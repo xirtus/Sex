@@ -118,7 +118,7 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Global Distributed Shared Memory (DSM).
 - [x] Remote Capability Hardware Fusion (NVIDIA 3070 over cluster).
 - [x] Distributed SMP & Inter-Node Interrupts.
-- [x] Runit-style Distributed Service Supervision (No systemd).
+- [x] Sexit-style Distributed Service Supervision (No systemd).
 - [x] Seamless Cluster-Wide Task Migration.
 
 ### Phase 9: Desktop Ecosystem & Hardware Parity (Next 🚀)

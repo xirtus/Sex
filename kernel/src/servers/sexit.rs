@@ -5,7 +5,7 @@ use alloc::sync::Arc;
 use spin::Mutex;
 use lazy_static::lazy_static;
 
-/// Sex-Runit: Simple Service Supervisor for the Sex Microkernel.
+/// Sexit: Simple Service Supervisor for the Sex Microkernel.
 /// A PDX-driven, isolated manager that avoids the monolithic complexity of systemd.
 
 pub enum ServiceStatus {
@@ -26,8 +26,8 @@ lazy_static! {
         Mutex::new(BTreeMap::new());
 }
 
-pub fn runit_init() {
-    serial_println!("RUNIT: Simple service supervision active.");
+pub fn sexit_init() {
+    serial_println!("SEXIT: Simple service supervision active.");
 }
 
 pub fn start_service(name: &'static str, pd_id: u32) {
@@ -37,7 +37,7 @@ pub fn start_service(name: &'static str, pd_id: u32) {
         status: ServiceStatus::Up(pd_id),
         restart_count: 0,
     });
-    serial_println!("RUNIT: Supervising service: {} (PD: {})", name, pd_id);
+    serial_println!("SEXIT: Supervising service: {} (PD: {})", name, pd_id);
 }
 
 pub fn check_services() {
@@ -46,10 +46,10 @@ pub fn check_services() {
         match service.status {
             ServiceStatus::Up(id) => {
                 // In a real system, we'd check if the PD is still alive
-                // serial_println!("RUNIT: {} is healthy.", name);
+                // serial_println!("SEXIT: {} is healthy.", name);
             },
             _ => {
-                serial_println!("RUNIT: Service {} is DOWN. Restarting...", name);
+                serial_println!("SEXIT: Service {} is DOWN. Restarting...", name);
                 service.restart_count += 1;
                 // Trigger PD restart...
             }
@@ -57,10 +57,10 @@ pub fn check_services() {
     }
 }
 
-/// The runit-sex entry point for PDX calls.
-pub extern "C" fn runit_entry(arg: u64) -> u64 {
+/// The sexit entry point for PDX calls.
+pub extern "C" fn sexit_entry(arg: u64) -> u64 {
     // 1: Status, 2: Start, 3: Stop
     let cmd = (arg >> 32) as u32;
-    serial_println!("RUNIT: Received command {}", cmd);
+    serial_println!("SEXIT: Received command {}", cmd);
     0
 }

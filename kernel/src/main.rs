@@ -400,11 +400,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         sex_kernel::vga_println!("Phase 7: COMPLETE. POSIX Foundation Ready.");
         // --- END PHASE 7 TEST ---
 
-        // --- PHASE 8: DISTRIBUTED SAS & RUNIT SUPERVISION ---
+        // --- PHASE 8: DISTRIBUTED SAS & SEXIT SUPERVISION ---
         serial_println!("DSAS: Initializing Phase 8 Distributed Paging...");
         
         use sex_kernel::servers::pager::{handle_map_request, MapRequest};
-        use sex_kernel::servers::runit;
+        use sex_kernel::servers::sexit;
 
         // 1. Simulate a Distributed Page Fault (Node 2)
         let dsm_req = MapRequest {
@@ -417,15 +417,15 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         handle_map_request(dsm_req);
         serial_println!("DSAS: SUCCESS - Distributed Page Fault triggered DSM fetch.");
 
-        // 2. Initialize Runit-style Service Management
-        runit::runit_init();
+        // 2. Initialize Sexit-style Service Management
+        sexit::sexit_init();
         
         // 3. Supervise the POSIX Application (PD 2000)
-        runit::start_service("posix-app", 2000);
+        sexit::start_service("posix-app", 2000);
         
         // 4. Simulate a service check
-        runit::check_services();
-        serial_println!("RUNIT: SUCCESS - Simple, isolated PD supervision active (No systemd).");
+        sexit::check_services();
+        serial_println!("SEXIT: SUCCESS - Simple, isolated PD supervision active (No systemd).");
 
         sex_kernel::vga_println!("Phase 8: COMPLETE. The Pinnacle of Sex Microkernel.");
         // --- END PHASE 8 TEST ---

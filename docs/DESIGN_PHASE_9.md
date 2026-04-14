@@ -3,26 +3,25 @@
 ## 🎯 Objective
 Elevate the Sex Microkernel from a functional distributed system to a fully capable daily driver. This phase focuses on achieving **Hardware Parity** (Networking, Sound) and building a modern **Desktop Ecosystem** supporting Wayland compositors (KDE Plasma, Hyprland, River) and modern applications (Kitty Terminal).
 
-## 🏛 Architectural Vision: The "Lifting" Philosophy Applied
+## 🏛 Architectural Vision: CAPIO & The "Slicer"
 
-Instead of reinventing the wheel, we will aggressively leverage our **DDE-Sex** (Device Driver Environment) and **Sex-Libc** (POSIX Emulation) layers to bring existing, high-quality software to our high-performance SASOS.
+Following the **CAPIO (Capability-based I/O)** architecture, drivers in Sex are not loaded into the kernel. Instead, they run as isolated compartments in the SASOS.
 
-1.  **The Graphics Stack (Wayland/DRM):**
-    *   Compositors like **Hyprland**, **River**, and **KWin (KDE)** rely on the Linux DRM/KMS subsystem and Mesa.
-    *   We will create a specialized **DRM-Sex PD** that uses DDE to lift the necessary Linux DRM core and hardware-specific drivers (NVIDIA Nouveau, Pi 5 VC4/VC7).
-    *   Wayland compositors will run unmodified atop `Sex-Libc` and `DRM-Sex`.
-2.  **The Audio Stack (Sound):**
-    *   Lift the Linux **ALSA (Advanced Linux Sound Architecture)** core via DDE-Sex into a dedicated **Audio PD**.
-    *   Run **PipeWire** or **PulseAudio** as a standard user-space service managed by our `sex-runit` supervisor.
-3.  **Connectivity (Ethernet & WiFi):**
-    *   Ethernet (e.g., Realtek, Intel IGB) is straightforward via DDE.
-    *   WiFi (e.g., Intel `iwlwifi`, Broadcom `brcmfmac` for Pi 5) requires lifting the `mac80211` subsystem and `wpa_supplicant`.
+1.  **Device Manifests:** The kernel stub handles initial device discovery (e.g., PCIe probing for the NVIDIA 3070). It defines a **Device Manifest** that partitions MMIO registers into "Safe Data Plane" and "Privileged Control Plane" (e.g., DMA config).
+2.  **The Slicer:** When a userspace driver (like the NVIDIA PD) starts, the **Slicer** intercepts mapping requests and issues unforgeable hardware capabilities for the specific **byte-slices** of the device MMIO defined in the manifest.
+3.  **Kernel-Bypass Data Plane:** Once capabilities are issued, the driver communicates with the hardware natively. The core microkernel is never involved in the data transfer, achieving raw hardware performance.
+4.  **IOMMU-Enforced Zero-Copy DMA:** For massive transfers (textures, packets), the system uses an IOMMU to restrict device access to specific "lent" memory capabilities, ensuring safety without intermediate copies.
 
 ---
 
 ## 🗺 Implementation Roadmap
 
-### 1. Hardware Parity: Networking & Sound
+### 1. CAPIO Infrastructure
+- [ ] **Kernel Discovery Stub:** Implement PCIe/DT probing and Manifest generation.
+- [ ] **The Slicer:** Implement the capability slicer that issues granular MMIO access tokens.
+- [ ] **IOMMU Manager:** Integrate IOMMU protection for zero-copy DMA lending.
+
+### 2. Hardware Parity: Networking & Sound
 - [ ] **Ethernet/WiFi PDs:**
   - Create `sex-src` templates for `iwlwifi` (x86_64) and `brcmfmac` (Pi 5).
   - Lift the `mac80211` wireless stack via DDE-Sex.

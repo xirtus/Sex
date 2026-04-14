@@ -6,7 +6,7 @@ pub mod dde;
 pub mod nvidia;
 pub mod libc;
 pub mod app;
-pub mod runit;
+pub mod sexit;
 pub mod serial;
 pub mod pager;
 pub mod input;
