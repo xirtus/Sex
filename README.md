@@ -1,4 +1,4 @@
-# Sex (Single Environment Xen)
+# Sex (Single Environment XIPC)
 Single Address Space Microkernel System
 
 Sex is a from-scratch, high-performance microkernel written in Rust. It is designed to be a tiny, safe, and lightning-fast alternative to traditional monolithic kernels, leveraging modern hardware features like Intel PKU and CHERI to provide memory safety in a single global address space.
