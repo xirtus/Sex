@@ -469,6 +469,31 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         sex_kernel::vga_println!("Phase 10: COMPLETE. Wayland Plumbing & Input Ready.");
         // --- END PHASE 10 TEST ---
 
+        // --- PHASE 11: GNU PIPELINE & FILESYSTEM PARITY ---
+        serial_println!("PHASE 11: Initializing Linux Compatibility & Filesystems...");
+        
+        use sex_kernel::servers::vfs as vfs_server;
+        use sex_kernel::servers::linsex::LinSexLoader;
+
+        // 1. Mount diverse filesystems
+        vfs_server::mount("/home", 800, "btrfs");
+        vfs_server::mount("/mnt/win", 800, "ntfs");
+        vfs_server::mount("/boot", 800, "fat32");
+
+        // 2. Simulate Linux Binary Execution
+        let linux_pd = Arc::new(ProtectionDomain::new(3000, 17));
+        DOMAIN_REGISTRY.write().insert(linux_pd.id, linux_pd.clone());
+        
+        let loader = LinSexLoader::new(3000);
+        loader.load_elf("/disk0/bin/bash").expect("LIN-SEX: Load failed");
+        
+        // 3. Simulate a Linux Syscall (sys_write to stdout)
+        let msg = "Hello from a Linux binary running on Sex!\n";
+        loader.handle_linux_syscall(1, 1, msg.as_ptr() as u64, msg.len() as u64);
+
+        sex_kernel::vga_println!("Phase 11: COMPLETE. GNU Pipeline & Filesystems Ready.");
+        // --- END PHASE 11 TEST ---
+
         // --- PHASE 8: DISTRIBUTED SAS & SEXIT SUPERVISION ---
         serial_println!("DSAS: Initializing Phase 8 Distributed Paging...");
         

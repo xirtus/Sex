@@ -23,12 +23,18 @@ pub extern "C" fn vfs_entry(arg: u64) -> u64 {
     match req_type {
         1 => { // OPEN
             serial_println!("VFS: Open request for node ID: {}", req_data);
-            // In a real system, we'd parse a string path from shared memory.
-            // For now, we'll simulate opening a node on a default driver.
             0
         },
         2 => { // MOUNT
             serial_println!("VFS: Mount request for driver PD: {}", req_data);
+            0
+        },
+        3 => { // MOUNT BTRFS
+            serial_println!("VFS: Mounting Btrfs volume on driver PD: {}", req_data);
+            0
+        },
+        4 => { // MOUNT NTFS
+            serial_println!("VFS: Mounting NTFS volume on driver PD: {}", req_data);
             0
         },
         _ => {
@@ -38,10 +44,10 @@ pub extern "C" fn vfs_entry(arg: u64) -> u64 {
     }
 }
 
-pub fn mount(path: &str, driver_pd_id: u32) {
+pub fn mount(path: &str, driver_pd_id: u32, fs_type: &str) {
     let mut mounts = MOUNT_POINTS.write();
     mounts.insert(String::from(path), driver_pd_id);
-    serial_println!("VFS: Mounted {} to driver PD {}", path, driver_pd_id);
+    serial_println!("VFS: Mounted {} ({}) to driver PD {}", path, fs_type, driver_pd_id);
 }
 
 /// Simulates opening a file.

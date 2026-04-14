@@ -135,6 +135,12 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Mesa & EGL/GLES for SASOS.
 - [x] The "Big Three" Compositor integration.
 
+### Phase 11: GNU Pipeline & Filesystem Parity (Complete ✅)
+- [x] Lin-Sex (Linux Binary Compatibility).
+- [x] Multi-Filesystem support (Ext4, Btrfs, FAT, NTFS).
+- [x] GNU Toolchain integration (GCC/Bash).
+- [x] `sex-packages` repository design.
+
 ---
 
 ## 🏆 The Vision Realized

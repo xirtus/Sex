@@ -9,6 +9,7 @@ pub mod audio;
 pub mod wifi;
 pub mod libc;
 pub mod app;
+pub mod linsex;
 pub mod sexit;
 pub mod serial;
 pub mod pager;
