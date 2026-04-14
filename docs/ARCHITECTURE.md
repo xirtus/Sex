@@ -101,3 +101,9 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] DDE-Sex Shim (Linux/BSD driver lifting).
 - [x] NVIDIA 3070 GPU PD (Nouveau-lifted skeleton).
 - [x] Pi 5 Peripheral support design.
+
+### Phase 6: SexSD (Distribution & Builds) (Next 🚀)
+- [ ] `sex-src` build system (xbps-src style).
+- [ ] Central Hardware-to-Driver Registry.
+- [ ] Provisioning tools (Flashable UEFI/Pi images).
+- [ ] Source-to-PD lifting pipeline.
