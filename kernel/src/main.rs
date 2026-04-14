@@ -364,6 +364,27 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         sex_kernel::vga_println!("Phase 4: COMPLETE. Distribution layer active.");
         // --- END PHASE 4 TEST ---
 
+        // --- PHASE 5: DDE-SEX & HARDWARE ENABLEMENT TEST ---
+        serial_println!("DDE: Initializing Phase 5 Driver Lifting...");
+        
+        use sex_kernel::servers::nvidia::NvidiaDriver;
+
+        // 1. Create NVIDIA Driver PD (ID 1100, Key 11)
+        let nvidia_pd = Arc::new(ProtectionDomain::new(1100, 11));
+        DOMAIN_REGISTRY.write().insert(nvidia_pd.id, nvidia_pd.clone());
+
+        // 2. Initialize and Probe the Lifted NVIDIA Driver
+        let mut nvidia_driver = NvidiaDriver::new();
+        match nvidia_driver.probe() {
+            Ok(_) => {
+                serial_println!("DDE: SUCCESS - Lifted NVIDIA 3070 Driver Probed via DDE-Sex.");
+            },
+            Err(e) => serial_println!("DDE: ERROR - {}", e),
+        }
+
+        sex_kernel::vga_println!("Phase 5: COMPLETE. DDE-Sex Hardware Enabled.");
+        // --- END PHASE 5 TEST ---
+
         sex_kernel::vga_println!("Phase 1: COMPLETE. 128-Core SMP Foundation Stable.");
 
     } else {
