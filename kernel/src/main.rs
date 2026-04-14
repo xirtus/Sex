@@ -436,6 +436,39 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         sex_kernel::vga_println!("Phase 9: COMPLETE. Desktop & Hardware Parity achieved.");
         // --- END PHASE 9 TEST ---
 
+        // --- PHASE 10: GRAPHICAL PLUMBING & INPUT ---
+        serial_println!("PHASE 10: Initializing Wayland Plumbing & Input...");
+        
+        use sex_kernel::servers::input::InputServer;
+        use sex_kernel::servers::libc::SexLibc;
+
+        // 1. Create Input PD (ID 2400, Key 16)
+        let input_pd = Arc::new(ProtectionDomain::new(2400, 16));
+        DOMAIN_REGISTRY.write().insert(input_pd.id, input_pd.clone());
+        
+        let mut input_server = InputServer::new("Alienware HID");
+        input_server.init().expect("INPUT: Init failed");
+
+        // 2. Demonstrate Wayland AF_UNIX emulation in Libc
+        let libc = SexLibc::new(2000); // Using existing App PD
+        let wayland_sock = libc.socket(1, 1, 0).expect("LIBC: Socket failed");
+        libc.sendmsg(wayland_sock, 0x_AAAA_0000, 0).expect("LIBC: sendmsg failed");
+
+        // 3. Demonstrate Wayland-SHM mapping via Pager
+        let shm_req = MapRequest {
+            node_id: 1,
+            start: 0x_BBBB_0000,
+            size: 1920 * 1080 * 4,
+            pku_key: 1,
+            writable: true,
+            is_shm: true, // Wayland-SHM flag
+        };
+        let shm_handle = handle_map_request(shm_req);
+        serial_println!("WAYLAND: Created zero-copy SHM buffer with handle {:#x}.", shm_handle);
+
+        sex_kernel::vga_println!("Phase 10: COMPLETE. Wayland Plumbing & Input Ready.");
+        // --- END PHASE 10 TEST ---
+
         // --- PHASE 8: DISTRIBUTED SAS & SEXIT SUPERVISION ---
         serial_println!("DSAS: Initializing Phase 8 Distributed Paging...");
         

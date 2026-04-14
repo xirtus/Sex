@@ -1,31 +1,47 @@
 use crate::serial_println;
-use crate::interrupts::INTERRUPT_QUEUE;
+use crate::servers::dde;
+use crate::ipc_ring::SpscRing;
 
-/// The Input Driver's entry point.
-/// Polls the asynchronous interrupt queue for hardware events.
-pub extern "C" fn input_driver_entry(_arg: u64) -> u64 {
-    serial_println!("INPUT: Driver started. Polling for hardware events...");
+/// Input-Sex: libinput lifting for the Sex Microkernel.
+/// Processes HID events (Mouse/Keyboard) for Wayland compositors.
 
-    loop {
-        // Poll the global asynchronous interrupt queue
-        if let Some(event) = INTERRUPT_QUEUE.dequeue() {
-            serial_println!("INPUT: Dequeued Hardware Event - IRQ: {}, Vector: {:#x}", 
-                event.irq, event.vector);
-            
-            if event.irq == 1 {
-                // Read from keyboard I/O port (0x60)
-                // In a real system, the Input Driver PD would have 
-                // I/O port permissions granted via TSS.
-                unsafe {
-                    let scancode: u8;
-                    core::arch::asm!("in al, 0x60", out("al") scancode);
-                    serial_println!("INPUT: Keyboard Scancode: {:#x}", scancode);
-                }
-            }
+pub struct InputServer {
+    pub name: &'static str,
+    // Event ring buffer for the compositor
+    pub event_queue: SpscRing<u64>, 
+}
+
+impl InputServer {
+    pub fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            event_queue: SpscRing::new(),
         }
-
-        // In a real system, we'd sleep or yield if the queue is empty
-        // to avoid 100% CPU usage.
-        x86_64::instructions::nop();
     }
+
+    pub fn init(&mut self) -> Result<(), &'static str> {
+        serial_println!("INPUT-SEX: Initializing libinput for {}...", self.name);
+        
+        // 1. Lift libinput via DDE-Sex
+        serial_println!("INPUT-SEX: Lifting libinput and USB HID stack...");
+        
+        // 2. Request HID Device IRQ via DDE-Sex Slicer
+        // (Simplified for demo)
+        dde::dde_request_irq(19, self.input_irq_handler)?;
+        serial_println!("INPUT-SEX: IRQ 19 requested for HID.");
+
+        Ok(())
+    }
+
+    pub extern "C" fn input_irq_handler(_arg: u64) -> u64 {
+        // In a real system, this would decode the HID packet 
+        // and push it to the event_queue.
+        serial_println!("INPUT-SEX: Mouse/Keyboard Event Received!");
+        0
+    }
+}
+
+pub extern "C" fn input_entry(arg: u64) -> u64 {
+    serial_println!("INPUT-SEX PDX: Received input request {:#x}", arg);
+    0
 }

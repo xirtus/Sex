@@ -67,6 +67,25 @@ impl SexLibc {
         serial_println!("LIBC: close(fd: {})", _fd);
         0
     }
+
+    // --- Wayland AF_UNIX Emulation ---
+
+    /// POSIX socket(AF_UNIX, ...)
+    pub fn socket(&self, domain: i32, _type: i32, _proto: i32) -> Result<u32, &'static str> {
+        if domain == 1 { // AF_UNIX
+            serial_println!("LIBC: socket(AF_UNIX)");
+            // In a SASOS, a socket is just a PDX capability to a local port
+            return Ok(100); // Simulated socket FD
+        }
+        Err("LIBC: Unsupported socket domain")
+    }
+
+    /// POSIX sendmsg() with Capability (FD) passing
+    pub fn sendmsg(&self, fd: u32, msg: u64, _flags: i32) -> Result<usize, &'static str> {
+        serial_println!("LIBC: sendmsg(fd: {}) - Transferring Capabilities", fd);
+        // Map to a PDX call that includes capability transfer in the message header
+        Ok(0)
+    }
 }
 
 /// The standard "syscall" entry point for C applications.

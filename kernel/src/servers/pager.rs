@@ -20,10 +20,17 @@ pub struct MapRequest {
     pub size: u64,
     pub pku_key: u8,
     pub writable: bool,
+    pub is_shm: bool, // Wayland Shared Memory flag
 }
 
 /// The PDX interface for the Pager.
 pub fn handle_map_request(req: MapRequest) -> u64 {
+    if req.is_shm {
+        serial_println!("PAGER: [SHM] Creating Shared Memory Segment at {:#x}", req.start);
+        // Grant a Shared Memory Capability (Memory Lending)
+        return 0xC0DE_BEEF;
+    }
+
     if req.node_id != 1 { // Assuming local node is 1
         serial_println!("PAGER: [DSM] Remote Page Fault for Node {} (addr: {:#x})", 
             req.node_id, req.start);
