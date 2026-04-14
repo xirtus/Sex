@@ -385,6 +385,21 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         sex_kernel::vga_println!("Phase 5: COMPLETE. DDE-Sex Hardware Enabled.");
         // --- END PHASE 5 TEST ---
 
+        // --- PHASE 7: POSIX ECOSYSTEM TEST ---
+        serial_println!("LIBC: Initializing POSIX Foundation...");
+        
+        use sex_kernel::servers::app;
+
+        // 1. Create App PD (ID 2000, Key 12)
+        let app_pd = Arc::new(ProtectionDomain::new(2000, 12));
+        DOMAIN_REGISTRY.write().insert(app_pd.id, app_pd.clone());
+
+        // 2. Run POSIX-based Sample Application
+        app::posix_app_main(2000);
+
+        sex_kernel::vga_println!("Phase 7: COMPLETE. POSIX Foundation Ready.");
+        // --- END PHASE 7 TEST ---
+
         sex_kernel::vga_println!("Phase 1: COMPLETE. 128-Core SMP Foundation Stable.");
 
     } else {

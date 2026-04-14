@@ -108,8 +108,8 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Provisioning tools (Flashable UEFI/Pi images).
 - [x] Source-to-PD lifting pipeline.
 
-### Phase 7: Ecosystem & Applications (Next 🚀)
-- [ ] POSIX Emulation Layer (Libc).
+### Phase 7: Ecosystem & Applications (Active 🚀)
+- [x] POSIX Emulation Layer (Sex-Libc).
 - [ ] Graphical Compositor (Wayland-lifted).
 - [ ] Developer Toolchain (Self-hosting).
 - [ ] High-Level Application Framework.

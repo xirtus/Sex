@@ -4,6 +4,8 @@ pub mod network;
 pub mod cluster;
 pub mod dde;
 pub mod nvidia;
+pub mod libc;
+pub mod app;
 pub mod serial;
 pub mod pager;
 pub mod input;
