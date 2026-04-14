@@ -2,6 +2,8 @@
 #![feature(abi_x86_interrupt)]
 
 pub mod serial;
+pub mod memory;
+pub mod pku;
 
 /// Basic Hardware Abstraction Layer (HAL) stubs for x86_64
 pub mod hal {

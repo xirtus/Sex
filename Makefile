@@ -6,7 +6,8 @@ build:
 	cargo build --package sasos-kernel
 
 run:
-	cargo run --package sasos-kernel
+	# Note: -cpu max is required for PKU support in QEMU
+	cargo run --package sasos-kernel -- -cpu max
 
 clean:
 	cargo clean
