@@ -128,6 +128,13 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Wayland Compositors (KDE, Hyprland, River).
 - [x] Kitty Terminal Emulator.
 
+### Phase 10: Graphical Plumbing & Input (Next 🚀)
+- [ ] Wayland `AF_UNIX` emulation in Libc.
+- [ ] Shared Memory (SHM) Pager.
+- [ ] `libinput` PD (Mouse/Keyboard lifting).
+- [ ] Mesa & EGL/GLES for SASOS.
+- [ ] The "Big Three" Compositor integration.
+
 ---
 
 ## 🏆 The Vision Realized
