@@ -71,25 +71,28 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] VGA/Serial console output.
 - [x] Bootloader integration (UEFI).
 
-### Phase 1: Core Primitives (Complete ✅)
-- [x] Physical memory manager (Frame allocator).
+### Phase 1: Core Primitives (Stable 🚀)
+- [x] Physical memory manager (Bitmap Frame allocator).
 - [x] Sexting and Global VAS setup.
 - [x] Protection Domain management (PKU/MPK).
 - [x] Basic PDX implementation (synchronous).
-- [x] Page Fault Forwarder (Prestep).
+- [x] **Page Fault Forwarder:** Asynchronous fault handling via `sext`.
+- [x] **Robust SMP Boot:** 16-bit to 64-bit Trampoline and INIT-SIPI sequence.
 
-### Phase 2: Capabilities & Servers (Complete ✅)
+### Phase 2: Capabilities & Servers (Stable 🚀)
 - [x] Formal Capability Engine implementation.
-- [x] User-Space sext Server (Asynchronous demand sexting).
+- [x] User-Space sext Server (Asynchronous demand paging).
 - [x] SMP Boot (128-core discovery & signaling).
 - [x] Asynchronous Interrupt management (Ring Buffers).
-- [x] First user-space sexdrive (Serial/sexinput).
+- [x] **Hardware Drivers:** Functional NVMe (SQ/CQ) and e1000 (RX/TX DMA).
 - [x] Domain Fusion & Revocation.
 
-### Phase 3: Services & sexvfs (Complete ✅)
-- [x] sexvfs implementation.
-- [x] IPC-based storage sexdrives (NVMe).
-- [x] sexnet stack (user-space).
+### Phase 3: Services & sexvfs (Stable 🚀)
+- [x] **Multi-FS sexvfs:** Unified path resolution for FAT32, Ext4, and Btrfs.
+- [x] IPC-based storage sexdrives (NVMe/IDE).
+- [x] **Networking:** Functional e1000 driver and `sexnet` protocol stack.
+- [x] **User-Land SDK:** `libsys` (sexos.h) and `malloc` runtime.
+- [x] **Cross-Toolchain:** `sexos-cc` wrapper for porting complex apps.
 
 ### Phase 4: Distribution (Complete ✅)
 - [x] Transparent networked IPC.
