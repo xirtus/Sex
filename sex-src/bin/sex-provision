@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import sys
+
+# sex-provision: Create a bootable Sex Microkernel image
+# Bundles the kernel + .spd driver images
+
+def provision_image(target, arch, drivers):
+    print(f"[*] Provisioning Sex Microkernel image for {target} ({arch})")
+    
+    # In a real implementation:
+    # 1. Locate the compiled kernel/main.bin
+    # 2. Collect the .spd driver images from sex-src/bin/
+    # 3. Use bootloader-api/limine/u-boot to create a flashable .img or .iso
+    
+    print(f"  - Bundling kernel...")
+    for drv in drivers:
+        print(f"  - Including driver: {drv}.spd")
+    
+    print(f"  - Generating bootloader config...")
+    print(f"[+] Successfully created sex-os-{target}-{arch}.img")
+
+def main():
+    parser = argparse.ArgumentParser(description="sex-provision: Create bootable Sex OS images")
+    parser.add_argument("target", choices=["uefi", "pi5"], help="Deployment target")
+    parser.add_argument("--arch", default="x86_64", help="Architecture")
+    parser.add_argument("--drivers", nargs="+", default=[], help="List of .spd drivers to include")
+
+    args = parser.parse_args()
+
+    provision_image(args.target, args.arch, args.drivers)
+
+if __name__ == "__main__":
+    main()

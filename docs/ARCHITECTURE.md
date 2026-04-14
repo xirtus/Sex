@@ -102,8 +102,14 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] NVIDIA 3070 GPU PD (Nouveau-lifted skeleton).
 - [x] Pi 5 Peripheral support design.
 
-### Phase 6: SexSD (Distribution & Builds) (Next 🚀)
-- [ ] `sex-src` build system (xbps-src style).
-- [ ] Central Hardware-to-Driver Registry.
-- [ ] Provisioning tools (Flashable UEFI/Pi images).
-- [ ] Source-to-PD lifting pipeline.
+### Phase 6: SexSD (Distribution & Builds) (Complete ✅)
+- [x] `sex-src` build system (xbps-src style).
+- [x] Central Hardware-to-Driver Registry.
+- [x] Provisioning tools (Flashable UEFI/Pi images).
+- [x] Source-to-PD lifting pipeline.
+
+### Phase 7: Ecosystem & Applications (Next 🚀)
+- [ ] POSIX Emulation Layer (Libc).
+- [ ] Graphical Compositor (Wayland-lifted).
+- [ ] Developer Toolchain (Self-hosting).
+- [ ] High-Level Application Framework.

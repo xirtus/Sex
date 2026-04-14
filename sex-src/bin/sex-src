@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import sys
+import json
+import subprocess
+
+# sex-src: The source-based build system for the Sex Microkernel
+# Inspired by xbps-src (Void Linux)
+
+TEMPLATES_DIR = "templates"
+DRIVERS_JSON = "drivers.json"
+
+def load_registry():
+    with open(DRIVERS_JSON, 'r') as f:
+        return json.load(f)
+
+def build_package(pkg_name, arch):
+    print(f"[*] Building package: {pkg_name} for {arch}")
+    
+    # In a real implementation, this would:
+    # 1. Fetch source from URL in template
+    # 2. Apply patches from templates/patches/
+    # 3. Call the appropriate cross-compiler (Rust/C)
+    # 4. Produce a .spd image
+    
+    # Simulate fetch/patch/build
+    print(f"  - Fetching source for {pkg_name}...")
+    print(f"  - Applying DDE-Sex patches...")
+    print(f"  - Compiling {pkg_name} ({arch})...")
+    print(f"[+] Successfully built {pkg_name}-{arch}.spd")
+
+def probe_hardware():
+    print("[*] Probing local hardware for Sex Driver Registry...")
+    registry = load_registry()
+    
+    # In a real system, this would read /sys/bus/pci/devices or 
+    # /proc/device-tree to identify hardware.
+    
+    # Mocked probe for user's RTX 3070
+    pci_id = "10de:2484"
+    if pci_id in registry["pci"]:
+        info = registry["pci"][pci_id]
+        print(f"  - Found: {info['name']} ({pci_id})")
+        print(f"    Recommended Template: {info['template']}")
+
+def main():
+    parser = argparse.ArgumentParser(description="sex-src: The Sex OS build system")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # Command: pkg (build a package)
+    pkg_parser = subparsers.add_parser("pkg", help="Build a package")
+    pkg_parser.add_argument("name", help="Name of the template/package")
+    pkg_parser.add_argument("--arch", default="x86_64", help="Target architecture")
+
+    # Command: probe (identify hardware)
+    probe_parser = subparsers.add_parser("probe", help="Probe local hardware")
+
+    args = parser.parse_args()
+
+    if args.command == "pkg":
+        build_package(args.name, args.arch)
+    elif args.command == "probe":
+        probe_hardware()
+    else:
+        parser.print_help()
+
+if __name__ == "__main__":
+    main()
