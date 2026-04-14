@@ -8,11 +8,38 @@ lazy_static! {
     /// Registry of known active nodes in the sexnode.
     /// Maps Node ID to its network address (simulated as u32).
     pub static ref CLUSTER_NODES: RwLock<BTreeMap<u32, u32>> = RwLock::new(BTreeMap::new());
+
+    /// Redox-style URL Scheme Registry.
+    /// Maps a scheme (e.g., "sexnet") to a target PD ID.
+    static ref SCHEME_REGISTRY: RwLock<BTreeMap<&'static str, u32>> = RwLock::new(BTreeMap::new());
+}
+
+/// Registers a URL scheme with a specific system server PD.
+pub fn register_scheme(scheme: &'static str, pd_id: u32) {
+    let mut schemes = SCHEME_REGISTRY.write();
+    schemes.insert(scheme, pd_id);
+    serial_println!("sexnode: Registered scheme {}:// to PD {}", scheme, pd_id);
+}
+
+/// Resolves a resource URL into a system capability or PD ID.
+pub fn resolve_url(url: &str) -> Result<u32, &'static str> {
+    serial_println!("sexnode: Resolving URL: {}", url);
+    
+    // In a real system, this would parse the URL (scheme://host/path)
+    if url.starts_with("sexnet://") {
+        let schemes = SCHEME_REGISTRY.read();
+        return schemes.get("sexnet").cloned().ok_or("Scheme not found");
+    } else if url.starts_with("sexdrm://") {
+        let schemes = SCHEME_REGISTRY.read();
+        return schemes.get("sexdrm").cloned().ok_or("Scheme not found");
+    }
+    
+    Err("sexnode: Unknown URL scheme")
 }
 
 /// The sexnode PD manages node discovery and distributed capabilities.
 pub struct sexnode {
-    // In a real system, this would listen on a UDP multicast socket
+...    // In a real system, this would listen on a UDP multicast socket
     // via the sexnet to discover peers.
 }
 

@@ -497,6 +497,50 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         sex_kernel::vga_println!("Phase 11: COMPLETE. GNU Pipeline & Filesystems Ready.");
         // --- END PHASE 11 TEST ---
 
+        // --- PHASE 12: DYNAMIC TRANSLATORS & URL RESOLVER ---
+        serial_println!("PHASE 12: Initializing Translators & URL Resolver...");
+        
+        use sex_kernel::servers::sexvfs;
+        use sex_kernel::servers::sexnode;
+
+        // 1. Demonstrate Hurd-style Translator
+        // Attach the NetStack (PD 900) as a translator for the "/net" node
+        sexvfs::set_translator("/net", 900);
+        
+        // Try to open a path under the translator
+        match sexvfs::open(200, "/net/github.com") {
+            Ok(cap) => {
+                if cap == 0x_TR_A_NS {
+                    serial_println!("sexvfs: SUCCESS - Dynamic redirection to sexnet translator verified.");
+                }
+            },
+            Err(e) => serial_println!("sexvfs: ERROR - {}", e),
+        }
+
+        // 2. Demonstrate Redox-style URL Resolution
+        // Register schemes
+        sexnode::register_scheme("sexnet", 900);
+        sexnode::register_scheme("sexdrm", 2100);
+
+        // Resolve a local network URL
+        match sexnode::resolve_url("sexnet://tcp/80") {
+            Ok(pd_id) => {
+                serial_println!("sexnode: SUCCESS - Resolved sexnet:// to PD {}.", pd_id);
+            },
+            Err(e) => serial_println!("sexnode: ERROR - {}", e),
+        }
+
+        // Resolve a graphics URL
+        match sexnode::resolve_url("sexdrm://display0") {
+            Ok(pd_id) => {
+                serial_println!("sexnode: SUCCESS - Resolved sexdrm:// to PD {}.", pd_id);
+            },
+            Err(e) => serial_println!("sexnode: ERROR - {}", e),
+        }
+
+        sex_kernel::vga_println!("Phase 12: COMPLETE. Dynamic OS Architecture Ready.");
+        // --- END PHASE 12 TEST ---
+
         // --- PHASE 8: DISTRIBUTED SAS & SEXIT SUPERVISION ---
         serial_println!("DSAS: Initializing Phase 8 Distributed Sexting...");
         

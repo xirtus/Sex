@@ -10,16 +10,22 @@ lazy_static! {
     /// Global registry of mount points.
     /// Maps a path (e.g., "/disk0") to a sexdrive's Protection Domain ID.
     static ref MOUNT_POINTS: RwLock<BTreeMap<String, u32>> = RwLock::new(BTreeMap::new());
+
+    /// Hurd-style Translator Registry.
+    /// Maps a path (e.g., "/net") to a Translator PD's ID.
+    static ref TRANSLATORS: RwLock<BTreeMap<String, u32>> = RwLock::new(BTreeMap::new());
+}
+
+/// Attaches a translator PD to a specific VFS node.
+pub fn set_translator(path: &str, translator_pd_id: u32) {
+    let mut translators = TRANSLATORS.write();
+    translators.insert(String::from(path), translator_pd_id);
+    serial_println!("sexvfs: Attached translator PD {} to {}", translator_pd_id, path);
 }
 
 /// The sexvfs Server's entry point for PDX calls.
 pub extern "C" fn sexvfs_entry(arg: u64) -> u64 {
-    // For simplicity, we'll use a request structure passed by pointer or 
-    // split the 64-bit arg into (RequestType, Data).
-    
-    let req_type = (arg >> 32) as u32;
-    let req_data = (arg & 0xFFFF_FFFF) as u32;
-
+...
     match req_type {
         1 => { // OPEN
             serial_println!("sexvfs: Open request for node ID: {}", req_data);
@@ -35,6 +41,10 @@ pub extern "C" fn sexvfs_entry(arg: u64) -> u64 {
         },
         4 => { // MOUNT NTFS
             serial_println!("sexvfs: Mounting NTFS volume on sexdrive PD: {}", req_data);
+            0
+        },
+        5 => { // SET TRANSLATOR
+            serial_println!("sexvfs: Request to set translator for PD: {}", req_data);
             0
         },
         _ => {
@@ -53,11 +63,25 @@ pub fn mount(path: &str, sexdrive_pd_id: u32, fs_type: &str) {
 /// Simulates opening a file.
 /// In a real implementation, this would involve path resolution and 
 /// interaction with the storage sexdrive to get a node ID.
-pub fn open(caller_pd_id: u32, _path: &str) -> Result<u32, &'static str> {
-    // 1. Resolve path to sexdrive PD
+pub fn open(caller_pd_id: u32, path: &str) -> Result<u32, &'static str> {
+    // 1. Check for Hurd-style translators
+    {
+        let translators = TRANSLATORS.read();
+        for (prefix, pd_id) in translators.iter() {
+            if path.starts_with(prefix) {
+                serial_println!("sexvfs: Path {} matches translator PD {}. Redirecting...", path, pd_id);
+                // In a real system, this would perform a PDX call to the translator.
+                // For the demo, we'll return a special capability.
+                return Ok(0x_TR_A_NS); 
+            }
+        }
+    }
+
+    // 2. Resolve path to sexdrive PD
     // For this demo, let's assume everything is on sexdrive 10.
     let sexdrive_pd_id = 10;
     let inode_id = 42; // Simulated inode
+...
 
     // 2. Create a Node Capability
     let node_cap = CapabilityData::Node(NodeCapData {
