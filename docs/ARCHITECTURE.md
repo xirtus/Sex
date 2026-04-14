@@ -95,3 +95,9 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Transparent networked IPC.
 - [x] Cluster management and node discovery.
 - [x] Distributed Capability management.
+
+### Phase 5: Hardware & Drivers (Next 🚀)
+- [ ] ARM64 Port (Raspberry Pi 5).
+- [ ] DDE-Sex Shim (Linux/BSD driver lifting).
+- [ ] NVIDIA 3070 GPU PD (Nouveau-lifted).
+- [ ] Pi 5 Peripheral support.
