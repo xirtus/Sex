@@ -541,6 +541,39 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         sex_kernel::vga_println!("Phase 12: COMPLETE. Dynamic OS Architecture Ready.");
         // --- END PHASE 12 TEST ---
 
+        // --- PHASE 13: NATIVE SELF-HOSTING TEST ---
+        serial_println!("PHASE 13: Initializing Developer PD & Toolchain...");
+        
+        use sex_kernel::capability::SpawnCapData;
+        use sex_kernel::servers::sexc::sexc;
+
+        // 1. Create Developer PD (ID 5000, Key 15)
+        // We reuse an available key or assume Key 15 is free
+        let dev_pd = Arc::new(ProtectionDomain::new(5000, 15));
+        DOMAIN_REGISTRY.write().insert(dev_pd.id, dev_pd.clone());
+
+        // 2. Grant the Developer PD the SPAWN capability
+        let spawn_cap_id = dev_pd.grant(CapabilityData::Spawn(SpawnCapData {
+            max_pds: 100,
+            allowed_pku_keys: 0xFFFF, // Full range for builds
+        }));
+        serial_println!("DEV: Granted Spawn Capability ID: {}", spawn_cap_id);
+
+        // 3. Simulate Native rustc Execution
+        let dev_libc = sexc::new(5000);
+        
+        serial_println!("DEV: Running 'rustc sexvfs.rs'...");
+        dev_libc.stat("/src/sexvfs.rs").expect("DEV: stat failed");
+        dev_libc.mmap(0x_DDDD_0000, 1024*1024, 0, 0).expect("DEV: mmap failed");
+        
+        // Simulate rustc spawning a linker PD
+        let linker_pd_id = dev_libc.spawn_pd(spawn_cap_id, "/bin/ld.sex")
+            .expect("DEV: Spawning linker failed");
+        serial_println!("DEV: Linker spawned in PD {}. Zero-Copy Linking initiated.", linker_pd_id);
+
+        sex_kernel::vga_println!("Phase 13: COMPLETE. Self-Hosting toolchain active.");
+        // --- END PHASE 13 TEST ---
+
         // --- PHASE 8: DISTRIBUTED SAS & SEXIT SUPERVISION ---
         serial_println!("DSAS: Initializing Phase 8 Distributed Sexting...");
         

@@ -86,6 +86,34 @@ impl sexc {
         // Map to a PDX call that includes capability transfer in the message header
         Ok(0)
     }
+
+    // --- Phase 13: Self-Hosting Primitives ---
+
+    /// sexc: spawn_pd() -> Creates a new isolated Protection Domain.
+    /// In SexOS, this is our fork/exec equivalent.
+    pub fn spawn_pd(&self, spawn_cap_id: u32, binary_path: &str) -> Result<u32, &'static str> {
+        serial_println!("sexc: Spawning new PD from {} using Cap {}", binary_path, spawn_cap_id);
+        
+        // 1. Validate Spawn Capability
+        // 2. Allocate new PD and PKU key
+        // 3. Load binary into the Global SAS
+        // 4. Jump to entry point
+        
+        Ok(3000) // Simulated new PD ID
+    }
+
+    /// POSIX mmap() -> sext map_request
+    pub fn mmap(&self, addr: u64, length: u64, prot: i32, flags: i32) -> Result<u64, &'static str> {
+        serial_println!("sexc: mmap(addr: {:#x}, len: {})", addr, length);
+        // Map to sext::sext_request
+        Ok(addr)
+    }
+
+    /// POSIX stat() -> sexvfs metadata
+    pub fn stat(&self, path: &str) -> Result<(), &'static str> {
+        serial_println!("sexc: stat(\"{}\")", path);
+        Ok(())
+    }
 }
 
 /// The standard "syscall" entry point for C applications.

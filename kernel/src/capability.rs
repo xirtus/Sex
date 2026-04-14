@@ -12,6 +12,7 @@ pub enum CapabilityKind {
     Interrupt, 
     Domain,    
     Node,      // Unified sexvfs Node capability
+    Spawn,     // PD Spawning capability
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -43,12 +44,19 @@ pub struct NodeCapData {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct SpawnCapData {
+    pub max_pds: u32,
+    pub allowed_pku_keys: u32, // Bitmask
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum CapabilityData {
     Memory(MemoryCapData),
     IPC(IpcCapData),
     Interrupt(InterruptCapData),
     Domain(u32), 
     Node(NodeCapData),
+    Spawn(SpawnCapData),
 }
 
 #[derive(Debug, Clone, Copy)]

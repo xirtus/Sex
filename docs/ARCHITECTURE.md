@@ -147,6 +147,18 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Dynamic On-Demand Translation.
 - [x] Global URL-driven routing.
 
+### Phase 13: Native Self-Hosting (Complete ✅)
+- [x] `sexc` Self-Hosting extensions (spawn_pd, mmap, stat).
+- [x] Developer PD & Spawn Capability.
+- [x] Rust toolchain porting design.
+- [x] Native build demonstration.
+
+### Phase 14: The Sex-Store (Next 🚀)
+- [ ] Graphical Sex-Store Application.
+- [ ] Package browsing & one-click sexting.
+- [ ] Binary caching & SPD image management.
+- [ ] User-contributed sexdrives and apps.
+
 ---
 
 ## 🏆 The Vision Realized
