@@ -537,7 +537,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
 
     // Test virtual-to-physical translation
-    use x86_64::structures::sexting::Mapper;
+    use x86_64::structures::paging::Mapper;
     let addresses = [
         // the identity-mapped vga buffer
         0xb8000,

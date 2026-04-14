@@ -141,6 +141,12 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] GNU Toolchain integration (GCC/Bash).
 - [x] `sex-packages` repository design.
 
+### Phase 12: Dynamic Translators & URL-Based DSAS (Next 🚀)
+- [ ] Hurd-style VFS Translators (PD-to-Node attachment).
+- [ ] Redox-style URL Schemes (sexnet://, sexdrm://).
+- [ ] Dynamic On-Demand Translation.
+- [ ] Global URL-driven routing.
+
 ---
 
 ## 🏆 The Vision Realized

@@ -28,7 +28,7 @@ pub const HEAP_SIZE: usize = 1024 * 1024; // 1 MiB
 pub mod allocator {
     use super::*;
     use x86_64::{
-        structures::sexting::{
+        structures::paging::{
             mapper::MapToError, FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB,
         },
         VirtAddr,

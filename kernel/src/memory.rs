@@ -1,6 +1,6 @@
 use bootloader_api::info::{MemoryRegionKind, MemoryRegions};
 use x86_64::{
-    structures::sexting::{FrameAllocator, Mapper, OffsetPageTable, PageTable, PhysFrame, Size4KiB, Page, PageTableFlags},
+    structures::paging::{FrameAllocator, Mapper, OffsetPageTable, PageTable, PhysFrame, Size4KiB, Page, PageTableFlags},
     PhysAddr, VirtAddr,
 };
 use spin::Mutex;

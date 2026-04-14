@@ -3,7 +3,7 @@ use crate::memory::GlobalVas;
 use spin::Mutex;
 use lazy_static::lazy_static;
 use x86_64::VirtAddr;
-use x86_64::structures::sexting::PageTableFlags;
+use x86_64::structures::paging::PageTableFlags;
 
 /// sext Server's state.
 pub struct sext {
