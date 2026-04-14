@@ -400,6 +400,42 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         sex_kernel::vga_println!("Phase 7: COMPLETE. POSIX Foundation Ready.");
         // --- END PHASE 7 TEST ---
 
+        // --- PHASE 9: DESKTOP ECOSYSTEM & HARDWARE PARITY ---
+        serial_println!("PHASE 9: Initializing Desktop Foundation & Hardware Parity...");
+        
+        use sex_kernel::servers::drm::DrmServer;
+        use sex_kernel::servers::audio::AudioServer;
+        use sex_kernel::servers::wifi::WifiServer;
+
+        // 1. Create Graphics PD (ID 2100, Key 13)
+        let drm_pd = Arc::new(ProtectionDomain::new(2100, 13));
+        DOMAIN_REGISTRY.write().insert(drm_pd.id, drm_pd.clone());
+        
+        let mut drm_server = DrmServer::new("NVIDIA RTX 3070");
+        drm_server.init().expect("DRM: Init failed");
+
+        // 2. Create Audio PD (ID 2200, Key 14)
+        let audio_pd = Arc::new(ProtectionDomain::new(2200, 14));
+        DOMAIN_REGISTRY.write().insert(audio_pd.id, audio_pd.clone());
+        
+        let mut audio_server = AudioServer::new("Intel HDA");
+        audio_server.init().expect("AUDIO: Init failed");
+
+        // 3. Create WiFi PD (ID 2300, Key 15)
+        let wifi_pd = Arc::new(ProtectionDomain::new(2300, 15));
+        DOMAIN_REGISTRY.write().insert(wifi_pd.id, wifi_pd.clone());
+        
+        let mut wifi_server = WifiServer::new("Intel iwlwifi");
+        wifi_server.init().expect("WIFI: Init failed");
+        wifi_server.connect("SexNet-5G");
+
+        // 4. Demonstrate Kitty-style buffer allocation
+        let buf_handle = drm_server.allocate_buffer(1920, 1080);
+        serial_println!("KITTY: Allocated GPU buffer {:#x} on NVIDIA via DRM-Sex.", buf_handle);
+
+        sex_kernel::vga_println!("Phase 9: COMPLETE. Desktop & Hardware Parity achieved.");
+        // --- END PHASE 9 TEST ---
+
         // --- PHASE 8: DISTRIBUTED SAS & SEXIT SUPERVISION ---
         serial_println!("DSAS: Initializing Phase 8 Distributed Paging...");
         
