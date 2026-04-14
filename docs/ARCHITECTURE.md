@@ -9,6 +9,7 @@ Sex is a **microkernel**, meaning it implements only the most fundamental primit
 - **Hardware-Enforced Protection:** Isolation is achieved through hardware features like Intel PKU/MPK and CHERI (where available), rather than page table switching.
 - **Zero-Copy IPC:** High-performance messaging through shared memory regions and Protected Procedure Calls (PDX).
 - **Capability-Based Security:** All system resources (memory, IPC ports, interrupts) are managed via unforgeable capabilities.
+- **Asynchronous I/O (Zero Mediation):** Hardware signals are pushed into lockless ring buffers, eliminating context switch jitter.
 
 ---
 
@@ -20,32 +21,30 @@ In Sex, all data is mapped into a single 64-bit address space. This removes the 
 ### 🛡 Protection Domains (PDs)
 Isolation is enforced by **Protection Domains (PDs)**. Each domain represents a logical set of permissions (Read, Write, Execute) over specific address ranges.
 - **Intel PKU / MPK:** Sex uses Intel Memory Protection Keys (PKU) to assign a 4-bit "key" to each page. A hardware register (PKRU) defines the current thread's access rights for each of the 16 available keys.
-- **CHERI Capabilities:** Where hardware support exists, CHERI (Capability Hardware Enhanced RISC Instructions) provides fine-grained, spatial and temporal memory safety for every pointer.
+- **Atomic PKRU Management:** Domain masks are managed via atomic operations to ensure thread-safe switches in multicore environments.
 
 ---
 
-## ⚡ IPC Primitives: PDX & Shared Regions
+## ⚡ IPC Primitives: PDX & Ring Buffers
 
 ### 🚀 Protected Procedure Calls (PDX)
-The core IPC mechanism is a synchronous **Protected Procedure Call (PDX)**. This allows a thread to "call" a function in another protection domain as if it were a local function.
-1. **Transfer:** The kernel switches the thread's Protection Key (PKRU) to the target domain's key.
-2. **Execute:** The thread executes code in the target domain.
-3. **Return:** The kernel restores the original PKRU.
-This mechanism provides zero-copy messaging and near-instantaneous context switching.
+The core IPC mechanism is a synchronous **Protected Procedure Call (PDX)**.
+1. **Safe PDX:** Validates a capability before performing a hardware-accelerated domain switch.
+2. **Fused PDX:** Bypasses capability checks for high-frequency hot-paths between "fused" domains.
 
-### 📦 Shared Memory Regions
-For high-volume data transfer, servers can negotiate **Shared Memory Regions**. These are ranges of the global address space that are mapped into multiple domains with appropriate permissions.
+### 📦 Asynchronous Ring Buffers
+For interrupts and high-volume data transfer, Sex uses lockless, SPSC (Single Producer, Single Consumer) ring buffers. These are cache-line aligned to prevent false sharing on 128-core systems.
 
 ---
 
 ## 🗝 Capability System
 
-Sex uses a **Sparse Capability** system, similar to seL4 and Mungi. A capability is an unforgeable token that proves its holder has the right to access a specific resource.
+Sex uses a **Sparse Capability** system. A capability is an unforgeable token that proves its holder has the right to access a specific resource.
 
 ### 🛠 Capability Types
-- **Memory Capabilities:** Define access (R/W/X) to a range of virtual memory.
+- **Memory Capabilities:** Define access (R/W/X) to a range of virtual memory via "Memory Lending".
 - **IPC Capabilities:** Grant permission to call or listen on a specific PDX port.
-- **Interrupt Capabilities:** Allow a user-space driver to respond to hardware interrupts.
+- **Interrupt Capabilities:** Allow a user-space driver to respond to hardware interrupts via ring buffers.
 - **Domain Capabilities:** Allow management and configuration of Protection Domains.
 
 ---
@@ -56,50 +55,43 @@ All traditional OS services run in isolated user-space Protection Domains.
 
 | Server | Responsibility |
 | --- | --- |
-| **Pager** | Manages the global virtual address space and physical memory allocation. |
-| **Capability Server** | Central authority for capability creation, derivation, and revocation. |
-| **VFS** | Provides a unified file system interface, delegating to specific file system drivers. |
-| **Network** | Implements TCP/IP and other protocols in user-space. |
-| **Drivers** | Isolated hardware management (Graphics, Disk, Input). |
-| **Init** | The system bootstrap and supervisor server. |
-
----
-
-## 🛰 Security Model
-
-- **Minimal Kernel:** Reduces the surface area for vulnerabilities.
-- **Hardware-Enforced Isolation:** Intel PKU and CHERI provide strong, hardware-backed boundaries between domains.
-- **Principle of Least Privilege:** Every domain starts with zero capabilities and must be explicitly granted the minimum set of permissions required.
-- **Network Transparency:** Distributed IPC capabilities are managed by the Capability Server, ensuring that security policies are consistent across the entire cluster.
+| **Pager** | Manages the global VAS and handles asynchronous page faults via large pages. |
+| **Capability Server** | Central authority for capability policy, distributed for local core scaling. |
+| **VFS** | Unified file system interface (Phase 3). |
+| **Network** | User-space TCP/IP stack (Phase 3). |
+| **Drivers** | Isolated hardware management (Serial, Input, etc.). |
 
 ---
 
 ## 🗺 Roadmap
 
-### Phase 0: Bootstrap (Current)
-- [ ] Bootable kernel skeleton (`no_std`, `no_main`).
-- [ ] Basic HAL for x86_64.
-- [ ] Simple VGA/Serial console output.
-- [ ] Bootloader integration (UEFI).
+### Phase 0: Bootstrap (Complete ✅)
+- [x] Bootable kernel skeleton (`no_std`, `no_main`).
+- [x] Basic HAL for x86_64.
+- [x] VGA/Serial console output.
+- [x] Bootloader integration (UEFI).
 
-### Phase 1: Core Primitives
-- [ ] Physical memory manager (Frame allocator).
-- [ ] Paging and Global VAS setup.
-- [ ] Protection Domain management (PKU/MPK).
-- [ ] Basic PDX implementation (synchronous).
+### Phase 1: Core Primitives (Complete ✅)
+- [x] Physical memory manager (Frame allocator).
+- [x] Paging and Global VAS setup.
+- [x] Protection Domain management (PKU/MPK).
+- [x] Basic PDX implementation (synchronous).
+- [x] Page Fault Forwarder (Prestep).
 
-### Phase 2: Capabilities & Servers
-- [ ] Capability engine implementation.
-- [ ] Pager Server (demand paging).
-- [ ] Interrupt management.
-- [ ] First user-space driver (Serial/Input).
+### Phase 2: Capabilities & Servers (Complete ✅)
+- [x] Formal Capability Engine implementation.
+- [x] User-Space Pager Server (Asynchronous demand paging).
+- [x] SMP Boot (128-core discovery & signaling).
+- [x] Asynchronous Interrupt management (Ring Buffers).
+- [x] First user-space driver (Serial/Input).
+- [x] Domain Fusion & Revocation.
 
-### Phase 3: Services & VFS
-- [ ] VFS implementation.
-- [ ] IPC-based storage drivers.
-- [ ] Network stack (user-space).
+### Phase 3: Services & VFS (Complete ✅)
+- [x] VFS implementation.
+- [x] IPC-based storage drivers (NVMe).
+- [x] Network stack (user-space).
 
-### Phase 4: Distribution
-- [ ] Transparent networked IPC.
-- [ ] Cluster management and node discovery.
-- [ ] Distributed Capability management.
+### Phase 4: Distribution (Complete ✅)
+- [x] Transparent networked IPC.
+- [x] Cluster management and node discovery.
+- [x] Distributed Capability management.

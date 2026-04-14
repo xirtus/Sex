@@ -1,50 +1,78 @@
 #![no_std]
-#![feature(abi_x86_interrupt)]
+#![feature(abi_x86_interrupt, naked_functions)]
+
+extern crate alloc;
 
 pub mod serial;
+pub mod vga;
 pub mod memory;
 pub mod pku;
+pub mod capability;
+pub mod ipc;
+pub mod ipc_ring;
+pub mod gdt;
+pub mod interrupts;
+pub mod apic;
+pub mod smp;
+pub mod scheduler;
+pub mod servers;
 
-/// Basic Hardware Abstraction Layer (HAL) stubs for x86_64
+use linked_list_allocator::LockedHeap;
+
+#[global_allocator]
+static ALLOCATOR: LockedHeap = LockedHeap::empty();
+
+pub const HEAP_START: usize = 0x_4444_4444_0000;
+pub const HEAP_SIZE: usize = 1024 * 1024; // 1 MiB
+
+pub mod allocator {
+    use super::*;
+    use x86_64::{
+        structures::paging::{
+            mapper::MapToError, FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB,
+        },
+        VirtAddr,
+    };
+
+    pub fn init_heap(
+        mapper: &mut impl Mapper<Size4KiB>,
+        frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    ) -> Result<(), MapToError<Size4KiB>> {
+        let page_range = {
+            let heap_start = VirtAddr::new(HEAP_START as u64);
+            let heap_end = heap_start + HEAP_SIZE - 1u64;
+            let heap_start_page = Page::containing_address(heap_start);
+            let heap_end_page = Page::containing_address(heap_end);
+            Page::range_inclusive(heap_start_page, heap_end_page)
+        };
+
+        for page in page_range {
+            let frame = frame_allocator
+                .allocate_frame()
+                .ok_or(MapToError::FrameAllocationFailed)?;
+            let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+            unsafe { mapper.map_to(page, frame, flags, frame_allocator)?.flush() };
+        }
+
+        unsafe {
+            ALLOCATOR.lock().init(HEAP_START as *mut u8, HEAP_SIZE);
+        }
+
+        Ok(())
+    }
+}
+
+/// Basic Hardware Abstraction Layer (HAL) for x86_64
 pub mod hal {
     use crate::serial_println;
+    use crate::gdt;
+    use crate::interrupts;
 
     pub fn init() {
-        serial_println!("HAL: Initializing x86_64 stubs...");
-        // TODO: Initialize GDT, IDT, Paging
-    }
-
-    pub mod interrupts {
-        pub fn init_idt() {
-            // TODO: Initialize IDT and forward interrupts
-        }
-    }
-
-    pub mod paging {
-        pub fn init_paging() {
-            // TODO: Implement basic page table walker for Global VAS
-        }
-    }
-}
-
-/// Simple round-robin scheduler stub
-pub mod scheduler {
-    pub fn schedule() {
-        // TODO: Implement round-robin scheduling
-    }
-}
-
-/// Capability engine stubs
-pub mod capability {
-    pub fn verify_cap() {
-        // TODO: Implement capability verification
-    }
-}
-
-/// IPC Primitives (PDX) stubs
-pub mod ipc {
-    pub fn pdx_call() {
-        // TODO: Implement PDX fast path with PKU
+        serial_println!("HAL: Initializing GDT...");
+        gdt::init();
+        serial_println!("HAL: Initializing IDT...");
+        interrupts::init_idt();
     }
 }
 

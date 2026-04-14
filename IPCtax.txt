@@ -1,0 +1,75 @@
+Technical Specification: Building a High-Performance Microkernel IPC System
+
+1. Strategic Foundation: The Capability-First Microkernel Architecture
+
+Traditional monolithic kernels have reached a terminal performance plateau on manycore accelerators such as the Xeon Phi and ARM Morello. This "performance wall" is defined by two architectural bottlenecks: intensive spinlock contention—with the Completely Fair Scheduler (CFS) spending between 8% and 15% of cycles on lock overhead—and the inherent latency of Memory Management Unit (MMU) operations. Standard isolation relies on expensive mode-switching and TLB flushes, which incur a significant "Context Switch Tax," exemplified by the 1.37μs latency required for traditional futex-based thread wakeups.
+
+To surpass these constraints, we mandate a transition to a Capability-Hardware-enforced Single Address Space Operating System (SASOS). The foundational enforcement layer utilizes CHERI (Capability Hardware Enhanced RISC Instructions). By implementing hardware-unforgeable capabilities in the CHERI-128 compressed format, we replace software-managed 64-bit machine-word pointers with fat pointers that possess inherent spatial and temporal safety. This architecture leverages "Capability Provenance" and "Access Monotonicity" to ensure that isolation is verified in parallel with the CPU pipeline. By managing metadata in a dedicated tag shadowspace, we eliminate TLB flush overhead and transform the kernel from a bottleneck into a high-speed traffic controller for silicon physics.
+
+2. Memory Architecture: Single Address Space (SASOS) Implementation
+
+The architecture implements a global, flat 64-bit address space where the kernel, drivers, and application entities reside. This SASOS model eliminates the need for per-process page table isolation, fundamentally streamlining the data path for Inter-Process Communication (IPC).
+
+Domain Switching via Intel MPK
+
+In this model, traditional "Context Switching" is replaced by "Domain Switching." We utilize Intel Memory Protection Keys (MPK) to provide in-process isolation within the same address space. Following the Pegasus framework, the system categorizes execution into "vProcesses" and "vThreads." While these entities share a 64-bit space, their access is gated by the PKRU register. This allow-list approach provides functional isolation, ensuring that a fault in one vProcess cannot propagate to another. This static memory model enables cross-domain calls to function as simple jump instructions, bypassing the MMU overhead that traditionally plagues microkernel designs.
+
+3. The IPC Core: Zero-Copy Capability Passing
+
+The IPC core shifts the paradigm from data shuffling to ownership transfer. In high-throughput environments, the kernel’s role as a data-shuffler is deprecated in favor of a "Lent Memory" model.
+
+Capability Passing Mechanism
+
+When a network driver receives a DMA buffer, it does not copy the payload across boundaries. Instead, it "lends" a read-only capability of the memory segment to the target vProcess. Utilizing capability-enhanced pointers, this ownership transfer is architected to occur in a single CPU cycle. The following table defines the performance delta between the traditional copy-based approach and the capability-transfer model:
+
+Metric	Traditional Data Copy IPC	Capability Transfer IPC
+Latency	1.37μs (Futex/Kernel Trap)	~1 CPU Cycle (Pointer Pass)
+CPU Cycles	Thousands (Allocation/Copy)	1 (Ownership Swap)
+Cache Pollution	Significant (Inter-core bounces)	Minimal (Data remains hot)
+
+4. Scheduling Logic: The Lockless Multikernel Approach
+
+To achieve linear scalability on systems with 64+ cores, the OS must be treated as a distributed network of independent cores. This "Lockless Multikernel" approach mitigates Amdahl’s Law bottlenecks where sequential lock contention degrades manycore throughput.
+
+FLSCHED Design Principles
+
+We implement a per-core, lockless scheduler based on FLSCHED principles. A primary driver for this design is the increasing state size of modern registers; for instance, the 512-bit SIMD register files (AVX-512) on Xeon Phi processors make traditional context switching prohibitively expensive. By adopting a "Work-conserving" scheduler, we minimize the frequency of saving and restoring these massive register states.
+
+* Lock Elimination: We mandate the removal of global runqueue locks and per-runqueue locks. This reduces spinlock contention from the ~15% observed in CFS to a target of ~4%.
+* Deterministic Logic: Periodic load balancing and bandwidth control mechanisms are removed. Cores communicate via asynchronous, cache-line-aligned ring buffers to maintain L1/L2 cache locality.
+* Context Switch Avoidance: The scheduler delays setting the NEED_RESCHED flag to the maximum extent permitted by the workload, prioritizing computation throughput over arbitrary fairness metrics.
+
+5. Optimization Layer: Domain Fusion and Profile-Guided Linkage
+
+"Domain Fusion" serves as a dynamic JIT for the operating system, resolving the "Microkernel Tax" by merging isolated compartments based on real-time profiling.
+
+Implementation of the Background Profiler
+
+A lightweight monitor tracks synchronous, high-frequency IPC hot-paths (e.g., a vProcess database communicating with a vProcess block-storage driver). When a threshold is met, the monitor triggers a fusion event:
+
+* Dynamic Tag Alteration: The hardware capability tags are modified to allow the two compartments to share an execution context temporarily.
+* Seccomp-Filter Relaxation: Utilizing the Pegasus model, the monitor performs a temporary relaxation of the Seccomp-filter. This allows the monitor to perform system calls on behalf of the fused domains without the overhead of multiple security crossings.
+* Runtime Linkage: The fusion enables zero-abstraction communication. If a fault is detected, the monitor instantly revokes the shared capability tags, restoring the hard isolation boundary.
+
+6. I/O Architecture: User-Space Interrupt and Direct Hardware Access
+
+To eliminate I/O jitter, the kernel is removed from the critical data path. We specify a "Unified Kernel-Bypass" model where hardware interrupts are pushed directly to isolated user-space drivers.
+
+Secure Switch Gates and Zero Mediation
+
+Hardware interrupts from high-speed peripherals (GPUs, NICs) are mapped directly to vProcess domains via the IOMMU. To ensure security in this model, we implement "Secure Switch Gates."
+
+* Binary Inspection: The monitor must inspect vProcess binaries to eliminate unauthorized WRPKRU, WRGSBASE, and WRFSBASE instructions. This prevents an application from using the ARCH_SET_GS call to tamper with the base address of the GS segment or escaping its MPK domain.
+* Direct Attention: Latency-critical paths receive hardware attention without kernel wakeups. This results in a "Zero Mediation" path, essential for deterministic timing in sub-microsecond environments.
+
+7. Microkernel Implementation Directives
+
+The following checklist provides the actionable engineering requirements for the system implementation:
+
+1. Assembly-Based JeOS: The core microkernel must be implemented using a "Just Enough OS" (JeOS) approach, written in Assembly to minimize footprint and eliminate C-runtime overhead.
+2. Asynchronous Ring Buffers: All inter-core communication must utilize cache-line-aligned ring structures to maximize L1/L2 hit rates.
+3. Intel MPK Symbiotic Fusing: Use MPK-based domains for vProcess isolation. Implement secure switch gates to protect the PKRU register and monitor state.
+4. Lockless Per-Runqueue Logic: Eliminate all global and per-runqueue spinlocks. Target a reduction of scheduler-related lock contention to < 5% of total CPU time.
+5. Capability-Enhanced Pointers: Mandate CHERI-128 hardware-unforgeable capabilities for all memory operations, ensuring deterministic safety and single-cycle ownership transfers.
+
+The ultimate objective of this architecture is the transformation of the kernel from an intermediary shuffler into a pure traffic controller for silicon physics, achieving the theoretical limits of hardware throughput.
