@@ -113,3 +113,9 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [ ] Graphical Compositor (Wayland-lifted).
 - [ ] Developer Toolchain (Self-hosting).
 - [ ] High-Level Application Framework.
+
+### Phase 8: Distributed SAS & Global Resource Fusion (The Pinnacle)
+- [ ] Global Distributed Shared Memory (DSM).
+- [ ] Remote Capability Hardware Fusion (NVIDIA 3070 over cluster).
+- [ ] Distributed SMP & Inter-Node Interrupts.
+- [ ] Seamless Cluster-Wide Task Migration.
