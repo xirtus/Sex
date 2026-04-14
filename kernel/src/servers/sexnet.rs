@@ -1,7 +1,7 @@
 use crate::serial_println;
 use crate::ipc_ring::SpscRing;
 
-/// User-Space Network Stack (Phase 3 Step 3)
+/// User-Space sexnet Stack (Phase 3 Step 3)
 pub struct sexnet {
     // Protocol domain (TCP/UDP/IP)
     // Ring buffer interface for NICs

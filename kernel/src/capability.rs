@@ -11,7 +11,7 @@ pub enum CapabilityKind {
     IPC,      
     Interrupt, 
     Domain,    
-    Node,      // Unified VFS Node capability
+    Node,      // Unified sexvfs Node capability
 }
 
 #[derive(Debug, Clone, Copy)]

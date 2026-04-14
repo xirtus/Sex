@@ -22,9 +22,9 @@ SexOS runs traditional monolithic kernel components as isolated, user-space serv
 *   **`sexit`**: The minimalist service supervisor (replaces `systemd`). It ensures that critical PDs stay alive.
     *   *Usage in code:* `sexit::start_service("name", pd_id)`
 *   **`sexvfs`**: The Virtual File System registry. Manages mount points for ext4, btrfs, FAT32, and NTFS.
-*   **`sext`**: The Global Memory Manager (Pager). Handles demand sexting and Distributed Shared Memory (DSM) across the cluster.
-*   **`sexnet`**: The Zero-Copy TCP/IP Network Stack.
-*   **`sexnode`**: The Cluster Manager. Discovers other SexOS machines on the network for transparent remote IPC.
+*   **`sext`**: The Global Memory Manager (sext). Handles demand sexting and Distributed Shared Memory (DSM) across the sexnode.
+*   **`sexnet`**: The Zero-Copy TCP/IP sexnet Stack.
+*   **`sexnode`**: The sexnode Manager. Discovers other SexOS machines on the network for transparent remote IPC.
 *   **`sexdrm`**: The Direct Rendering Manager. Interfaces with your GPU (e.g., NVIDIA 3070) for Wayland compositors.
 *   **`sexsound`**: The ALSA-lifted audio server.
 *   **`sexinput`**: The libinput-lifted server for mouse and keyboard events.

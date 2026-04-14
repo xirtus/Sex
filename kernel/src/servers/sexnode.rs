@@ -5,7 +5,7 @@ use spin::RwLock;
 use lazy_static::lazy_static;
 
 lazy_static! {
-    /// Registry of known active nodes in the cluster.
+    /// Registry of known active nodes in the sexnode.
     /// Maps Node ID to its network address (simulated as u32).
     pub static ref CLUSTER_NODES: RwLock<BTreeMap<u32, u32>> = RwLock::new(BTreeMap::new());
 }

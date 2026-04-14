@@ -33,7 +33,7 @@ pub fn sext_request(req: MapRequest) -> u64 {
     if req.node_id != 1 { // Assuming local node is 1
         serial_println!("sext: [DSM] Remote Page Fault for Node {} (addr: {:#x})", 
             req.node_id, req.start);
-        // Route to Global Pager Network Stack (DSM Fetch)
+        // Route to Global sext sexnet Stack (DSM Fetch)
         return fetch_remote_page(req.node_id, req.start);
     }
 

@@ -28,7 +28,7 @@ pub fn dde_kmalloc(size: usize) -> *mut u8 {
     unsafe {
         let layout = Layout::from_size_align_unchecked(size, 16);
         let ptr = alloc::alloc::alloc(layout);
-        serial_println!("DDE [{}]: kmalloc({}) -> {:p}", "DRIVER", size, ptr);
+        serial_println!("DDE [{}]: kmalloc({}) -> {:p}", "SEXDRIVE", size, ptr);
         ptr
     }
 }
@@ -48,7 +48,7 @@ pub fn dde_ioremap(phys_addr: u64, size: u64) -> Result<VirtAddr, &'static str> 
     
     // In a SASOS, MMIO is often identity-mapped or mapped at a fixed offset.
     // For now, we return the virtual address directly (assuming 1:1 for hardware).
-    // In a real system, this would call the Pager to map the hardware range.
+    // In a real system, this would call the sext to map the hardware range.
     Ok(VirtAddr::new(phys_addr))
 }
 

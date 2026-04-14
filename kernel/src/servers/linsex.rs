@@ -6,14 +6,14 @@ use crate::servers::sexc::sexc;
 
 pub struct LinSexLoader {
     pub target_pd_id: u32,
-    pub libc: sexc,
+    pub sexc: sexc,
 }
 
 impl LinSexLoader {
     pub fn new(pd_id: u32) -> Self {
         Self {
             target_pd_id: pd_id,
-            libc: sexc::new(pd_id),
+            sexc: sexc::new(pd_id),
         }
     }
 
@@ -41,14 +41,14 @@ impl LinSexLoader {
     }
 
     fn sys_read(&self, fd: u32, buf: *mut u8, count: usize) -> u64 {
-        match self.libc.read(fd, buf, count) {
+        match self.sexc.read(fd, buf, count) {
             Ok(res) => res as u64,
             Err(_) => u64::MAX,
         }
     }
 
     fn sys_write(&self, fd: u32, buf: *const u8, count: usize) -> u64 {
-        match self.libc.write(fd, buf, count) {
+        match self.sexc.write(fd, buf, count) {
             Ok(res) => res as u64,
             Err(_) => u64::MAX,
         }
@@ -57,13 +57,13 @@ impl LinSexLoader {
     fn sys_open(&self, path_ptr: *const u8, flags: i32) -> u64 {
         // In a real system, we'd copy the string from the PD's memory
         let path = "/disk0/linux_app"; 
-        match self.libc.open(path, flags) {
+        match self.sexc.open(path, flags) {
             Ok(fd) => fd as u64,
             Err(_) => u64::MAX,
         }
     }
 
     fn sys_close(&self, fd: u32) -> u64 {
-        self.libc.close(fd) as u64
+        self.sexc.close(fd) as u64
     }
 }

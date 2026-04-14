@@ -328,7 +328,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // --- END PHASE 3 TEST ---
 
         // --- PHASE 4: DISTRIBUTION TEST ---
-        serial_println!("CLUSTER: Initializing Phase 4 Distribution...");
+        serial_println!("sexnode: Initializing Phase 4 Distribution...");
         
         use sex_kernel::servers::sexnode;
         
@@ -341,10 +341,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
         // 3. Import Remote Capability
         let imported_cap_handle = sexnode::import_remote_capability(2, 50, 42);
-        serial_println!("CLUSTER: Received Local Handle {} for Remote Capability.", imported_cap_handle);
+        serial_println!("sexnode: Received Local Handle {} for Remote Capability.", imported_cap_handle);
         
         // 4. Demonstrate Transparent Networked IPC (Remote PDX)
-        serial_println!("CLUSTER: Demonstrating Transparent Remote PDX...");
+        serial_println!("sexnode: Demonstrating Transparent Remote PDX...");
         
         // Grant Client an IPC Capability targeting the Remote Node (Node 2)
         let remote_entry_ptr = x86_64::VirtAddr::new(0x3000_0000);
@@ -414,48 +414,48 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         let drm_pd = Arc::new(ProtectionDomain::new(2100, 13));
         DOMAIN_REGISTRY.write().insert(drm_pd.id, drm_pd.clone());
         
-        let mut drm_server = sexdrm::sexdrm::new("NVIDIA RTX 3070");
-        drm_server.init().expect("DRM: Init failed");
+        let mut sexdrm = sexdrm::sexdrm::new("NVIDIA RTX 3070");
+        sexdrm.init().expect("sexdrm: Init failed");
 
-        // 2. Create Audio PD (ID 2200, Key 14)
+        // 2. Create sexsound PD (ID 2200, Key 14)
         let audio_pd = Arc::new(ProtectionDomain::new(2200, 14));
         DOMAIN_REGISTRY.write().insert(audio_pd.id, audio_pd.clone());
         
-        let mut audio_server = sexsound::sexsound::new("Intel HDA");
-        audio_server.init().expect("AUDIO: Init failed");
+        let mut sexsound = sexsound::sexsound::new("Intel HDA");
+        sexsound.init().expect("sexsound: Init failed");
 
-        // 3. Create WiFi PD (ID 2300, Key 15)
+        // 3. Create sexwifi PD (ID 2300, Key 15)
         let wifi_pd = Arc::new(ProtectionDomain::new(2300, 15));
         DOMAIN_REGISTRY.write().insert(wifi_pd.id, wifi_pd.clone());
         
-        let mut wifi_server = sexwifi::sexwifi::new("Intel iwlwifi");
-        wifi_server.init().expect("WIFI: Init failed");
-        wifi_server.connect("SexNet-5G");
+        let mut sexwifi = sexwifi::sexwifi::new("Intel iwlwifi");
+        sexwifi.init().expect("sexwifi: Init failed");
+        sexwifi.connect("SexNet-5G");
 
         // 4. Demonstrate Kitty-style buffer allocation
-        let buf_handle = drm_server.allocate_buffer(1920, 1080);
+        let buf_handle = sexdrm.allocate_buffer(1920, 1080);
         serial_println!("KITTY: Allocated GPU buffer {:#x} on NVIDIA via sexdrm.", buf_handle);
 
         sex_kernel::vga_println!("Phase 9: COMPLETE. Desktop & Hardware Parity achieved.");
         // --- END PHASE 9 TEST ---
 
-        // --- PHASE 10: GRAPHICAL PLUMBING & INPUT ---
-        serial_println!("PHASE 10: Initializing Wayland Plumbing & Input...");
+        // --- PHASE 10: GRAPHICAL PLUMBING & sexinput ---
+        serial_println!("PHASE 10: Initializing Wayland Plumbing & sexinput...");
         
         use sex_kernel::servers::sexinput;
         use sex_kernel::servers::sexc;
 
-        // 1. Create Input PD (ID 2400, Key 16)
+        // 1. Create sexinput PD (ID 2400, Key 16)
         let input_pd = Arc::new(ProtectionDomain::new(2400, 16));
         DOMAIN_REGISTRY.write().insert(input_pd.id, input_pd.clone());
         
-        let mut input_server = sexinput::sexinput::new("Alienware HID");
-        input_server.init().expect("INPUT: Init failed");
+        let mut sexinput = sexinput::sexinput::new("Alienware HID");
+        sexinput.init().expect("sexinput: Init failed");
 
         // 2. Demonstrate Wayland AF_UNIX emulation in sexc
-        let libc = sexc::sexc::new(2000); // Using existing App PD
-        let wayland_sock = libc.socket(1, 1, 0).expect("sexc: Socket failed");
-        libc.sendmsg(wayland_sock, 0x_AAAA_0000, 0).expect("sexc: sendmsg failed");
+        let sexc = sexc::sexc::new(2000); // Using existing App PD
+        let wayland_sock = sexc.socket(1, 1, 0).expect("sexc: Socket failed");
+        sexc.sendmsg(wayland_sock, 0x_AAAA_0000, 0).expect("sexc: sendmsg failed");
 
         // 3. Demonstrate Wayland-SHM mapping via sext
         let shm_req = MapRequest {
@@ -469,7 +469,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         let shm_handle = sext::sext_request(shm_req);
         serial_println!("WAYLAND: Created zero-copy SHM buffer with handle {:#x}.", shm_handle);
 
-        sex_kernel::vga_println!("Phase 10: COMPLETE. Wayland Plumbing & Input Ready.");
+        sex_kernel::vga_println!("Phase 10: COMPLETE. Wayland Plumbing & sexinput Ready.");
         // --- END PHASE 10 TEST ---
 
         // --- PHASE 11: GNU PIPELINE & FILESYSTEM PARITY ---

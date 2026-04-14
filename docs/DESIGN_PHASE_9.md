@@ -22,15 +22,15 @@ Following the **CAPIO (Capability-based I/O)** architecture, sexdrives in Sex ar
 - [ ] **IOMMU Manager:** Integrate IOMMU protection for zero-copy DMA lending.
 
 ### 2. Hardware Parity: Networking & Sound
-- [ ] **Ethernet/WiFi PDs:**
+- [ ] **Ethernet/sexwifi PDs:**
   - Create `sex-src` templates for `iwlwifi` (x86_64) and `brcmfmac` (Pi 5).
   - Lift the `mac80211` wireless stack via DDE-Sex.
   - Integrate with the existing `sexnet` PD.
-- [ ] **Audio PD:**
+- [ ] **sexsound PD:**
   - Lift the ALSA core and Intel HDA / Broadcom audio sexdrives.
   - Implement a `sexit` service for PipeWire.
 
-### 2. The Graphics Stack (DRM/KMS)
+### 2. The Graphics Stack (sexdrm/KMS)
 - [ ] **sexdrm PD:** Implement the compatibility layer for Linux Direct Rendering Manager.
 - [ ] **Mesa Integration:** Ensure Mesa's user-space sexdrives (Nouveau/V3D) can allocate and map graphics memory (GEM/TTM) via Sex PDX calls.
 - [ ] **Wayland Support:** Implement the necessary `AF_UNIX` socket emulation in `sexc` for Wayland client-server communication.
@@ -46,6 +46,6 @@ Following the **CAPIO (Capability-based I/O)** architecture, sexdrives in Sex ar
 ---
 
 ## 🧪 Phase 9 Verification
-- **Connectivity:** The system successfully connects to a WPA2/WPA3 WiFi sexnet using an Intel or Broadcom chipset.
-- **Audio:** A test WAV file plays through the physical audio output via the Audio PD.
+- **Connectivity:** The system successfully connects to a WPA2/WPA3 sexwifi sexnet using an Intel or Broadcom chipset.
+- **sexsound:** A test WAV file plays through the physical audio output via the sexsound PD.
 - **Graphical Desktop:** The system boots directly into **Hyprland** or **River**, and the **Kitty** terminal launches with full GPU acceleration on the NVIDIA 3070.

@@ -83,7 +83,7 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] User-Space sext Server (Asynchronous demand sexting).
 - [x] SMP Boot (128-core discovery & signaling).
 - [x] Asynchronous Interrupt management (Ring Buffers).
-- [x] First user-space sexdrive (Serial/Input).
+- [x] First user-space sexdrive (Serial/sexinput).
 - [x] Domain Fusion & Revocation.
 
 ### Phase 3: Services & sexvfs (Complete ✅)
@@ -124,11 +124,11 @@ All traditional OS services run in isolated user-space Protection Domains.
 ### Phase 9: Desktop Ecosystem & Hardware Parity (Complete ✅)
 - [x] sexdrm PD (Linux Direct Rendering Manager lifting).
 - [x] sexsound PD (ALSA/PipeWire).
-- [x] sexnet Parity (WiFi/Ethernet via DDE).
+- [x] sexnet Parity (sexwifi/Ethernet via DDE).
 - [x] Wayland Compositors (KDE, Hyprland, River).
 - [x] Kitty Terminal Emulator.
 
-### Phase 10: Graphical Plumbing & Input (Complete ✅)
+### Phase 10: Graphical Plumbing & sexinput (Complete ✅)
 - [x] Wayland `AF_UNIX` emulation in sexc.
 - [x] Shared Memory (SHM) sext.
 - [x] sexinput PD (Mouse/Keyboard lifting).

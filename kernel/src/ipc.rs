@@ -1,7 +1,7 @@
 use crate::pku::Pkru;
 use x86_64::VirtAddr;
 use crate::capability::{ProtectionDomain, CapabilityData, IpcCapData};
-use crate::servers::network::route_remote_ipc;
+use crate::servers::sexnet::route_remote_ipc;
 use alloc::collections::BTreeMap;
 use spin::RwLock;
 use lazy_static::lazy_static;
@@ -28,7 +28,7 @@ pub fn safe_pdx_call(caller: &ProtectionDomain, cap_id: u32, arg0: u64) -> Resul
         // Handle standard IPC capabilities
         CapabilityData::IPC(ipc_data) => {
             if ipc_data.node_id != LOCAL_NODE_ID {
-                // Route to Network Stack for remote invocation
+                // Route to sexnet Stack for remote invocation
                 return Ok(route_remote_ipc(ipc_data.node_id, ipc_data.target_pd_id, arg0));
             }
 
@@ -41,10 +41,10 @@ pub fn safe_pdx_call(caller: &ProtectionDomain, cap_id: u32, arg0: u64) -> Resul
                 Ok(pdx_call_with_mask(target_mask, ipc_data.entry_point, arg0))
             }
         },
-        // Handle Node capabilities (Unified VFS interface)
+        // Handle Node capabilities (Unified sexvfs interface)
         CapabilityData::Node(node_data) => {
             if node_data.node_id != LOCAL_NODE_ID {
-                // Route to Network Stack for remote invocation
+                // Route to sexnet Stack for remote invocation
                 return Ok(route_remote_ipc(node_data.node_id, node_data.sexdrive_pd_id, arg0));
             }
 

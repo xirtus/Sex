@@ -2,7 +2,7 @@ use crate::serial_println;
 use crate::servers::dde;
 use x86_64::VirtAddr;
 
-/// sexdrm: Linux DRM/KMS lifting for the Sex Microkernel.
+/// sexdrm: Linux sexdrm/KMS lifting for the Sex Microkernel.
 /// Provides a compatibility layer for Direct Rendering Manager.
 
 pub struct sexdrm {
@@ -19,13 +19,13 @@ impl sexdrm {
     }
 
     pub fn init(&mut self) -> Result<(), &'static str> {
-        serial_println!("sexdrm: Initializing DRM/KMS for {}...", self.device_name);
+        serial_println!("sexdrm: Initializing sexdrm/KMS for {}...", self.device_name);
         
         // 1. Map Framebuffer MMIO via DDE-Sex Slicer
         self.framebuffer_base = dde::dde_ioremap(0x8000_0000, 0x400_0000)?; // 64MB placeholder
         serial_println!("sexdrm: Framebuffer mapped at {:?}", self.framebuffer_base);
 
-        // 2. Register DRM device with the system
+        // 2. Register sexdrm device with the system
         serial_println!("sexdrm: /dev/dri/card0 registered.");
         
         Ok(())

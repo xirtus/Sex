@@ -12,7 +12,7 @@ Sex is a from-scratch, high-performance microkernel written in Rust. It is desig
 - **Asynchronous I/O (Zero Mediation):** Lockless, cache-aligned ring buffers for interrupts and IPC events.
 - **Capability-Based Security:** Sparse, unforgeable capabilities for granular access control.
 - **Distributed & Transparent IPC:** Lockless multikernel architecture scaling across 128 cores and multiple physical nodes.
-- **User-Space Everything:** Pagers, VFS, NetStack, sexdrives, and Cluster Managers all run in isolated user-space domains.
+- **User-Space Everything:** Pagers, sexvfs, sexnet, sexdrives, and sexnode Managers all run in isolated user-space domains.
 
 ## 📁 Project Structure
 
@@ -56,12 +56,12 @@ The kernel currently performs a suite of Phase 11 validation tests on boot, incl
 4. Asynchronous Page Fault forwarding to **sext**.
 5. Linux binary compatibility via **Lin-Sex**.
 6. Sexit-style service supervision.
-7. Cluster-wide node discovery via **sexnode**.
+7. sexnode-wide node discovery via **sexnode**.
 
 ## 📚 Documentation
 
 - [**ARCHITECTURE.md**](docs/ARCHITECTURE.md): Full living specification of the kernel.
-- [**DESIGN_PHASE_3.md**](docs/DESIGN_PHASE_3.md): Implementation plan for VFS and Services.
+- [**DESIGN_PHASE_3.md**](docs/DESIGN_PHASE_3.md): Implementation plan for sexvfs and Services.
 - [**DESIGN_PHASE_4.md**](docs/DESIGN_PHASE_4.md): Architecture for distributed clusters.
 - [**IPCtax.txt**](IPCtax.txt): Original technical mandates for high-performance IPC.
 

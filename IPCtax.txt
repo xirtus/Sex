@@ -8,7 +8,7 @@ To surpass these constraints, we mandate a transition to a Capability-Hardware-e
 
 2. Memory Architecture: Single Address Space (SASOS) Implementation
 
-The architecture implements a global, flat 64-bit address space where the kernel, drivers, and application entities reside. This SASOS model eliminates the need for per-process page table isolation, fundamentally streamlining the data path for Inter-Process Communication (IPC).
+The architecture implements a global, flat 64-bit address space where the kernel, sexdrives, and application entities reside. This SASOS model eliminates the need for per-process page table isolation, fundamentally streamlining the data path for Inter-Process Communication (IPC).
 
 Domain Switching via Intel MPK
 
@@ -20,7 +20,7 @@ The IPC core shifts the paradigm from data shuffling to ownership transfer. In h
 
 Capability Passing Mechanism
 
-When a network driver receives a DMA buffer, it does not copy the payload across boundaries. Instead, it "lends" a read-only capability of the memory segment to the target vProcess. Utilizing capability-enhanced pointers, this ownership transfer is architected to occur in a single CPU cycle. The following table defines the performance delta between the traditional copy-based approach and the capability-transfer model:
+When a network sexdrive receives a DMA buffer, it does not copy the payload across boundaries. Instead, it "lends" a read-only capability of the memory segment to the target vProcess. Utilizing capability-enhanced pointers, this ownership transfer is architected to occur in a single CPU cycle. The following table defines the performance delta between the traditional copy-based approach and the capability-transfer model:
 
 Metric	Traditional Data Copy IPC	Capability Transfer IPC
 Latency	1.37μs (Futex/Kernel Trap)	~1 CPU Cycle (Pointer Pass)
@@ -33,7 +33,7 @@ To achieve linear scalability on systems with 64+ cores, the OS must be treated 
 
 FLSCHED Design Principles
 
-We implement a per-core, lockless scheduler based on FLSCHED principles. A primary driver for this design is the increasing state size of modern registers; for instance, the 512-bit SIMD register files (AVX-512) on Xeon Phi processors make traditional context switching prohibitively expensive. By adopting a "Work-conserving" scheduler, we minimize the frequency of saving and restoring these massive register states.
+We implement a per-core, lockless scheduler based on FLSCHED principles. A primary sexdrive for this design is the increasing state size of modern registers; for instance, the 512-bit SIMD register files (AVX-512) on Xeon Phi processors make traditional context switching prohibitively expensive. By adopting a "Work-conserving" scheduler, we minimize the frequency of saving and restoring these massive register states.
 
 * Lock Elimination: We mandate the removal of global runqueue locks and per-runqueue locks. This reduces spinlock contention from the ~15% observed in CFS to a target of ~4%.
 * Deterministic Logic: Periodic load balancing and bandwidth control mechanisms are removed. Cores communicate via asynchronous, cache-line-aligned ring buffers to maintain L1/L2 cache locality.
@@ -45,7 +45,7 @@ We implement a per-core, lockless scheduler based on FLSCHED principles. A prima
 
 Implementation of the Background Profiler
 
-A lightweight monitor tracks synchronous, high-frequency IPC hot-paths (e.g., a vProcess database communicating with a vProcess block-storage driver). When a threshold is met, the monitor triggers a fusion event:
+A lightweight monitor tracks synchronous, high-frequency IPC hot-paths (e.g., a vProcess database communicating with a vProcess block-storage sexdrive). When a threshold is met, the monitor triggers a fusion event:
 
 * Dynamic Tag Alteration: The hardware capability tags are modified to allow the two compartments to share an execution context temporarily.
 * Seccomp-Filter Relaxation: Utilizing the Pegasus model, the monitor performs a temporary relaxation of the Seccomp-filter. This allows the monitor to perform system calls on behalf of the fused domains without the overhead of multiple security crossings.
@@ -53,7 +53,7 @@ A lightweight monitor tracks synchronous, high-frequency IPC hot-paths (e.g., a 
 
 6. I/O Architecture: User-Space Interrupt and Direct Hardware Access
 
-To eliminate I/O jitter, the kernel is removed from the critical data path. We specify a "Unified Kernel-Bypass" model where hardware interrupts are pushed directly to isolated user-space drivers.
+To eliminate I/O jitter, the kernel is removed from the critical data path. We specify a "Unified Kernel-Bypass" model where hardware interrupts are pushed directly to isolated user-space sexdrives.
 
 Secure Switch Gates and Zero Mediation
 

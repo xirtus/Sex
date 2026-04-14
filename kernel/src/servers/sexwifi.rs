@@ -23,7 +23,7 @@ impl sexwifi {
         // 1. Register PCI/DT sexdrive via DDE-Sex
         serial_println!("sexwifi: Lifting wireless stack...");
 
-        // 2. Request WiFi Device IRQ via DDE-Sex Slicer
+        // 2. Request sexwifi Device IRQ via DDE-Sex Slicer
         dde::dde_request_irq(18, self.wifi_irq_handler)?;
         serial_println!("sexwifi: IRQ 18 requested for wireless.");
 

@@ -34,8 +34,8 @@ def main():
     print("from source, format your drive, and download necessary sexdrives.")
     input("\nPress ENTER to begin...")
 
-    # 1. Network Setup
-    print_header("Network Configuration")
+    # 1. sexnet Setup
+    print_header("sexnet Configuration")
     print("Checking ethernet connection...")
     time.append(1) if 'append' in dir(time) else time.sleep(1)
     print("[+] Ethernet link detected (eth0).")
@@ -52,7 +52,7 @@ def main():
         "CPU: Intel(R) Core(TM) i7/i9 (x86_64) or ARM64 (BCM2712)",
         "GPU: NVIDIA GeForce RTX 3070 (10de:2484) / VideoCore VII",
         "NET: Intel iwlwifi / Realtek Ethernet",
-        "SND: Intel HDA Audio"
+        "SND: Intel HDA sexsound"
     ]
     for hw in hardware:
         print(f"  -> Found: {hw}")

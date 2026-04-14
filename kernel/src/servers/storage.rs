@@ -26,7 +26,7 @@ pub extern "C" fn storage_entry(arg: u64) -> u64 {
 /// Block Cache PD (Phase 3 Step 2.2)
 /// A dedicated domain for caching disk blocks.
 pub struct BlockCache {
-    // Shared via "Domain Fusion" with the Storage sexdrive and VFS.
+    // Shared via "Domain Fusion" with the Storage sexdrive and sexvfs.
 }
 
 pub fn handle_read(node_id: u64, offset: u64, size: u64, buffer: u64) -> u64 {

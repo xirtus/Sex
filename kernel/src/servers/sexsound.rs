@@ -33,7 +33,7 @@ impl sexsound {
     }
 
     pub extern "C" fn audio_irq_handler(_arg: u64) -> u64 {
-        serial_println!("sexsound: Audio Hardware Interrupt Handled!");
+        serial_println!("sexsound: sexsound Hardware Interrupt Handled!");
         0
     }
 }

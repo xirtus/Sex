@@ -7,7 +7,7 @@ Port the Sex Microkernel to physical hardware: **Raspberry Pi 5 (ARM64)** and **
 
 To avoid writing sexdrives from scratch, we will implement **DDE-Sex**, a compatibility layer that allows us to "lift" existing sexdrives from Linux and BSD into isolated Protection Domains (PDs).
 
-1.  **Isolated sexdrive Domains:** Each sexdrive (NVMe, WiFi, GPU) runs in its own PD, gated by capabilities.
+1.  **Isolated sexdrive Domains:** Each sexdrive (NVMe, sexwifi, GPU) runs in its own PD, gated by capabilities.
 2.  **Shim Layer:** A "DDE-Sex" shim emulates the minimum required Linux/BSD kernel APIs (kmalloc, request_irq, pci_register) and maps them to Sex PDX calls and Ring Buffers.
 3.  **Zero-Copy Hardware Paths:** sexdrives use "Memory Lending" to grant the hardware (DMA) direct access to application buffers, bypassing kernel mediation.
 
@@ -40,7 +40,7 @@ To avoid writing sexdrives from scratch, we will implement **DDE-Sex**, a compat
 - **Intel x86_64 (X17R1):**
   - [ ] NVMe Storage (Native/Lifted).
   - [ ] **NVIDIA 3070 (Nouveau/Lifted):** Use DDE to lift the Nouveau or proprietary-shim sexdrive into a GPU PD.
-  - [ ] Intel WiFi/Ethernet (Lifted).
+  - [ ] Intel sexwifi/Ethernet (Lifted).
 
 ---
 
