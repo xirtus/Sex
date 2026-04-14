@@ -5,18 +5,18 @@ use x86_64::VirtAddr;
 use alloc::sync::Arc;
 use core::alloc::Layout;
 
-/// DDE-Sex: Device Driver Environment for the Sex Microkernel.
+/// DDE-Sex: Device sexdrive Environment for the Sex Microkernel.
 /// This module provides a shim for Linux/BSD kernel APIs, allowing 
-/// unmodified or lightly patched drivers to run in isolated PDs.
+/// unmodified or lightly patched sexdrives to run in isolated PDs.
 
 pub struct DdeContext {
-    pub driver_pd_id: u32,
+    pub sexdrive_pd_id: u32,
     pub name: &'static str,
 }
 
 impl DdeContext {
     pub fn new(id: u32, name: &'static str) -> Self {
-        Self { driver_pd_id: id, name }
+        Self { sexdrive_pd_id: id, name }
     }
 }
 
@@ -53,14 +53,14 @@ pub fn dde_ioremap(phys_addr: u64, size: u64) -> Result<VirtAddr, &'static str> 
 }
 
 /// Equivalent to Linux's request_irq().
-/// Connects a hardware interrupt to the driver's asynchronous ring buffer.
+/// Connects a hardware interrupt to the sexdrive's asynchronous ring buffer.
 pub fn dde_request_irq(irq: u8, handler: extern "C" fn(u64) -> u64) -> Result<(), &'static str> {
     serial_println!("DDE: request_irq {} with handler at {:p}", irq, handler);
     
     // 1. Create an Interrupt Capability
     let cap_data = CapabilityData::Interrupt(InterruptCapData { irq });
     
-    // 2. Grant it to the driver's PD (Self)
+    // 2. Grant it to the sexdrive's PD (Self)
     // In a real DDE, we'd lookup the current PD.
     
     Ok(())
@@ -83,8 +83,8 @@ pub struct PciDevice {
     pub device_id: u16,
 }
 
-pub fn dde_pci_register_driver(vendor: u16, device: u16) -> Option<PciDevice> {
-    serial_println!("DDE: Registering driver for PCI {:#x}:{:#x}", vendor, device);
+pub fn dde_pci_register_sexdrive(vendor: u16, device: u16) -> Option<PciDevice> {
+    serial_println!("DDE: Registering sexdrive for PCI {:#x}:{:#x}", vendor, device);
     // Simulate finding the device
     Some(PciDevice {
         bus: 0, dev: 1, func: 0,

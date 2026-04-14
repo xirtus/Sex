@@ -36,15 +36,15 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     let phys_mem_offset = x86_64::VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
     
-    // Initialize Paging
-    let mut mapper = unsafe { sex_kernel::memory::init_paging(phys_mem_offset) };
+    // Initialize Sexting
+    let mut mapper = unsafe { sex_kernel::memory::init_sexting(phys_mem_offset) };
 
     // Initialize Frame Allocator
     let mut frame_allocator = unsafe {
         sex_kernel::memory::BootInfoFrameAllocator::init(&boot_info.memory_regions)
     };
 
-    serial_println!("Memory: Paging and Frame Allocator initialized.");
+    serial_println!("Memory: Sexting and Frame Allocator initialized.");
 
     // Initialize Global VAS Manager (Phase 1 Final Step)
     let mut global_vas = sex_kernel::memory::GlobalVas {
@@ -128,6 +128,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
         // 2. Grant the Client an IPC Capability to call the Serial Server
         let serial_cap_id = client_pd.grant(CapabilityData::IPC(IpcCapData {
+            node_id: 1, // Local node
             target_pd_id: serial_server_pd.id,
             entry_point: serial_entry_ptr,
         }));
@@ -184,39 +185,41 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // --- END FUSION TEST ---
 
         // --- PAGE FAULT FORWARDER TEST (PHASE 2 PRESTEP) ---
-        serial_println!("PAGING: Testing Asynchronous Pager Server...");
+        serial_println!("sext: Testing Asynchronous sext Server...");
         
-        use sex_kernel::interrupts::{PAGER_QUEUE, PageFaultEvent};
-        use sex_kernel::servers::pager::{pager_entry, MapRequest};
+        use sex_kernel::interrupts::{SEXT_QUEUE, PageFaultEvent};
+        use sex_kernel::servers::sext::{self, MapRequest};
         
-        // 1. Create the Pager PD (ID 600, Key 6)
+        // 1. Create the sext PD (ID 600, Key 6)
         let pager_pd = Arc::new(ProtectionDomain::new(600, 6));
         DOMAIN_REGISTRY.write().insert(pager_pd.id, pager_pd.clone());
         
         // 2. Simulate a Page Fault enqueuing an event
         let fault_addr = 0x_DEAD_BEEF_0000;
         let event = PageFaultEvent { addr: fault_addr, error_code: 0 };
-        PAGER_QUEUE.enqueue(event).expect("PAGING: Failed to enqueue test fault");
-        serial_println!("PAGING: Test fault at {:#x} enqueued.", fault_addr);
+        SEXT_QUEUE.enqueue(event).expect("sext: Failed to enqueue test fault");
+        serial_println!("sext: Test fault at {:#x} enqueued.", fault_addr);
 
-        // 3. Pager "Server" dequeues and processes the event
-        // (In a real system, the Pager would be a long-running task)
-        if let Some(dequeued_event) = PAGER_QUEUE.dequeue() {
-            serial_println!("PAGING: Pager Server dequeued fault for {:#x}", dequeued_event.addr);
+        // 3. sext "Server" dequeues and processes the event
+        // (In a real system, the sext would be a long-running task)
+        if let Some(dequeued_event) = SEXT_QUEUE.dequeue() {
+            serial_println!("sext: sext Server dequeued fault for {:#x}", dequeued_event.addr);
             if dequeued_event.addr == fault_addr {
-                serial_println!("PAGING: SUCCESS - Asynchronous Ring Buffer delivery verified.");
+                serial_println!("sext: SUCCESS - Asynchronous Ring Buffer delivery verified.");
             }
         }
 
-        // 4. Test Pager's PDX interface for Large Page mapping
+        // 4. Test sext's PDX interface for Large Page mapping
         let map_req = MapRequest {
+            node_id: 1,
             start: 0x_6666_6666_0000,
             size: 2 * 1024 * 1024, // 2 MiB Large Page
             pku_key: 7,
             writable: true,
+            is_shm: false,
         };
         // In a real system, this would be a safe_pdx_call from another domain
-        sex_kernel::servers::pager::handle_map_request(map_req);
+        sext::sext_request(map_req);
         // --- END FORWARDER TEST ---
 
         // --- ASYNCHRONOUS I/O & INTERRUPT TEST (PHASE 2 STEP 3) ---
@@ -235,9 +238,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         INTERRUPT_QUEUE.enqueue(irq_event).expect("I/O: Failed to enqueue test IRQ");
         serial_println!("I/O: Test IRQ 1 (Keyboard) enqueued.");
 
-        // 3. User-Space Input Driver dequeues and processes the event
+        // 3. User-Space sexinput sexdrive dequeues and processes the event
         if let Some(dequeued_irq) = INTERRUPT_QUEUE.dequeue() {
-            serial_println!("I/O: Input Driver dequeued IRQ: {}", dequeued_irq.irq);
+            serial_println!("I/O: sexinput sexdrive dequeued IRQ: {}", dequeued_irq.irq);
             if dequeued_irq.irq == 1 {
                 serial_println!("I/O: SUCCESS - Asynchronous Interrupt delivery verified.");
             }
@@ -275,69 +278,69 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
         // --- END SCHEDULER TEST ---
 
-        // --- PHASE 3: VFS & SERVICES TEST ---
-        serial_println!("VFS: Initializing Phase 3 Unified Services...");
+        // --- PHASE 3: sexvfs & SERVICES TEST ---
+        serial_println!("sexvfs: Initializing Phase 3 Unified Services...");
         
-        use sex_kernel::servers::vfs::{self, vfs_entry};
-        use sex_kernel::servers::storage::{self, storage_entry};
-        use sex_kernel::servers::network::{self, network_entry};
+        use sex_kernel::servers::sexvfs;
+        use sex_kernel::servers::storage;
+        use sex_kernel::servers::sexnet;
 
-        // 1. Create VFS PD (ID 700, Key 7)
+        // 1. Create sexvfs PD (ID 700, Key 7)
         let vfs_pd = Arc::new(ProtectionDomain::new(700, 7));
         DOMAIN_REGISTRY.write().insert(vfs_pd.id, vfs_pd.clone());
         
-        // 2. Create Storage Driver PD (ID 800, Key 8)
+        // 2. Create Storage sexdrive PD (ID 800, Key 8)
         let storage_pd = Arc::new(ProtectionDomain::new(800, 8));
         DOMAIN_REGISTRY.write().insert(storage_pd.id, storage_pd.clone());
 
-        // 3. Create NetStack PD (ID 900, Key 9)
+        // 3. Create sexnet PD (ID 900, Key 9)
         let net_pd = Arc::new(ProtectionDomain::new(900, 9));
         DOMAIN_REGISTRY.write().insert(net_pd.id, net_pd.clone());
 
-        // 4. Mount Storage Driver (ID 800) in VFS
-        vfs::mount("/disk0", 800);
+        // 4. Mount Storage sexdrive (ID 800) in sexvfs
+        sexvfs::mount("/disk0", 800, "ext4");
 
         // 5. Demonstrate Workflow: Open -> Node Cap -> Read
-        serial_println!("VFS: Demonstrating Unified Workflow...");
+        serial_println!("sexvfs: Demonstrating Unified Workflow...");
         
         // Client (PD 200) opens a file
-        let file_cap_id = vfs::open(200, "/disk0/config.json")
-            .expect("VFS: Failed to open file");
-        serial_println!("VFS: Client granted Node Capability ID: {}", file_cap_id);
+        let file_cap_id = sexvfs::open(200, "/disk0/config.json")
+            .expect("sexvfs: Failed to open file");
+        serial_println!("sexvfs: Client granted Node Capability ID: {}", file_cap_id);
 
         // Client performs direct READ via the Node Capability (safe_pdx_call)
         let buffer_ptr = 0x_AAAA_AAAA_0000;
         match safe_pdx_call(&client_pd, file_cap_id, buffer_ptr) {
             Ok(_) => {
-                serial_println!("VFS: SUCCESS - Direct READ to storage driver via Node Capability.");
-                serial_println!("VFS: Zero-Copy transfer coordinated between Client and Driver.");
+                serial_println!("sexvfs: SUCCESS - Direct READ to storage sexdrive via Node Capability.");
+                serial_println!("sexvfs: Zero-Copy transfer coordinated between Client and sexdrive.");
             },
-            Err(e) => serial_println!("VFS: ERROR - {}", e),
+            Err(e) => serial_println!("sexvfs: ERROR - {}", e),
         }
 
-        // 6. Demonstrate NetStack Socket creation
-        let socket_id = network::create_socket(200, 6); // TCP
+        // 6. Demonstrate sexnet Socket creation
+        let socket_id = sexnet::create_socket(200, 6); // TCP
         serial_println!("NET: Socket {} created for Client.", socket_id);
-        network::send(socket_id, buffer_ptr, 1024);
+        sexnet::send(socket_id, buffer_ptr, 1024);
         serial_println!("NET: Zero-Copy TX initiated from Client buffer.");
 
-        sex_kernel::vga_println!("Phase 3: COMPLETE. Services & VFS Online.");
+        sex_kernel::vga_println!("Phase 3: COMPLETE. Services & sexvfs Online.");
         // --- END PHASE 3 TEST ---
 
         // --- PHASE 4: DISTRIBUTION TEST ---
         serial_println!("CLUSTER: Initializing Phase 4 Distribution...");
         
-        use sex_kernel::servers::cluster::{self, cluster_entry};
+        use sex_kernel::servers::sexnode;
         
-        // 1. Create Cluster Server PD (ID 1000, Key 10)
+        // 1. Create sexnode Server PD (ID 1000, Key 10)
         let cluster_pd = Arc::new(ProtectionDomain::new(1000, 10));
         DOMAIN_REGISTRY.write().insert(cluster_pd.id, cluster_pd.clone());
         
         // 2. Simulate Node Discovery
-        cluster::discover_node(2, 0xC0A8010A); // 192.168.1.10
+        sexnode::discover_node(2, 0xC0A8010A); // 192.168.1.10
 
         // 3. Import Remote Capability
-        let imported_cap_handle = cluster::import_remote_capability(2, 50, 42);
+        let imported_cap_handle = sexnode::import_remote_capability(2, 50, 42);
         serial_println!("CLUSTER: Received Local Handle {} for Remote Capability.", imported_cap_handle);
         
         // 4. Demonstrate Transparent Networked IPC (Remote PDX)
@@ -356,7 +359,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         match safe_pdx_call(&client_pd, remote_cap_id, remote_test_input) {
             Ok(result) => {
                 serial_println!("IPC: Remote PDX Request completed. Result: {:#x}", result);
-                serial_println!("IPC: SUCCESS - Transparent Routing to NetStack verified.");
+                serial_println!("IPC: SUCCESS - Transparent Routing to sexnet verified.");
             },
             Err(e) => serial_println!("IPC: ERROR - {}", e),
         }
@@ -365,19 +368,19 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // --- END PHASE 4 TEST ---
 
         // --- PHASE 5: DDE-SEX & HARDWARE ENABLEMENT TEST ---
-        serial_println!("DDE: Initializing Phase 5 Driver Lifting...");
+        serial_println!("DDE: Initializing Phase 5 sexdrive Lifting...");
         
-        use sex_kernel::servers::nvidia::NvidiaDriver;
+        use sex_kernel::servers::nvidia::Nvidiasexdrive;
 
-        // 1. Create NVIDIA Driver PD (ID 1100, Key 11)
+        // 1. Create NVIDIA sexdrive PD (ID 1100, Key 11)
         let nvidia_pd = Arc::new(ProtectionDomain::new(1100, 11));
         DOMAIN_REGISTRY.write().insert(nvidia_pd.id, nvidia_pd.clone());
 
-        // 2. Initialize and Probe the Lifted NVIDIA Driver
-        let mut nvidia_driver = NvidiaDriver::new();
-        match nvidia_driver.probe() {
+        // 2. Initialize and Probe the Lifted NVIDIA sexdrive
+        let mut nvidia_sexdrive = Nvidiasexdrive::new();
+        match nvidia_sexdrive.probe() {
             Ok(_) => {
-                serial_println!("DDE: SUCCESS - Lifted NVIDIA 3070 Driver Probed via DDE-Sex.");
+                serial_println!("DDE: SUCCESS - Lifted NVIDIA 3070 sexdrive Probed via DDE-Sex.");
             },
             Err(e) => serial_println!("DDE: ERROR - {}", e),
         }
@@ -386,7 +389,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // --- END PHASE 5 TEST ---
 
         // --- PHASE 7: POSIX ECOSYSTEM TEST ---
-        serial_println!("LIBC: Initializing POSIX Foundation...");
+        serial_println!("sexc: Initializing POSIX Foundation...");
         
         use sex_kernel::servers::app;
 
@@ -403,35 +406,35 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // --- PHASE 9: DESKTOP ECOSYSTEM & HARDWARE PARITY ---
         serial_println!("PHASE 9: Initializing Desktop Foundation & Hardware Parity...");
         
-        use sex_kernel::servers::drm::DrmServer;
-        use sex_kernel::servers::audio::AudioServer;
-        use sex_kernel::servers::wifi::WifiServer;
+        use sex_kernel::servers::sexdrm;
+        use sex_kernel::servers::sexsound;
+        use sex_kernel::servers::sexwifi;
 
         // 1. Create Graphics PD (ID 2100, Key 13)
         let drm_pd = Arc::new(ProtectionDomain::new(2100, 13));
         DOMAIN_REGISTRY.write().insert(drm_pd.id, drm_pd.clone());
         
-        let mut drm_server = DrmServer::new("NVIDIA RTX 3070");
+        let mut drm_server = sexdrm::sexdrm::new("NVIDIA RTX 3070");
         drm_server.init().expect("DRM: Init failed");
 
         // 2. Create Audio PD (ID 2200, Key 14)
         let audio_pd = Arc::new(ProtectionDomain::new(2200, 14));
         DOMAIN_REGISTRY.write().insert(audio_pd.id, audio_pd.clone());
         
-        let mut audio_server = AudioServer::new("Intel HDA");
+        let mut audio_server = sexsound::sexsound::new("Intel HDA");
         audio_server.init().expect("AUDIO: Init failed");
 
         // 3. Create WiFi PD (ID 2300, Key 15)
         let wifi_pd = Arc::new(ProtectionDomain::new(2300, 15));
         DOMAIN_REGISTRY.write().insert(wifi_pd.id, wifi_pd.clone());
         
-        let mut wifi_server = WifiServer::new("Intel iwlwifi");
+        let mut wifi_server = sexwifi::sexwifi::new("Intel iwlwifi");
         wifi_server.init().expect("WIFI: Init failed");
         wifi_server.connect("SexNet-5G");
 
         // 4. Demonstrate Kitty-style buffer allocation
         let buf_handle = drm_server.allocate_buffer(1920, 1080);
-        serial_println!("KITTY: Allocated GPU buffer {:#x} on NVIDIA via DRM-Sex.", buf_handle);
+        serial_println!("KITTY: Allocated GPU buffer {:#x} on NVIDIA via sexdrm.", buf_handle);
 
         sex_kernel::vga_println!("Phase 9: COMPLETE. Desktop & Hardware Parity achieved.");
         // --- END PHASE 9 TEST ---
@@ -439,22 +442,22 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // --- PHASE 10: GRAPHICAL PLUMBING & INPUT ---
         serial_println!("PHASE 10: Initializing Wayland Plumbing & Input...");
         
-        use sex_kernel::servers::input::InputServer;
-        use sex_kernel::servers::libc::SexLibc;
+        use sex_kernel::servers::sexinput;
+        use sex_kernel::servers::sexc;
 
         // 1. Create Input PD (ID 2400, Key 16)
         let input_pd = Arc::new(ProtectionDomain::new(2400, 16));
         DOMAIN_REGISTRY.write().insert(input_pd.id, input_pd.clone());
         
-        let mut input_server = InputServer::new("Alienware HID");
+        let mut input_server = sexinput::sexinput::new("Alienware HID");
         input_server.init().expect("INPUT: Init failed");
 
-        // 2. Demonstrate Wayland AF_UNIX emulation in Libc
-        let libc = SexLibc::new(2000); // Using existing App PD
-        let wayland_sock = libc.socket(1, 1, 0).expect("LIBC: Socket failed");
-        libc.sendmsg(wayland_sock, 0x_AAAA_0000, 0).expect("LIBC: sendmsg failed");
+        // 2. Demonstrate Wayland AF_UNIX emulation in sexc
+        let libc = sexc::sexc::new(2000); // Using existing App PD
+        let wayland_sock = libc.socket(1, 1, 0).expect("sexc: Socket failed");
+        libc.sendmsg(wayland_sock, 0x_AAAA_0000, 0).expect("sexc: sendmsg failed");
 
-        // 3. Demonstrate Wayland-SHM mapping via Pager
+        // 3. Demonstrate Wayland-SHM mapping via sext
         let shm_req = MapRequest {
             node_id: 1,
             start: 0x_BBBB_0000,
@@ -463,7 +466,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             writable: true,
             is_shm: true, // Wayland-SHM flag
         };
-        let shm_handle = handle_map_request(shm_req);
+        let shm_handle = sext::sext_request(shm_req);
         serial_println!("WAYLAND: Created zero-copy SHM buffer with handle {:#x}.", shm_handle);
 
         sex_kernel::vga_println!("Phase 10: COMPLETE. Wayland Plumbing & Input Ready.");
@@ -472,13 +475,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // --- PHASE 11: GNU PIPELINE & FILESYSTEM PARITY ---
         serial_println!("PHASE 11: Initializing Linux Compatibility & Filesystems...");
         
-        use sex_kernel::servers::vfs as vfs_server;
+        use sex_kernel::servers::sexvfs as sexvfs_server;
         use sex_kernel::servers::linsex::LinSexLoader;
 
         // 1. Mount diverse filesystems
-        vfs_server::mount("/home", 800, "btrfs");
-        vfs_server::mount("/mnt/win", 800, "ntfs");
-        vfs_server::mount("/boot", 800, "fat32");
+        sexvfs_server::mount("/home", 800, "btrfs");
+        sexvfs_server::mount("/mnt/win", 800, "ntfs");
+        sexvfs_server::mount("/boot", 800, "fat32");
 
         // 2. Simulate Linux Binary Execution
         let linux_pd = Arc::new(ProtectionDomain::new(3000, 17));
@@ -495,20 +498,21 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // --- END PHASE 11 TEST ---
 
         // --- PHASE 8: DISTRIBUTED SAS & SEXIT SUPERVISION ---
-        serial_println!("DSAS: Initializing Phase 8 Distributed Paging...");
+        serial_println!("DSAS: Initializing Phase 8 Distributed Sexting...");
         
-        use sex_kernel::servers::pager::{handle_map_request, MapRequest};
+        use sex_kernel::servers::sext::{sext_request, MapRequest as DsmRequest};
         use sex_kernel::servers::sexit;
 
         // 1. Simulate a Distributed Page Fault (Node 2)
-        let dsm_req = MapRequest {
+        let dsm_req = DsmRequest {
             node_id: 2, // Remote node
             start: 0x_7777_7777_0000,
             size: 4096,
             pku_key: 1,
             writable: true,
+            is_shm: false,
         };
-        handle_map_request(dsm_req);
+        sext_request(dsm_req);
         serial_println!("DSAS: SUCCESS - Distributed Page Fault triggered DSM fetch.");
 
         // 2. Initialize Sexit-style Service Management
@@ -533,7 +537,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
 
     // Test virtual-to-physical translation
-    use x86_64::structures::paging::Mapper;
+    use x86_64::structures::sexting::Mapper;
     let addresses = [
         // the identity-mapped vga buffer
         0xb8000,

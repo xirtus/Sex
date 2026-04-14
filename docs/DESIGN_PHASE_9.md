@@ -1,15 +1,15 @@
 # Phase 9 Design: Desktop Ecosystem & Hardware Parity
 
 ## 🎯 Objective
-Elevate the Sex Microkernel from a functional distributed system to a fully capable daily driver. This phase focuses on achieving **Hardware Parity** (Networking, Sound) and building a modern **Desktop Ecosystem** supporting Wayland compositors (KDE Plasma, Hyprland, River) and modern applications (Kitty Terminal).
+Elevate the Sex Microkernel from a functional distributed system to a fully capable daily sexdrive. This phase focuses on achieving **Hardware Parity** (Networking, Sound) and building a modern **Desktop Ecosystem** supporting Wayland compositors (KDE Plasma, Hyprland, River) and modern applications (Kitty Terminal).
 
 ## 🏛 Architectural Vision: CAPIO & The "Slicer"
 
-Following the **CAPIO (Capability-based I/O)** architecture, drivers in Sex are not loaded into the kernel. Instead, they run as isolated compartments in the SASOS.
+Following the **CAPIO (Capability-based I/O)** architecture, sexdrives in Sex are not loaded into the kernel. Instead, they run as isolated compartments in the SASOS.
 
 1.  **Device Manifests:** The kernel stub handles initial device discovery (e.g., PCIe probing for the NVIDIA 3070). It defines a **Device Manifest** that partitions MMIO registers into "Safe Data Plane" and "Privileged Control Plane" (e.g., DMA config).
-2.  **The Slicer:** When a userspace driver (like the NVIDIA PD) starts, the **Slicer** intercepts mapping requests and issues unforgeable hardware capabilities for the specific **byte-slices** of the device MMIO defined in the manifest.
-3.  **Kernel-Bypass Data Plane:** Once capabilities are issued, the driver communicates with the hardware natively. The core microkernel is never involved in the data transfer, achieving raw hardware performance.
+2.  **The Slicer:** When a userspace sexdrive (like the NVIDIA PD) starts, the **Slicer** intercepts mapping requests and issues unforgeable hardware capabilities for the specific **byte-slices** of the device MMIO defined in the manifest.
+3.  **Kernel-Bypass Data Plane:** Once capabilities are issued, the sexdrive communicates with the hardware natively. The core microkernel is never involved in the data transfer, achieving raw hardware performance.
 4.  **IOMMU-Enforced Zero-Copy DMA:** For massive transfers (textures, packets), the system uses an IOMMU to restrict device access to specific "lent" memory capabilities, ensuring safety without intermediate copies.
 
 ---
@@ -25,15 +25,15 @@ Following the **CAPIO (Capability-based I/O)** architecture, drivers in Sex are 
 - [ ] **Ethernet/WiFi PDs:**
   - Create `sex-src` templates for `iwlwifi` (x86_64) and `brcmfmac` (Pi 5).
   - Lift the `mac80211` wireless stack via DDE-Sex.
-  - Integrate with the existing `NetStack` PD.
+  - Integrate with the existing `sexnet` PD.
 - [ ] **Audio PD:**
-  - Lift the ALSA core and Intel HDA / Broadcom audio drivers.
-  - Implement a `sex-runit` service for PipeWire.
+  - Lift the ALSA core and Intel HDA / Broadcom audio sexdrives.
+  - Implement a `sexit` service for PipeWire.
 
 ### 2. The Graphics Stack (DRM/KMS)
-- [ ] **DRM-Sex PD:** Implement the compatibility layer for Linux Direct Rendering Manager.
-- [ ] **Mesa Integration:** Ensure Mesa's user-space drivers (Nouveau/V3D) can allocate and map graphics memory (GEM/TTM) via Sex PDX calls.
-- [ ] **Wayland Support:** Implement the necessary `AF_UNIX` socket emulation in `Sex-Libc` for Wayland client-server communication.
+- [ ] **sexdrm PD:** Implement the compatibility layer for Linux Direct Rendering Manager.
+- [ ] **Mesa Integration:** Ensure Mesa's user-space sexdrives (Nouveau/V3D) can allocate and map graphics memory (GEM/TTM) via Sex PDX calls.
+- [ ] **Wayland Support:** Implement the necessary `AF_UNIX` socket emulation in `sexc` for Wayland client-server communication.
 
 ### 3. The Desktop Experience
 - [ ] **Compositors:**
@@ -41,11 +41,11 @@ Following the **CAPIO (Capability-based I/O)** architecture, drivers in Sex are 
   - Build `sex-src` templates for **KDE Plasma** (KWin).
 - [ ] **Applications:**
   - Build `sex-src` templates for the **Kitty** terminal emulator (requires OpenGL/Mesa support).
-  - Ensure font rendering (FreeType/Fontconfig) functions correctly over `Sex-Libc`.
+  - Ensure font rendering (FreeType/Fontconfig) functions correctly over `sexc`.
 
 ---
 
 ## 🧪 Phase 9 Verification
-- **Connectivity:** The system successfully connects to a WPA2/WPA3 WiFi network using an Intel or Broadcom chipset.
+- **Connectivity:** The system successfully connects to a WPA2/WPA3 WiFi sexnet using an Intel or Broadcom chipset.
 - **Audio:** A test WAV file plays through the physical audio output via the Audio PD.
 - **Graphical Desktop:** The system boots directly into **Hyprland** or **River**, and the **Kitty** terminal launches with full GPU acceleration on the NVIDIA 3070.

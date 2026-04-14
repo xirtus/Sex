@@ -45,22 +45,22 @@ pub fn safe_pdx_call(caller: &ProtectionDomain, cap_id: u32, arg0: u64) -> Resul
         CapabilityData::Node(node_data) => {
             if node_data.node_id != LOCAL_NODE_ID {
                 // Route to Network Stack for remote invocation
-                return Ok(route_remote_ipc(node_data.node_id, node_data.driver_pd_id, arg0));
+                return Ok(route_remote_ipc(node_data.node_id, node_data.sexdrive_pd_id, arg0));
             }
 
             let registry = DOMAIN_REGISTRY.read();
-            let target_pd = registry.get(&node_data.driver_pd_id)
-                .ok_or("IPC: Driver domain not found")?;
+            let target_pd = registry.get(&node_data.sexdrive_pd_id)
+                .ok_or("IPC: sexdrive domain not found")?;
 
-            // We'll need a way to look up the entry point for the driver's read/write 
-            // operations. For this prototype, we'll assume a standard driver entry point.
-            // In a real system, the driver would register its entry points in the capability.
-            let driver_entry = VirtAddr::new(0x2000_0000); // Placeholder driver entry
+            // We'll need a way to look up the entry point for the sexdrive's read/write 
+            // operations. For this prototype, we'll assume a standard sexdrive entry point.
+            // In a real system, the sexdrive would register its entry points in the capability.
+            let sexdrive_entry = VirtAddr::new(0x2000_0000); // Placeholder sexdrive entry
             
             let target_mask = target_pd.current_pkru_mask.load(Ordering::SeqCst);
             unsafe {
                 // Pass the node_id in edx or as part of the arg0
-                Ok(pdx_call_with_mask(target_mask, driver_entry, arg0))
+                Ok(pdx_call_with_mask(target_mask, sexdrive_entry, arg0))
             }
         },
         _ => Err("IPC: Capability does not support PDX calls"),

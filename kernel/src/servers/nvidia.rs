@@ -2,17 +2,17 @@ use crate::serial_println;
 use crate::servers::dde::{self, PciDevice};
 use x86_64::VirtAddr;
 
-/// Lifted NVIDIA Nouveau Skeleton Driver (Simplified).
-/// This driver "thinks" it's running in a Linux kernel, but is 
+/// Lifted NVIDIA Nouveau Skeleton sexdrive (Simplified).
+/// This sexdrive "thinks" it's running in a Linux kernel, but is 
 /// actually isolated in its own Sex Protection Domain via DDE-Sex.
 
-pub struct NvidiaDriver {
+pub struct Nvidiasexdrive {
     pub pci: Option<PciDevice>,
     pub mmio_base: VirtAddr,
     pub firmware_ptr: *mut u8,
 }
 
-impl NvidiaDriver {
+impl Nvidiasexdrive {
     pub fn new() -> Self {
         Self {
             pci: None,
@@ -21,12 +21,12 @@ impl NvidiaDriver {
         }
     }
 
-    /// The "Probe" routine, similar to Linux's pci_driver.probe()
+    /// The "Probe" routine, similar to Linux's pci_sexdrive.probe()
     pub fn probe(&mut self) -> Result<(), &'static str> {
         serial_println!("NVIDIA: Probing for RTX 3070 (ID 0x2484)...");
 
-        // 1. Register PCI driver via DDE
-        self.pci = dde::dde_pci_register_driver(0x10DE, 0x2484);
+        // 1. Register PCI sexdrive via DDE
+        self.pci = dde::dde_pci_register_sexdrive(0x10DE, 0x2484);
         let _pci = self.pci.as_ref().ok_or("NVIDIA: Device not found")?;
         serial_println!("NVIDIA: Found device at 00:01.0");
 
@@ -56,9 +56,9 @@ impl NvidiaDriver {
     }
 }
 
-/// The Driver's PDX Entry Point.
+/// The sexdrive's PDX Entry Point.
 pub extern "C" fn nvidia_entry(arg: u64) -> u64 {
     serial_println!("NVIDIA PDX: Received command {:#x}", arg);
-    // Dispatch to the lifted driver logic
+    // Dispatch to the lifted sexdrive logic
     0
 }

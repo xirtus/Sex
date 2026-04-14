@@ -25,10 +25,10 @@ pub struct InterruptEvent {
 
 lazy_static! {
     /// The global asynchronous queue for Page Faults.
-    pub static ref PAGER_QUEUE: RingBuffer<PageFaultEvent, 256> = RingBuffer::new();
+    pub static ref SEXT_QUEUE: RingBuffer<PageFaultEvent, 256> = RingBuffer::new();
     
     /// The global asynchronous queue for Hardware Interrupts.
-    /// This is the "prestep" for user-space drivers.
+    /// This is the "prestep" for user-space sexdrives.
     pub static ref INTERRUPT_QUEUE: RingBuffer<InterruptEvent, 1024> = RingBuffer::new();
 }
 
@@ -78,7 +78,7 @@ extern "x86-interrupt" fn page_fault_handler(
         error_code: error_code.bits(),
     };
 
-    let _ = PAGER_QUEUE.enqueue(event);
+    let _ = SEXT_QUEUE.enqueue(event);
 }
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
@@ -89,7 +89,7 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    // Asynchronous Forwarding to User-Space Driver
+    // Asynchronous Forwarding to User-Space sexdrive
     let event = InterruptEvent {
         irq: 1, // Keyboard is IRQ 1
         vector: 0x21,

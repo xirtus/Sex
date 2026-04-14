@@ -12,7 +12,7 @@ Sex is a from-scratch, high-performance microkernel written in Rust. It is desig
 - **Asynchronous I/O (Zero Mediation):** Lockless, cache-aligned ring buffers for interrupts and IPC events.
 - **Capability-Based Security:** Sparse, unforgeable capabilities for granular access control.
 - **Distributed & Transparent IPC:** Lockless multikernel architecture scaling across 128 cores and multiple physical nodes.
-- **User-Space Everything:** Pagers, VFS, NetStack, Drivers, and Cluster Managers all run in isolated user-space domains.
+- **User-Space Everything:** Pagers, VFS, NetStack, sexdrives, and Cluster Managers all run in isolated user-space domains.
 
 ## 📁 Project Structure
 
@@ -23,13 +23,15 @@ Sex is a from-scratch, high-performance microkernel written in Rust. It is desig
   - `scheduler.rs`: Per-core, lockless task schedulers.
   - `apic.rs` / `smp.rs`: Multicore discovery and bootstrap (up to 128 cores).
 - `kernel/src/servers/`: User-space system servers.
-  - `vfs.rs`: Unified Virtual File System with Node capabilities.
-  - `storage.rs`: High-throughput, zero-copy storage drivers.
-  - `network.rs`: User-space TCP/IP stack with zero-copy sockets.
-  - `cluster.rs`: Node discovery and distributed capability management.
-  - `pager.rs`: Asynchronous demand paging and large page management.
-  - `serial.rs`: Isolated serial driver.
-  - `input.rs`: Asynchronous keyboard/input driver.
+  - `sexvfs.rs`: Unified Virtual File System with Node capabilities.
+  - `storage.rs`: High-throughput, zero-copy storage sexdrives.
+  - `sexnet.rs`: User-space TCP/IP stack with zero-copy sockets.
+  - `sexnode.rs`: Node discovery and distributed capability management.
+  - `sext.rs`: Asynchronous demand sexting and distributed shared memory.
+  - `sexsound.rs`: Isolated sound sexdrive (ALSA).
+  - `sexwifi.rs`: Wireless connectivity (mac80211).
+  - `sexinput.rs`: Asynchronous mouse/keyboard sexdrive.
+  - `sexc.rs`: POSIX/C emulation layer.
 - `docs/`: In-depth documentation and Phase plans.
 
 ## 🛠 Getting Started
@@ -47,14 +49,14 @@ To build and run the kernel in QEMU:
 make run
 ```
 
-The kernel currently performs a suite of Phase 4 validation tests on boot, including:
+The kernel currently performs a suite of Phase 11 validation tests on boot, including:
 1. Formal Capability authorization (Memory, IPC, Node).
 2. Cross-domain and **Remote** PDX calls.
-3. Unified VFS path resolution and Node capability granting.
-4. Asynchronous Page Fault forwarding to the Pager.
-5. "Domain Fusion" hot-path optimization.
-6. Per-core context switching.
-7. Cluster-wide node discovery and capability importing.
+3. Unified **sexvfs** path resolution and Node capability granting.
+4. Asynchronous Page Fault forwarding to **sext**.
+5. Linux binary compatibility via **Lin-Sex**.
+6. Sexit-style service supervision.
+7. Cluster-wide node discovery via **sexnode**.
 
 ## 📚 Documentation
 

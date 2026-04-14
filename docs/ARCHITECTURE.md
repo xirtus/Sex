@@ -44,7 +44,7 @@ Sex uses a **Sparse Capability** system. A capability is an unforgeable token th
 ### 🛠 Capability Types
 - **Memory Capabilities:** Define access (R/W/X) to a range of virtual memory via "Memory Lending".
 - **IPC Capabilities:** Grant permission to call or listen on a specific PDX port.
-- **Interrupt Capabilities:** Allow a user-space driver to respond to hardware interrupts via ring buffers.
+- **Interrupt Capabilities:** Allow a user-space sexdrive to respond to hardware interrupts via ring buffers.
 - **Domain Capabilities:** Allow management and configuration of Protection Domains.
 
 ---
@@ -55,11 +55,11 @@ All traditional OS services run in isolated user-space Protection Domains.
 
 | Server | Responsibility |
 | --- | --- |
-| **Pager** | Manages the global VAS and handles asynchronous page faults via large pages. |
+| **sext** | Manages the global VAS and handles asynchronous page faults via large pages. |
 | **Capability Server** | Central authority for capability policy, distributed for local core scaling. |
-| **VFS** | Unified file system interface (Phase 3). |
-| **Network** | User-space TCP/IP stack (Phase 3). |
-| **Drivers** | Isolated hardware management (Serial, Input, etc.). |
+| **sexvfs** | Unified file system interface (Phase 3). |
+| **sexnet** | User-space TCP/IP stack (Phase 3). |
+| **sexinput** | Isolated hardware management (Mouse, Keyboard, etc.). |
 
 ---
 
@@ -73,65 +73,65 @@ All traditional OS services run in isolated user-space Protection Domains.
 
 ### Phase 1: Core Primitives (Complete ✅)
 - [x] Physical memory manager (Frame allocator).
-- [x] Paging and Global VAS setup.
+- [x] Sexting and Global VAS setup.
 - [x] Protection Domain management (PKU/MPK).
 - [x] Basic PDX implementation (synchronous).
 - [x] Page Fault Forwarder (Prestep).
 
 ### Phase 2: Capabilities & Servers (Complete ✅)
 - [x] Formal Capability Engine implementation.
-- [x] User-Space Pager Server (Asynchronous demand paging).
+- [x] User-Space sext Server (Asynchronous demand sexting).
 - [x] SMP Boot (128-core discovery & signaling).
 - [x] Asynchronous Interrupt management (Ring Buffers).
-- [x] First user-space driver (Serial/Input).
+- [x] First user-space sexdrive (Serial/Input).
 - [x] Domain Fusion & Revocation.
 
-### Phase 3: Services & VFS (Complete ✅)
-- [x] VFS implementation.
-- [x] IPC-based storage drivers (NVMe).
-- [x] Network stack (user-space).
+### Phase 3: Services & sexvfs (Complete ✅)
+- [x] sexvfs implementation.
+- [x] IPC-based storage sexdrives (NVMe).
+- [x] sexnet stack (user-space).
 
 ### Phase 4: Distribution (Complete ✅)
 - [x] Transparent networked IPC.
-- [x] Cluster management and node discovery.
+- [x] sexnode management and node discovery.
 - [x] Distributed Capability management.
 
-### Phase 5: Hardware & Drivers (Complete ✅)
+### Phase 5: Hardware & sexdrives (Complete ✅)
 - [x] ARM64 Design (Raspberry Pi 5).
-- [x] DDE-Sex Shim (Linux/BSD driver lifting).
+- [x] DDE-Sex Shim (Linux/BSD sexdrive lifting).
 - [x] NVIDIA 3070 GPU PD (Nouveau-lifted skeleton).
 - [x] Pi 5 Peripheral support design.
 
 ### Phase 6: SexSD (Distribution & Builds) (Complete ✅)
 - [x] `sex-src` build system (xbps-src style).
-- [x] Central Hardware-to-Driver Registry.
+- [x] Central Hardware-to-sexdrive Registry.
 - [x] Provisioning tools (Flashable UEFI/Pi images).
 - [x] Source-to-PD lifting pipeline.
 
 ### Phase 7: Ecosystem & Applications (Active 🚀)
-- [x] POSIX Emulation Layer (Sex-Libc).
+- [x] POSIX Emulation Layer (sexc).
 - [ ] Graphical Compositor (Wayland-lifted).
 - [ ] Developer Toolchain (Self-hosting).
 - [ ] High-Level Application Framework.
 
 ### Phase 8: Distributed SAS & Global Resource Fusion (Complete ✅)
 - [x] Global Distributed Shared Memory (DSM).
-- [x] Remote Capability Hardware Fusion (NVIDIA 3070 over cluster).
+- [x] Remote Capability Hardware Fusion (NVIDIA 3070 over sexnode).
 - [x] Distributed SMP & Inter-Node Interrupts.
 - [x] Sexit-style Distributed Service Supervision (No systemd).
-- [x] Seamless Cluster-Wide Task Migration.
+- [x] Seamless sexnode-Wide Task Migration.
 
 ### Phase 9: Desktop Ecosystem & Hardware Parity (Complete ✅)
-- [x] DRM-Sex PD (Linux Direct Rendering Manager lifting).
-- [x] Audio PD (ALSA/PipeWire).
-- [x] Network Parity (WiFi/Ethernet via DDE).
+- [x] sexdrm PD (Linux Direct Rendering Manager lifting).
+- [x] sexsound PD (ALSA/PipeWire).
+- [x] sexnet Parity (WiFi/Ethernet via DDE).
 - [x] Wayland Compositors (KDE, Hyprland, River).
 - [x] Kitty Terminal Emulator.
 
 ### Phase 10: Graphical Plumbing & Input (Complete ✅)
-- [x] Wayland `AF_UNIX` emulation in Libc.
-- [x] Shared Memory (SHM) Pager.
-- [x] `libinput` PD (Mouse/Keyboard lifting).
+- [x] Wayland `AF_UNIX` emulation in sexc.
+- [x] Shared Memory (SHM) sext.
+- [x] sexinput PD (Mouse/Keyboard lifting).
 - [x] Mesa & EGL/GLES for SASOS.
 - [x] The "Big Three" Compositor integration.
 
@@ -144,4 +144,4 @@ All traditional OS services run in isolated user-space Protection Domains.
 ---
 
 ## 🏆 The Vision Realized
-The Sex Microkernel project has successfully evolved from a single-core bootloader into a high-performance, distributed Single Address Space Operating System. By leveraging Intel PKU for zero-cost isolation and a global 64-bit VAS, we have created a platform that treats a cluster of machines as one unified, secure, and lightning-fast computer.
+The Sex Microkernel project has successfully evolved from a single-core bootloader into a high-performance, distributed Single Address Space Operating System. By leveraging Intel PKU for zero-cost isolation and a global 64-bit VAS, we have created a platform that treats a sexnode of machines as one unified, secure, and lightning-fast computer.

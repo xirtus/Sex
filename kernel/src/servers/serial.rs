@@ -12,7 +12,7 @@ pub extern "C" fn serial_server_entry(arg: u64) -> u64 {
     // For this demonstration, we'll just treat the argument as a single byte to print.
     let byte = (arg & 0xFF) as u8;
     
-    // Use the low-level serial driver directly
+    // Use the low-level serial sexdrive directly
     // This assumes the kernel has granted the Serial PD the right to use I/O ports.
     // (In x86_64, this is controlled by the I/O Permission Bitmap in the TSS).
     

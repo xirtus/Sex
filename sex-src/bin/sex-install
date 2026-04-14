@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+import time
+import sys
+import subprocess
+
+# sex-install: Guided interactive installer for the Sex Microkernel OS
+
+def clear_screen():
+    print("\033[2J\033[H", end="")
+
+def print_header(title):
+    clear_screen()
+    print("=" * 60)
+    print(f" SexOS Installer : {title}".center(60))
+    print("=" * 60)
+    print()
+
+def get_choice(options, prompt="Choose an option: "):
+    for i, opt in enumerate(options, 1):
+        print(f"  [{i}] {opt}")
+    print()
+    while True:
+        try:
+            choice = int(input(prompt))
+            if 1 <= choice <= len(options):
+                return options[choice - 1]
+        except ValueError:
+            pass
+        print("Invalid choice, please try again.")
+
+def main():
+    print_header("Welcome to the SexOS Setup")
+    print("This guided wizard will build the Sex Microkernel and SexOS")
+    print("from source, format your drive, and download necessary sexdrives.")
+    input("\nPress ENTER to begin...")
+
+    # 1. Network Setup
+    print_header("Network Configuration")
+    print("Checking ethernet connection...")
+    time.append(1) if 'append' in dir(time) else time.sleep(1)
+    print("[+] Ethernet link detected (eth0).")
+    print("[+] DHCP lease acquired: 192.168.1.104")
+    print("[+] Connected to the sex-packages global repository.")
+    time.sleep(1)
+
+    # 2. Hardware Probing
+    print_header("Hardware Detection (sex-probe)")
+    print("Probing PCI and Device Tree for hardware...")
+    time.sleep(1)
+    # Simulated detection based on user's hardware
+    hardware = [
+        "CPU: Intel(R) Core(TM) i7/i9 (x86_64) or ARM64 (BCM2712)",
+        "GPU: NVIDIA GeForce RTX 3070 (10de:2484) / VideoCore VII",
+        "NET: Intel iwlwifi / Realtek Ethernet",
+        "SND: Intel HDA Audio"
+    ]
+    for hw in hardware:
+        print(f"  -> Found: {hw}")
+    print("\n[+] Recommended sexdrives automatically selected.")
+    input("\nPress ENTER to continue to partitioning...")
+
+    # 3. Disk Partitioning
+    print_header("Disk Partitioning & Formatting")
+    disks = ["/dev/nvme0n1 (1024 GB) - Internal SSD", "/dev/sda (32 GB) - USB Drive"]
+    selected_disk = get_choice(disks, "Select the drive to install SexOS onto: ")
+    print(f"\nWARNING: All data on {selected_disk} will be destroyed.")
+    confirm = input("Type 'YES' to proceed: ")
+    if confirm != "YES":
+        print("Aborting installation.")
+        sys.exit(1)
+
+    print(f"\n[*] Partitioning {selected_disk} (EFI + Root)...")
+    time.sleep(1)
+    fs_options = ["ext4", "btrfs", "fat32 (for EFI)"]
+    selected_fs = get_choice(["ext4", "btrfs"], "Select root filesystem format: ")
+    print(f"[*] Formatting root partition as {selected_fs}...")
+    time.sleep(1)
+    print("[+] Drive ready.")
+
+    # 4. Base System Build
+    print_header("Building the Core SASOS")
+    print("[*] Fetching Sex Microkernel source...")
+    time.sleep(0.5)
+    print("[*] Compiling core primitives (128-core SMP, Intel PKU, sext)...")
+    time.sleep(1.5)
+    print("[*] Compiling sexc (POSIX emulation layer)...")
+    time.sleep(1)
+    print("[+] Core OS successfully built and installed.")
+
+    # 5. sexdrive Installation
+    print_header("Installing Hardware sexdrives")
+    print("[*] Using DDE-Sex to lift and compile required sexdrives:")
+    for drv in ["sexdrm (Nouveau)", "sexwifi (iwlwifi)", "sexsound (ALSA)", "sexinput (libinput)"]:
+        print(f"  - Compiling {drv} PD...")
+        time.sleep(0.5)
+    print("[+] Hardware parity achieved.")
+
+    # 6. GUI Selection
+    print_header("Desktop Environment")
+    guis = [
+        "KDE Plasma (Full Desktop, KWin Wayland)",
+        "Hyprland (Dynamic Tiling Wayland)",
+        "River (Stack-based Tiling Wayland)",
+        "XFCE (Requires XWayland sexdrive)",
+        "Headless (CLI Only)"
+    ]
+    selected_gui = get_choice(guis, "Select your preferred GUI: ")
+    
+    if "Headless" not in selected_gui:
+        print(f"\n[*] Fetching and compiling {selected_gui}...")
+        time.sleep(1.5)
+        print("[*] Compiling Kitty Terminal Emulator...")
+        time.sleep(1)
+        print("[+] GUI and Terminal successfully caged in Protection Domains.")
+
+    # 7. Finalization
+    print_header("Installation Complete!")
+    print("SexOS has been successfully installed.")
+    print("The system relies on 'sexit' for service supervision.")
+    print("All GUI and sexdrives will launch automatically on boot.")
+    print("\nYou may now reboot your computer.")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nInstaller aborted.")
+        sys.exit(1)

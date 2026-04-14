@@ -10,15 +10,15 @@ lazy_static! {
     pub static ref CLUSTER_NODES: RwLock<BTreeMap<u32, u32>> = RwLock::new(BTreeMap::new());
 }
 
-/// The Cluster Server PD manages node discovery and distributed capabilities.
-pub struct ClusterServer {
+/// The sexnode PD manages node discovery and distributed capabilities.
+pub struct sexnode {
     // In a real system, this would listen on a UDP multicast socket
-    // via the NetStack to discover peers.
+    // via the sexnet to discover peers.
 }
 
-/// Simulated PDX entry point for the Cluster Server.
-pub extern "C" fn cluster_entry(arg: u64) -> u64 {
-    serial_println!("CLUSTER: Received command: {:#x}", arg);
+/// Simulated PDX entry point for the sexnode.
+pub extern "C" fn sexnode_entry(arg: u64) -> u64 {
+    serial_println!("sexnode: Received command: {:#x}", arg);
     0
 }
 
@@ -26,12 +26,12 @@ pub extern "C" fn cluster_entry(arg: u64) -> u64 {
 pub fn discover_node(node_id: u32, network_addr: u32) {
     let mut nodes = CLUSTER_NODES.write();
     nodes.insert(node_id, network_addr);
-    serial_println!("CLUSTER: Discovered Node {} at Address {:#x}", node_id, network_addr);
+    serial_println!("sexnode: Discovered Node {} at Address {:#x}", node_id, network_addr);
 }
 
 /// Simulates receiving an exported capability from a remote node.
 pub fn import_remote_capability(source_node: u32, target_pd: u32, cap_id: u32) -> u32 {
-    serial_println!("CLUSTER: Imported capability {} from Node {} (Target PD: {})",
+    serial_println!("sexnode: Imported capability {} from Node {} (Target PD: {})",
         cap_id, source_node, target_pd);
     // Return a local handle/ID for this imported capability
     cap_id + 1000

@@ -3,15 +3,14 @@ use crate::memory::GlobalVas;
 use spin::Mutex;
 use lazy_static::lazy_static;
 use x86_64::VirtAddr;
-use x86_64::structures::paging::PageTableFlags;
+use x86_64::structures::sexting::PageTableFlags;
 
-/// The Pager Server's state.
-/// In a real system, this would manage physical frame pools and swap.
-pub struct PagerState {
+/// sext Server's state.
+pub struct sext {
     pub local_node_id: u32,
 }
 
-/// A request to the Pager to map or fetch a memory range.
+/// A request to the sext to map or fetch a memory range.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct MapRequest {
@@ -23,28 +22,28 @@ pub struct MapRequest {
     pub is_shm: bool, // Wayland Shared Memory flag
 }
 
-/// The PDX interface for the Pager.
-pub fn handle_map_request(req: MapRequest) -> u64 {
+/// The PDX interface for the sext.
+pub fn sext_request(req: MapRequest) -> u64 {
     if req.is_shm {
-        serial_println!("PAGER: [SHM] Creating Shared Memory Segment at {:#x}", req.start);
+        serial_println!("sext: [SHM] Creating Shared Memory Segment at {:#x}", req.start);
         // Grant a Shared Memory Capability (Memory Lending)
         return 0xC0DE_BEEF;
     }
 
     if req.node_id != 1 { // Assuming local node is 1
-        serial_println!("PAGER: [DSM] Remote Page Fault for Node {} (addr: {:#x})", 
+        serial_println!("sext: [DSM] Remote Page Fault for Node {} (addr: {:#x})", 
             req.node_id, req.start);
         // Route to Global Pager Network Stack (DSM Fetch)
         return fetch_remote_page(req.node_id, req.start);
     }
 
-    serial_println!("PAGER: Mapping local range {:#x} (size: {}) with Key {}", 
+    serial_println!("sext: Mapping local range {:#x} (size: {}) with Key {}", 
         req.start, req.size, req.pku_key);
     0
 }
 
 fn fetch_remote_page(node_id: u32, addr: u64) -> u64 {
-    serial_println!("PAGER: [DSM] Fetching Page {:#x} from Node {} via RDMA/Net...", 
+    serial_println!("sext: [DSM] Fetching Page {:#x} from Node {} via RDMA/Net...", 
         addr, node_id);
     // In a real system, this blocks until the network packet arrives.
     0

@@ -9,10 +9,10 @@ import subprocess
 # Inspired by xbps-src (Void Linux)
 
 TEMPLATES_DIR = "templates"
-DRIVERS_JSON = "drivers.json"
+SEXDRIVES_JSON = "sexdrives.json"
 
 def load_registry():
-    with open(DRIVERS_JSON, 'r') as f:
+    with open(SEXDRIVES_JSON, 'r') as f:
         return json.load(f)
 
 def build_package(pkg_name, arch):
@@ -31,7 +31,7 @@ def build_package(pkg_name, arch):
     print(f"[+] Successfully built {pkg_name}-{arch}.spd")
 
 def probe_hardware():
-    print("[*] Probing local hardware for Sex Driver Registry...")
+    print("[*] Probing local hardware for Sex sexdrive Registry...")
     registry = load_registry()
     
     # In a real system, this would read /sys/bus/pci/devices or 

@@ -1,27 +1,27 @@
 use crate::serial_println;
-use crate::servers::libc::SexLibc;
+use crate::servers::sexc::sexc;
 
 /// Lin-Sex: Linux Binary Compatibility Layer.
-/// Intercepts Linux syscalls and maps them to Sex PDX / Libc calls.
+/// Intercepts Linux syscalls and maps them to Sex PDX / sexc calls.
 
 pub struct LinSexLoader {
     pub target_pd_id: u32,
-    pub libc: SexLibc,
+    pub libc: sexc,
 }
 
 impl LinSexLoader {
     pub fn new(pd_id: u32) -> Self {
         Self {
             target_pd_id: pd_id,
-            libc: SexLibc::new(pd_id),
+            libc: sexc::new(pd_id),
         }
     }
 
     /// Simulates loading a Linux ELF binary.
     pub fn load_elf(&self, path: &str) -> Result<(), &'static str> {
         serial_println!("LIN-SEX: Loading Linux ELF from {}...", path);
-        // 1. Read ELF headers via VFS
-        // 2. Map segments into Global SAS via Pager
+        // 1. Read ELF headers via sexvfs
+        // 2. Map segments into Global SAS via sext
         // 3. Set up Linux-specific stack (auxiliary vector, env, args)
         Ok(())
     }

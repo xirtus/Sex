@@ -37,7 +37,7 @@ pub struct InterruptCapData {
 #[derive(Debug, Clone, Copy)]
 pub struct NodeCapData {
     pub node_id: u32,
-    pub driver_pd_id: u32,
+    pub sexdrive_pd_id: u32,
     pub inode_id: u64,
     pub permissions: u8,
 }
