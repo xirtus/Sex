@@ -1,0 +1,4 @@
+pkgname=lifted-btrfs
+version=upstream-ai
+short_desc="AI-Lifted Linux driver for btrfs"
+# Build using sex-src

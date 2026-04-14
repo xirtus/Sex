@@ -1,0 +1,4 @@
+pkgname=lifted-drm_drv
+version=upstream-ai
+short_desc="AI-Lifted Linux driver for drm_drv"
+# Build using sex-src

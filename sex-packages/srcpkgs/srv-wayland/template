@@ -1,0 +1,30 @@
+# sexbuild template for srv-wayland (Wayland Compositor)
+pkgname=srv-wayland
+version=0.1.0
+revision=1
+short_desc="Native SexOS Wayland Compositor based on river/wlroots"
+maintainer="xirtus <xirtus@sexos.org>"
+license="MIT"
+homepage="https://sexos.org/wayland"
+
+# Dependencies
+makedepends="relibc wlroots-drm"
+
+do_build() {
+    echo "srv-wayland: Building compositor PD..."
+    # rustc srv_wayland.rs --extern wlroots=libwlroots_drm.a
+    touch srv_wayland.elf
+}
+
+do_install() {
+    local destdir=$1
+    mkdir -p "${destdir}/usr/bin"
+    cp srv_wayland.elf "${destdir}/usr/bin/"
+    
+    # Capability Manifest
+    cat <<EOF > "${destdir}/manifest.txt"
+TYPE: SERVICE_FEDERATION
+NAME: srv_wayland
+CAPABILITIES: PCI_VGA, SHM_LENDING, DRM_IOCTL, INPUT_EVENT_RING, SEC_IDENTITY
+EOF
+}

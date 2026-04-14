@@ -13,6 +13,7 @@ use alloc::sync::Arc;
 pub struct PageFaultEvent {
     pub addr: u64,
     pub error_code: u64,
+    pub task_id: u32,
 }
 
 /// The event structure for a hardware interrupt.
@@ -81,10 +82,25 @@ extern "x86-interrupt" fn page_fault_handler(
     let _ = SEXT_QUEUE.enqueue(event);
 }
 
-extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    // Timer is handled by the kernel scheduler, but we still send EOI
-    unsafe {
+pub unsafe fn send_eoi() {
+    if let Some(lapic_virt) = crate::apic::LAPIC_ADDR.lock().as_ref() {
+        let lapic_ptr = lapic_virt.as_u64() as *mut u32;
+        let eoi_reg = lapic_ptr.offset(0x0B0 / 4);
+        eoi_reg.write_volatile(0);
+    } else {
+        // Fallback to legacy PIC for early boot or if APIC is unavailable
         core::arch::asm!("mov al, 0x20", "out 0x20, al", "out 0xa0, al");
+    }
+}
+
+extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    // 1. Notify the scheduler that a tick has occurred
+    unsafe {
+        if let Some(ref mut sched) = crate::scheduler::SCHEDULERS[0] {
+            // In a real system, we'd find the current core ID
+            sched.tick();
+        }
+        send_eoi();
     }
 }
 
@@ -99,7 +115,36 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     let _ = INTERRUPT_QUEUE.enqueue(event);
 
     unsafe {
-        // EOI to Local APIC (handled in apic module in a real system)
+        send_eoi();
+    }
+}
+C for early boot or if APIC is unavailable
         core::arch::asm!("mov al, 0x20", "out 0x20, al", "out 0xa0, al");
+    }
+}
+
+extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    // 1. Notify the scheduler that a tick has occurred
+    unsafe {
+        if let Some(ref mut sched) = crate::scheduler::SCHEDULERS[0] {
+            // In a real system, we'd find the current core ID
+            sched.tick();
+        }
+        send_eoi();
+    }
+}
+
+extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    // Asynchronous Forwarding to User-Space sexdrive
+    let event = InterruptEvent {
+        irq: 1, // Keyboard is IRQ 1
+        vector: 0x21,
+    };
+
+    // Fast enqueue and EOI. No context switch here!
+    let _ = INTERRUPT_QUEUE.enqueue(event);
+
+    unsafe {
+        send_eoi();
     }
 }

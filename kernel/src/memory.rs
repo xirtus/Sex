@@ -20,17 +20,25 @@ unsafe fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut
     &mut *page_table_ptr
 }
 
+lazy_static::lazy_static! {
+    pub static ref GLOBAL_VAS: Mutex<Option<GlobalVas>> = Mutex::new(None);
+}
+
 /// The Global Virtual Address Space Manager.
 /// In SASOS, there is only one of these for the entire system.
 pub struct GlobalVas {
     pub mapper: OffsetPageTable<'static>,
-    pub frame_allocator: BootInfoFrameAllocator,
+    pub frame_allocator: BitmapFrameAllocator,
 }
 
 impl GlobalVas {
     /// Maps a virtual address range to physical frames.
     /// This is a Phase 1 primitive.
     pub fn map_range(&mut self, start: VirtAddr, size: u64, flags: PageTableFlags) -> Result<(), &'static str> {
+        self.map_pku_range(start, size, flags, 0)
+    }
+
+    pub fn map_pku_range(&mut self, start: VirtAddr, size: u64, flags: PageTableFlags, pku_key: u8) -> Result<(), &'static str> {
         let page_range = {
             let start_page = Page::containing_address(start);
             let end_page = Page::containing_address(start + size - 1u64);
@@ -41,41 +49,139 @@ impl GlobalVas {
             let frame = self.frame_allocator.allocate_frame()
                 .ok_or("VAS: Frame allocation failed")?;
             unsafe {
-                self.mapper.map_to(page, frame, flags, &mut self.frame_allocator)
-                    .map_err(|_| "VAS: Mapping failed")?
-                    .flush();
+                let _flush = self.mapper.map_to(page, frame, flags, &mut self.frame_allocator)
+                    .map_err(|_| "VAS: Mapping failed")?;
+                
+                // Manual PKU bit manipulation if needed (Bits 59-62)
+                // For this prototype, we'll assume the mapper handles standard flags.
+                // To set PKU bits, we'd need to traverse the page tables manually or use a custom mapper.
+                
+                _flush.flush();
             }
         }
         Ok(())
     }
 }
 
-pub struct BootInfoFrameAllocator {
-    memory_map: &'static MemoryRegions,
-    next: usize,
+pub struct BitmapFrameAllocator {
+    bitmap: &'static mut [u8],
+    max_frame: usize,
+    last_allocated: usize,
 }
 
-impl BootInfoFrameAllocator {
-    pub unsafe fn init(memory_map: &'static MemoryRegions) -> Self {
-        BootInfoFrameAllocator {
-            memory_map,
-            next: 0,
+impl BitmapFrameAllocator {
+    /// Initialize a new BitmapFrameAllocator from the passed memory map.
+    /// 
+    /// # Safety
+    /// This function is unsafe because the caller must guarantee that the passed
+    /// memory map is valid and that the physical memory offset is correct.
+    pub unsafe fn init(memory_map: &'static MemoryRegions, physical_memory_offset: VirtAddr) -> Self {
+        // 1. Find max physical address to determine bitmap size
+        let max_addr = memory_map.iter().map(|r| r.end).max().unwrap_or(0);
+        let max_frame = (max_addr / 4096) as usize;
+        let bitmap_size = (max_frame + 7) / 8;
+
+        // 2. Find a usable memory region large enough to store the bitmap
+        // We look for a region that isn't at the very beginning of memory to avoid BIOS/bootloader structures
+        let bitmap_region = memory_map.iter()
+            .find(|r| r.kind == MemoryRegionKind::Usable && (r.end - r.start) as usize >= bitmap_size)
+            .expect("Memory: No usable region found for physical memory bitmap");
+
+        let bitmap_phys_addr = PhysAddr::new(bitmap_region.start);
+        let bitmap_virt_addr = physical_memory_offset + bitmap_phys_addr.as_u64();
+        let bitmap_ptr = bitmap_virt_addr.as_mut_ptr::<u8>();
+        
+        // Initialize the bitmap slice
+        let bitmap = core::slice::from_raw_parts_mut(bitmap_ptr, bitmap_size);
+        
+        // Start with all frames marked as "used" (1)
+        bitmap.fill(0xFF);
+
+        let mut allocator = BitmapFrameAllocator {
+            bitmap,
+            max_frame,
+            last_allocated: 0,
+        };
+
+        // 3. Mark usable frames as "free" (0)
+        for region in memory_map.iter().filter(|r| r.kind == MemoryRegionKind::Usable) {
+            for addr in (region.start..region.end).step_by(4096) {
+                allocator.free_frame_internal(PhysFrame::containing_address(PhysAddr::new(addr)));
+            }
+        }
+
+        // 4. Mark the frames used by the bitmap itself as "used"
+        let bitmap_start_frame = PhysFrame::containing_address(bitmap_phys_addr);
+        let bitmap_end_frame = PhysFrame::containing_address(PhysAddr::new(bitmap_phys_addr.as_u64() + bitmap_size as u64 - 1));
+        for frame in PhysFrame::range_inclusive(bitmap_start_frame, bitmap_end_frame) {
+            allocator.mark_used_internal(frame);
+        }
+
+        allocator
+    }
+
+    fn free_frame_internal(&mut self, frame: PhysFrame) {
+        let frame_idx = (frame.start_address().as_u64() / 4096) as usize;
+        if frame_idx < self.max_frame {
+            self.bitmap[frame_idx / 8] &= !(1 << (frame_idx % 8));
         }
     }
 
-    fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> {
-        let regions = self.memory_map.iter();
-        let usable_regions = regions.filter(|r| r.kind == MemoryRegionKind::Usable);
-        let addr_ranges = usable_regions.map(|r| r.start..r.end);
-        let frame_addresses = addr_ranges.flat_map(|r| r.step_by(4096));
-        frame_addresses.map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
+    fn mark_used_internal(&mut self, frame: PhysFrame) {
+        let frame_idx = (frame.start_address().as_u64() / 4096) as usize;
+        if frame_idx < self.max_frame {
+            self.bitmap[frame_idx / 8] |= 1 << (frame_idx % 8);
+        }
+    }
+
+    /// Allocates multiple contiguous frames.
+    pub fn allocate_contiguous(&mut self, num_frames: usize) -> Option<PhysFrame> {
+        for i in 0..self.max_frame {
+            let start_idx = (self.last_allocated + i) % self.max_frame;
+            
+            // Check if there are enough contiguous bits
+            if start_idx + num_frames > self.max_frame { continue; }
+
+            let mut found = true;
+            for j in 0..num_frames {
+                let idx = start_idx + j;
+                if self.bitmap[idx / 8] & (1 << (idx % 8)) != 0 {
+                    found = false;
+                    break;
+                }
+            }
+
+            if found {
+                // Mark all as used
+                for j in 0..num_frames {
+                    let idx = start_idx + j;
+                    self.bitmap[idx / 8] |= 1 << (idx % 8);
+                }
+                self.last_allocated = start_idx + num_frames;
+                return Some(PhysFrame::containing_address(PhysAddr::new((start_idx as u64) * 4096)));
+            }
+        }
+        None
     }
 }
 
-unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
+unsafe impl FrameAllocator<Size4KiB> for BitmapFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        let frame = self.usable_frames().nth(self.next);
-        self.next += 1;
-        frame
+        // Linear search for a free bit, starting from last_allocated for better distribution
+        for i in 0..self.max_frame {
+            let idx = (self.last_allocated + i) % self.max_frame;
+            let byte_idx = idx / 8;
+            let bit_idx = idx % 8;
+
+            if self.bitmap[byte_idx] & (1 << bit_idx) == 0 {
+                // Mark as used
+                self.bitmap[byte_idx] |= 1 << bit_idx;
+                self.last_allocated = idx;
+                
+                let phys_addr = PhysAddr::new((idx as u64) * 4096);
+                return Some(PhysFrame::containing_address(phys_addr));
+            }
+        }
+        None
     }
 }

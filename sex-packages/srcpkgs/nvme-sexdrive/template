@@ -1,0 +1,4 @@
+pkgname=lifted-pci
+version=upstream-ai
+short_desc="AI-Lifted Linux driver for pci"
+# Build using sex-src

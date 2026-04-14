@@ -1,0 +1,4 @@
+pkgname=lifted-e1000
+version=upstream-ai
+short_desc="AI-Lifted Linux driver for e1000"
+# Build using sex-src

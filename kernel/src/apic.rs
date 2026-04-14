@@ -98,27 +98,36 @@ unsafe fn init_local_apic(lapic_virt: VirtAddr) {
 /// Maps an IRQ to a vector on a specific I/O APIC.
 pub unsafe fn map_irq(irq: u8, vector: u8, dest_lapic_id: u8, physical_memory_offset: VirtAddr) {
     let io_apics = IO_APICS.lock();
-    if let Some(io_apic) = io_apics.first() { // Assume first I/O APIC for now
-        let io_apic_virt = physical_memory_offset + io_apic.address as u64;
-        let io_apic_ptr = io_apic_virt.as_u64() as *mut u32;
+    
+    // Find the correct I/O APIC based on the Global System Interrupt (GSI) base
+    // For simplicity, we assume IRQ maps 1:1 to GSI
+    let gsi = irq as u32;
+    let io_apic = io_apics.iter()
+        .find(|io| gsi >= io.global_system_interrupt_base && gsi < io.global_system_interrupt_base + 24)
+        .or_else(|| io_apics.first()) // Fallback to first
+        .expect("APIC: No suitable I/O APIC found");
 
-        let reg_sel = io_apic_ptr;
-        let reg_win = io_apic_ptr.offset(4 / 4);
+    let io_apic_virt = physical_memory_offset + io_apic.address as u64;
+    let io_apic_ptr = io_apic_virt.as_u64() as *mut u32;
 
-        // Redirection table entry for this IRQ (starts at 0x10, 2 registers per IRQ)
-        let low_index = 0x10 + (irq as u32) * 2;
-        let high_index = low_index + 1;
+    let reg_sel = io_apic_ptr;
+    let reg_win = io_apic_ptr.offset(4 / 4);
 
-        // Write low part: vector, delivery mode (000 = fixed), dest mode (0 = physical)
-        reg_sel.write_volatile(low_index);
-        reg_win.write_volatile(vector as u32);
+    // Redirection table entry for this IRQ (starts at 0x10, 2 registers per IRQ)
+    let relative_irq = gsi - io_apic.global_system_interrupt_base;
+    let low_index = 0x10 + relative_irq * 2;
+    let high_index = low_index + 1;
 
-        // Write high part: destination (LAPIC ID)
-        reg_sel.write_volatile(high_index);
-        reg_win.write_volatile((dest_lapic_id as u32) << 24);
-        
-        serial_println!("APIC: Mapped IRQ {} to Vector {} (Dest LAPIC {})", irq, vector, dest_lapic_id);
-    }
+    // Write low part: vector, delivery mode (000 = fixed), dest mode (0 = physical), polarity/trigger (0=active high, 0=edge)
+    reg_sel.write_volatile(low_index);
+    reg_win.write_volatile(vector as u32);
+
+    // Write high part: destination (LAPIC ID)
+    reg_sel.write_volatile(high_index);
+    reg_win.write_volatile((dest_lapic_id as u32) << 24);
+    
+    serial_println!("APIC: Mapped GSI {} (IOAPIC {}) to Vector {} (Dest LAPIC {})", 
+        gsi, io_apic.id, vector, dest_lapic_id);
 }
 
 pub unsafe fn send_ipi(lapic_id: u8, vector: u8, delivery_mode: u32) {

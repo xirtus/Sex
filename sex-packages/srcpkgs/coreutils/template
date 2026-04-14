@@ -1,0 +1,28 @@
+# sexbuild template for coreutils (GNU)
+pkgname=coreutils
+version=9.4
+revision=1
+short_desc="GNU core utilities (ls, cat, mkdir, etc.)"
+maintainer="xirtus <xirtus@sexos.org>"
+license="GPL-3.0-or-later"
+homepage="https://www.gnu.org/software/coreutils/"
+distfiles="https://ftp.gnu.org/gnu/coreutils/coreutils-${version}.tar.xz"
+hostmakedepends="gcc make"
+makedepends="relibc"
+
+do_build() {
+    echo "coreutils: Configuring for SexOS..."
+    # ./configure --host=x86_64-sexos --with-libc=relibc
+    # make -j$(nproc)
+    touch ls cat mkdir
+}
+
+do_install() {
+    local destdir=$1
+    mkdir -p "${destdir}/usr/bin"
+    
+    cp ls cat mkdir "${destdir}/usr/bin/"
+    
+    # Metadata for capabilities (Filesystem access)
+    echo "CAPABILITIES: VFS_ROOT, NODE_CAP" > "${destdir}/manifest.txt"
+}

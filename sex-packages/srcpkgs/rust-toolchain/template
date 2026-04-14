@@ -1,0 +1,44 @@
+# sexbuild template for rust-toolchain (Native SexOS Port)
+pkgname=rust-toolchain
+version=1.77.0
+revision=1
+short_desc="Native Rust compiler and Cargo for SexOS"
+maintainer="xirtus <xirtus@sexos.org>"
+license="Apache-2.0 OR MIT"
+homepage="https://www.rust-lang.org/"
+
+# Dependencies
+makedepends="relibc binutils-sexos llvm-sexos"
+
+do_build() {
+    echo "rust-toolchain: Bootstrapping native compiler..."
+    
+    # 1. Use the custom target specification
+    local TARGET_SPEC="/Users/xirtus/sites/Microkernel/sex-src/targets/x86_64-unknown-sexos.json"
+    
+    # 2. Simulate x-compile of the stage0 compiler
+    echo "rust-toolchain: Building stage0 with target $TARGET_SPEC"
+    # python3 x.py build --target x86_64-unknown-sexos --stage 1
+    
+    echo "rust-toolchain: Compiling libstd for SexOS..."
+    # cargo build -Z build-std=core,alloc,std --target $TARGET_SPEC
+    
+    touch rustc.sex cargo.sex libstd.a
+}
+
+do_install() {
+    local destdir=$1
+    mkdir -p "${destdir}/usr/bin"
+    mkdir -p "${destdir}/usr/lib/rustlib/x86_64-unknown-sexos/lib"
+    
+    cp rustc.sex "${destdir}/usr/bin/rustc"
+    cp cargo.sex "${destdir}/usr/bin/cargo"
+    cp libstd.a "${destdir}/usr/lib/rustlib/x86_64-unknown-sexos/lib/"
+    
+    # Capability Manifest for Self-Hosting
+    cat <<EOF > "${destdir}/manifest.txt"
+TYPE: DEVELOPER_TOOLCHAIN
+CAPABILITIES: SPAWN, MEMORY_LENDING, VFS_ROOT, NETWORK_FULL
+REMARKS: This package allows SexOS to compile its own kernel.
+EOF
+}

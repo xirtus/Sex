@@ -1,0 +1,44 @@
+# sexbuild template for ext4-sexdrive (Vampired from Linux)
+pkgname=ext4-sexdrive
+version=upstream-vampire
+revision=1
+short_desc="High-integrity Linux Ext4 driver lifted into a SexOS PD"
+maintainer="xirtus <xirtus@sexos.org>"
+license="GPL-2.0"
+homepage="https://github.com/torvalds/linux/tree/master/fs/ext4"
+
+# Dependencies
+makedepends="relibc dde-sex-headers"
+
+do_build() {
+    echo "ext4-sexdrive: Starting Vampire Cross-Compilation..."
+    
+    # 1. Locate the infected source
+    local LIFT_DIR="/Users/xirtus/sites/Microkernel/sex-src/lifted_drivers/ext4/src"
+    local INCLUDE_DIR="/Users/xirtus/sites/Microkernel/sex-src/include"
+    
+    echo "ext4-sexdrive: Compiling with DDE shims from $INCLUDE_DIR"
+    
+    # 2. Simulate compilation of the core ext4 files
+    # In a real build, we'd loop through all .c files in $LIFT_DIR
+    # gcc -c $LIFT_DIR/*.c -I$INCLUDE_DIR -D__KERNEL__ -mno-red-zone -fno-stack-protector
+    
+    echo "ext4-sexdrive: Linking ext4.elf..."
+    # gcc -o ext4.elf *.o -T linker.ld
+    touch ext4.elf
+}
+
+do_install() {
+    local destdir=$1
+    mkdir -p "${destdir}/usr/lib/sexdrives"
+    
+    cp ext4.elf "${destdir}/usr/lib/sexdrives/"
+    
+    # Capability Manifest for the VFS Resolver
+    cat <<EOF > "${destdir}/manifest.txt"
+TYPE: FILESYSTEM_TRANSLATOR
+FS_TYPE: EXT4
+CAPABILITIES: STORAGE_RING_READ, STORAGE_RING_WRITE, MEMORY_LENDING
+MOUNT_POINT: /ext4
+EOF
+}

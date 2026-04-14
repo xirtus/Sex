@@ -5,19 +5,11 @@ use x86_64::VirtAddr;
 /// The address where we will place the AP trampoline code (must be below 1MB).
 pub const TRAMPOLINE_ADDR: u64 = 0x8000;
 
-/// A simple AP trampoline in assembly.
-/// In a real system, this would be a separate assembly file compiled to a binary blob.
-/// Here we use a byte array for the demonstration.
-pub const TRAMPOLINE_CODE: &[u8] = &[
-    0xFA,                   // cli
-    0xEB, 0xFE,             // jmp $ (Wait loop for demonstration)
-    // Real implementation would include:
-    // 1. lgdt with a temporary GDT
-    // 2. set cr0 PE bit (Protected Mode)
-    // 3. ljmp to 32-bit segment
-    // 4. set cr4 PAE, EFER.LME, cr0 PG (Long Mode)
-    // 5. ljmp to 64-bit kernel entry
-];
+/// The address where we store the kernel entry point for APs.
+pub const AP_ENTRY_PTR: u64 = 0x500;
+
+/// The address of the P4 page table (BSP's table).
+pub const P4_TABLE_ADDR: u64 = 0x1000;
 
 pub fn boot_aps() {
     let processors = apic::PROCESSORS.lock();
@@ -30,31 +22,56 @@ pub fn boot_aps() {
 
     serial_println!("SMP: Booting {} Application Processors...", ap_count);
 
-    // 1. Prepare trampoline code at TRAMPOLINE_ADDR
-    // SAFETY: We assume 0x8000 is available and mapped.
+    // 1. Write the kernel entry point for APs to a fixed location
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            TRAMPOLINE_CODE.as_ptr(),
-            TRAMPOLINE_ADDR as *mut u8,
-            TRAMPOLINE_CODE.len(),
-        );
+        *(AP_ENTRY_PTR as *mut u64) = ap_kernel_entry as u64;
     }
 
     // 2. Send INIT IPI to all APs
     unsafe {
-        // Delivery mode 0b101 = INIT
-        // Destination shorthand 0b11 = All excluding self
-        apic::send_ipi(0, 0, 0b101 | (0b11 << 10));
+        // Delivery mode 0b101 = INIT, Level 1, Assert 1, Shorthand 0b11 (All excluding self)
+        apic::send_ipi(0, 0, 0b101 | (0b11 << 10) | (1 << 14) | (1 << 15));
     }
 
     // 3. Wait 10ms (approximate)
-    for _ in 0..1000000 { x86_64::instructions::nop(); }
+    for _ in 0..10000000 { x86_64::instructions::nop(); }
 
-    // 4. Send Startup IPI (SIPI)
-    // The vector 0x08 corresponds to address 0x08000 (vector * 4096)
-    unsafe {
-        apic::broadcast_sipi(0x08);
+    // 4. Send Startup IPI (SIPI) twice
+    for _ in 0..2 {
+        unsafe {
+            apic::broadcast_sipi(0x08); // Vector 0x08 -> 0x8000
+        }
+        for _ in 0..1000000 { x86_64::instructions::nop(); }
     }
 
-    serial_println!("SMP: SIPI sent to all APs.");
+    serial_println!("SMP: SIPI sequence completed.");
+}
+
+/// The entry point for Application Processors in 64-bit Long Mode.
+pub extern "C" fn ap_kernel_entry() -> ! {
+    // 1. Identify current core
+    let lapic_id = unsafe { 
+        let lapic_virt = apic::LAPIC_ADDR.lock().unwrap();
+        let lapic_ptr = lapic_virt.as_u64() as *const u32;
+        (lapic_ptr.offset(0x020 / 4).read_volatile() >> 24) as u8
+    };
+
+    serial_println!("SMP: Core (LAPIC ID {}) online.", lapic_id);
+
+    // 2. Initialize Core-Local storage and Scheduler
+    // In a real system, we'd find the core_id from LAPIC_ID mapping
+    let core_id = lapic_id as usize; 
+    unsafe {
+        crate::core_local::CoreLocal::init(core_id);
+        crate::scheduler::init_core(core_id);
+    }
+
+    // 3. Enable Interrupts and enter the scheduler loop
+    x86_64::instructions::interrupts::enable();
+    
+    serial_println!("SMP: Core {} entering scheduler loop.", core_id);
+    
+    loop {
+        x86_64::instructions::hlt();
+    }
 }

@@ -1,0 +1,35 @@
+# sexbuild template for relibc (Rust-native Libc)
+pkgname=relibc
+version=0.1.0
+revision=1
+short_desc="Rust-native C standard library for SexOS"
+maintainer="xirtus <xirtus@sexos.org>"
+license="MIT"
+homepage="https://github.com/redox-os/relibc"
+distfiles="https://github.com/redox-os/relibc/archive/master.tar.gz"
+checksum="SKIP" # Always use latest for now
+
+do_build() {
+    echo "relibc: Cross-compiling for x86_64-unknown-sexos..."
+    # 1. Setup SexOS target for Rust
+    # rustup target add x86_64-unknown-none
+    
+    # 2. Build with SexOS platform backend
+    # cargo build --target x86_64-unknown-none --release --features sexos
+    touch relibc.a crt0.o
+}
+
+do_install() {
+    local destdir=$1
+    mkdir -p "${destdir}/usr/lib"
+    mkdir -p "${destdir}/usr/include"
+    
+    cp relibc.a "${destdir}/usr/lib/libc.a"
+    cp crt0.o "${destdir}/usr/lib/"
+    
+    # Install standard headers (mapped to relibc)
+    echo "#include <relibc/stdio.h>" > "${destdir}/usr/include/stdio.h"
+    
+    # Capabilities for libc (none required, it's a library)
+    echo "CAPABILITIES: NONE" > "${destdir}/manifest.txt"
+}

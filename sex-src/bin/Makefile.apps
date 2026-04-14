@@ -1,0 +1,26 @@
+# Makefile for SexOS User-Land Applications
+# Uses the sexos-cc toolchain wrapper.
+
+CC = /Users/xirtus/sites/microkernel/sex-src/bin/sexos-cc
+CFLAGS = -O2 -Wall
+LDFLAGS = 
+
+# Source files
+SRCS = hello.c ../lib/malloc.c
+OBJS = $(SRCS:.c=.o)
+TARGET = hello.sex
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJS)
+	@echo "Build successful: $@"
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(OBJS) $(TARGET)
+
+install: $(TARGET)
+	cp $(TARGET) ../root_fs/bin/

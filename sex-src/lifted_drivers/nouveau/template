@@ -1,0 +1,4 @@
+pkgname=lifted-nouveau
+version=upstream-ai
+short_desc="AI-Lifted Linux driver for nouveau"
+# Build using sex-src

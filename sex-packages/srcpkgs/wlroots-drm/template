@@ -1,0 +1,31 @@
+# sexbuild template for wlroots-drm (Vampired from wlroots)
+pkgname=wlroots-drm
+version=upstream-vampire
+revision=1
+short_desc="Wlroots DRM backend lifted into SexOS"
+maintainer="xirtus <xirtus@sexos.org>"
+license="MIT"
+homepage="https://gitlab.freedesktop.org/wlroots/wlroots"
+
+# Dependencies
+makedepends="relibc dde-sex-headers mesa-nouveau"
+
+do_build() {
+    echo "wlroots-drm: Starting Vampire Cross-Compilation..."
+    local LIFT_DIR="/Users/xirtus/sites/Microkernel/sex-src/lifted_drivers/drm/src"
+    local INCLUDE_DIR="/Users/xirtus/sites/Microkernel/sex-src/include"
+    
+    # gcc -c $LIFT_DIR/*.c -I$INCLUDE_DIR -DWLR_HAS_DRM_BACKEND
+    touch libwlroots_drm.a
+}
+
+do_install() {
+    local destdir=$1
+    mkdir -p "${destdir}/usr/lib"
+    cp libwlroots_drm.a "${destdir}/usr/lib/"
+    
+    cat <<EOF > "${destdir}/manifest.txt"
+TYPE: COMPOSITOR_BACKEND
+CAPABILITIES: DRM_IOCTL, INPUT_EVENT_RING
+EOF
+}

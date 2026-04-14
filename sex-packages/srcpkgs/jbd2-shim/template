@@ -1,0 +1,4 @@
+pkgname=lifted-jbd2
+version=upstream-ai
+short_desc="AI-Lifted Linux driver for jbd2"
+# Build using sex-src

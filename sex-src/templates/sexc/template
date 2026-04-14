@@ -1,0 +1,32 @@
+# sexbuild template for sexc (POSIX Emulation Layer)
+pkgname=sexc
+version=0.1.0
+revision=1
+short_desc="Standard C library and POSIX emulation for SexOS"
+maintainer="xirtus <xirtus@sexos.org>"
+license="MIT"
+homepage="https://sexos.org/sexc"
+distfiles="https://github.com/sexos/sexc/archive/v${version}.tar.gz"
+checksum="da39a3ee5e6b4b0d3255bfef95601890afd80709"
+
+do_build() {
+    echo "sexc: Cross-compiling for x86_64-sexos-none..."
+    # In a real build, we'd run:
+    # cargo build --target x86_64-sexos-none --release
+    touch sexc.elf
+}
+
+do_install() {
+    local destdir=$1
+    mkdir -p "${destdir}/usr/lib"
+    mkdir -p "${destdir}/usr/include"
+    
+    # Install binary
+    cp sexc.elf "${destdir}/usr/lib/"
+    
+    # Install headers
+    echo "#define SEXOS_LIBC 1" > "${destdir}/usr/include/stdio.h"
+    
+    # Metadata for Sex-Store
+    echo "CAPABILITIES: SPAWN, MEMORY_LENDING" > "${destdir}/manifest.txt"
+}

@@ -1,0 +1,4 @@
+pkgname=lifted-ext4
+version=upstream-ai
+short_desc="AI-Lifted Linux driver for ext4"
+# Build using sex-src

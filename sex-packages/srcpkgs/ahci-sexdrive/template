@@ -1,0 +1,4 @@
+pkgname=lifted-ahci
+version=upstream-ai
+short_desc="AI-Lifted Linux driver for ahci"
+# Build using sex-src

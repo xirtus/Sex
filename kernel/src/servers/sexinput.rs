@@ -5,10 +5,18 @@ use crate::ipc_ring::SpscRing;
 /// sexinput: libinput lifting for the Sex Microkernel.
 /// Processes HID events (Mouse/Keyboard) for Wayland compositors.
 
+/// Standard Input Event structure (Inspired by Linux evdev).
+#[repr(C)]
+pub struct InputEvent {
+    pub ev_type: u16,
+    pub code: u16,
+    pub value: i32,
+}
+
 pub struct sexinput {
     pub name: &'static str,
-    // Event ring buffer for the compositor
-    pub event_queue: SpscRing<u64>, 
+    /// Event ring buffer for the compositor (Zero-Copy).
+    pub event_queue: SpscRing<InputEvent>, 
 }
 
 impl sexinput {
@@ -19,24 +27,33 @@ impl sexinput {
         }
     }
 
+    /// Real PS/2 Controller initialization and IRQ handling.
     pub fn init(&mut self) -> Result<(), &'static str> {
-        serial_println!("sexinput: Initializing libinput for {}...", self.name);
+        serial_println!("sexinput: Initializing PS/2 Controller for {}...", self.name);
         
-        // 1. Lift libinput via DDE-Sex
-        serial_println!("sexinput: Lifting libinput and USB HID stack...");
-        
-        // 2. Request HID Device IRQ via DDE-Sex Slicer
-        // (Simplified for demo)
-        dde::dde_request_irq(19, self.input_irq_handler)?;
-        serial_println!("sexinput: IRQ 19 requested for HID.");
+        // 1. Request Keyboard (1) and Mouse (12) IRQs
+        dde::dde_request_irq(1, Self::keyboard_handler)?;
+        dde::dde_request_irq(12, Self::mouse_handler)?;
 
         Ok(())
     }
 
-    pub extern "C" fn input_irq_handler(_arg: u64) -> u64 {
-        // In a real system, this would decode the HID packet 
-        // and push it to the event_queue.
-        serial_println!("sexinput: Mouse/Keyboard Event Received!");
+    pub extern "C" fn keyboard_handler(_arg: u64) -> u64 {
+        unsafe {
+            let scancode: u8 = x86_64::instructions::port::Port::new(0x60).read();
+            serial_println!("sexinput: Keyboard Scancode: {:#x}", scancode);
+            
+            // In a real system, we'd translate scancode to InputEvent 
+            // and push it to the event_queue.
+        }
+        0
+    }
+
+    pub extern "C" fn mouse_handler(_arg: u64) -> u64 {
+        unsafe {
+            let data: u8 = x86_64::instructions::port::Port::new(0x60).read();
+            serial_println!("sexinput: Mouse Data: {:#x}", data);
+        }
         0
     }
 }
