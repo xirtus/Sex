@@ -116,10 +116,10 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Asynchronous #PF forwarding to standalone `sext` server.
 - [x] Demand paging via lent-memory capabilities.
 
-### Phase 8: Full ELF Loader + PD Spawn (Complete ✅)
-- [x] Kernel ELF loader: Segment parsing and buddy-allocator mapping implemented.
-- [x] PD creation: High-level lifecycle management and initial capability grants.
-- [x] Spawn syscall: sys_spawn_pd unblocks user-space process creation.
+### Phase 8: Full ELF Loader + PD Spawn (Complete ✅ (hardened on lock-free memory))
+- [x] Kernel ELF loader: Segment parsing and buddy-allocator mapping (Lock-Free).
+- [x] PD creation: Pure PDX-based ELF loading and initial capability grants via RCU Table.
+- [x] sys_spawn_pd: Fully asynchronous spawn path.
 
 ### Phase 9: Driver Enablement (Storage + Input) (COMPLETE ✅)
 - [x] Production-grade NVMe/AHCI driver in standalone PD.

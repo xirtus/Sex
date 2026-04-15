@@ -1,28 +1,31 @@
-use crate::syscalls::spawn::sys_spawn_pd;
+use crate::pd::create::create_protection_domain;
 use crate::serial_println;
 
-/// The root initialization sequence for the microkernel.
+/// init: The root initialization sequence for the microkernel.
+/// Phase 10/8: Spawns standalone system servers and the root shell.
 pub fn init() {
-    serial_println!("init: Bootstrapping root Protection Domain...");
+    serial_println!("init: Bootstrapping system Protection Domains...");
 
-    // 1. Initialize High-Performance Storage (NVMe/AHCI)
-    // In our prototype, we scan for the first NVMe device BAR0.
-    crate::servers::sexdrives::driver::init_storage(0x_E000_0000); // Simulated BAR0
+    // 1. Spawn System Servers (Standalone ELFs)
+    // IPCtax: These domains will communicate purely via PDX.
+    let _sext = create_protection_domain("/servers/sext/bin/sext\0");
+    let _sexc = create_protection_domain("/servers/sexc/bin/sexc\0");
+    let _sexvfs = create_protection_domain("/servers/sexvfs/bin/sexvfs\0");
+    let _sexdrives = create_protection_domain("/servers/sexdrives/bin/sexdrives\0");
+    let _sexinput = create_protection_domain("/servers/sexinput/bin/sexinput\0");
+    let _sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0");
 
-    // 2. Initialize Polished Input (PS/2 + USB HID)
-    // This starts the input polling/interrupt loop in its own context.
-    // In a real system, this would be spawned as a separate PD.
-    serial_println!("init: Input stack active (PS/2 + USB HID).");
+    serial_println!("init: System services spawned. Spawning root shell...");
 
-    // 3. Register with VFS
-    crate::servers::sexvfs::main::sexvfs_main();
-
-    // 4. Spawn Root Shell
-    let res = sys_spawn_pd("/bin/ash\0".as_ptr());
+    // 2. Spawn Root Shell (ASH)
+    let res = create_protection_domain("/bin/ash\0");
     
-    if res >= 0 {
-        serial_println!("init: Root shell spawned with PD ID {}. Driver stack: COMPLETE.", res);
-    } else {
-        serial_println!("init: Critical failure - could not spawn /bin/ash.");
+    match res {
+        Ok(pd_id) => {
+            serial_println!("init: Root shell spawned with PD ID {}. SYSTEM READY.", pd_id);
+        },
+        Err(e) => {
+            serial_println!("init: Critical failure - could not spawn /bin/ash: {}", e);
+        }
     }
 }

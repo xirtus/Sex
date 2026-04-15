@@ -52,10 +52,10 @@ impl Task {
                 r15: 0, r14: 0, r13: 0, r12: 0, rbx: 0, rbp: 0,
                 pkru, pd_id: pd.id,
                 rip: entry_point, cs, rflags: 0x202, rsp: stack_top, ss,
-                pd,
+                pd: pd.clone(),
             },
             state: AtomicU32::new(TaskState::Ready as u32),
-            signal_ring: Arc::new(RingBuffer::new()),
+            signal_ring: pd.signal_ring.clone(),
             next: AtomicPtr::new(ptr::null_mut()),
         }
     }
