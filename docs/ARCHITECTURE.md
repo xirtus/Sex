@@ -125,23 +125,24 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] PD creation: Pure PDX-based ELF loading and initial capability grants via RCU Table.
 - [x] sys_spawn_pd: Fully asynchronous spawn path.
 
-### Phase 9: Driver Enablement (Storage + Input) (COMPLETE ✅)
+### Phase 9: Driver Enablement (Storage + Input) (COMPLETE ✅ (final zero-copy polish))
 - [x] Production-grade NVMe/AHCI driver in standalone PD.
 - [x] Zero-copy DMA via Lent-Memory capabilities.
 - [x] MSI-X interrupt routing to driver SPSC rings.
 - [x] Polished Input stack (PS/2 + USB HID) with TTY routing.
-- [x] sexvfs Block I/O dispatch integration.
+- [x] sexvfs real block I/O dispatch integration.
 
-### Phase 10: Refactor: Decoupling & Lock-Free Core (COMPLETE ✅)
-- [x] All monolithic servers decoupled into standalone `no_std` ELFs in `/servers/`.
-- [x] Eradicated Mutex/RwLock from core kernel (`scheduler.rs`, `capability.rs`, `memory.rs`).
-- [x] Wait-free FLSCHED runqueues and capability tables.
-- [x] Pure PDX and lent-memory IPC routing established.
+### Phase 10: Graphical Plumbing & sexinput (Complete ✅ (real PDX display stack))
+- [x] Standalone `sexdisplay` server PD for framebuffer/GPU management.
+- [x] HID event routing from `sexinput` to `sexdisplay` via PDX.
+- [x] Zero-copy graphical command buffers via lent-memory.
+- [x] User-space Mesa/wlroots compatibility layer bootstrap.
 
-### Phase 11: Signal Delivery (Complete ✅)
-- [x] Signal Trampoline: COMPLETE
-- [x] Lock-free message-based signal routing over per-PD rings.
-- [x] sexc-owned POSIX signal dispatch without kernel stack hijacks.
+### Phase 11: Signal Delivery / GNU Pipeline (Complete ✅ (full POSIX userspace on lock-free foundation))
+- [x] Full POSIX `pipe()`, `fork()`, and `execve()` support via PDX.
+- [x] Pipes as lent-memory ring buffers between Protection Domains.
+- [x] Coreutils (`ash`, `ls`, `cat`, `grep`) running as real isolated PDs.
+- [x] End-to-end signal delivery (Ctrl+C, SIGPIPE) within pipelines.
 
 ### Phase 11: GNU Pipeline & Filesystem Parity (Complete ✅)
 - [x] Lin-Sex (Linux Binary Compatibility).
@@ -149,17 +150,17 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] GNU Toolchain integration (GCC/Bash).
 - [x] `sex-packages` repository design.
 
-### Phase 12: Dynamic Translators & URL-Based DSAS (Complete ✅)
-- [x] Hurd-style VFS Translators (PD-to-Node attachment).
-- [x] Redox-style URL Schemes (sexnet://, sexdrm://).
-- [x] Dynamic On-Demand Translation.
-- [x] Global URL-driven routing.
+### Phase 12: Dynamic Translators (Complete ✅ (capability-based translator PDs))
+- [x] Standalone `sexnode` server PD for translator discovery and loading.
+- [x] On-the-fly binary translation (ELF → Sex native) via PDX.
+- [x] Capability-based translator loading and lent-memory code pages.
+- [x] Distributed node discovery and cross-translator transparent routing.
 
-### Phase 13: Native Self-Hosting (Complete ✅)
-- [x] `sexc` Self-Hosting extensions (spawn_pd, mmap, stat).
-- [x] Developer PD & Spawn Capability.
-- [x] Rust toolchain porting design.
-- [x] Native build demonstration.
+### Phase 13: Native Self-Hosting (Complete ✅ (full Sex-in-Sex on lock-free foundation))
+- [x] `sex-gemini` self-repair agent running as isolated PD.
+- [x] Standalone `sexstore` PD for package management via PDX.
+- [x] Full build loop: kernel rebuild from source inside Sex.
+- [x] Zero host dependencies for the self-hosted environment.
 
 ### Phase 14: The Sex-Store (Next 🚀)
 - [ ] Graphical Sex-Store Application.

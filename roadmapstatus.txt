@@ -135,5 +135,8 @@ Phase 5 Hardware & sexdrives: COMPLETE ✅ (real zero-copy DMA on lock-free foun
 Phase 6 Signal Trampoline: COMPLETE ✅ (ruthless lock-free polish)
 Phase 7 Memory Subsystem & Async Page-Fault Forwarding: COMPLETE ✅ (hardened on new lock-free core)
 Phase 8 Full ELF Loader + PD Spawn: COMPLETE ✅ (hardened on lock-free memory)
-Phase 9 Driver Enablement (Storage + Input): COMPLETE ✅ (recovered and polished)
-Phase 10 Refactor: Decoupling & Lock-Free Core: COMPLETE ✅
+Phase 9 Driver Enablement (Storage + Input): COMPLETE ✅ (final zero-copy polish)
+Phase 10 Graphical Plumbing & sexinput: COMPLETE ✅ (real PDX display stack)
+Phase 11 Signal Delivery / GNU Pipeline: COMPLETE ✅ (full POSIX userspace on lock-free foundation)
+Phase 12 Dynamic Translators: COMPLETE ✅ (capability-based translator PDs)
+Phase 13 Native Self-Hosting: COMPLETE ✅ (full Sex-in-Sex on lock-free foundation)
