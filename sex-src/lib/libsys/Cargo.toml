@@ -1,7 +1,7 @@
 [package]
-name = "sexc"
+name = "libsys"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-libsys = { path = "../../sex-src/lib/libsys" }
+x86_64 = "0.15.2"

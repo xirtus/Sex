@@ -43,6 +43,7 @@ fn route_storage_call(cmd: u32, device_cap_id: u32, offset: u64, size: u64, buff
         length: size,
         pku_key: current_pd.pku_key,
         permissions: 3, // R/W
+        source_pd_id: current_pd.id,
     }));
 
     // 3. Construct DmaCall message

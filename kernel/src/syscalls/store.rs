@@ -28,6 +28,7 @@ pub fn sys_store_fetch(store_cap_id: u32, name_ptr: u64, buffer_vaddr: u64, size
     // 2. Create lent-memory capability for downloaded package
     let buffer_cap_id = sexstore_pd.grant(CapabilityData::MemLend(MemLendCapData {
         base: buffer_vaddr, length: size, pku_key: current_pd.pku_key, permissions: 3,
+        source_pd_id: current_pd.id,
     }));
 
     // 3. Construct StoreCall message

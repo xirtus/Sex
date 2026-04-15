@@ -15,7 +15,7 @@ impl ElfLoader {
         let current_pd = crate::core_local::CoreLocal::get().current_pd_ref();
 
         // 1. Resolve path to sexvfs (Via capability slot 1 - granted at boot)
-        let vfs_cap = current_pd.cap_table.find(1).ok_or("loader: VFS cap missing")?;
+        let vfs_cap = unsafe { (*current_pd.cap_table).find(1).ok_or("loader: VFS cap missing")? };
         let sexvfs_pd_id = match vfs_cap.data {
             crate::capability::CapabilityData::IPC(data) => data.target_pd_id,
             _ => return Err("loader: Invalid VFS cap"),

@@ -1,6 +1,5 @@
 use crate::capability::{CapabilityData, ProtectionDomain};
 use crate::pku::Pkru;
-use alloc::sync::Arc;
 use core::ptr;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use x86_64::VirtAddr;
@@ -13,7 +12,7 @@ pub const MAX_DOMAINS: usize = 1024;
 pub const LOCAL_NODE_ID: u32 = 1;
 
 /// A Lock-Free, Wait-Free Domain Registry for SASOS.
-/// IPCtax-Compliant: Sharded Atomic Array (No Locks).
+/// IPCtax-Compliant: Sharded Atomic Array (No Locks, No Arc).
 pub struct DomainRegistry {
     pub domains: [AtomicPtr<ProtectionDomain>; MAX_DOMAINS],
 }
@@ -26,28 +25,21 @@ impl DomainRegistry {
         }
     }
 
-    pub fn get(&self, id: u32) -> Option<Arc<ProtectionDomain>> {
+    pub fn get(&self, id: u32) -> Option<&'static ProtectionDomain> {
         let idx = id as usize % MAX_DOMAINS;
         let ptr = self.domains[idx].load(Ordering::Acquire);
         if ptr.is_null() {
             None
         } else {
-            // Safety: We assume domains are never deallocated in this SASOS prototype.
-            unsafe {
-                let arc = Arc::from_raw(ptr);
-                let cloned = arc.clone();
-                let _ = Arc::into_raw(arc); // Re-increment refcount for registry
-                Some(cloned)
-            }
+            unsafe { Some(&*ptr) }
         }
     }
 
-    pub fn insert(&self, id: u32, pd: Arc<ProtectionDomain>) {
+    pub fn insert(&self, id: u32, pd: *mut ProtectionDomain) {
         let idx = id as usize % MAX_DOMAINS;
-        let ptr = Arc::into_raw(pd) as *mut _;
-        let old = self.domains[idx].swap(ptr, Ordering::AcqRel);
+        let old = self.domains[idx].swap(pd, Ordering::AcqRel);
         if !old.is_null() {
-            // In a real system, we'd defer the deletion of 'old' via Epochs
+            // RCU reclamation omitted
         }
     }
 
@@ -59,7 +51,6 @@ impl DomainRegistry {
 pub static DOMAIN_REGISTRY: DomainRegistry = DomainRegistry::new();
 
 /// The hardware-accelerated PDX primitive with explicit mask.
-/// This fulfills the "Domain Fusion" requirement in IPCtax.txt.
 pub unsafe fn pdx_call_with_mask(target_pkru: u32, entry_point: VirtAddr, arg0: u64) -> u64 {
     let old_pkru = Pkru::read();
     let result: u64;
@@ -89,9 +80,7 @@ pub unsafe fn pdx_call_with_mask(target_pkru: u32, entry_point: VirtAddr, arg0: 
 
 pub fn safe_pdx_call(cap_id: u32, arg0: u64) -> Result<u64, &'static str> {
     let current_pd = crate::core_local::CoreLocal::get().current_pd_ref();
-    
-    // 1. Resolve target via Caller's Capability (Wait-Free RCU lookup)
-    let cap = current_pd.cap_table.find(cap_id).ok_or("IPC: Invalid cap")?;
+    let cap = unsafe { (*current_pd.cap_table).find(cap_id).ok_or("IPC: Invalid cap")? };
     
     match cap.data {
         CapabilityData::IPC(data) => {
@@ -104,23 +93,20 @@ pub fn safe_pdx_call(cap_id: u32, arg0: u64) -> Result<u64, &'static str> {
         CapabilityData::Domain(target_pd_id) => {
             let target_pd = DOMAIN_REGISTRY.get(target_pd_id).ok_or("IPC: Target lost")?;
             let target_mask = target_pd.current_pkru_mask.load(Ordering::Acquire);
-            // Default entry point for Domain caps (Control Port)
-            let entry = VirtAddr::new(0x_4000_0000); // Standard ELF entry for servers
+            let entry = VirtAddr::new(0x_4000_0000);
             unsafe {
                 Ok(pdx_call_with_mask(target_mask, entry, arg0))
             }
         },
-        _ => Err("IPC: Not a PDX-capable capability"),
+        _ => Err("IPC: Not a PDX capability"),
     }
 }
 
-/// resolve_phys_pdx: Securely resolves a physical address from a lent capability.
-/// Fulfills zero-copy DMA requirements.
 pub fn resolve_phys_pdx(cap_id: u32) -> u64 {
     let current_pd = crate::core_local::CoreLocal::get().current_pd_ref();
-    if let Some(cap) = current_pd.cap_table.find(cap_id) {
+    if let Some(cap) = unsafe { (*current_pd.cap_table).find(cap_id) } {
         match cap.data {
-            CapabilityData::MemLend(data) => return data.base, // Assuming base is phys for prototype
+            CapabilityData::MemLend(data) => return data.base,
             CapabilityData::DMA(data) => return data.phys_addr,
             _ => (),
         }
@@ -132,5 +118,5 @@ pub fn route_signal(target_pd_id: u32, signal: u8) -> Result<(), &'static str> {
     let target_pd = DOMAIN_REGISTRY.get(target_pd_id)
         .ok_or("IPC: Target not found")?;
 
-    target_pd.signal_ring.enqueue(signal)
+    unsafe { (*target_pd.signal_ring).enqueue(signal) }
 }

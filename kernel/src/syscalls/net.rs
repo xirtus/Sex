@@ -41,6 +41,7 @@ fn route_net_call(cmd: u32, target_cap_id: u32, socket_cap_id: u32, size: u64, b
             length: size,
             pku_key: current_pd.pku_key,
             permissions: 1, // Read-only for send, R/W for recv
+            source_pd_id: current_pd.id,
         }))
     } else {
         0

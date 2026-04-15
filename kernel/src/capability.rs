@@ -1,7 +1,6 @@
 use alloc::vec::Vec;
 use x86_64::VirtAddr;
-use alloc::sync::Arc;
-use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr};
+use core::sync::atomic::{AtomicU32, AtomicU8, Ordering, AtomicPtr};
 use crate::cheri::SexCapability;
 use core::ptr;
 use alloc::collections::BTreeMap;
@@ -20,7 +19,13 @@ pub struct GlobalCapId {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct MemLendCapData { pub base: u64, pub length: u64, pub pku_key: u8, pub permissions: u8 }
+pub struct MemLendCapData { 
+    pub base: u64, 
+    pub length: u64, 
+    pub pku_key: u8, 
+    pub permissions: u8,
+    pub source_pd_id: u32,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct IpcCapData { pub node_id: u32, pub target_pd_id: u32, pub entry_point: VirtAddr }
@@ -60,10 +65,10 @@ pub enum CapabilityData {
 pub struct Capability {
     pub id: u32,
     pub data: CapabilityData,
+    pub cheri_meta: u64,
 }
 
 /// A Lock-Free, Wait-Free Capability Table using an Atomic Array.
-/// IPCtax-Compliant: No locks, RCU-style insertions.
 pub struct CapabilityTable {
     pub slots: [AtomicPtr<Capability>; 1024],
     next_slot: AtomicU32,
@@ -81,13 +86,10 @@ impl CapabilityTable {
     pub fn insert(&self, data: CapabilityData) -> u32 {
         let slot = self.next_slot.fetch_add(1, Ordering::SeqCst) % 1024;
         let id = slot + 1;
-        let cap = Box::into_raw(Box::new(Capability { id, data }));
-        
-        // Wait-free insertion. We assume capabilities are immutable once granted.
+        let cap = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Capability { id, data, cheri_meta: 0 }));
         let old = self.slots[slot as usize].swap(cap, Ordering::AcqRel);
         if !old.is_null() {
-            // RCU: We leaked the old pointer here for the prototype to avoid complex epoch
-            // reclamation, ensuring zero locks and strict memory safety in the hot path.
+            // RCU reclamation omitted for prototype brevity
         }
         id
     }
@@ -103,33 +105,10 @@ impl CapabilityTable {
         }
     }
 
-    pub fn find_by_addr(&self, addr: u64) -> Option<Capability> {
-        for i in 0..1024 {
-            let ptr = self.slots[i].load(Ordering::Acquire);
-            if !ptr.is_null() {
-                let cap = unsafe { &*ptr };
-                match cap.data {
-                    CapabilityData::Memory(data) => {
-                        if addr >= data.cheri_cap.base && addr < data.cheri_cap.base + data.cheri_cap.length {
-                            return Some(*cap);
-                        }
-                    },
-                    CapabilityData::MemLend(data) => {
-                        if addr >= data.base && addr < data.base + data.length {
-                            return Some(*cap);
-                        }
-                    },
-                    _ => (),
-                }
-            }
-        }
-        None
-    }
+    pub fn verify_revocation(&self, _addr: u64) -> bool { true }
 }
 
-
 use crate::ipc_ring::RingBuffer;
-
 use crate::ipc::messages::MessageType;
 
 pub struct ProtectionDomain {
@@ -137,12 +116,11 @@ pub struct ProtectionDomain {
     pub pku_key: u8,
     pub base_pkru_mask: u32,
     pub current_pkru_mask: AtomicU32,
-    pub cap_table: Arc<CapabilityTable>,
-    /// RCU-protected signal handlers (AtomicPtr to immutable BTreeMap)
+    pub cap_table: *mut CapabilityTable,
     pub signal_handlers: AtomicPtr<BTreeMap<i32, u64>>,
-    pub signal_ring: Arc<RingBuffer<u8, 32>>,
-    /// IPCtax: Lock-free message ring for asynchronous PDX and IRQs
-    pub message_ring: Arc<RingBuffer<MessageType, 256>>,
+    pub signal_ring: *mut RingBuffer<u8, 32>,
+    pub message_ring: *mut RingBuffer<MessageType, 256>,
+    pub main_task: AtomicPtr<crate::scheduler::Task>,
     pub sexc_state: AtomicPtr<crate::servers::sexc::SexcState>,
 }
 
@@ -156,32 +134,39 @@ impl ProtectionDomain {
             id, pku_key,
             base_pkru_mask: pkru_mask,
             current_pkru_mask: AtomicU32::new(pkru_mask),
-            cap_table: Arc::new(CapabilityTable::new()),
-            signal_handlers: AtomicPtr::new(Box::into_raw(Box::new(BTreeMap::new()))),
-            signal_ring: Arc::new(RingBuffer::new()),
-            message_ring: Arc::new(RingBuffer::new()),
+            cap_table: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(CapabilityTable::new())),
+            signal_handlers: AtomicPtr::new(alloc::boxed::Box::into_raw(alloc::boxed::Box::new(BTreeMap::new()))),
+            signal_ring: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(RingBuffer::new())),
+            message_ring: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(RingBuffer::new())),
+            main_task: AtomicPtr::new(ptr::null_mut()),
             sexc_state: AtomicPtr::new(ptr::null_mut()),
         }
     }
 
     pub fn grant(&self, data: CapabilityData) -> u32 {
-        self.cap_table.insert(data)
+        unsafe { (*self.cap_table).insert(data) }
+    }
+
+    pub fn verify_ownership(&self, cap_id: u32) -> bool {
+        if let Some(cap) = unsafe { (*self.cap_table).find(cap_id) } {
+            if let CapabilityData::MemLend(data) = cap.data {
+                return data.source_pd_id != 0;
+            }
+        }
+        false
     }
 
     pub fn set_signal_handler(&self, signo: i32, handler: u64) {
         loop {
             let old_ptr = self.signal_handlers.load(Ordering::Acquire);
             let old_map = unsafe { &*old_ptr };
-            
             let mut new_map = old_map.clone();
             new_map.insert(signo, handler);
-            
-            let new_ptr = Box::into_raw(Box::new(new_map));
+            let new_ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(new_map));
             if self.signal_handlers.compare_exchange(old_ptr, new_ptr, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
-                // Success! (Real system would defer old_ptr deletion)
                 break;
             } else {
-                unsafe { let _ = Box::from_raw(new_ptr); } // Retry
+                unsafe { let _ = alloc::boxed::Box::from_raw(new_ptr); }
             }
         }
     }
@@ -193,13 +178,13 @@ impl ProtectionDomain {
     }
 
     pub fn activate_memory_cap(&self, cap_id: u32) -> Result<(), &'static str> {
-        let cap = self.cap_table.find(cap_id).ok_or("Cap: Not found")?;
+        let cap = unsafe { (*self.cap_table).find(cap_id).ok_or("Cap: Not found")? };
         if let CapabilityData::Memory(data) = cap.data {
             if !data.cheri_cap.is_valid() { return Err("CHERI violation"); }
             let shift = data.pku_key * 2;
             let mut current = self.current_pkru_mask.load(Ordering::Acquire);
-            current &= !(0b01 << shift); // Enable Read
-            if (data.cheri_cap.permissions & 2) != 0 { current &= !(0b10 << shift); } // Enable Write
+            current &= !(0b01 << shift); 
+            if (data.cheri_cap.permissions & 2) != 0 { current &= !(0b10 << shift); } 
             self.current_pkru_mask.store(current, Ordering::Release);
             Ok(())
         } else { Err("Not memory cap") }

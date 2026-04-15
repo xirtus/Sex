@@ -7,7 +7,7 @@ use sex_kernel::{init, serial_println};
 use alloc::sync::Arc;
 use sex_kernel::capability::ProtectionDomain;
 use sex_kernel::ipc::DOMAIN_REGISTRY;
-use sex_kernel::scheduler::{Task, TaskContext, TaskState, init_core};
+use sex_kernel::scheduler::{Task, TaskContext, TaskState};
 
 const BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -36,9 +36,22 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     
     // 2. Initialize Memory (Sexting, Frame Allocator, Global VAS)
     let mapper = unsafe { sex_kernel::memory::init_sexting(phys_mem_offset) };
-    let frame_allocator = unsafe {
+    let mut frame_allocator = unsafe {
         sex_kernel::memory::BitmapFrameAllocator::init(&boot_info.memory_regions, phys_mem_offset)
     };
+
+    // Phase 14: Bootstrap Lock-Free Buddy Allocator
+    let total_pages = 0x100000; // 4 GiB
+    let metadata_size = total_pages * core::mem::size_of::<sex_kernel::memory::allocator::PageMetadata>();
+    let metadata_pages = (metadata_size + 4095) / 4096;
+    let metadata_phys = frame_allocator.allocate_contiguous(metadata_pages).expect("OOM for metadata");
+    let metadata_vaddr = phys_mem_offset.as_u64() + metadata_phys.start_address().as_u64();
+
+    unsafe {
+        sex_kernel::memory::allocator::GLOBAL_ALLOCATOR.init_from_mmap(
+            0, total_pages as u64 * 4096, metadata_vaddr
+        );
+    }
 
     let global_vas_inst = sex_kernel::memory::GlobalVas {
         mapper,
@@ -66,8 +79,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             sex_kernel::apic::map_irq(1, 0x21, 0, phys_mem_offset); // Keyboard
             sex_kernel::apic::map_irq(12, 0x2C, 0, phys_mem_offset); // Mouse
             sex_kernel::core_local::CoreLocal::init(0);
-        }
-        // sex_kernel::smp::boot_aps(); // Secondary cores
+
+            // Phase 13.2.1: Register PD 0 (Kernel/Root)
+            let root_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(sex_kernel::capability::ProtectionDomain::new(0, 0)));
+            sex_kernel::ipc::DOMAIN_REGISTRY.insert(0, root_pd);
+            sex_kernel::core_local::CoreLocal::get().set_pd(0);
+            unsafe { sex_kernel::capabilities::engine::CapEngine::grant_initial_rights(&*root_pd); }
+            }
+
     }
 
     // 4. Initialize Protection Domains (PKU)
@@ -79,11 +98,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
 
     // 5. Initialize Scheduler
-    init_core(0);
+    // Note: SCHEDULERS is already initialized as a static array
 
-    // 6. Bootstrap Advanced Interaction Suite (Font, Wayland, AI)
-    // Note: In a production system, these would be services managed by sexit.
-    // For this bootstrap, we initialize the suite before jumping to PID 1.
+    // 6. Bootstrap Advanced Interaction Suite (Simulated)
     sex_kernel::bootstrap_advanced_services();
 
     // --- PHASE 3: SAS INITRD BOOTSTRAP ---
@@ -96,34 +113,22 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         
         sex_kernel::initrd::bootstrap_initrd(ramdisk_vaddr, ramdisk_len, global_vas)
             .expect("INITRD: Bootstrap failed");
-    } else {
-        serial_println!("INITRD: No ramdisk provided by bootloader!");
     }
 
-    serial_println!("SAS Ecosystem ready. Handoff to SEXIT (PID 1).");
+    serial_println!("SAS Ecosystem ready. Handoff to system servers.");
     serial_println!("--------------------------------------------------");
 
-    // Phase 8: Root shell bootstrap
+    // Phase 8: Root shell and system servers bootstrap
     sex_kernel::init::init();
 
-    // Start execution
-    unsafe {
-        if let Some(ref mut sched) = sex_kernel::scheduler::SCHEDULERS[0] {
-            // Pick PID 1 (sexit) and enter Ring 3!
-            sched.tick();
-            
-            if let Some(ref current_task_mutex) = sched.current_task {
-                let current = current_task_mutex.lock();
-                let next_ctx = &current.context;
-                
-                let mut dummy_ctx = TaskContext::new(0, 0, 
-                    Arc::new(ProtectionDomain::new(0, 0)), false);
-                
-                sex_kernel::scheduler::Scheduler::switch_to(&mut dummy_ctx, next_ctx);
-            } else {
-                panic!("BOOT: SEXIT task not found in runqueue!");
-            }
+    // Start execution on first core
+    let sched = &sex_kernel::scheduler::SCHEDULERS[0];
+    if let Some((_old_ctx, next_ctx)) = sched.tick() {
+        unsafe {
+            sex_kernel::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx);
         }
+    } else {
+        panic!("BOOT: No tasks found in runqueue!");
     }
 
     loop {

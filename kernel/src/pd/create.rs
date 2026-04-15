@@ -1,6 +1,5 @@
 use crate::capability::ProtectionDomain;
 use crate::ipc::DOMAIN_REGISTRY;
-use alloc::sync::Arc;
 use crate::loader::elf::ElfLoader;
 use crate::serial_println;
 use crate::memory::allocator::GLOBAL_ALLOCATOR;
@@ -8,7 +7,6 @@ use crate::memory::pku;
 use crate::capabilities::engine::CapEngine;
 
 /// create_protection_domain: Ruthless Phase 6/8/10 implementation.
-/// IPCtax: No Arc/Box in task management, dedicated trampoline tasks.
 pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Result<u32, &'static str> {
     serial_println!("pd: Creating domain for {}...", elf_path);
 
@@ -20,8 +18,8 @@ pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Re
     };
     let pku_key = (pd_id % 15) as u8 + 1;
     
-    // RCU-style raw pointer for ProtectionDomain
-    let new_pd = Arc::into_raw(Arc::new(ProtectionDomain::new(pd_id, pku_key))) as *mut ProtectionDomain;
+    // Raw pointer for ProtectionDomain
+    let new_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(ProtectionDomain::new(pd_id, pku_key)));
 
     // 2. Assign PKU domain key (Hardware isolation)
     let pkru_mask = pku::init_pd_pkru(pku_key);
@@ -31,25 +29,27 @@ pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Re
     let entry = ElfLoader::load_elf(elf_path, pku_key)?;
 
     // 4. Register with Registry (Lock-free insertion)
-    DOMAIN_REGISTRY.insert(pd_id, unsafe { Arc::from_raw(new_pd) });
+    DOMAIN_REGISTRY.insert(pd_id, new_pd);
     let pd_ref = DOMAIN_REGISTRY.get(pd_id).unwrap();
 
     // 5. Mint initial root capabilities
-    CapEngine::grant_initial_rights(&pd_ref);
+    CapEngine::grant_initial_rights(pd_ref);
 
     // 6. Create main execution Task (Raw Pointer)
     let stack_top = 0x_7000_0000_0000;
-    let task_ptr = Box::into_raw(Box::new(crate::scheduler::Task::new(
-        pd_id, entry.as_u64(), stack_top, pd_ref.clone(), true
+    let task_ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(crate::scheduler::Task::new(
+        pd_id, entry.as_u64(), stack_top, pd_ref, true
     )));
+    
+    // Phase 13.2.1: Store main task for interrupt unparking
+    unsafe { (*new_pd).main_task.store(task_ptr, core::sync::atomic::Ordering::Release); }
+    
     crate::scheduler::SCHEDULERS[0].runqueue.enqueue(task_ptr);
 
-    // 7. Create Dedicated Signal Trampoline Task (Phase 6 Polish)
-    // Dedicated stack for signals to prevent kernel stack touch.
-    // Trampoline entry point is hardcoded or resolved from sexc ELF.
+    // 7. Create Dedicated Signal Trampoline Task
     let trampoline_stack_top = 0x_7000_1000_0000; 
-    let trampoline_task_ptr = Box::into_raw(Box::new(crate::scheduler::Task::new(
-        pd_id | 0x8000_0000, 0 /* Resolve sexc_trampoline_entry */, trampoline_stack_top, pd_ref.clone(), true
+    let trampoline_task_ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(crate::scheduler::Task::new(
+        pd_id | 0x8000_0000, 0, trampoline_stack_top, pd_ref, true
     )));
     crate::scheduler::SCHEDULERS[0].runqueue.enqueue(trampoline_task_ptr);
 

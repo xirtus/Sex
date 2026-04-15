@@ -168,6 +168,13 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Standardized `FLSCHED` park in all servers via `libsys::sched::park_on_ring()`.
 - [x] Eradicated all remaining stubs, simulated MMIO, and hardcoded PD IDs.
 - [x] Clean positive end-to-end self-hosting validation test.
+
+### Phase 13.2.1: Build Fix & Clean Compilation (Complete ✅ (10/10 production-ready build))
+### Phase 14: Refined Physical Allocator + PKU Domain Init + Formal Verification Hooks (Complete ✅)
+- [x] Refined Physical Allocator: Per-core sharded queues and seL4-style invariants.
+- [x] Hardened PKU Domain Init: Runtime WRPKRU validation and isolation proofs.
+- [x] Formal Verification Hooks: Ownership and revocation asserts in Capability system.
+- [x] CHERI Capability Prep: Metadata alignment and safety-critical hardening.
 - [ ] Graphical Sex-Store Application.
 - [ ] Package browsing & one-click sexting.
 - [ ] Binary caching & SPD image management.

@@ -116,15 +116,9 @@ extern "x86-interrupt" fn page_fault_handler(
         }
     }
 
-    // 2. Notify sext PD via the asynchronous ring buffer
-    let event = PageFaultEvent {
-        addr: fault_addr.as_u64(),
-        error_code: error_code.bits(),
-        task_id,
-    };
-
-    if SEXT_QUEUE.enqueue(event).is_err() {
-        serial_println!("EXCEPTION: Page Fault Queue FULL. Dropping fault for Task {}.", task_id);
+    // 2. Async #PF Forwarding via safe_pdx_call (IPCtax mandate)
+    if let Err(e) = crate::ipc::pagefault::forward_page_fault(fault_addr.as_u64(), error_code.bits() as u32, task_id as u64) {
+        serial_println!("EXCEPTION: Failed to forward #PF to sext: {}", e);
     }
 
     // 3. Trigger Scheduler to pick next task
@@ -133,8 +127,9 @@ extern "x86-interrupt" fn page_fault_handler(
 }
 
 pub unsafe fn send_eoi() {
-    if let Some(lapic_virt) = crate::apic::LAPIC_ADDR.lock().as_ref() {
-        let lapic_ptr = lapic_virt.as_u64() as *mut u32;
+    let lapic_vaddr = crate::apic::LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire);
+    if lapic_vaddr != 0 {
+        let lapic_ptr = lapic_vaddr as *mut u32;
         let eoi_reg = lapic_ptr.offset(0x0B0 / 4);
         eoi_reg.write_volatile(0);
     } else {
@@ -177,7 +172,12 @@ fn route_interrupt(vector: u8) {
     if let Some(target_pd) = DOMAIN_REGISTRY.get(pd_id) {
         let msg = MessageType::HardwareInterrupt { vector, data: 0 };
         let _ = target_pd.message_ring.enqueue(msg);
+        
         // Wake the driver trampoline/main thread
+        let main_task = target_pd.main_task.load(Ordering::Acquire);
+        if !main_task.is_null() {
+            crate::scheduler::unpark_thread(main_task);
+        }
     }
 
     unsafe { send_eoi(); }

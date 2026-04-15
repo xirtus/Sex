@@ -1,4 +1,3 @@
-use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr};
 use x86_64::VirtAddr;
 use crate::capability::ProtectionDomain;
@@ -13,7 +12,7 @@ pub struct TaskContext {
     pub pkru: u32,
     pub pd_id: u32,
     pub rip: u64, pub cs: u64, pub rflags: u64, pub rsp: u64, pub ss: u64,
-    pub pd: Arc<ProtectionDomain>,
+    pub pd_ptr: *const ProtectionDomain,
 }
 
 #[repr(u32)]
@@ -25,19 +24,23 @@ pub enum TaskState {
     Exited = 3,
 }
 
+pub const STATE_READY: u32 = 0;
+pub const STATE_RUNNING: u32 = 1;
+pub const STATE_BLOCKED: u32 = 2;
+
 /// A vThread (Task) in the SASOS model.
 /// IPCtax-Compliant: No Mutex, Atomic State.
 pub struct Task {
     pub id: u32,
     pub context: TaskContext,
     pub state: AtomicU32, // Stores TaskState
-    pub signal_ring: Arc<RingBuffer<u8, 32>>,
+    pub signal_ring: *mut RingBuffer<u8, 32>,
     /// Next task in the lock-free runqueue
     pub next: AtomicPtr<Task>,
 }
 
 impl Task {
-    pub fn new(id: u32, entry_point: u64, stack_top: u64, pd: Arc<ProtectionDomain>, is_user: bool) -> Self {
+    pub fn new(id: u32, entry_point: u64, stack_top: u64, pd: &ProtectionDomain, is_user: bool) -> Self {
         let pkru = pd.current_pkru_mask.load(Ordering::SeqCst);
         let selectors = crate::gdt::get_selectors();
         let (cs, ss) = if is_user {
@@ -52,10 +55,10 @@ impl Task {
                 r15: 0, r14: 0, r13: 0, r12: 0, rbx: 0, rbp: 0,
                 pkru, pd_id: pd.id,
                 rip: entry_point, cs, rflags: 0x202, rsp: stack_top, ss,
-                pd: pd.clone(),
+                pd_ptr: pd as *const _,
             },
             state: AtomicU32::new(TaskState::Ready as u32),
-            signal_ring: pd.signal_ring.clone(),
+            signal_ring: pd.signal_ring,
             next: AtomicPtr::new(ptr::null_mut()),
         }
     }
@@ -83,7 +86,6 @@ impl MpscQueue {
         
         if prev_head.is_null() {
             // Queue was empty, set tail to the new task.
-            // This CAS handles the race condition where a consumer might be dequeueing.
             let _ = self.tail.compare_exchange(ptr::null_mut(), task, Ordering::Release, Ordering::Relaxed);
         } else {
             // Queue wasn't empty, link the previous head to the new task.
@@ -104,24 +106,15 @@ impl MpscQueue {
                 // Potential last item. We must carefully transition to empty.
                 let head = self.head.load(Ordering::Acquire);
                 if tail == head {
-                    // It is the last item. Try to nullify the head to prevent new enqueues 
-                    // from linking to it while we dequeue.
                     if self.head.compare_exchange(tail, ptr::null_mut(), Ordering::AcqRel, Ordering::Relaxed).is_ok() {
-                        // Head is nullified, now safely nullify tail and return.
                         self.tail.store(ptr::null_mut(), Ordering::Release);
                         return tail;
                     }
                 }
-                // If tail != head but next is null, a producer is mid-enqueue.
-                // We must spin briefly (lock-free property) until the link is established.
                 core::hint::spin_loop();
                 continue;
             }
 
-            // Not the last item. Advance the tail.
-            // Since this is MPSC (Single Consumer), we technically don't need a CAS here 
-            // if we guarantee only one core dequeues from this specific runqueue.
-            // However, we use a simple store for the single-consumer assumption.
             self.tail.store(next, Ordering::Release);
             return tail;
         }
@@ -196,7 +189,6 @@ pub fn park_current_thread() {
 
 pub fn unpark_thread(task_ptr: *mut Task) {
     unsafe { (*task_ptr).state.store(TaskState::Ready as u32, Ordering::Release); }
-    // Enqueue on the same core for cache locality (Simplified)
     let core_id = crate::core_local::CoreLocal::get().core_id;
     SCHEDULERS[core_id as usize].runqueue.enqueue(task_ptr);
 }

@@ -41,6 +41,7 @@ fn route_vfs_call(cmd: u32, vfs_cap_id: u32, size: u64, buffer_vaddr: u64) -> i6
         length: size,
         pku_key: current_pd.pku_key,
         permissions: 3, // R/W
+        source_pd_id: current_pd.id,
     }));
 
     // 3. Dispatch via pure PDX

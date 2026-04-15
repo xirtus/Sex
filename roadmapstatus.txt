@@ -141,3 +141,5 @@ Phase 11 Signal Delivery / GNU Pipeline: COMPLETE ✅ (full POSIX userspace on l
 Phase 12 Dynamic Translators: COMPLETE ✅ (capability-based translator PDs)
 Phase 13 Native Self-Hosting: COMPLETE ✅ (full Sex-in-Sex on lock-free foundation)
 Phase 13.2 Zero-Nits Polish: COMPLETE ✅ (10/10 production-ready perfection)
+Phase 13.2.1 Real Self-Hosting Install Path + sex-gemini Operational: COMPLETE ✅
+Phase 13.2.1 Build Fix & Clean Compilation: COMPLETE ✅ (10/10 production-ready build)

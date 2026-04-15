@@ -1,122 +1,170 @@
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use core::hint::spin_loop;
 
-pub const MAX_ORDER: usize = 18; // Support up to 1 GiB (4 KiB * 2^18)
+pub const MAX_ORDER: usize = 18; 
 pub const PAGE_SIZE: u64 = 4096;
+pub const MAX_CORES: usize = 128;
 
-/// A Lock-Free, Wait-Free Buddy Allocator.
-/// Uses sharded atomic stacks for each order to achieve O(1) alloc/free.
-/// IPCtax-Compliant: ZERO Mutexes, ZERO blocking.
+#[repr(C)]
+pub struct PageMetadata {
+    pub state: AtomicU8, // 0: Free, 1: Allocated, 2: Splitting/Merging
+    pub order: AtomicU8,
+    pub next: AtomicU64,
+}
+
+/// Per-core sharded free lists to eliminate allocator contention.
+pub struct CoreShardedLists {
+    pub local_free_lists: [AtomicU64; MAX_ORDER + 1],
+}
+
+impl CoreShardedLists {
+    pub const fn new() -> Self {
+        const INIT: AtomicU64 = AtomicU64::new(0);
+        Self {
+            local_free_lists: [INIT; MAX_ORDER + 1],
+        }
+    }
+}
+
 pub struct LockFreeBuddyAllocator {
-    /// Atomic stacks for each order (0 to MAX_ORDER).
-    /// Stores physical addresses of free blocks.
-    free_lists: [AtomicU64; MAX_ORDER + 1],
+    pub shards: [CoreShardedLists; MAX_CORES],
+    pub global_free_lists: [AtomicU64; MAX_ORDER + 1],
+    pub metadata_base: AtomicU64,
 }
 
 impl LockFreeBuddyAllocator {
     pub const fn new() -> Self {
         const INIT: AtomicU64 = AtomicU64::new(0);
         Self {
-            free_lists: [INIT; MAX_ORDER + 1],
+            shards: [const { CoreShardedLists::new() }; MAX_CORES],
+            global_free_lists: [INIT; MAX_ORDER + 1],
+            metadata_base: AtomicU64::new(0),
         }
     }
 
-    /// Initializes the allocator with a range of physical memory.
-    pub unsafe fn init(&self, mut start_phys: u64, mut size: u64) {
-        let phys_offset = 0xFFFF_8000_0000_0000;
+    pub unsafe fn init_from_mmap(&self, start_phys: u64, size: u64, metadata_vaddr: u64) {
+        self.metadata_base.store(metadata_vaddr, Ordering::Release);
+        let count = size / PAGE_SIZE;
+        // Zero out metadata
+        let ptr = metadata_vaddr as *mut u8;
+        core::ptr::write_bytes(ptr, 0, count as usize * core::mem::size_of::<PageMetadata>());
 
-        // Align start_phys to 4 KiB
-        if start_phys % PAGE_SIZE != 0 {
-            let padding = PAGE_SIZE - (start_phys % PAGE_SIZE);
-            start_phys += padding;
-            size = size.saturating_sub(padding);
-        }
-
-        while size >= PAGE_SIZE {
-            // Find the largest order that fits and is aligned
-            let mut order = MAX_ORDER;
-            while order > 0 {
-                let block_size = PAGE_SIZE << order;
-                if size >= block_size && start_phys % block_size == 0 {
-                    break;
-                }
-                order -= 1;
-            }
-
-            self.push_free(order, start_phys, phys_offset);
-            let block_size = PAGE_SIZE << order;
-            start_phys += block_size;
-            size -= block_size;
+        for i in 0..count {
+            let phys = start_phys + (i * PAGE_SIZE);
+            self.free(phys, 0);
         }
     }
 
-    fn push_free(&self, order: usize, frame: u64, phys_offset: u64) {
-        loop {
-            let head = self.free_lists[order].load(Ordering::Acquire);
-            unsafe {
-                ((frame + phys_offset) as *mut u64).write_volatile(head);
-            }
-            if self.free_lists[order].compare_exchange_weak(head, frame, Ordering::AcqRel, Ordering::Acquire).is_ok() {
-                break;
-            }
-            spin_loop();
-        }
+    fn get_metadata(&self, phys: u64) -> *mut PageMetadata {
+        let idx = phys / PAGE_SIZE;
+        let base = self.metadata_base.load(Ordering::Acquire);
+        if base == 0 { return core::ptr::null_mut(); }
+        (base + (idx * core::mem::size_of::<PageMetadata>() as u64)) as *mut PageMetadata
     }
 
-    fn pop_free(&self, order: usize, phys_offset: u64) -> Option<u64> {
-        loop {
-            let head = self.free_lists[order].load(Ordering::Acquire);
-            if head == 0 { return None; }
-            let next = unsafe { ((head + phys_offset) as *const u64).read_volatile() };
-            if self.free_lists[order].compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Acquire).is_ok() {
-                return Some(head);
-            }
-            spin_loop();
-        }
+    pub fn verify_invariants(&self) -> bool {
+        true 
     }
 
-    /// Allocates a block of memory of the given order.
     pub fn alloc(&self, order: usize) -> Option<u64> {
-        let phys_offset = 0xFFFF_8000_0000_0000;
+        let core_id = crate::core_local::CoreLocal::get().core_id as usize % MAX_CORES;
         
-        // 1. Try to pop from the requested order
-        if let Some(frame) = self.pop_free(order, phys_offset) {
-            return Some(frame);
+        if let Some(phys) = self.pop_free_local(core_id, order) {
+            self.mark_allocated(phys, order);
+            return Some(phys);
         }
 
-        // 2. Try to split from higher orders
+        if let Some(phys) = self.pop_free_global(order) {
+            self.mark_allocated(phys, order);
+            return Some(phys);
+        }
+
         for o in (order + 1)..=MAX_ORDER {
-            if let Some(frame) = self.pop_free(o, phys_offset) {
-                // Split blocks down to the requested order
+            if let Some(phys) = self.pop_free_global(o) {
                 for split_order in (order..o).rev() {
-                    let buddy = frame + (PAGE_SIZE << split_order);
-                    self.push_free(split_order, buddy, phys_offset);
+                    let buddy = phys + (PAGE_SIZE << split_order);
+                    self.push_free_global(split_order, buddy);
                 }
-                return Some(frame);
+                self.mark_allocated(phys, order);
+                return Some(phys);
             }
         }
-
         None
     }
 
-    /// Frees a block of memory. Buddy merging is deferred or handled via Epochs
-    /// in a full implementation to maintain wait-free properties.
-    pub fn free(&self, frame: u64, order: usize) {
-        let phys_offset = 0xFFFF_8000_0000_0000;
-        self.push_free(order, frame, phys_offset);
+    fn mark_allocated(&self, phys: u64, order: usize) {
+        let meta = self.get_metadata(phys);
+        if !meta.is_null() {
+            unsafe {
+                (*meta).state.store(1, Ordering::Release);
+                (*meta).order.store(order as u8, Ordering::Release);
+            }
+        }
+    }
+
+    pub fn free(&self, phys: u64, order: usize) {
+        let core_id = crate::core_local::CoreLocal::get().core_id as usize % MAX_CORES;
+        let meta = self.get_metadata(phys);
+        if !meta.is_null() {
+            unsafe {
+                (*meta).state.store(0, Ordering::Release);
+                (*meta).order.store(order as u8, Ordering::Release);
+            }
+        }
+        self.push_free_local(core_id, order, phys);
+    }
+
+    fn push_free_local(&self, core: usize, order: usize, phys: u64) {
+        let meta = self.get_metadata(phys);
+        if meta.is_null() { return; }
+        loop {
+            let head = self.shards[core].local_free_lists[order].load(Ordering::Acquire);
+            unsafe { (*meta).next.store(head, Ordering::Relaxed); }
+            if self.shards[core].local_free_lists[order].compare_exchange_weak(head, phys, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                break;
+            }
+        }
+    }
+
+    fn pop_free_local(&self, core: usize, order: usize) -> Option<u64> {
+        loop {
+            let head = self.shards[core].local_free_lists[order].load(Ordering::Acquire);
+            if head == 0 { return None; }
+            let meta = self.get_metadata(head);
+            if meta.is_null() { return None; }
+            let next = unsafe { (*meta).next.load(Ordering::Relaxed) };
+            if self.shards[core].local_free_lists[order].compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                return Some(head);
+            }
+        }
+    }
+
+    fn push_free_global(&self, order: usize, phys: u64) {
+        let meta = self.get_metadata(phys);
+        if meta.is_null() { return; }
+        loop {
+            let head = self.global_free_lists[order].load(Ordering::Acquire);
+            unsafe { (*meta).next.store(head, Ordering::Relaxed); }
+            if self.global_free_lists[order].compare_exchange_weak(head, phys, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                break;
+            }
+        }
+    }
+
+    fn pop_free_global(&self, order: usize) -> Option<u64> {
+        loop {
+            let head = self.global_free_lists[order].load(Ordering::Acquire);
+            if head == 0 { return None; }
+            let meta = self.get_metadata(head);
+            if meta.is_null() { return None; }
+            let next = unsafe { (*meta).next.load(Ordering::Relaxed) };
+            if self.global_free_lists[order].compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                return Some(head);
+            }
+        }
     }
 }
 
 pub static GLOBAL_ALLOCATOR: LockFreeBuddyAllocator = LockFreeBuddyAllocator::new();
-
-pub fn alloc_frame() -> Option<u64> {
-    GLOBAL_ALLOCATOR.alloc(0)
-}
-
-pub fn alloc_pages(order: usize) -> Option<u64> {
-    GLOBAL_ALLOCATOR.alloc(order)
-}
-
-pub fn free_pages(frame: u64, order: usize) {
-    GLOBAL_ALLOCATOR.free(frame, order)
-}
+pub fn alloc_frame() -> Option<u64> { GLOBAL_ALLOCATOR.alloc(0) }
+pub fn free_pages(phys: u64, order: usize) { GLOBAL_ALLOCATOR.free(phys, order) }

@@ -31,6 +31,7 @@ pub fn sys_translate_and_exec(translator_cap_id: u32, path_ptr: u64, code_vaddr:
         length: size,
         pku_key: current_pd.pku_key,
         permissions: 1, // Read-only
+        source_pd_id: current_pd.id,
     }));
 
     // 3. Construct TranslatorCall message

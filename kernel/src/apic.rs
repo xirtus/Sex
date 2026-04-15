@@ -43,8 +43,9 @@ pub struct IoApicInfo {
 lazy_static! {
     pub static ref PROCESSORS: Mutex<Vec<ProcessorInfo>> = Mutex::new(Vec::new());
     pub static ref IO_APICS: Mutex<Vec<IoApicInfo>> = Mutex::new(Vec::new());
-    pub static ref LAPIC_ADDR: Mutex<Option<VirtAddr>> = Mutex::new(None);
 }
+
+pub static LAPIC_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 pub fn init_apic(rsdp_addr: u64, physical_memory_offset: VirtAddr) {
     let handler = SexAcpiHandler { physical_memory_offset };
@@ -54,7 +55,7 @@ pub fn init_apic(rsdp_addr: u64, physical_memory_offset: VirtAddr) {
     
     if let acpi::InterruptModel::Apic(apic_info) = platform_info.interrupt_model {
         let lapic_virt = physical_memory_offset + apic_info.local_apic_address;
-        *LAPIC_ADDR.lock() = Some(lapic_virt);
+        LAPIC_ADDR.store(lapic_virt.as_u64(), core::sync::atomic::Ordering::Release);
         serial_println!("APIC: Found LAPIC at {:#x}", apic_info.local_apic_address);
         
         unsafe {
@@ -131,8 +132,9 @@ pub unsafe fn map_irq(irq: u8, vector: u8, dest_lapic_id: u8, physical_memory_of
 }
 
 pub unsafe fn send_ipi(lapic_id: u8, vector: u8, delivery_mode: u32) {
-    let lapic_virt = LAPIC_ADDR.lock().expect("APIC: LAPIC address not initialized");
-    let lapic_ptr = lapic_virt.as_u64() as *mut u32;
+    let lapic_vaddr = LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire);
+    if lapic_vaddr == 0 { return; }
+    let lapic_ptr = lapic_vaddr as *mut u32;
     let icr_high = lapic_ptr.offset(0x310 / 4);
     let icr_low = lapic_ptr.offset(0x300 / 4);
     while (icr_low.read_volatile() & (1 << 12)) != 0 {}
@@ -142,8 +144,9 @@ pub unsafe fn send_ipi(lapic_id: u8, vector: u8, delivery_mode: u32) {
 }
 
 pub unsafe fn broadcast_sipi(vector: u8) {
-    let lapic_virt = LAPIC_ADDR.lock().expect("APIC: LAPIC address not initialized");
-    let lapic_ptr = lapic_virt.as_u64() as *mut u32;
+    let lapic_vaddr = LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire);
+    if lapic_vaddr == 0 { return; }
+    let lapic_ptr = lapic_vaddr as *mut u32;
     let icr_low = lapic_ptr.offset(0x300 / 4);
     while (icr_low.read_volatile() & (1 << 12)) != 0 {}
     let cmd = (0b11 << 18) | (0b110 << 8) | (vector as u32);
