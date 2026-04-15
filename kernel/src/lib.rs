@@ -106,6 +106,10 @@ pub fn bootstrap_advanced_services() {
     // 4. Font Server
     let font_srv = crate::servers::srv_font::FontServer::new();
 
+    // 5. Hardware Input (PS/2 Keyboard)
+    let mut input = crate::servers::sexinput::sexinput::new("PS/2 Keyboard");
+    let _ = input.init();
+
     serial_println!("SexOS: Advanced Suite Ready (AI-Supervised SAS).");
 
     // 5. Start Autonomous Supervisor (Enters Loop)

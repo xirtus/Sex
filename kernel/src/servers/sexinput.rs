@@ -31,30 +31,26 @@ impl sexinput {
     pub fn init(&mut self) -> Result<(), &'static str> {
         serial_println!("sexinput: Initializing PS/2 Controller for {}...", self.name);
         
-        // 1. Request Keyboard (1) and Mouse (12) IRQs
-        dde::dde_request_irq(1, Self::keyboard_handler)?;
-        dde::dde_request_irq(12, Self::mouse_handler)?;
+        // 1. Register with the kernel's IRQ Routing Table for Keyboard (Vector 0x21)
+        let ring = Arc::new(self.event_queue.clone());
+        crate::interrupts::register_irq_route(0x21, 0, ring); // PD 0 for kernel-bootstrap input
 
         Ok(())
     }
 
-    pub extern "C" fn keyboard_handler(_arg: u64) -> u64 {
-        unsafe {
-            let scancode: u8 = x86_64::instructions::port::Port::new(0x60).read();
-            // serial_println!("sexinput: Keyboard Scancode: {:#x}", scancode);
-            
-            // Push to the TTY server's input buffer
-            crate::servers::tty::push_input(scancode);
+    /// Process events from the IRQ ring buffer.
+    pub fn run_loop(&self) {
+        loop {
+            if let Some(event) = self.event_queue.dequeue() {
+                // In this prototype, the event.irq is the scancode for simplicity
+                // or we read directly from the port if needed.
+                unsafe {
+                    let scancode: u8 = x86_64::instructions::port::Port::new(0x60).read();
+                    crate::servers::tty::push_input(scancode);
+                }
+            }
+            x86_64::instructions::hlt();
         }
-        0
-    }
-
-    pub extern "C" fn mouse_handler(_arg: u64) -> u64 {
-        unsafe {
-            let data: u8 = x86_64::instructions::port::Port::new(0x60).read();
-            serial_println!("sexinput: Mouse Data: {:#x}", data);
-        }
-        0
     }
 }
 

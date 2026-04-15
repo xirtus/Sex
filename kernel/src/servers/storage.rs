@@ -47,15 +47,32 @@ impl Storagesexdrive {
 
 /// The sexdrive's PDX entry point.
 pub extern "C" fn storage_entry(arg: u64) -> u64 {
-    // arg might be a pointer to a command structure in the global SAS.
-    serial_println!("STORAGE: Received command: {:#x}", arg);
+    let args = unsafe { &*(arg as *const crate::servers::sexc::FsArgs) };
     
-    // Demonstrate "Zero-Copy" logic:
-    // 1. The caller "lends" a memory buffer to the sexdrive.
-    // 2. The sexdrive performs the DMA transfer directly from/to that buffer.
-    // 3. The sexdrive signals completion via the response queue.
-    
-    0
+    match args.command {
+        crate::servers::sexc::FS_READ => {
+            serial_println!("STORAGE: PDX Read: LBA={}, Count={}, Buf={:#x}", 
+                args.offset, args.size, args.buffer);
+            
+            // In a real system, we'd use the Storagesexdrive instance
+            // For the prototype, we use handle_read which talks to IDE
+            handle_read(1, args.offset, args.size, args.buffer)
+        },
+        crate::servers::sexc::FS_GETATTR => {
+            serial_println!("STORAGE: PDX GetAttr: Buf={:#x}", args.buffer);
+            // Mock stat response for now
+            unsafe {
+                let buf = args.buffer as *mut u64;
+                for i in 0..18 { *buf.add(i) = 0; }
+                *buf.add(8) = 1024 * 1024; // 1MB size
+            }
+            0
+        }
+        _ => {
+            serial_println!("STORAGE: Unknown PDX Command {}", args.command);
+            u64::MAX
+        }
+    }
 }
 
 /// Block Cache PD (Phase 3 Step 2.2)
