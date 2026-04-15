@@ -109,20 +109,19 @@ extern "x86-interrupt" fn page_fault_handler(
 
     // 1. Identify current faulting task
     let mut task_id = 0;
-    unsafe {
-        if let Some(ref mut sched) = crate::scheduler::SCHEDULERS[0] {
-            if let Some(ref current_mutex) = sched.current_task {
-                let mut task = current_mutex.lock();
-                task_id = task.id;
-                
-                task.context.rip = stack_frame.instruction_pointer.as_u64();
-                task.context.rsp = stack_frame.stack_pointer.as_u64();
-                task.context.rflags = stack_frame.cpu_flags.as_u64();
+    let core_id = crate::core_local::CoreLocal::get().core_id;
+    if let Some(ref mut sched) = *crate::scheduler::SCHEDULERS[core_id as usize].lock() {
+        if let Some(ref current_mutex) = sched.current_task {
+            let mut task = current_mutex.lock();
+            task_id = task.id;
+            
+            task.context.rip = stack_frame.instruction_pointer.as_u64();
+            task.context.rsp = stack_frame.stack_pointer.as_u64();
+            task.context.rflags = stack_frame.cpu_flags.as_u64();
 
-                task.state = crate::scheduler::TaskState::Blocked;
-            }
-            sched.block_current();
+            task.state = crate::scheduler::TaskState::Blocked;
         }
+        sched.block_current();
     }
 
     // 4. Notify sext PD via the asynchronous ring buffer
@@ -137,12 +136,10 @@ extern "x86-interrupt" fn page_fault_handler(
     }
 
     // 5. Trigger Scheduler to pick next task (since current is blocked)
-    unsafe {
-        if let Some(ref mut sched) = crate::scheduler::SCHEDULERS[0] {
-            sched.tick();
-        }
-        send_eoi();
+    if let Some(ref mut sched) = *crate::scheduler::SCHEDULERS[core_id as usize].lock() {
+        sched.tick();
     }
+    unsafe { send_eoi(); }
 }
 
 pub unsafe fn send_eoi() {
@@ -157,10 +154,11 @@ pub unsafe fn send_eoi() {
 
 extern "x86-interrupt" fn timer_interrupt_handler(stack_frame: InterruptStackFrame) {
     TICKS.fetch_add(1, Ordering::Relaxed);
-    unsafe {
-        if let Some(ref mut sched) = crate::scheduler::SCHEDULERS[0] {
-            if let Some((old_ctx_ptr, next_ctx_ptr)) = sched.tick() {
-                // 1. Save state from the interrupt stack frame into the old context
+    let core_id = crate::core_local::CoreLocal::get().core_id;
+    if let Some(ref mut sched) = *crate::scheduler::SCHEDULERS[core_id as usize].lock() {
+        if let Some((old_ctx_ptr, next_ctx_ptr)) = sched.tick() {
+            // 1. Save state from the interrupt stack frame into the old context
+            unsafe {
                 let old_ctx = &mut *old_ctx_ptr;
                 old_ctx.rip = stack_frame.instruction_pointer.as_u64();
                 old_ctx.rsp = stack_frame.stack_pointer.as_u64();
@@ -173,8 +171,8 @@ extern "x86-interrupt" fn timer_interrupt_handler(stack_frame: InterruptStackFra
                 crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
             }
         }
-        send_eoi();
     }
+    unsafe { send_eoi(); }
 }
 
 extern "x86-interrupt" fn generic_irq_handler(_stack_frame: InterruptStackFrame) {

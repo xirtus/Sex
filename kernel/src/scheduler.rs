@@ -146,24 +146,23 @@ impl Scheduler {
     fn try_load_balance(&mut self) -> Option<(*mut TaskContext, *const TaskContext)> {
         if self.current_task.is_none() { return None; }
 
-        unsafe {
-            for i in 0..128 {
-                if let Some(ref mut other_sched) = SCHEDULERS[i] {
-                    // Very basic "steal" - take from the back of their runqueue
-                    if other_sched.runqueue.len() > 1 {
-                        if let Some(stolen_task) = other_sched.runqueue.pop_back() {
-                            serial_println!("SCHED: Core stealing Task {} from Core {}.", 
-                                stolen_task.lock().id, i);
-                            
-                            let old_task_mutex = self.current_task.take().unwrap();
-                            let old_ctx_ptr = unsafe { &mut (*old_task_mutex.as_ptr()).context as *mut TaskContext };
-                            
-                            self.runqueue.push_back(old_task_mutex);
-                            self.current_task = Some(stolen_task.clone());
-                            let next_ctx_ptr = unsafe { &(*stolen_task.as_ptr()).context as *const TaskContext };
-                            
-                            return Some((old_ctx_ptr, next_ctx_ptr));
-                        }
+        for i in 0..128 {
+            let mut other_sched_lock = SCHEDULERS[i].lock();
+            if let Some(ref mut other_sched) = *other_sched_lock {
+                // Very basic "steal" - take from the back of their runqueue
+                if other_sched.runqueue.len() > 1 {
+                    if let Some(stolen_task) = other_sched.runqueue.pop_back() {
+                        serial_println!("SCHED: Core stealing Task {} from Core {}.", 
+                            stolen_task.lock().id, i);
+                        
+                        let old_task_mutex = self.current_task.take().unwrap();
+                        let old_ctx_ptr = unsafe { &mut (*old_task_mutex.as_ptr()).context as *mut TaskContext };
+                        
+                        self.runqueue.push_back(old_task_mutex);
+                        self.current_task = Some(stolen_task.clone());
+                        let next_ctx_ptr = unsafe { &(*stolen_task.as_ptr()).context as *const TaskContext };
+                        
+                        return Some((old_ctx_ptr, next_ctx_ptr));
                     }
                 }
             }
@@ -218,43 +217,45 @@ impl Scheduler {
     }
 }
 
-pub static mut SCHEDULERS: [Option<Scheduler>; 128] = [None; 128];
+pub static SCHEDULERS: [Mutex<Option<Scheduler>>; 128] = {
+    const INIT: Mutex<Option<Scheduler>> = Mutex::new(None);
+    [INIT; 128]
+};
 
 pub fn balanced_spawn(task: Task) {
-    unsafe {
-        let mut min_load = usize::MAX;
-        let mut target_core = 0;
+    let mut min_load = usize::MAX;
+    let mut target_core = 0;
 
-        for i in 0..128 {
-            if let Some(ref sched) = SCHEDULERS[i] {
-                let load = sched.runqueue.len();
-                if load < min_load {
-                    min_load = load;
-                    target_core = i;
-                }
+    for i in 0..128 {
+        if let Some(ref sched) = *SCHEDULERS[i].lock() {
+            let load = sched.runqueue.len();
+            if load < min_load {
+                min_load = load;
+                target_core = i;
             }
         }
+    }
 
-        if let Some(ref mut sched) = SCHEDULERS[target_core] {
-            serial_println!("SCHED: Spawning Task {} on Core {}.", task.id, target_core);
-            sched.spawn(task);
-        }
+    if let Some(ref mut sched) = *SCHEDULERS[target_core].lock() {
+        serial_println!("SCHED: Spawning Task {} on Core {}.", task.id, target_core);
+        sched.spawn(task);
     }
 }
 
 /// Blocks the current thread (Phase 6 Signal Trampoline).
 pub fn park_current_thread() {
-    unsafe {
-        if let Some(ref mut sched) = SCHEDULERS[0] { // Assuming single core for park/unpark prototype
-            sched.block_current();
-        }
+    let core_id = crate::core_local::CoreLocal::get().core_id;
+    if let Some(ref mut sched) = *SCHEDULERS[core_id as usize].lock() {
+        sched.block_current();
     }
 }
 
 /// Wakes up a specific thread by its ID.
 pub fn unpark_thread(tid: u32) {
-    unsafe {
-        if let Some(ref mut sched) = SCHEDULERS[0] {
+    // For simplicity, we search all cores' wait queues. 
+    // In a real system, we'd have a PD -> Core mapping.
+    for i in 0..128 {
+        if let Some(ref mut sched) = *SCHEDULERS[i].lock() {
             sched.unblock(tid);
         }
     }
