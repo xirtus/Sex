@@ -3,8 +3,11 @@ use crate::ipc::DOMAIN_REGISTRY;
 use alloc::sync::Arc;
 use crate::loader::elf::ElfLoader;
 use crate::serial_println;
+use crate::memory::allocator::GLOBAL_ALLOCATOR;
+use crate::memory::pku;
 
 /// create_protection_domain: High-level PD lifecycle management.
+/// Phase 7: Now backed by lock-free buddy and PKU initialization.
 pub fn create_protection_domain(elf_path: &str) -> Result<u32, &'static str> {
     serial_println!("pd: Creating domain for {}...", elf_path);
 
@@ -13,29 +16,29 @@ pub fn create_protection_domain(elf_path: &str) -> Result<u32, &'static str> {
     let pku_key = (pd_id % 15) as u8 + 1;
     let new_pd = Arc::new(ProtectionDomain::new(pd_id, pku_key));
 
-    // 2. Load ELF (Simplified for Phase 8, normally via sexvfs PDX)
-    // We assume the binary is already in a buffer for this prototype
-    let binary_data = [0u8; 1024]; // Placeholder
+    // 2. Allocate initial memory from lock-free buddy
+    // For this prototype, we allocate 16 KiB (order 2) for stack + text
+    let initial_phys = GLOBAL_ALLOCATOR.alloc(2).ok_or("pd: OOM during spawn")?;
+    
+    // 3. PD PKU Initialization
+    let pkru_mask = pku::init_pd_pkru(pku_key);
+    new_pd.current_pkru_mask.store(pkru_mask, core::sync::atomic::Ordering::Release);
+
+    // 4. Load ELF (Normally via sexvfs, here using simulated buffer)
+    let binary_data = [0u8; 1024]; 
     let entry = ElfLoader::load_elf(&binary_data, pku_key)?;
 
-    // 3. PD Init (Control ring, signal ring, trampoline)
-    crate::servers::sexc::pd_init(new_pd.clone());
-
-    // 4. Register root capabilities
-    crate::capabilities::engine::CapEngine::grant_initial_rights(&new_pd);
-
-    // 5. Insert into registry
-    DOMAIN_REGISTRY.write().insert(pd_id, new_pd.clone());
+    // 5. Register with registry (Lock-free insertion)
+    DOMAIN_REGISTRY.insert(pd_id, new_pd.clone());
 
     // 6. Create initial Task and add to scheduler
     let stack_top = 0x_7000_0000_0000 + (pd_id as u64 * 0x1000_0000);
-    let task = crate::scheduler::Task {
-        id: pd_id,
-        context: crate::scheduler::TaskContext::new(entry.as_u64(), stack_top, new_pd, true),
-        state: crate::scheduler::TaskState::Ready,
-        signal_ring: Arc::new(crate::ipc_ring::RingBuffer::new()),
-    };
-    crate::scheduler::balanced_spawn(task);
+    let task = Box::into_raw(Box::new(crate::scheduler::Task::new(
+        pd_id, entry.as_u64(), stack_top, new_pd.clone(), true
+    )));
+    
+    crate::scheduler::SCHEDULERS[0].runqueue.enqueue(task);
 
+    serial_println!("pd: Spawning PD {} (PKU Key {}) at Phys {:#x}", pd_id, pku_key, initial_phys);
     Ok(pd_id)
 }

@@ -33,3 +33,13 @@ pub struct StorageCompletion {
     pub id: u64,
     pub status: i32,
 }
+
+/// Message types for XIPC Communication.
+#[derive(Debug, Clone, Copy)]
+pub enum MessageType {
+    Empty,
+    Signal(u8),
+    IpcCall { func_id: u32, arg0: u64 },
+    IpcReply(u64),
+    PageFault { fault_addr: u64, error_code: u32, pd_id: u64, lent_cap: u64 },
+}

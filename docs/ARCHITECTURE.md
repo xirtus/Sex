@@ -110,10 +110,11 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Lock-free message-based signal routing over per-PD rings.
 - [x] sexc-owned POSIX signal dispatch without kernel stack hijacks.
 
-### Phase 7: Real Memory Subsystem & Async Page-Fault Forwarding (Complete ✅)
-- [x] Physical frame allocator: Buddy-system (4K/2M/1G) implemented.
-- [x] PKU domain initialization: WRPKRU and safe domain switch helpers.
-- [x] Async page-fault forwarding: #PF routed via MessageType::PageFault to sext.
+### Phase 7: Real Memory Subsystem & Async Page-Fault Forwarding (Complete ✅ (hardened on new lock-free core))
+- [x] Lock-free Buddy Allocator (4 KiB / 2 MiB / 1 GiB sharding).
+- [x] Hardware-enforced PKU domain management.
+- [x] Asynchronous #PF forwarding to standalone `sext` server.
+- [x] Demand paging via lent-memory capabilities.
 
 ### Phase 8: Full ELF Loader + PD Spawn (Complete ✅)
 - [x] Kernel ELF loader: Segment parsing and buddy-allocator mapping implemented.

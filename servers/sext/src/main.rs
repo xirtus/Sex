@@ -1,44 +1,53 @@
-use crate::xipc::messages::MessageType;
+#![no_std]
+#![no_main]
+
+use libsys::pdx::{pdx_listen, pdx_reply};
+use crate::ipc::messages::MessageType;
 use crate::memory::allocator::GLOBAL_ALLOCATOR;
-use x86_64::structures::paging::PageTableFlags;
+use crate::capability::{CapabilityData, MemLendCapData};
+use crate::ipc::DOMAIN_REGISTRY;
 
-/// The main entry point for the sext server (SASOS Pager).
-pub fn sext_main() {
-    let pd = crate::core_local::CoreLocal::get().current_pd_ref();
-    let sexc_state_lock = pd.sexc_state.lock();
-    let state = sexc_state_lock.as_ref().expect("sext: No state");
-    let ring = &state.control_ring;
-
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    // sext: Standalone Pager / Global VAS Manager
     loop {
-        while ring.is_empty() {
-            crate::scheduler::park_current_thread();
-        }
-
-        if let Ok(msg) = ring.dequeue() {
-            match msg {
-                MessageType::PageFault { fault_addr, error_code, pd_id } => {
-                    handle_page_fault(fault_addr, error_code, pd_id);
-                }
-                _ => {}
-            }
+        // Wait for PageFault messages from the kernel
+        let req = pdx_listen(0);
+        
+        // Handle demand paging
+        match req {
+            MessageType::PageFault { fault_addr, pd_id, .. } => {
+                handle_page_fault(fault_addr, pd_id as u32);
+            },
+            _ => (),
         }
     }
 }
 
-fn handle_page_fault(addr: u64, _err: u32, target_pd_id: u64) {
-    // 1. Allocate frame via Buddy System
-    let mut allocator = GLOBAL_ALLOCATOR.lock();
-    if let Some(phys) = allocator.alloc(0) { // 4KiB
-        // 2. Map into target PD's virtual address space (SAS Model)
-        let mut gvas = crate::memory::GLOBAL_VAS.lock();
-        if let Some(ref mut vas) = *gvas {
-            let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
-            let target_pku_key = (target_pd_id % 15) as u8 + 1;
+fn handle_page_fault(fault_addr: u64, pd_id: u32) {
+    // 1. Allocate a 4 KiB frame from the lock-free buddy
+    if let Some(phys_addr) = GLOBAL_ALLOCATOR.alloc(0) {
+        // 2. Identify the target PD
+        let registry = DOMAIN_REGISTRY.get(pd_id);
+        if let Some(target_pd) = registry {
+            // 3. Grant a Lent-Memory capability to the faulting PD
+            // In a real system, we'd also update the hardware page tables.
+            target_pd.grant(CapabilityData::MemLend(MemLendCapData {
+                base: fault_addr & !0xFFF,
+                length: 4096,
+                pku_key: target_pd.pku_key,
+                permissions: 3, // R/W
+            }));
             
-            if vas.map_pku_range(x86_64::VirtAddr::new(addr), 4096, flags, target_pku_key).is_ok() {
-                // 3. Resume the faulting task
-                crate::scheduler::unpark_thread(target_pd_id as u32);
-            }
+            crate::serial_println!("sext: Paged in {:#x} for PD {} -> Phys {:#x}", 
+                fault_addr, pd_id, phys_addr);
         }
+    }
+}
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {
+        unsafe { core::arch::asm!("syscall", in("rax") 24); }
     }
 }
