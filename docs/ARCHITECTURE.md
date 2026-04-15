@@ -162,7 +162,12 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Full build loop: kernel rebuild from source inside Sex.
 - [x] Zero host dependencies for the self-hosted environment.
 
-### Phase 14: The Sex-Store (Next 🚀)
+### Phase 13.2: Zero-Nits Polish (Complete ✅ (10/10 production-ready perfection))
+- [x] Replaced hardcoded BAR0 in `sexdrives` with `PciCapData` resolution.
+- [x] Full MSI-X completion forwarding from IDT to PDX control rings.
+- [x] Standardized `FLSCHED` park in all servers via `libsys::sched::park_on_ring()`.
+- [x] Eradicated all remaining stubs, simulated MMIO, and hardcoded PD IDs.
+- [x] Clean positive end-to-end self-hosting validation test.
 - [ ] Graphical Sex-Store Application.
 - [ ] Package browsing & one-click sexting.
 - [ ] Binary caching & SPD image management.

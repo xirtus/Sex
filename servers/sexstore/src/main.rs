@@ -50,5 +50,5 @@ fn handle_store_request(cmd: u32, _name_ptr: u64, _buf_cap: u32) -> (i64, u64) {
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop { unsafe { core::arch::asm!("syscall", in("rax") 24); } }
+    loop { park_on_ring(); }
 }

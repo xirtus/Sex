@@ -7,19 +7,29 @@ use crate::core_local::CoreLocal;
 /// Phase 4: Bridge for Network operations via PDX.
 /// Maps kernel-level NET requests to the standalone sexnet server.
 
-pub fn sys_socket(domain: i32, net_type: i32, protocol: i32) -> i64 {
-    route_net_call(1, 0, 0, 0, 0)
+pub fn sys_socket(net_cap_id: u32, domain: i32, net_type: i32, protocol: i32) -> i64 {
+    route_net_call(1, net_cap_id, 0, 0, 0, 0) // Treat socket_cap as net_cap_id for initial socket creation
 }
 
 pub fn sys_send(socket_cap_id: u32, buffer: u64, size: u64) -> i64 {
-    route_net_call(3, socket_cap_id, size, buffer, 0)
+    route_net_call(3, socket_cap_id, socket_cap_id, size, buffer, 0)
 }
 
-fn route_net_call(cmd: u32, socket_cap_id: u32, size: u64, buffer_vaddr: u64, remote_node: u32) -> i64 {
+fn route_net_call(cmd: u32, target_cap_id: u32, socket_cap_id: u32, size: u64, buffer_vaddr: u64, remote_node: u32) -> i64 {
     let current_pd = CoreLocal::get().current_pd_ref();
     
-    // 1. Identify sexnet PD (Hardcoded PD 400 for prototype bootstrap)
-    let sexnet_pd = match DOMAIN_REGISTRY.get(400) {
+    // 1. Identify target PD via capability
+    let target_cap = match current_pd.cap_table.find(target_cap_id) {
+        Some(cap) => cap,
+        None => return -1,
+    };
+    
+    let target_pd_id = match target_cap.data {
+        CapabilityData::IPC(data) => data.target_pd_id,
+        _ => return -1,
+    };
+
+    let sexnet_pd = match DOMAIN_REGISTRY.get(target_pd_id) {
         Some(pd) => pd,
         None => return -1,
     };
@@ -47,7 +57,7 @@ fn route_net_call(cmd: u32, socket_cap_id: u32, size: u64, buffer_vaddr: u64, re
     };
 
     // 4. Dispatch via pure PDX
-    match safe_pdx_call(sexnet_pd.as_ref(), 0, &msg as *const _ as u64) {
+    match safe_pdx_call(target_cap_id, &msg as *const _ as u64) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
             if let MessageType::NetReply { status, socket_cap, .. } = reply {

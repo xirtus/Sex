@@ -69,12 +69,13 @@ pub static SIGNAL_STATE: SignalState = SignalState::new();
 
 /// The background trampoline thread entry point.
 /// IPCtax: Blocks with FLSCHED::park() on the control ring.
+use libsys::sched::park_on_ring;
+
 #[no_mangle]
 pub extern "C" fn sexc_trampoline_entry() -> ! {
     loop {
         // 1. Wait-free park until signal message arrives
-        // Syscall 24 = SYS_PARK
-        unsafe { core::arch::asm!("syscall", in("rax") 24); }
+        park_on_ring();
 
         // 2. Poll control ring via PDX library
         let req = pdx_listen(0);

@@ -14,8 +14,9 @@ fn test_graphical_glyph_render() {
         height: 16,
     };
     
-    let sexdisplay = crate::ipc::DOMAIN_REGISTRY.get(500).expect("sexdisplay lost");
-    let res_ptr = crate::ipc::safe_pdx_call(sexdisplay.as_ref(), 0, &msg as *const _ as u64).unwrap();
+    // Simulation: Instead of direct DOMAIN_REGISTRY lookup, a real app uses its capability table.
+    // For test purposes, assume capability slot 5 points to sexdisplay (granted at boot).
+    let res_ptr = crate::ipc::safe_pdx_call(5, &msg as *const _ as u64).unwrap();
     
     let reply = unsafe { *(res_ptr as *const crate::ipc::messages::MessageType) };
     match reply {

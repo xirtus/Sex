@@ -6,8 +6,6 @@ use crate::core_local::CoreLocal;
 /// Phase 11: POSIX pipe routing via PDX to standalone sexc.
 
 pub fn sys_pipe(pipe_fds: *mut u32) -> i64 {
-    let sexc_pd = DOMAIN_REGISTRY.get(3).unwrap(); // Fixed PD 3 for sexc
-    
     let msg = MessageType::PipeCall {
         command: 1, // PIPE_CREATE
         pipe_cap: 0,
@@ -15,7 +13,8 @@ pub fn sys_pipe(pipe_fds: *mut u32) -> i64 {
         size: 0,
     };
 
-    match safe_pdx_call(sexc_pd.as_ref(), 0, &msg as *const _ as u64) {
+    // Assumes slot 3 is granted to applications as their POSIX interface (sexc)
+    match safe_pdx_call(3, &msg as *const _ as u64) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
             if let MessageType::PipeReply { pipe_cap, .. } = reply {

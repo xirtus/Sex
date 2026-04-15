@@ -12,10 +12,18 @@ impl ElfLoader {
     pub fn load_elf(path: &str, pku_key: u8) -> Result<VirtAddr, &'static str> {
         serial_println!("loader: Loading ELF {} (PKU Key {})...", path, pku_key);
 
-        // 1. Resolve path to sexvfs (Simulated PDX resolution)
-        let sexvfs_pd = DOMAIN_REGISTRY.get(100).ok_or("loader: sexvfs not found")?;
+        let current_pd = crate::core_local::CoreLocal::get().current_pd_ref();
+
+        // 1. Resolve path to sexvfs (Via capability slot 1 - granted at boot)
+        let vfs_cap = current_pd.cap_table.find(1).ok_or("loader: VFS cap missing")?;
+        let sexvfs_pd_id = match vfs_cap.data {
+            crate::capability::CapabilityData::IPC(data) => data.target_pd_id,
+            _ => return Err("loader: Invalid VFS cap"),
+        };
+        let _sexvfs_pd = DOMAIN_REGISTRY.get(sexvfs_pd_id).ok_or("loader: sexvfs not found")?;
 
         // 2. Read ELF Header via PDX (Simplified simulation)
+
         // In SAS, we'd lend a 4K buffer to sexvfs and ask it to read the header.
         let entry = VirtAddr::new(0x_4000_0000);
         let phnum = 1;

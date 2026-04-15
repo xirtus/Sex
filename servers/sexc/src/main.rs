@@ -86,5 +86,5 @@ fn handle_proc_call(cmd: u32, path_ptr: u64, _arg_ptr: u64) -> (i64, u32) {
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop { unsafe { core::arch::asm!("syscall", in("rax") 24); } }
+    loop { park_on_ring(); }
 }

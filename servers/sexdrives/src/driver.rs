@@ -73,5 +73,5 @@ fn handle_msix_completion(_bar0: u64, _vector: u8) {
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop { unsafe { core::arch::asm!("syscall", in("rax") 24); } }
+    loop { park_on_ring(); }
 }

@@ -6,11 +6,21 @@ use crate::core_local::CoreLocal;
 /// kernel/src/syscalls/translator.rs
 /// Phase 12: execve translation path via PDX to standalone sexnode.
 
-pub fn sys_translate_and_exec(path_ptr: u64, code_vaddr: u64, size: u64) -> i64 {
+pub fn sys_translate_and_exec(translator_cap_id: u32, path_ptr: u64, code_vaddr: u64, size: u64) -> i64 {
     let current_pd = CoreLocal::get().current_pd_ref();
     
-    // 1. Identify sexnode PD (Hardcoded PD 600 for prototype bootstrap)
-    let sexnode_pd = match DOMAIN_REGISTRY.get(600) {
+    // 1. Identify target via Capability
+    let trans_cap = match current_pd.cap_table.find(translator_cap_id) {
+        Some(cap) => cap,
+        None => return -1,
+    };
+    
+    let target_pd_id = match trans_cap.data {
+        CapabilityData::IPC(data) => data.target_pd_id,
+        _ => return -1,
+    };
+
+    let sexnode_pd = match DOMAIN_REGISTRY.get(target_pd_id) {
         Some(pd) => pd,
         None => return -1,
     };
@@ -31,7 +41,7 @@ pub fn sys_translate_and_exec(path_ptr: u64, code_vaddr: u64, size: u64) -> i64 
     };
 
     // 4. Dispatch via pure PDX
-    match safe_pdx_call(sexnode_pd.as_ref(), 0, &msg as *const _ as u64) {
+    match safe_pdx_call(translator_cap_id, &msg as *const _ as u64) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
             if let MessageType::TranslatorReply { status, translated_entry } = reply {

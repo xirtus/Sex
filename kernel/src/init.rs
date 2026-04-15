@@ -10,37 +10,43 @@ use x86_64::VirtAddr;
 pub fn init() {
     serial_println!("init: Bootstrapping system Protection Domains...");
 
-    // 1. Spawn Core System Servers with Fixed Slots
-    let sext = create_protection_domain("/servers/sext/bin/sext\0", Some(2)).expect("sext lost");
-    let sexc = create_protection_domain("/servers/sexc/bin/sexc\0", Some(3)).expect("sexc lost");
-    let sexvfs = create_protection_domain("/servers/sexvfs/bin/sexvfs\0", Some(100)).expect("sexvfs lost");
-    let sexdrives = create_protection_domain("/servers/sexdrives/bin/sexdrives\0", Some(200)).expect("sexdrives lost");
-    let sexinput = create_protection_domain("/servers/sexinput/bin/sexinput\0", Some(300)).expect("sexinput lost");
-    let sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0", Some(400)).expect("sexnet lost");
-    let sexdisplay = create_protection_domain("/servers/sexdisplay/bin/sexdisplay\0", Some(500)).expect("sexdisplay lost");
-    let sexnode = create_protection_domain("/servers/sexnode/bin/sexnode\0", Some(600)).expect("sexnode lost");
-    let sexstore = create_protection_domain("/servers/sexstore/bin/sexstore\0", Some(700)).expect("sexstore lost");
+    // 1. Spawn Core System Servers (Dynamic IDs)
+    let sext = create_protection_domain("/servers/sext/bin/sext\0", None).expect("sext lost");
+    let sexc = create_protection_domain("/servers/sexc/bin/sexc\0", None).expect("sexc lost");
+    let sexvfs = create_protection_domain("/servers/sexvfs/bin/sexvfs\0", None).expect("sexvfs lost");
+    let sexdrives = create_protection_domain("/servers/sexdrives/bin/sexdrives\0", None).expect("sexdrives lost");
+    let sexinput = create_protection_domain("/servers/sexinput/bin/sexinput\0", None).expect("sexinput lost");
+    let sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0", None).expect("sexnet lost");
+    let sexdisplay = create_protection_domain("/servers/sexdisplay/bin/sexdisplay\0", None).expect("sexdisplay lost");
+    let sexnode = create_protection_domain("/servers/sexnode/bin/sexnode\0", None).expect("sexnode lost");
+    let sexstore = create_protection_domain("/servers/sexstore/bin/sexstore\0", None).expect("sexstore lost");
 
     // 2. Cross-grant IPC capabilities (Standardize slots)
     // Grant sexvfs to sexc (Slot 1)
-    let sexc_pd = DOMAIN_REGISTRY.get(3).unwrap();
+    let sexc_pd = DOMAIN_REGISTRY.get(sexc).unwrap();
     sexc_pd.grant(CapabilityData::IPC(IpcCapData { 
-        node_id: 1, target_pd_id: 100, entry_point: VirtAddr::new(0x_4000_0000) 
+        node_id: 1, target_pd_id: sexvfs, entry_point: VirtAddr::new(0x_4000_0000) 
     }));
     
     // Grant sexnode to sexc (Slot 2)
     sexc_pd.grant(CapabilityData::IPC(IpcCapData { 
-        node_id: 1, target_pd_id: 600, entry_point: VirtAddr::new(0x_4000_0000) 
+        node_id: 1, target_pd_id: sexnode, entry_point: VirtAddr::new(0x_4000_0000) 
     }));
 
     // Grant sexnet to sexstore (Slot 4)
-    let sexstore_pd = DOMAIN_REGISTRY.get(700).unwrap();
+    let sexstore_pd = DOMAIN_REGISTRY.get(sexstore).unwrap();
     sexstore_pd.grant(CapabilityData::IPC(IpcCapData { 
-        node_id: 1, target_pd_id: 400, entry_point: VirtAddr::new(0x_4000_0000) 
+        node_id: 1, target_pd_id: sexnet, entry_point: VirtAddr::new(0x_4000_0000) 
     }));
 
-    // 3. Hardware Bootstrap (Registers with interrupts)
-    pci::bootstrap_drivers();
+    // Grant sexdisplay to sexinput (Slot 5)
+    let sexinput_pd = DOMAIN_REGISTRY.get(sexinput).unwrap();
+    sexinput_pd.grant(CapabilityData::IPC(IpcCapData { 
+        node_id: 1, target_pd_id: sexdisplay, entry_point: VirtAddr::new(0x_4000_0000) 
+    }));
+    
+    // Pass PDs down to PCI for hardware grants
+    pci::bootstrap_drivers(sexdrives, sexdisplay);
 
     serial_println!("init: System services active. Spawning Self-Host environment...");
 
