@@ -35,15 +35,29 @@ pub struct SexSysInfo {
     pub cpu_count: u32,
 }
 
+#[repr(C)]
+pub struct FsArgs {
+    pub command: u32,
+    pub offset: u64,
+    pub size: u64,
+    pub buffer: u64,
+}
+
+pub const FS_READ: u32 = 1;
+pub const FS_WRITE: u32 = 2;
+pub const FS_GETATTR: u32 = 3;
+pub const FS_LSEEK: u32 = 4;
+
 impl sexc {
     /// POSIX sysinfo() equivalent for SexOS
     pub fn sysinfo(&self, buf_ptr: u64) -> i32 {
-        let mut info = SexSysInfo {
-            uptime: 12345, // Mock uptime
+        let uptime = crate::interrupts::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        let info = SexSysInfo {
+            uptime,
             total_ram: 2048 * 1024 * 1024,
-            used_ram: 512 * 1024 * 1024,
+            used_ram: 512 * 1024 * 1024, // Placeholder for real slab stats
             pd_count: crate::ipc::DOMAIN_REGISTRY.read().len() as u32,
-            cpu_count: 4,
+            cpu_count: 4, // Prototype fixed count
         };
 
         unsafe {
@@ -72,17 +86,20 @@ impl sexc {
 
         serial_println!("sexc: read(fd: {}, count: {})", fd, count);
         
+        let args = FsArgs {
+            command: FS_READ,
+            offset: 0, // Placeholder: Sexdrive should track offset per-handle
+            size: count as u64,
+            buffer: buffer as u64,
+        };
+
         let registry = DOMAIN_REGISTRY.read();
         let pd = registry.get(&self.caller_pd_id)
             .ok_or("sexc: PD not found")?;
 
-        // Perform safe_pdx_call using the file descriptor (which is a Capability ID)
-        match safe_pdx_call(pd, fd, buffer as u64) {
+        match safe_pdx_call(pd, fd, &args as *const _ as u64) {
             Ok(res) => Ok(res as usize),
-            Err(e) => {
-                serial_println!("sexc: read error: {}", e);
-                Err(e)
-            }
+            Err(e) => Err(e)
         }
     }
 
@@ -93,11 +110,20 @@ impl sexc {
             return Ok(crate::servers::tty::write(buffer, count));
         }
 
+        serial_println!("sexc: write(fd: {}, count: {})", fd, count);
+
+        let args = FsArgs {
+            command: FS_WRITE,
+            offset: 0,
+            size: count as u64,
+            buffer: buffer as u64,
+        };
+
         let registry = DOMAIN_REGISTRY.read();
         let pd = registry.get(&self.caller_pd_id)
             .ok_or("sexc: PD not found")?;
 
-        match safe_pdx_call(pd, fd, buffer as u64) {
+        match safe_pdx_call(pd, fd, &args as *const _ as u64) {
             Ok(res) => Ok(res as usize),
             Err(e) => Err(e)
         }
@@ -263,13 +289,24 @@ impl sexc {
         let req = crate::servers::sext::MapRequest {
             node_id: 1, // Local
             start: addr,
+            phys_addr: 0,
             size: length,
             pku_key: (self.caller_pd_id % 16) as u8, // Assign PD's default key
             writable: (prot & 0x2) != 0, // PROT_WRITE
             is_shm: (flags & 0x10) != 0, // MAP_SHARED
+            is_mmio: false,
+            is_dma: false,
         };
 
-        // 2. Interface with the Global VAS and PD Capability Table
+        // 2. Interface with the Global VAS
+        let mut gvas_lock = crate::memory::GLOBAL_VAS.lock();
+        if let Some(ref mut gvas) = *gvas_lock {
+            crate::servers::sext::sext_request(req, gvas);
+        } else {
+            return Err("sexc: Global VAS not initialized");
+        }
+
+        // 3. Grant the memory capability to the PD for verification
         let cheri_cap = crate::cheri::SexCapability {
             base: addr,
             length,
@@ -280,7 +317,6 @@ impl sexc {
         let registry = DOMAIN_REGISTRY.read();
         let pd = registry.get(&self.caller_pd_id).ok_or("sexc: PD not found")?;
         
-        // Grant the memory capability to the PD so sext can validate it on fault
         pd.grant(crate::capability::CapabilityData::Memory(crate::capability::MemoryCapData {
             cheri_cap,
             pku_key: req.pku_key,
@@ -316,14 +352,44 @@ impl sexc {
     /// POSIX mprotect() -> pku_update simulation
     pub fn mprotect(&self, addr: u64, len: u64, prot: i32) -> i32 {
         serial_println!("sexc: mprotect(addr: {:#x}, len: {}, prot: {})", addr, len, prot);
-        // In SASOS, this translates to updating the PKU key for the range
+        // Update PKU key via sext
+        let req = crate::servers::sext::MapRequest {
+            node_id: 1,
+            start: addr,
+            phys_addr: 0,
+            size: len,
+            pku_key: (self.caller_pd_id % 16) as u8,
+            writable: (prot & 0x2) != 0,
+            is_shm: false,
+            is_mmio: false,
+            is_dma: false,
+        };
+        let mut gvas_lock = crate::memory::GLOBAL_VAS.lock();
+        if let Some(ref mut gvas) = *gvas_lock {
+            crate::servers::sext::sext_request(req, gvas);
+        }
         0
     }
 
     /// POSIX brk() -> Memory expansion
     pub fn brk(&self, addr: u64) -> u64 {
         serial_println!("sexc: brk(new_addr: {:#x})", addr);
-        // Return the new break address (Simulated)
+        // Expand memory via sext
+        let req = crate::servers::sext::MapRequest {
+            node_id: 1,
+            start: addr,
+            phys_addr: 0,
+            size: 4096, // Single page expansion for now
+            pku_key: (self.caller_pd_id % 16) as u8,
+            writable: true,
+            is_shm: false,
+            is_mmio: false,
+            is_dma: false,
+        };
+        let mut gvas_lock = crate::memory::GLOBAL_VAS.lock();
+        if let Some(ref mut gvas) = *gvas_lock {
+            crate::servers::sext::sext_request(req, gvas);
+        }
         addr
     }
 
@@ -334,42 +400,52 @@ impl sexc {
 
     /// POSIX clock_gettime()
     pub fn clock_gettime(&self, clk_id: i32) -> u64 {
-        serial_println!("sexc: clock_gettime(clk_id: {})", clk_id);
-        // Return mock monotonic time in nanos
-        123456789
+        // Return monotonic time in nanos from kernel TICKS (1ms resolution)
+        crate::interrupts::TICKS.load(core::sync::atomic::Ordering::Relaxed) * 1_000_000
     }
 
     /// POSIX lseek()
     pub fn lseek(&self, fd: u32, offset: i64, whence: i32) -> Result<i64, &'static str> {
         serial_println!("sexc: lseek(fd: {}, offset: {}, whence: {})", fd, offset, whence);
-        Ok(offset) // Mock successful seek
+        
+        let args = FsArgs {
+            command: FS_LSEEK,
+            offset: offset as u64,
+            size: whence as u64,
+            buffer: 0,
+        };
+
+        let registry = DOMAIN_REGISTRY.read();
+        let pd = registry.get(&self.caller_pd_id)
+            .ok_or("sexc: PD not found")?;
+
+        match safe_pdx_call(pd, fd, &args as *const _ as u64) {
+            Ok(res) => Ok(res as i64),
+            Err(e) => Err(e)
+        }
     }
 
     /// POSIX fstat()
     pub fn fstat(&self, fd: u32, statbuf: u64) -> i32 {
-        // serial_println!("sexc: fstat(fd: {})", fd);
-        // Linux x86_64 struct stat layout (approximate offsets in 8-byte units)
-        unsafe {
-            let buf = statbuf as *mut u64;
-            // Clear structure (144 bytes for standard Linux x86_64 stat)
-            for i in 0..18 { *buf.add(i) = 0; }
-            
-            *buf.add(0) = 1; // st_dev
-            *buf.add(1) = 2; // st_ino
-            *buf.add(3) = 0o100644; // st_mode (Regular file, 644)
-            *buf.add(4) = 1; // st_nlink
-            *buf.add(5) = 1000; // st_uid
-            *buf.add(6) = 1000; // st_gid
-            *buf.add(8) = 40960; // st_size (Simulated size)
-            *buf.add(9) = 512; // st_blksize
-            *buf.add(11) = 80; // st_blocks
-            
-            // Timestamps (atime, mtime, ctime) - Mocking with current boot time
-            *buf.add(12) = 123456789; // st_atime
-            *buf.add(14) = 123456789; // st_mtime
-            *buf.add(16) = 123456789; // st_ctime
+        serial_println!("sexc: fstat(fd: {})", fd);
+        
+        let args = FsArgs {
+            command: FS_GETATTR,
+            offset: 0,
+            size: 0,
+            buffer: statbuf,
+        };
+
+        let registry = DOMAIN_REGISTRY.read();
+        let pd = match registry.get(&self.caller_pd_id) {
+            Some(pd) => pd,
+            None => return -1,
+        };
+
+        match safe_pdx_call(pd, fd, &args as *const _ as u64) {
+            Ok(_) => 0,
+            Err(_) => -1,
         }
-        0
     }
 
     /// POSIX stat()
@@ -530,7 +606,7 @@ impl SexPlatform {
 }
 /// The standard "syscall" entry point for C applications.
 #[no_mangle]
-pub extern "C" fn sexc_syscall(num: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
+pub extern "C" fn sexc_syscall(num: u64, arg0: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64) -> u64 {
     // 1. Recover the caller's PD ID from CoreLocal state (Privilege Isolation)
     let pd_id = crate::core_local::CoreLocal::get().current_pd();
     let _ = drain_pending_signals_for_pd(pd_id);
@@ -577,7 +653,7 @@ pub extern "C" fn sexc_syscall(num: u64, arg0: u64, arg1: u64, arg2: u64) -> u64
             }
         },
         9 => { // sys_mmap
-            match lib.mmap(arg0, arg1, arg2 as i32, 0x02 | 0x20) { // PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS
+            match lib.mmap(arg0, arg1, arg2 as i32, arg3 as i32) { 
                 Ok(addr) => addr,
                 Err(_) => u64::MAX,
             }
