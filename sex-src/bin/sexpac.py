@@ -60,7 +60,7 @@ class SexPac:
 
 def main():
     parser = argparse.ArgumentParser(description="SexOS Package Manager")
-    subparsers = parser.add_argument_group("commands").add_subparsers(dest="command")
+    subparsers = parser.add_subparsers(dest="command")
 
     # Install command
     install_parser = subparsers.add_parser("install", help="Install a .spd package")

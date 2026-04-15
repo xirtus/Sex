@@ -24,6 +24,7 @@ pub mod sexwifi;
 pub mod sexc;
 pub mod app;
 pub mod linsex;
+pub mod tty;
 pub mod sexit;
 pub mod serial;
 pub mod sext;

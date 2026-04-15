@@ -26,6 +26,11 @@ impl sexc {
 
     /// POSIX read() -> Direct sexdrive IPC via Node Capability
     pub fn read(&self, fd: u32, buffer: *mut u8, count: usize) -> Result<usize, &'static str> {
+        // For fd 0 (stdin), route to TTY server
+        if fd == 0 {
+            return Ok(crate::servers::tty::read(buffer, count));
+        }
+
         serial_println!("sexc: read(fd: {}, count: {})", fd, count);
         
         let registry = DOMAIN_REGISTRY.read();
@@ -44,12 +49,9 @@ impl sexc {
 
     /// POSIX write() -> Direct sexdrive IPC or Serial/VGA PDX
     pub fn write(&self, fd: u32, buffer: *const u8, count: usize) -> Result<usize, &'static str> {
-        // For fd 1 (stdout), we default to the Serial Server for this prototype
-        if fd == 1 {
-            serial_println!("sexc: STDOUT write: {}", unsafe { 
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(buffer, count)) 
-            });
-            return Ok(count);
+        // For fd 1 (stdout) and 2 (stderr), route to TTY server
+        if fd == 1 || fd == 2 {
+            return Ok(crate::servers::tty::write(buffer, count));
         }
 
         let registry = DOMAIN_REGISTRY.read();
@@ -326,8 +328,15 @@ pub extern "C" fn sexc_syscall(num: u64, arg0: u64, arg1: u64, arg2: u64) -> u64
         },
         10 => lib.mprotect(arg0, arg1, arg2 as i32) as u64, // sys_mprotect
         12 => lib.brk(arg0), // sys_brk
+        16 => { // sys_ioctl (Required for Terminal/TTY)
+            crate::servers::tty::handle_ioctl(arg0 as u32, arg1, arg2)
+        },
         39 => lib.getpid() as u64, // sys_getpid
         228 => lib.clock_gettime(arg0 as i32), // sys_clock_gettime
+        5 => { // sys_fstat (Actually mapped to 5 in some ABIs, let's use 5 for now)
+            serial_println!("sexc: sys_fstat(fd: {})", arg0);
+            0 // Mock success
+        },
         _ => {
             serial_println!("sexc: Unknown syscall {}", num);
             u64::MAX

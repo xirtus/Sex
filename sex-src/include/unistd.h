@@ -26,4 +26,9 @@ static inline uint32_t getpid(void) {
     return sexos_getpid();
 }
 
+static inline int isatty(int fd) {
+    // For the prototype, we assume fd 0, 1, 2 are always TTYs
+    return (fd >= 0 && fd <= 2);
+}
+
 #endif // _UNISTD_H

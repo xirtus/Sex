@@ -41,10 +41,10 @@ impl sexinput {
     pub extern "C" fn keyboard_handler(_arg: u64) -> u64 {
         unsafe {
             let scancode: u8 = x86_64::instructions::port::Port::new(0x60).read();
-            serial_println!("sexinput: Keyboard Scancode: {:#x}", scancode);
+            // serial_println!("sexinput: Keyboard Scancode: {:#x}", scancode);
             
-            // In a real system, we'd translate scancode to InputEvent 
-            // and push it to the event_queue.
+            // Push to the TTY server's input buffer
+            crate::servers::tty::push_input(scancode);
         }
         0
     }

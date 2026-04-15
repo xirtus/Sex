@@ -1,0 +1,6 @@
+{
+    "name": "lua",
+    "version": "5.4.6",
+    "capabilities": ["MEM_READ", "MEM_WRITE", "SPAWN_PD"],
+    "description": "Lua scriptable engine for Neovim and SexOS services."
+}

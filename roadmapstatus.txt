@@ -99,19 +99,23 @@
    * Implement the sexvfs logic to map file paths to disk sectors.
    * Milestone: The kernel can read a text file from a real hard drive and print it to the screen.
 
-  Step 3: Interactive Shell & Libc (Months 6-12)
+  Step 3: Interactive Shell & Libc (Stable 🚀)
    * Write PS/2 or USB keyboard drivers.
-   * Port musl libc by mapping its syscalls to sexc PDX calls.
+   * Port musl libc by mapping its syscalls to sexc PDX calls (Relibc Backend Complete).
+   * **TTY & Termios:** Implemented bidirectional TTY with ANSI escape support.
+   * **Interaction Pillar:** Connected Keyboard to TTY input buffer.
    * Port a simple shell (like ash or dash) and basic coreutils (ls, cat).
    * Milestone: You boot into a blinking cursor where you can type ls and see the files on your disk.
 
-  Step 4: Networking & Display (Year 1-2)
+  Step 4: Networking & Display (Stable 🚀)
    * Write an Intel e1000 or Virtio network driver.
    * Port a TCP/IP stack (like smoltcp in Rust).
-   * Initialize a basic framebuffer (VESA or GOP) for graphics.
+   * **RDMA Fabric:** Finalized multi-node RDMA listeners in sexnet.
+   * Initialize a basic framebuffer (VESA or GOP) for graphics (sexdrm complete).
    * Milestone: You can ping an IP address and draw shapes/text on a graphical screen.
 
-  Step 5: The Desktop Environment (Year 2-3)
+  Step 5: The Desktop Environment (In Progress 🏗️)
+   * **Dependency Ports:** Completed zlib, lua, and libuv SPD packages.
    * Implement shared memory (mmap) for IPC graphics.
    * Port a Wayland Compositor (e.g., sway or river) and Mesa for software rendering.
    * Implement the sexdrm and sexinput servers to translate inputs to Wayland.
