@@ -20,43 +20,79 @@ pub enum VnodeKind {
     Directory,
     Translator(u32), // Attached PD ID
 }
-/// A Radix Tree node for the Directory Cache (Dcache).
-/// Provides high-performance, lock-free path lookups.
-pub struct RadixNode {
-    pub vnode: Option<Vnode>,
-    pub children: BTreeMap<String, Box<RadixNode>>,
+use core::sync::atomic::AtomicPtr;
+use core::ptr;
+
+/// A lock-free Radix Tree node for the Directory Cache (Dcache).
+/// Uses RCU-style atomic pointer swaps for high-performance concurrent lookups.
+pub struct AtomicRadixNode {
+    pub vnode: AtomicPtr<Vnode>,
+    /// Pointer to an immutable BTreeMap of children.
+    /// In a production SASOS, this would be a dedicated lock-free trie.
+    pub children: AtomicPtr<BTreeMap<String, Arc<AtomicRadixNode>>>,
 }
 
-impl RadixNode {
-    pub fn new() -> Self {
-        Self {
-            vnode: None,
-            children: BTreeMap::new(),
-        }
+impl AtomicRadixNode {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            vnode: AtomicPtr::new(ptr::null_mut()),
+            children: AtomicPtr::new(Box::into_raw(Box::new(BTreeMap::new()))),
+        })
     }
 
-    /// Inserts a path into the radix tree.
-    pub fn insert(&mut self, path: &str, vnode: Vnode) {
-        let mut current = self;
-        for part in path.split('/').filter(|s| !s.is_empty()) {
-            current = current.children.entry(String::from(part)).or_insert(Box::new(RadixNode::new()));
-        }
-        current.vnode = Some(vnode);
+    /// Looks up a path part in the radix tree (Lock-Free).
+    pub fn lookup(&self, part: &str) -> Option<Arc<AtomicRadixNode>> {
+        let map_ptr = self.children.load(Ordering::Acquire);
+        let map = unsafe { &*map_ptr };
+        map.get(part).cloned()
     }
 
-    /// Looks up a path in the radix tree.
-    pub fn lookup(&self, path: &str) -> Option<Vnode> {
-        let mut current = self;
-        for part in path.split('/').filter(|s| !s.is_empty()) {
-            current = current.children.get(part)?;
+    /// Inserts a child node using RCU (Atomic Swap).
+    pub fn insert_child(&self, part: String, child: Arc<AtomicRadixNode>) {
+        loop {
+            let old_map_ptr = self.children.load(Ordering::Acquire);
+            let old_map = unsafe { &*old_map_ptr };
+
+            let mut new_map = old_map.clone();
+            new_map.insert(part.clone(), child.clone());
+
+            let new_map_ptr = Box::into_raw(Box::new(new_map));
+
+            if self.children.compare_exchange(old_map_ptr, new_map_ptr, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
+                // Success! In a real system, we'd defer the deletion of old_map_ptr via Epochs.
+                break;
+            } else {
+                // Retry if someone else swapped the map
+                unsafe { let _ = Box::from_raw(new_map_ptr); }
+            }
         }
-        current.vnode
     }
 }
 
 lazy_static! {
-    /// The high-performance Radix-based Directory Cache.
-    static ref DCACHE_RADIX: RwLock<RadixNode> = RwLock::new(RadixNode::new());
+    /// The high-performance Atomic Radix-based Directory Cache.
+    pub static ref DCACHE_RADIX: Arc<AtomicRadixNode> = AtomicRadixNode::new();
+}
+
+/// Resolves a path using the lock-free Radix cache.
+pub fn resolve_path(path: &str) -> Result<Vnode, &'static str> {
+    let mut current = DCACHE_RADIX.clone();
+
+    for part in path.split('/').filter(|s| !s.is_empty()) {
+        if let Some(next) = current.lookup(part) {
+            current = next;
+        } else {
+            return Err("VFS: Path component not found");
+        }
+    }
+
+    let vnode_ptr = current.vnode.load(Ordering::Acquire);
+    if vnode_ptr.is_null() {
+        Err("VFS: Path does not resolve to a Vnode")
+    } else {
+        unsafe { Ok(*vnode_ptr) }
+    }
+}
 
     /// The Mount Table.
     static ref MOUNTS: RwLock<BTreeMap<String, u32>> = RwLock::new(BTreeMap::new());
@@ -135,6 +171,12 @@ pub enum FsCommand {
     ReadDir { inode: u64, cookie: u64 },
 }
 
+#[repr(C)]
+pub struct FsLookupArgs {
+    pub dir_inode: u64,
+    pub name: [u8; 128],
+}
+
 /// Resolves a full path to a Vnode by walking the directory tree.
 /// This function now supports multiple filesystems by dispatching to PDX servers.
 pub fn resolve_path_multi_fs(path: &str) -> Result<Vnode, &'static str> {
@@ -146,33 +188,55 @@ pub fn resolve_path_multi_fs(path: &str) -> Result<Vnode, &'static str> {
     }
 
     // 1. Identify the filesystem (Mount point)
-    let mount_pd = if path.starts_with("/ext4") { 400 }
+    let mount_pd_id = if path.starts_with("/ext4") { 400 }
     else if path.starts_with("/btrfs") { 500 }
     else if path.starts_with("/disk0") { 800 }
     else { 1 };
 
-    serial_println!("sexvfs: Dispatching to FS Server PD {}", mount_pd);
-
     // 2. Perform component-by-component walk via PDX calls to the FS server
-    let mut current_inode = 2; // Root inode (standard for ext2/ext4/btrfs)
+    let mut current_inode = 2; // Root inode
     
+    // We need the VFS PD to have an IPC capability to the target FS PD.
+    // For this prototype, we'll assume a "System-Internal" PDX mechanism
+    // that uses PD IDs directly for trusted service coordination.
+    let registry = crate::ipc::DOMAIN_REGISTRY.read();
+    let fs_pd = registry.get(&mount_pd_id).ok_or("sexvfs: FS Driver PD not found")?;
+
     for part in parts {
-        // In a real system, this would be a safe_pdx_call to the mount_pd
-        // with the FsCommand::Lookup variant.
-        serial_println!("sexvfs: Walking -> {} (Inode: {})", part, current_inode);
+        serial_println!("sexvfs: Requesting lookup for '{}' from PD {}", part, mount_pd_id);
         
-        // Mocking the lookup result for the demonstration
-        current_inode = match part {
-            "bin" => 100,
-            "usr" => 200,
-            "init" => 0x1000,
-            _ => current_inode + 1,
+        // Prepare arguments in SAS (Single Address Space)
+        let mut args = FsLookupArgs {
+            dir_inode: current_inode,
+            name: [0; 128],
         };
+        let bytes = part.as_bytes();
+        let len = bytes.len().min(127);
+        args.name[..len].copy_from_slice(&bytes[..len]);
+
+        // Perform the call
+        // In a real system, the VFS would use a previously granted IPC cap.
+        // For the prototype, we simulate the FS driver's response.
+        let result = if mount_pd_id == 1 {
+            // Mock local FS
+            match part {
+                "bin" => 100,
+                "usr" => 200,
+                "init" => 0x1000,
+                _ => current_inode + 1,
+            }
+        } else {
+            // Simulate safe_pdx_call to the external driver
+            // result = crate::ipc::safe_pdx_call(vfs_pd, fs_cap_id, &args as *const _ as u64)?;
+            current_inode + 100 // Simulated remote inode offset
+        };
+        
+        current_inode = result;
     }
 
     Ok(Vnode {
         inode_id: current_inode,
-        sexdrive_pd_id: mount_pd,
+        sexdrive_pd_id: mount_pd_id,
         kind: VnodeKind::File,
     })
 }

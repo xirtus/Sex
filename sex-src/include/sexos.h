@@ -9,21 +9,42 @@
  * Standard C interface for the Sex Microkernel.
  */
 
-// --- System Call Numbers (Matching sexc_syscall in sexc.rs) ---
-#define SYS_EXIT         1
+// --- System Call Numbers (Standard x86_64 Linux) ---
+#define SYS_READ         0
+#define SYS_WRITE        1
 #define SYS_OPEN         2
-#define SYS_READ         3
-#define SYS_WRITE        4
-#define SYS_SPAWN_PD     5
-#define SYS_YIELD        6
-#define SYS_SIGACTION    7
-#define SYS_KILL         8
+#define SYS_CLOSE        3
+#define SYS_STAT         4
+#define SYS_FSTAT        5
+#define SYS_POLL         7
+#define SYS_LSEEK        8
+#define SYS_MMAP         9
+#define SYS_MPROTECT     10
+#define SYS_BRK          12
+#define SYS_SIGACTION    13
+#define SYS_IOCTL        16
+#define SYS_YIELD        24
 #define SYS_GETPID       39
+#define SYS_EXIT         60
+#define SYS_KILL         62
+#define SYS_RENAME       82
+#define SYS_UNLINK       87
 #define SYS_CLOCK_GETTIME 228
+#define SYS_SPAWN_PD     400
+#define SYS_REGISTER_IRQ 401
+#define SYS_SYSINFO      402
 
 // --- Types ---
 typedef uint32_t pd_id_t;
 typedef uint32_t cap_id_t;
+
+typedef struct {
+    uint64_t uptime;
+    uint64_t total_ram;
+    uint64_t used_ram;
+    uint32_t pd_count;
+    uint32_t cpu_count;
+} SexSysInfo;
 
 // --- Syscall Wrapper (x86_64) ---
 static inline uint64_t _syscall(uint64_t num, uint64_t arg0, uint64_t arg1, uint64_t arg2) {

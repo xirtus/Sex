@@ -3,24 +3,70 @@
 
 CC = /Users/xirtus/sites/microkernel/sex-src/bin/sexos-cc
 CFLAGS = -O2 -Wall
-LDFLAGS = 
+LDFLAGS = -nostdlib
 
 # Source files
-SRCS = hello.c ../lib/malloc.c
-OBJS = $(SRCS:.c=.o)
-TARGET = hello.sex
+SRCS = hello.c init.c sexsh.c sexfetch.c ../packages/doom/doom.c ../packages/classicube/cube.c ../lib/malloc.c ../lib/crt0.c ../lib/libSDL2-sexos.c
+OBJS = hello.o init.o sexsh.o sexfetch.o doom.o cube.o ../lib/malloc.o ../lib/crt0.o ../lib/libSDL2-sexos.o
+TARGETS = hello.sex init.sex sexsh.sex sexfetch.sex doom.sex cube.sex sexit.sex sext.sex sexvfs.sex sexc.sex
 
-all: $(TARGET)
+all: $(TARGETS)
 
-$(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $(OBJS)
+# ... (existing targets)
+
+sexit.sex: sexit.o ../lib/malloc.o ../lib/crt0.o
+	$(CC) $(LDFLAGS) -o $@ $^
+	@echo "Build successful: $@"
+
+sext.sex: sext.o ../lib/malloc.o ../lib/crt0.o
+	$(CC) $(LDFLAGS) -o $@ $^
+	@echo "Build successful: $@"
+
+sexvfs.sex: sexvfs.o ../lib/malloc.o ../lib/crt0.o
+	$(CC) $(LDFLAGS) -o $@ $^
+	@echo "Build successful: $@"
+
+sexc.sex: sexc.o ../lib/malloc.o ../lib/crt0.o
+	$(CC) $(LDFLAGS) -o $@ $^
+	@echo "Build successful: $@"
+
+# ... (rest of the targets)
+
+doom.sex: doom.o ../lib/malloc.o ../lib/crt0.o ../lib/libSDL2-sexos.o
+	$(CC) $(LDFLAGS) -o $@ $^
+	@echo "Build successful: $@"
+
+cube.sex: cube.o ../lib/malloc.o ../lib/crt0.o ../lib/libSDL2-sexos.o
+	$(CC) $(LDFLAGS) -o $@ $^
+	@echo "Build successful: $@"
+
+%.o: ../packages/doom/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+%.o: ../packages/classicube/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+hello.sex: hello.o ../lib/malloc.o ../lib/crt0.o
+	$(CC) $(LDFLAGS) -o $@ $^
+	@echo "Build successful: $@"
+
+init.sex: init.o ../lib/malloc.o ../lib/crt0.o
+	$(CC) $(LDFLAGS) -o $@ $^
+	@echo "Build successful: $@"
+
+sexsh.sex: sexsh.o ../lib/malloc.o ../lib/crt0.o
+	$(CC) $(LDFLAGS) -o $@ $^
+	@echo "Build successful: $@"
+
+sexfetch.sex: sexfetch.o ../lib/malloc.o ../lib/crt0.o
+	$(CC) $(LDFLAGS) -o $@ $^
 	@echo "Build successful: $@"
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f *.o $(TARGETS) ../lib/*.o
 
-install: $(TARGET)
-	cp $(TARGET) ../root_fs/bin/
+install: $(TARGETS)
+	cp $(TARGETS) ../root_fs/bin/

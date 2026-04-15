@@ -42,12 +42,44 @@ pub struct RdmaDescriptor {
     pub completion_flag: core::sync::atomic::AtomicBool,
 }
 
+/// TCP Header
+#[repr(C, packed)]
+pub struct TcpHeader {
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub seq_num: u32,
+    pub ack_num: u32,
+    pub offset_flags: u16,
+    pub window: u16,
+    pub checksum: u16,
+    pub urgent_ptr: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TcpState {
+    Closed,
+    Listen,
+    SynReceived,
+    Established,
+    FinWait,
+}
+
+pub struct TcpConnection {
+    pub remote_addr: [u8; 4],
+    pub remote_port: u16,
+    pub local_port: u16,
+    pub state: TcpState,
+    pub seq: u32,
+    pub ack: u32,
+}
+
 /// User-Space sexnet Stack (Multiplexer)
 use crate::servers::e1000::E1000Driver;
 
 pub struct sexnet {
     pub driver: E1000Driver,
     pub port_bindings: BTreeMap<u16, u32>,
+    pub connections: Vec<TcpConnection>,
 }
 
 impl sexnet {
@@ -55,6 +87,7 @@ impl sexnet {
         Self {
             driver: E1000Driver::new(),
             port_bindings: BTreeMap::new(),
+            connections: Vec::new(),
         }
     }
 
@@ -175,12 +208,50 @@ impl sexnet {
         }
     }
 
-    fn handle_ipv4(&self, ip: &Ipv4Header, _payload: *const u8) {
+    fn handle_ipv4(&mut self, ip: &Ipv4Header, payload: *const u8) {
         match ip.protocol {
             1 => serial_println!("sexnet: Received ICMP Packet"),
-            6 => serial_println!("sexnet: Received TCP Packet"),
+            6 => {
+                let tcp = unsafe { &*(payload as *const TcpHeader) };
+                let src_port = u16::from_be(tcp.src_port);
+                let dst_port = u16::from_be(tcp.dst_port);
+                let flags = u16::from_be(tcp.offset_flags) & 0x3F;
+
+                serial_println!("sexnet: TCP Packet {src_port} -> {dst_port} (Flags: {:#x})", flags);
+                self.handle_tcp(ip, tcp, flags);
+            },
             17 => serial_println!("sexnet: Received UDP Packet"),
             _ => {},
+        }
+    }
+
+    fn handle_tcp(&mut self, ip: &Ipv4Header, tcp: &TcpHeader, flags: u16) {
+        let src_port = u16::from_be(tcp.src_port);
+        let dst_port = u16::from_be(tcp.dst_port);
+
+        if flags & 0x02 != 0 { // SYN
+            serial_println!("sexnet: [TCP] Connection Request (SYN) from {}:{}", 
+                ip.src_ip[0], src_port);
+            
+            let conn = TcpConnection {
+                remote_addr: ip.src_ip,
+                remote_port: src_port,
+                local_port: dst_port,
+                state: TcpState::SynReceived,
+                seq: 1000,
+                ack: u32::from_be(tcp.seq_num) + 1,
+            };
+            
+            serial_println!("sexnet: [TCP] Sending SYN-ACK to {}:{}", ip.src_ip[0], src_port);
+            self.connections.push(conn);
+        } else if flags & 0x10 != 0 { // ACK
+            if let Some(conn) = self.connections.iter_mut()
+                .find(|c| c.remote_addr == ip.src_ip && c.remote_port == src_port) {
+                if conn.state == TcpState::SynReceived {
+                    conn.state = TcpState::Established;
+                    serial_println!("sexnet: [TCP] Connection Established with {}.", ip.src_ip[0]);
+                }
+            }
         }
     }
 }

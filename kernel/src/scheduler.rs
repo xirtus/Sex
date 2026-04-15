@@ -114,33 +114,70 @@ impl Scheduler {
         }
     }
 
-    /// Picks the next task to run and performs a context switch.
-    pub fn tick(&mut self) {
+    /// Picks the next task to run and returns pointers for the context switch.
+    /// Returns (old_context, new_context) if a switch is needed.
+    pub fn tick(&mut self) -> Option<(*mut TaskContext, *const TaskContext)> {
         // 1. Process Signals for the current task
         if let Some(ref current_mutex) = self.current_task {
             let current = current_mutex.lock();
             if let Some(sig) = current.signal_ring.dequeue() {
                 serial_println!("SCHED: Signal {} pending for Task {}.", sig, current.id);
-                
-                // 2. Check for registered handler in PD
-                if let Some(handler) = current.context.pd.signal_handlers.lock().get(&sig) {
-                    serial_println!("SCHED: Injecting signal handler at {:#x}", *handler);
-                    // In a real system, we'd swap RIP to the handler and save the old RIP
+                // Signal injection logic would go here
+            }
+        }
+
+        // 2. Simple round-robin for the prototype
+        if let Some(next_task_mutex) = self.runqueue.pop_front() {
+            let old_task_mutex = self.current_task.take().unwrap();
+            
+            // Save pointer to old context before re-enqueueing
+            let old_ctx_ptr = unsafe { &mut (*old_task_mutex.as_ptr()).context as *mut TaskContext };
+            
+            self.runqueue.push_back(old_task_mutex);
+            
+            let next_task = next_task_mutex.clone();
+            let next_ctx_ptr = unsafe { &(*next_task.as_ptr()).context as *const TaskContext };
+            
+            self.current_task = Some(next_task);
+            
+            return Some((old_ctx_ptr, next_ctx_ptr));
+        }
+        
+        // 3. If runqueue is empty, try to steal from another core
+        if let Some((old_ctx_ptr, next_ctx_ptr)) = self.try_load_balance() {
+            return Some((old_ctx_ptr, next_ctx_ptr));
+        }
+
+        None
+    }
+
+    /// Attempts to steal a task from another core if this one is idle.
+    fn try_load_balance(&mut self) -> Option<(*mut TaskContext, *const TaskContext)> {
+        if self.current_task.is_none() { return None; }
+
+        unsafe {
+            for i in 0..128 {
+                if let Some(ref mut other_sched) = SCHEDULERS[i] {
+                    // Very basic "steal" - take from the back of their runqueue
+                    if other_sched.runqueue.len() > 1 {
+                        if let Some(stolen_task) = other_sched.runqueue.pop_back() {
+                            serial_println!("SCHED: Core stealing Task {} from Core {}.", 
+                                stolen_task.lock().id, i);
+                            
+                            let old_task_mutex = self.current_task.take().unwrap();
+                            let old_ctx_ptr = unsafe { &mut (*old_task_mutex.as_ptr()).context as *mut TaskContext };
+                            
+                            self.runqueue.push_back(old_task_mutex);
+                            self.current_task = Some(stolen_task.clone());
+                            let next_ctx_ptr = unsafe { &(*stolen_task.as_ptr()).context as *const TaskContext };
+                            
+                            return Some((old_ctx_ptr, next_ctx_ptr));
+                        }
+                    }
                 }
             }
         }
-
-        // 3. Simple round-robin for the prototype
-        if let Some(next_task_mutex) = self.runqueue.pop_front() {
-            let next_task = next_task_mutex.clone();
-            
-            // Re-enqueue the current task
-            if let Some(current) = self.current_task.take() {
-                self.runqueue.push_back(current);
-            }
-
-            self.current_task = Some(next_task);
-        }
+        None
     }
 
     /// The hardware-accelerated context switch.
@@ -192,8 +229,24 @@ impl Scheduler {
 
 pub static mut SCHEDULERS: [Option<Scheduler>; 128] = [None; 128];
 
-pub fn init_core(core_id: usize) {
+pub fn balanced_spawn(task: Task) {
     unsafe {
-        SCHEDULERS[core_id] = Some(Scheduler::new());
+        let mut min_load = usize::MAX;
+        let mut target_core = 0;
+
+        for i in 0..128 {
+            if let Some(ref sched) = SCHEDULERS[i] {
+                let load = sched.runqueue.len();
+                if load < min_load {
+                    min_load = load;
+                    target_core = i;
+                }
+            }
+        }
+
+        if let Some(ref mut sched) = SCHEDULERS[target_core] {
+            serial_println!("SCHED: Spawning Task {} on Core {}.", task.id, target_core);
+            sched.spawn(task);
+        }
     }
 }

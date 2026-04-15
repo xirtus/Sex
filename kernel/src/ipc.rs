@@ -10,13 +10,67 @@ use core::sync::atomic::Ordering;
 
 pub const LOCAL_NODE_ID: u32 = 1;
 
-lazy_static! {
-    /// Global Registry of all Protection Domains.
-    /// In a 128-core system, we use a RwLock for now, but the design 
-    /// allows for sharding or per-core caching to eliminate contention.
-    pub static ref DOMAIN_REGISTRY: RwLock<BTreeMap<u32, Arc<ProtectionDomain>>> = 
-        RwLock::new(BTreeMap::new());
+use core::sync::atomic::AtomicPtr;
+use core::ptr;
+
+pub const MAX_DOMAINS: usize = 1024;
+
+struct DomainRegistry {
+    domains: [AtomicPtr<ProtectionDomain>; MAX_DOMAINS],
 }
+
+impl DomainRegistry {
+    const fn new() -> Self {
+        Self {
+            domains: [AtomicPtr::new(ptr::null_mut()); MAX_DOMAINS],
+        }
+    }
+
+    fn get(&self, id: u32) -> Option<Arc<ProtectionDomain>> {
+        let idx = id as usize % MAX_DOMAINS;
+        let ptr = self.domains[idx].load(Ordering::Acquire);
+        if ptr.is_null() {
+            None
+        } else {
+            // Safety: We assume domains are never deallocated in this SASOS prototype.
+            // In a real system, we'd use hazard pointers or Arc::from_raw with care.
+            unsafe {
+                let arc = Arc::from_raw(ptr);
+                let cloned = arc.clone();
+                let _ = Arc::into_raw(arc); // Keep original alive
+                Some(cloned)
+            }
+        }
+    }
+
+    fn insert(&self, id: u32, pd: Arc<ProtectionDomain>) {
+        let idx = id as usize % MAX_DOMAINS;
+        let ptr = Arc::into_raw(pd) as *mut _;
+        self.domains[idx].store(ptr, Ordering::Release);
+    }
+
+    fn contains_key(&self, id: u32) -> bool {
+        let idx = id as usize % MAX_DOMAINS;
+        !self.domains[idx].load(Ordering::Acquire).is_null()
+    }
+
+    fn len(&self) -> usize {
+        self.domains.iter().filter(|p| !p.load(Ordering::Acquire).is_null()).count()
+    }
+}
+
+static WAIT_FREE_REGISTRY: DomainRegistry = DomainRegistry::new();
+
+pub const LOCAL_NODE_ID: u32 = 1;
+
+// Compatibility wrapper for DOMAIN_REGISTRY (Simulated read/write)
+pub struct RegistryWrapper;
+impl RegistryWrapper {
+    pub fn read(&self) -> &DomainRegistry { &WAIT_FREE_REGISTRY }
+    pub fn write(&self) -> &DomainRegistry { &WAIT_FREE_REGISTRY }
+}
+
+pub static DOMAIN_REGISTRY: RegistryWrapper = RegistryWrapper;
 use crate::amdahl::GLOBAL_AMDAHL;
 use crate::sunni::GLOBAL_SUNNI;
 use crate::latency_guard;

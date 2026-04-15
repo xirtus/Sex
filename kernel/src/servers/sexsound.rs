@@ -1,16 +1,17 @@
 use crate::serial_println;
 use crate::servers::dde;
+use crate::ipc_ring::SpscRing;
+use crate::interrupts::InterruptEvent;
+use alloc::sync::Arc;
+use x86_64::VirtAddr;
 
-/// sexsound: ALSA/PipeWire lifting for the Sex Microkernel.
-/// Provides high-performance, isolated sound support.
+/// sexsound: Intel HDA / High-Performance Audio for SexOS.
+/// Provides high-performance, isolated sound support with real-time IRQ routing.
 
 pub struct sexsound {
     pub name: &'static str,
-    pub channels: u8,
-    pub sample_rate: u32,
+    pub interrupt_ring: Arc<SpscRing<InterruptEvent>>,
 }
-
-// --- Intel HDA Support (Real Implementation) ---
 
 pub struct HdaController {
     pub mmio_base: VirtAddr,
@@ -22,44 +23,57 @@ impl HdaController {
     }
 
     /// Initializes the HDA controller (CORB/RIRB logic).
-    pub unsafe fn init_hardware(&self) {
+    pub unsafe fn init_hardware(&self, pd_id: u32) -> Result<(), &'static str> {
         let mmio_ptr = self.mmio_base.as_u64() as *mut u32;
         
-        // 1. Reset Controller (GCAP/GCTL)
+        // 1. Reset Controller
         let gctl = mmio_ptr.offset(0x08 / 4);
-        gctl.write_volatile(gctl.read_volatile() | 1); // Reset bit
+        gctl.write_volatile(gctl.read_volatile() | 1); 
         while (gctl.read_volatile() & 1) == 0 {}
         
-        serial_println!("sexsound: Intel HDA Controller Reset Complete.");
-
-        // 2. Initialize DMA Engine (CORB - Command Output Ring Buffer)
-        let corblbase = mmio_ptr.offset(0x40 / 4);
-        corblbase.write_volatile(0x_BBBB_0000); // Simulated physical buffer
+        // 2. Grant DMA Capability for Audio Buffers
+        let buffer_phys = 0x_BBBB_0000;
+        let registry = crate::ipc::DOMAIN_REGISTRY.read();
+        let pd = registry.get(&pd_id).ok_or("sexsound: PD not found")?;
         
-        serial_println!("sexsound: HDA DMA CORB/RIRB initialized.");
+        pd.grant(crate::capability::CapabilityData::DMA(crate::capability::DmaCapData {
+            phys_addr: buffer_phys,
+            length: 64 * 1024, // 64KB audio ring
+            pku_key: pd.pku_key,
+        }));
+
+        // 3. Set CORB/RIRB base (Simulated)
+        let corblbase = mmio_ptr.offset(0x40 / 4);
+        corblbase.write_volatile(buffer_phys as u32);
+        
+        serial_println!("sexsound: Intel HDA Controller ready with DMA at {:#x}.", buffer_phys);
+        Ok(())
     }
 }
 
-pub fn play_sound(buffer_phys: u64, size: usize) {
-    serial_println!("sexsound: Playing {} bytes from {:#x} (DMA Transfer Started).", 
-        size, buffer_phys);
-    // In a real system, we'd trigger the Stream Descriptor DMA
-}
-
 impl sexsound {
-    pub fn init(&mut self) -> Result<(), &'static str> {
-        serial_println!("sexsound: Initializing Intel HDA for {}...", self.name);
-        
-        // 1. Find HDA Controller via DDE
-        let devices = dde::dde_pci_enumerate();
-        let pci = devices.into_iter().find(|d| d.vendor_id == 0x8086 && d.class_id == 0x04)
-            .ok_or("sexsound: HDA Controller not found")?;
+    pub fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            interrupt_ring: Arc::new(SpscRing::new()),
+        }
+    }
 
-        // 2. Map MMIO and Init Hardware
-        let bar0 = pci.read_u32(0x10) & 0xFFFF_FFF0;
-        let mmio_base = dde::dde_ioremap(bar0 as u64, 0x4000)?;
+    pub fn init(&mut self, pd_id: u32) -> Result<(), &'static str> {
+        serial_println!("sexsound: Scanning for Audio via PCI...");
+        
+        // 1. Find HDA Controller via real PCI
+        let devices = crate::pci::enumerate_bus();
+        let pci = devices.into_iter().find(|d| d.class_id == 0x04) // Multimedia Controller
+            .ok_or("sexsound: Audio Controller not found")?;
+
+        // 2. Register IRQ (Vector 0x23 for Audio)
+        crate::interrupts::register_irq_route(0x23, pd_id, self.interrupt_ring.clone());
+
+        // 3. Map MMIO and Init Hardware
+        let mmio_base = dde::dde_ioremap(pci.get_bar(0), 0x4000)?;
         let hda = HdaController::new(mmio_base);
-        unsafe { hda.init_hardware(); }
+        unsafe { hda.init_hardware(pd_id)?; }
 
         Ok(())
     }

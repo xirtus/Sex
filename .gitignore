@@ -1,8 +1,36 @@
+# SexOS: Sensitive and Environment Ignores
+.env
+.env.*
+*.pem
+*.key
+*.pub
+credentials
+secrets.json
+config.local.json
+
+# Rust and Build Artifacts
 /target
 Cargo.lock
+*.bin
+*.iso
+*.sex
+*.spd
+*.img
+
+# macOS and OS Specific
 .DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# IDEs and Editors
 .history
 .vscode
 .idea
-*.bin
-*.iso
+*.swp
+*.swo
+.project
+.settings
+.classpath
+.factorypath

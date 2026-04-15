@@ -6,6 +6,7 @@ extern crate alloc;
 pub mod serial;
 pub mod vga;
 pub mod memory;
+pub mod pci;
 pub mod pku;
 pub mod slab;
 pub mod cheri;
@@ -23,6 +24,7 @@ pub mod apic;
 pub mod smp;
 pub mod scheduler;
 pub mod elf;
+pub mod initrd;
 pub mod servers;
 
 use linked_list_allocator::LockedHeap;
@@ -84,6 +86,30 @@ pub mod hal {
     }
 }
 
-pub fn init() {
-    hal::init();
+pub fn bootstrap_advanced_services() {
+    serial_println!("SexOS: Bootstrapping Advanced Interaction Suite...");
+
+    // 1. Security Federation (Telemetry Source)
+    let srv_sec = Arc::new(crate::servers::srv_sec::SecurityFederation::new(1));
+    
+    // 2. Sex-Gemini (Autonomous Supervisor)
+    let ai = Arc::new(crate::servers::sexgemini::SexGemini::new());
+    
+    // In a real system, the repair loop would run in its own PD.
+    // For this bootstrap, we simulate the monitoring intent.
+    serial_println!("SexOS: AI Supervisor active (Autonomous Remediation).");
+
+    // 3. Graphics Stack
+    let mut wayland = crate::servers::srv_wayland::WaylandCompositor::new();
+    let _ = wayland.init();
+
+    // 4. Font Server
+    let font_srv = crate::servers::srv_font::FontServer::new();
+
+    serial_println!("SexOS: Advanced Suite Ready (AI-Supervised SAS).");
+
+    // 5. Start Autonomous Supervisor (Enters Loop)
+    // Note: In a production SASOS, sexgemini runs in its own PD.
+    // For this prototype, we'll initialize the repair loop.
+    // crate::servers::sexgemini::SexGemini::new().run_repair_loop();
 }

@@ -1,0 +1,10 @@
+{
+  "name": "git",
+  "version": "2.44.0-sexos",
+  "capabilities": [
+    "VFS_LOOKUP_WRITE",
+    "NET_TCP_CONNECT"
+  ],
+  "driver_info": {},
+  "binary": "/bin/git.sex"
+}

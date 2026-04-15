@@ -88,10 +88,15 @@ impl NvmeQueue {
     }
 }
 
+use crate::ipc_ring::SpscRing;
+use crate::interrupts::InterruptEvent;
+use alloc::sync::Arc;
+
 pub struct NvmeController {
     pub mmio_base: VirtAddr,
     pub admin_queue: Option<NvmeQueue>,
     pub io_queue: Option<NvmeQueue>,
+    pub interrupt_ring: Arc<SpscRing<InterruptEvent>>,
 }
 
 impl NvmeController {
@@ -100,25 +105,39 @@ impl NvmeController {
             mmio_base,
             admin_queue: None,
             io_queue: None,
+            interrupt_ring: Arc::new(SpscRing::new()),
         }
     }
 
-    pub unsafe fn init_controller(&mut self) -> Result<(), &'static str> {
+    pub unsafe fn init_controller(&mut self, pd_id: u32) -> Result<(), &'static str> {
+        // 1. Register IRQ Route (Vector 0x22 for NVMe)
+        crate::interrupts::register_irq_route(0x22, pd_id, self.interrupt_ring.clone());
+
         let regs = &mut *(self.mmio_base.as_u64() as *mut NvmeRegs);
         
-        // 1. Reset controller
+        // 2. Reset controller
         regs.cc &= !1;
         while (regs.csts & 1) != 0 {}
 
-        // 2. Setup Admin Queue (AQA, ASQ, ACQ)
+        // 3. Setup Admin Queue (AQA, ASQ, ACQ)
         // In a real system, allocate via PMM
         let sq_phys = 0x_F000_0000; 
         let cq_phys = 0x_F000_1000;
+        
+        // Grant DMA capabilities to the PD
+        let registry = crate::ipc::DOMAIN_REGISTRY.read();
+        let pd = registry.get(&pd_id).ok_or("NVMe: PD not found")?;
+        pd.grant(crate::capability::CapabilityData::DMA(crate::capability::DmaCapData {
+            phys_addr: sq_phys,
+            length: 4096,
+            pku_key: pd.pku_key,
+        }));
+
         regs.aqa = (31 << 16) | 31;
         regs.asq = sq_phys;
         regs.acq = cq_phys;
 
-        // 3. Enable
+        // 4. Enable
         regs.cc |= (6 << 16) | (4 << 20) | 1; // 4KB page size, EN=1
         while (regs.csts & 1) == 0 {}
 
@@ -133,9 +152,22 @@ impl NvmeController {
             phase: true,
         });
 
-        serial_println!("NVMe: Admin Queue initialized.");
+        serial_println!("NVMe: Admin Queue initialized with real-time IRQ routing.");
         Ok(())
     }
+
+    pub fn wait_for_completion(&mut self) {
+        serial_println!("NVMe: Waiting for interrupt...");
+        loop {
+            if let Some(event) = self.interrupt_ring.dequeue() {
+                serial_println!("NVMe: Received IRQ {:#x}. Processing completions.", event.vector);
+                break;
+            }
+            // In Ring 3, we'd yield or use a wait-queue
+            x86_64::instructions::hlt();
+        }
+    }
+}
 
     pub fn read_blocks(&mut self, lba: u64, count: u16, buffer_phys: u64) {
         let mut entry = NvmeSqEntry {
@@ -168,23 +200,38 @@ impl NvmeController {
     }
 }
 
+use crate::pci;
+
 pub fn nvme_probe() -> Result<(), &'static str> {
-    serial_println!("NVMe: Scanning for high-performance SSDs...");
+    serial_println!("NVMe: Scanning for high-performance SSDs via real PCI bus...");
     
     // 1. Find device (Class 0x01, Subclass 0x08, Prog IF 0x02)
-    let devices = dde::dde_pci_enumerate();
-    let pci = devices.into_iter().find(|d| d.class_id == 0x01 && d.subclass_id == 0x08)
+    let devices = pci::enumerate_bus();
+    let dev_info = devices.into_iter().find(|d| d.class_id == 0x01 && d.subclass_id == 0x08)
         .ok_or("NVMe: No SSD found")?;
 
     serial_println!("NVMe: Found {} at {:02x}:{:02x}.{:x}", 
-        if pci.vendor_id == 0x144d { "Samsung 990 Pro" } else { "NVMe Device" },
-        pci.bus, pci.dev, pci.func);
+        if dev_info.vendor_id == 0x144d { "Samsung 990 Pro" } else { "NVMe Device" },
+        dev_info.bus, dev_info.dev, dev_info.func);
 
     // 2. Map BAR0 (Registers)
-    let bar0 = pci.read_u32(0x10) & 0xFFFF_FFF0;
-    let mmio_base = dde::dde_ioremap(bar0 as u64, 0x4000)?;
+    let bar0_phys = dev_info.get_bar(0);
+    serial_println!("NVMe: Mapping BAR0 physical {:#x}", bar0_phys);
+
+    // In a real system, we'd assign a unique virtual range in the SAS.
+    // For the prototype, we use a fixed MMIO offset.
+    let mmio_vaddr = VirtAddr::new(0x_A000_0000_0000 + bar0_phys); 
     
-    let mut nvme = NvmeController::new(mmio_base);
+    let mut gvas_lock = crate::memory::GLOBAL_VAS.lock();
+    if let Some(ref mut gvas) = *gvas_lock {
+        let flags = x86_64::structures::paging::PageTableFlags::PRESENT 
+                  | x86_64::structures::paging::PageTableFlags::WRITABLE 
+                  | x86_64::structures::paging::PageTableFlags::NO_CACHE;
+        
+        gvas.map_phys_range(mmio_vaddr, x86_64::PhysAddr::new(bar0_phys), 0x4000, flags, 0)?;
+    }
+
+    let mut nvme = NvmeController::new(mmio_vaddr);
     unsafe { nvme.init_controller()?; }
 
     Ok(())

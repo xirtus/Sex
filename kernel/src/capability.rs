@@ -9,6 +9,7 @@ use crate::cheri::SexCapability;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityKind {
     Memory,
+    DMA,       // New: Contiguous DMA capability
     IPC,      
     Interrupt, 
     Domain,    
@@ -95,8 +96,16 @@ pub struct SocketCapData {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct DmaCapData {
+    pub phys_addr: u64,
+    pub length: u64,
+    pub pku_key: u8,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum CapabilityData {
     Memory(MemoryCapData),
+    DMA(DmaCapData), // Added DMA data
     IPC(IpcCapData),
     Interrupt(InterruptCapData),
     Domain(u32), 
@@ -154,6 +163,21 @@ impl CapabilityTable {
 
     pub fn find(&self, id: u32) -> Option<Capability> {
         self.caps.lock().iter().find(|c| c.id == id).copied()
+    }
+
+    /// Finds a capability that covers a specific virtual address.
+    pub fn find_by_addr(&self, addr: u64) -> Option<Capability> {
+        self.caps.lock().iter().find(|c| {
+            match c.data {
+                CapabilityData::Memory(data) => {
+                    addr >= data.cheri_cap.base && addr < data.cheri_cap.base + data.cheri_cap.length
+                },
+                CapabilityData::MemLend(data) => {
+                    addr >= data.base && addr < data.base + data.length
+                },
+                _ => false,
+            }
+        }).copied()
     }
 }
 
@@ -247,5 +271,25 @@ impl ProtectionDomain {
         let mut current = self.current_pkru_mask.load(Ordering::SeqCst);
         current |= 0b11 << shift; // Disable access
         self.current_pkru_mask.store(current, Ordering::SeqCst);
+    }
+
+    /// Activates a DMA capability.
+    pub fn activate_dma_cap(&self, cap_id: u32) -> Result<(), &'static str> {
+        let cap = self.cap_table.find(cap_id).ok_or("Cap: Not found")?;
+        match cap.data {
+            CapabilityData::DMA(data) => {
+                let shift = data.pku_key * 2;
+                let mut current = self.current_pkru_mask.load(Ordering::SeqCst);
+                
+                // DMA usually requires R/W access for the hardware and PD
+                current &= !(0b11 << shift); 
+
+                self.current_pkru_mask.store(current, Ordering::SeqCst);
+                serial_println!("DMA: Activated Contiguous DMA Capability {} (Phys: {:#x})", 
+                    cap_id, data.phys_addr);
+                Ok(())
+            },
+            _ => Err("Cap: Not a DMA capability"),
+        }
     }
 }

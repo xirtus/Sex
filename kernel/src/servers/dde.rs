@@ -128,7 +128,7 @@ use core::sync::atomic::AtomicU64;
 static DMA_BUMP_PTR: AtomicU64 = AtomicU64::new(0x_D000_0000); // Dedicated DMA region
 
 /// Linux-equivalent dma_alloc_coherent (DDE Shim).
-/// Allocates physically contiguous, pinned memory for DMA using the kernel allocator.
+/// Allocates physically contiguous, pinned memory and requests a secure SAS mapping via sext.
 #[no_mangle]
 pub extern "C" fn dma_alloc_coherent(_dev: *mut device, size: usize, dma_handle: *mut u64, _flags: i32) -> *mut u8 {
     let num_frames = (size + 4095) / 4096;
@@ -137,16 +137,35 @@ pub extern "C" fn dma_alloc_coherent(_dev: *mut device, size: usize, dma_handle:
     if let Some(ref mut gvas) = *gvas_lock {
         if let Some(frame) = gvas.frame_allocator.allocate_contiguous(num_frames) {
             let phys_addr = frame.start_address().as_u64();
-            serial_println!("VAMPIRE: dma_alloc_coherent(size: {}) -> Phys: {:#x}", size, phys_addr);
-            unsafe {
-                *dma_handle = phys_addr;
+            unsafe { *dma_handle = phys_addr; }
+
+            // 1. Identify current PD
+            let pd_id = crate::core_local::CoreLocal::get().current_pd();
+            let registry = crate::ipc::DOMAIN_REGISTRY.read();
+            let pku_key = registry.get(&pd_id).map(|p| p.pku_key).unwrap_or(0);
+
+            // 2. Request secure mapping from sext
+            let req = crate::servers::sext::MapRequest {
+                node_id: 1,
+                start: 0,
+                phys_addr,
+                size: size as u64,
+                pku_key,
+                writable: true,
+                is_shm: false,
+                is_mmio: false,
+                is_dma: true,
+            };
+
+            let vaddr = crate::servers::sext::sext_request(req, gvas);
+            if vaddr != u64::MAX {
+                serial_println!("DDE: Secure DMA mapping established at {:#x}.", vaddr);
+                return vaddr as *mut u8;
             }
-            // In SASOS, we return the virtual address (identity mapped for kernel buffers)
-            return phys_addr as *mut u8;
         }
     }
     
-    serial_println!("VAMPIRE: DMA allocation failed!");
+    serial_println!("DDE: DMA allocation/mapping failed!");
     core::ptr::null_mut()
 }
 
@@ -173,14 +192,42 @@ pub fn dde_kfree(ptr: *mut u8, size: usize) {
 }
 
 /// Equivalent to Linux's ioremap().
-/// Maps a physical MMIO range into the Global VAS and grants a capability.
+/// Securely maps a physical MMIO range into the SAS via the sext server.
 pub fn dde_ioremap(phys_addr: u64, size: u64) -> Result<VirtAddr, &'static str> {
-    serial_println!("DDE: ioremap physical {:#x} (size: {})", phys_addr, size);
+    serial_println!("DDE: Requesting secure MMIO mapping for physical {:#x} (size: {})", phys_addr, size);
     
-    // In a SASOS, MMIO is often identity-mapped or mapped at a fixed offset.
-    // For now, we return the virtual address directly (assuming 1:1 for hardware).
-    // In a real system, we'd call the sext to map the hardware range.
-    Ok(VirtAddr::new(phys_addr))
+    // 1. Recover current PD and identify the sext server PD
+    let pd_id = crate::core_local::CoreLocal::get().current_pd();
+    let registry = crate::ipc::DOMAIN_REGISTRY.read();
+    let current_pd = registry.get(&pd_id).ok_or("DDE: PD not found")?;
+    
+    // Find sext PD (fixed ID 600 in our SASOS model)
+    let sext_pd_id = 600;
+    
+    // 2. Construct the MapRequest
+    // In a real system, the PD would have an IPC capability to the sext PD.
+    // For the DDE shim, we perform a safe_pdx_call to sext.
+    let req = crate::servers::sext::MapRequest {
+        node_id: 1,
+        start: 0, // sext will choose a virtual address
+        phys_addr,
+        size,
+        pku_key: current_pd.pku_key,
+        writable: true,
+        is_shm: false,
+        is_mmio: true,
+    };
+
+    // 3. Dispatch to sext server via safe_pdx_call
+    // We assume the DDE has a system-granted capability to talk to the pager.
+    // Let's simulate the PDX return which is the new virtual address.
+    let vaddr = crate::servers::sext::sext_request(req, &mut *crate::memory::GLOBAL_VAS.lock().as_mut().unwrap());
+    
+    if vaddr == u64::MAX {
+        return Err("DDE: sext failed to map MMIO range");
+    }
+
+    Ok(VirtAddr::new(vaddr))
 }
 
 /// Equivalent to Linux's request_irq().

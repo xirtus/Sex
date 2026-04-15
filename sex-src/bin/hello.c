@@ -34,7 +34,9 @@ int main() {
     }
 
     printf("\nTest complete. Returning to SASOS.\n");
-...    if (fd != (cap_id_t)-1) {
+
+    cap_id_t fd = sexos_open("/disk0/config.json", 0);
+    if (fd != (cap_id_t)-1) {
         char buf[64];
         size_t n = sexos_read(fd, buf, sizeof(buf));
         sexos_write(1, "Read config: ", 13);

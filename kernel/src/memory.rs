@@ -29,6 +29,7 @@ lazy_static::lazy_static! {
 pub struct GlobalVas {
     pub mapper: OffsetPageTable<'static>,
     pub frame_allocator: BitmapFrameAllocator,
+    pub phys_mem_offset: VirtAddr, // Added to allow manual PTE walking
 }
 
 impl GlobalVas {
@@ -52,14 +53,73 @@ impl GlobalVas {
                 let _flush = self.mapper.map_to(page, frame, flags, &mut self.frame_allocator)
                     .map_err(|_| "VAS: Mapping failed")?;
                 
-                // Manual PKU bit manipulation if needed (Bits 59-62)
-                // For this prototype, we'll assume the mapper handles standard flags.
-                // To set PKU bits, we'd need to traverse the page tables manually or use a custom mapper.
+                // Set PKU bits (59-62) in the page table entry
+                self.set_page_pku(page, pku_key);
                 
                 _flush.flush();
             }
         }
         Ok(())
+    }
+
+    /// Maps a virtual address range to a specific physical address range.
+    /// Used for Hardware MMIO (PCI BARs).
+    pub fn map_phys_range(&mut self, start: VirtAddr, phys_start: PhysAddr, size: u64, flags: PageTableFlags, pku_key: u8) -> Result<(), &'static str> {
+        let page_range = {
+            let start_page = Page::containing_address(start);
+            let end_page = Page::containing_address(start + size - 1u64);
+            Page::range_inclusive(start_page, end_page)
+        };
+
+        let mut current_phys = phys_start;
+
+        for page in page_range {
+            let frame = PhysFrame::containing_address(current_phys);
+            unsafe {
+                let _flush = self.mapper.map_to(page, frame, flags, &mut self.frame_allocator)
+                    .map_err(|_| "VAS: MMIO Mapping failed")?;
+                
+                // Set PKU bits
+                self.set_page_pku(page, pku_key);
+                
+                _flush.flush();
+            }
+            current_phys += 4096u64;
+        }
+        Ok(())
+    }
+
+    /// Internal helper to set PKU bits in the leaf page table entry.
+    /// This traverses the 4-level page table manually and flushes the TLB for the specific address.
+    pub unsafe fn set_page_pku(&mut self, page: Page, pku_key: u8) {
+        use x86_64::structures::paging::page_table::PageTable;
+        
+        let p4_table = active_level_4_table(self.phys_mem_offset);
+        
+        // 1. PML4 -> PDP
+        let p3_table_frame = p4_table[page.p4_index()].frame().expect("P4 entry not present");
+        let p3_table: &mut PageTable = &mut *(self.phys_mem_offset + p3_table_frame.start_address().as_u64()).as_mut_ptr();
+        
+        // 2. PDP -> PD
+        let p2_table_frame = p3_table[page.p3_index()].frame().expect("P3 entry not present");
+        let p2_table: &mut PageTable = &mut *(self.phys_mem_offset + p2_table_frame.start_address().as_u64()).as_mut_ptr();
+        
+        // 3. PD -> PT
+        let p1_table_frame = p2_table[page.p2_index()].frame().expect("P2 entry not present");
+        let p1_table: &mut PageTable = &mut *(self.phys_mem_offset + p1_table_frame.start_address().as_u64()).as_mut_ptr();
+        
+        // 4. Locate leaf PTE
+        let entry = &mut p1_table[page.p1_index()];
+        
+        // 5. Bits 59-62 are the Protection Key (PKEY)
+        let mut entry_bits = entry.as_u64();
+        entry_bits &= !(0xF << 59); // Mask out existing bits
+        entry_bits |= (pku_key as u64 & 0xF) << 59; // OR in new key
+        
+        *entry = x86_64::structures::paging::PageTableEntry::from_u64(entry_bits);
+
+        // 6. Targeted TLB flush (invlpg)
+        core::arch::asm!("invlpg [{}]", in(reg) page.start_address().as_u64());
     }
 }
 

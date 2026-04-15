@@ -1,0 +1,11 @@
+{
+  "name": "classicube",
+  "version": "1.3.6-sexos",
+  "capabilities": [
+    "WAYLAND_SURFACE_CREATE",
+    "GLES_ACCEL_SAS",
+    "NET_TCP_CONNECT"
+  ],
+  "driver_info": {},
+  "binary": "/bin/cube.sex"
+}

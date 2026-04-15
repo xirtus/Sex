@@ -30,8 +30,20 @@ lazy_static! {
 pub fn sexit_init() {
     serial_println!("SEXIT: Runit-style service supervision active.");
     
-    // 1. In a real system, we'd scan /etc/sv/
-    serial_println!("SEXIT: Scanning /etc/sv/ for service definitions...");
+    // 1. Core Services
+    register_service("sexvfs", vec![]);
+    register_service("sexnet", vec![]);
+    
+    // 2. Multimedia Infrastructure
+    register_service("srv_wayland", vec!["sexdrm", "sexinput"]);
+    register_service("sexsound", vec!["dde"]);
+    register_service("srv_font", vec!["sexvfs"]);
+
+    // 3. Phase 16 Applications
+    register_service("doom", vec!["srv_wayland", "sexsound"]);
+    register_service("classicube", vec!["srv_wayland", "sexnet"]);
+
+    serial_println!("SEXIT: Multimedia dependency graph resolved.");
 }
 
 pub fn register_service(name: &'static str, deps: Vec<&'static str>) {
@@ -73,33 +85,68 @@ fn boot_service(name: &'static str) {
     }
 }
 
-/// Checks the health of all supervised services.
-pub fn check_services() {
+/// The main event loop for the sexit supervisor.
+/// Intercepts asynchronous system fault messages instead of polling.
+pub fn fault_listener_loop() {
+    serial_println!("SEXIT: Fault listener loop active (Zero-Mediation).");
+    loop {
+        if let Some(event) = crate::interrupts::FAULT_RING.dequeue() {
+            serial_println!("SEXIT: Intercepted {} for PD {}. Initiating Reincarnation.", 
+                if event.fault_type == 0 { "Page Fault" } else { "Cap Violation" },
+                event.pd_id);
+            
+            reincarnate_pd(event.pd_id);
+        }
+        x86_64::instructions::hlt();
+    }
+}
+
+fn reincarnate_pd(pd_id: u32) {
     let mut services = SUPERVISED_SERVICES.lock();
-    for (name, service) in services.iter_mut() {
-        match service.status {
-            ServiceStatus::Up(id) => {
-                // 1. Verify if the PD is still in the registry
-                let registry = crate::ipc::DOMAIN_REGISTRY.read();
-                if !registry.contains_key(&id) {
-                    serial_println!("SEXIT: Service {} (PD {}) has DIED.", name, id);
-                    service.status = ServiceStatus::Down;
-                }
-            },
-            ServiceStatus::Down => {
-                serial_println!("SEXIT: Reincarnating service {}...", name);
-                service.restart_count += 1;
-                
-                // 2. Automated Reincarnation: Spawn a fresh PD
-                // In a real system, we'd look up the binary path for this service
-                let new_id = 5000 + service.restart_count;
-                let new_pd = Arc::new(ProtectionDomain::new(new_id, (new_id % 16) as u8));
-                crate::ipc::DOMAIN_REGISTRY.write().insert(new_id, new_pd);
-                
-                service.status = ServiceStatus::Up(new_id);
-                serial_println!("SEXIT: SUCCESS - {} restored in PD {}.", name, new_id);
-            },
-            _ => {}
+    let mut target_name = None;
+    for (name, service) in services.iter() {
+        if let ServiceStatus::Up(id) = service.status {
+            if id == pd_id {
+                target_name = Some(*name);
+                break;
+            }
+        }
+    }
+
+    if let Some(name) = target_name {
+        serial_println!("SEXIT: Reincarnating service {} (Previous PD {})...", name, pd_id);
+        if let Some(service) = services.get_mut(name) {
+            service.status = ServiceStatus::Down;
+            service.restart_count += 1;
+            
+            // Re-spawn the service (Simulated)
+            let new_id = 6000 + service.restart_count;
+            let new_pd = Arc::new(ProtectionDomain::new(new_id, (new_id % 16) as u8));
+            crate::ipc::DOMAIN_REGISTRY.write().insert(new_id, new_pd);
+            
+            service.status = ServiceStatus::Up(new_id);
+            serial_println!("SEXIT: Service {} successfully restored in PD {}.", name, new_id);
+        }
+    }
+}
+
+/// Triggers a manual restart of a service.
+pub fn restart_service(pd_id: u32) {
+    let mut services = SUPERVISED_SERVICES.lock();
+    let mut target_name = None;
+    for (name, service) in services.iter() {
+        if let ServiceStatus::Up(id) = service.status {
+            if id == pd_id {
+                target_name = Some(*name);
+                break;
+            }
+        }
+    }
+
+    if let Some(name) = target_name {
+        serial_println!("SEXIT: Manual restart triggered for {} (PD {}).", name, pd_id);
+        if let Some(service) = services.get_mut(name) {
+            service.status = ServiceStatus::Down;
         }
     }
 }

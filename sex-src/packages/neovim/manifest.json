@@ -1,0 +1,10 @@
+{
+  "name": "neovim",
+  "version": "0.10.0-sexos",
+  "capabilities": [
+    "DRM_MAP_SAS",
+    "INPUT_LISTEN_RING"
+  ],
+  "driver_info": {},
+  "binary": "/bin/nvim.sex"
+}

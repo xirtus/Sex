@@ -1,0 +1,11 @@
+{
+  "name": "doom",
+  "version": "1.10-sexos",
+  "capabilities": [
+    "WAYLAND_SURFACE_CREATE",
+    "AUDIO_DMA_PLAY",
+    "VFS_READ_WAD"
+  ],
+  "driver_info": {},
+  "binary": "/bin/doom.sex"
+}
