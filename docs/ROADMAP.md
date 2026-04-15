@@ -21,10 +21,10 @@ This document outlines the strategic progression from a microkernel architectura
 
 ## 🚀 Current & Future Milestones
 
-### Step 3: Interactive Shell & Libc (Userland Alpha) - **IN PROGRESS 🏗️**
-*   **Drivers:** Real PS/2 keyboard/mouse scancode decoding in `sexinput`.
-*   **Libc:** `relibc` (Rust-native) ported to SexOS `sexc` PDX interface.
-*   **CoreUtils:** Cross-compiled GNU `bash`, `ls`, `cat`, and `grep`.
+### Step 3: Interactive Shell & Libc (Userland Alpha) - **COMPLETE ✅**
+*   **Drivers:** Real PS/2 keyboard/mouse scancode decoding in `sexinput` wired to TTY.
+*   **Libc:** `relibc` (Rust-native) ported to SexOS `sexc` PDX interface with real file ops.
+*   **CoreUtils:** Mature `sexc` bridge unblocks GNU `bash`, `ls`, `cat`, and `grep`.
 *   **Milestone:** Boot into a blinking cursor, type `ls`, and see files on a real physical disk.
 
 ### Step 4: Networking & Display (High-Throughput I/O) - **IN PROGRESS 🏗️**
