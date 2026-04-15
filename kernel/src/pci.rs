@@ -22,6 +22,45 @@ impl PciDevice {
         unsafe { pci_config_write(self.bus, self.dev, self.func, offset, value) }
     }
 
+    pub fn setup_msix(&self, vector: u8, target_core: u8) {
+        serial_println!("PCI: Setting up MSI-X for {:02x}:{:02x}.{:x} -> Vector {:#x}", 
+            self.bus, self.dev, self.func, vector);
+        
+        // 1. Find MSI-X Capability (ID 0x11)
+        let mut cap_ptr = (self.read_u32(0x34) & 0xFF) as u8;
+        while cap_ptr != 0 {
+            let cap_header = self.read_u32(cap_ptr);
+            if (cap_header & 0xFF) == 0x11 {
+                // MSI-X Found
+                let msg_ctrl = (cap_header >> 16) as u16;
+                let table_info = self.read_u32(cap_ptr + 4);
+                let table_bir = (table_info & 0x7) as u8;
+                let table_offset = table_info & !0x7;
+
+                let bar_addr = self.get_bar(table_bir);
+                let table_vaddr = bar_addr + table_offset as u64;
+
+                // 2. Configure Entry 0 (Simplified for prototype)
+                // Message Address: 0xFEE00000 | (target_core << 12)
+                // Message Data: vector (edge-triggered, fixed delivery)
+                unsafe {
+                    let entry_ptr = table_vaddr as *mut u32;
+                    entry_ptr.write_volatile(0xFEE0_0000 | ((target_core as u32) << 12)); // Msg Addr
+                    entry_ptr.add(1).write_volatile(0);                                  // Msg Upper Addr
+                    entry_ptr.add(2).write_volatile(vector as u32);                      // Msg Data
+                    entry_ptr.add(3).write_volatile(0);                                  // Vector Control (Unmask)
+                }
+
+                // 3. Enable MSI-X in Message Control register
+                self.write_u32(cap_ptr, cap_header | (1 << 31));
+                serial_println!("PCI: MSI-X Enabled for vector {:#x}", vector);
+                return;
+            }
+            cap_ptr = ((cap_header >> 8) & 0xFF) as u8;
+        }
+        serial_println!("PCI: Warning - MSI-X capability not found for device!");
+    }
+
     pub fn get_bar(&self, index: u8) -> u64 {
         let offset = 0x10 + (index * 4);
         let bar = self.read_u32(offset);

@@ -1,40 +1,45 @@
-use alloc::collections::VecDeque;
 use alloc::sync::Arc;
-use spin::Mutex;
+use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr};
 use x86_64::VirtAddr;
 use crate::capability::ProtectionDomain;
+use crate::ipc_ring::RingBuffer;
+use core::ptr;
 
 /// The execution state of a vThread (Task).
 #[repr(C)]
 pub struct TaskContext {
-    // 1. General Purpose Registers (saved on context switch)
-    pub r15: u64,
-    pub r14: u64,
-    pub r13: u64,
-    pub r12: u64,
-    pub rbx: u64,
-    pub rbp: u64,
-    
-    // 2. PKRU register state
+    pub r15: u64, pub r14: u64, pub r13: u64, pub r12: u64,
+    pub rbx: u64, pub rbp: u64,
     pub pkru: u32,
     pub pd_id: u32,
-
-    // 3. iretq Frame (order required by hardware)
-    pub rip: u64,
-    pub cs: u64,
-    pub rflags: u64,
-    pub rsp: u64,
-    pub ss: u64,
-
-    // 4. Protection Domain metadata
+    pub rip: u64, pub cs: u64, pub rflags: u64, pub rsp: u64, pub ss: u64,
     pub pd: Arc<ProtectionDomain>,
 }
 
-impl TaskContext {
-    pub fn new(entry_point: u64, stack_top: u64, pd: Arc<ProtectionDomain>, is_user: bool) -> Self {
-        let pkru = pd.current_pkru_mask.load(core::sync::atomic::Ordering::SeqCst);
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskState {
+    Ready = 0,
+    Running = 1,
+    Blocked = 2,
+    Exited = 3,
+}
+
+/// A vThread (Task) in the SASOS model.
+/// IPCtax-Compliant: No Mutex, Atomic State.
+pub struct Task {
+    pub id: u32,
+    pub context: TaskContext,
+    pub state: AtomicU32, // Stores TaskState
+    pub signal_ring: Arc<RingBuffer<u8, 32>>,
+    /// Next task in the lock-free runqueue
+    pub next: AtomicPtr<Task>,
+}
+
+impl Task {
+    pub fn new(id: u32, entry_point: u64, stack_top: u64, pd: Arc<ProtectionDomain>, is_user: bool) -> Self {
+        let pkru = pd.current_pkru_mask.load(Ordering::SeqCst);
         let selectors = crate::gdt::get_selectors();
-        
         let (cs, ss) = if is_user {
             (selectors.user_code_selector.0 as u64 | 3, selectors.user_data_selector.0 as u64 | 3)
         } else {
@@ -42,221 +47,156 @@ impl TaskContext {
         };
 
         Self {
-            r15: 0, r14: 0, r13: 0, r12: 0, rbx: 0, rbp: 0,
-            pkru,
-            pd_id: pd.id,
-            rip: entry_point,
-            cs,
-            rflags: 0x202, // IF (Interrupt Flag) enabled
-            rsp: stack_top,
-            ss,
-            pd,
+            id,
+            context: TaskContext {
+                r15: 0, r14: 0, r13: 0, r12: 0, rbx: 0, rbp: 0,
+                pkru, pd_id: pd.id,
+                rip: entry_point, cs, rflags: 0x202, rsp: stack_top, ss,
+                pd,
+            },
+            state: AtomicU32::new(TaskState::Ready as u32),
+            signal_ring: Arc::new(RingBuffer::new()),
+            next: AtomicPtr::new(ptr::null_mut()),
         }
     }
 }
 
-pub enum TaskState {
-    Ready,
-    Running,
-    Blocked,
+/// A Lock-Free MPSC (Multi-Producer, Single-Consumer) Queue.
+/// IPCtax-Compliant: True lock-free CAS-based implementation.
+pub struct MpscQueue {
+    head: AtomicPtr<Task>,
+    tail: AtomicPtr<Task>,
 }
 
-use crate::ipc_ring::RingBuffer;
+impl MpscQueue {
+    pub const fn new() -> Self {
+        Self {
+            head: AtomicPtr::new(ptr::null_mut()),
+            tail: AtomicPtr::new(ptr::null_mut()),
+        }
+    }
 
-/// A vThread (Task) in the SASOS model.
-pub struct Task {
-    pub id: u32,
-    pub context: TaskContext,
-    pub state: TaskState,
-    /// Asynchronous Signal Ring (Signum)
-    pub signal_ring: Arc<RingBuffer<u8, 32>>,
+    /// Wait-free enqueue using an atomic swap on the head pointer.
+    pub fn enqueue(&self, task: *mut Task) {
+        unsafe { (*task).next.store(ptr::null_mut(), Ordering::Relaxed); }
+        let prev_head = self.head.swap(task, Ordering::AcqRel);
+        
+        if prev_head.is_null() {
+            // Queue was empty, set tail to the new task.
+            // This CAS handles the race condition where a consumer might be dequeueing.
+            let _ = self.tail.compare_exchange(ptr::null_mut(), task, Ordering::Release, Ordering::Relaxed);
+        } else {
+            // Queue wasn't empty, link the previous head to the new task.
+            unsafe { (*prev_head).next.store(task, Ordering::Release); }
+        }
+    }
+
+    /// Lock-free dequeue (Consumer-only).
+    pub fn dequeue(&self) -> *mut Task {
+        loop {
+            let tail = self.tail.load(Ordering::Acquire);
+            if tail.is_null() {
+                return ptr::null_mut(); // Queue is empty
+            }
+
+            let next = unsafe { (*tail).next.load(Ordering::Acquire) };
+            if next.is_null() {
+                // Potential last item. We must carefully transition to empty.
+                let head = self.head.load(Ordering::Acquire);
+                if tail == head {
+                    // It is the last item. Try to nullify the head to prevent new enqueues 
+                    // from linking to it while we dequeue.
+                    if self.head.compare_exchange(tail, ptr::null_mut(), Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                        // Head is nullified, now safely nullify tail and return.
+                        self.tail.store(ptr::null_mut(), Ordering::Release);
+                        return tail;
+                    }
+                }
+                // If tail != head but next is null, a producer is mid-enqueue.
+                // We must spin briefly (lock-free property) until the link is established.
+                core::hint::spin_loop();
+                continue;
+            }
+
+            // Not the last item. Advance the tail.
+            // Since this is MPSC (Single Consumer), we technically don't need a CAS here 
+            // if we guarantee only one core dequeues from this specific runqueue.
+            // However, we use a simple store for the single-consumer assumption.
+            self.tail.store(next, Ordering::Release);
+            return tail;
+        }
+    }
 }
-/// Per-core Lockless Scheduler.
+
+/// Per-core Lock-Free Scheduler.
 pub struct Scheduler {
-    pub runqueue: VecDeque<Arc<Mutex<Task>>>,
-    pub wait_queue: VecDeque<Arc<Mutex<Task>>>,
-    pub current_task: Option<Arc<Mutex<Task>>>,
+    pub runqueue: MpscQueue,
+    pub current_task: AtomicPtr<Task>,
 }
 
 impl Scheduler {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
-            runqueue: VecDeque::new(),
-            wait_queue: VecDeque::new(),
-            current_task: None,
+            runqueue: MpscQueue::new(),
+            current_task: AtomicPtr::new(ptr::null_mut()),
         }
     }
 
-    pub fn spawn(&mut self, task: Task) {
-        self.runqueue.push_back(Arc::new(Mutex::new(task)));
-    }
+    pub fn tick(&self) -> Option<(*mut TaskContext, *const TaskContext)> {
+        let next_task = self.runqueue.dequeue();
+        if next_task.is_null() { return None; }
 
-    /// Blocks the current task and adds it to the wait queue.
-    pub fn block_current(&mut self) {
-        if let Some(task_mutex) = self.current_task.take() {
-            {
-                let mut task = task_mutex.lock();
-                task.state = TaskState::Blocked;
-            }
-            self.wait_queue.push_back(task_mutex);
-        }
-    }
-
-    /// Unblocks a task by its ID and moves it to the runqueue.
-    pub fn unblock(&mut self, task_id: u32) {
-        if let Some(pos) = self.wait_queue.iter().position(|t| t.lock().id == task_id) {
-            let task_mutex = self.wait_queue.remove(pos).unwrap();
-            {
-                let mut task = task_mutex.lock();
-                task.state = TaskState::Ready;
-            }
-            self.runqueue.push_back(task_mutex);
-        }
-    }
-
-    /// Picks the next task to run and returns pointers for the context switch.
-    /// Returns (old_context, new_context) if a switch is needed.
-    pub fn tick(&mut self) -> Option<(*mut TaskContext, *const TaskContext)> {
-        // 1. Simple round-robin for the prototype
-        if let Some(next_task_mutex) = self.runqueue.pop_front() {
-            let old_task_mutex = self.current_task.take().unwrap();
-            
-            // Save pointer to old context before re-enqueueing
-            let old_ctx_ptr = unsafe { &mut (*old_task_mutex.as_ptr()).context as *mut TaskContext };
-            
-            self.runqueue.push_back(old_task_mutex);
-            
-            let next_task = next_task_mutex.clone();
-            let next_ctx_ptr = unsafe { &(*next_task.as_ptr()).context as *const TaskContext };
-            
-            self.current_task = Some(next_task);
-            
-            return Some((old_ctx_ptr, next_ctx_ptr));
-        }
-        
-        // 2. If runqueue is empty, try to steal from another core
-        if let Some((old_ctx_ptr, next_ctx_ptr)) = self.try_load_balance() {
-            return Some((old_ctx_ptr, next_ctx_ptr));
+        let old_task = self.current_task.swap(next_task, Ordering::AcqRel);
+        if old_task.is_null() {
+            unsafe { return Some((ptr::null_mut(), &(*next_task).context)); }
         }
 
-        None
-    }
-
-    /// Attempts to steal a task from another core if this one is idle.
-    fn try_load_balance(&mut self) -> Option<(*mut TaskContext, *const TaskContext)> {
-        if self.current_task.is_none() { return None; }
-
-        for i in 0..128 {
-            let mut other_sched_lock = SCHEDULERS[i].lock();
-            if let Some(ref mut other_sched) = *other_sched_lock {
-                // Very basic "steal" - take from the back of their runqueue
-                if other_sched.runqueue.len() > 1 {
-                    if let Some(stolen_task) = other_sched.runqueue.pop_back() {
-                        serial_println!("SCHED: Core stealing Task {} from Core {}.", 
-                            stolen_task.lock().id, i);
-                        
-                        let old_task_mutex = self.current_task.take().unwrap();
-                        let old_ctx_ptr = unsafe { &mut (*old_task_mutex.as_ptr()).context as *mut TaskContext };
-                        
-                        self.runqueue.push_back(old_task_mutex);
-                        self.current_task = Some(stolen_task.clone());
-                        let next_ctx_ptr = unsafe { &(*stolen_task.as_ptr()).context as *const TaskContext };
-                        
-                        return Some((old_ctx_ptr, next_ctx_ptr));
-                    }
-                }
-            }
+        let old_state = unsafe { (*old_task).state.load(Ordering::Acquire) };
+        if old_state == TaskState::Running as u32 {
+            unsafe { (*old_task).state.store(TaskState::Ready as u32, Ordering::Release); }
+            self.runqueue.enqueue(old_task);
         }
-        None
+
+        unsafe { Some((&mut (*old_task).context, &(*next_task).context)) }
     }
 
-    /// The hardware-accelerated context switch.
-    /// This routine saves the current task's registers and performs an `iretq` 
-    /// transition to the next task's privilege level (Ring 0 or Ring 3).
     #[naked]
     pub unsafe extern "C" fn switch_to(old_context: *mut TaskContext, next_context: *const TaskContext) {
         core::arch::asm!(
-            // 1. Save current task's state
-            "mov [rdi + 0x00], r15",
-            "mov [rdi + 0x08], r14",
-            "mov [rdi + 0x10], r13",
-            "mov [rdi + 0x18], r12",
-            "mov [rdi + 0x20], rbx",
-            "mov [rdi + 0x28], rbp",
-            "rdpkru",
-            "mov [rdi + 0x30], eax",
-
-            // 2. Load next task's state
-            "mov r15, [rsi + 0x00]",
-            "mov r14, [rsi + 0x08]",
-            "mov r13, [rsi + 0x10]",
-            "mov r12, [rsi + 0x18]",
-            "mov rbx, [rsi + 0x20]",
-            "mov rbp, [rsi + 0x28]",
-            
-            // 3. Load PKRU and Update CoreLocal PD Identity
-            "mov eax, [rsi + 0x30]",
-            "xor edx, edx",
-            "xor ecx, ecx",
-            "wrpkru",
-            
-            "mov eax, [rsi + 0x34]",
-            "mov [gs:0], eax",
-
-            // 4. Prepare iretq frame
-            "push [rsi + 0x58]", // ss
-            "push [rsi + 0x50]", // rsp
-            "push [rsi + 0x48]", // rflags
-            "push [rsi + 0x40]", // cs
-            "push [rsi + 0x38]", // rip
-
-            // 5. Jump to next task
+            "test rdi, rdi",
+            "jz 2f", // Skip saving if old_context is null (first boot)
+            "mov [rdi + 0x00], r15", "mov [rdi + 0x08], r14",
+            "mov [rdi + 0x10], r13", "mov [rdi + 0x18], r12",
+            "mov [rdi + 0x20], rbx", "mov [rdi + 0x28], rbp",
+            "rdpkru", "mov [rdi + 0x30], eax",
+            "2:",
+            "mov r15, [rsi + 0x00]", "mov r14, [rsi + 0x08]",
+            "mov r13, [rsi + 0x10]", "mov r12, [rsi + 0x18]",
+            "mov rbx, [rsi + 0x20]", "mov rbp, [rsi + 0x28]",
+            "mov eax, [rsi + 0x30]", "xor edx, edx", "xor ecx, ecx", "wrpkru",
+            "mov eax, [rsi + 0x34]", "mov [gs:0], eax",
+            "push [rsi + 0x60]", "push [rsi + 0x58]", "push [rsi + 0x50]",
+            "push [rsi + 0x48]", "push [rsi + 0x40]",
             "iretq",
             options(noreturn)
         );
     }
 }
 
-pub static SCHEDULERS: [Mutex<Option<Scheduler>>; 128] = {
-    const INIT: Mutex<Option<Scheduler>> = Mutex::new(None);
-    [INIT; 128]
-};
+pub static SCHEDULERS: [Scheduler; 128] = [Scheduler::new(); 128];
 
-pub fn balanced_spawn(task: Task) {
-    let mut min_load = usize::MAX;
-    let mut target_core = 0;
-
-    for i in 0..128 {
-        if let Some(ref sched) = *SCHEDULERS[i].lock() {
-            let load = sched.runqueue.len();
-            if load < min_load {
-                min_load = load;
-                target_core = i;
-            }
-        }
-    }
-
-    if let Some(ref mut sched) = *SCHEDULERS[target_core].lock() {
-        serial_println!("SCHED: Spawning Task {} on Core {}.", task.id, target_core);
-        sched.spawn(task);
-    }
-}
-
-/// Blocks the current thread (Phase 6 Signal Trampoline).
 pub fn park_current_thread() {
     let core_id = crate::core_local::CoreLocal::get().core_id;
-    if let Some(ref mut sched) = *SCHEDULERS[core_id as usize].lock() {
-        sched.block_current();
+    let sched = &SCHEDULERS[core_id as usize];
+    let current = sched.current_task.load(Ordering::Acquire);
+    if !current.is_null() {
+        unsafe { (*current).state.store(TaskState::Blocked as u32, Ordering::Release); }
     }
 }
 
-/// Wakes up a specific thread by its ID.
-pub fn unpark_thread(tid: u32) {
-    // For simplicity, we search all cores' wait queues. 
-    // In a real system, we'd have a PD -> Core mapping.
-    for i in 0..128 {
-        if let Some(ref mut sched) = *SCHEDULERS[i].lock() {
-            sched.unblock(tid);
-        }
-    }
+pub fn unpark_thread(task_ptr: *mut Task) {
+    unsafe { (*task_ptr).state.store(TaskState::Ready as u32, Ordering::Release); }
+    // Enqueue on the same core for cache locality (Simplified)
+    let core_id = crate::core_local::CoreLocal::get().core_id;
+    SCHEDULERS[core_id as usize].runqueue.enqueue(task_ptr);
 }

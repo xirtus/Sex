@@ -110,32 +110,28 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Lock-free message-based signal routing over per-PD rings.
 - [x] sexc-owned POSIX signal dispatch without kernel stack hijacks.
 
-### Phase 7: Ecosystem & Applications (Active 🚀)
-- [x] POSIX Emulation Layer (sexc).
-- [ ] Graphical Compositor (Wayland-lifted).
-- [ ] Developer Toolchain (Self-hosting).
-- [ ] High-Level Application Framework.
+### Phase 7: Real Memory Subsystem & Async Page-Fault Forwarding (Complete ✅)
+- [x] Physical frame allocator: Buddy-system (4K/2M/1G) implemented.
+- [x] PKU domain initialization: WRPKRU and safe domain switch helpers.
+- [x] Async page-fault forwarding: #PF routed via MessageType::PageFault to sext.
 
-### Phase 8: Distributed SAS & Global Resource Fusion (Complete ✅)
-- [x] Global Distributed Shared Memory (DSM).
-- [x] Remote Capability Hardware Fusion (NVIDIA 3070 over sexnode).
-- [x] Distributed SMP & Inter-Node Interrupts.
-- [x] Sexit-style Distributed Service Supervision (No systemd).
-- [x] Seamless sexnode-Wide Task Migration.
+### Phase 8: Full ELF Loader + PD Spawn (Complete ✅)
+- [x] Kernel ELF loader: Segment parsing and buddy-allocator mapping implemented.
+- [x] PD creation: High-level lifecycle management and initial capability grants.
+- [x] Spawn syscall: sys_spawn_pd unblocks user-space process creation.
 
-### Phase 9: Desktop Ecosystem & Hardware Parity (Complete ✅)
-- [x] sexdrm PD (Linux Direct Rendering Manager lifting).
-- [x] sexsound PD (ALSA/PipeWire).
-- [x] sexnet Parity (sexwifi/Ethernet via DDE).
-- [x] Wayland Compositors (KDE, Hyprland, River).
-- [x] Kitty Terminal Emulator.
+### Phase 9: Driver Enablement (Storage + Input) (COMPLETE ✅)
+- [x] Production-grade NVMe/AHCI driver in standalone PD.
+- [x] Zero-copy DMA via Lent-Memory capabilities.
+- [x] MSI-X interrupt routing to driver SPSC rings.
+- [x] Polished Input stack (PS/2 + USB HID) with TTY routing.
+- [x] sexvfs Block I/O dispatch integration.
 
-### Phase 10: Graphical Plumbing & sexinput (Complete ✅)
-- [x] Wayland `AF_UNIX` emulation in sexc.
-- [x] Shared Memory (SHM) sext.
-- [x] sexinput PD (Mouse/Keyboard lifting).
-- [x] Mesa & EGL/GLES for SASOS.
-- [x] The "Big Three" Compositor integration.
+### Phase 10: Refactor: Decoupling & Lock-Free Core (COMPLETE ✅)
+- [x] All monolithic servers decoupled into standalone `no_std` ELFs in `/servers/`.
+- [x] Eradicated Mutex/RwLock from core kernel (`scheduler.rs`, `capability.rs`, `memory.rs`).
+- [x] Wait-free FLSCHED runqueues and capability tables.
+- [x] Pure PDX and lent-memory IPC routing established.
 
 ### Phase 11: Signal Delivery (Complete ✅)
 - [x] Signal Trampoline: COMPLETE

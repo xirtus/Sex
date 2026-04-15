@@ -1,4 +1,5 @@
-use crate::capability::{ProtectionDomain, CapEngine};
+use crate::capability::ProtectionDomain;
+use crate::capabilities::engine::CapEngine;
 use crate::ipc::DOMAIN_REGISTRY;
 use super::messages::MessageType;
 

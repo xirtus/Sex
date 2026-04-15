@@ -103,6 +103,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("SAS Ecosystem ready. Handoff to SEXIT (PID 1).");
     serial_println!("--------------------------------------------------");
 
+    // Phase 8: Root shell bootstrap
+    sex_kernel::init::init();
+
     // Start execution
     unsafe {
         if let Some(ref mut sched) = sex_kernel::scheduler::SCHEDULERS[0] {

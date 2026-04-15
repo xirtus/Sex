@@ -25,7 +25,11 @@ pub mod smp;
 pub mod scheduler;
 pub mod elf;
 pub mod initrd;
-pub mod servers;
+pub mod loader;
+pub mod pd;
+pub mod syscalls;
+pub mod capabilities;
+pub mod init;
 
 use linked_list_allocator::LockedHeap;
 
