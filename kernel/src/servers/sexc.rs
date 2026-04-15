@@ -4,12 +4,26 @@ use crate::ipc::DOMAIN_REGISTRY;
 use crate::capability::ProtectionDomain;
 use crate::servers::sexvfs;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
+use x86_64::structures::paging::PageTableFlags;
+
+#[path = "../../../sexc/src/trampoline.rs"]
+pub mod trampoline;
 
 /// sexc: POSIX Emulation Layer for the Sex Microkernel.
 /// Maps standard C/POSIX calls to high-performance PDX operations.
 
 pub struct sexc {
     pub caller_pd_id: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct KernelSigAction {
+    pub handler: u64,
+    pub flags: u64,
+    pub mask: u64,
+    pub restorer: u64,
 }
 
 #[repr(C)]
@@ -184,26 +198,56 @@ impl sexc {
         let new_pku_key = (new_pd_id % 15) as u8 + 1; // Avoid key 0
         let new_pd = Arc::new(ProtectionDomain::new(new_pd_id, new_pku_key));
         DOMAIN_REGISTRY.write().insert(new_pd.id, new_pd.clone());
+        
+        // --- Phase 6: Signal Trampoline Initialization ---
+        pd_init(new_pd.clone());
+        
+        init_signal_trampoline(new_pd.id);
 
-        // 4. Load binary into the Global SAS
-        // For the bootstrap, we read the first 64KB (simplified)
-        let mut buffer = [0u8; 65536];
-        let bytes_read = self.read(fd, buffer.as_mut_ptr(), buffer.len())?;
+        // 4. Read binary from sexvfs into a buffer
+        let mut binary_data = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match self.read(fd, chunk.as_mut_ptr(), chunk.len()) {
+                Ok(0) => break,
+                Ok(n) => binary_data.extend_from_slice(&chunk[..n]),
+                Err(e) => {
+                    serial_println!("sexc: Error reading binary: {}", e);
+                    return Err(e);
+                }
+            }
+        }
+
+        if binary_data.is_empty() {
+            return Err("sexc: Binary is empty or could not be read");
+        }
         
         let mut gvas_lock = crate::memory::GLOBAL_VAS.lock();
         let entry_point = if let Some(ref mut gvas) = *gvas_lock {
-            crate::elf::load_elf_for_pd(&buffer[..bytes_read], gvas, new_pku_key)?
+            // 5. Load binary segments into Global SAS
+            let entry = crate::elf::load_elf_for_pd(&binary_data, gvas, new_pku_key)?;
+
+            // 6. Allocate and map User Stack for the new PD
+            // Use 256MB spacing for SAS stacks to avoid collisions
+            let stack_top = 0x_7000_0000_0000 + (new_pd_id as u64 * 0x1000_0000);
+            let stack_size = 64 * 1024; // 64 KiB
+            let stack_flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+            
+            gvas.map_pku_range(x86_64::VirtAddr::new(stack_top - stack_size), stack_size, stack_flags, new_pku_key)?;
+            
+            entry
         } else {
             return Err("sexc: Global VAS not initialized");
         };
         
-        // 5. Create Task and Add to Scheduler via Load Balancer
-        let stack_top = 0x_7000_0000_0000 + (new_pd_id as u64 * 0x1000_000);
+        // 7. Create Task and Add to Scheduler via Load Balancer
+        let stack_top = 0x_7000_0000_0000 + (new_pd_id as u64 * 0x1000_0000);
+        let signal_ring = new_pd.signal_ring.clone();
         let user_task = crate::scheduler::Task {
             id: new_pd_id,
             context: crate::scheduler::TaskContext::new(entry_point.as_u64(), stack_top, new_pd, true),
             state: crate::scheduler::TaskState::Ready,
-            signal_ring: Arc::new(crate::ipc_ring::RingBuffer::new()),
+            signal_ring,
         };
 
         crate::scheduler::balanced_spawn(user_task);
@@ -378,15 +422,36 @@ impl sexc {
     }
 
     /// Deep POSIX: sigaction() -> Signal Ring Registration
-    pub fn sigaction(&self, sig: i32, handler: u64) -> Result<(), &'static str> {
-        serial_println!("sexc: Registering Signal Handler for {} at {:#x}", sig, handler);
+    pub fn sigaction(&self, sig: i32, action_ptr: u64) -> Result<(), &'static str> {
+        let action = parse_sigaction(action_ptr)?;
+        serial_println!("sexc: Registering Signal Handler for {} at {:#x}", sig, action.handler);
 
         let registry = DOMAIN_REGISTRY.read();
         let pd = registry.get(&self.caller_pd_id)
             .ok_or("sexc: PD not found")?;
 
-        pd.signal_handlers.lock().insert(sig, handler);
+        pd.signal_handlers.lock().insert(sig, action.handler as u64);
+        trampoline::register_sigaction(
+            self.caller_pd_id,
+            sig as u8,
+            trampoline::SigAction {
+                handler: action.handler as usize,
+                flags: action.flags,
+            },
+        );
         Ok(())
+    }
+
+    pub fn kill(&self, target_pd_id: u32, sig: i32) -> Result<(), &'static str> {
+        if !(0..=255).contains(&sig) {
+            return Err("sexc: invalid signal");
+        }
+
+        crate::ipc::route_signal(target_pd_id, sig as u8)
+    }
+
+    pub fn raise(&self, sig: i32) -> Result<(), &'static str> {
+        self.kill(self.caller_pd_id, sig)
     }
 
     /// sexc: register_irq() -> Dynamically maps a hardware vector to a PDX ring.
@@ -445,12 +510,30 @@ impl SexPlatform {
         // Map to sext logic
         addr
     }
+
+    pub fn relibc_sigaction(pd_id: u32, sig: u8, action: &KernelSigAction) -> i32 {
+        let lib = sexc::new(pd_id);
+        lib.sigaction(sig as i32, action as *const KernelSigAction as u64)
+            .map(|_| 0)
+            .unwrap_or(-1)
+    }
+
+    pub fn relibc_kill(pd_id: u32, target_pd_id: u32, sig: u8) -> i32 {
+        let lib = sexc::new(pd_id);
+        lib.kill(target_pd_id, sig as i32).map(|_| 0).unwrap_or(-1)
+    }
+
+    pub fn relibc_raise(pd_id: u32, sig: u8) -> i32 {
+        let lib = sexc::new(pd_id);
+        lib.raise(sig as i32).map(|_| 0).unwrap_or(-1)
+    }
 }
 /// The standard "syscall" entry point for C applications.
 #[no_mangle]
 pub extern "C" fn sexc_syscall(num: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
     // 1. Recover the caller's PD ID from CoreLocal state (Privilege Isolation)
     let pd_id = crate::core_local::CoreLocal::get().current_pd();
+    let _ = drain_pending_signals_for_pd(pd_id);
     let lib = sexc::new(pd_id);
 
     // 2. Syscall table mapping (Standard x86_64 Linux numbers)
@@ -554,6 +637,12 @@ pub extern "C" fn sexc_syscall(num: u64, arg0: u64, arg1: u64, arg2: u64) -> u64
                 Err(_) => u64::MAX,
             }
         },
+        186 => { // sys_gettid / local raise hook in prototype
+            match lib.raise(arg0 as i32) {
+                Ok(_) => 0,
+                Err(_) => u64::MAX,
+            }
+        },
         82 => { // sys_rename
             lib.rename("/disk0/old", "/disk0/new") as u64
         },
@@ -581,4 +670,65 @@ pub extern "C" fn sexc_syscall(num: u64, arg0: u64, arg1: u64, arg2: u64) -> u64
             u64::MAX
         }
     }
+}
+
+pub fn init_signal_trampoline(pd_id: u32) {
+    // Implementation now handled in pd_init() via task spawn.
+}
+
+pub struct SexcState {
+    pub signal_state: trampoline::SignalState,
+    pub control_ring: Arc<crate::ipc_ring::RingBuffer<crate::xipc::messages::MessageType, 256>>,
+    pub trampoline_tid: u32,
+}
+
+pub fn pd_init(pd: Arc<ProtectionDomain>) {
+    let state = Arc::new(SexcState {
+        signal_state: trampoline::SignalState::new(),
+        control_ring: Arc::new(crate::ipc_ring::RingBuffer::new()),
+        trampoline_tid: pd.id + 10000,
+    });
+    
+    // Attach state to PD
+    *pd.sexc_state.lock() = Some(state.clone());
+
+    // Spawn exactly one trampoline thread per PD
+    let task = crate::scheduler::Task {
+        id: state.trampoline_tid,
+        context: crate::scheduler::TaskContext::new(
+            trampoline::trampoline_entry as u64,
+            0x_8000_0000_0000 + (pd.id as u64 * 0x1000_0000), // Dedicated stack context
+            pd.clone(),
+            true,
+        ),
+        state: crate::scheduler::TaskState::Ready,
+        signal_ring: pd.signal_ring.clone(),
+    };
+    crate::scheduler::balanced_spawn(task);
+}
+
+pub fn sys_exit(_code: i32) -> ! {
+    loop { x86_64::instructions::hlt(); }
+}
+
+pub fn drain_pending_signals_for_pd(pd_id: u32) -> usize {
+    let registry = DOMAIN_REGISTRY.read();
+    let Some(pd) = registry.get(&pd_id) else {
+        return 0;
+    };
+
+    trampoline::pump_pending(pd_id, pd.signal_ring.as_ref())
+}
+
+fn parse_sigaction(action_ptr: u64) -> Result<KernelSigAction, &'static str> {
+    if action_ptr == 0 {
+        return Err("sexc: null sigaction");
+    }
+
+    let action = unsafe { *(action_ptr as *const KernelSigAction) };
+    if action.handler == 0 {
+        return Err("sexc: empty signal handler");
+    }
+
+    Ok(action)
 }

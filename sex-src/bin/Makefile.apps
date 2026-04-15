@@ -4,6 +4,7 @@
 CC = /Users/xirtus/sites/microkernel/sex-src/bin/sexos-cc
 CFLAGS = -O2 -Wall
 LDFLAGS = -nostdlib
+RUSTCARGO = cargo build --manifest-path ../../Cargo.toml -p sexc
 
 # Source files
 SRCS = hello.c init.c sexsh.c sexfetch.c ../packages/doom/doom.c ../packages/classicube/cube.c ../lib/malloc.c ../lib/crt0.c ../lib/libSDL2-sexos.c
@@ -26,9 +27,12 @@ sexvfs.sex: sexvfs.o ../lib/malloc.o ../lib/crt0.o
 	$(CC) $(LDFLAGS) -o $@ $^
 	@echo "Build successful: $@"
 
-sexc.sex: sexc.o ../lib/malloc.o ../lib/crt0.o
+sexc.sex: sexc-trampoline sexc.o ../lib/malloc.o ../lib/crt0.o
 	$(CC) $(LDFLAGS) -o $@ $^
 	@echo "Build successful: $@"
+
+sexc-trampoline:
+	$(RUSTCARGO)
 
 # ... (rest of the targets)
 

@@ -102,13 +102,5 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8) -> Res
         }
     }
 
-    // 6. Allocate and map User Stack
-    let stack_top = 0x_7000_0000_0000; // Standard user stack top for our prototype
-    let stack_size = 64 * 1024; // 64 KiB
-    let stack_flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
-    
-    vas.map_pku_range(VirtAddr::new(stack_top - stack_size), stack_size, stack_flags, pku_key)?;
-    serial_println!("ELF: User stack mapped at {:#x} (Key: {})", stack_top, pku_key);
-
     Ok(VirtAddr::new(header.entry))
 }

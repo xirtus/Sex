@@ -61,6 +61,7 @@ fn spawn_bundled_pd(name: &str, elf_data: &[u8], vas: &mut GlobalVas) -> Result<
     // 2. Create Protection Domain
     let pd = Arc::new(ProtectionDomain::new(pd_id, pku_key));
     DOMAIN_REGISTRY.write().insert(pd.id, pd.clone());
+    crate::servers::sexc::init_signal_trampoline(pd.id);
     
     // 3. Load ELF into Global SAS
     let entry_point = crate::elf::load_elf_for_pd(elf_data, vas, pku_key)?;
@@ -78,11 +79,12 @@ fn spawn_bundled_pd(name: &str, elf_data: &[u8], vas: &mut GlobalVas) -> Result<
         pku_key
     )?;
     
+    let signal_ring = pd.signal_ring.clone();
     let task = Task {
         id: pd_id,
         context: TaskContext::new(entry_point.as_u64(), stack_top, pd, true),
         state: TaskState::Ready,
-        signal_ring: Arc::new(crate::ipc_ring::RingBuffer::new()),
+        signal_ring,
     };
     
     balanced_spawn(task);

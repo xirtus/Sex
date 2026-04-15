@@ -127,3 +127,6 @@
    * Implement hardware acceleration (lifting Nouveau/AMDGPU via DDE).
    * Milestone: Daily Driver. You can browse the web, write code, and play media natively.
  > okay plan how to tackle the core kernel issues, and begin
+
+Signal Trampoline: COMPLETE
+Phase 6 Signal Trampoline: COMPLETE

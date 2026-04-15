@@ -1,19 +1,31 @@
+use crate::capability::{CapabilityData, ProtectionDomain};
 use crate::pku::Pkru;
-use x86_64::VirtAddr;
-use crate::capability::{ProtectionDomain, CapabilityData, IpcCapData};
 use crate::servers::sexnet::route_remote_ipc;
-use alloc::collections::BTreeMap;
-use spin::RwLock;
-use lazy_static::lazy_static;
 use alloc::sync::Arc;
-use core::sync::atomic::Ordering;
-
-pub const LOCAL_NODE_ID: u32 = 1;
-
-use core::sync::atomic::AtomicPtr;
 use core::ptr;
+use core::sync::atomic::{AtomicPtr, Ordering};
+use x86_64::VirtAddr;
 
 pub const MAX_DOMAINS: usize = 1024;
+pub const LOCAL_NODE_ID: u32 = 1;
+const PDX_MESSAGE_TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+const PDX_MESSAGE_TAG: u64 = 0x5349_0000_0000_0000;
+const PDX_MESSAGE_KIND_SHIFT: u64 = 48;
+const PDX_MESSAGE_KIND_SIGNAL: u64 = 0x01;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageType {
+    RawCall(u64),
+    Signal(u8),
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PdxMessage {
+    pub target_pd: u32,
+    pub msg_type: MessageType,
+}
 
 struct DomainRegistry {
     domains: [AtomicPtr<ProtectionDomain>; MAX_DOMAINS],
@@ -26,8 +38,8 @@ impl DomainRegistry {
         }
     }
 
-    fn get(&self, id: u32) -> Option<Arc<ProtectionDomain>> {
-        let idx = id as usize % MAX_DOMAINS;
+    pub fn get(&self, id: &u32) -> Option<Arc<ProtectionDomain>> {
+        let idx = *id as usize % MAX_DOMAINS;
         let ptr = self.domains[idx].load(Ordering::Acquire);
         if ptr.is_null() {
             None
@@ -43,25 +55,23 @@ impl DomainRegistry {
         }
     }
 
-    fn insert(&self, id: u32, pd: Arc<ProtectionDomain>) {
+    pub fn insert(&self, id: u32, pd: Arc<ProtectionDomain>) {
         let idx = id as usize % MAX_DOMAINS;
         let ptr = Arc::into_raw(pd) as *mut _;
         self.domains[idx].store(ptr, Ordering::Release);
     }
 
-    fn contains_key(&self, id: u32) -> bool {
-        let idx = id as usize % MAX_DOMAINS;
+    pub fn contains_key(&self, id: &u32) -> bool {
+        let idx = *id as usize % MAX_DOMAINS;
         !self.domains[idx].load(Ordering::Acquire).is_null()
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.domains.iter().filter(|p| !p.load(Ordering::Acquire).is_null()).count()
     }
 }
 
 static WAIT_FREE_REGISTRY: DomainRegistry = DomainRegistry::new();
-
-pub const LOCAL_NODE_ID: u32 = 1;
 
 // Compatibility wrapper for DOMAIN_REGISTRY (Simulated read/write)
 pub struct RegistryWrapper;
@@ -74,6 +84,64 @@ pub static DOMAIN_REGISTRY: RegistryWrapper = RegistryWrapper;
 use crate::amdahl::GLOBAL_AMDAHL;
 use crate::sunni::GLOBAL_SUNNI;
 use crate::latency_guard;
+
+pub const fn encode_signal_message(signal: u8) -> u64 {
+    PDX_MESSAGE_TAG | (PDX_MESSAGE_KIND_SIGNAL << PDX_MESSAGE_KIND_SHIFT) | signal as u64
+}
+
+pub fn decode_message(target_pd: u32, raw: u64) -> PdxMessage {
+    if (raw & PDX_MESSAGE_TAG_MASK) == PDX_MESSAGE_TAG {
+        let kind = (raw >> PDX_MESSAGE_KIND_SHIFT) & 0xFF;
+        if kind == PDX_MESSAGE_KIND_SIGNAL {
+            return PdxMessage {
+                target_pd,
+                msg_type: MessageType::Signal(raw as u8),
+            };
+        }
+    }
+
+    PdxMessage {
+        target_pd,
+        msg_type: MessageType::RawCall(raw),
+    }
+}
+
+pub fn enqueue_message(target_pd: &ProtectionDomain, message: PdxMessage) -> Result<(), &'static str> {
+    match message.msg_type {
+        MessageType::Signal(signal) => target_pd.signal_ring.enqueue(signal),
+        MessageType::RawCall(_) => Err("IPC: raw call cannot be enqueued"),
+    }
+}
+
+pub fn route_signal(target_pd_id: u32, signal: u8) -> Result<(), &'static str> {
+    let registry = DOMAIN_REGISTRY.read();
+    let target_pd = registry
+        .get(&target_pd_id)
+        .ok_or("IPC: Target domain not found")?;
+
+    enqueue_message(
+        target_pd.as_ref(),
+        PdxMessage {
+            target_pd: target_pd_id,
+            msg_type: MessageType::Signal(signal),
+        },
+    )
+}
+
+pub fn forward_interrupt_message(target_pd_id: u32, message: MessageType) -> Result<(), &'static str> {
+    let registry = DOMAIN_REGISTRY.read();
+    let target_pd = registry
+        .get(&target_pd_id)
+        .ok_or("IPC: Target domain not found")?;
+
+    enqueue_message(
+        target_pd.as_ref(),
+        PdxMessage {
+            target_pd: target_pd_id,
+            msg_type: message,
+        },
+    )
+}
 
 /// A "Safe" PDX call that validates a capability before switching domains.
 pub fn safe_pdx_call(caller: &ProtectionDomain, cap_id: u32, arg0: u64) -> Result<u64, &'static str> {
@@ -96,6 +164,15 @@ pub fn safe_pdx_call(caller: &ProtectionDomain, cap_id: u32, arg0: u64) -> Resul
             let target_pd = registry.get(&ipc_data.target_pd_id)
                 .ok_or("IPC: Target domain not found")?;
 
+            let message = decode_message(ipc_data.target_pd_id, arg0);
+            if !matches!(message.msg_type, MessageType::RawCall(_)) {
+                enqueue_message(target_pd.as_ref(), message)?;
+                latency_guard::verify_latency("IPC_FAST_PATH", start_cycles, false);
+                GLOBAL_AMDAHL.record_event(0, end_lock - start_lock);
+                GLOBAL_SUNNI.update_scale(100, 50);
+                return Ok(0);
+            }
+
             let target_mask = target_pd.current_pkru_mask.load(Ordering::SeqCst);
 
             let result = unsafe {
@@ -109,7 +186,6 @@ pub fn safe_pdx_call(caller: &ProtectionDomain, cap_id: u32, arg0: u64) -> Resul
 
             Ok(result)
         },
-...
 
         // Handle Node capabilities (Unified sexvfs interface)
         CapabilityData::Node(node_data) => {

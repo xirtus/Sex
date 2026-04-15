@@ -125,6 +125,7 @@ pub struct Capability {
 }
 
 use alloc::collections::BTreeMap;
+use crate::ipc_ring::RingBuffer;
 
 /// A Protection Domain (PD) represents an isolated execution context.
 pub struct ProtectionDomain {
@@ -136,6 +137,22 @@ pub struct ProtectionDomain {
     pub cap_table: Arc<CapabilityTable>,
     /// POSIX Signal Handlers (Signum -> Handler Entry Point)
     pub signal_handlers: Mutex<BTreeMap<i32, u64>>,
+    /// Per-PD asynchronous signal delivery ring.
+    pub signal_ring: Arc<RingBuffer<u8, 32>>,
+    /// Phase 6: POSIX Emulation State
+    pub sexc_state: Mutex<Option<Arc<crate::servers::sexc::SexcState>>>,
+}
+
+/// The Capability Engine: Central authority for capability verification.
+pub struct CapEngine;
+
+impl CapEngine {
+    /// Verifies if a PD has the right to send a signal via a specific capability.
+    pub fn verify_signal_rights(pd: &ProtectionDomain, cap_id: u64) -> bool {
+        // In this prototype, we allow any valid IPC or Domain capability to send signals.
+        // In a real SASOS, we would check for a specific "Signal" permission bit.
+        pd.cap_table.find(cap_id as u32).is_some()
+    }
 }
 
 /// Per-domain Capability Table.
@@ -143,7 +160,7 @@ pub struct ProtectionDomain {
 pub struct CapabilityTable {
     // For the demo, we use a Mutex-protected Vec, but the API 
     // is designed for a lockless/distributed backend.
-    caps: Mutex<Vec<Capability>>,
+    pub caps: Mutex<Vec<Capability>>,
     next_cap_id: AtomicU32,
 }
 
@@ -194,6 +211,8 @@ impl ProtectionDomain {
             current_pkru_mask: AtomicU32::new(pkru_mask),
             cap_table: Arc::new(CapabilityTable::new()),
             signal_handlers: Mutex::new(BTreeMap::new()),
+            signal_ring: Arc::new(RingBuffer::new()),
+            sexc_state: Mutex::new(None),
         }
     }
 

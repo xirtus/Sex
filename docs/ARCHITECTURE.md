@@ -105,11 +105,10 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] NVIDIA 3070 GPU PD (Nouveau-lifted skeleton).
 - [x] Pi 5 Peripheral support design.
 
-### Phase 6: SexSD (Distribution & Builds) (Complete ✅)
-- [x] `sex-src` build system (xbps-src style).
-- [x] Central Hardware-to-sexdrive Registry.
-- [x] Provisioning tools (Flashable UEFI/Pi images).
-- [x] Source-to-PD lifting pipeline.
+### Phase 6: Asynchronous POSIX Signal Trampoline (Complete ✅)
+- [x] Signal Trampoline: COMPLETE
+- [x] Lock-free message-based signal routing over per-PD rings.
+- [x] sexc-owned POSIX signal dispatch without kernel stack hijacks.
 
 ### Phase 7: Ecosystem & Applications (Active 🚀)
 - [x] POSIX Emulation Layer (sexc).
@@ -137,6 +136,11 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] sexinput PD (Mouse/Keyboard lifting).
 - [x] Mesa & EGL/GLES for SASOS.
 - [x] The "Big Three" Compositor integration.
+
+### Phase 11: Signal Delivery (Complete ✅)
+- [x] Signal Trampoline: COMPLETE
+- [x] Lock-free message-based signal routing over per-PD rings.
+- [x] sexc-owned POSIX signal dispatch without kernel stack hijacks.
 
 ### Phase 11: GNU Pipeline & Filesystem Parity (Complete ✅)
 - [x] Lin-Sex (Linux Binary Compatibility).

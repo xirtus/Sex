@@ -63,4 +63,13 @@ impl<T, const N: usize> RingBuffer<T, N> {
         self.read_idx.store(r + 1, Ordering::Release);
         Some(item)
     }
+
+    /// Returns the number of queued items.
+    pub fn len(&self) -> usize {
+        let w = self.write_idx.load(Ordering::Acquire);
+        let r = self.read_idx.load(Ordering::Acquire);
+        w.saturating_sub(r)
+    }
 }
+
+pub type SpscRing<T> = RingBuffer<T, 256>;

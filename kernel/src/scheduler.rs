@@ -32,7 +32,7 @@ pub struct TaskContext {
 
 impl TaskContext {
     pub fn new(entry_point: u64, stack_top: u64, pd: Arc<ProtectionDomain>, is_user: bool) -> Self {
-        let pkru = *pd.current_pkru_mask.lock();
+        let pkru = pd.current_pkru_mask.load(core::sync::atomic::Ordering::SeqCst);
         let selectors = crate::gdt::get_selectors();
         
         let (cs, ss) = if is_user {
@@ -69,7 +69,7 @@ pub struct Task {
     pub context: TaskContext,
     pub state: TaskState,
     /// Asynchronous Signal Ring (Signum)
-    pub signal_ring: Arc<RingBuffer<i32, 16>>,
+    pub signal_ring: Arc<RingBuffer<u8, 32>>,
 }
 /// Per-core Lockless Scheduler.
 pub struct Scheduler {
@@ -117,16 +117,7 @@ impl Scheduler {
     /// Picks the next task to run and returns pointers for the context switch.
     /// Returns (old_context, new_context) if a switch is needed.
     pub fn tick(&mut self) -> Option<(*mut TaskContext, *const TaskContext)> {
-        // 1. Process Signals for the current task
-        if let Some(ref current_mutex) = self.current_task {
-            let current = current_mutex.lock();
-            if let Some(sig) = current.signal_ring.dequeue() {
-                serial_println!("SCHED: Signal {} pending for Task {}.", sig, current.id);
-                // Signal injection logic would go here
-            }
-        }
-
-        // 2. Simple round-robin for the prototype
+        // 1. Simple round-robin for the prototype
         if let Some(next_task_mutex) = self.runqueue.pop_front() {
             let old_task_mutex = self.current_task.take().unwrap();
             
@@ -143,7 +134,7 @@ impl Scheduler {
             return Some((old_ctx_ptr, next_ctx_ptr));
         }
         
-        // 3. If runqueue is empty, try to steal from another core
+        // 2. If runqueue is empty, try to steal from another core
         if let Some((old_ctx_ptr, next_ctx_ptr)) = self.try_load_balance() {
             return Some((old_ctx_ptr, next_ctx_ptr));
         }
@@ -247,6 +238,24 @@ pub fn balanced_spawn(task: Task) {
         if let Some(ref mut sched) = SCHEDULERS[target_core] {
             serial_println!("SCHED: Spawning Task {} on Core {}.", task.id, target_core);
             sched.spawn(task);
+        }
+    }
+}
+
+/// Blocks the current thread (Phase 6 Signal Trampoline).
+pub fn park_current_thread() {
+    unsafe {
+        if let Some(ref mut sched) = SCHEDULERS[0] { // Assuming single core for park/unpark prototype
+            sched.block_current();
+        }
+    }
+}
+
+/// Wakes up a specific thread by its ID.
+pub fn unpark_thread(tid: u32) {
+    unsafe {
+        if let Some(ref mut sched) = SCHEDULERS[0] {
+            sched.unblock(tid);
         }
     }
 }
