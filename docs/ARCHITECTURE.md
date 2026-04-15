@@ -105,10 +105,11 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] NVIDIA 3070 GPU PD (Nouveau-lifted skeleton).
 - [x] Pi 5 Peripheral support design.
 
-### Phase 6: Asynchronous POSIX Signal Trampoline (Complete ✅)
-- [x] Signal Trampoline: COMPLETE
-- [x] Lock-free message-based signal routing over per-PD rings.
-- [x] sexc-owned POSIX signal dispatch without kernel stack hijacks.
+### Phase 6: Asynchronous POSIX Signal Trampoline (Complete ✅ (polished on lock-free core))
+- [x] Dedicated trampoline stack per-PD (no kernel stack touch).
+- [x] Lock-free atomic signal handlers in `sexc` (RCU-style).
+- [x] Asynchronous signal routing via `safe_pdx_call`.
+- [x] Full `sigaction` ABI support (SA_RESTART, etc.).
 
 ### Phase 7: Real Memory Subsystem & Async Page-Fault Forwarding (Complete ✅ (hardened on new lock-free core))
 - [x] Lock-free Buddy Allocator (4 KiB / 2 MiB / 1 GiB sharding).

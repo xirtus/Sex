@@ -7,6 +7,7 @@ use x86_64::VirtAddr;
 
 pub mod messages;
 pub mod pagefault;
+pub mod router;
 
 pub const MAX_DOMAINS: usize = 1024;
 pub const LOCAL_NODE_ID: u32 = 1;

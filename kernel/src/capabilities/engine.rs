@@ -1,4 +1,4 @@
-use crate::capability::{ProtectionDomain, CapabilityData, NodeCapData};
+use crate::capability::{ProtectionDomain, CapabilityData, NodeCapData, CapabilityKind};
 use crate::serial_println;
 
 pub struct CapEngine;
@@ -12,17 +12,29 @@ impl CapEngine {
         // 1. Root VFS capability
         pd.grant(CapabilityData::Node(NodeCapData {
             node_id: 1,
-            sexdrive_pd_id: 100, // sexvfs
+            sexdrive_pd_id: 100, // sexvfs PD ID
             inode_id: 2,
             permissions: 0x7, // R/W/X
         }));
 
         // 2. Control Ring Capability (Self-management)
         pd.grant(CapabilityData::Domain(pd.id));
+
+        // 3. Signal Capability (Self-delivery)
+        // In a real system, this grants permission to send signals to self/group.
+        pd.grant(CapabilityData::Interrupt(crate::capability::InterruptCapData {
+            irq: 0, // Mock: Self-Signal
+        }));
     }
 
     pub fn verify_signal_rights(pd: &ProtectionDomain, cap_id: u64) -> bool {
         // RCU Lookup: Wait-Free
-        pd.cap_table.find(cap_id as u32).is_some()
+        if let Some(cap) = pd.cap_table.find(cap_id as u32) {
+            match cap.data {
+                CapabilityData::Interrupt(_) | CapabilityData::Domain(_) => return true,
+                _ => (),
+            }
+        }
+        false
     }
 }

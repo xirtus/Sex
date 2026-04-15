@@ -8,7 +8,6 @@ use crate::memory::pku;
 use crate::capabilities::engine::CapEngine;
 
 /// create_protection_domain: High-level PD lifecycle management.
-/// Phase 8: Hardened on lock-free foundations.
 pub fn create_protection_domain(elf_path: &str) -> Result<u32, &'static str> {
     serial_println!("pd: Creating domain for {}...", elf_path);
 
@@ -30,14 +29,20 @@ pub fn create_protection_domain(elf_path: &str) -> Result<u32, &'static str> {
     // 5. Register with Registry (Lock-free insertion)
     DOMAIN_REGISTRY.insert(pd_id, new_pd.clone());
 
-    // 6. Create initial Task and add to Scheduler
+    // 6. Create main execution Task
     let stack_top = 0x_7000_0000_0000;
     let task = Box::into_raw(Box::new(crate::scheduler::Task::new(
         pd_id, entry.as_u64(), stack_top, new_pd.clone(), true
     )));
-    
-    // Enqueue in first core's runqueue (MPSC)
     crate::scheduler::SCHEDULERS[0].runqueue.enqueue(task);
+
+    // 7. Create Dedicated Signal Trampoline Task (Phase 6 Polish)
+    // Dedicated stack for signals to prevent kernel stack touch
+    let trampoline_stack_top = 0x_7000_1000_0000; 
+    let trampoline_task = Box::into_raw(Box::new(crate::scheduler::Task::new(
+        pd_id | 0x8000_0000, 0 /* sexc_trampoline_handler entry */, trampoline_stack_top, new_pd.clone(), true
+    )));
+    crate::scheduler::SCHEDULERS[0].runqueue.enqueue(trampoline_task);
 
     serial_println!("pd: Spawning PD {} (PKU Key {}) -> entry {:#x}", pd_id, pku_key, entry.as_u64());
     Ok(pd_id)
