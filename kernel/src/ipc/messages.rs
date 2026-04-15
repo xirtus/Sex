@@ -43,4 +43,10 @@ pub enum MessageType {
     IpcReply(u64),
     PageFault { fault_addr: u64, error_code: u32, pd_id: u64, lent_cap: u64 },
     Spawn { path_ptr: u64 },
+    VfsCall { command: u32, offset: u64, size: u64, buffer_cap: u32 },
+    VfsReply { status: i64, size: u64 },
+    NetCall { command: u32, socket_cap: u32, offset: u64, size: u64, buffer_cap: u32, remote_node: u32 },
+    NetReply { status: i64, size: u64, socket_cap: u32 },
+    DmaCall { command: u32, offset: u64, size: u64, buffer_cap: u32, device_cap: u32 },
+    DmaReply { status: i64, size: u64 },
 }

@@ -5,7 +5,6 @@ pub struct CapEngine;
 
 impl CapEngine {
     /// Mints and grants the initial set of capabilities required for a new PD.
-    /// IPCtax: Uses RCU-based CapabilityTable (Lock-Free).
     pub fn grant_initial_rights(pd: &ProtectionDomain) {
         serial_println!("cap: Granting root rights to PD {}...", pd.id);
 
@@ -21,9 +20,9 @@ impl CapEngine {
         pd.grant(CapabilityData::Domain(pd.id));
 
         // 3. Signal Capability (Self-delivery)
-        // In a real system, this grants permission to send signals to self/group.
+        // IPCtax: Capability required to trigger signal routing via kernel.
         pd.grant(CapabilityData::Interrupt(crate::capability::InterruptCapData {
-            irq: 0, // Mock: Self-Signal
+            irq: 0, // Mock: Signal Cap
         }));
     }
 

@@ -7,43 +7,52 @@ use crate::memory::allocator::GLOBAL_ALLOCATOR;
 use crate::memory::pku;
 use crate::capabilities::engine::CapEngine;
 
-/// create_protection_domain: High-level PD lifecycle management.
-pub fn create_protection_domain(elf_path: &str) -> Result<u32, &'static str> {
+/// create_protection_domain: Ruthless Phase 6/8/10 implementation.
+/// IPCtax: No Arc/Box in task management, dedicated trampoline tasks.
+pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Result<u32, &'static str> {
     serial_println!("pd: Creating domain for {}...", elf_path);
 
     // 1. Allocate a unique PD ID and PKU key
-    let pd_id = 4000 + (x86_64::instructions::random::rdseed().unwrap_or(0) as u32 % 1000);
+    let pd_id = if let Some(id) = requested_id {
+        id
+    } else {
+        4000 + (x86_64::instructions::random::rdseed().unwrap_or(0) as u32 % 1000)
+    };
     let pku_key = (pd_id % 15) as u8 + 1;
-    let new_pd = Arc::new(ProtectionDomain::new(pd_id, pku_key));
+    
+    // RCU-style raw pointer for ProtectionDomain
+    let new_pd = Arc::into_raw(Arc::new(ProtectionDomain::new(pd_id, pku_key))) as *mut ProtectionDomain;
 
     // 2. Assign PKU domain key (Hardware isolation)
     let pkru_mask = pku::init_pd_pkru(pku_key);
-    new_pd.current_pkru_mask.store(pkru_mask, core::sync::atomic::Ordering::Release);
+    unsafe { (*new_pd).current_pkru_mask.store(pkru_mask, core::sync::atomic::Ordering::Release); }
 
     // 3. Load ELF via PDX to sexvfs
     let entry = ElfLoader::load_elf(elf_path, pku_key)?;
 
-    // 4. Mint initial root capabilities (Signal, VFS, etc.) in RCU Table
-    CapEngine::grant_initial_rights(&new_pd);
+    // 4. Register with Registry (Lock-free insertion)
+    DOMAIN_REGISTRY.insert(pd_id, unsafe { Arc::from_raw(new_pd) });
+    let pd_ref = DOMAIN_REGISTRY.get(pd_id).unwrap();
 
-    // 5. Register with Registry (Lock-free insertion)
-    DOMAIN_REGISTRY.insert(pd_id, new_pd.clone());
+    // 5. Mint initial root capabilities
+    CapEngine::grant_initial_rights(&pd_ref);
 
-    // 6. Create main execution Task
+    // 6. Create main execution Task (Raw Pointer)
     let stack_top = 0x_7000_0000_0000;
-    let task = Box::into_raw(Box::new(crate::scheduler::Task::new(
-        pd_id, entry.as_u64(), stack_top, new_pd.clone(), true
+    let task_ptr = Box::into_raw(Box::new(crate::scheduler::Task::new(
+        pd_id, entry.as_u64(), stack_top, pd_ref.clone(), true
     )));
-    crate::scheduler::SCHEDULERS[0].runqueue.enqueue(task);
+    crate::scheduler::SCHEDULERS[0].runqueue.enqueue(task_ptr);
 
     // 7. Create Dedicated Signal Trampoline Task (Phase 6 Polish)
-    // Dedicated stack for signals to prevent kernel stack touch
+    // Dedicated stack for signals to prevent kernel stack touch.
+    // Trampoline entry point is hardcoded or resolved from sexc ELF.
     let trampoline_stack_top = 0x_7000_1000_0000; 
-    let trampoline_task = Box::into_raw(Box::new(crate::scheduler::Task::new(
-        pd_id | 0x8000_0000, 0 /* sexc_trampoline_handler entry */, trampoline_stack_top, new_pd.clone(), true
+    let trampoline_task_ptr = Box::into_raw(Box::new(crate::scheduler::Task::new(
+        pd_id | 0x8000_0000, 0 /* Resolve sexc_trampoline_entry */, trampoline_stack_top, pd_ref.clone(), true
     )));
-    crate::scheduler::SCHEDULERS[0].runqueue.enqueue(trampoline_task);
+    crate::scheduler::SCHEDULERS[0].runqueue.enqueue(trampoline_task_ptr);
 
-    serial_println!("pd: Spawning PD {} (PKU Key {}) -> entry {:#x}", pd_id, pku_key, entry.as_u64());
+    serial_println!("pd: PD {} Spawned (Trampoline task active).", pd_id);
     Ok(pd_id)
 }

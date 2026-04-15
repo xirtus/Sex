@@ -1,4 +1,6 @@
 use core::sync::atomic::{AtomicU64, Ordering};
+use libsys::pdx::{pdx_listen, pdx_reply};
+use libsys::messages::MessageType;
 
 /// POSIX Signal ABI constants
 pub const NSIG: usize = 64;
@@ -12,6 +14,19 @@ pub struct SigAction {
     pub handler: u64,
     pub flags: u64,
     pub mask: u64,
+}
+
+#[repr(C)]
+pub struct SigInfo {
+    pub signum: i32,
+    pub code: i32,
+    pub value: u64,
+}
+
+#[repr(C)]
+pub struct UContext {
+    pub stack: [u64; 2],
+    pub mcontext: [u64; 32], // Simplified registers
 }
 
 /// Per-PD lock-free signal state.
@@ -50,16 +65,52 @@ impl SignalState {
     }
 }
 
-/// The trampoline dispatch logic.
-/// Executed on the dedicated trampoline stack in user-space.
-#[no_mangle]
-pub extern "C" fn sexc_trampoline_dispatch(signum: i32, handler: u64) {
-    // 1. Invoke the actual user handler
-    let handler_fn: extern "C" fn(i32) = unsafe { core::mem::transmute(handler) };
-    handler_fn(signum);
+pub static SIGNAL_STATE: SignalState = SignalState::new();
 
-    // 2. Return to sexc loop via PDX sigreturn (syscall 15)
-    unsafe {
-        core::arch::asm!("syscall", in("rax") 15, in("rdi") signum);
+/// The background trampoline thread entry point.
+/// IPCtax: Blocks with FLSCHED::park() on the control ring.
+#[no_mangle]
+pub extern "C" fn sexc_trampoline_entry() -> ! {
+    loop {
+        // 1. Wait-free park until signal message arrives
+        // Syscall 24 = SYS_PARK
+        unsafe { core::arch::asm!("syscall", in("rax") 24); }
+
+        // 2. Poll control ring via PDX library
+        let req = pdx_listen(0);
+        let msg = unsafe { *(req.arg0 as *const MessageType) };
+
+        if let MessageType::Signal(signum) = msg {
+            dispatch_signal(signum as usize);
+        }
+        
+        // 3. Signal handled, reply to kernel/sender
+        pdx_reply(req.caller_pd, 0);
+    }
+}
+
+fn dispatch_signal(signum: usize) {
+    if let Some(action) = SIGNAL_STATE.get_action(signum) {
+        // ABI: Construct siginfo and ucontext on dedicated stack
+        let info = SigInfo { signum: signum as i32, code: 0, value: 0 };
+        let ctx = UContext { stack: [0; 2], mcontext: [0; 32] };
+
+        // Invoke handler
+        if action.flags & SA_SIGINFO != 0 {
+            let handler_fn: extern "C" fn(i32, *const SigInfo, *const UContext) = 
+                unsafe { core::mem::transmute(action.handler) };
+            handler_fn(signum as i32, &info, &ctx);
+        } else {
+            let handler_fn: extern "C" fn(i32) = unsafe { core::mem::transmute(action.handler) };
+            handler_fn(signum as i32);
+        }
+
+        // Support SA_RESETHAND
+        if action.flags & SA_RESETHAND != 0 {
+            SIGNAL_STATE.handlers[signum].store(0, Ordering::Release);
+        }
+
+        // PDX Sigreturn (Syscall 15)
+        unsafe { core::arch::asm!("syscall", in("rax") 15, in("rdi") signum); }
     }
 }

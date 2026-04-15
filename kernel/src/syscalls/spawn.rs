@@ -13,11 +13,8 @@ pub fn sys_spawn_pd(path_ptr: *const u8) -> i64 {
     serial_println!("syscall: sys_spawn_pd(\"{}\")", path);
 
     // 2. Execute Spawn (Lock-Free)
-    match create_protection_domain(path) {
+    match create_protection_domain(path, None) {
         Ok(pd_id) => pd_id as i64,
-        Err(e) => {
-            serial_println!("syscall: spawn failed: {}", e);
-            -1
-        }
+        Err(_) => -1,
     }
 }

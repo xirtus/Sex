@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+libsys = { path = "../../sex-src/lib/libsys" }
+
+[[bin]]
+name = "sexdrives"
+path = "src/driver.rs"

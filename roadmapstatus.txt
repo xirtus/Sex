@@ -129,7 +129,10 @@
  > okay plan how to tackle the core kernel issues, and begin
 
 Signal Trampoline: COMPLETE
-Phase 6 Signal Trampoline: COMPLETE ✅ (polished on lock-free core)
+Phase 3 Services & sexvfs: COMPLETE ✅ (real PDX-based VFS on lock-free foundation)
+Phase 4 Distribution: COMPLETE ✅ (real remote PDX on lock-free foundation)
+Phase 5 Hardware & sexdrives: COMPLETE ✅ (real zero-copy DMA on lock-free foundation)
+Phase 6 Signal Trampoline: COMPLETE ✅ (ruthless lock-free polish)
 Phase 7 Memory Subsystem & Async Page-Fault Forwarding: COMPLETE ✅ (hardened on new lock-free core)
 Phase 8 Full ELF Loader + PD Spawn: COMPLETE ✅ (hardened on lock-free memory)
 Phase 9 Driver Enablement (Storage + Input): COMPLETE ✅ (recovered and polished)

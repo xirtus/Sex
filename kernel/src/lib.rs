@@ -26,6 +26,7 @@ pub mod scheduler;
 pub mod elf;
 pub mod initrd;
 pub mod loader;
+pub mod drivers;
 pub mod pd;
 pub mod syscalls;
 pub mod capabilities;

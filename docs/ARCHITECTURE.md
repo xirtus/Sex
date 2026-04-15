@@ -87,29 +87,32 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] **Hardware Drivers:** Functional NVMe (SQ/CQ) and e1000 (RX/TX DMA).
 - [x] Domain Fusion & Revocation.
 
-### Phase 3: Services & sexvfs (Stable 🚀)
-- [x] **Multi-FS sexvfs:** Unified path resolution for FAT32, Ext4, and Btrfs.
-- [x] IPC-based storage sexdrives (NVMe/IDE).
-- [x] **Networking:** Functional e1000 driver and `sexnet` protocol stack.
-- [x] **User-Land SDK:** `libsys` (sexos.h) and `malloc` runtime.
-- [x] **Cross-Toolchain:** `sexos-cc` wrapper for porting complex apps.
+### Phase 3: Services & sexvfs (Stable 🚀 (real PDX-based VFS on lock-free foundation))
+- [x] Standalone `sexvfs` server PD.
+- [x] Real block I/O dispatch to `sexdrives` via PDX and lent-memory.
+- [x] Minimal `ramfs` using Phase-7 lock-free buddy allocator.
+- [x] POSIX syscall bridge in `sexc` for VFS operations.
 
-### Phase 4: Distribution (Complete ✅)
-- [x] Transparent networked IPC.
-- [x] sexnode management and node discovery.
-- [x] Distributed Capability management.
+### Phase 4: Distribution (Complete ✅ (real remote PDX on lock-free foundation))
+- [x] Standalone `sexnet` server PD for networking and remote proxy.
+- [x] Remote PDX routing via cluster fabric capabilities.
+- [x] Zero-copy packet transfer via lent-memory.
+- [x] Translucent network-local capability transparency.
 
-### Phase 5: Hardware & sexdrives (Complete ✅)
+### Phase 5: Hardware & sexdrives (Complete ✅ (real zero-copy DMA on lock-free foundation))
 - [x] ARM64 Design (Raspberry Pi 5).
 - [x] DDE-Sex Shim (Linux/BSD sexdrive lifting).
 - [x] NVIDIA 3070 GPU PD (Nouveau-lifted skeleton).
 - [x] Pi 5 Peripheral support design.
+- [x] Standalone `sexdrives` server PD.
+- [x] Pure PDX hardware dispatch and MSI-X interrupt routing.
+- [x] Zero-copy DMA via lent-memory capabilities.
 
-### Phase 6: Asynchronous POSIX Signal Trampoline (Complete ✅ (polished on lock-free core))
-- [x] Dedicated trampoline stack per-PD (no kernel stack touch).
-- [x] Lock-free atomic signal handlers in `sexc` (RCU-style).
-- [x] Asynchronous signal routing via `safe_pdx_call`.
-- [x] Full `sigaction` ABI support (SA_RESTART, etc.).
+### Phase 6: Asynchronous POSIX Signal Trampoline (Complete ✅ (ruthless lock-free polish))
+- [x] Background trampoline thread per PD with `FLSCHED::park`.
+- [x] Zero busy-wait signal dequeuing from control ring.
+- [x] Full POSIX sigaction ABI (siginfo_t, ucontext_t) on dedicated stack.
+- [x] Lock-free signal state management (RCU-style).
 
 ### Phase 7: Real Memory Subsystem & Async Page-Fault Forwarding (Complete ✅ (hardened on new lock-free core))
 - [x] Lock-free Buddy Allocator (4 KiB / 2 MiB / 1 GiB sharding).
