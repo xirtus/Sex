@@ -130,6 +130,8 @@ impl CapabilityTable {
 
 use crate::ipc_ring::RingBuffer;
 
+use crate::ipc::messages::MessageType;
+
 pub struct ProtectionDomain {
     pub id: u32,
     pub pku_key: u8,
@@ -139,6 +141,8 @@ pub struct ProtectionDomain {
     /// RCU-protected signal handlers (AtomicPtr to immutable BTreeMap)
     pub signal_handlers: AtomicPtr<BTreeMap<i32, u64>>,
     pub signal_ring: Arc<RingBuffer<u8, 32>>,
+    /// IPCtax: Lock-free message ring for asynchronous PDX and IRQs
+    pub message_ring: Arc<RingBuffer<MessageType, 256>>,
     pub sexc_state: AtomicPtr<crate::servers::sexc::SexcState>,
 }
 
@@ -155,6 +159,7 @@ impl ProtectionDomain {
             cap_table: Arc::new(CapabilityTable::new()),
             signal_handlers: AtomicPtr::new(Box::into_raw(Box::new(BTreeMap::new()))),
             signal_ring: Arc::new(RingBuffer::new()),
+            message_ring: Arc::new(RingBuffer::new()),
             sexc_state: AtomicPtr::new(ptr::null_mut()),
         }
     }

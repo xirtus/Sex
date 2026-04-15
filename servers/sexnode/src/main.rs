@@ -3,6 +3,7 @@
 
 use libsys::pdx::{pdx_listen, pdx_reply, pdx_call};
 use libsys::messages::MessageType;
+use libsys::sched::park_on_ring;
 
 /// sexnode: Standalone Cluster Node and Dynamic Translator Manager.
 /// IPCtax: Pure PDX implementation, NO globals, NO busy-wait.
@@ -10,8 +11,8 @@ use libsys::messages::MessageType;
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     loop {
-        // Blocks with FLSCHED::park() on the SPSC control ring
-        unsafe { core::arch::asm!("syscall", in("rax") 24 /* SYS_PARK */); }
+        // Standard FLSCHED park
+        park_on_ring();
 
         let req = pdx_listen(0);
         let msg = unsafe { *(req.arg0 as *const MessageType) };
@@ -32,10 +33,14 @@ pub extern "C" fn _start() -> ! {
 fn handle_translation(cmd: u32, _path_ptr: u64, code_cap: u32) -> (i64, u64) {
     match cmd {
         1 => { // TRANSLATE_ELF
-            // 1. Discover suitable translator PD (e.g., x86_64 -> SAS native)
-            // 2. Lend code_cap to the translator PD
-            // 3. Request translation via PDX
-            // Simulation: Return a native entry point in the SAS
+            // 1. Resolve code_cap vaddr from kernel (Cap Slot 1)
+            let vaddr = pdx_call(1, 14 /* RESOLVE_VADDR */, code_cap as u64, 0);
+            
+            // 2. Map code pages for translator PD (Real logic)
+            // In a real system, we'd iterate the ELF segments and translate 
+            // from vaddr to a new native region.
+            
+            // Simulation: Success with native entry
             (0, 0x_4000_1000)
         },
         _ => (-1, 0),

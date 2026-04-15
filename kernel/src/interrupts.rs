@@ -8,6 +8,9 @@ use lazy_static::lazy_static;
 use spin::Mutex;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use crate::ipc::DOMAIN_REGISTRY;
+use crate::ipc::messages::MessageType;
 
 /// The event structure for a page fault.
 #[derive(Debug, Clone, Copy)]
@@ -26,13 +29,6 @@ pub struct InterruptEvent {
     pub vector: u8,
 }
 
-/// Mapping from Hardware Vector to user-space PD Interrupt Ring.
-pub struct VectorRouting {
-    pub vector: u8,
-    pub pd_id: u32,
-    pub ring: Arc<SpscRing<InterruptEvent>>,
-}
-
 /// The event structure for a system-wide fault (Security or #PF).
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -41,8 +37,6 @@ pub struct SystemFaultEvent {
     pub fault_addr: u64,
     pub fault_type: u8, // 0: #PF, 1: CAP_VIOLATION
 }
-
-use core::sync::atomic::{AtomicU64, Ordering};
 
 lazy_static! {
     /// Global Uptime Ticks (incremented by LAPIC timer).
@@ -53,14 +47,14 @@ lazy_static! {
     
     /// The global fault interception ring for sexit (PID 1).
     pub static ref FAULT_RING: RingBuffer<SystemFaultEvent, 128> = RingBuffer::new();
-    
-    /// The global Dynamic IRQ Routing Table.
-    pub static ref IRQ_ROUTING_TABLE: Mutex<Vec<VectorRouting>> = Mutex::new(Vec::new());
 }
 
-pub fn register_irq_route(vector: u8, pd_id: u32, ring: Arc<SpscRing<InterruptEvent>>) {
-    let mut table = IRQ_ROUTING_TABLE.lock();
-    table.push(VectorRouting { vector, pd_id, ring });
+/// Static mapping for Hardware Vector -> Driver PD.
+/// IPCtax: Lock-free interrupt delivery.
+static VECTOR_OWNERS: [AtomicU32; 256] = [const { AtomicU32::new(0) }; 256];
+
+pub fn register_irq_route(vector: u8, pd_id: u32) {
+    VECTOR_OWNERS[vector as usize].store(pd_id, Ordering::Release);
     serial_println!("IRQ: Registered Vector {:#x} to PD {}", vector, pd_id);
 }
 
@@ -78,7 +72,6 @@ lazy_static! {
         idt[0x20].set_handler_fn(timer_interrupt_handler);
         
         // Map hardware vectors (0x21 to 0x30) to generic_irq_handler
-        // In a real system, we'd use individual stubs to capture the vector.
         idt[0x21].set_handler_fn(keyboard_interrupt_handler);
         idt[0x22].set_handler_fn(generic_irq_handler); 
         
@@ -110,21 +103,20 @@ extern "x86-interrupt" fn page_fault_handler(
     // 1. Identify current faulting task
     let mut task_id = 0;
     let core_id = crate::core_local::CoreLocal::get().core_id;
-    if let Some(ref mut sched) = *crate::scheduler::SCHEDULERS[core_id as usize].lock() {
-        if let Some(ref current_mutex) = sched.current_task {
-            let mut task = current_mutex.lock();
+    let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
+    let current_ptr = sched.current_task.load(Ordering::Acquire);
+    if !current_ptr.is_null() {
+        unsafe {
+            let task = &mut *current_ptr;
             task_id = task.id;
-            
             task.context.rip = stack_frame.instruction_pointer.as_u64();
             task.context.rsp = stack_frame.stack_pointer.as_u64();
             task.context.rflags = stack_frame.cpu_flags.as_u64();
-
-            task.state = crate::scheduler::TaskState::Blocked;
+            task.state.store(crate::scheduler::STATE_BLOCKED, Ordering::Release);
         }
-        sched.block_current();
     }
 
-    // 4. Notify sext PD via the asynchronous ring buffer
+    // 2. Notify sext PD via the asynchronous ring buffer
     let event = PageFaultEvent {
         addr: fault_addr.as_u64(),
         error_code: error_code.bits(),
@@ -135,10 +127,8 @@ extern "x86-interrupt" fn page_fault_handler(
         serial_println!("EXCEPTION: Page Fault Queue FULL. Dropping fault for Task {}.", task_id);
     }
 
-    // 5. Trigger Scheduler to pick next task (since current is blocked)
-    if let Some(ref mut sched) = *crate::scheduler::SCHEDULERS[core_id as usize].lock() {
-        sched.tick();
-    }
+    // 3. Trigger Scheduler to pick next task
+    sched.tick();
     unsafe { send_eoi(); }
 }
 
@@ -155,48 +145,40 @@ pub unsafe fn send_eoi() {
 extern "x86-interrupt" fn timer_interrupt_handler(stack_frame: InterruptStackFrame) {
     TICKS.fetch_add(1, Ordering::Relaxed);
     let core_id = crate::core_local::CoreLocal::get().core_id;
-    if let Some(ref mut sched) = *crate::scheduler::SCHEDULERS[core_id as usize].lock() {
-        if let Some((old_ctx_ptr, next_ctx_ptr)) = sched.tick() {
-            // 1. Save state from the interrupt stack frame into the old context
-            unsafe {
-                let old_ctx = &mut *old_ctx_ptr;
-                old_ctx.rip = stack_frame.instruction_pointer.as_u64();
-                old_ctx.rsp = stack_frame.stack_pointer.as_u64();
-                old_ctx.rflags = stack_frame.cpu_flags.as_u64();
-                
-                // 2. Perform EOI before the switch, as iretq will re-enable interrupts
-                send_eoi();
-
-                // 3. Jump to the next task (Naked switch with iretq)
-                crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
-            }
+    let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
+    if let Some((old_ctx_ptr, next_ctx_ptr)) = sched.tick() {
+        unsafe {
+            let old_ctx = &mut *old_ctx_ptr;
+            old_ctx.rip = stack_frame.instruction_pointer.as_u64();
+            old_ctx.rsp = stack_frame.stack_pointer.as_u64();
+            old_ctx.rflags = stack_frame.cpu_flags.as_u64();
+            send_eoi();
+            crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
         }
     }
     unsafe { send_eoi(); }
 }
 
 extern "x86-interrupt" fn generic_irq_handler(_stack_frame: InterruptStackFrame) {
-    // Prototype: Routing for Vector 0x22 (e.g. NVMe/NIC)
     route_interrupt(0x22);
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    // Routing for Vector 0x21
     route_interrupt(0x21);
 }
 
 fn route_interrupt(vector: u8) {
-    let event = InterruptEvent {
-        irq: vector - 0x20,
-        vector,
-    };
-
-    let table = IRQ_ROUTING_TABLE.lock();
-    for route in table.iter().filter(|r| r.vector == vector) {
-        let _ = route.ring.enqueue(event);
+    let pd_id = VECTOR_OWNERS[vector as usize].load(Ordering::Acquire);
+    if pd_id == 0 {
+        unsafe { send_eoi(); }
+        return;
     }
 
-    unsafe {
-        send_eoi();
+    if let Some(target_pd) = DOMAIN_REGISTRY.get(pd_id) {
+        let msg = MessageType::HardwareInterrupt { vector, data: 0 };
+        let _ = target_pd.message_ring.enqueue(msg);
+        // Wake the driver trampoline/main thread
     }
+
+    unsafe { send_eoi(); }
 }

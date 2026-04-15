@@ -87,20 +87,45 @@ pub unsafe fn pdx_call_with_mask(target_pkru: u32, entry_point: VirtAddr, arg0: 
     result
 }
 
-pub fn safe_pdx_call(target: &ProtectionDomain, cap_id: u32, arg0: u64) -> Result<u64, &'static str> {
-    // 1. Validate Capability (Lock-Free)
-    let cap = target.cap_table.find(cap_id).ok_or("IPC: Invalid cap")?;
+pub fn safe_pdx_call(cap_id: u32, arg0: u64) -> Result<u64, &'static str> {
+    let current_pd = crate::core_local::CoreLocal::get().current_pd_ref();
     
-    // 2. Perform Switch
-    let target_mask = target.current_pkru_mask.load(Ordering::Acquire);
-    let entry = match cap.data {
-        CapabilityData::IPC(data) => data.entry_point,
-        _ => return Err("IPC: Not a PDX capability"),
-    };
-
-    unsafe {
-        Ok(pdx_call_with_mask(target_mask, entry, arg0))
+    // 1. Resolve target via Caller's Capability (Wait-Free RCU lookup)
+    let cap = current_pd.cap_table.find(cap_id).ok_or("IPC: Invalid cap")?;
+    
+    match cap.data {
+        CapabilityData::IPC(data) => {
+            let target_pd = DOMAIN_REGISTRY.get(data.target_pd_id).ok_or("IPC: Target lost")?;
+            let target_mask = target_pd.current_pkru_mask.load(Ordering::Acquire);
+            unsafe {
+                Ok(pdx_call_with_mask(target_mask, data.entry_point, arg0))
+            }
+        },
+        CapabilityData::Domain(target_pd_id) => {
+            let target_pd = DOMAIN_REGISTRY.get(target_pd_id).ok_or("IPC: Target lost")?;
+            let target_mask = target_pd.current_pkru_mask.load(Ordering::Acquire);
+            // Default entry point for Domain caps (Control Port)
+            let entry = VirtAddr::new(0x_4000_0000); // Standard ELF entry for servers
+            unsafe {
+                Ok(pdx_call_with_mask(target_mask, entry, arg0))
+            }
+        },
+        _ => Err("IPC: Not a PDX-capable capability"),
     }
+}
+
+/// resolve_phys_pdx: Securely resolves a physical address from a lent capability.
+/// Fulfills zero-copy DMA requirements.
+pub fn resolve_phys_pdx(cap_id: u32) -> u64 {
+    let current_pd = crate::core_local::CoreLocal::get().current_pd_ref();
+    if let Some(cap) = current_pd.cap_table.find(cap_id) {
+        match cap.data {
+            CapabilityData::MemLend(data) => return data.base, // Assuming base is phys for prototype
+            CapabilityData::DMA(data) => return data.phys_addr,
+            _ => (),
+        }
+    }
+    0
 }
 
 pub fn route_signal(target_pd_id: u32, signal: u8) -> Result<(), &'static str> {

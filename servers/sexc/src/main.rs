@@ -7,12 +7,17 @@ use trampoline::{SIGNAL_STATE, SigAction, sexc_trampoline_entry};
 use pipe::handle_pipe_call;
 use libsys::pdx::{pdx_listen, pdx_reply, pdx_call};
 use libsys::messages::MessageType;
+use libsys::sched::park_on_ring;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // 1. Standalone sexc: Main syscall bridge loop
+    // 1. Spawn Trampoline thread in background (Normally would be done by kernel/init)
+    
+    // 2. Standalone sexc: Main syscall bridge loop
     loop {
-        // Blocks with FLSCHED::park() until PDX call arrives
+        // Standard FLSCHED wait-free park
+        park_on_ring();
+
         let req = pdx_listen(0);
         let msg_ptr = req.arg0 as *const MessageType;
         let msg = unsafe { *msg_ptr };
@@ -43,11 +48,12 @@ fn handle_posix_syscall(func_id: u32, arg0: u64) -> u64 {
     match func_id {
         0 => { // sys_read
             let msg = MessageType::VfsCall { command: 1, offset: 0, size: 4096, buffer_cap: arg0 as u32 };
-            pdx_call(100, 0, &msg as *const _ as u64, 0)
+            // Resolve sexvfs via capability slot 1
+            pdx_call(1, 0, &msg as *const _ as u64, 0)
         },
         1 => { // sys_write
             let msg = MessageType::VfsCall { command: 2, offset: 0, size: 4096, buffer_cap: arg0 as u32 };
-            pdx_call(100, 0, &msg as *const _ as u64, 0)
+            pdx_call(1, 0, &msg as *const _ as u64, 0)
         },
         13 => { // sys_sigaction
             let action = unsafe { *(arg0 as *const SigAction) };
@@ -65,12 +71,13 @@ fn handle_posix_syscall(func_id: u32, arg0: u64) -> u64 {
 fn handle_proc_call(cmd: u32, path_ptr: u64, _arg_ptr: u64) -> (i64, u32) {
     match cmd {
         1 => { // FORK
-            // Simulate fork by spawning same binary
-            (0, 5000)
+            // IPCtax: fork is a PD clone via kernel (Syscall 18)
+            let res = pdx_call(1, 18, 0, 0);
+            (0, res as u32)
         },
         2 => { // EXEC
-            // Call kernel spawn (Syscall 17)
-            let res = pdx_call(1, 17, path_ptr, 0);
+            // Resolve sexnode via capability slot 2
+            let res = pdx_call(2, 1, path_ptr, 0); // TRANSLATE_ELF
             (0, res as u32)
         },
         _ => (-1, 0),

@@ -5,14 +5,15 @@ mod vfs;
 use vfs::handle_vfs_request;
 use libsys::pdx::{pdx_listen, pdx_reply};
 use libsys::messages::MessageType;
+use libsys::sched::park_on_ring;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // sexvfs: Standalone Virtual File System Server
-    // Phase 3: handles VFS operations via pure PDX.
+    // Phase 13.1: park_on_ring refactor.
     loop {
         // Blocks with FLSCHED::park() until VFS request arrives
-        unsafe { core::arch::asm!("syscall", in("rax") 24); }
+        park_on_ring();
 
         let req = pdx_listen(0);
         let msg_ptr = req.arg0 as *const MessageType;
