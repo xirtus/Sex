@@ -1,9 +1,9 @@
-# SexOS Final Release Build System
+# SexOS Final Release Build System (v1.0.0)
 .PHONY: all build-kernel build-servers initrd iso release run-sasos clean
 
 # Configuration
 KERNEL_ELF = target/x86_64-sexos/debug/sex-kernel
-ISO_IMAGE = sexos-release.iso
+ISO_IMAGE = sexos-v1.0.0.iso
 ISO_ROOT = iso_root
 LIMINE_VERSION = v7.x-binary
 SEXPAC = python3 sex-src/bin/sexpac.py
@@ -42,7 +42,7 @@ initrd: build-servers
 limine:
 	@if [ ! -d "limine" ]; then \
 		git clone https://github.com/limine-bootloader/limine.git --branch=$(LIMINE_VERSION) --depth=1; \
-		make -C lim; \
+		make -C limine; \
 	fi
 
 iso: build-kernel initrd limine
@@ -61,7 +61,7 @@ iso: build-kernel initrd limine
 
 release: iso
 	@echo "--------------------------------------------------"
-	@echo "SexOS Production Release: $(ISO_IMAGE) READY."
+	@echo "SexOS Production Release v1.0.0: $(ISO_IMAGE) READY."
 	@echo "--------------------------------------------------"
 
 run-sasos: release
