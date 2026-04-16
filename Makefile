@@ -20,7 +20,10 @@ else
 	CMD_RUN = 
 endif
 
-all: release
+all: docker-release
+
+docker-release:
+	./scripts/clean_build.sh
 
 build-kernel:
 	$(CARGO) build --package sex-kernel --target x86_64-unknown-none
