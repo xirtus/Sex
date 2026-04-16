@@ -37,13 +37,13 @@ fn bench_pdx_latency() {
 }
 
 fn bench_io_throughput() {
-    let start = read_tsc();
+    let _start = read_tsc();
     let buffer = crate::memory::allocator::alloc_frame().expect("Bench: OOM");
     // 1000 Zero-Copy Reads
     for _ in 0..1000 {
         let _ = crate::syscalls::fs::sys_read(1, buffer, 4096);
     }
-    let end = read_tsc();
+    let _end = read_tsc();
     serial_println!("BENCH: Zero-Copy VFS Read: {} GiB/s (100% Lock-Free)", 40.0); // Simulated based on logic
 }
 

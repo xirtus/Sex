@@ -1,5 +1,4 @@
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use core::hint::spin_loop;
 
 pub const MAX_ORDER: usize = 18; // Up to 1 GiB
 pub const PAGE_SIZE: u64 = 4096;

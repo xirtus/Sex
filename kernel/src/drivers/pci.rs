@@ -1,5 +1,4 @@
 use crate::serial_println;
-use alloc::vec::Vec;
 use crate::ipc::DOMAIN_REGISTRY;
 use crate::capability::CapabilityData;
 

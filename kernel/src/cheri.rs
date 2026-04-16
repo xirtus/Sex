@@ -1,4 +1,3 @@
-use x86_64::VirtAddr;
 
 /// SexCapability: A CHERI-inspired 128-bit Software Capability (Fat Pointer).
 /// Provides deterministic, byte-granularity spatial safety and unforgeability.

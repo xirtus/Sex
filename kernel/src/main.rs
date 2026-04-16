@@ -18,10 +18,7 @@ pub static PVH_NAME: &[u8; 4] = b"Xen\0";
 use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
 use core::panic::PanicInfo;
 use sex_kernel::serial_println;
-use alloc::sync::Arc;
-use sex_kernel::capability::ProtectionDomain;
 use sex_kernel::ipc::DOMAIN_REGISTRY;
-use sex_kernel::scheduler::{Task, TaskContext, TaskState};
 use sex_kernel::pd::create::create_protection_domain;
 use x86_64::VirtAddr;
 
@@ -43,8 +40,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // 3. Memory & Virtual Address Space
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
-    let mut mapper = unsafe { sex_kernel::memory::init_sexting(phys_mem_offset) };
-    let mut frame_allocator = unsafe {
+    let mapper = unsafe { sex_kernel::memory::init_sexting(phys_mem_offset) };
+    let frame_allocator = unsafe {
         sex_kernel::memory::BitmapFrameAllocator::init(&boot_info.memory_regions, phys_mem_offset)
     };
 
@@ -71,11 +68,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // 6. Spawn Core System Domains (Isolation Level 1)
     serial_println!("pd: Spawning core services...");
     
-    unsafe {
-        // Root Domain (Slot 0)
-        let root_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(sex_kernel::capability::ProtectionDomain::new(0, 0)));
-        DOMAIN_REGISTRY.insert(0, root_pd);
-    }
+    // Root Domain (Slot 0)
+    let root_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(sex_kernel::capability::ProtectionDomain::new(0, 0)));
+    DOMAIN_REGISTRY.insert(0, root_pd);
 
     let _sext = create_protection_domain("/servers/sext/bin/sext\0", None).expect("sext lost");
     

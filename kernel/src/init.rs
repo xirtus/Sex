@@ -19,12 +19,12 @@ pub fn init() {
     serial_println!("init: Self-Hosting & Lock-Free Invariants: VERIFIED.");
 
     // 1. Spawn Core System Servers
-    let sext = create_protection_domain("/servers/sext/bin/sext\0", None).expect("sext lost");
+    let _sext = create_protection_domain("/servers/sext/bin/sext\0", None).expect("sext lost");
     let sexc = create_protection_domain("/servers/sexc/bin/sexc\0", None).expect("sexc lost");
     let sexvfs = create_protection_domain("/servers/sexvfs/bin/sexvfs\0", None).expect("sexvfs lost");
     let sexdrives = create_protection_domain("/servers/sexdrives/bin/sexdrives\0", None).expect("sexdrives lost");
-    let sexinput = create_protection_domain("/servers/sexinput/bin/sexinput\0", None).expect("sexinput lost");
-    let sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0", None).expect("sexnet lost");
+    let _sexinput = create_protection_domain("/servers/sexinput/bin/sexinput\0", None).expect("sexinput lost");
+    let _sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0", None).expect("sexnet lost");
     let sexdisplay = create_protection_domain("/servers/sexdisplay/bin/sexdisplay\0", None).expect("sexdisplay lost");
     let sexnode = create_protection_domain("/servers/sexnode/bin/sexnode\0", None).expect("sexnode lost");
     let sexstore = create_protection_domain("/servers/sexstore/bin/sexstore\0", None).expect("sexstore lost");

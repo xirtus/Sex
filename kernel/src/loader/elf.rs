@@ -1,9 +1,7 @@
-use crate::memory::allocator::{GLOBAL_ALLOCATOR, PAGE_SIZE};
-use x86_64::{VirtAddr, structures::paging::PageTableFlags};
+use crate::memory::allocator::GLOBAL_ALLOCATOR;
+use x86_64::VirtAddr;
 use crate::serial_println;
-use crate::ipc::safe_pdx_call;
 use crate::ipc::DOMAIN_REGISTRY;
-use crate::capability::{CapabilityData, MemLendCapData};
 
 pub struct ElfLoader;
 
@@ -34,7 +32,7 @@ impl ElfLoader {
         for _ in 0..phnum {
             let p_vaddr = 0x_4000_0000;
             let p_memsz = 0x1000;
-            let p_flags = 5; // R-X
+            let _p_flags = 5; // R-X
 
             // 4. Allocate from Phase-7 Lock-Free Buddy
             let order = 0; // 4 KiB

@@ -1,5 +1,4 @@
 use core::alloc::Layout;
-use core::ptr::NonNull;
 use spin::Mutex;
 use alloc::vec::Vec;
 
@@ -24,7 +23,6 @@ impl Slab {
 
     /// Refills the slab by allocating a new 4KiB page.
     pub fn refill(&mut self, allocator: &mut impl x86_64::structures::paging::FrameAllocator<x86_64::structures::paging::Size4KiB>) {
-        use x86_64::structures::paging::FrameAllocator;
         if let Some(frame) = allocator.allocate_frame() {
             // In a SASOS, we can assume identity mapping or use the phys_offset
             let page_ptr = (frame.start_address().as_u64() + 0x_0000_0000_0000) as *mut u8; // Placeholder offset

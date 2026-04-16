@@ -1,5 +1,5 @@
 use crate::ipc::messages::MessageType;
-use crate::ipc::{safe_pdx_call, DOMAIN_REGISTRY};
+use crate::ipc::safe_pdx_call;
 
 /// kernel/src/syscalls/fork.rs
 /// Phase 11: fork/exec routing via PDX to standalone sexc.

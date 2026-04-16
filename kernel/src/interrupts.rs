@@ -1,18 +1,11 @@
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use crate::serial_println;
 use crate::gdt;
-use crate::capability::ProtectionDomain;
 use crate::ipc_ring::RingBuffer;
-use crate::ipc_ring::SpscRing;
 use lazy_static::lazy_static;
-use spin::Mutex;
 
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
-use crate::ipc::DOMAIN_REGISTRY;
 use crate::ipc::messages::MessageType;
-use x86_64::VirtAddr;
 
 /// The event structure for a page fault.
 #[derive(Debug, Clone, Copy)]
@@ -63,19 +56,19 @@ pub fn register_irq_route(vector: u8, pd_id: u32) {
 lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
+        idt.breakpoint.set_handler_fn(breakpoint_handler);
         unsafe {
-            idt.breakpoint.set_handler_addr(VirtAddr::new(breakpoint_handler as *const () as u64));
-            idt.double_fault.set_handler_addr(VirtAddr::new(double_fault_handler as *const () as u64))
+            idt.double_fault.set_handler_fn(double_fault_handler)
                 .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
-            idt.page_fault.set_handler_addr(VirtAddr::new(page_fault_handler as *const () as u64));
-            
-            // Timer at 0x20
-            idt[0x20].set_handler_addr(VirtAddr::new(timer_interrupt_handler as *const () as u64));
-            
-            // Map hardware vectors (0x21 to 0x30) to generic_irq_handler
-            idt[0x21].set_handler_addr(VirtAddr::new(keyboard_interrupt_handler as *const () as u64));
-            idt[0x22].set_handler_addr(VirtAddr::new(generic_irq_handler as *const () as u64)); 
         }
+        idt.page_fault.set_handler_fn(page_fault_handler);
+
+        // Timer at 0x20
+        idt[0x20].set_handler_fn(timer_interrupt_handler);
+
+        // Map hardware vectors (0x21 to 0x30) to generic_irq_handler
+        idt[0x21].set_handler_fn(keyboard_interrupt_handler);
+        idt[0x22].set_handler_fn(generic_irq_handler); 
         idt
     };
 }

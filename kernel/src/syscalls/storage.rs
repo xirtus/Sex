@@ -1,6 +1,6 @@
 use crate::ipc::messages::MessageType;
 use crate::ipc::{safe_pdx_call, DOMAIN_REGISTRY};
-use crate::capability::{CapabilityData, MemLendCapData, DmaCapData};
+use crate::capability::{CapabilityData, MemLendCapData};
 use crate::core_local::CoreLocal;
 
 /// kernel/src/syscalls/storage.rs

@@ -1,4 +1,3 @@
-use crate::capability::NodeCapData;
 
 /// IPCtax-compliant Message structures for Driver/VFS interaction.
 /// 100% Zero-Copy via Lent Capabilities.

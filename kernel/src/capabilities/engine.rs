@@ -1,4 +1,4 @@
-use crate::capability::{ProtectionDomain, CapabilityData, NodeCapData, CapabilityKind};
+use crate::capability::{ProtectionDomain, CapabilityData, NodeCapData};
 use crate::serial_println;
 
 pub struct CapEngine;

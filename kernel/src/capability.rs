@@ -1,6 +1,5 @@
-use alloc::vec::Vec;
 use x86_64::VirtAddr;
-use core::sync::atomic::{AtomicU32, AtomicU8, Ordering, AtomicPtr};
+use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr};
 use crate::cheri::SexCapability;
 use core::ptr;
 use alloc::collections::BTreeMap;

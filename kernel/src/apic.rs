@@ -1,6 +1,6 @@
 use acpi::{AcpiHandler, AcpiTables, PhysicalMapping};
 use core::ptr::NonNull;
-use x86_64::{PhysAddr, VirtAddr};
+use x86_64::VirtAddr;
 use crate::serial_println;
 use alloc::vec::Vec;
 use spin::Mutex;

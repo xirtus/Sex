@@ -1,6 +1,5 @@
 use crate::ipc::messages::MessageType;
-use crate::ipc::{safe_pdx_call, DOMAIN_REGISTRY};
-use crate::core_local::CoreLocal;
+use crate::ipc::safe_pdx_call;
 
 /// kernel/src/syscalls/pipe.rs
 /// Phase 11: POSIX pipe routing via PDX to standalone sexc.

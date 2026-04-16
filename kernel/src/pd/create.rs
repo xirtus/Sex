@@ -2,7 +2,6 @@ use crate::capability::ProtectionDomain;
 use crate::ipc::DOMAIN_REGISTRY;
 use crate::loader::elf::ElfLoader;
 use crate::serial_println;
-use crate::memory::allocator::GLOBAL_ALLOCATOR;
 use crate::pku;
 use crate::capabilities::engine::CapEngine;
 

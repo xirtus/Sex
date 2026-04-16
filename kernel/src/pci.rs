@@ -32,7 +32,7 @@ impl PciDevice {
             let cap_header = self.read_u32(cap_ptr);
             if (cap_header & 0xFF) == 0x11 {
                 // MSI-X Found
-                let msg_ctrl = (cap_header >> 16) as u16;
+                let _msg_ctrl = (cap_header >> 16) as u16;
                 let table_info = self.read_u32(cap_ptr + 4);
                 let table_bir = (table_info & 0x7) as u8;
                 let table_offset = table_info & !0x7;

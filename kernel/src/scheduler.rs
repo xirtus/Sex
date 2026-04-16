@@ -1,5 +1,4 @@
 use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr};
-use x86_64::VirtAddr;
 use crate::capability::ProtectionDomain;
 use crate::ipc_ring::RingBuffer;
 use core::ptr;

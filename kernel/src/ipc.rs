@@ -52,7 +52,7 @@ pub static DOMAIN_REGISTRY: DomainRegistry = DomainRegistry::new();
 
 /// The hardware-accelerated PDX primitive with explicit mask.
 pub unsafe fn pdx_call_with_mask(target_pkru: u32, entry_point: VirtAddr, arg0: u64) -> u64 {
-    let old_pkru = Pkru::read();
+    let _old_pkru = Pkru::read();
     let result: u64;
 
     core::arch::asm!(

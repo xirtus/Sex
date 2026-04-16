@@ -7,7 +7,7 @@ use crate::core_local::CoreLocal;
 /// Phase 4: Bridge for Network operations via PDX.
 /// Maps kernel-level NET requests to the standalone sexnet server.
 
-pub fn sys_socket(net_cap_id: u32, domain: i32, net_type: i32, protocol: i32) -> i64 {
+pub fn sys_socket(net_cap_id: u32, _domain: i32, _net_type: i32, _protocol: i32) -> i64 {
     route_net_call(1, net_cap_id, 0, 0, 0, 0) // Treat socket_cap as net_cap_id for initial socket creation
 }
 

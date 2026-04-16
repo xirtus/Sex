@@ -1,5 +1,4 @@
 use crate::ipc::messages::MessageType;
-use crate::ipc::DOMAIN_REGISTRY;
 use crate::ipc::safe_pdx_call;
 
 /// forward_page_fault: Routes #PF to the sext server.
