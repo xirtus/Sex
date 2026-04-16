@@ -1,6 +1,6 @@
 use core::alloc::Layout;
 use core::ptr::NonNull;
-use spin::Mutex;
+use conquer_once::spin::Mutex;
 use alloc::vec::Vec;
 
 /// A simple Slab Allocator for fixed-size kernel objects.

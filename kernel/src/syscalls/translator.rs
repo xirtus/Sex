@@ -62,8 +62,6 @@ pub fn sys_translate_and_exec(translator_cap_id: u32, path_ptr: u64, code_vaddr:
     }
 }
 
-pub fn sys_load_linux_driver(translator_cap_id: u32, driver_name_ptr: u64) -> i64 {
-    // 1. Construct DriverLoadCall message
     let msg = MessageType::DriverLoadCall {
         command: 1, // LOAD_LINUX_DRIVER
         driver_name_ptr,
@@ -85,29 +83,3 @@ pub fn sys_load_linux_driver(translator_cap_id: u32, driver_name_ptr: u64) -> i6
         },
         Err(_) => -1,
     }
-}
-
-pub fn sys_load_linux_driver(translator_cap_id: u32, driver_name_ptr: u64) -> i64 {
-    // 1. Construct DriverLoadCall message
-    let msg = MessageType::DriverLoadCall {
-        command: 1, // LOAD_LINUX_DRIVER
-        driver_name_ptr,
-    };
-
-    // 2. Dispatch via pure PDX
-    match safe_pdx_call(translator_cap_id, &msg as *const _ as u64) {
-        Ok(res_ptr) => {
-            let reply = unsafe { *(res_ptr as *const MessageType) };
-            if let MessageType::DriverLoadReply { status, driver_pd_id } = reply {
-                if status == 0 {
-                    driver_pd_id as i64
-                } else {
-                    -1
-                }
-            } else {
-                -1
-            }
-        },
-        Err(_) => -1,
-    }
-}

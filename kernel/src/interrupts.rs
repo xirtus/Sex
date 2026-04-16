@@ -5,7 +5,7 @@ use crate::capability::ProtectionDomain;
 use crate::ipc_ring::RingBuffer;
 use crate::ipc_ring::SpscRing;
 use lazy_static::lazy_static;
-use spin::Mutex;
+use conquer_once::spin::Mutex;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};

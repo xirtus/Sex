@@ -3,7 +3,7 @@ use x86_64::{
     structures::paging::{FrameAllocator, Mapper, OffsetPageTable, PageTable, PhysFrame, Size4KiB, Page, PageTableFlags},
     PhysAddr, VirtAddr,
 };
-use spin::Mutex;
+use conquer_once::spin::Mutex;
 
 /// Initialize a new OffsetPageTable.
 pub unsafe fn init_sexting(physical_memory_offset: VirtAddr) -> OffsetPageTable<'static> {

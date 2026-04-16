@@ -3,7 +3,7 @@ use core::ptr::NonNull;
 use x86_64::{PhysAddr, VirtAddr};
 use crate::serial_println;
 use alloc::vec::Vec;
-use spin::Mutex;
+use conquer_once::spin::Mutex;
 use lazy_static::lazy_static;
 
 #[derive(Clone, Copy)]
