@@ -129,7 +129,6 @@ pub struct ProtectionDomain {
     pub signal_ring: *mut RingBuffer<u8, 32>,
     pub message_ring: *mut RingBuffer<MessageType, 256>,
     pub main_task: AtomicPtr<crate::scheduler::Task>,
-    pub sexc_state: AtomicPtr<crate::servers::sexc::SexcState>,
 }
 
 impl ProtectionDomain {
@@ -147,7 +146,6 @@ impl ProtectionDomain {
             signal_ring: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(RingBuffer::new())),
             message_ring: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(RingBuffer::new())),
             main_task: AtomicPtr::new(ptr::null_mut()),
-            sexc_state: AtomicPtr::new(ptr::null_mut()),
         }
     }
 

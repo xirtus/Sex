@@ -11,7 +11,7 @@ pub fn sys_translate_and_exec(translator_cap_id: u32, path_ptr: u64, code_vaddr:
     let current_pd = CoreLocal::get().current_pd_ref();
     
     // 1. Identify target via Capability
-    let trans_cap = match current_pd.cap_table.find(translator_cap_id) {
+    let trans_cap = match unsafe { &*current_pd.cap_table }.find(translator_cap_id) {
         Some(cap) => cap,
         None => return -1,
     };
@@ -62,6 +62,8 @@ pub fn sys_translate_and_exec(translator_cap_id: u32, path_ptr: u64, code_vaddr:
     }
 }
 
+pub fn sys_translate_driver(translator_cap_id: u32, driver_name_ptr: u64) -> i64 {
+    // 1. Construct TranslatorCall message
     let msg = MessageType::DriverLoadCall {
         command: 1, // LOAD_LINUX_DRIVER
         driver_name_ptr,
@@ -83,3 +85,4 @@ pub fn sys_translate_and_exec(translator_cap_id: u32, path_ptr: u64, code_vaddr:
         },
         Err(_) => -1,
     }
+}

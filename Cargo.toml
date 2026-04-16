@@ -1,7 +1,15 @@
 [workspace]
 members = [
     "kernel",
-    "sexc",
+    "servers/sexc",
+    "servers/sexvfs",
+    "servers/sexdrives",
+    "servers/sexinput",
+    "servers/sexnet",
+    "servers/sexdisplay",
+    "servers/sexnode",
+    "servers/sexstore",
+    "servers/sexgemini",
 ]
 resolver = "2"
 

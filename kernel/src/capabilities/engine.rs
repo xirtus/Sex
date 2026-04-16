@@ -28,7 +28,7 @@ impl CapEngine {
 
     pub fn verify_signal_rights(pd: &ProtectionDomain, cap_id: u64) -> bool {
         // RCU Lookup: Wait-Free
-        if let Some(cap) = pd.cap_table.find(cap_id as u32) {
+        if let Some(cap) = unsafe { &*pd.cap_table }.find(cap_id as u32) {
             match cap.data {
                 CapabilityData::Interrupt(_) | CapabilityData::Domain(_) => return true,
                 _ => (),

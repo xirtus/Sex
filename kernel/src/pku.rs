@@ -21,7 +21,7 @@ pub fn is_pku_supported() -> bool {
 /// PKU support must be verified with `is_pku_supported()` before calling this.
 pub unsafe fn enable_pku() {
     let mut flags = Cr4::read();
-    flags.insert(Cr4Flags::PROTECTION_KEY);
+    flags.insert(Cr4Flags::PROTECTION_KEY_USER);
     Cr4::write(flags);
     serial_println!("PKU: Protection Keys enabled in CR4.");
 }
@@ -76,4 +76,11 @@ impl Pkru {
         
         unsafe { Self::write(pkru); }
     }
+}
+
+pub fn init_pd_pkru(key: u8) -> u32 {
+    let mut pkru = 0xFFFF_FFFF;
+    let shift = key * 2;
+    pkru &= !(0b11 << shift);
+    pkru
 }

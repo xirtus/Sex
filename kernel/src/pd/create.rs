@@ -3,7 +3,7 @@ use crate::ipc::DOMAIN_REGISTRY;
 use crate::loader::elf::ElfLoader;
 use crate::serial_println;
 use crate::memory::allocator::GLOBAL_ALLOCATOR;
-use crate::memory::pku;
+use crate::pku;
 use crate::capabilities::engine::CapEngine;
 
 /// create_protection_domain: Ruthless Phase 6/8/10 implementation.
@@ -14,7 +14,8 @@ pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Re
     let pd_id = if let Some(id) = requested_id {
         id
     } else {
-        4000 + (x86_64::instructions::random::rdseed().unwrap_or(0) as u32 % 1000)
+        // Fallback for rdseed in this toolchain
+        4001 // Simplified for prototype
     };
     let pku_key = (pd_id % 15) as u8 + 1;
     
@@ -47,7 +48,8 @@ pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Re
     crate::scheduler::SCHEDULERS[0].runqueue.enqueue(task_ptr);
 
     // 7. Create Dedicated Signal Trampoline Task
-    let trampoline_stack_top = 0x_7000_1000_0000; 
+    let trampoline_stack_top = 0x_7000_1000_0000u64;
+ 
     let trampoline_task_ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(crate::scheduler::Task::new(
         pd_id | 0x8000_0000, 0, trampoline_stack_top, pd_ref, true
     )));

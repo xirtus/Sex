@@ -24,7 +24,7 @@ pub fn boot_aps() {
 
     // 1. Write the kernel entry point for APs to a fixed location
     unsafe {
-        *(AP_ENTRY_PTR as *mut u64) = ap_kernel_entry as u64;
+        *(AP_ENTRY_PTR as *mut u64) = ap_kernel_entry as *const () as u64;
     }
 
     // 2. Send INIT IPI to all APs
@@ -51,19 +51,18 @@ pub fn boot_aps() {
 pub extern "C" fn ap_kernel_entry() -> ! {
     // 1. Identify current core
     let lapic_id = unsafe { 
-        let lapic_virt = apic::LAPIC_ADDR.lock().unwrap();
+        let lapic_virt = VirtAddr::new(apic::LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire));
         let lapic_ptr = lapic_virt.as_u64() as *const u32;
         (lapic_ptr.offset(0x020 / 4).read_volatile() >> 24) as u8
     };
 
     serial_println!("SMP: Core (LAPIC ID {}) online.", lapic_id);
 
-    // 2. Initialize Core-Local storage and Scheduler
+    // 2. Initialize Core-Local storage
     // In a real system, we'd find the core_id from LAPIC_ID mapping
     let core_id = lapic_id as usize; 
     unsafe {
-        crate::core_local::CoreLocal::init(core_id);
-        crate::scheduler::init_core(core_id);
+        crate::core_local::CoreLocal::init(core_id as u32);
     }
 
     // 3. Enable Interrupts and enter the scheduler loop

@@ -12,12 +12,20 @@ lazy_static! {
             const STACK_SIZE: usize = 4096 * 5;
             static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
 
-            let stack_start = VirtAddr::from_ptr(unsafe { &STACK });
-            let stack_end = stack_start + STACK_SIZE;
+            let stack_start = VirtAddr::from_ptr(unsafe { &raw const STACK });
+            let stack_end = stack_start + (STACK_SIZE as u64);
             stack_end
         };
         tss
     };
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Selectors {
+    pub code_selector: SegmentSelector,
+    pub tss_selector: SegmentSelector,
+    pub user_data_selector: SegmentSelector,
+    pub user_code_selector: SegmentSelector,
 }
 
 lazy_static! {
@@ -42,17 +50,6 @@ lazy_static! {
     };
 }
 
-pub struct Selectors {
-    pub code_selector: SegmentSelector,
-    pub tss_selector: SegmentSelector,
-    pub user_data_selector: SegmentSelector,
-    pub user_code_selector: SegmentSelector,
-}
-
-pub fn get_selectors() -> &'static Selectors {
-    &GDT.1
-}
-
 pub fn init() {
     use x86_64::instructions::tables::load_tss;
     use x86_64::instructions::segmentation::{CS, Segment};
@@ -62,4 +59,8 @@ pub fn init() {
         CS::set_reg(GDT.1.code_selector);
         load_tss(GDT.1.tss_selector);
     }
+}
+
+pub fn get_selectors() -> Selectors {
+    GDT.1
 }

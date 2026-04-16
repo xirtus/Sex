@@ -1,0 +1,1353 @@
+=== Starting Clean Build Process at Wed Apr 15 21:58:18 CDT 2026 ===
+[*] Tearing down old Docker environment...
+ID						RECLAIMABLE	SIZE		LAST ACCESSED
+qten8n1vyfol4a2s746hv5zdh               	true 		1.546GB   	About an hour ago
+p1d1bww8thuqp4husrfcxnywz               	true 	1.587GB   	6 minutes ago
+dtat8kgl2biae3rn3xmflrlm1*              	true 	1.437GB   	4 minutes ago
+ladr0w9d0hay8tvyo9btr7hie               	true 	1.587GB   	4 minutes ago
+jgby4c7wcyuzr68g1ippvf3qz               	true 	1.437GB   	2 hours ago
+n7kpkwuq70gfjouayn602lm1s*              	true 	0B        	4 minutes ago
+qmvekxh9pmlgfup4m8i4fm6tz*              	true 	812B      	4 minutes ago
+ey706oe5ya0duz47ueh741lbc               	true 	1.443GB   	56 minutes ago
+nnqp3dvputi2fykczf9lul7tu               	true 	1.437GB   	2 hours ago
+1yg0w8bpq8h5ap67b8n36gcrp               	true 	0B        	56 minutes ago
+vmiyfer7q9eiuedfprsbpnsa5               	true 	0B        	Less than a second ago
+jdw9wh0yg3wg4h6q5dhew9592               	true 	0B        	4 minutes ago
+nha6xzszdqq6l8usp22fqzdwn               	true 	0B        	6 minutes ago
+z4mb3e7uf00nh7wlkqt5jqxkx               	true 	0B        	Less than a second ago
+uo4wor4v9ankiiwc7mfv3w48n               	true 	154.6kB   	Less than a second ago
+qk0pobuyfept75zmtwg0aojzf               	true 	154.6kB   	56 minutes ago
+xoohp3330us00s118x42i9gw2               	true 	154.6kB   	Less than a second ago
+zi5jkxk4i1pghhqgaeb8ry52m               	true 	154.6kB   	4 minutes ago
+70sqajihvf6ypm8o2lqkcpyvt               	true 	154.6kB   	6 minutes ago
+luh77k9vnu61j0icgvoqd1z7f               	true 	151MB     	56 minutes ago
+fs0x272migewmoe6mnbn3cld5               	true 	151MB     	6 minutes ago
+3ls5s21zfpx3mc6y863x84qj6               	true 	408.8MB   	4 minutes ago
+qkp9q9pv5rkjw7vb8nicnjlp9               	true 	67.02MB   	Less than a second ago
+z04od5vrdtuwxuvwk362eotpy               	true 	67.02MB   	Less than a second ago
+blrr3yfnbrmjll36s8uwppvsh               	true 	322.8MB   	4 minutes ago
+4zntxf1c328xy2jkskkx59b30               	true 	945.8MB   	Less than a second ago
+9wio0rua90j36fuw3px5r1dbh               	true 	945.8MB   	Less than a second ago
+2ljyg5i0xiwepwpjzclnegcpi               	true 	0B        	Less than a second ago
+vggr2ft9ontqk60smwp4k4u1g               	true 	0B        	Less than a second ago
+17r5ae1a75x928le7iburtks3               	true 	0B        	Less than a second ago
+bji398aly90zjovjvyc5pe5r4               	true 	0B        	Less than a second ago
+qy5viig13yog4f0e4y9nnwle2               	true 	0B        	Less than a second ago
+ik0gw1syw77dzcqbvdtfm0deh               	true 	0B        	Less than a second ago
+Total:	13.53GB
+[*] Rebuilding sexos-builder:latest...
+#0 building with "orbstack" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.64kB done
+#1 DONE 0.1s
+
+#2 [auth] rustlang/rust:pull token for registry-1.docker.io
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/rustlang/rust:nightly-bullseye
+#3 DONE 1.8s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 2B done
+#4 DONE 0.0s
+
+#5 [internal] load build context
+#5 ...
+
+#6 [1/6] FROM docker.io/rustlang/rust:nightly-bullseye@sha256:f2578d9e44cd7d1c828cc0d56278b01b8ee1529d39e55076c818b95a114b4f78
+#6 resolve docker.io/rustlang/rust:nightly-bullseye@sha256:f2578d9e44cd7d1c828cc0d56278b01b8ee1529d39e55076c818b95a114b4f78 0.1s done
+#6 sha256:abba7d1645249637f5dabf19e410b83e96696c6d3243a0346c0ab881eb5a36f0 1.26kB / 1.26kB done
+#6 sha256:8be6c3b366bb4d588db2a3df2ac57c7a6dfe3bf9a068043dc8e2016ced502cac 4.80kB / 4.80kB done
+#6 sha256:f2578d9e44cd7d1c828cc0d56278b01b8ee1529d39e55076c818b95a114b4f78 3.14kB / 3.14kB done
+#6 DONE 0.4s
+
+#5 [internal] load build context
+#5 transferring context: 502.59MB 5.0s
+#5 transferring context: 1.06GB 10.0s
+#5 ...
+
+#7 [2/6] RUN apt-get update && apt-get install -y --no-install-recommends     qemu-system-x86     lld     clang     make     curl     git     python3     python3-pip     xorriso     binutils     && rm -rf /var/lib/apt/lists/*
+#7 0.801 Get:1 http://deb.debian.org/debian bullseye InRelease [75.1 kB]
+#7 0.945 Get:2 http://deb.debian.org/debian-security bullseye-security InRelease [27.2 kB]
+#7 1.004 Get:3 http://deb.debian.org/debian bullseye-updates InRelease [44.0 kB]
+#7 1.121 Get:4 http://deb.debian.org/debian bullseye/main arm64 Packages [7955 kB]
+#7 2.549 Get:5 http://deb.debian.org/debian-security bullseye-security/main arm64 Packages [442 kB]
+#7 2.628 Get:6 http://deb.debian.org/debian bullseye-updates/main arm64 Packages [16.3 kB]
+#7 4.388 Fetched 8559 kB in 4s (2101 kB/s)
+#7 4.388 Reading package lists...
+#7 5.389 Reading package lists...
+#7 6.388 Building dependency tree...
+#7 6.638 Reading state information...
+#7 7.299 binutils is already the newest version (2.35.2-2).
+#7 7.299 binutils set to manually installed.
+#7 7.299 make is already the newest version (4.3-4.1).
+#7 7.299 python3 is already the newest version (3.9.2-3).
+#7 7.299 python3 set to manually installed.
+#7 7.299 curl is already the newest version (7.74.0-1.3+deb11u16).
+#7 7.299 git is already the newest version (1:2.30.2-1+deb11u5).
+#7 7.299 The following additional packages will be installed:
+#7 7.299   clang-11 ipxe-qemu iso-codes libaio1 libasound2 libasound2-data libbrlapi0.8
+#7 7.299   libburn4 libcacard0 libcap2 libcap2-bin libcapstone4 libclang-common-11-dev
+#7 7.299   libclang-cpp11 libclang1-11 libdaxctl1 libdrm-common libdrm2 libdw1
+#7 7.299   libepoxy0 libexecs0 libfdt1 libgbm1 libgc1 libgstreamer-plugins-base1.0-0
+#7 7.299   libgstreamer1.0-0 libibverbs1 libisoburn1 libisofs6 libjte2 libkmod2
+#7 7.299   libllvm11 libndctl6 libnl-3-200 libnl-route-3-200 libnspr4 libnss3
+#7 7.299   libobjc-10-dev libobjc4 libopus0 liborc-0.4-0 libpcsclite1 libpmem1
+#7 7.300   librdmacm1 libslirp0 libspice-server1 libunwind8 liburing1 libusb-1.0-0
+#7 7.301   libusbredirparser1 libvdeplug2 libvirglrenderer1 libwayland-server0 libz3-4
+#7 7.301   lld-11 python-pip-whl python3-pkg-resources python3-setuptools python3-wheel
+#7 7.302   qemu-system-common qemu-system-data seabios
+#7 7.304 Suggested packages:
+#7 7.304   clang-11-doc isoquery libasound2-plugins alsa-utils libvisual-0.4-plugins
+#7 7.304   gstreamer1.0-tools opus-tools pcscd gstreamer1.0-plugins-ugly
+#7 7.304   python-setuptools-doc samba vde2 qemu-block-extra xorriso-tcltk jigit cdck
+#7 7.304 Recommended packages:
+#7 7.304   llvm-11-dev libomp-11-dev alsa-ucm-conf alsa-topology-conf libpam-cap
+#7 7.304   gstreamer1.0-plugins-base ibverbs-providers gstreamer1.0-libav
+#7 7.304   gstreamer1.0-plugins-good build-essential python3-dev qemu-system-gui
+#7 7.304   qemu-utils ovmf
+#7 8.106 The following NEW packages will be installed:
+#7 8.106   clang clang-11 ipxe-qemu iso-codes libaio1 libasound2 libasound2-data
+#7 8.106   libbrlapi0.8 libburn4 libcacard0 libcap2 libcap2-bin libcapstone4
+#7 8.106   libclang-common-11-dev libclang-cpp11 libclang1-11 libdaxctl1 libdrm-common
+#7 8.106   libdrm2 libdw1 libepoxy0 libexecs0 libfdt1 libgbm1 libgc1
+#7 8.106   libgstreamer-plugins-base1.0-0 libgstreamer1.0-0 libibverbs1 libisoburn1
+#7 8.106   libisofs6 libjte2 libkmod2 libllvm11 libndctl6 libnl-3-200 libnl-route-3-200
+#7 8.106   libnspr4 libnss3 libobjc-10-dev libobjc4 libopus0 liborc-0.4-0 libpcsclite1
+#7 8.106   libpmem1 librdmacm1 libslirp0 libspice-server1 libunwind8 liburing1
+#7 8.106   libusb-1.0-0 libusbredirparser1 libvdeplug2 libvirglrenderer1
+#7 8.106   libwayland-server0 libz3-4 lld lld-11 python-pip-whl python3-pip
+#7 8.106   python3-pkg-resources python3-setuptools python3-wheel qemu-system-common
+#7 8.106   qemu-system-data qemu-system-x86 seabios xorriso
+#7 8.256 0 upgraded, 67 newly installed, 0 to remove and 13 not upgraded.
+#7 8.256 Need to get 63.6 MB of archives.
+#7 8.256 After this operation, 321 MB of additional disk space will be used.
+#7 8.256 Get:1 http://deb.debian.org/debian bullseye/main arm64 libz3-4 arm64 4.8.10-1 [6117 kB]
+#7 9.055 Get:2 http://deb.debian.org/debian bullseye/main arm64 libllvm11 arm64 1:11.0.1-2 [14.7 MB]
+#7 ...
+
+#5 [internal] load build context
+#5 transferring context: 1.27GB 15.1s
+#5 transferring context: 1.61GB 19.7s done
+#5 DONE 20.7s
+
+#7 [2/6] RUN apt-get update && apt-get install -y --no-install-recommends     qemu-system-x86     lld     clang     make     curl     git     python3     python3-pip     xorriso     binutils     && rm -rf /var/lib/apt/lists/*
+#7 11.72 Get:3 http://deb.debian.org/debian bullseye/main arm64 libclang-cpp11 arm64 1:11.0.1-2 [7957 kB]
+#7 12.42 Get:4 http://deb.debian.org/debian bullseye/main arm64 libgc1 arm64 1:8.0.4-3 [232 kB]
+#7 12.52 Get:5 http://deb.debian.org/debian bullseye/main arm64 libobjc4 arm64 10.2.1-6 [38.7 kB]
+#7 12.60 Get:6 http://deb.debian.org/debian bullseye/main arm64 libobjc-10-dev arm64 10.2.1-6 [165 kB]
+#7 12.60 Get:7 http://deb.debian.org/debian bullseye/main arm64 libclang-common-11-dev arm64 1:11.0.1-2 [3470 kB]
+#7 13.19 Get:8 http://deb.debian.org/debian bullseye/main arm64 libclang1-11 arm64 1:11.0.1-2 [4553 kB]
+#7 14.27 Get:9 http://deb.debian.org/debian bullseye/main arm64 clang-11 arm64 1:11.0.1-2 [105 kB]
+#7 14.31 Get:10 http://deb.debian.org/debian bullseye/main arm64 clang arm64 1:11.0-51+nmu5 [8872 B]
+#7 14.36 Get:11 http://deb.debian.org/debian bullseye/main arm64 ipxe-qemu all 1.0.0+git-20190125.36a4c85-5.1 [766 kB]
+#7 14.49 Get:12 http://deb.debian.org/debian bullseye/main arm64 iso-codes all 4.6.0-1 [2824 kB]
+#7 14.79 Get:13 http://deb.debian.org/debian bullseye/main arm64 libaio1 arm64 0.3.112-9 [12.3 kB]
+#7 14.79 Get:14 http://deb.debian.org/debian-security bullseye-security/main arm64 libasound2-data all 1.2.4-1.1+deb11u1 [38.4 kB]
+#7 14.79 Get:15 http://deb.debian.org/debian-security bullseye-security/main arm64 libasound2 arm64 1.2.4-1.1+deb11u1 [326 kB]
+#7 14.82 Get:16 http://deb.debian.org/debian bullseye/main arm64 libbrlapi0.8 arm64 6.3+dfsg-1+deb11u1 [101 kB]
+#7 14.83 Get:17 http://deb.debian.org/debian bullseye/main arm64 libburn4 arm64 1.5.2-1 [153 kB]
+#7 14.85 Get:18 http://deb.debian.org/debian bullseye/main arm64 libnspr4 arm64 2:4.29-1 [105 kB]
+#7 14.91 Get:19 http://deb.debian.org/debian-security bullseye-security/main arm64 libnss3 arm64 2:3.61-1+deb11u5 [1210 kB]
+#7 15.01 Get:20 http://deb.debian.org/debian bullseye/main arm64 libpcsclite1 arm64 1.9.1-1 [59.5 kB]
+#7 15.02 Get:21 http://deb.debian.org/debian bullseye/main arm64 libcacard0 arm64 1:2.8.0-3 [89.4 kB]
+#7 15.03 Get:22 http://deb.debian.org/debian-security bullseye-security/main arm64 libcap2 arm64 1:2.44-1+deb11u1 [23.8 kB]
+#7 15.03 Get:23 http://deb.debian.org/debian-security bullseye-security/main arm64 libcap2-bin arm64 1:2.44-1+deb11u1 [32.6 kB]
+#7 15.03 Get:24 http://deb.debian.org/debian bullseye/main arm64 libcapstone4 arm64 4.0.2-3 [534 kB]
+#7 15.08 Get:25 http://deb.debian.org/debian bullseye/main arm64 libkmod2 arm64 28-1 [52.5 kB]
+#7 15.08 Get:26 http://deb.debian.org/debian bullseye/main arm64 libdaxctl1 arm64 71.1-1 [17.4 kB]
+#7 15.08 Get:27 http://deb.debian.org/debian bullseye/main arm64 libdrm-common all 2.4.104-1 [14.9 kB]
+#7 15.08 Get:28 http://deb.debian.org/debian bullseye/main arm64 libdrm2 arm64 2.4.104-1 [41.3 kB]
+#7 15.14 Get:29 http://deb.debian.org/debian bullseye/main arm64 libdw1 arm64 0.183-1 [219 kB]
+#7 15.15 Get:30 http://deb.debian.org/debian bullseye/main arm64 libepoxy0 arm64 1.5.5-1 [197 kB]
+#7 15.17 Get:31 http://deb.debian.org/debian bullseye/main arm64 libexecs0 arm64 1.3-1 [8524 B]
+#7 15.24 Get:32 http://deb.debian.org/debian bullseye/main arm64 libfdt1 arm64 1.6.0-1 [20.8 kB]
+#7 15.26 Get:33 http://deb.debian.org/debian bullseye/main arm64 libwayland-server0 arm64 1.18.0-2~exp1.1 [33.7 kB]
+#7 15.34 Get:34 http://deb.debian.org/debian bullseye/main arm64 libgbm1 arm64 20.3.5-1 [72.5 kB]
+#7 15.41 Get:35 http://deb.debian.org/debian bullseye/main arm64 libunwind8 arm64 1.3.2-2 [50.5 kB]
+#7 15.48 Get:36 http://deb.debian.org/debian-security bullseye-security/main arm64 libgstreamer1.0-0 arm64 1.18.4-2.1+deb11u1 [2132 kB]
+#7 15.64 Get:37 http://deb.debian.org/debian bullseye/main arm64 liborc-0.4-0 arm64 1:0.4.32-1 [176 kB]
+#7 15.65 Get:38 http://deb.debian.org/debian-security bullseye-security/main arm64 libgstreamer-plugins-base1.0-0 arm64 1.18.4-2+deb11u4 [2077 kB]
+#7 15.89 Get:39 http://deb.debian.org/debian bullseye/main arm64 libnl-3-200 arm64 3.4.0-1+b1 [60.6 kB]
+#7 15.89 Get:40 http://deb.debian.org/debian bullseye/main arm64 libnl-route-3-200 arm64 3.4.0-1+b1 [149 kB]
+#7 15.89 Get:41 http://deb.debian.org/debian bullseye/main arm64 libibverbs1 arm64 33.2-1 [56.1 kB]
+#7 15.94 Get:42 http://deb.debian.org/debian bullseye/main arm64 libjte2 arm64 1.22-3 [29.0 kB]
+#7 15.95 Get:43 http://deb.debian.org/debian bullseye/main arm64 libisofs6 arm64 1.5.2-1 [191 kB]
+#7 15.96 Get:44 http://deb.debian.org/debian bullseye/main arm64 libisoburn1 arm64 1.5.2-1 [360 kB]
+#7 16.04 Get:45 http://deb.debian.org/debian bullseye/main arm64 libndctl6 arm64 71.1-1 [50.8 kB]
+#7 16.04 Get:46 http://deb.debian.org/debian bullseye/main arm64 libopus0 arm64 1.3.1-0.1 [169 kB]
+#7 16.11 Get:47 http://deb.debian.org/debian bullseye/main arm64 libpmem1 arm64 1.10-2+deb11u1 [43.9 kB]
+#7 16.18 Get:48 http://deb.debian.org/debian bullseye/main arm64 librdmacm1 arm64 33.2-1 [65.3 kB]
+#7 16.19 Get:49 http://deb.debian.org/debian bullseye/main arm64 libslirp0 arm64 4.4.0-1+deb11u2 [54.0 kB]
+#7 16.20 Get:50 http://deb.debian.org/debian bullseye/main arm64 libspice-server1 arm64 0.14.3-2.1 [319 kB]
+#7 16.23 Get:51 http://deb.debian.org/debian bullseye/main arm64 liburing1 arm64 0.7-3 [8420 B]
+#7 16.23 Get:52 http://deb.debian.org/debian bullseye/main arm64 libusb-1.0-0 arm64 2:1.0.24-3 [58.0 kB]
+#7 16.24 Get:53 http://deb.debian.org/debian bullseye/main arm64 libusbredirparser1 arm64 0.8.0-1+b1 [16.9 kB]
+#7 16.33 Get:54 http://deb.debian.org/debian bullseye/main arm64 libvdeplug2 arm64 4.0.1-2 [26.8 kB]
+#7 16.33 Get:55 http://deb.debian.org/debian bullseye/main arm64 libvirglrenderer1 arm64 0.8.2-5+deb11u1 [155 kB]
+#7 16.40 Get:56 http://deb.debian.org/debian bullseye/main arm64 lld-11 arm64 1:11.0.1-2 [948 kB]
+#7 16.44 Get:57 http://deb.debian.org/debian bullseye/main arm64 lld arm64 1:11.0-51+nmu5 [8492 B]
+#7 16.44 Get:58 http://deb.debian.org/debian-security bullseye-security/main arm64 python-pip-whl all 20.3.4-4+deb11u2 [1952 kB]
+#7 16.57 Get:59 http://deb.debian.org/debian-security bullseye-security/main arm64 python3-pkg-resources all 52.0.0-4+deb11u2 [190 kB]
+#7 16.64 Get:60 http://deb.debian.org/debian-security bullseye-security/main arm64 python3-setuptools all 52.0.0-4+deb11u2 [367 kB]
+#7 16.66 Get:61 http://deb.debian.org/debian bullseye/main arm64 python3-wheel all 0.34.2-1 [24.0 kB]
+#7 16.72 Get:62 http://deb.debian.org/debian-security bullseye-security/main arm64 python3-pip all 20.3.4-4+deb11u2 [338 kB]
+#7 16.78 Get:63 http://deb.debian.org/debian-security bullseye-security/main arm64 qemu-system-common arm64 1:5.2+dfsg-11+deb11u5 [1600 kB]
+#7 16.95 Get:64 http://deb.debian.org/debian-security bullseye-security/main arm64 qemu-system-data all 1:5.2+dfsg-11+deb11u5 [1167 kB]
+#7 17.16 Get:65 http://deb.debian.org/debian bullseye/main arm64 seabios all 1.14.0-2 [149 kB]
+#7 17.21 Get:66 http://deb.debian.org/debian-security bullseye-security/main arm64 qemu-system-x86 arm64 1:5.2+dfsg-11+deb11u5 [6011 kB]
+#7 18.15 Get:67 http://deb.debian.org/debian bullseye/main arm64 xorriso arm64 1.5.2-1 [311 kB]
+#7 19.51 debconf: delaying package configuration, since apt-utils is not installed
+#7 19.55 Fetched 63.6 MB in 11s (5830 kB/s)
+#7 20.28 Selecting previously unselected package libz3-4:arm64.
+#7 20.28 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 22806 files and directories currently installed.)
+#7 20.43 Preparing to unpack .../00-libz3-4_4.8.10-1_arm64.deb ...
+#7 20.68 Unpacking libz3-4:arm64 (4.8.10-1) ...
+#7 21.35 Selecting previously unselected package libllvm11:arm64.
+#7 21.35 Preparing to unpack .../01-libllvm11_1%3a11.0.1-2_arm64.deb ...
+#7 21.36 Unpacking libllvm11:arm64 (1:11.0.1-2) ...
+#7 24.01 Selecting previously unselected package libclang-cpp11.
+#7 24.01 Preparing to unpack .../02-libclang-cpp11_1%3a11.0.1-2_arm64.deb ...
+#7 24.02 Unpacking libclang-cpp11 (1:11.0.1-2) ...
+#7 25.77 Selecting previously unselected package libgc1:arm64.
+#7 25.78 Preparing to unpack .../03-libgc1_1%3a8.0.4-3_arm64.deb ...
+#7 25.80 Unpacking libgc1:arm64 (1:8.0.4-3) ...
+#7 25.93 Selecting previously unselected package libobjc4:arm64.
+#7 25.94 Preparing to unpack .../04-libobjc4_10.2.1-6_arm64.deb ...
+#7 25.94 Unpacking libobjc4:arm64 (10.2.1-6) ...
+#7 25.99 Selecting previously unselected package libobjc-10-dev:arm64.
+#7 25.99 Preparing to unpack .../05-libobjc-10-dev_10.2.1-6_arm64.deb ...
+#7 26.00 Unpacking libobjc-10-dev:arm64 (10.2.1-6) ...
+#7 26.08 Selecting previously unselected package libclang-common-11-dev.
+#7 26.08 Preparing to unpack .../06-libclang-common-11-dev_1%3a11.0.1-2_arm64.deb ...
+#7 26.08 Unpacking libclang-common-11-dev (1:11.0.1-2) ...
+#7 27.19 Selecting previously unselected package libclang1-11.
+#7 27.20 Preparing to unpack .../07-libclang1-11_1%3a11.0.1-2_arm64.deb ...
+#7 27.21 Unpacking libclang1-11 (1:11.0.1-2) ...
+#7 28.25 Selecting previously unselected package clang-11.
+#7 28.25 Preparing to unpack .../08-clang-11_1%3a11.0.1-2_arm64.deb ...
+#7 28.26 Unpacking clang-11 (1:11.0.1-2) ...
+#7 28.41 Selecting previously unselected package clang.
+#7 28.41 Preparing to unpack .../09-clang_1%3a11.0-51+nmu5_arm64.deb ...
+#7 28.42 Unpacking clang (1:11.0-51+nmu5) ...
+#7 28.48 Selecting previously unselected package ipxe-qemu.
+#7 28.48 Preparing to unpack .../10-ipxe-qemu_1.0.0+git-20190125.36a4c85-5.1_all.deb ...
+#7 28.49 Unpacking ipxe-qemu (1.0.0+git-20190125.36a4c85-5.1) ...
+#7 28.73 Selecting previously unselected package iso-codes.
+#7 28.73 Preparing to unpack .../11-iso-codes_4.6.0-1_all.deb ...
+#7 28.74 Unpacking iso-codes (4.6.0-1) ...
+#7 30.10 Selecting previously unselected package libaio1:arm64.
+#7 30.11 Preparing to unpack .../12-libaio1_0.3.112-9_arm64.deb ...
+#7 30.11 Unpacking libaio1:arm64 (0.3.112-9) ...
+#7 30.18 Selecting previously unselected package libasound2-data.
+#7 30.18 Preparing to unpack .../13-libasound2-data_1.2.4-1.1+deb11u1_all.deb ...
+#7 30.20 Unpacking libasound2-data (1.2.4-1.1+deb11u1) ...
+#7 30.30 Selecting previously unselected package libasound2:arm64.
+#7 30.31 Preparing to unpack .../14-libasound2_1.2.4-1.1+deb11u1_arm64.deb ...
+#7 30.31 Unpacking libasound2:arm64 (1.2.4-1.1+deb11u1) ...
+#7 30.42 Selecting previously unselected package libbrlapi0.8:arm64.
+#7 30.43 Preparing to unpack .../15-libbrlapi0.8_6.3+dfsg-1+deb11u1_arm64.deb ...
+#7 30.43 Unpacking libbrlapi0.8:arm64 (6.3+dfsg-1+deb11u1) ...
+#7 30.50 Selecting previously unselected package libburn4:arm64.
+#7 30.50 Preparing to unpack .../16-libburn4_1.5.2-1_arm64.deb ...
+#7 30.51 Unpacking libburn4:arm64 (1.5.2-1) ...
+#7 30.57 Selecting previously unselected package libnspr4:arm64.
+#7 30.58 Preparing to unpack .../17-libnspr4_2%3a4.29-1_arm64.deb ...
+#7 30.58 Unpacking libnspr4:arm64 (2:4.29-1) ...
+#7 30.68 Selecting previously unselected package libnss3:arm64.
+#7 30.68 Preparing to unpack .../18-libnss3_2%3a3.61-1+deb11u5_arm64.deb ...
+#7 30.74 Unpacking libnss3:arm64 (2:3.61-1+deb11u5) ...
+#7 31.23 Selecting previously unselected package libpcsclite1:arm64.
+#7 31.23 Preparing to unpack .../19-libpcsclite1_1.9.1-1_arm64.deb ...
+#7 31.26 Unpacking libpcsclite1:arm64 (1.9.1-1) ...
+#7 31.39 Selecting previously unselected package libcacard0:arm64.
+#7 31.40 Preparing to unpack .../20-libcacard0_1%3a2.8.0-3_arm64.deb ...
+#7 31.40 Unpacking libcacard0:arm64 (1:2.8.0-3) ...
+#7 31.66 Selecting previously unselected package libcap2:arm64.
+#7 31.68 Preparing to unpack .../21-libcap2_1%3a2.44-1+deb11u1_arm64.deb ...
+#7 31.79 Unpacking libcap2:arm64 (1:2.44-1+deb11u1) ...
+#7 31.98 Selecting previously unselected package libcap2-bin.
+#7 32.01 Preparing to unpack .../22-libcap2-bin_1%3a2.44-1+deb11u1_arm64.deb ...
+#7 32.23 Unpacking libcap2-bin (1:2.44-1+deb11u1) ...
+#7 32.61 Selecting previously unselected package libcapstone4:arm64.
+#7 32.61 Preparing to unpack .../23-libcapstone4_4.0.2-3_arm64.deb ...
+#7 32.62 Unpacking libcapstone4:arm64 (4.0.2-3) ...
+#7 33.00 Selecting previously unselected package libkmod2:arm64.
+#7 33.00 Preparing to unpack .../24-libkmod2_28-1_arm64.deb ...
+#7 33.06 Unpacking libkmod2:arm64 (28-1) ...
+#7 33.16 Selecting previously unselected package libdaxctl1:arm64.
+#7 33.17 Preparing to unpack .../25-libdaxctl1_71.1-1_arm64.deb ...
+#7 33.20 Unpacking libdaxctl1:arm64 (71.1-1) ...
+#7 33.28 Selecting previously unselected package libdrm-common.
+#7 33.28 Preparing to unpack .../26-libdrm-common_2.4.104-1_all.deb ...
+#7 33.32 Unpacking libdrm-common (2.4.104-1) ...
+#7 33.44 Selecting previously unselected package libdrm2:arm64.
+#7 33.45 Preparing to unpack .../27-libdrm2_2.4.104-1_arm64.deb ...
+#7 33.49 Unpacking libdrm2:arm64 (2.4.104-1) ...
+#7 33.56 Selecting previously unselected package libdw1:arm64.
+#7 33.57 Preparing to unpack .../28-libdw1_0.183-1_arm64.deb ...
+#7 33.57 Unpacking libdw1:arm64 (0.183-1) ...
+#7 33.63 Selecting previously unselected package libepoxy0:arm64.
+#7 33.63 Preparing to unpack .../29-libepoxy0_1.5.5-1_arm64.deb ...
+#7 33.63 Unpacking libepoxy0:arm64 (1.5.5-1) ...
+#7 33.69 Selecting previously unselected package libexecs0:arm64.
+#7 33.70 Preparing to unpack .../30-libexecs0_1.3-1_arm64.deb ...
+#7 33.70 Unpacking libexecs0:arm64 (1.3-1) ...
+#7 33.93 Selecting previously unselected package libfdt1:arm64.
+#7 33.94 Preparing to unpack .../31-libfdt1_1.6.0-1_arm64.deb ...
+#7 33.99 Unpacking libfdt1:arm64 (1.6.0-1) ...
+#7 34.21 Selecting previously unselected package libwayland-server0:arm64.
+#7 34.22 Preparing to unpack .../32-libwayland-server0_1.18.0-2~exp1.1_arm64.deb ...
+#7 34.24 Unpacking libwayland-server0:arm64 (1.18.0-2~exp1.1) ...
+#7 34.37 Selecting previously unselected package libgbm1:arm64.
+#7 34.38 Preparing to unpack .../33-libgbm1_20.3.5-1_arm64.deb ...
+#7 34.38 Unpacking libgbm1:arm64 (20.3.5-1) ...
+#7 34.45 Selecting previously unselected package libunwind8:arm64.
+#7 34.45 Preparing to unpack .../34-libunwind8_1.3.2-2_arm64.deb ...
+#7 34.46 Unpacking libunwind8:arm64 (1.3.2-2) ...
+#7 34.51 Selecting previously unselected package libgstreamer1.0-0:arm64.
+#7 34.51 Preparing to unpack .../35-libgstreamer1.0-0_1.18.4-2.1+deb11u1_arm64.deb ...
+#7 34.52 Unpacking libgstreamer1.0-0:arm64 (1.18.4-2.1+deb11u1) ...
+#7 34.80 Selecting previously unselected package liborc-0.4-0:arm64.
+#7 34.80 Preparing to unpack .../36-liborc-0.4-0_1%3a0.4.32-1_arm64.deb ...
+#7 34.81 Unpacking liborc-0.4-0:arm64 (1:0.4.32-1) ...
+#7 35.04 Selecting previously unselected package libgstreamer-plugins-base1.0-0:arm64.
+#7 35.04 Preparing to unpack .../37-libgstreamer-plugins-base1.0-0_1.18.4-2+deb11u4_arm64.deb ...
+#7 35.07 Unpacking libgstreamer-plugins-base1.0-0:arm64 (1.18.4-2+deb11u4) ...
+#7 35.41 Selecting previously unselected package libnl-3-200:arm64.
+#7 35.41 Preparing to unpack .../38-libnl-3-200_3.4.0-1+b1_arm64.deb ...
+#7 35.42 Unpacking libnl-3-200:arm64 (3.4.0-1+b1) ...
+#7 35.49 Selecting previously unselected package libnl-route-3-200:arm64.
+#7 35.50 Preparing to unpack .../39-libnl-route-3-200_3.4.0-1+b1_arm64.deb ...
+#7 35.55 Unpacking libnl-route-3-200:arm64 (3.4.0-1+b1) ...
+#7 35.66 Selecting previously unselected package libibverbs1:arm64.
+#7 35.67 Preparing to unpack .../40-libibverbs1_33.2-1_arm64.deb ...
+#7 35.67 Unpacking libibverbs1:arm64 (33.2-1) ...
+#7 35.73 Selecting previously unselected package libjte2:arm64.
+#7 35.73 Preparing to unpack .../41-libjte2_1.22-3_arm64.deb ...
+#7 35.78 Unpacking libjte2:arm64 (1.22-3) ...
+#7 35.94 Selecting previously unselected package libisofs6:arm64.
+#7 35.94 Preparing to unpack .../42-libisofs6_1.5.2-1_arm64.deb ...
+#7 35.95 Unpacking libisofs6:arm64 (1.5.2-1) ...
+#7 36.12 Selecting previously unselected package libisoburn1:arm64.
+#7 36.12 Preparing to unpack .../43-libisoburn1_1.5.2-1_arm64.deb ...
+#7 36.13 Unpacking libisoburn1:arm64 (1.5.2-1) ...
+#7 36.24 Selecting previously unselected package libndctl6:arm64.
+#7 36.24 Preparing to unpack .../44-libndctl6_71.1-1_arm64.deb ...
+#7 36.27 Unpacking libndctl6:arm64 (71.1-1) ...
+#7 36.42 Selecting previously unselected package libopus0:arm64.
+#7 36.42 Preparing to unpack .../45-libopus0_1.3.1-0.1_arm64.deb ...
+#7 36.43 Unpacking libopus0:arm64 (1.3.1-0.1) ...
+#7 36.66 Selecting previously unselected package libpmem1:arm64.
+#7 36.66 Preparing to unpack .../46-libpmem1_1.10-2+deb11u1_arm64.deb ...
+#7 36.67 Unpacking libpmem1:arm64 (1.10-2+deb11u1) ...
+#7 36.72 Selecting previously unselected package librdmacm1:arm64.
+#7 36.72 Preparing to unpack .../47-librdmacm1_33.2-1_arm64.deb ...
+#7 36.73 Unpacking librdmacm1:arm64 (33.2-1) ...
+#7 36.80 Selecting previously unselected package libslirp0:arm64.
+#7 36.80 Preparing to unpack .../48-libslirp0_4.4.0-1+deb11u2_arm64.deb ...
+#7 36.81 Unpacking libslirp0:arm64 (4.4.0-1+deb11u2) ...
+#7 36.89 Selecting previously unselected package libspice-server1:arm64.
+#7 36.90 Preparing to unpack .../49-libspice-server1_0.14.3-2.1_arm64.deb ...
+#7 36.90 Unpacking libspice-server1:arm64 (0.14.3-2.1) ...
+#7 37.03 Selecting previously unselected package liburing1:arm64.
+#7 37.03 Preparing to unpack .../50-liburing1_0.7-3_arm64.deb ...
+#7 37.08 Unpacking liburing1:arm64 (0.7-3) ...
+#7 37.14 Selecting previously unselected package libusb-1.0-0:arm64.
+#7 37.14 Preparing to unpack .../51-libusb-1.0-0_2%3a1.0.24-3_arm64.deb ...
+#7 37.15 Unpacking libusb-1.0-0:arm64 (2:1.0.24-3) ...
+#7 37.21 Selecting previously unselected package libusbredirparser1:arm64.
+#7 37.21 Preparing to unpack .../52-libusbredirparser1_0.8.0-1+b1_arm64.deb ...
+#7 37.22 Unpacking libusbredirparser1:arm64 (0.8.0-1+b1) ...
+#7 37.31 Selecting previously unselected package libvdeplug2.
+#7 37.32 Preparing to unpack .../53-libvdeplug2_4.0.1-2_arm64.deb ...
+#7 37.33 Unpacking libvdeplug2 (4.0.1-2) ...
+#7 37.39 Selecting previously unselected package libvirglrenderer1:arm64.
+#7 37.39 Preparing to unpack .../54-libvirglrenderer1_0.8.2-5+deb11u1_arm64.deb ...
+#7 37.40 Unpacking libvirglrenderer1:arm64 (0.8.2-5+deb11u1) ...
+#7 37.46 Selecting previously unselected package lld-11.
+#7 37.46 Preparing to unpack .../55-lld-11_1%3a11.0.1-2_arm64.deb ...
+#7 37.47 Unpacking lld-11 (1:11.0.1-2) ...
+#7 37.70 Selecting previously unselected package lld.
+#7 37.70 Preparing to unpack .../56-lld_1%3a11.0-51+nmu5_arm64.deb ...
+#7 37.71 Unpacking lld (1:11.0-51+nmu5) ...
+#7 37.76 Selecting previously unselected package python-pip-whl.
+#7 37.77 Preparing to unpack .../57-python-pip-whl_20.3.4-4+deb11u2_all.deb ...
+#7 37.80 Unpacking python-pip-whl (20.3.4-4+deb11u2) ...
+#7 38.17 Selecting previously unselected package python3-pkg-resources.
+#7 38.18 Preparing to unpack .../58-python3-pkg-resources_52.0.0-4+deb11u2_all.deb ...
+#7 38.19 Unpacking python3-pkg-resources (52.0.0-4+deb11u2) ...
+#7 38.31 Selecting previously unselected package python3-setuptools.
+#7 38.32 Preparing to unpack .../59-python3-setuptools_52.0.0-4+deb11u2_all.deb ...
+#7 38.32 Unpacking python3-setuptools (52.0.0-4+deb11u2) ...
+#7 38.49 Selecting previously unselected package python3-wheel.
+#7 38.50 Preparing to unpack .../60-python3-wheel_0.34.2-1_all.deb ...
+#7 38.52 Unpacking python3-wheel (0.34.2-1) ...
+#7 38.64 Selecting previously unselected package python3-pip.
+#7 38.64 Preparing to unpack .../61-python3-pip_20.3.4-4+deb11u2_all.deb ...
+#7 38.65 Unpacking python3-pip (20.3.4-4+deb11u2) ...
+#7 38.89 Selecting previously unselected package qemu-system-common.
+#7 38.89 Preparing to unpack .../62-qemu-system-common_1%3a5.2+dfsg-11+deb11u5_arm64.deb ...
+#7 38.90 Unpacking qemu-system-common (1:5.2+dfsg-11+deb11u5) ...
+#7 39.52 Selecting previously unselected package qemu-system-data.
+#7 39.53 Preparing to unpack .../63-qemu-system-data_1%3a5.2+dfsg-11+deb11u5_all.deb ...
+#7 39.54 Unpacking qemu-system-data (1:5.2+dfsg-11+deb11u5) ...
+#7 39.93 Selecting previously unselected package seabios.
+#7 39.94 Preparing to unpack .../64-seabios_1.14.0-2_all.deb ...
+#7 39.95 Unpacking seabios (1.14.0-2) ...
+#7 40.04 Selecting previously unselected package qemu-system-x86.
+#7 40.05 Preparing to unpack .../65-qemu-system-x86_1%3a5.2+dfsg-11+deb11u5_arm64.deb ...
+#7 40.06 Unpacking qemu-system-x86 (1:5.2+dfsg-11+deb11u5) ...
+#7 41.42 Selecting previously unselected package xorriso.
+#7 41.42 Preparing to unpack .../66-xorriso_1.5.2-1_arm64.deb ...
+#7 41.43 Unpacking xorriso (1.5.2-1) ...
+#7 41.56 Setting up python3-pkg-resources (52.0.0-4+deb11u2) ...
+#7 41.76 Setting up libwayland-server0:arm64 (1.18.0-2~exp1.1) ...
+#7 41.77 Setting up libdw1:arm64 (0.183-1) ...
+#7 41.77 Setting up python3-setuptools (52.0.0-4+deb11u2) ...
+#7 42.02 Setting up libjte2:arm64 (1.22-3) ...
+#7 42.03 Setting up libexecs0:arm64 (1.3-1) ...
+#7 42.03 Setting up libfdt1:arm64 (1.6.0-1) ...
+#7 42.04 Setting up libusbredirparser1:arm64 (0.8.0-1+b1) ...
+#7 42.05 Setting up libunwind8:arm64 (1.3.2-2) ...
+#7 42.06 Setting up python3-wheel (0.34.2-1) ...
+#7 42.16 Setting up libcap2:arm64 (1:2.44-1+deb11u1) ...
+#7 42.17 Setting up libcap2-bin (1:2.44-1+deb11u1) ...
+#7 42.18 Setting up libasound2-data (1.2.4-1.1+deb11u1) ...
+#7 42.19 Setting up libz3-4:arm64 (4.8.10-1) ...
+#7 42.20 Setting up libllvm11:arm64 (1:11.0.1-2) ...
+#7 42.20 Setting up libepoxy0:arm64 (1.5.5-1) ...
+#7 42.21 Setting up libnspr4:arm64 (2:4.29-1) ...
+#7 42.22 Setting up libopus0:arm64 (1.3.1-0.1) ...
+#7 42.23 Setting up libclang1-11 (1:11.0.1-2) ...
+#7 42.24 Setting up liborc-0.4-0:arm64 (1:0.4.32-1) ...
+#7 42.25 Setting up libpcsclite1:arm64 (1.9.1-1) ...
+#7 42.26 Setting up libgc1:arm64 (1:8.0.4-3) ...
+#7 42.27 Setting up liburing1:arm64 (0.7-3) ...
+#7 42.28 Setting up qemu-system-data (1:5.2+dfsg-11+deb11u5) ...
+#7 42.29 Setting up seabios (1.14.0-2) ...
+#7 42.29 Setting up libcapstone4:arm64 (4.0.2-3) ...
+#7 42.30 Setting up libslirp0:arm64 (4.4.0-1+deb11u2) ...
+#7 42.31 Setting up ipxe-qemu (1.0.0+git-20190125.36a4c85-5.1) ...
+#7 42.32 Setting up libasound2:arm64 (1.2.4-1.1+deb11u1) ...
+#7 42.33 Setting up libclang-common-11-dev (1:11.0.1-2) ...
+#7 42.34 Setting up libnl-3-200:arm64 (3.4.0-1+b1) ...
+#7 42.35 Setting up python-pip-whl (20.3.4-4+deb11u2) ...
+#7 42.36 Setting up libbrlapi0.8:arm64 (6.3+dfsg-1+deb11u1) ...
+#7 42.37 Setting up libusb-1.0-0:arm64 (2:1.0.24-3) ...
+#7 42.38 Setting up libburn4:arm64 (1.5.2-1) ...
+#7 42.39 Setting up libaio1:arm64 (0.3.112-9) ...
+#7 42.40 Setting up libdrm-common (2.4.104-1) ...
+#7 42.41 Setting up iso-codes (4.6.0-1) ...
+#7 42.42 Setting up libgstreamer1.0-0:arm64 (1.18.4-2.1+deb11u1) ...
+#7 42.43 Setcap worked! gst-ptp-helper is not suid!
+#7 42.43 Setting up libkmod2:arm64 (28-1) ...
+#7 42.44 Setting up libisofs6:arm64 (1.5.2-1) ...
+#7 42.45 Setting up libvdeplug2 (4.0.1-2) ...
+#7 42.46 Setting up libgstreamer-plugins-base1.0-0:arm64 (1.18.4-2+deb11u4) ...
+#7 42.47 Setting up libobjc4:arm64 (10.2.1-6) ...
+#7 42.48 Setting up libnss3:arm64 (2:3.61-1+deb11u5) ...
+#7 42.49 Setting up lld-11 (1:11.0.1-2) ...
+#7 42.49 Setting up libcacard0:arm64 (1:2.8.0-3) ...
+#7 42.50 Setting up libnl-route-3-200:arm64 (3.4.0-1+b1) ...
+#7 42.51 Setting up libclang-cpp11 (1:11.0.1-2) ...
+#7 42.52 Setting up libisoburn1:arm64 (1.5.2-1) ...
+#7 42.53 Setting up python3-pip (20.3.4-4+deb11u2) ...
+#7 42.72 Setting up libdaxctl1:arm64 (71.1-1) ...
+#7 42.73 Setting up libobjc-10-dev:arm64 (10.2.1-6) ...
+#7 42.74 Setting up libdrm2:arm64 (2.4.104-1) ...
+#7 42.75 Setting up libndctl6:arm64 (71.1-1) ...
+#7 42.76 Setting up xorriso (1.5.2-1) ...
+#7 42.76 Setting up libpmem1:arm64 (1.10-2+deb11u1) ...
+#7 42.77 Setting up clang-11 (1:11.0.1-2) ...
+#7 42.78 Setting up libibverbs1:arm64 (33.2-1) ...
+#7 42.84 Setting up libgbm1:arm64 (20.3.5-1) ...
+#7 42.85 Setting up lld (1:11.0-51+nmu5) ...
+#7 42.86 Setting up libspice-server1:arm64 (0.14.3-2.1) ...
+#7 42.87 Setting up libvirglrenderer1:arm64 (0.8.2-5+deb11u1) ...
+#7 42.87 Setting up clang (1:11.0-51+nmu5) ...
+#7 42.90 Setting up librdmacm1:arm64 (33.2-1) ...
+#7 42.91 Setting up qemu-system-common (1:5.2+dfsg-11+deb11u5) ...
+#7 42.93 Setting up qemu-system-x86 (1:5.2+dfsg-11+deb11u5) ...
+#7 42.94 Processing triggers for libc-bin (2.31-13+deb11u13) ...
+#7 43.24 Processing triggers for hicolor-icon-theme (0.17-2) ...
+#7 DONE 44.8s
+
+#8 [3/6] RUN rustup target add x86_64-unknown-none &&     rustup component add rust-src llvm-tools-preview &&     cargo install bootimage cargo-binutils
+#8 0.292 info: downloading component rust-std
+#8 4.336 info: downloading component rust-src
+#8 5.948 info: downloading component llvm-tools
+#8 11.90     Updating crates.io index
+#8 12.34  Downloading crates ...
+#8 12.74   Downloaded bootimage v0.10.4
+#8 12.82     Updating crates.io index
+#8 13.15  Downloading crates ...
+#8 13.44   Downloaded cargo-binutils v0.4.0
+#8 13.48   Installing bootimage v0.10.4
+#8 13.53     Updating crates.io index
+#8 15.25      Locking 23 packages to latest compatible versions
+#8 15.25       Adding cargo_metadata v0.9.1 (available: v0.23.1)
+#8 15.26       Adding thiserror v1.0.69 (available: v2.0.18)
+#8 15.26       Adding toml v0.5.11 (available: v1.1.2+spec-1.1.0)
+#8 15.26  Downloading crates ...
+#8 15.59   Downloaded locate-cargo-manifest v0.2.2
+#8 15.61   Downloaded llvm-tools v0.1.1
+#8 15.65   Downloaded semver-parser v0.7.0
+#8 15.66   Downloaded wait-timeout v0.2.1
+#8 15.67   Downloaded cargo_metadata v0.9.1
+#8 15.68   Downloaded itoa v1.0.18
+#8 15.70   Downloaded proc-macro2 v1.0.106
+#8 15.73   Downloaded semver v0.9.0
+#8 15.74   Downloaded thiserror v1.0.69
+#8 15.75   Downloaded quote v1.0.45
+#8 15.76   Downloaded thiserror-impl v1.0.69
+#8 15.76   Downloaded anyhow v1.0.102
+#8 15.78   Downloaded serde_core v1.0.228
+#8 15.79   Downloaded zmij v1.0.21
+#8 15.79   Downloaded unicode-ident v1.0.24
+#8 15.80   Downloaded toml v0.5.11
+#8 15.80   Downloaded serde_derive v1.0.228
+#8 15.81   Downloaded memchr v2.8.0
+#8 15.82   Downloaded serde v1.0.228
+#8 15.82   Downloaded json v0.12.4
+#8 15.84   Downloaded serde_json v1.0.149
+#8 15.88   Downloaded syn v2.0.117
+#8 15.91   Downloaded libc v0.2.185
+#8 15.96    Compiling proc-macro2 v1.0.106
+#8 15.96    Compiling quote v1.0.45
+#8 15.96    Compiling unicode-ident v1.0.24
+#8 15.96    Compiling serde_core v1.0.228
+#8 15.97    Compiling serde v1.0.228
+#8 15.97    Compiling zmij v1.0.21
+#8 15.97    Compiling libc v0.2.185
+#8 15.97    Compiling serde_json v1.0.149
+#8 16.15    Compiling memchr v2.8.0
+#8 16.31    Compiling itoa v1.0.18
+#8 16.40    Compiling thiserror v1.0.69
+#8 16.44    Compiling anyhow v1.0.102
+#8 16.58    Compiling semver-parser v0.7.0
+#8 16.81    Compiling json v0.12.4
+#8 16.92    Compiling llvm-tools v0.1.1
+#8 17.45    Compiling locate-cargo-manifest v0.2.2
+#8 17.59    Compiling syn v2.0.117
+#8 17.80    Compiling wait-timeout v0.2.1
+#8 19.15    Compiling thiserror-impl v1.0.69
+#8 19.15    Compiling serde_derive v1.0.228
+#8 19.73    Compiling semver v0.9.0
+#8 19.73    Compiling toml v0.5.11
+#8 22.04    Compiling cargo_metadata v0.9.1
+#8 22.53    Compiling bootimage v0.10.4
+#8 25.19     Finished `release` profile [optimized] target(s) in 13.61s
+#8 25.20   Installing /usr/local/cargo/bin/bootimage
+#8 25.20   Installing /usr/local/cargo/bin/cargo-bootimage
+#8 25.20    Installed package `bootimage v0.10.4` (executables `bootimage`, `cargo-bootimage`)
+#8 25.21   Installing cargo-binutils v0.4.0
+#8 25.23     Updating crates.io index
+#8 26.80      Locking 55 packages to latest compatible versions
+#8 26.80       Adding cargo_metadata v0.18.1 (available: v0.23.1)
+#8 26.83       Adding toml v0.8.23 (available: v1.1.2+spec-1.1.0)
+#8 26.83  Downloading crates ...
+#8 27.13   Downloaded rustc-demangle v0.1.27
+#8 27.17   Downloaded rustc-cfg v0.5.0
+#8 27.23   Downloaded cargo-platform v0.1.9
+#8 27.24   Downloaded is_terminal_polyfill v1.70.2
+#8 27.25   Downloaded clap_lex v1.1.0
+#8 27.25   Downloaded equivalent v1.0.2
+#8 27.27   Downloaded errno v0.3.14
+#8 27.28   Downloaded anstyle-query v1.1.5
+#8 27.28   Downloaded colorchoice v1.0.5
+#8 27.29   Downloaded utf8parse v0.2.2
+#8 27.29   Downloaded rustc_version v0.4.1
+#8 27.29   Downloaded toml_write v0.1.2
+#8 27.30   Downloaded toml_datetime v0.6.11
+#8 27.30   Downloaded anstyle v1.0.14
+#8 27.30   Downloaded strsim v0.11.1
+#8 27.31   Downloaded terminal_size v0.4.4
+#8 27.31   Downloaded cargo_metadata v0.18.1
+#8 27.32   Downloaded anstream v1.0.0
+#8 27.35   Downloaded serde_spanned v0.6.9
+#8 27.35   Downloaded camino v1.2.2
+#8 27.35   Downloaded bitflags v2.11.1
+#8 27.36   Downloaded anstyle-parse v1.0.0
+#8 27.37   Downloaded toml v0.8.23
+#8 27.37   Downloaded clap v4.6.1
+#8 27.39   Downloaded semver v1.0.28
+#8 27.40   Downloaded toml_edit v0.22.27
+#8 27.41   Downloaded indexmap v2.14.0
+#8 27.43   Downloaded clap_builder v4.6.0
+#8 27.44   Downloaded regex v1.12.3
+#8 27.45   Downloaded winnow v0.7.15
+#8 27.46   Downloaded aho-corasick v1.1.4
+#8 27.47   Downloaded hashbrown v0.17.0
+#8 27.48   Downloaded regex-syntax v0.8.10
+#8 27.49   Downloaded rustix v1.1.4
+#8 27.51   Downloaded regex-automata v0.4.14
+#8 27.68   Downloaded linux-raw-sys v0.12.1
+#8 27.79    Compiling proc-macro2 v1.0.106
+#8 27.79    Compiling unicode-ident v1.0.24
+#8 27.79    Compiling quote v1.0.45
+#8 27.79    Compiling serde_core v1.0.228
+#8 27.79    Compiling serde v1.0.228
+#8 27.79    Compiling memchr v2.8.0
+#8 27.79    Compiling rustix v1.1.4
+#8 27.79    Compiling thiserror v1.0.69
+#8 27.85    Compiling zmij v1.0.21
+#8 28.01    Compiling utf8parse v0.2.2
+#8 28.03    Compiling bitflags v2.11.1
+#8 28.07    Compiling linux-raw-sys v0.12.1
+#8 28.08    Compiling anstyle-parse v1.0.0
+#8 28.16    Compiling camino v1.2.2
+#8 28.25    Compiling is_terminal_polyfill v1.70.2
+#8 28.31    Compiling colorchoice v1.0.5
+#8 28.32    Compiling anstyle-query v1.1.5
+#8 28.39    Compiling hashbrown v0.17.0
+#8 28.39    Compiling equivalent v1.0.2
+#8 28.45    Compiling serde_json v1.0.149
+#8 28.52    Compiling anstyle v1.0.14
+#8 28.59    Compiling aho-corasick v1.1.4
+#8 28.77    Compiling anstream v1.0.0
+#8 28.86    Compiling syn v2.0.117
+#8 28.99    Compiling clap_lex v1.1.0
+#8 29.29    Compiling terminal_size v0.4.4
+#8 29.31    Compiling indexmap v2.14.0
+#8 29.40    Compiling regex-syntax v0.8.10
+#8 29.42    Compiling toml_write v0.1.2
+#8 29.50    Compiling itoa v1.0.18
+#8 29.66    Compiling anyhow v1.0.102
+#8 29.79    Compiling strsim v0.11.1
+#8 30.00    Compiling winnow v0.7.15
+#8 30.10    Compiling clap_builder v4.6.0
+#8 31.10    Compiling rustc-demangle v0.1.27
+#8 31.33    Compiling semver v1.0.28
+#8 32.04    Compiling serde_derive v1.0.228
+#8 32.25    Compiling thiserror-impl v1.0.69
+#8 32.71    Compiling regex-automata v0.4.14
+#8 34.26    Compiling clap v4.6.1
+#8 34.35    Compiling rustc_version v0.4.1
+#8 34.86    Compiling rustc-cfg v0.5.0
+#8 37.54    Compiling regex v1.12.3
+#8 38.55    Compiling toml_datetime v0.6.11
+#8 38.76    Compiling serde_spanned v0.6.9
+#8 38.89    Compiling toml_edit v0.22.27
+#8 39.06    Compiling cargo-platform v0.1.9
+#8 39.88    Compiling cargo_metadata v0.18.1
+#8 43.89    Compiling toml v0.8.23
+#8 47.17    Compiling cargo-binutils v0.4.0
+#8 54.74     Finished `release` profile [optimized] target(s) in 43.16s
+#8 54.76   Installing /usr/local/cargo/bin/cargo-cov
+#8 54.76   Installing /usr/local/cargo/bin/cargo-nm
+#8 54.76   Installing /usr/local/cargo/bin/cargo-objcopy
+#8 54.76   Installing /usr/local/cargo/bin/cargo-objdump
+#8 54.76   Installing /usr/local/cargo/bin/cargo-profdata
+#8 54.76   Installing /usr/local/cargo/bin/cargo-readobj
+#8 54.76   Installing /usr/local/cargo/bin/cargo-size
+#8 54.76   Installing /usr/local/cargo/bin/cargo-strip
+#8 54.76   Installing /usr/local/cargo/bin/rust-ar
+#8 54.76   Installing /usr/local/cargo/bin/rust-as
+#8 54.76   Installing /usr/local/cargo/bin/rust-cov
+#8 54.76   Installing /usr/local/cargo/bin/rust-ld
+#8 54.76   Installing /usr/local/cargo/bin/rust-lld
+#8 54.76   Installing /usr/local/cargo/bin/rust-nm
+#8 54.76   Installing /usr/local/cargo/bin/rust-objcopy
+#8 54.76   Installing /usr/local/cargo/bin/rust-objdump
+#8 54.76   Installing /usr/local/cargo/bin/rust-profdata
+#8 54.76   Installing /usr/local/cargo/bin/rust-readobj
+#8 54.76   Installing /usr/local/cargo/bin/rust-size
+#8 54.76   Installing /usr/local/cargo/bin/rust-strip
+#8 54.76    Installed package `cargo-binutils v0.4.0` (executables `cargo-cov`, `cargo-nm`, `cargo-objcopy`, `cargo-objdump`, `cargo-profdata`, `cargo-readobj`, `cargo-size`, `cargo-strip`, `rust-ar`, `rust-as`, `rust-cov`, `rust-ld`, `rust-lld`, `rust-nm`, `rust-objcopy`, `rust-objdump`, `rust-profdata`, `rust-readobj`, `rust-size`, `rust-strip`)
+#8 54.78      Summary Successfully installed bootimage, cargo-binutils!
+#8 DONE 55.0s
+
+#9 [4/6] RUN pip3 install --no-cache-dir argparse
+#9 1.316 Collecting argparse
+#9 1.620   Downloading argparse-1.4.0-py2.py3-none-any.whl (23 kB)
+#9 1.643 Installing collected packages: argparse
+#9 1.686 Successfully installed argparse-1.4.0
+#9 DONE 1.7s
+
+#10 [5/6] WORKDIR /sexos
+#10 DONE 0.1s
+
+#11 [6/6] COPY . .
+#11 DONE 20.4s
+
+#12 exporting to image
+#12 exporting layers
+#12 exporting layers 9.3s done
+#12 writing image sha256:c3fbbb06f66b1644fc8b45fe02cc8e7aeec6659f7f6583b3ea899b1b45e5d63e done
+#12 naming to docker.io/library/sexos-builder:latest done
+#12 DONE 9.4s
+
+View build details: docker-desktop://dashboard/build/orbstack/orbstack/zz4dfhlsszzgh39c2v9s9rot6
+[*] Running isolated build inside container...
+rm -rf target/
+rm -rf iso_root sexos-v1.0.0.iso initrd.sex limine
+cargo build --package sex-kernel --target x86_64-unknown-none
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded lazy_static v1.5.0
+  Downloaded bitflags v1.3.2
+  Downloaded scopeguard v1.2.0
+  Downloaded bit_field v0.10.3
+  Downloaded conquer-util v0.3.0
+  Downloaded radium v0.7.0
+  Downloaded bootloader_api v0.11.7
+  Downloaded conquer-once v0.4.0
+  Downloaded crossbeam-queue v0.3.12
+  Downloaded pic8259 v0.10.4
+  Downloaded tap v1.0.1
+  Downloaded volatile v0.4.6
+  Downloaded uart_16550 v0.3.2
+  Downloaded byteorder v1.5.0
+  Downloaded rustversion v1.0.22
+  Downloaded funty v2.0.0
+  Downloaded linked_list_allocator v0.10.6
+  Downloaded lock_api v0.4.14
+  Downloaded wyz v0.5.1
+  Downloaded spin v0.9.8
+  Downloaded acpi v5.2.0
+  Downloaded spinning_top v0.2.5
+  Downloaded log v0.4.29
+  Downloaded spinning_top v0.3.0
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded aml v0.16.4
+  Downloaded x86_64 v0.14.13
+  Downloaded raw-cpuid v11.6.0
+  Downloaded raw-cpuid v10.7.0
+  Downloaded bitvec v1.0.1
+  Downloaded x86 v0.52.0
+   Compiling bit_field v0.10.3
+   Compiling scopeguard v1.2.0
+   Compiling rustversion v1.0.22
+   Compiling bitflags v2.11.1
+   Compiling radium v0.7.0
+   Compiling tap v1.0.1
+   Compiling x86 v0.52.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling lock_api v0.4.14
+   Compiling bitflags v1.3.2
+   Compiling wyz v0.5.1
+   Compiling raw-cpuid v10.7.0
+   Compiling volatile v0.4.6
+   Compiling spinning_top v0.2.5
+   Compiling log v0.4.29
+   Compiling bootloader_api v0.11.7
+   Compiling funty v2.0.0
+   Compiling spin v0.9.8
+   Compiling byteorder v1.5.0
+   Compiling conquer-util v0.3.0
+   Compiling conquer-once v0.4.0
+   Compiling lazy_static v1.5.0
+   Compiling acpi v5.2.0
+   Compiling linked_list_allocator v0.10.6
+   Compiling bitvec v1.0.1
+   Compiling spinning_top v0.3.0
+   Compiling raw-cpuid v11.6.0
+   Compiling crossbeam-queue v0.3.12
+   Compiling x86_64 v0.14.13
+   Compiling uart_16550 v0.3.2
+   Compiling pic8259 v0.10.4
+   Compiling aml v0.16.4
+   Compiling sex-kernel v0.1.0 (/sex/kernel)
+warning: unused import: `page_table::PageTableEntry`
+ --> kernel/src/memory.rs:3:153
+  |
+3 | ...ge, PageTableFlags, frame::PhysFrameRangeInclusive, page_table::PageTableEntry},
+  |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `core::hint::spin_loop`
+ --> kernel/src/memory/allocator.rs:2:5
+  |
+2 | use core::hint::spin_loop;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CapabilityData` and `PciCapData`
+ --> kernel/src/pci.rs:3:25
+  |
+3 | use crate::capability::{PciCapData, CapabilityData};
+  |                         ^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused import: `core::ptr::NonNull`
+ --> kernel/src/slab.rs:2:5
+  |
+2 | use core::ptr::NonNull;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `x86_64::VirtAddr`
+ --> kernel/src/cheri.rs:1:5
+  |
+1 | use x86_64::VirtAddr;
+  |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::vec::Vec`
+ --> kernel/src/capability.rs:1:5
+  |
+1 | use alloc::vec::Vec;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `AtomicU8`
+ --> kernel/src/capability.rs:3:37
+  |
+3 | use core::sync::atomic::{AtomicU32, AtomicU8, Ordering, AtomicPtr};
+  |                                     ^^^^^^^^
+
+warning: unused import: `crate::capability::NodeCapData`
+ --> kernel/src/ipc/messages.rs:1:5
+  |
+1 | use crate::capability::NodeCapData;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ipc::DOMAIN_REGISTRY`
+ --> kernel/src/ipc/pagefault.rs:2:5
+  |
+2 | use crate::ipc::DOMAIN_REGISTRY;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::capability::ProtectionDomain`
+ --> kernel/src/interrupts.rs:4:5
+  |
+4 | use crate::capability::ProtectionDomain;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ipc_ring::SpscRing`
+ --> kernel/src/interrupts.rs:6:5
+  |
+6 | use crate::ipc_ring::SpscRing;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `spin::Mutex`
+ --> kernel/src/interrupts.rs:8:5
+  |
+8 | use spin::Mutex;
+  |     ^^^^^^^^^^^
+
+warning: unused import: `alloc::sync::Arc`
+  --> kernel/src/interrupts.rs:10:5
+   |
+10 | use alloc::sync::Arc;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::vec::Vec`
+  --> kernel/src/interrupts.rs:11:5
+   |
+11 | use alloc::vec::Vec;
+   |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ipc::DOMAIN_REGISTRY`
+  --> kernel/src/interrupts.rs:13:5
+   |
+13 | use crate::ipc::DOMAIN_REGISTRY;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `PhysAddr`
+ --> kernel/src/apic.rs:3:14
+  |
+3 | use x86_64::{PhysAddr, VirtAddr};
+  |              ^^^^^^^^
+
+warning: unused import: `x86_64::VirtAddr`
+ --> kernel/src/scheduler.rs:2:5
+  |
+2 | use x86_64::VirtAddr;
+  |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::pd::create::create_protection_domain`
+ --> kernel/src/initrd.rs:3:5
+  |
+3 | use crate::pd::create::create_protection_domain;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `PAGE_SIZE`
+ --> kernel/src/loader/elf.rs:1:50
+  |
+1 | use crate::memory::allocator::{GLOBAL_ALLOCATOR, PAGE_SIZE};
+  |                                                  ^^^^^^^^^
+
+warning: unused import: `structures::paging::PageTableFlags`
+ --> kernel/src/loader/elf.rs:2:24
+  |
+2 | use x86_64::{VirtAddr, structures::paging::PageTableFlags};
+  |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ipc::safe_pdx_call`
+ --> kernel/src/loader/elf.rs:4:5
+  |
+4 | use crate::ipc::safe_pdx_call;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `CapabilityData` and `MemLendCapData`
+ --> kernel/src/loader/elf.rs:6:25
+  |
+6 | use crate::capability::{CapabilityData, MemLendCapData};
+  |                         ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::vec::Vec`
+ --> kernel/src/drivers/pci.rs:2:5
+  |
+2 | use alloc::vec::Vec;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::memory::allocator::GLOBAL_ALLOCATOR`
+ --> kernel/src/pd/create.rs:5:5
+  |
+5 | use crate::memory::allocator::GLOBAL_ALLOCATOR;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `DmaCapData`
+ --> kernel/src/syscalls/storage.rs:3:57
+  |
+3 | use crate::capability::{CapabilityData, MemLendCapData, DmaCapData};
+  |                                                         ^^^^^^^^^^
+
+warning: unused import: `DOMAIN_REGISTRY`
+ --> kernel/src/syscalls/pipe.rs:2:33
+  |
+2 | use crate::ipc::{safe_pdx_call, DOMAIN_REGISTRY};
+  |                                 ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::core_local::CoreLocal`
+ --> kernel/src/syscalls/pipe.rs:3:5
+  |
+3 | use crate::core_local::CoreLocal;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `DOMAIN_REGISTRY`
+ --> kernel/src/syscalls/fork.rs:2:33
+  |
+2 | use crate::ipc::{safe_pdx_call, DOMAIN_REGISTRY};
+  |                                 ^^^^^^^^^^^^^^^
+
+warning: unused import: `CapabilityKind`
+ --> kernel/src/capabilities/engine.rs:1:72
+  |
+1 | use crate::capability::{ProtectionDomain, CapabilityData, NodeCapData, CapabilityKind};
+  |                                                                        ^^^^^^^^^^^^^^
+
+warning: unused import: `crate::core_local::CoreLocal`
+ --> kernel/src/benchmark.rs:3:5
+  |
+3 | use crate::core_local::CoreLocal;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `AtomicU64` and `Ordering`
+ --> kernel/src/benchmark.rs:4:26
+  |
+4 | use core::sync::atomic::{AtomicU64, Ordering};
+  |                          ^^^^^^^^^  ^^^^^^^^
+
+warning: unused import: `x86_64::structures::paging::FrameAllocator`
+  --> kernel/src/slab.rs:27:13
+   |
+27 |         use x86_64::structures::paging::FrameAllocator;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `msg_ctrl`
+  --> kernel/src/pci.rs:35:21
+   |
+35 |                 let msg_ctrl = (cap_header >> 16) as u16;
+   |                     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_msg_ctrl`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `old_pkru`
+  --> kernel/src/ipc.rs:55:9
+   |
+55 |     let old_pkru = Pkru::read();
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_old_pkru`
+
+warning: unnecessary `unsafe` block
+  --> kernel/src/gdt.rs:15:50
+   |
+15 |             let stack_start = VirtAddr::from_ptr(unsafe { &raw const STACK });
+   |                                                  ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `p_flags`
+  --> kernel/src/loader/elf.rs:37:17
+   |
+37 |             let p_flags = 5; // R-X
+   |                 ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_p_flags`
+
+warning: unused variable: `domain`
+  --> kernel/src/syscalls/net.rs:10:36
+   |
+10 | pub fn sys_socket(net_cap_id: u32, domain: i32, net_type: i32, protocol: i32) -> i64 {
+   |                                    ^^^^^^ help: if this is intentional, prefix it with an underscore: `_domain`
+
+warning: unused variable: `net_type`
+  --> kernel/src/syscalls/net.rs:10:49
+   |
+10 | pub fn sys_socket(net_cap_id: u32, domain: i32, net_type: i32, protocol: i32) -> i64 {
+   |                                                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_net_type`
+
+warning: unused variable: `protocol`
+  --> kernel/src/syscalls/net.rs:10:64
+   |
+10 | pub fn sys_socket(net_cap_id: u32, domain: i32, net_type: i32, protocol: i32) -> i64 {
+   |                                                                ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_protocol`
+
+warning: unused variable: `start`
+  --> kernel/src/benchmark.rs:40:9
+   |
+40 |     let start = read_tsc();
+   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_start`
+
+warning: unused variable: `end`
+  --> kernel/src/benchmark.rs:46:9
+   |
+46 |     let end = read_tsc();
+   |         ^^^ help: if this is intentional, prefix it with an underscore: `_end`
+
+warning: unused variable: `sext`
+  --> kernel/src/init.rs:22:9
+   |
+22 |     let sext = create_protection_domain("/servers/sext/bin/sext\0", None).expect("sext lost");
+   |         ^^^^ help: if this is intentional, prefix it with an underscore: `_sext`
+
+warning: unused variable: `sexinput`
+  --> kernel/src/init.rs:26:9
+   |
+26 |     let sexinput = create_protection_domain("/servers/sexinput/bin/sexinput\0", None).expect("sexinput lost");
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_sexinput`
+
+warning: unused variable: `sexnet`
+  --> kernel/src/init.rs:27:9
+   |
+27 |     let sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0", None).expect("sexnet lost");
+   |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_sexnet`
+
+warning: `sex-kernel` (lib) generated 44 warnings (run `cargo fix --lib -p sex-kernel` to apply 42 suggestions)
+warning: unused import: `alloc::sync::Arc`
+ --> kernel/src/main.rs:9:5
+  |
+9 | use alloc::sync::Arc;
+  |     ^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `sex_kernel::capability::ProtectionDomain`
+  --> kernel/src/main.rs:10:5
+   |
+10 | use sex_kernel::capability::ProtectionDomain;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TaskContext`, `TaskState`, and `Task`
+  --> kernel/src/main.rs:12:29
+   |
+12 | use sex_kernel::scheduler::{Task, TaskContext, TaskState};
+   |                             ^^^^  ^^^^^^^^^^^  ^^^^^^^^^
+
+warning: unnecessary `unsafe` block
+  --> kernel/src/main.rs:62:5
+   |
+62 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+  --> kernel/src/main.rs:34:9
+   |
+34 |     let mut mapper = unsafe { sex_kernel::memory::init_sexting(phys_mem_offset) };
+   |         ----^^^^^^
+   |         |
+   |         help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+  --> kernel/src/main.rs:35:9
+   |
+35 |     let mut frame_allocator = unsafe {
+   |         ----^^^^^^^^^^^^^^^
+   |         |
+   |         help: remove this `mut`
+
+warning: `sex-kernel` (bin "sex-kernel") generated 6 warnings (run `cargo fix --bin "sex-kernel" -p sex-kernel` to apply 5 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.61s
+# Build all standalone servers
+cargo build --manifest-path servers/sexc/Cargo.toml --target x86_64-unknown-none
+ Downloading crates ...
+  Downloaded const_fn v0.4.12
+  Downloaded x86_64 v0.15.4
+   Compiling const_fn v0.4.12
+   Compiling x86_64 v0.15.4
+   Compiling libsys v0.1.0 (/sex/sex-src/lib/libsys)
+warning: unused import: `crate::messages::MessageType`
+ --> sex-src/lib/libsys/src/pdx.rs:1:5
+  |
+1 | use crate::messages::MessageType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `libsys` (lib) generated 1 warning (run `cargo fix --lib -p libsys` to apply 1 suggestion)
+   Compiling sexc v0.1.0 (/sex/servers/sexc)
+warning: unused import: `libsys::messages::MessageType`
+ --> servers/sexc/src/pipe.rs:2:5
+  |
+2 | use libsys::messages::MessageType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `sexc_trampoline_entry`
+ --> servers/sexc/src/main.rs:6:43
+  |
+6 | use trampoline::{SIGNAL_STATE, SigAction, sexc_trampoline_entry};
+  |                                           ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `buffer_cap`
+  --> servers/sexc/src/pipe.rs:17:50
+   |
+17 | pub fn handle_pipe_call(cmd: u32, pipe_cap: u32, buffer_cap: u32, size: u64) -> (i64, u64, u32) {
+   |                                                  ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_buffer_cap`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `w`
+  --> servers/sexc/src/pipe.rs:20:21
+   |
+20 |             let (r, w) = create_pipe();
+   |                     ^ help: if this is intentional, prefix it with an underscore: `_w`
+
+warning: constant `SA_RESTART` is never used
+ --> servers/sexc/src/trampoline.rs:7:11
+  |
+7 | pub const SA_RESTART: u64 = 0x10000000;
+  |           ^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sexc` (bin "sexc") generated 5 warnings (run `cargo fix --bin "sexc" -p sexc` to apply 4 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.00s
+cargo build --manifest-path servers/sexvfs/Cargo.toml --target x86_64-unknown-none
+warning: unused import: `crate::messages::MessageType`
+ --> sex-src/lib/libsys/src/pdx.rs:1:5
+  |
+1 | use crate::messages::MessageType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `libsys` (lib) generated 1 warning (run `cargo fix --lib -p libsys` to apply 1 suggestion)
+   Compiling sexvfs v0.1.0 (/sex/servers/sexvfs)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+cargo build --manifest-path servers/sexdrives/Cargo.toml --target x86_64-unknown-none
+warning: unused import: `crate::messages::MessageType`
+ --> sex-src/lib/libsys/src/pdx.rs:1:5
+  |
+1 | use crate::messages::MessageType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `libsys` (lib) generated 1 warning (run `cargo fix --lib -p libsys` to apply 1 suggestion)
+   Compiling sexdrives v0.1.0 (/sex/servers/sexdrives)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+cargo build --manifest-path servers/sexinput/Cargo.toml --target x86_64-unknown-none
+warning: unused import: `crate::messages::MessageType`
+ --> sex-src/lib/libsys/src/pdx.rs:1:5
+  |
+1 | use crate::messages::MessageType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `libsys` (lib) generated 1 warning (run `cargo fix --lib -p libsys` to apply 1 suggestion)
+   Compiling sexinput v0.1.0 (/sex/servers/sexinput)
+warning: unused imports: `pdx_listen` and `pdx_reply`
+ --> servers/sexinput/src/main.rs:4:19
+  |
+4 | use libsys::pdx::{pdx_listen, pdx_reply, pdx_call};
+  |                   ^^^^^^^^^^  ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sexinput` (bin "sexinput") generated 1 warning (run `cargo fix --bin "sexinput" -p sexinput` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+cargo build --manifest-path servers/sexnet/Cargo.toml --target x86_64-unknown-none
+warning: unused import: `crate::messages::MessageType`
+ --> sex-src/lib/libsys/src/pdx.rs:1:5
+  |
+1 | use crate::messages::MessageType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `libsys` (lib) generated 1 warning (run `cargo fix --lib -p libsys` to apply 1 suggestion)
+   Compiling sexnet v0.1.0 (/sex/servers/sexnet)
+warning: unused import: `pdx_call`
+ --> servers/sexnet/src/main.rs:4:42
+  |
+4 | use libsys::pdx::{pdx_listen, pdx_reply, pdx_call};
+  |                                          ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sexnet` (bin "sexnet") generated 1 warning (run `cargo fix --bin "sexnet" -p sexnet` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+cargo build --manifest-path servers/sexdisplay/Cargo.toml --target x86_64-unknown-none
+warning: unused import: `crate::messages::MessageType`
+ --> sex-src/lib/libsys/src/pdx.rs:1:5
+  |
+1 | use crate::messages::MessageType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `libsys` (lib) generated 1 warning (run `cargo fix --lib -p libsys` to apply 1 suggestion)
+   Compiling sexdisplay v0.1.0 (/sex/servers/sexdisplay)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+cargo build --manifest-path servers/sexnode/Cargo.toml --target x86_64-unknown-none
+warning: unused import: `crate::messages::MessageType`
+ --> sex-src/lib/libsys/src/pdx.rs:1:5
+  |
+1 | use crate::messages::MessageType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `libsys` (lib) generated 1 warning (run `cargo fix --lib -p libsys` to apply 1 suggestion)
+   Compiling sexnode v0.1.0 (/sex/servers/sexnode)
+warning: comparison is useless due to type limits
+  --> servers/sexnode/src/main.rs:45:16
+   |
+45 |             if build_res < 0 { return (-1, 0); }
+   |                ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_comparisons)]` on by default
+
+warning: comparison is useless due to type limits
+  --> servers/sexnode/src/main.rs:59:16
+   |
+59 |             if fetch_res < 0 { return (-1, 0); }
+   |                ^^^^^^^^^^^^^
+
+warning: comparison is useless due to type limits
+  --> servers/sexnode/src/main.rs:63:16
+   |
+63 |             if trans_res < 0 { return (-1, 0); }
+   |                ^^^^^^^^^^^^^
+
+warning: `sexnode` (bin "sexnode") generated 3 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+cargo build --manifest-path servers/sexstore/Cargo.toml --target x86_64-unknown-none
+warning: unused import: `crate::messages::MessageType`
+ --> sex-src/lib/libsys/src/pdx.rs:1:5
+  |
+1 | use crate::messages::MessageType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `libsys` (lib) generated 1 warning (run `cargo fix --lib -p libsys` to apply 1 suggestion)
+   Compiling sexstore v0.1.0 (/sex/servers/sexstore)
+warning: unused variable: `name_ptr`
+  --> servers/sexstore/src/main.rs:33:35
+   |
+33 | fn handle_store_request(cmd: u32, name_ptr: u64, buf_cap: u32) -> (i64, u64) {
+   |                                   ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_name_ptr`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sexstore` (bin "sexstore") generated 1 warning (run `cargo fix --bin "sexstore" -p sexstore` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+cargo build --manifest-path servers/sexgemini/Cargo.toml --target x86_64-unknown-none
+warning: unused import: `crate::messages::MessageType`
+ --> sex-src/lib/libsys/src/pdx.rs:1:5
+  |
+1 | use crate::messages::MessageType;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `libsys` (lib) generated 1 warning (run `cargo fix --lib -p libsys` to apply 1 suggestion)
+   Compiling sexgemini v0.1.0 (/sex/servers/sexgemini)
+warning: unused variable: `fault_addr`
+  --> servers/sexgemini/src/main.rs:37:21
+   |
+37 | fn handle_violation(fault_addr: u64) -> i64 {
+   |                     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_fault_addr`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sexgemini` (bin "sexgemini") generated 1 warning (run `cargo fix --bin "sexgemini" -p sexgemini` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+# Package all SAS artifacts into initrd.sex
+python3 sex-src/bin/sexpac.py --out initrd.sex \
+	target/x86_64-unknown-none/debug/sexc \
+	target/x86_64-unknown-none/debug/sexvfs \
+	target/x86_64-unknown-none/debug/sexdrives \
+	target/x86_64-unknown-none/debug/sexinput \
+	target/x86_64-unknown-none/debug/sexnet \
+	target/x86_64-unknown-none/debug/sexdisplay \
+	target/x86_64-unknown-none/debug/sexnode \
+	target/x86_64-unknown-none/debug/sexstore \
+	target/x86_64-unknown-none/debug/sexgemini
+sexpac: Stripping target/x86_64-unknown-none/debug/sexc...
+sexpac: Packed target/x86_64-unknown-none/debug/sexc (8704 bytes, SHA-256 verified)
+sexpac: Stripping target/x86_64-unknown-none/debug/sexvfs...
+sexpac: Packed target/x86_64-unknown-none/debug/sexvfs (5784 bytes, SHA-256 verified)
+sexpac: Stripping target/x86_64-unknown-none/debug/sexdrives...
+sexpac: Packed target/x86_64-unknown-none/debug/sexdrives (9640 bytes, SHA-256 verified)
+sexpac: Stripping target/x86_64-unknown-none/debug/sexinput...
+sexpac: Packed target/x86_64-unknown-none/debug/sexinput (2184 bytes, SHA-256 verified)
+sexpac: Stripping target/x86_64-unknown-none/debug/sexnet...
+sexpac: Packed target/x86_64-unknown-none/debug/sexnet (5176 bytes, SHA-256 verified)
+sexpac: Stripping target/x86_64-unknown-none/debug/sexdisplay...
+sexpac: Packed target/x86_64-unknown-none/debug/sexdisplay (5176 bytes, SHA-256 verified)
+sexpac: Stripping target/x86_64-unknown-none/debug/sexnode...
+sexpac: Packed target/x86_64-unknown-none/debug/sexnode (5808 bytes, SHA-256 verified)
+sexpac: Stripping target/x86_64-unknown-none/debug/sexstore...
+sexpac: Packed target/x86_64-unknown-none/debug/sexstore (5520 bytes, SHA-256 verified)
+sexpac: Stripping target/x86_64-unknown-none/debug/sexgemini...
+sexpac: Packed target/x86_64-unknown-none/debug/sexgemini (5424 bytes, SHA-256 verified)
+sexpac: Successfully generated initrd.sex
+Cloning into 'limine'...
+make[1]: Entering directory '/sex/limine'
+cc -g -O2 -pipe -Wall -Wextra    -std=c99 limine.c  -o limine
+make[1]: Leaving directory '/sex/limine'
+mkdir -p iso_root/boot
+cp target/x86_64-unknown-none/debug/sex-kernel iso_root/boot/sexos-kernel
+cp initrd.sex iso_root/boot/
+cp limine.cfg limine/limine-bios.sys limine/limine-bios-cd.bin \
+   limine/BOOTX64.EFI limine/BOOTIA32.EFI \
+   iso_root/
+xorriso -as mkisofs -b limine-bios-cd.bin \
+	-no-emul-boot -boot-load-size 4 -boot-info-table \
+	--efi-boot BOOTX64.EFI \
+	-efi-boot-part --efi-boot-image --protective-msdos-label \
+	iso_root -o sexos-v1.0.0.iso
+xorriso 1.5.2 : RockRidge filesystem manipulator, libburnia project.
+
+Drive current: -outdev 'stdio:sexos-v1.0.0.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  400g free
+Added to ISO image: directory '/'='/sex/iso_root'
+xorriso : UPDATE :       8 files added in 1 seconds
+xorriso : UPDATE :       8 files added in 1 seconds
+ISO image produced: 3564 sectors
+Written to medium : 3564 sectors at LBA 0
+Writing to 'stdio:sexos-v1.0.0.iso' completed successfully.
+
+./limine/limine bios-install sexos-v1.0.0.iso
+Physical block size of 512 bytes.
+Installing to GPT. Logical block size of 512 bytes.
+Secondary header at LBA 0x37af.
+Secondary header valid.
+GPT partition NOT specified. Attempting GPT embedding.
+New maximum count of partition entries: 44.
+Stage 2 to be located at 0x1a00 and 0x6efa00.
+Reminder: Remember to copy the limine-bios.sys file in either
+          the root, /boot, /limine, or /boot/limine directories of
+          one of the partitions on the device, or boot will fail!
+Limine BIOS stages installed successfully!
+--------------------------------------------------
+SexOS Production Release v1.0.0: sexos-v1.0.0.iso READY.
+--------------------------------------------------

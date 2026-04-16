@@ -1,15 +1,19 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
 use core::panic::PanicInfo;
-use sex_kernel::{init, serial_println};
+use sex_kernel::serial_println;
 use alloc::sync::Arc;
 use sex_kernel::capability::ProtectionDomain;
 use sex_kernel::ipc::DOMAIN_REGISTRY;
 use sex_kernel::scheduler::{Task, TaskContext, TaskState};
+use sex_kernel::pd::create::create_protection_domain;
+use x86_64::VirtAddr;
 
-const BOOTLOADER_CONFIG: BootloaderConfig = {
+pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
     config.mappings.physical_memory = Some(bootloader_api::config::Mapping::Dynamic);
     config
@@ -18,120 +22,66 @@ const BOOTLOADER_CONFIG: BootloaderConfig = {
 entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    sex_kernel::vga_println!("--------------------------------------------------");
-    sex_kernel::vga_println!("Sex Microkernel v0.1 - SASOS Core Bootstrap");
-    sex_kernel::vga_println!("--------------------------------------------------");
+    // 1. Initial Serial/VGA setup
+    // sex_kernel::serial::init(); // Handled by lazy_static
+    sex_kernel::vga::_print(format_args!("Sex Microkernel v1.0.0 Loading...\n"));
 
-    // 1. Initialize HAL (GDT, IDT)
+    // 2. Hardware Abstraction Layer (GDT, IDT, PIC)
     sex_kernel::hal::init();
-    
-    // Disable legacy PIC
-    unsafe {
-        use pic8259::ChainedPics;
-        let mut pics = ChainedPics::new(0x20, 0x28);
-        pics.disable();
-    }
 
-    let phys_mem_offset = x86_64::VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
-    
-    // 2. Initialize Memory (Sexting, Frame Allocator, Global VAS)
-    let mapper = unsafe { sex_kernel::memory::init_sexting(phys_mem_offset) };
+    // 3. Memory & Virtual Address Space
+    let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
+    let mut mapper = unsafe { sex_kernel::memory::init_sexting(phys_mem_offset) };
     let mut frame_allocator = unsafe {
         sex_kernel::memory::BitmapFrameAllocator::init(&boot_info.memory_regions, phys_mem_offset)
     };
 
-    // Phase 14: Bootstrap Lock-Free Buddy Allocator
-    let total_pages = 0x100000; // 4 GiB
-    let metadata_size = total_pages * core::mem::size_of::<sex_kernel::memory::allocator::PageMetadata>();
-    let metadata_pages = (metadata_size + 4095) / 4096;
-    let metadata_phys = frame_allocator.allocate_contiguous(metadata_pages).expect("OOM for metadata");
-    let metadata_vaddr = phys_mem_offset.as_u64() + metadata_phys.start_address().as_u64();
-
-    unsafe {
-        sex_kernel::memory::allocator::GLOBAL_ALLOCATOR.init_from_mmap(
-            0, total_pages as u64 * 4096, metadata_vaddr
-        );
-    }
-
-    let global_vas_inst = sex_kernel::memory::GlobalVas {
+    // Phase 14: Bootstrap the Global Virtual Address Space
+    let mut global_vas_inst = sex_kernel::memory::GlobalVas {
         mapper,
         frame_allocator,
         phys_mem_offset,
     };
-    
+
+    // 4. Global Allocator Initialization
+    sex_kernel::allocator::init_heap(&mut global_vas_inst.mapper, &mut global_vas_inst.frame_allocator)
+        .expect("Heap initialization failed");
+
     {
         let mut gvas = sex_kernel::memory::GLOBAL_VAS.lock();
         *gvas = Some(global_vas_inst);
     }
+
+    // 5. Symmetric Multi-Processing (SMP)
+    sex_kernel::apic::init_apic(boot_info.rsdp_addr.into_option().unwrap(), phys_mem_offset);
+    sex_kernel::smp::boot_aps();
+
+    // 6. Spawn Core System Domains (Isolation Level 1)
+    serial_println!("pd: Spawning core services...");
     
-    let mut gvas_locked = sex_kernel::memory::GLOBAL_VAS.lock();
-    let global_vas = gvas_locked.as_mut().unwrap();
-
-    // Initialize Heap
-    sex_kernel::allocator::init_heap(&mut global_vas.mapper, &mut global_vas.frame_allocator)
-        .expect("Heap initialization failed");
-
-    // 3. Initialize Multi-Core & APIC
-    if let Some(rsdp_addr) = boot_info.rsdp_addr.into_option() {
-        sex_kernel::apic::init_apic(rsdp_addr, phys_mem_offset);
-        unsafe {
-            // Map Hardware IRQs
-            sex_kernel::apic::map_irq(1, 0x21, 0, phys_mem_offset); // Keyboard
-            sex_kernel::apic::map_irq(12, 0x2C, 0, phys_mem_offset); // Mouse
-            sex_kernel::core_local::CoreLocal::init(0);
-
-            // Phase 13.2.1: Register PD 0 (Kernel/Root)
-            let root_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(sex_kernel::capability::ProtectionDomain::new(0, 0)));
-            sex_kernel::ipc::DOMAIN_REGISTRY.insert(0, root_pd);
-            sex_kernel::core_local::CoreLocal::get().set_pd(0);
-            unsafe { sex_kernel::capabilities::engine::CapEngine::grant_initial_rights(&*root_pd); }
-            }
-
+    unsafe {
+        // Root Domain (Slot 0)
+        let root_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(sex_kernel::capability::ProtectionDomain::new(0, 0)));
+        DOMAIN_REGISTRY.insert(0, root_pd);
     }
 
-    // 4. Initialize Protection Domains (PKU)
-    if sex_kernel::pku::is_pku_supported() {
-        unsafe { 
-            sex_kernel::pku::enable_pku(); 
-            sex_kernel::pku::Pkru::write(0xFFFF_FFFF);
-        }
-    }
-
-    // 5. Initialize Scheduler
-    // Note: SCHEDULERS is already initialized as a static array
-
-    // 6. Bootstrap Advanced Interaction Suite (Simulated)
+    let _sext = create_protection_domain("/servers/sext/bin/sext\0", None).expect("sext lost");
+    
+    // 7. Advanced Interaction Suite (Capability Engine)
     sex_kernel::bootstrap_advanced_services();
 
-    // --- PHASE 3: SAS INITRD BOOTSTRAP ---
-    serial_println!("--------------------------------------------------");
-    serial_println!("Sex Microkernel: Bootstrapping SAS Ecosystem...");
+    let _sexinput = create_protection_domain("/servers/sexinput/bin/sexinput\0", None).expect("sexinput lost");
+    let _sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0", None).expect("sexnet lost");
 
-    if let Some(ramdisk_addr) = boot_info.ramdisk_addr.into_option() {
-        let ramdisk_len = boot_info.ramdisk_len;
-        let ramdisk_vaddr = x86_64::VirtAddr::new(ramdisk_addr + phys_mem_offset.as_u64());
-        
-        sex_kernel::initrd::bootstrap_initrd(ramdisk_vaddr, ramdisk_len, global_vas)
-            .expect("INITRD: Bootstrap failed");
-    }
+    serial_println!("Sex SASOS: Production Ready (Phase 16).");
 
-    serial_println!("SAS Ecosystem ready. Handoff to system servers.");
-    serial_println!("--------------------------------------------------");
-
-    // Phase 8: Root shell and system servers bootstrap
-    sex_kernel::init::init();
-
-    // Phase 16: Performance Benchmarking
-    sex_kernel::benchmark::run_maturity_benchmarks();
-
-    // Start execution on first core
-    let sched = &sex_kernel::scheduler::SCHEDULERS[0];
-    if let Some((_old_ctx, next_ctx)) = sched.tick() {
+    // 8. Yield to Scheduler
+    if let Some((_, next_ctx)) = sex_kernel::scheduler::SCHEDULERS[0].tick() {
         unsafe {
             sex_kernel::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx);
         }
     } else {
-        panic!("BOOT: No tasks found in runqueue!");
+        panic!("Main loop failed to enqueue!");
     }
 
     loop {

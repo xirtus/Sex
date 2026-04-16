@@ -10,7 +10,7 @@ pub fn sys_store_fetch(store_cap_id: u32, name_ptr: u64, buffer_vaddr: u64, size
     let current_pd = CoreLocal::get().current_pd_ref();
     
     // 1. Identify target via Capability
-    let store_cap = match current_pd.cap_table.find(store_cap_id) {
+    let store_cap = match unsafe { &*current_pd.cap_table }.find(store_cap_id) {
         Some(cap) => cap,
         None => return -1,
     };

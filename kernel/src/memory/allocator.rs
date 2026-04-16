@@ -211,3 +211,35 @@ impl LockFreeBuddyAllocator {
 pub static GLOBAL_ALLOCATOR: LockFreeBuddyAllocator = LockFreeBuddyAllocator::new();
 pub fn alloc_frame() -> Option<u64> { GLOBAL_ALLOCATOR.alloc(0) }
 pub fn free_pages(phys: u64, order: usize) { GLOBAL_ALLOCATOR.free(phys, order) }
+
+pub fn init_heap(
+    mapper: &mut impl x86_64::structures::paging::Mapper<x86_64::structures::paging::Size4KiB>,
+    frame_allocator: &mut impl x86_64::structures::paging::FrameAllocator<x86_64::structures::paging::Size4KiB>,
+) -> Result<(), x86_64::structures::paging::mapper::MapToError<x86_64::structures::paging::Size4KiB>> {
+    use x86_64::{
+        structures::paging::{Page, PageTableFlags},
+        VirtAddr,
+    };
+
+    let page_range = {
+        let heap_start = VirtAddr::new(crate::HEAP_START as u64);
+        let heap_end = heap_start + (crate::HEAP_SIZE as u64) - 1u64;
+        let heap_start_page = Page::containing_address(heap_start);
+        let heap_end_page = Page::containing_address(heap_end);
+        Page::range_inclusive(heap_start_page, heap_end_page)
+    };
+
+    for page in page_range {
+        let frame = frame_allocator
+            .allocate_frame()
+            .ok_or(x86_64::structures::paging::mapper::MapToError::FrameAllocationFailed)?;
+        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+        unsafe { mapper.map_to(page, frame, flags, frame_allocator)?.flush() };
+    }
+
+    unsafe {
+        crate::ALLOCATOR.lock().init(crate::HEAP_START as *mut u8, crate::HEAP_SIZE);
+    }
+
+    Ok(())
+}

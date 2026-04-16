@@ -1,33 +1,45 @@
 # SexOS Final Release Build System (v1.0.0)
-.PHONY: all build-kernel build-servers initrd iso release run-sasos clean
+.PHONY: all build-kernel build-servers initrd limine iso release run-sasos clean
 
 # Configuration
-KERNEL_ELF = target/x86_64-sexos/debug/sex-kernel
+KERNEL_ELF = target/x86_64-unknown-none/debug/sex-kernel
 ISO_IMAGE = sexos-v1.0.0.iso
 ISO_ROOT = iso_root
 LIMINE_VERSION = v7.x-binary
 SEXPAC = python3 sex-src/bin/sexpac.py
 
+# Docker wrapper for Apple Silicon / Host safety
+DOCKER_IMG = sexos-builder:latest
+DOCKER_RUN = docker run --rm -v $(PWD):/sexos -w /sexos $(DOCKER_IMG)
+
+ifeq ($(wildcard /.dockerenv),)
+	CARGO = $(DOCKER_RUN) cargo
+	CMD_RUN = $(DOCKER_RUN)
+else
+	CARGO = cargo
+	CMD_RUN = 
+endif
+
 all: release
 
 build-kernel:
-	cargo build --package sex-kernel --target x86_64-unknown-none
+	$(CARGO) build --package sex-kernel --target x86_64-unknown-none
 
 build-servers:
 	# Build all standalone servers
-	cd servers/sexc && cargo build --target x86_64-unknown-none
-	cd servers/sexvfs && cargo build --target x86_64-unknown-none
-	cd servers/sexdrives && cargo build --target x86_64-unknown-none
-	cd servers/sexinput && cargo build --target x86_64-unknown-none
-	cd servers/sexnet && cargo build --target x86_64-unknown-none
-	cd servers/sexdisplay && cargo build --target x86_64-unknown-none
-	cd servers/sexnode && cargo build --target x86_64-unknown-none
-	cd servers/sexstore && cargo build --target x86_64-unknown-none
-	cd servers/sexgemini && cargo build --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/sexc/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/sexvfs/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/sexdrives/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/sexinput/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/sexnet/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/sexdisplay/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/sexnode/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/sexstore/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/sexgemini/Cargo.toml --target x86_64-unknown-none
 
 initrd: build-servers
 	# Package all SAS artifacts into initrd.sex
-	$(SEXPAC) --out initrd.sex \
+	$(CMD_RUN) $(SEXPAC) --out initrd.sex \
 		target/x86_64-unknown-none/debug/sexc \
 		target/x86_64-unknown-none/debug/sexvfs \
 		target/x86_64-unknown-none/debug/sexdrives \
@@ -36,13 +48,12 @@ initrd: build-servers
 		target/x86_64-unknown-none/debug/sexdisplay \
 		target/x86_64-unknown-none/debug/sexnode \
 		target/x86_64-unknown-none/debug/sexstore \
-		target/x86_64-unknown-none/debug/sexgemini \
-		sex-src/bin/ash
+		target/x86_64-unknown-none/debug/sexgemini
 
 limine:
 	@if [ ! -d "limine" ]; then \
 		git clone https://github.com/limine-bootloader/limine.git --branch=$(LIMINE_VERSION) --depth=1; \
-		make -C limine; \
+		$(CMD_RUN) make -C limine; \
 	fi
 
 iso: build-kernel initrd limine
@@ -50,14 +61,14 @@ iso: build-kernel initrd limine
 	cp $(KERNEL_ELF) $(ISO_ROOT)/boot/sexos-kernel
 	cp initrd.sex $(ISO_ROOT)/boot/
 	cp limine.cfg limine/limine-bios.sys limine/limine-bios-cd.bin \
-	   limine/limine-uefi-binary/BOOTX64.EFI limine/limine-uefi-binary/BOOTIA32.EFI \
+	   limine/BOOTX64.EFI limine/BOOTIA32.EFI \
 	   $(ISO_ROOT)/
-	xorriso -as mkisofs -b limine-bios-cd.bin \
+	$(CMD_RUN) xorriso -as mkisofs -b limine-bios-cd.bin \
 		-no-emul-boot -boot-load-size 4 -boot-info-table \
 		--efi-boot BOOTX64.EFI \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		$(ISO_ROOT) -o $(ISO_IMAGE)
-	./limine/limine bios-install $(ISO_IMAGE)
+	$(CMD_RUN) ./limine/limine bios-install $(ISO_IMAGE)
 
 release: iso
 	@echo "--------------------------------------------------"
@@ -70,5 +81,5 @@ run-sasos: release
 		-cdrom $(ISO_IMAGE)
 
 clean:
-	cargo clean
+	rm -rf target/
 	rm -rf $(ISO_ROOT) $(ISO_IMAGE) initrd.sex limine

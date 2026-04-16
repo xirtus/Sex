@@ -153,9 +153,9 @@ impl Scheduler {
         unsafe { Some((&mut (*old_task).context, &(*next_task).context)) }
     }
 
-    #[naked]
+    #[unsafe(naked)]
     pub unsafe extern "C" fn switch_to(old_context: *mut TaskContext, next_context: *const TaskContext) {
-        core::arch::asm!(
+        core::arch::naked_asm!(
             "test rdi, rdi",
             "jz 2f", // Skip saving if old_context is null (first boot)
             "mov [rdi + 0x00], r15", "mov [rdi + 0x08], r14",
@@ -167,16 +167,15 @@ impl Scheduler {
             "mov r13, [rsi + 0x10]", "mov r12, [rsi + 0x18]",
             "mov rbx, [rsi + 0x20]", "mov rbp, [rsi + 0x28]",
             "mov eax, [rsi + 0x30]", "xor edx, edx", "xor ecx, ecx", "wrpkru",
-            "mov eax, [rsi + 0x34]", "mov [gs:0], eax",
+            "mov eax, [rsi + 0x34]", "mov gs:[0], eax",
             "push [rsi + 0x60]", "push [rsi + 0x58]", "push [rsi + 0x50]",
             "push [rsi + 0x48]", "push [rsi + 0x40]",
             "iretq",
-            options(noreturn)
         );
     }
 }
 
-pub static SCHEDULERS: [Scheduler; 128] = [Scheduler::new(); 128];
+pub static SCHEDULERS: [Scheduler; 128] = [const { Scheduler::new() }; 128];
 
 pub fn park_current_thread() {
     let core_id = crate::core_local::CoreLocal::get().core_id;

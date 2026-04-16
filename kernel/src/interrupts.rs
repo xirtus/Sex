@@ -5,12 +5,14 @@ use crate::capability::ProtectionDomain;
 use crate::ipc_ring::RingBuffer;
 use crate::ipc_ring::SpscRing;
 use lazy_static::lazy_static;
-use conquer_once::spin::Mutex;
+use spin::Mutex;
+
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use crate::ipc::DOMAIN_REGISTRY;
 use crate::ipc::messages::MessageType;
+use x86_64::VirtAddr;
 
 /// The event structure for a page fault.
 #[derive(Debug, Clone, Copy)]
@@ -61,20 +63,19 @@ pub fn register_irq_route(vector: u8, pd_id: u32) {
 lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
-        idt.breakpoint.set_handler_fn(breakpoint_handler);
         unsafe {
-            idt.double_fault.set_handler_fn(double_fault_handler)
+            idt.breakpoint.set_handler_addr(VirtAddr::new(breakpoint_handler as *const () as u64));
+            idt.double_fault.set_handler_addr(VirtAddr::new(double_fault_handler as *const () as u64))
                 .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
+            idt.page_fault.set_handler_addr(VirtAddr::new(page_fault_handler as *const () as u64));
+            
+            // Timer at 0x20
+            idt[0x20].set_handler_addr(VirtAddr::new(timer_interrupt_handler as *const () as u64));
+            
+            // Map hardware vectors (0x21 to 0x30) to generic_irq_handler
+            idt[0x21].set_handler_addr(VirtAddr::new(keyboard_interrupt_handler as *const () as u64));
+            idt[0x22].set_handler_addr(VirtAddr::new(generic_irq_handler as *const () as u64)); 
         }
-        idt.page_fault.set_handler_fn(page_fault_handler);
-        
-        // Timer at 0x20
-        idt[0x20].set_handler_fn(timer_interrupt_handler);
-        
-        // Map hardware vectors (0x21 to 0x30) to generic_irq_handler
-        idt[0x21].set_handler_fn(keyboard_interrupt_handler);
-        idt[0x22].set_handler_fn(generic_irq_handler); 
-        
         idt
     };
 }
@@ -111,7 +112,7 @@ extern "x86-interrupt" fn page_fault_handler(
             task_id = task.id;
             task.context.rip = stack_frame.instruction_pointer.as_u64();
             task.context.rsp = stack_frame.stack_pointer.as_u64();
-            task.context.rflags = stack_frame.cpu_flags.as_u64();
+            task.context.rflags = stack_frame.cpu_flags;
             task.state.store(crate::scheduler::STATE_BLOCKED, Ordering::Release);
         }
     }
@@ -146,7 +147,7 @@ extern "x86-interrupt" fn timer_interrupt_handler(stack_frame: InterruptStackFra
             let old_ctx = &mut *old_ctx_ptr;
             old_ctx.rip = stack_frame.instruction_pointer.as_u64();
             old_ctx.rsp = stack_frame.stack_pointer.as_u64();
-            old_ctx.rflags = stack_frame.cpu_flags.as_u64();
+            old_ctx.rflags = stack_frame.cpu_flags;
             send_eoi();
             crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
         }
@@ -169,9 +170,9 @@ fn route_interrupt(vector: u8) {
         return;
     }
 
-    if let Some(target_pd) = DOMAIN_REGISTRY.get(pd_id) {
+    if let Some(target_pd) = crate::ipc::DOMAIN_REGISTRY.get(pd_id) {
         let msg = MessageType::HardwareInterrupt { vector, data: 0 };
-        let _ = target_pd.message_ring.enqueue(msg);
+        let _ = unsafe { &*target_pd.message_ring }.enqueue(msg);
         
         // Wake the driver trampoline/main thread
         let main_task = target_pd.main_task.load(Ordering::Acquire);

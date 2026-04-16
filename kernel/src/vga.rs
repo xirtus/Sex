@@ -1,6 +1,6 @@
 use core::fmt;
 use lazy_static::lazy_static;
-use conquer_once::spin::Mutex;
+use spin::Mutex;
 use volatile::Volatile;
 
 #[allow(dead_code)]
@@ -40,6 +40,19 @@ impl ColorCode {
 struct ScreenChar {
     ascii_character: u8,
     color_code: ColorCode,
+}
+
+impl core::ops::Deref for ScreenChar {
+    type Target = ScreenChar;
+    fn deref(&self) -> &Self::Target {
+        self
+    }
+}
+
+impl core::ops::DerefMut for ScreenChar {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self
+    }
 }
 
 const BUFFER_HEIGHT: usize = 25;
@@ -122,7 +135,7 @@ lazy_static! {
     pub static ref WRITER: Mutex<Writer> = Mutex::new(Writer {
         column_position: 0,
         color_code: ColorCode::new(Color::Yellow, Color::Black),
-        unsafe { &mut *(0xb8000 as *mut Buffer) },
+        buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
     });
 }
 

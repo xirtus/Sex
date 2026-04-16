@@ -19,7 +19,7 @@ fn route_net_call(cmd: u32, target_cap_id: u32, socket_cap_id: u32, size: u64, b
     let current_pd = CoreLocal::get().current_pd_ref();
     
     // 1. Identify target PD via capability
-    let target_cap = match current_pd.cap_table.find(target_cap_id) {
+    let target_cap = match unsafe { &*current_pd.cap_table }.find(target_cap_id) {
         Some(cap) => cap,
         None => return -1,
     };

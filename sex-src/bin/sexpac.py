@@ -17,7 +17,7 @@ def pack_pd(bin_path, out_file):
     # 1. Strip debug symbols
     stripped_path = bin_path + ".stripped"
     print(f"sexpac: Stripping {bin_path}...")
-    subprocess.run(["strip", "-s", bin_path, "-o", stripped_path], check=True)
+    subprocess.run(["rust-strip", "-s", bin_path, "-o", stripped_path], check=True)
     
     # 2. Read data and calculate SHA-256
     with open(stripped_path, "rb") as f:

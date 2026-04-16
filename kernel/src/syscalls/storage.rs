@@ -19,7 +19,7 @@ fn route_storage_call(cmd: u32, device_cap_id: u32, offset: u64, size: u64, buff
     let current_pd = CoreLocal::get().current_pd_ref();
     
     // 1. Identify target via Pci device capability
-    let device_cap = match current_pd.cap_table.find(device_cap_id) {
+    let device_cap = match unsafe { &*current_pd.cap_table }.find(device_cap_id) {
         Some(cap) => cap,
         None => return -1,
     };

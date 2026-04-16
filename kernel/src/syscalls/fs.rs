@@ -19,7 +19,7 @@ fn route_vfs_call(cmd: u32, vfs_cap_id: u32, size: u64, buffer_vaddr: u64) -> i6
     let current_pd = CoreLocal::get().current_pd_ref();
     
     // 1. Resolve target via VFS capability (RCU-lookup)
-    let vfs_cap = match current_pd.cap_table.find(vfs_cap_id) {
+    let vfs_cap = match unsafe { &*current_pd.cap_table }.find(vfs_cap_id) {
         Some(cap) => cap,
         None => return -1,
     };

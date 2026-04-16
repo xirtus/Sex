@@ -1,6 +1,6 @@
 use core::alloc::Layout;
 use core::ptr::NonNull;
-use conquer_once::spin::Mutex;
+use spin::Mutex;
 use alloc::vec::Vec;
 
 /// A simple Slab Allocator for fixed-size kernel objects.
@@ -11,6 +11,9 @@ pub struct Slab {
     pub free_list: Vec<*mut u8>,
 }
 
+unsafe impl Send for Slab {}
+unsafe impl Sync for Slab {}
+
 impl Slab {
     pub fn new(object_size: usize) -> Self {
         Self {
@@ -20,7 +23,7 @@ impl Slab {
     }
 
     /// Refills the slab by allocating a new 4KiB page.
-    pub fn refill(&mut self, allocator: &mut crate::memory::BitmapFrameAllocator) {
+    pub fn refill(&mut self, allocator: &mut impl x86_64::structures::paging::FrameAllocator<x86_64::structures::paging::Size4KiB>) {
         use x86_64::structures::paging::FrameAllocator;
         if let Some(frame) = allocator.allocate_frame() {
             // In a SASOS, we can assume identity mapping or use the phys_offset

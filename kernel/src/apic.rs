@@ -3,7 +3,7 @@ use core::ptr::NonNull;
 use x86_64::{PhysAddr, VirtAddr};
 use crate::serial_println;
 use alloc::vec::Vec;
-use conquer_once::spin::Mutex;
+use spin::Mutex;
 use lazy_static::lazy_static;
 
 #[derive(Clone, Copy)]
@@ -51,7 +51,7 @@ pub fn init_apic(rsdp_addr: u64, physical_memory_offset: VirtAddr) {
     let handler = SexAcpiHandler { physical_memory_offset };
     let tables = unsafe { AcpiTables::from_rsdp(handler, rsdp_addr as usize).expect("ACPI: Failed to parse tables") };
 
-    let platform_info = tables.platform_info().expect("ACPI: Failed to get platform info");
+    let platform_info = tables.platform_info_in(alloc::alloc::Global).expect("ACPI: Failed to get platform info");
     
     if let acpi::InterruptModel::Apic(apic_info) = platform_info.interrupt_model {
         let lapic_virt = physical_memory_offset + apic_info.local_apic_address;
@@ -74,16 +74,16 @@ pub fn init_apic(rsdp_addr: u64, physical_memory_offset: VirtAddr) {
 
         let mut processors = PROCESSORS.lock();
         if let Some(proc_info) = platform_info.processor_info {
-            for proc in proc_info.application_processors {
+            for proc in proc_info.application_processors.iter() {
                 processors.push(ProcessorInfo {
                     id: proc.processor_uid,
-                    local_apic_id: proc.local_apic_id,
+                    local_apic_id: proc.local_apic_id as u8,
                     is_bsp: false,
                 });
             }
             processors.push(ProcessorInfo {
                 id: proc_info.boot_processor.processor_uid,
-                local_apic_id: proc_info.boot_processor.local_apic_id,
+                local_apic_id: proc_info.boot_processor.local_apic_id as u8,
                 is_bsp: true,
             });
         }

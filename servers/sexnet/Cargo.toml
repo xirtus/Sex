@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+x86_64 = { version = "0.14.13", default-features = false, features = ["instructions"] }
 libsys = { path = "../../sex-src/lib/libsys", default-features = false }
 bitflags = { version = "2.4.0", default-features = false }
 radium = { version = "0.7.0", default-features = false }
