@@ -1,7 +1,5 @@
 use crate::serial_println;
 use crate::ipc::safe_pdx_call;
-use crate::core_local::CoreLocal;
-use core::sync::atomic::{AtomicU64, Ordering};
 
 /// SexOS Maturity Benchmarks: Proving SASOS superiority over Monolithic Linux.
 /// Measures context-switch latency, I/O throughput, and interrupt response.

@@ -1,6 +1,5 @@
 use crate::serial_println;
 use alloc::vec::Vec;
-use crate::capability::{PciCapData, CapabilityData};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PciDevice {
