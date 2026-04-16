@@ -15,12 +15,6 @@ if [ ! -f "dist/${ISO_FILE}" ] && [ -f "${ISO_FILE}" ]; then
   mv "${ISO_FILE}" dist/ 2>/dev/null || true
 fi
 
-# Detect OS for KVM support
-KVM_FLAG=""
-if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    KVM_FLAG="-enable-kvm"
-fi
-
 QEMU_CMD="qemu-system-x86_64 \
   -machine q35 \
   -cpu max,pku=on \
@@ -28,8 +22,7 @@ QEMU_CMD="qemu-system-x86_64 \
   -m 2G \
   -serial stdio \
   -display none \
-  -cdrom dist/${ISO_FILE} \
-  ${KVM_FLAG}"
+  -cdrom dist/${ISO_FILE}"
 
 echo "=== Sex SASOS QEMU Production Boot ==="
 echo "Launching with full PKU + SAS invariants..."
