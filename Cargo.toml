@@ -12,6 +12,7 @@ members = [
     "servers/sexdisplay",
     "servers/sexdrive",
     "servers/tuxedo",
+    "servers/sexstore-gui",
 ]
 resolver = "2"
 

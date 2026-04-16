@@ -18,7 +18,7 @@ struct Inode {
 }
 
 impl RamFs {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             inodes: RwLock::new(BTreeMap::new()),
             next_inode: AtomicU64::new(1),

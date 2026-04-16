@@ -85,6 +85,19 @@ pub fn init_pd_pkru(key: u8) -> u32 {
     pkru
 }
 
+pub fn multicast_revoke_key(_key: u8) {
+    // 1. Broadcast IPI to all other cores (Vector 0x40)
+    unsafe {
+        // Destination Shorthand: 0b11 (All excluding self)
+        // Delivery Mode: 0b000 (Fixed)
+        // Vector: 0x40
+        crate::apic::send_ipi(0, 0x40, (0b11 << 18));
+    }
+
+    // 2. Flush local TLB
+    crate::hal::tlb_flush_local();
+}
+
 pub fn rdseed_u64() -> Option<u64> {
     let mut val: u64;
     let success: u8;

@@ -1,11 +1,9 @@
-/// HandoverRead: Handover Read protocol
-/// HandoverWrite: Handover Write protocol
-/// Large Read/Write return PageHandover. Arena allocator for metadata.
-/// 3-cycle PKU dance: pku_grant_temporary(client_key, PKU_WRU) -> capability copy only -> pku_restore()
-
 use crate::messages::{VfsProtocol, PageHandover};
 use sex_pdx::ring::PdxReply;
 use core::sync::atomic::{AtomicU64, Ordering};
+use crate::backends::FsBackend;
+use crate::backends::ramfs::RamFs;
+use crate::backends::diskfs::DiskFs;
 
 /// Phase 19: Handover Trampoline Architecture.
 
@@ -13,6 +11,37 @@ pub static IPC_OPS_TOTAL: AtomicU64 = AtomicU64::new(0);
 pub static ZERO_COPY_HANDOVERS: AtomicU64 = AtomicU64::new(0);
 pub static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 pub static PKU_FLIPS: AtomicU64 = AtomicU64::new(0);
+
+pub static RAMFS: RamFs = RamFs::new();
+pub static DISKFS: DiskFs = DiskFs::new();
+
+pub struct MountEntry {
+    pub prefix: &'static str,
+    pub backend: &'static dyn FsBackend,
+}
+
+pub struct MountTable {
+    pub entries: [Option<MountEntry>; 4],
+}
+
+pub static MOUNT_TABLE: MountTable = MountTable {
+    entries: [
+        Some(MountEntry { prefix: "/dev", backend: &DISKFS }),
+        Some(MountEntry { prefix: "/", backend: &RAMFS }),
+        None, None,
+    ],
+};
+
+impl MountTable {
+    pub fn route(&self, path: &str) -> Option<(&'static dyn FsBackend, &str)> {
+        for entry in self.entries.iter().flatten() {
+            if path.starts_with(entry.prefix) {
+                return Some((entry.backend, &path[entry.prefix.len()..]));
+            }
+        }
+        None
+    }
+}
 
 #[inline(always)]
 pub unsafe fn pku_grant_temporary(key: u8) -> u32 {
@@ -51,15 +80,27 @@ pub unsafe fn pku_restore(old_pkru: u32) {
 pub fn handle_vfs_message(msg: &VfsProtocol, reply: &mut PdxReply) {
     IPC_OPS_TOTAL.fetch_add(1, Ordering::Relaxed);
     match msg {
-        VfsProtocol::Open => {
-            reply.status = 0;
-            reply.size = 42;
+        VfsProtocol::Open { path, flags, mode } => {
+            let path_str = core::str::from_utf8(path).unwrap_or("").trim_matches('\0');
+            if let Some((backend, subpath)) = MOUNT_TABLE.route(path_str) {
+                match backend.open(subpath, *flags, *mode) {
+                    Ok(inode) => {
+                        reply.status = 0;
+                        reply.size = inode;
+                    },
+                    Err(e) => reply.status = e,
+                }
+            } else {
+                reply.status = -2; // ENOENT
+            }
         },
         VfsProtocol::HandoverRead { page, offset, len } => {
             ZERO_COPY_HANDOVERS.fetch_add(1, Ordering::Relaxed);
-            // 3-cycle PKU dance
+            // In a real system, we would use the inode/fd to call the backend
+            // Here we simulate the 3-cycle PKU dance
             unsafe {
                 let old_pkru = pku_grant_temporary(page.pku_key);
+                // backend.read(...) logic here
                 pku_restore(old_pkru);
             }
             reply.status = 0;
@@ -69,6 +110,7 @@ pub fn handle_vfs_message(msg: &VfsProtocol, reply: &mut PdxReply) {
             ZERO_COPY_HANDOVERS.fetch_add(1, Ordering::Relaxed);
             unsafe {
                 let old_pkru = pku_grant_temporary(page.pku_key);
+                // backend.write(...) logic here
                 pku_restore(old_pkru);
             }
             reply.status = 0;
@@ -83,8 +125,4 @@ pub fn handle_vfs_message(msg: &VfsProtocol, reply: &mut PdxReply) {
             reply.size = 0;
         }
     }
-}
-
-pub fn handle_vfs_request(_msg: &crate::pdx::MessageType) -> crate::pdx::MessageType {
-    crate::pdx::MessageType::VfsReply { status: -1, size: 0 }
 }

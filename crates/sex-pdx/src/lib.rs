@@ -9,6 +9,39 @@ use serde::{Deserialize, Serialize};
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct PageHandover {
+    pub pfn: u64,
+    pub pku_key: u8,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum DisplayProtocol {
+    DisplayBufferAlloc { width: u32, height: u32, format: u32 },
+    DisplayBufferCommit { page: PageHandover },
+    Stats,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum StoreProtocol {
+    FetchPackage { name: [u8; 256] },
+    CacheBinary { name: [u8; 256], image: PageHandover },
+    Stats,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum NodeProtocol {
+    LoadDriver { image: PageHandover },
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum MessageType {
     RawCall(u64),
     Signal(u32),
@@ -25,10 +58,9 @@ pub enum MessageType {
     HardwareInterrupt { vector: u8, data: u64 },
     VfsCall,
     VfsReply { status: i64, size: u64 },
-    StoreCall,
-    StoreReply { status: i64, size: u64 },
-    InputCall,
-    InputReply { status: i64, size: u64 },
+    
+    Store(StoreProtocol),
+    Node(NodeProtocol),
 
     // Phase 18: Advanced Zero-Copy VFS Protocol
     VfsOpen { path: [u8; 512], flags: u32, mode: u32 },
@@ -40,12 +72,11 @@ pub enum MessageType {
     VfsZeroCopyHandover { page_count: u16, pfn_list: [u64; 64] },
 
     // Display Server Protocol (Phase 16: PDX Display)
-    DisplayBufferAlloc { width: u32, height: u32, format: u32 },
-    DisplayBufferCommit { buffer_id: u32, damage_x: u32, damage_y: u32, damage_w: u32, damage_h: u32 },
-    DisplayBufferReply { page_count: u32, pfn_list: [u64; 64], pku_key: u8 },
+    Display(DisplayProtocol),
     DisplayModeset { width: u32, height: u32, refresh: u32 },
     DisplayCursor { x: i32, y: i32, visible: bool, buffer_id: u32 },
     DisplayGeminiRepairDisplay,
+    RevokeKey { key: u8 },
 }
 
 #[derive(Debug, Clone, Copy)]

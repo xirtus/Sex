@@ -66,6 +66,9 @@ lazy_static! {
         // Timer at 0x20
         idt[0x20].set_handler_fn(timer_interrupt_handler);
 
+        // Revocation IPI at 0x40
+        idt[0x40].set_handler_fn(revoke_key_handler);
+
         // Map hardware vectors (0x21 to 0x30) to generic_irq_handler
         idt[0x21].set_handler_fn(keyboard_interrupt_handler);
         idt[0x22].set_handler_fn(generic_irq_handler); 
@@ -154,6 +157,12 @@ extern "x86-interrupt" fn generic_irq_handler(_stack_frame: InterruptStackFrame)
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     route_interrupt(0x21);
+}
+
+extern "x86-interrupt" fn revoke_key_handler(_stack_frame: InterruptStackFrame) {
+    // Phase 19: Multicast Revocation TLB Shootdown
+    crate::hal::tlb_flush_local();
+    unsafe { send_eoi(); }
 }
 
 fn route_interrupt(vector: u8) {

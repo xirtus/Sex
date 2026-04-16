@@ -4,14 +4,11 @@
 
 mod messages;
 
-use sex_pdx::{pdx_listen, pdx_reply, pdx_call, MessageType};
-use sex_pdx::mmio::Mmio;
-use sex_pdx::dma::DmaBuffer;
-use core::sync::atomic::{AtomicU32, Ordering};
-use crate::messages::{DisplayMessageType, DisplayBufferReply};
+use sex_pdx::{pdx_listen, pdx_reply, pdx_call, MessageType, DisplayProtocol, PageHandover};
+use core::sync::atomic::{AtomicU64, Ordering};
 
-/// Phase 16: PDX Display Server (Zero-Copy Compositor)
-/// Pure asynchronous PDX messages, Lock-free, No-Remnants.
+/// Phase 20: Display Server (Zero-Copy PageHandover)
+/// Pure asynchronous PDX messages, Lock-free, PKU key dance.
 
 pub fn sys_park() {
     unsafe {
@@ -24,40 +21,34 @@ pub extern "C" fn _start() -> ! {
     let mut compositor = Compositor::new();
     
     loop {
-        // Standard FLSCHED wait-free park
-        // Wait for next PDX message or HID interrupt
         sys_park();
         
         let req = pdx_listen(0);
         
-        // Safety: We assume the caller provided a valid MessageType pointer in arg0.
-        // The #![forbid(unsafe_code)] is bypassed here by the abstracted PDX layer.
-        // (In a real implementation, pdx_listen would return a safe enum).
+        // Safety: Abstracted PDX layer assumes valid MessageType in arg0.
         let msg = unsafe { *(req.arg0 as *const MessageType) };
 
         match msg {
-            MessageType::DisplayBufferAlloc { width, height, format } => {
-                let reply = compositor.allocate_buffer(width, height, format);
-                pdx_reply(req.caller_pd, &reply as *const _ as u64);
-            },
-            MessageType::DisplayBufferCommit { buffer_id, damage_x, damage_y, damage_w, damage_h } => {
-                compositor.commit_buffer(buffer_id, damage_x, damage_y, damage_w, damage_h);
-                pdx_reply(req.caller_pd, 0);
+            MessageType::Display(proto) => match proto {
+                DisplayProtocol::DisplayBufferAlloc { width, height, format } => {
+                    let page = compositor.allocate_buffer(width, height, format);
+                    pdx_reply(req.caller_pd, &page as *const _ as u64);
+                },
+                DisplayProtocol::DisplayBufferCommit { page } => {
+                    compositor.commit_buffer(page);
+                    pdx_reply(req.caller_pd, 0);
+                },
+                DisplayProtocol::Stats => {
+                    let flips = compositor.frame_flips.load(Ordering::Relaxed);
+                    pdx_reply(req.caller_pd, flips);
+                }
             },
             MessageType::DisplayModeset { width, height, refresh } => {
                 compositor.modeset(width, height, refresh);
                 pdx_reply(req.caller_pd, 0);
             },
-            MessageType::DisplayCursor { x, y, visible, buffer_id } => {
-                compositor.update_cursor(x, y, visible, buffer_id);
-                pdx_reply(req.caller_pd, 0);
-            },
-            MessageType::DisplayGeminiRepairDisplay => {
-                compositor.repair();
-                pdx_reply(req.caller_pd, 0);
-            },
-            MessageType::HIDEvent { ev_type, code, value } => {
-                compositor.process_input(ev_type, code, value);
+            MessageType::DisplayCursor { x, y, visible, buffer_id: _ } => {
+                compositor.update_cursor(x, y, visible);
                 pdx_reply(req.caller_pd, 0);
             },
             _ => {
@@ -74,9 +65,7 @@ struct Compositor {
     cursor_x: i32,
     cursor_y: i32,
     cursor_visible: bool,
-    active_buffer: u32,
-    // Lock-free damage tracking (simplified for prototype)
-    damage_mask: AtomicU32,
+    pub frame_flips: AtomicU64,
 }
 
 impl Compositor {
@@ -88,44 +77,28 @@ impl Compositor {
             cursor_x: 0,
             cursor_y: 0,
             cursor_visible: true,
-            active_buffer: 0,
-            damage_mask: AtomicU32::new(0),
+            frame_flips: AtomicU64::new(0),
         }
     }
 
-    pub fn allocate_buffer(&mut self, width: u32, height: u32, _format: u32) -> MessageType {
-        // 1. Request physical pages from kernel (Slot 1)
-        let page_count = (width * height * 4 + 4095) / 4096;
-        let mut pfns = [0u64; 64];
+    pub fn allocate_buffer(&mut self, width: u32, height: u32, _format: u32) -> PageHandover {
+        // Request physical page from kernel (Slot 1, RESOLVE_PHYS 12)
+        // Simplified: one large page handover for the framebuffer
+        let pfn = pdx_call(1, 12, 0, 0);
+        let pku_key = 5; // Display domain key
         
-        for i in 0..core::cmp::min(page_count as usize, 64) {
-            pfns[i] = pdx_call(1, 12 /* RESOLVE_PHYS */, i as u64, 0);
-        }
-
-        // 2. Assign PKU key for zero-copy isolation
-        let pku_key = 5; // Static key for display domain
-        
-        MessageType::DisplayBufferReply {
-            page_count,
-            pfn_list: pfns,
-            pku_key,
-        }
+        PageHandover { pfn, pku_key }
     }
 
-    pub fn commit_buffer(&mut self, buffer_id: u32, dx: u32, dy: u32, dw: u32, dh: u32) {
-        // Atomic damage update
-        self.damage_mask.fetch_or(1 << (buffer_id % 32), Ordering::SeqCst);
-        self.active_buffer = buffer_id;
+    pub fn commit_buffer(&mut self, page: PageHandover) {
+        self.frame_flips.fetch_add(1, Ordering::Relaxed);
 
-        // Forward to tuxedo (Slot 10) for atomic scanout
-        let scanout_msg = MessageType::DisplayBufferCommit {
-            buffer_id,
-            damage_x: dx,
-            damage_y: dy,
-            damage_w: dw,
-            damage_h: dh,
-        };
-        pdx_call(10 /* tuxedo */, 0, &scanout_msg as *const _ as u64, 0);
+        // Atomic flip with PKU key swap:
+        // 1. Revoke write access from caller
+        pdx_call(1, 30 /* REVOKE_KEY */, page.pku_key as u64, 0);
+        
+        // 2. Forward to tuxedo (Slot 10) for scanout
+        pdx_call(10, 0, page.pfn, page.pku_key as u64);
     }
 
     pub fn modeset(&mut self, w: u32, h: u32, r: u32) {
@@ -134,18 +107,10 @@ impl Compositor {
         self.refresh = r;
     }
 
-    pub fn update_cursor(&mut self, x: i32, y: i32, visible: bool, _buf: u32) {
+    pub fn update_cursor(&mut self, x: i32, y: i32, visible: bool) {
         self.cursor_x = x;
         self.cursor_y = y;
         self.cursor_visible = visible;
-    }
-
-    pub fn process_input(&mut self, _ev: u16, _code: u16, _val: i32) {
-        // Logic to route events to the correct surface in Smithay
-    }
-
-    pub fn repair(&mut self) {
-        // Hot-repair state from Gemini logs
     }
 }
 

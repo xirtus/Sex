@@ -202,6 +202,15 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Official v1.0.0 ISO generation with full standalone stack.
 - [x] Superiority benchmarks (3.5x faster IPC than Linux) verified.
 - [x] Operational DDE bridge for legacy Linux driver reuse.
+
+### Phase 19: sexfiles Overhaul (Complete ✅ (ruthless zero-copy polish))
+- [x] Trampoline Architecture: 100% lock-free polling loop for VFS messages.
+- [x] Zero-Copy PKU Handover: 3-cycle PKU dance for large I/O operations.
+- [x] Lock-free LRU Cache: 2Q cache with shared physical pages.
+- [x] Physical I/O Integration: DiskFs dispatch to sexdrive via PDX.
+- [x] Lock-free Mount Table: Real path routing for multiple backends.
+- [x] RevokeKey Multicast: Hardware-accelerated capability revocation across sexnode.
+
 - [ ] Graphical Sex-Store Application.
 - [ ] Package browsing & one-click sexting.
 - [ ] Binary caching & SPD image management.

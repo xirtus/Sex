@@ -1,27 +1,25 @@
 #![no_std]
 #![no_main]
 
-use libsys::pdx::{pdx_listen, pdx_reply, pdx_call};
-use libsys::messages::MessageType;
-use libsys::sched::park_on_ring;
+use sex_pdx::{pdx_listen, pdx_reply, pdx_call, MessageType, StoreProtocol, PageHandover};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// sexstore: Standalone Package Manager and Self-Hosting Daemon.
-/// Phase 13.1: Real manifest fetching via sexnet.
+/// Phase 20: StoreProtocol for zero-copy package loading.
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    let mut store = Store::new();
     loop {
-        // Standard FLSCHED park
-        park_on_ring();
+        sys_park();
 
         let req = pdx_listen(0);
         let msg = unsafe { *(req.arg0 as *const MessageType) };
 
         match msg {
-            MessageType::StoreCall { command, package_name_ptr, buffer_cap } => {
-                let (status, size) = handle_store_request(command, package_name_ptr, buffer_cap);
-                let reply = MessageType::StoreReply { status, size };
-                pdx_reply(req.caller_pd, &reply as *const _ as u64);
+            MessageType::Store(proto) => {
+                let reply = store.handle_request(proto);
+                pdx_reply(req.caller_pd, reply);
             },
             _ => {
                 pdx_reply(req.caller_pd, u64::MAX);
@@ -30,25 +28,58 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
-fn handle_store_request(cmd: u32, name_ptr: u64, buf_cap: u32) -> (i64, u64) {
-    match cmd {
-        1 => { // FETCH_PACKAGE
-            // 1. Establish TCP connection to GitHub via sexnet (Cap Slot 4)
-            let sock_cap = pdx_call(4, 1 /* NET_SOCKET */, 2 /* AF_INET */, 1 /* SOCK_STREAM */);
-            if sock_cap == 0 { return (-1, 0); }
-            
-            // 2. Perform zero-copy fetch into lent buffer
-            let res = pdx_call(4, 3 /* NET_RECV */, sock_cap, buf_cap as u64);
-            (res as i64, 4096)
-        },
-        2 => { // REPAIR_SYSTEM (sex-gemini hook)
-            (0, 0)
-        }
-        _ => (-1, 0),
+pub fn sys_park() {
+    unsafe {
+        core::arch::asm!("syscall", in("rax") 24);
     }
 }
 
+struct Store {
+    package_loads: AtomicU64,
+    zero_copy_handovers: AtomicU64,
+}
+
+impl Store {
+    fn new() -> Self {
+        Self {
+            package_loads: AtomicU64::new(0),
+            zero_copy_handovers: AtomicU64::new(0),
+        }
+    }
+
+    fn handle_request(&mut self, proto: StoreProtocol) -> u64 {
+        match proto {
+            StoreProtocol::FetchPackage { name: _ } => {
+                // Mock implementation: return a dummy PageHandover
+                self.package_loads.fetch_add(1, Ordering::Relaxed);
+                let page = self.fetch_from_ramfs();
+                &page as *const _ as u64
+            },
+            StoreProtocol::CacheBinary { name: _, image } => {
+                self.zero_copy_handovers.fetch_add(1, Ordering::Relaxed);
+                self.cache_to_ramfs(image);
+                0
+            },
+            StoreProtocol::Stats => {
+                self.package_loads.load(Ordering::Relaxed)
+            }
+        }
+    }
+
+    fn fetch_from_ramfs(&self) -> PageHandover {
+        // In a real implementation, this would interact with a RamFS driver.
+        // For now, we request a page from the kernel and return it.
+        let pfn = pdx_call(1, 12, 0, 0); // RESOLVE_PHYS
+        PageHandover { pfn, pku_key: 6 } // sexstore domain key
+    }
+
+    fn cache_to_ramfs(&self, _image: PageHandover) {
+        // In a real implementation, this would write the page to the RamFS.
+    }
+}
+
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop { park_on_ring(); }
+    loop { sys_park(); }
 }

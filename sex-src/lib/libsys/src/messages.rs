@@ -1,5 +1,12 @@
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct PageHandover {
+    pub pfn: u64,
+    pub pku_key: u8,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub enum MessageType {
     Empty,
     Signal(u8),
@@ -18,7 +25,7 @@ pub enum MessageType {
     HIDEvent { ev_type: u16, code: u16, value: i32 },
     PipeCall { command: u32, pipe_cap: u32, buffer_cap: u32, size: u64 },
     PipeReply { status: i64, size: u64, pipe_cap: u32 },
-    ProcCall { command: u32, path_ptr: u64, arg_ptr: u64 },
+    ProcCall { command: u32, path_ptr: u64, arg_ptr: u64, page_handover: PageHandover },
     ProcReply { status: i64, pd_id: u32 },
     TranslatorCall { command: u32, path_ptr: u64, code_cap: u32 },
     TranslatorReply { status: i64, translated_entry: u64 },

@@ -35,6 +35,9 @@ pub fn init() {
     assert!(crate::memory::allocator::GLOBAL_ALLOCATOR.verify_invariants(), "Phase 14: Allocator Invariant Violation");
 
     // 2. Cross-grant IPC capabilities (Dynamic Slotting)
+    let sexfiles_pd = DOMAIN_REGISTRY.get(sexfiles).unwrap();
+    sexfiles_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdrive, entry_point: VirtAddr::new(0x_4000_0000) }));
+
     let sexc_pd = DOMAIN_REGISTRY.get(sexc).unwrap();
     sexc_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexfiles, entry_point: VirtAddr::new(0x_4000_0000) }));
     sexc_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexnode, entry_point: VirtAddr::new(0x_4000_0000) }));

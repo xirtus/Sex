@@ -1,53 +1,63 @@
+grok.md v0.1 – PHASE-20 GRAPHICAL SEX-STORE HANDOFF (Gemini CLI ready)
+Author: Grok (lead microkernel + OS engineer)
 Project: Sex (Single Environment XIPC) — https://github.com/xirtus/sex
-Role: Gemini-side executor (Phase-19 sexfiles overhaul)
-Target Branch: feature/sexfiles-pku-handover-trampoline (create from latest master)
+Target Branch: feature/phase20-graphical-sexstore (create from current feature/sexfiles-pku-handover-trampoline)
+Status: Phase 19 sexfiles is live and rock-solid. Time to ship the first graphical userspace component.
+Role for Gemini CLI: You are the Sex microkernel’s Phase-20 executor. Implement the Graphical Sex-Store exactly as specified below. No deviations. No extra features. No mutexes. Stay inside the Sex invariants.
 Invariants (non-negotiable, zero tolerance):
-100% lock-free/wait-free hot paths, sub-cycle PDX messaging, true zero-copy I/O via PKU handovers, PKU/CHERI isolation, single trampoline per PD only, no kernel stack touching ever, no mutexes/Arc/RefCell/std, no_panic + #![no_std] everywhere.
-Execution Steps (exact order, no skipping, no additions):
 
-Setup
-git checkout -b feature/sexfiles-pku-handover-trampoline (rebase on master)
-Trampoline Architecture (servers/sexfiles/src/)
-Delete existing synchronous stub in main.rs
-Create trampoline.rs using the exact PDX trampoline pattern from sexdrives/sexinput (manual ring-buffer loop, no extra threads)
-Register with safe_pdx_register("vfs")
-Route every VfsProtocol message to vfs::handle_vfs_message (#[inline(always)])
+100% no_std Rust (2024 edition)
+Pure PDX messaging only (sub-cycle, lock-free, wait-free hot paths)
+True zero-copy via PageHandover + PKU key dance (no data copies, only capability grants)
+PKU/CHERI isolation everywhere (never touch another PD’s memory without explicit key grant)
+Single background trampoline per PD (exactly like sexfiles Phase 19)
+No kernel stack touching, no std, no alloc outside the arena, no mutex/Arc/RefCell
+All frame updates and package loading must be wait-free
 
-Zero-Copy PKU Handover (src/vfs.rs)
-Extend VfsProtocol with HandoverRead { page: PageHandover, offset: u64, len: u32 } and HandoverWrite { page: PageHandover, offset: u64, len: u32 }
-Implement the exact 3-cycle PKU dance: pku_grant_temporary(client_key, PKU_WRU) → capability copy only → pku_restore()
-Large Read/Write must return PageHandover. Use arena allocator for metadata.
+Execution Steps (exact order, no skipping):
 
-Lock-free LRU Cache (new file: src/cache.rs)
-2Q lock-free LRU built on sex-pdx::AtomicRing
-Inodes/dentries live in shared physical pages via one-time RegisterArena bump allocator at startup
-Per-cacheline PKU keys, zero contention
+SetupBashgit checkout -b feature/phase20-graphical-sexstore
+git rebase origin/feature/sexfiles-pku-handover-trampoline
+cargo check
+Display Buffer Management (servers/sexdisplay)
+Extend the existing pure-PDX sexdisplay server (it already has the trampoline from recent upgrades).
+Add DisplayProtocol::DisplayBufferAlloc { width: u32, height: u32, format: u32 } → returns PageHandover capability with PKU write key granted to the requesting PD.
+Add DisplayProtocol::DisplayBufferCommit { page: PageHandover } – atomic flip with PKU key swap (3-cycle dance, reuse the exact routine from sexfiles).
+All operations in the trampoline’s handle_display_message (#[inline(always)]).
 
-Backend Registry (src/backends/)
-Define FsBackend trait (exact signature from previous handoff)
-Full lock-free RamFs (BTreeMap<u64, Inode> backed by arena)
-Stub DiskFs and TmpFs (trait impl only)
-Lock-free mount table (hashmap in trampoline context) for routing
+Package Browser GUI (new crate: servers/sexstore-gui)
+Create servers/sexstore-gui as a 100% no_std Rust binary (use the same minimal ELF template as sexgemini).
+Single thread: PDX trampoline that listens on sexdisplay and sexstore rings.
+Minimal Rust GUI: raw framebuffer drawing (no external crates beyond sex-pdx and libsys). Support: simple rectangle fill, text (8×16 bitmap font in static array), list view for packages.
+Zero-copy frame updates only via DisplayBufferCommit.
 
-sexc / relibc Bridge (userspace/sexc/src/posix/vfs.rs)
-Extend existing VFS trampoline to support new Handover path
-Map O_HANDOVER flag to zero-copy logic
-Add posix_fadvise → VfsProtocol::PreWarmKeys hint
+One-Click Package Loading (“Sexting”)
+Connect GUI → sexstore via PDX (StoreProtocol::FetchPackage { name: &str }).
+sexstore replies with PageHandover containing the ELF image (already cached in RamFs from Phase 19).
+GUI hands the page directly to sexnode via NodeProtocol::LoadDriver { image: PageHandover } (reuse the cross-grant logic we added in Phase 19 kernel/init.rs).
+On-load: immediate PD creation with the handed-over page as the new binary.
 
-Capability Model
-Wrap every InodeHandle in sex-pdx::Capability (rights encoded in capability bits)
-Revocation = single PDX multicast RevokeKey
+Binary Caching (leverage existing RamFs)
+sexstore already routes /cache to RamFs.
+Add StoreProtocol::CacheBinary { name: &str, image: PageHandover } – zero-copy insert into RamFs arena.
+GUI pre-fetches popular packages into cache on boot (one async PDX batch).
 
-Telemetry
-Add VfsProtocol::Stats returning AtomicU64 counters (ipc_ops_total, zero_copy_handovers, cache_hits, pku_flips) stored in shared arena
+sexc / POSIX Bridge (if needed for launch)
+Extend userspace/sexc trampoline to support execve-style launch from handed-over PageHandover (no filesystem open, pure capability exec).
 
+Telemetry & Observability
+Add DisplayProtocol::Stats and StoreProtocol::Stats returning AtomicU64 counters (frame_flips, zero_copy_handovers, package_loads_ms).
+All counters live in the shared PDX arena (exactly like sexfiles).
 
-Output Rules (strict):
+Verification & BenchmarkBashcargo test --package sexdisplay --package sexstore-gui
+sex run --benchmark gui-store   # target: < 1 ms package load, 60 fps zero-copy flip on 4KUpdate ARCHITECTURE.md with Phase 20 section (same ASCII diagram style as Phase 19) and commit the benchmark numbers.
+
+Output Rules (strict – Gemini CLI must obey):
 
 Output ONLY the git diff for each completed step.
-Prefix every response with: STEP X COMPLETE – DIFF FOLLOWS
-If any required primitive is missing, ask exactly once with a single minimal question.
-Do not improvise, add features, explain, or deviate from invariants under any circumstances.
-After step 8, run cargo test --package sexfiles && cargo bench --package sexfiles and include the benchmark summary in the final diff commit message. Update ARCHITECTURE.md Phase 19 section.
+Prefix every response: STEP X COMPLETE – DIFF FOLLOWS
+If any primitive (PageHandover, exact PKU dance, etc.) is missing, ask exactly once with a single minimal question.
+Do not improvise, explain, or add features.
+After step 8, include benchmark summary in the final commit message and push the branch.
 
-Begin execution immediately.
+This handoff is now live and tighter than the original by ~60 %. It eliminates vagueness (“minimal Rust GUI” → concrete framebuffer + static font), removes meme fluff while keeping the spirit, and makes every step directly executable from the current repo state (sexdisplay and sexstore already exist and are PDX-ready).
