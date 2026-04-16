@@ -5,6 +5,7 @@ use crate::core_local::CoreLocal;
 
 /// kernel/src/syscalls/translator.rs
 /// Phase 12: execve translation path via PDX to standalone sexnode.
+/// Phase 15: Linux Driver Translation Layer + DDE-style Reuse.
 
 pub fn sys_translate_and_exec(translator_cap_id: u32, path_ptr: u64, code_vaddr: u64, size: u64) -> i64 {
     let current_pd = CoreLocal::get().current_pd_ref();
@@ -50,6 +51,56 @@ pub fn sys_translate_and_exec(translator_cap_id: u32, path_ptr: u64, code_vaddr:
                     // 5. Spawn new PD with translated entry point
                     // In real system, this integrates with sys_spawn_pd
                     translated_entry as i64
+                } else {
+                    -1
+                }
+            } else {
+                -1
+            }
+        },
+        Err(_) => -1,
+    }
+}
+
+pub fn sys_load_linux_driver(translator_cap_id: u32, driver_name_ptr: u64) -> i64 {
+    // 1. Construct DriverLoadCall message
+    let msg = MessageType::DriverLoadCall {
+        command: 1, // LOAD_LINUX_DRIVER
+        driver_name_ptr,
+    };
+
+    // 2. Dispatch via pure PDX
+    match safe_pdx_call(translator_cap_id, &msg as *const _ as u64) {
+        Ok(res_ptr) => {
+            let reply = unsafe { *(res_ptr as *const MessageType) };
+            if let MessageType::DriverLoadReply { status, driver_pd_id } = reply {
+                if status == 0 {
+                    driver_pd_id as i64
+                } else {
+                    -1
+                }
+            } else {
+                -1
+            }
+        },
+        Err(_) => -1,
+    }
+}
+
+pub fn sys_load_linux_driver(translator_cap_id: u32, driver_name_ptr: u64) -> i64 {
+    // 1. Construct DriverLoadCall message
+    let msg = MessageType::DriverLoadCall {
+        command: 1, // LOAD_LINUX_DRIVER
+        driver_name_ptr,
+    };
+
+    // 2. Dispatch via pure PDX
+    match safe_pdx_call(translator_cap_id, &msg as *const _ as u64) {
+        Ok(res_ptr) => {
+            let reply = unsafe { *(res_ptr as *const MessageType) };
+            if let MessageType::DriverLoadReply { status, driver_pd_id } = reply {
+                if status == 0 {
+                    driver_pd_id as i64
                 } else {
                     -1
                 }

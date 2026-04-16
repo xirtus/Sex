@@ -1,31 +1,49 @@
-# SexOS Build System - SASOS Pipeline
-.PHONY: all build-kernel build-apps initrd iso run-sasos clean help
+# SexOS Final Release Build System
+.PHONY: all build-kernel build-servers initrd iso release run-sasos clean
 
 # Configuration
 KERNEL_ELF = target/x86_64-sexos/debug/sex-kernel
-ISO_IMAGE = sexos.iso
+ISO_IMAGE = sexos-release.iso
 ISO_ROOT = iso_root
 LIMINE_VERSION = v7.x-binary
 SEXPAC = python3 sex-src/bin/sexpac.py
 
-all: iso
+all: release
 
 build-kernel:
-	cargo build --package sex-kernel
+	cargo build --package sex-kernel --target x86_64-unknown-none
 
-build-apps:
-	make -C sex-src/bin -f Makefile.apps
+build-servers:
+	# Build all standalone servers
+	cd servers/sexc && cargo build --target x86_64-unknown-none
+	cd servers/sexvfs && cargo build --target x86_64-unknown-none
+	cd servers/sexdrives && cargo build --target x86_64-unknown-none
+	cd servers/sexinput && cargo build --target x86_64-unknown-none
+	cd servers/sexnet && cargo build --target x86_64-unknown-none
+	cd servers/sexdisplay && cargo build --target x86_64-unknown-none
+	cd servers/sexnode && cargo build --target x86_64-unknown-none
+	cd servers/sexstore && cargo build --target x86_64-unknown-none
+	cd servers/sexgemini && cargo build --target x86_64-unknown-none
 
-initrd: build-apps
+initrd: build-servers
+	# Package all SAS artifacts into initrd.sex
 	$(SEXPAC) --out initrd.sex \
-		sex-src/bin/sexit.sex \
-		sex-src/bin/sext.sex \
-		sex-src/bin/sexvfs.sex \
-		sex-src/bin/sexc.sex
+		target/x86_64-unknown-none/debug/sexc \
+		target/x86_64-unknown-none/debug/sexvfs \
+		target/x86_64-unknown-none/debug/sexdrives \
+		target/x86_64-unknown-none/debug/sexinput \
+		target/x86_64-unknown-none/debug/sexnet \
+		target/x86_64-unknown-none/debug/sexdisplay \
+		target/x86_64-unknown-none/debug/sexnode \
+		target/x86_64-unknown-none/debug/sexstore \
+		target/x86_64-unknown-none/debug/sexgemini \
+		sex-src/bin/ash
 
 limine:
-	git clone https://github.com/limine-bootloader/limine.git --branch=$(LIMINE_VERSION) --depth=1
-	make -C limine
+	@if [ ! -d "limine" ]; then \
+		git clone https://github.com/limine-bootloader/limine.git --branch=$(LIMINE_VERSION) --depth=1; \
+		make -C lim; \
+	fi
 
 iso: build-kernel initrd limine
 	mkdir -p $(ISO_ROOT)/boot
@@ -41,19 +59,16 @@ iso: build-kernel initrd limine
 		$(ISO_ROOT) -o $(ISO_IMAGE)
 	./limine/limine bios-install $(ISO_IMAGE)
 
-run-sasos: iso
-	# Launch QEMU with PKU support enabled for Single Address Space isolation.
+release: iso
+	@echo "--------------------------------------------------"
+	@echo "SexOS Production Release: $(ISO_IMAGE) READY."
+	@echo "--------------------------------------------------"
+
+run-sasos: release
 	qemu-system-x86_64 -machine q35 -cpu max,pku=on -smp 4 -m 2G \
 		-serial stdio -display none \
 		-cdrom $(ISO_IMAGE)
 
 clean:
 	cargo clean
-	make -C sex-src/bin -f Makefile.apps clean
 	rm -rf $(ISO_ROOT) $(ISO_IMAGE) initrd.sex limine
-
-help:
-	@echo "SexOS Build System (SASOS)"
-	@echo "  make iso       - Generate bootable sexos.iso with Limine and Initrd"
-	@echo "  make run-sasos - Build and boot SexOS in QEMU with PKU"
-	@echo "  make clean     - Clean all build artifacts"

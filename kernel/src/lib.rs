@@ -30,6 +30,7 @@ pub mod drivers;
 pub mod pd;
 pub mod syscalls;
 pub mod capabilities;
+pub mod benchmark;
 pub mod init;
 
 use linked_list_allocator::LockedHeap;

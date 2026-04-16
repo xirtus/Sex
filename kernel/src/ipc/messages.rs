@@ -61,4 +61,6 @@ pub enum MessageType {
     StoreCall { command: u32, package_name_ptr: u64, buffer_cap: u32 },
     StoreReply { status: i64, size: u64 },
     HardwareInterrupt { vector: u8, data: u64 },
+    DriverLoadCall { command: u32, driver_name_ptr: u64 },
+    DriverLoadReply { status: i64, driver_pd_id: u32 },
 }

@@ -121,6 +121,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Phase 8: Root shell and system servers bootstrap
     sex_kernel::init::init();
 
+    // Phase 16: Performance Benchmarking
+    sex_kernel::benchmark::run_maturity_benchmarks();
+
     // Start execution on first core
     let sched = &sex_kernel::scheduler::SCHEDULERS[0];
     if let Some((_old_ctx, next_ctx)) = sched.tick() {

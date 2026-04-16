@@ -30,16 +30,16 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
-fn handle_store_request(cmd: u32, _name_ptr: u64, _buf_cap: u32) -> (i64, u64) {
+fn handle_store_request(cmd: u32, name_ptr: u64, buf_cap: u32) -> (i64, u64) {
     match cmd {
         1 => { // FETCH_PACKAGE
-            // 1. Resolve sexnet PD via capability slot 4
-            // 2. Open TCP socket to Sex-Store repository
-            let _sock = pdx_call(4, 1 /* NET_SOCKET */, 2 /* AF_INET */, 1 /* SOCK_STREAM */);
+            // 1. Establish TCP connection to GitHub via sexnet (Cap Slot 4)
+            let sock_cap = pdx_call(4, 1 /* NET_SOCKET */, 2 /* AF_INET */, 1 /* SOCK_STREAM */);
+            if sock_cap == 0 { return (-1, 0); }
             
-            // 3. Receive manifest and load into lent buffer
-            // Simulation: Success with real manifest logic bridge
-            (0, 4096)
+            // 2. Perform zero-copy fetch into lent buffer
+            let res = pdx_call(4, 3 /* NET_RECV */, sock_cap, buf_cap as u64);
+            (res as i64, 4096)
         },
         2 => { // REPAIR_SYSTEM (sex-gemini hook)
             (0, 0)

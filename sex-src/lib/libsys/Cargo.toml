@@ -4,4 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-x86_64 = "0.15.2"
+x86_64 = { version = "0.15.2", default-features = false }
+
+# Explicitly disable default features for problematic transitive dependencies
+bitflags = { version = "2.4.0", default-features = false }
+radium = { version = "0.7.0", default-features = false }
+bit_field = { version = "0.10.3", default-features = false }
+volatile = { version = "0.4.6", default-features = false }
+scopeguard = { version = "1.2.0", default-features = false }
+tap = { version = "1.0.1", default-features = false }

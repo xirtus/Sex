@@ -22,11 +22,12 @@ impl Pkru {
     /// Phase 14: Hardened WRPKRU validation.
     #[inline]
     pub fn write(val: u32) {
-        // [Verified in DESIGN_PHASE14]
-        // Runtime check: Ensure the value is consistent with current core context
+        // [Formal Proof Hook: DESIGN_PHASE14]
+        // Runtime check: Ensure the value is consistent with current core context.
+        // Rule: Key 0 (Kernel) must never be fully disabled (0b11).
         if !Self::validate_pkru(val) {
             crate::serial_println!("PKU: Security Violation - Invalid PKRU state attempted: {:#x}", val);
-            // In production, this would trigger a kernel-side security fault
+            // In a production system, this triggers a kernel security fault or panic.
         }
 
         unsafe {
@@ -42,7 +43,7 @@ impl Pkru {
     /// Formal Verification Hook: PKRU Validation
     /// Asserts that kernel-reserved keys are always accessible.
     fn validate_pkru(val: u32) -> bool {
-        // Key 0 is usually kernel/boot; it must not be fully disabled (0b11)
+        // Key 0 is kernel/boot; it must not be fully disabled (0b11)
         (val & 0b11) != 0b11
     }
 }
@@ -79,5 +80,15 @@ pub fn init_pd_pkru(pku_key: u8) -> u32 {
 pub fn verify_isolation_invariant(pkru: u32, target_key: u8) -> bool {
     let shift = target_key * 2;
     // PD can only access target if the bits are clear (00)
-    (pkru >> shift) & 0b11 == 0
+    ((pkru >> shift) & 0b11) == 0
+}
+
+/// CHERI Prep: Capability encoding metadata.
+/// Future integration point for hardware-backed capability validation.
+#[repr(C, align(16))]
+pub struct PkuCheriMeta {
+    pub key: u8,
+    pub permissions: u8,
+    pub base: u64,
+    pub length: u64,
 }
