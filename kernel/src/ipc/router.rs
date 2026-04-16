@@ -22,8 +22,11 @@ pub fn route_signal(caller_pd_id: u32, target_pd_id: u32, signum: u8, cap_id: u6
         (*target_pd.message_ring).enqueue(msg).map_err(|_| "router: ring full")?;
     }
 
-    // 5. Unpark the dedicated trampoline thread (Simplified search)
-    // In a production system, we'd have a PD -> Tasks mapping.
+    // 5. Unpark the dedicated trampoline thread
+    let trampoline_task = target_pd.trampoline_task.load(core::sync::atomic::Ordering::Acquire);
+    if !trampoline_task.is_null() {
+        crate::scheduler::unpark_thread(trampoline_task);
+    }
     
     Ok(())
 }

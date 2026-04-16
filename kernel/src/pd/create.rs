@@ -6,6 +6,9 @@ use crate::memory::allocator::GLOBAL_ALLOCATOR;
 use crate::pku;
 use crate::capabilities::engine::CapEngine;
 
+use core::sync::atomic::{AtomicU32, Ordering};
+static NEXT_PD_ID: AtomicU32 = AtomicU32::new(4000);
+
 /// create_protection_domain: Ruthless Phase 6/8/10 implementation.
 pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Result<u32, &'static str> {
     serial_println!("pd: Creating domain for {}...", elf_path);
@@ -14,8 +17,10 @@ pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Re
     let pd_id = if let Some(id) = requested_id {
         id
     } else {
-        // Fallback for rdseed in this toolchain
-        4001 // Simplified for prototype
+        match crate::pku::rdseed_u64() {
+            Some(seed) => (seed as u32 % 1000) + 4000,
+            None => NEXT_PD_ID.fetch_add(1, Ordering::SeqCst),
+        }
     };
     let pku_key = (pd_id % 15) as u8 + 1;
     
@@ -53,6 +58,7 @@ pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Re
     let trampoline_task_ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(crate::scheduler::Task::new(
         pd_id | 0x8000_0000, 0, trampoline_stack_top, pd_ref, true
     )));
+    unsafe { (*new_pd).trampoline_task.store(trampoline_task_ptr, core::sync::atomic::Ordering::Release); }
     crate::scheduler::SCHEDULERS[0].runqueue.enqueue(trampoline_task_ptr);
 
     serial_println!("pd: PD {} Spawned (Trampoline task active).", pd_id);

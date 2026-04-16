@@ -62,6 +62,28 @@ unsafe fn active_level_4_table(physical_memory_offset: VirtAddr)
     &mut *page_table_ptr
 }
 
+pub trait PageTableEntryExt {
+    fn set_pku_key(&mut self, key: u8);
+    fn pku_key(&self) -> u8;
+}
+
+impl PageTableEntryExt for PageTableEntry {
+    fn set_pku_key(&mut self, key: u8) {
+        let entry_ptr = self as *mut PageTableEntry as *mut u64;
+        unsafe {
+            let mut bits = *entry_ptr;
+            bits &= !(0xF << 59);
+            bits |= (key as u64 & 0xF) << 59;
+            *entry_ptr = bits;
+        }
+    }
+
+    fn pku_key(&self) -> u8 {
+        let entry_bits = unsafe { *(self as *const PageTableEntry as *const u64) };
+        ((entry_bits >> 59) & 0xF) as u8
+    }
+}
+
 pub fn update_page_pkey(page: Page, pku_key: u8, physical_memory_offset: VirtAddr) {
     unsafe {
         let level_4_table = active_level_4_table(physical_memory_offset);
@@ -74,16 +96,13 @@ pub fn update_page_pkey(page: Page, pku_key: u8, physical_memory_offset: VirtAdd
         let p2_entry = &p2_table[page.p2_index()];
         let p1_table_phys = p2_entry.frame().unwrap().start_address();
         let p1_table: &mut PageTable = &mut *((physical_memory_offset + p1_table_phys.as_u64()).as_mut_ptr());
-        let entry = &mut p1_table[page.p1_index()];
-        
-        let mut entry_bits = *(entry as *const _ as *const u64);
-        entry_bits &= !(0xF << 59);
-        entry_bits |= (pku_key as u64 & 0xF) << 59;
-        
-        *(entry as *mut _ as *mut u64) = entry_bits;
+
+        p1_table[page.p1_index()].set_pku_key(pku_key);
+
         core::arch::asm!("invlpg [{}]", in(reg) page.start_address().as_u64());
     }
 }
+
 
 pub struct BitmapFrameAllocator {
     inner: BootInfoFrameAllocator,
@@ -100,9 +119,16 @@ impl BitmapFrameAllocator {
     }
 
     pub fn allocate_contiguous(&mut self, count: usize) -> Option<PhysFrameRangeInclusive<Size4KiB>> {
+        if count == 0 { return None; }
+        
         let start = self.allocate_frame()?;
-        for _ in 1..count {
-            self.allocate_frame()?;
+        for i in 1..count {
+            let frame = self.allocate_frame()?;
+            // Hardening: Verify contiguity
+            if frame.start_address() != start.start_address() + (i as u64 * 4096) {
+                 crate::serial_println!("FATAL: BitmapFrameAllocator failed contiguity invariant! count={}, i={}", count, i);
+                 return None; 
+            }
         }
         let end = PhysFrame::containing_address(start.start_address() + (count as u64 - 1) * 4096);
         Some(PhysFrame::range_inclusive(start, end))

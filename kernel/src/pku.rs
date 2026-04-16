@@ -84,3 +84,21 @@ pub fn init_pd_pkru(key: u8) -> u32 {
     pkru &= !(0b11 << shift);
     pkru
 }
+
+pub fn rdseed_u64() -> Option<u64> {
+    let mut val: u64;
+    let success: u8;
+    unsafe {
+        core::arch::asm!(
+            "rdseed {0}",
+            "setc {1}",
+            out(reg) val,
+            out(reg_byte) success,
+        );
+    }
+    if success != 0 {
+        Some(val)
+    } else {
+        None
+    }
+}
