@@ -1,18 +1,16 @@
 #![no_std]
 #![no_main]
 
-use libsys::pdx::{pdx_listen, pdx_reply};
-use libsys::messages::MessageType;
-use libsys::sched::park_on_ring;
+use sex_pdx::{pdx_listen, pdx_reply, Message, MessageType};
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     loop {
-        park_on_ring();
         let req = pdx_listen(0);
-        let msg = unsafe { *(req.arg0 as *const MessageType) };
-        if let MessageType::PageFault { fault_addr, pd_id, .. } = msg {
-            // Demand paging logic (Simulation: success)
+        let msg = Message::from_u64(req.arg0);
+        
+        // Demand paging logic (Simulation: success)
+        if let MessageType::PageFault { .. } = msg.msg_type() {
             pdx_reply(req.caller_pd, 0);
         }
     }
@@ -20,5 +18,5 @@ pub extern "C" fn _start() -> ! {
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop { park_on_ring(); }
+    loop {}
 }

@@ -1,0 +1,51 @@
+/caveman ultra
+
+#	cd /Users/xirtus/sites/microkernel
+#
+	#mkdir -p rust_output && grep "^cat " docs/rustify.txt | while read -r cmd; do 
+#  	server=$(echo "$cmd" | awk -F'/' '{print $2}')
+#  	echo "=> Rustifying $server..."
+#  	eval "$cmd" > "rust_output/${server}_rewrite.rs"
+#  	echo "   [Done] Sleeping for 10 seconds to cool down API..."
+#  	sleep 10
+#	done
+
+#You are a senior SEX microkernel engineer. 
+#server rewrites in rust from its current C implementation into pure safe Rust RIGHT NOW.
+#: Run this in your /Users/xirtus/sites/microkernel directory:
+#First scan the current C code in /sites/microkernel/servers/
+#Make it production quality, idiomatic Rust, no todo! left behind.
+#cat /sites/microkernel/servers/<TARGET>/src/* kernel/src/ipc.rs | gemini-cli "/caveman ultra ROLE: SEX microkernel architect. REWRITE <TARGET> C to safe RUST. STACK: crates/sex-pdx #ONLY. NO raw FFI/syscalls. ROUTE ALL via safe_pdx_call, Message, DmaBuffer, mmio. ENV: #![no_std] #![no_main]. STATIC/heapless buffers. MINIMIZE alloc. COMPAT: #100% C ABI/opcodes/payload parity via #[repr(C)]. MUST preserve PD IDs. POSIX downstream zero-breakage. PERF: Lock-free hot paths. ZERO critical allocs. ZERO #public unsafe. Rust 2021 clippy clean. TARGET_RULES: [INSERT_SPECIFIC_CRATES_OR_PATTERNS]. OUTPUT: Cargo.toml + src/main.rs ONLY. RAW CODE BLOCKS. NO #explanations. NO todo!. RULE: 100% English code/strings/comments. NO foreign localization."
+
+
+#sext rewrite in rust
+cat /sites/microkernel/servers/sext/src/main.rs kernel/src/ipc.rs | gemini-cli "/caveman ultra REFACTOR sext. ARCH: Ultra-thin Rust wrapper. MECHANISM: 100% direct sex-pdx IPC calls. STRIP heavy logic. RULE: ALL output (code, variables, strings, comments) MUST be strictly standard English. NO foreign localization. Emit raw patched code."
+
+#sextnode rewrite in rust
+cat /sites/microkernel/servers/sexnode/src/main.rs kernel/src/ipc.rs | gemini-cli "/caveman ultra REWRITE sexnode. RUST. STACK: serde + kernel PDX serialization. STRIP old IPC. MAP structs to PDX messages. RULE: 100% English code/strings/comments. NO foreign localization. Emit raw patched code."
+
+/caveman sexgemini rewrite in rust 
+cat /sites/microkernel/servers/sexgemini/src/main.rs path/to/your/gemini_client/src/lib.rs | gemini-cli "/caveman ultra REWRITE sexgemini. PURE RUST. INTEGRATE existing Gemini client crate. HOOK client methods to PDX IPC loop. RULE: 100% English code/strings/comments. NO foreign localization. Emit raw patched code."
+
+/caveman sexnet rewrite in rust (entire project is located in /sites/microkernel and there is no reason to visit any other directory)
+cat /sites/microkernel/servers/sexnet/src/main.rs kernel/src/ipc.rs | gemini-cli "/caveman ultra REWRITE sexnet. PURE RUST. STACK: smoltcp + rust-tcpip. ARCH: Initialize smoltcp network interface. Route packets through PDX IPC loop. STRIP old net logic. RULE: 100% English code/strings/comments. NO foreign localization. Emit raw patched code."
+
+/caveman sexc rewrite in rust (entire project is located in /sites/microkernel and there is no reason to visit any other directory)
+cat /sites/microkernel/servers/sexc/src/main.rs /sites/microkernel/servers/sexc/src/trampoline.rs kernel/src/ipc.rs | gemini-cli "/caveman ultra REWRITE sexc. PURE RUST. STACK: relibc + PDX runtime. ARCH: Bind relibc syscall interface to existing Rust trampoline. Forward translated calls via PDX IPC. RULE: 100% English code/strings/comments. NO foreign localization. Emit raw patched code."
+
+/caveman sexvfs rewrite in rust (entire project is located in /sites/microkernel and there is no reason to visit any other directory)
+cat /sites/microkernel/servers/sexvfs/src/* kernel/src/ipc.rs | gemini-cli "/caveman ultra REWRITE sexvfs. PURE RUST. STACK: rust-vfs + redox-fs patterns + fatfs + ext4 crates. ARCH: Preserve 100% C functionality and structs via #[repr(C)]. Map legacy C VFS requests to Rust crates. Route I/O through PDX IPC loop. RULE: 100% English code/strings/comments. NO foreign localization. Emit raw patched code." 
+
+/caveman sexstore rewrite in rust (entire project is located in /sites/microkernel and there is no reason to visit any other directory)
+cat /sites/microkernel/servers/sexstore/src/* kernel/src/ipc.rs | gemini-cli "/caveman ultra ROLE: SEX microkernel architect. REWRITE sexstore C to safe RUST. STACK: crates/sex-pdx ONLY + redox-fs patterns. NO raw FFI/syscalls. ROUTE ALL via safe_pdx_call, Message, DmaBuffer. ENV: #![no_std] #![no_main]. STATIC/heapless buffers. MINIMIZE alloc. COMPAT: 100% C ABI/opcodes/payload parity via #[repr(C)]. MUST preserve PD IDs. POSIX downstream zero-breakage. PERF: Lock-free hot paths. ZERO critical allocs. ZERO public unsafe. Rust 2021 clippy clean. TARGET_RULES: Clean block-device abstraction. Scheme registry. Route raw I/O (virtio-blk/NVMe/AHCI) to sexdrive via PDX. Exact match legacy read/write/block_info/mount/umount opcodes. OUTPUT: Cargo.toml + src/main.rs ONLY. RAW CODE BLOCKS. NO explanations. NO todo!. RULE: 100% English code/strings/comments. NO foreign localization."
+
+/caveman sexinput rewrite into rust (entire project is located in /sites/microkernel and there is no reason to visit any other directory)
+cat /sites/microkernel/servers/sexinput/src/* kernel/src/ipc.rs | gemini-cli "/caveman ultra ROLE: SEX microkernel architect. REWRITE sexinput C to safe RUST. STACK: crates/sex-pdx ONLY. NO raw FFI/syscalls. ROUTE ALL via safe_pdx_call, Message, DmaBuffer, mmio. ENV: #![no_std] #![no_main]. STATIC/heapless buffers. MINIMIZE alloc. COMPAT: 100% C ABI/opcodes/payload parity via #[repr(C)]. MUST preserve PD IDs. POSIX downstream zero-breakage. PERF: Lock-free hot paths. ZERO critical allocs. ZERO public unsafe. Rust 2021 clippy clean. TARGET_RULES: Bind PS/2 and USB HID interrupts via sex-pdx::irq. Translate scancodes to uniform input events. Dispatch events via wait-free static ring buffers. OUTPUT: Cargo.toml + src/main.rs ONLY. RAW CODE BLOCKS. NO explanations. NO todo!. RULE: 100% English code/strings/comments. NO foreign localization."
+
+/caveman sexdisplay rewrite into rust with smithay (Wayland compositor), wgpu, raw-window-handle (entire project is located in /sites/microkernel and there is no reason to visit any other directory)
+cat /sites/microkernel/servers/sexdisplay/src/* kernel/src/ipc.rs | gemini-cli "/caveman ultra ROLE: SEX microkernel architect. REWRITE sexdisplay C to safe RUST. STACK: smithay + wgpu + raw-window-handle + crates/sex-pdx. ARCH: Replace Mesa/wlroots DDE bridge. Init Smithay Wayland compositor. Render via wgpu. Map hardware framebuffers via sex-pdx::dma. Route surface events through PDX IPC loop. NO raw FFI/syscalls. ROUTE ALL via safe_pdx_call. ENV: #![no_std] (allow global alloc for wgpu) #![no_main]. COMPAT: 100% C ABI/opcodes/payload parity via #[repr(C)]. MUST preserve PD IDs. PERF: Lock-free hot paths. Rust 2021 clippy clean. OUTPUT: Cargo.toml + src/main.rs ONLY. RAW CODE BLOCKS. NO explanations. NO todo!. RULE: 100% English code/strings/comments. NO foreign localization."
+
+/caveman sexdrives replace with new sexdrive rust alternative (entire project is located in /sites/microkernel and there is no reason to visit any other directory)
+cat /sites/microkernel/servers/sexdrives/src/* kernel/src/ipc.rs | gemini-cli "/caveman ultra ROLE: SEX microkernel architect. REWRITE sexdrives C to sexdrive RUST. STACK: crates/sex-pdx ONLY. ROUTE ALL via safe_pdx_call, mmio, dma, irq. ARCH: Hybrid registry (Native Rust drivers + Legacy DDE broker spawning Linux ELFs). CONFIG: Implement drivers.toml or cmdline parser for native/dde selection. ENV: #![no_std] #![no_main]. COMPAT: 100% C ABI/opcodes/payload parity via #[repr(C)]. MUST preserve PD IDs. POSIX downstream zero-breakage. PERF: Lock-free hot paths. Rust 2021 clippy clean. OUTPUT: sexdrive/Cargo.toml, sexdrive/src/main.rs, sexdrive-core/Cargo.toml, sexdrive-core/src/lib.rs ONLY. RAW CODE BLOCKS. NO explanations. NO todo!. RULE: 100% English code/strings/comments. NO foreign localization."
+
+

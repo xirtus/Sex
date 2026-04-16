@@ -16,6 +16,9 @@ Cargo.lock
 *.sex
 *.spd
 *.img
+build_error_logs/
+iso_root/
+limine/
 
 # macOS and OS Specific
 .DS_Store

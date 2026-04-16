@@ -3,6 +3,18 @@
 
 extern crate alloc;
 
+#[link_section = ".note.pvh"]
+#[no_mangle]
+pub static PVH_NOTE: [u32; 4] = [
+    4,                  // Name size
+    4,                  // Desc size
+    18,                 // Type (XEN_ELFNOTE_PHYS32_ENTRY)
+    0x1000000           // Entry point (matches linker anchor)
+];
+
+#[no_mangle]
+pub static PVH_NAME: &[u8; 4] = b"Xen\0";
+
 use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
 use core::panic::PanicInfo;
 use sex_kernel::serial_println;

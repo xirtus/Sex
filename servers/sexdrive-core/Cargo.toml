@@ -1,0 +1,12 @@
+[package]
+name = "sexdrive-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+
+[lib]
+name = "sexdrive_core"
+path = "src/lib.rs"

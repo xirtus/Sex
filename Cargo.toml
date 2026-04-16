@@ -2,19 +2,20 @@
 members = [
     "kernel",
     "servers/sexc",
+    "servers/sext",
     "servers/sexvfs",
-    "servers/sexdrives",
-    "servers/sexinput",
-    "servers/sexnet",
-    "servers/sexdisplay",
     "servers/sexnode",
-    "servers/sexstore",
     "servers/sexgemini",
+    "servers/sexnet",
+    "servers/sexstore",
+    "servers/sexinput",
+    "servers/sexdisplay",
+    "servers/sexdrives",
 ]
 resolver = "2"
 
 [profile.release]
 panic = "abort"
-
-[profile.dev]
-panic = "abort"
+lto = true
+codegen-units = 1
+opt-level = 3
