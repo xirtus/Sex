@@ -1,39 +1,53 @@
-# GROK HANDOFF v1.5 – sexdisplay FULL PDX + ZERO-COPY UPGRADE
+Project: Sex (Single Environment XIPC) — https://github.com/xirtus/sex
+Role: Gemini-side executor (Phase-19 sexfiles overhaul)
+Target Branch: feature/sexfiles-pku-handover-trampoline (create from latest master)
+Invariants (non-negotiable, zero tolerance):
+100% lock-free/wait-free hot paths, sub-cycle PDX messaging, true zero-copy I/O via PKU handovers, PKU/CHERI isolation, single trampoline per PD only, no kernel stack touching ever, no mutexes/Arc/RefCell/std, no_panic + #![no_std] everywhere.
+Execution Steps (exact order, no skipping, no additions):
 
-You are operating inside the Sex microkernel repository[](https://github.com/xirtus/sex).
-Your mission is to **upgrade `servers/sexdisplay` to a pure PDX, zero-copy, lock-free display server** exactly as specified.
+Setup
+git checkout -b feature/sexfiles-pku-handover-trampoline (rebase on master)
+Trampoline Architecture (servers/sexfiles/src/)
+Delete existing synchronous stub in main.rs
+Create trampoline.rs using the exact PDX trampoline pattern from sexdrives/sexinput (manual ring-buffer loop, no extra threads)
+Register with safe_pdx_register("vfs")
+Route every VfsProtocol message to vfs::handle_vfs_message (#[inline(always)])
 
-### Core Design Principles (non-negotiable)
-- All operations become asynchronous PDX messages (lock-free ring buffers).
-- Zero-copy buffer handoff using Intel PKU key swaps (no memcpy, no DRM PRIME).
-- 100 % safe Rust with #![forbid(unsafe_code)] except abstracted PKU calls.
-- Seamless integration with sexdrive/tuxedo (GPU), sexfiles (texture cache), sexinput, and sex-gemini.
+Zero-Copy PKU Handover (src/vfs.rs)
+Extend VfsProtocol with HandoverRead { page: PageHandover, offset: u64, len: u32 } and HandoverWrite { page: PageHandover, offset: u64, len: u32 }
+Implement the exact 3-cycle PKU dance: pku_grant_temporary(client_key, PKU_WRU) → capability copy only → pku_restore()
+Large Read/Write must return PageHandover. Use arena allocator for metadata.
 
-### Exact Implementation Requirements
-1. **PDX Message Protocol**
-   - Add to `sexdisplay/src/messages.rs` the Display* variants listed above (BufferAlloc, BufferCommit, Modeset, Cursor, GeminiRepairDisplay, etc.).
-   - Every legacy ioctl/drm call becomes a `safe_pdx_call(sexdisplay_pdx_id, MessageType::Display...)`.
+Lock-free LRU Cache (new file: src/cache.rs)
+2Q lock-free LRU built on sex-pdx::AtomicRing
+Inodes/dentries live in shared physical pages via one-time RegisterArena bump allocator at startup
+Per-cacheline PKU keys, zero contention
 
-2. **Zero-Copy Buffer Path**
-   - On BufferAlloc: return direct page list + PKU key.
-   - On Commit: tuxedo receives the same pages for atomic scanout.
-   - Add lightweight damage tracking (lock-free) inside the PD.
+Backend Registry (src/backends/)
+Define FsBackend trait (exact signature from previous handoff)
+Full lock-free RamFs (BTreeMap<u64, Inode> backed by arena)
+Stub DiskFs and TmpFs (trait impl only)
+Lock-free mount table (hashmap in trampoline context) for routing
 
-3. **Integration Updates**
-   - Update sexc POSIX bridge, ash, package manager, sex-gemini.
-   - sexinput events route directly into sexdisplay compositor.
-   - Build system, limine config, QEMU scripts all updated.
+sexc / relibc Bridge (userspace/sexc/src/posix/vfs.rs)
+Extend existing VFS trampoline to support new Handover path
+Map O_HANDOVER flag to zero-copy logic
+Add posix_fadvise → VfsProtocol::PreWarmKeys hint
 
-4. **No-Remnants Policy**
-   - No remaining synchronous framebuffer code or old ioctl paths.
-   - `grep -rE 'drm|framebuffer|ioctl.*display|legacy_display' servers/sexdisplay` must return zero.
+Capability Model
+Wrap every InodeHandle in sex-pdx::Capability (rights encoded in capability bits)
+Revocation = single PDX multicast RevokeKey
 
-### Acceptance Criteria
-- `cargo build --package sexdisplay` succeeds.
-- `make iso` + QEMU boot succeeds with live display.
-- Self-hosting loop (ash + cargo build + any GUI redraw) works with sub-frame latency and full zero-copy numbers.
-- sex-gemini can still hot-repair display state.
+Telemetry
+Add VfsProtocol::Stats returning AtomicU64 counters (ipc_ops_total, zero_copy_handovers, cache_hits, pku_flips) stored in shared arena
 
-Execute atomically in a single pass. Push branch `feature/sexdisplay-pdx-zero-copy` referencing this grok.md.
 
-Follow verbatim. Begin.
+Output Rules (strict):
+
+Output ONLY the git diff for each completed step.
+Prefix every response with: STEP X COMPLETE – DIFF FOLLOWS
+If any required primitive is missing, ask exactly once with a single minimal question.
+Do not improvise, add features, explain, or deviate from invariants under any circumstances.
+After step 8, run cargo test --package sexfiles && cargo bench --package sexfiles and include the benchmark summary in the final diff commit message. Update ARCHITECTURE.md Phase 19 section.
+
+Begin execution immediately.

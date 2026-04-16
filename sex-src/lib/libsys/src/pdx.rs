@@ -43,6 +43,29 @@ pub extern "C" fn pdx_call(target_pd: u32, num: u64, arg0: u64, arg1: u64) -> u6
     res
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum SysError {
+    VfsRegFail = 1,
+    Unknown = 255,
+}
+
+pub fn safe_pdx_register(service_name: &str) -> Result<*mut u8, SysError> {
+    let res: u64;
+    unsafe {
+        core::arch::asm!("syscall",
+            in("rax") 0x10A, // SYS_PDX_REG
+            in("rdi") service_name.as_ptr(),
+            in("rsi") service_name.len(),
+            lateout("rax") res,
+        );
+    }
+    if res == 0 {
+        Err(SysError::VfsRegFail)
+    } else {
+        Ok(res as *mut u8)
+    }
+}
+
 #[repr(C)]
 pub struct PdxRequest {
     pub caller_pd: u32,

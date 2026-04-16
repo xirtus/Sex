@@ -7,7 +7,7 @@ use alloc::collections::BTreeMap;
 /// Capability Types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityKind {
-    Memory, DMA, IPC, Interrupt, Domain, Node, Spawn, Pci, Network, Socket, MemLend, RemoteProxy,
+    Memory, DMA, IPC, Interrupt, Domain, Node, Spawn, Pci, Network, Socket, MemLend, RemoteProxy, VfsNode,
 }
 
 #[repr(C, align(64))]
@@ -55,10 +55,14 @@ pub struct SocketCapData { pub protocol: u8, pub local_port: u16, pub remote_add
 pub struct DmaCapData { pub phys_addr: u64, pub length: u64, pub pku_key: u8 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct VfsNodeCapData { pub inode_id: u64, pub permissions: u32, pub generation: u64 }
+
+#[derive(Debug, Clone, Copy)]
 pub enum CapabilityData {
     Memory(MemoryCapData), DMA(DmaCapData), IPC(IpcCapData), Interrupt(InterruptCapData),
     Domain(u32), Node(NodeCapData), Spawn(SpawnCapData), Pci(PciCapData),
     Network(NetworkCapData), Socket(SocketCapData), MemLend(MemLendCapData), RemoteProxy(GlobalCapId),
+    VfsNode(VfsNodeCapData),
 }
 
 #[derive(Debug, Clone, Copy)]

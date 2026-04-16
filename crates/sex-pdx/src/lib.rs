@@ -1,5 +1,8 @@
 #![no_std]
 
+pub mod ring;
+pub use ring::{AtomicRing, PdxReply};
+
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
