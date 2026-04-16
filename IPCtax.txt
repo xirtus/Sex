@@ -8,7 +8,7 @@ To surpass these constraints, we mandate a transition to a Capability-Hardware-e
 
 2. Memory Architecture: Single Address Space (SASOS) Implementation
 
-The architecture implements a global, flat 64-bit address space where the kernel, sexdrives, and application entities reside. This SASOS model eliminates the need for per-process page table isolation, fundamentally streamlining the data path for Inter-Process Communication (IPC).
+The architecture implements a global, flat 64-bit address space where the kernel, sexdrive, and application entities reside. This SASOS model eliminates the need for per-process page table isolation, fundamentally streamlining the data path for Inter-Process Communication (IPC).
 
 Domain Switching via Intel MPK
 
@@ -53,7 +53,7 @@ A lightweight monitor tracks synchronous, high-frequency IPC hot-paths (e.g., a 
 
 6. I/O Architecture: User-Space Interrupt and Direct Hardware Access
 
-To eliminate I/O jitter, the kernel is removed from the critical data path. We specify a "Unified Kernel-Bypass" model where hardware interrupts are pushed directly to isolated user-space sexdrives.
+To eliminate I/O jitter, the kernel is removed from the critical data path. We specify a "Unified Kernel-Bypass" model where hardware interrupts are pushed directly to isolated user-space sexdrive.
 
 Secure Switch Gates and Zero Mediation
 

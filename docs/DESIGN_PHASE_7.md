@@ -5,9 +5,9 @@ Transform the Sex Microkernel from a hardware-aware foundation into a usable ope
 
 ## 🏛 Architectural Vision: "Lifting the Desktop"
 
-1.  **sexc (POSIX Emulation):** A lightweight C library (mapping to Rust's `no_std` primitives) that translates standard POSIX calls (`open`, `read`, `write`, `socket`) into Sex **PDX calls** targeting the sexvfs, sexnet, and sext.
-2.  **Graphical Compositor (Wayland-Lifted):** Instead of writing a display server from scratch, we will "lift" a Wayland-based compositor (like `sway` or `weston`) into a dedicated **Graphics PD**. It will use DDE-Sex to interact with the NVIDIA/VideoCore sexdrives.
-3.  **Global SAS Shell:** A command-line interface that runs in its own PD, allowing users to spawn tasks, manage files via sexvfs, and monitor the 128-core sexnode.
+1.  **sexc (POSIX Emulation):** A lightweight C library (mapping to Rust's `no_std` primitives) that translates standard POSIX calls (`open`, `read`, `write`, `socket`) into Sex **PDX calls** targeting the sexfiles, sexnet, and sext.
+2.  **Graphical Compositor (Wayland-Lifted):** Instead of writing a display server from scratch, we will "lift" a Wayland-based compositor (like `sway` or `weston`) into a dedicated **Graphics PD**. It will use DDE-Sex to interact with the NVIDIA/VideoCore sexdrive.
+3.  **Global SAS Shell:** A command-line interface that runs in its own PD, allowing users to spawn tasks, manage files via sexfiles, and monitor the 128-core sexnode.
 
 ---
 
@@ -37,4 +37,4 @@ Transform the Sex Microkernel from a hardware-aware foundation into a usable ope
 ## 🧪 Phase 7 Verification
 - **POSIX Hello World:** A standard C "Hello World" compiled with `sexc` runs and prints to the serial console.
 - **Graphical Boot:** The system boots into a Wayland-based graphical interface on the NVIDIA 3070 / Pi 5.
-- **Interactive Shell:** Users can navigate the sexvfs and spawn new Protection Domains from an interactive terminal.
+- **Interactive Shell:** Users can navigate the sexfiles and spawn new Protection Domains from an interactive terminal.

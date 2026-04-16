@@ -31,11 +31,13 @@ build-kernel:
 build-servers:
 	# Build all standalone servers
 	$(CARGO) build --manifest-path servers/sexc/Cargo.toml --target x86_64-unknown-none
-	$(CARGO) build --manifest-path servers/sexvfs/Cargo.toml --target x86_64-unknown-none
-	$(CARGO) build --manifest-path servers/sexdrives/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/sexfiles/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/sexdrive/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/tuxedo/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexinput/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexnet/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexdisplay/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/sextuxedo/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexnode/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexstore/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexgemini/Cargo.toml --target x86_64-unknown-none
@@ -44,8 +46,9 @@ initrd: build-servers
 	# Package all SAS artifacts into initrd.sex
 	$(CMD_RUN) $(SEXPAC) --out initrd.sex \
 		target/x86_64-unknown-none/debug/sexc \
-		target/x86_64-unknown-none/debug/sexvfs \
-		target/x86_64-unknown-none/debug/sexdrives \
+		target/x86_64-unknown-none/debug/sexfiles \
+		target/x86_64-unknown-none/debug/sexdrive \
+		target/x86_64-unknown-none/debug/sextuxedo \
 		target/x86_64-unknown-none/debug/sexinput \
 		target/x86_64-unknown-none/debug/sexnet \
 		target/x86_64-unknown-none/debug/sexdisplay \

@@ -21,7 +21,7 @@ Wayland relies on three main components that we must implement or "lift":
 
 ### 2. sexinput Parity (libinput PD)
 - [ ] **The sexinput PD:** A dedicated domain (ID 2400, Key 16) running a lifted `libinput`.
-- [ ] **USB HID Lifting:** Use DDE-Sex to lift the Linux USB stack and HID sexdrives for mice/keyboards.
+- [ ] **USB HID Lifting:** Use DDE-Sex to lift the Linux USB stack and HID sexdrive for mice/keyboards.
 - [ ] **Ring Buffer Events:** Push mouse/keyboard events into a cache-aligned SPSC ring buffer for the compositor.
 
 ### 3. Graphics & Mesa (The GPU Path)

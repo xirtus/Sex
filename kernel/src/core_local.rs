@@ -7,6 +7,7 @@ use x86_64::VirtAddr;
 pub struct CoreLocal {
     pub current_pd_id: AtomicU32,
     pub core_id: u32,
+    pub pdx_ring: crate::ipc_ring::SpscRing<crate::ipc::messages::Message>,
 }
 
 impl CoreLocal {
@@ -14,6 +15,7 @@ impl CoreLocal {
         let core_local = alloc::boxed::Box::new(CoreLocal {
             current_pd_id: AtomicU32::new(0),
             core_id,
+            pdx_ring: crate::ipc_ring::SpscRing::new(),
         });
         
         let ptr = alloc::boxed::Box::into_raw(core_local);

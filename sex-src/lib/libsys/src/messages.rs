@@ -27,4 +27,12 @@ pub enum MessageType {
     HardwareInterrupt { vector: u8, data: u64 },
     DriverLoadCall { command: u32, driver_name_ptr: u64 },
     DriverLoadReply { status: i64, driver_pd_id: u32 },
+
+    // Display Server Protocol (Phase 16: PDX Display)
+    DisplayBufferAlloc { width: u32, height: u32, format: u32 },
+    DisplayBufferCommit { buffer_id: u32, damage_x: u32, damage_y: u32, damage_w: u32, damage_h: u32 },
+    DisplayBufferReply { page_count: u32, pfn_list: [u64; 64], pku_key: u8 },
+    DisplayModeset { width: u32, height: u32, refresh: u32 },
+    DisplayCursor { x: i32, y: i32, visible: bool, buffer_id: u32 },
+    DisplayGeminiRepairDisplay,
 }

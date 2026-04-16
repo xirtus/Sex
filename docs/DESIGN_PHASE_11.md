@@ -5,8 +5,8 @@ Achieve rapid ecosystem growth by enabling unmodified Linux binaries to run on t
 
 ## 🏛 Architectural Vision: "The Linux Mirror"
 
-1.  **Lin-Sex Loader:** A specialized Protection Domain that can load standard Linux ELF binaries. It intercepts Linux system calls and translates them into Sex PDX calls targeting our native servers (sexvfs, sexnet, sext).
-2.  **MultivFS Lifting:** Instead of writing complex filesystems from scratch, we will use **DDE-Sex** to lift the Linux filesystem sexdrives.
+1.  **Lin-Sex Loader:** A specialized Protection Domain that can load standard Linux ELF binaries. It intercepts Linux system calls and translates them into Sex PDX calls targeting our native servers (sexfiles, sexnet, sext).
+2.  **MultivFS Lifting:** Instead of writing complex filesystems from scratch, we will use **DDE-Sex** to lift the Linux filesystem sexdrive.
     *   **Ext4 & Btrfs:** Lifted from the Linux kernel source.
     *   **FAT/exFAT:** Lifted from Linux or BSD.
     *   **NTFS:** Lifted via `ntfs-3g` or the modern Linux `ntfs3` sexdrive.
@@ -19,13 +19,13 @@ Achieve rapid ecosystem growth by enabling unmodified Linux binaries to run on t
 ### 1. Lin-Sex (Linux Binary Compatibility)
 - [ ] **ELF Loader:** Implement a loader that handles Linux-specific ELF headers and dynamic linking (ld-linux.so).
 - [ ] **Syscall Translator:** Map Linux x86_64/ARM64 syscall numbers to `sexc` / PDX primitives.
-- [ ] **Procfs/Sysfs Emulation:** Implement a virtual sexvfs provider that mimics `/proc` and `/sys` for Linux binary compatibility.
+- [ ] **Procfs/Sysfs Emulation:** Implement a virtual sexfiles provider that mimics `/proc` and `/sys` for Linux binary compatibility.
 
-### 2. Filesystem Parity (sexvfs Lifting)
-- [ ] **`sexdrives/fs/ext4`**: DDE-Sex template for Linux Ext4.
-- [ ] **`sexdrives/fs/btrfs`**: DDE-Sex template for Linux Btrfs.
-- [ ] **`sexdrives/fs/fat-exfat`**: DDE-Sex template for FAT/exFAT support.
-- [ ] **`sexdrives/fs/ntfs3`**: DDE-Sex template for the modern Linux NTFS sexdrive.
+### 2. Filesystem Parity (sexfiles Lifting)
+- [ ] **`sexdrive/fs/ext4`**: DDE-Sex template for Linux Ext4.
+- [ ] **`sexdrive/fs/btrfs`**: DDE-Sex template for Linux Btrfs.
+- [ ] **`sexdrive/fs/fat-exfat`**: DDE-Sex template for FAT/exFAT support.
+- [ ] **`sexdrive/fs/ntfs3`**: DDE-Sex template for the modern Linux NTFS sexdrive.
 
 ### 3. GNU Toolchain & Repository
 - [ ] **`sex-packages` Repo:** Create a public registry for GNU tool templates.

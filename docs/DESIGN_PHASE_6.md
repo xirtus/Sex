@@ -1,7 +1,7 @@
 # Phase 6 Design: SexSD (Sex Software Distribution)
 
 ## 🎯 Objective
-Create a convenient, source-based distribution system called **SexSD**. Inspired by `xbps-src` (Void Linux) and BSD Ports, this system will automate the process of fetching, patching, and "lifting" sexdrives from existing Linux/BSD repositories into Sex Microkernel Protection Domains (PDs).
+Create a convenient, source-based distribution system called **SexSD**. Inspired by `xbps-src` (Void Linux) and BSD Ports, this system will automate the process of fetching, patching, and "lifting" sexdrive from existing Linux/BSD repositories into Sex Microkernel Protection Domains (PDs).
 
 ## 🏛 Architectural Vision: `sex-src`
 
@@ -23,17 +23,17 @@ The `sex-src` tool will be the primary interface for building the operating syst
 - [ ] Implement the `fetch` and `patch` logic to pull from Linux/NetBSD GitHub mirrors.
 - [ ] Support **Cross-Compilation** (Targeting both `x86_64-unknown-none` and `aarch64-unknown-none`).
 
-### 2. The sexdrive Registry (`sexdrives.json`)
+### 2. The sexdrive Registry (`sexdrive.json`)
 - [ ] Build a database mapping hardware IDs to templates:
-  - `0x10DE:0x2484` $\rightarrow$ `sexdrives/gpu/nvidia-3070`
-  - `brcm,bcm2712-gpio` $\rightarrow$ `sexdrives/gpio/rpi5-gpio`
+  - `0x10DE:0x2484` $\rightarrow$ `sexdrive/gpu/nvidia-3070`
+  - `brcm,bcm2712-gpio` $\rightarrow$ `sexdrive/gpio/rpi5-gpio`
 - [ ] Implement a `sex-probe` tool that identifies local hardware and recommends builds.
 
 ### 3. Initial "Lifting" Templates
-- [ ] **`sexdrives/net/netbsd-stack`**: Lifts the NetBSD TCP/IP stack via Rump.
-* [ ] **`sexdrives/gpu/nouveau-rtx`**: Lifts the Linux Nouveau sexdrive for the 3070.
-* [ ] **`sexdrives/storage/nvme-generic`**: Lifts the standard Linux NVMe sexdrive.
-* [ ] **`sexdrives/rpi5/vc7-gpu`**: Lifts the Raspberry Pi VideoCore VII sexdrive.
+- [ ] **`sexdrive/net/netbsd-stack`**: Lifts the NetBSD TCP/IP stack via Rump.
+* [ ] **`sexdrive/gpu/nouveau-rtx`**: Lifts the Linux Nouveau sexdrive for the 3070.
+* [ ] **`sexdrive/storage/nvme-generic`**: Lifts the standard Linux NVMe sexdrive.
+* [ ] **`sexdrive/rpi5/vc7-gpu`**: Lifts the Raspberry Pi VideoCore VII sexdrive.
 
 ### 4. The Sex Installer (`sex-provision`)
 - [ ] A tool to generate a bootable UEFI/Pi image containing the kernel + the selected set of `.spd` sexdrive images.
@@ -44,4 +44,4 @@ The `sex-src` tool will be the primary interface for building the operating syst
 ## 🧪 Phase 6 Verification
 - **Automated Build:** `sex-src pkg nvidia-3070` successfully fetches Linux source, patches it for DDE-Sex, and produces a valid PD image.
 - **Hardware Probing:** `sex-probe` correctly identifies the RTX 3070 and the Pi 5's BCM2712 SoC.
-- **End-to-End Boot:** A "provisioned" image successfully boots on physical hardware and loads the required lifted sexdrives.
+- **End-to-End Boot:** A "provisioned" image successfully boots on physical hardware and loads the required lifted sexdrive.

@@ -31,7 +31,7 @@ def get_choice(options, prompt="Choose an option: "):
 def main():
     print_header("Welcome to the SexOS Setup")
     print("This guided wizard will build the Sex Microkernel and SexOS")
-    print("from source, format your drive, and download necessary sexdrives.")
+    print("from source, format your drive, and download necessary sexdrive.")
     input("\nPress ENTER to begin...")
 
     # 1. sexnet Setup
@@ -56,7 +56,7 @@ def main():
     ]
     for hw in hardware:
         print(f"  -> Found: {hw}")
-    print("\n[+] Recommended sexdrives automatically selected.")
+    print("\n[+] Recommended sexdrive automatically selected.")
     input("\nPress ENTER to continue to partitioning...")
 
     # 3. Disk Partitioning
@@ -88,8 +88,8 @@ def main():
     print("[+] Core OS successfully built and installed.")
 
     # 5. sexdrive Installation
-    print_header("Installing Hardware sexdrives")
-    print("[*] Using DDE-Sex to lift and compile required sexdrives:")
+    print_header("Installing Hardware sexdrive")
+    print("[*] Using DDE-Sex to lift and compile required sexdrive:")
     for drv in ["sexdrm (Nouveau)", "sexwifi (iwlwifi)", "sexsound (ALSA)", "sexinput (libinput)"]:
         print(f"  - Compiling {drv} PD...")
         time.sleep(0.5)
@@ -117,7 +117,7 @@ def main():
     print_header("Installation Complete!")
     print("SexOS has been successfully installed.")
     print("The system relies on 'sexit' for service supervision.")
-    print("All GUI and sexdrives will launch automatically on boot.")
+    print("All GUI and sexdrive will launch automatically on boot.")
     print("\nYou may now reboot your computer.")
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ fn panic(info: &PanicInfo) -> ! {
 fn test_phase13_full_validation() {
     serial_println!("test: Starting Phase 13.1 Full System Validation...");
 
-    // 1. Verify standard capability slots (Slot 1: sexvfs)
+    // 1. Verify standard capability slots (Slot 1: sexfiles)
     let current_pd = sex_kernel::core_local::CoreLocal::get().current_pd_ref();
     let vfs_cap = unsafe { (*current_pd.cap_table).find(1).expect("sexc: VFS cap missing") };
     match vfs_cap.data {
@@ -34,7 +34,7 @@ fn test_phase13_full_validation() {
 
     // 2. Simulate GNU Pipeline: ash | cat | grep
     serial_println!("test: Simulating GNU Pipeline ash | cat | grep...");
-    // This routes via PDX to sexvfs/sexc/etc.
+    // This routes via PDX to sexfiles/sexc/etc.
     let buffer = sex_kernel::memory::allocator::alloc_frame().expect("Test: OOM");
     let res = sex_kernel::syscalls::fs::sys_write(1 /* stdout */, buffer, 4096);
     assert!(res >= 0, "Pipeline write failed");

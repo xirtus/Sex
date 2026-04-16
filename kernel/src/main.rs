@@ -3,46 +3,66 @@
 
 extern crate alloc;
 
-#[link_section = ".note.pvh"]
-#[no_mangle]
-pub static PVH_NOTE: [u32; 4] = [
-    4,                  // Name size
-    4,                  // Desc size
-    18,                 // Type (XEN_ELFNOTE_PHYS32_ENTRY)
-    0x1000000           // Entry point (matches linker anchor)
-];
-
-#[no_mangle]
-pub static PVH_NAME: &[u8; 4] = b"Xen\0";
-
-use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
+use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, RsdpRequest};
+use limine::BaseRevision;
 use core::panic::PanicInfo;
 use sex_kernel::serial_println;
 use sex_kernel::ipc::DOMAIN_REGISTRY;
 use sex_kernel::pd::create::create_protection_domain;
 use x86_64::VirtAddr;
 
-pub static BOOTLOADER_CONFIG: BootloaderConfig = {
-    let mut config = BootloaderConfig::new_default();
-    config.mappings.physical_memory = Some(bootloader_api::config::Mapping::Dynamic);
-    config
-};
+// 1. Limine Protocol Requirements
+#[used]
+#[link_section = ".requests"]
+static BASE_REVISION: BaseRevision = BaseRevision::new();
 
-entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
+#[used]
+#[link_section = ".requests_start"]
+static REQ_START: limine::request::RequestsStartMarker = limine::request::RequestsStartMarker::new();
 
-fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    // 1. Initial Serial/VGA setup
-    // sex_kernel::serial::init(); // Handled by lazy_static
-    sex_kernel::vga::_print(format_args!("Sex Microkernel v1.0.0 Loading...\n"));
+#[used]
+#[link_section = ".requests_end"]
+static REQ_END: limine::request::RequestsEndMarker = limine::request::RequestsEndMarker::new();
 
-    // 2. Hardware Abstraction Layer (GDT, IDT, PIC)
+// 2. Bootloader Information Requests
+#[used]
+#[link_section = ".requests"]
+static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
+
+#[used]
+#[link_section = ".requests"]
+static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
+
+#[used]
+#[link_section = ".requests"]
+static MEMORY_MAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
+
+#[used]
+#[link_section = ".requests"]
+static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
+
+/// The absolute entry point for the SEX microkernel (Pure Rust).
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    // Ensure the bootloader is compatible with our version of the protocol
+    if !BASE_REVISION.is_supported() {
+        loop { x86_64::instructions::hlt(); }
+    }
+
+    // 1. Capture early bootloader responses
+    let hhdm = HHDM_REQUEST.get_response().unwrap();
+    let phys_mem_offset = VirtAddr::new(hhdm.offset());
+    
+    let mmap = MEMORY_MAP_REQUEST.get_response().unwrap();
+    let rsdp = RSDP_REQUEST.get_response().unwrap();
+
+    // 2. Initialize Core HAL (GDT, IDT, PIC)
     sex_kernel::hal::init();
 
-    // 3. Memory & Virtual Address Space
-    let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset.into_option().unwrap());
+    // 3. Setup Virtual Memory & Page Mapping (SASOS)
     let mapper = unsafe { sex_kernel::memory::init_sexting(phys_mem_offset) };
     let frame_allocator = unsafe {
-        sex_kernel::memory::BitmapFrameAllocator::init(&boot_info.memory_regions, phys_mem_offset)
+        sex_kernel::memory::BitmapFrameAllocator::init(mmap.entries(), phys_mem_offset)
     };
 
     // Phase 14: Bootstrap the Global Virtual Address Space
@@ -52,7 +72,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         phys_mem_offset,
     };
 
-    // 4. Global Allocator Initialization
+    // 4. Global Allocator Initialization (Heap)
     sex_kernel::allocator::init_heap(&mut global_vas_inst.mapper, &mut global_vas_inst.frame_allocator)
         .expect("Heap initialization failed");
 
@@ -61,11 +81,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         *gvas = Some(global_vas_inst);
     }
 
-    // 5. Symmetric Multi-Processing (SMP)
-    sex_kernel::apic::init_apic(boot_info.rsdp_addr.into_option().unwrap(), phys_mem_offset);
+    // 5. Symmetric Multi-Processing (SMP) - Deliverable 2
+    sex_kernel::apic::init_apic(rsdp.address().as_ptr() as u64, phys_mem_offset);
     sex_kernel::smp::boot_aps();
 
     // 6. Spawn Core System Domains (Isolation Level 1)
+    serial_println!("Sex SASOS: Production Ready (Phase 16).");
     serial_println!("pd: Spawning core services...");
     
     // Root Domain (Slot 0)
@@ -80,15 +101,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let _sexinput = create_protection_domain("/servers/sexinput/bin/sexinput\0", None).expect("sexinput lost");
     let _sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0", None).expect("sexnet lost");
 
-    serial_println!("Sex SASOS: Production Ready (Phase 16).");
-
-    // 8. Yield to Scheduler
+    // 8. Yield to Scheduler (BSP context)
     if let Some((_, next_ctx)) = sex_kernel::scheduler::SCHEDULERS[0].tick() {
         unsafe {
             sex_kernel::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx);
         }
     } else {
-        panic!("Main loop failed to enqueue!");
+        panic!("Main loop failed to enqueue scheduler!");
     }
 
     loop {

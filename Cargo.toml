@@ -3,14 +3,16 @@ members = [
     "kernel",
     "servers/sexc",
     "servers/sext",
-    "servers/sexvfs",
+    "servers/sexfiles",
     "servers/sexnode",
     "servers/sexgemini",
     "servers/sexnet",
     "servers/sexstore",
     "servers/sexinput",
     "servers/sexdisplay",
-    "servers/sexdrives",
+    "servers/sextuxedo",
+    "servers/sexdrive",
+    "servers/tuxedo",
 ]
 resolver = "2"
 

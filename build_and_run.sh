@@ -7,7 +7,7 @@ cargo build --release
 
 BIN_DIR="target/x86_64-unknown-none/release"
 KERNEL="sex-kernel"
-SERVERS=("sexc" "sext" "sexvfs" "sexnode" "sexgemini" "sexnet" "sexstore" "sexinput" "sexdisplay" "sexdrives")
+SERVERS=("sexc" "sext" "sexfiles" "sexnode" "sexgemini" "sexnet" "sexstore" "sexinput" "sexdisplay" "sexdrive")
 
 echo "Verifying ELF binaries..."
 if ! file "$BIN_DIR/$KERNEL" | grep -q "ELF 64-bit LSB"; then

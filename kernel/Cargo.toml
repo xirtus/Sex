@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bootloader_api = { version = "=0.11.7", default-features = false }
-x86_64 = { version = "0.14.13", default-features = false, features = ["instructions", "abi_x86_interrupt"] }
+limine = { version = "0.6.0" }
+x86_64 = { version = "0.15.2", default-features = false, features = ["instructions", "abi_x86_interrupt", "nightly"] }
 uart_16550 = { version = "0.3.0", default-features = false }
 spinning_top = { version = "0.3.0", default-features = false }
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }

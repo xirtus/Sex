@@ -11,7 +11,7 @@ Type `help` in your SexOS terminal at any time to display this reference.
 `sex-src` is the primary build and package management system for SexOS. It fetches source code, applies DDE-Sex patches, and compiles packages into isolated Protection Domains (PDs).
 
 *   `sex-src pkg <name>`: Fetch and compile a package or sexdrive (e.g., `sex-src pkg nouveau-rtx`).
-*   `sex-src probe`: Analyze your local PCI and Device Tree hardware to recommend sexdrives.
+*   `sex-src probe`: Analyze your local PCI and Device Tree hardware to recommend sexdrive.
 *   `sex-src install <script>`: Launch an interactive installation script (e.g., `sex-src install sex-install`).
 *   `sex-provision <target>`: Bundle the compiled kernel and `.spd` (Sex Protection Domain) images into a bootable EFI/Pi disk image.
 
@@ -21,7 +21,7 @@ SexOS runs traditional monolithic kernel components as isolated, user-space serv
 
 *   **`sexit`**: The minimalist service supervisor (replaces `systemd`). It ensures that critical PDs stay alive.
     *   *Usage in code:* `sexit::start_service("name", pd_id)`
-*   **`sexvfs`**: The Virtual File System registry. Manages mount points for ext4, btrfs, FAT32, and NTFS.
+*   **`sexfiles`**: The Virtual File System registry. Manages mount points for ext4, btrfs, FAT32, and NTFS.
 *   **`sext`**: The Global Memory Manager (sext). Handles demand sexting and Distributed Shared Memory (DSM) across the sexnode.
 *   **`sexnet`**: The Zero-Copy TCP/IP sexnet Stack.
 *   **`sexnode`**: The sexnode Manager. Discovers other SexOS machines on the network for transparent remote IPC.

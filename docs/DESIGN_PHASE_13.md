@@ -14,7 +14,7 @@ Achieve the ultimate milestone for any operating system: **Self-Hosting**. This 
 ## 🗺 Implementation Roadmap
 
 ### 1. `sexc` Extension (The Compiler Bridge)
-- [ ] **Advanced File I/O:** Support for `mmap`, `stat`, and `unlink` targeting `sexvfs`.
+- [ ] **Advanced File I/O:** Support for `mmap`, `stat`, and `unlink` targeting `sexfiles`.
 - [ ] **PD Lifecycle Management:** Implement `fork()` and `exec()` equivalents that map to PD creation and capability inheritance.
 - [ ] **Signal Handling:** Basic signal emulation for compiler error reporting.
 
@@ -33,4 +33,4 @@ Achieve the ultimate milestone for any operating system: **Self-Hosting**. This 
 ## 🧪 Phase 13 Verification
 - **Native Compile:** Running `rustc hello.rs` inside a SexOS terminal produces a working binary.
 - **Cargo Build:** Running `cargo build` on a SexOS app correctly resolves dependencies and compiles.
-- **Full Bootstrap:** The system successfully rebuilds its own `sexvfs` or `sexnet` PD images from source while running.
+- **Full Bootstrap:** The system successfully rebuilds its own `sexfiles` or `sexnet` PD images from source while running.

@@ -25,7 +25,7 @@ pub fn run_maturity_benchmarks() {
 
 fn bench_pdx_latency() {
     let start = read_tsc();
-    // Perform 1000 PDX calls to sexvfs (Slot 1)
+    // Perform 1000 PDX calls to sexfiles (Slot 1)
     for _ in 0..1000 {
         let _ = safe_pdx_call(1, 0); 
     }

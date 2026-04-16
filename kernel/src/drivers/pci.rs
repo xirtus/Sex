@@ -17,7 +17,7 @@ impl PciDevice {
     }
 }
 
-pub fn bootstrap_drivers(sexdrives_pd_id: u32, sexdisplay_pd_id: u32) {
+pub fn bootstrap_drivers(sexdrive_pd_id: u32, sexdisplay_pd_id: u32) {
     serial_println!("pci: Starting hardware enumeration...");
     for bus in 0..8 {
         for dev in 0..32 {
@@ -32,9 +32,9 @@ pub fn bootstrap_drivers(sexdrives_pd_id: u32, sexdisplay_pd_id: u32) {
 
             if class == 0x01 && subclass == 0x08 { // NVMe
                 serial_println!("pci: Found NVMe at {:02x}:{:02x}.0", bus, dev);
-                if let Some(pd) = DOMAIN_REGISTRY.get(sexdrives_pd_id) {
+                if let Some(pd) = DOMAIN_REGISTRY.get(sexdrive_pd_id) {
                     pd.grant(CapabilityData::Pci(crate::capability::PciCapData { bus, dev, func: 0, vendor_id: vendor, device_id: 0 }));
-                    crate::interrupts::register_irq_route(0x22, sexdrives_pd_id);
+                    crate::interrupts::register_irq_route(0x22, sexdrive_pd_id);
                 }
             } else if class == 0x03 { // GPU
                 serial_println!("pci: Found GPU at {:02x}:{:02x}.0", bus, dev);

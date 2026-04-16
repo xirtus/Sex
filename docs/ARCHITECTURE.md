@@ -57,7 +57,7 @@ All traditional OS services run in isolated user-space Protection Domains.
 | --- | --- |
 | **sext** | Manages the global VAS and handles asynchronous page faults via large pages. |
 | **Capability Server** | Central authority for capability policy, distributed for local core scaling. |
-| **sexvfs** | Unified file system interface (Phase 3). |
+| **sexfiles** | Unified file system interface (Phase 3). |
 | **sexnet** | User-space TCP/IP stack (Phase 3). |
 | **sexinput** | Isolated hardware management (Mouse, Keyboard, etc.). |
 
@@ -87,9 +87,9 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] **Hardware Drivers:** Functional NVMe (SQ/CQ) and e1000 (RX/TX DMA).
 - [x] Domain Fusion & Revocation.
 
-### Phase 3: Services & sexvfs (Stable 🚀 (real PDX-based VFS on lock-free foundation))
-- [x] Standalone `sexvfs` server PD.
-- [x] Real block I/O dispatch to `sexdrives` via PDX and lent-memory.
+### Phase 3: Services & sexfiles (Stable 🚀 (real PDX-based VFS on lock-free foundation))
+- [x] Standalone `sexfiles` server PD.
+- [x] Real block I/O dispatch to `sexdrive` via PDX and lent-memory.
 - [x] Minimal `ramfs` using Phase-7 lock-free buddy allocator.
 - [x] POSIX syscall bridge in `sexc` for VFS operations.
 
@@ -99,12 +99,12 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Zero-copy packet transfer via lent-memory.
 - [x] Translucent network-local capability transparency.
 
-### Phase 5: Hardware & sexdrives (Complete ✅ (real zero-copy DMA on lock-free foundation))
+### Phase 5: Hardware & sexdrive (Complete ✅ (real zero-copy DMA on lock-free foundation))
 - [x] ARM64 Design (Raspberry Pi 5).
 - [x] DDE-Sex Shim (Linux/BSD sexdrive lifting).
 - [x] NVIDIA 3070 GPU PD (Nouveau-lifted skeleton).
 - [x] Pi 5 Peripheral support design.
-- [x] Standalone `sexdrives` server PD.
+- [x] Standalone `sexdrive` server PD.
 - [x] Pure PDX hardware dispatch and MSI-X interrupt routing.
 - [x] Zero-copy DMA via lent-memory capabilities.
 
@@ -130,7 +130,7 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Zero-copy DMA via Lent-Memory capabilities.
 - [x] MSI-X interrupt routing to driver SPSC rings.
 - [x] Polished Input stack (PS/2 + USB HID) with TTY routing.
-- [x] sexvfs real block I/O dispatch integration.
+- [x] sexfiles real block I/O dispatch integration.
 
 ### Phase 10: Graphical Plumbing & sexinput (Complete ✅ (real PDX display stack))
 - [x] Standalone `sexdisplay` server PD for framebuffer/GPU management.
@@ -163,7 +163,7 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Zero host dependencies for the self-hosted environment.
 
 ### Phase 13.2: Zero-Nits Polish (Complete ✅ (10/10 production-ready perfection))
-- [x] Replaced hardcoded BAR0 in `sexdrives` with `PciCapData` resolution.
+- [x] Replaced hardcoded BAR0 in `sexdrive` with `PciCapData` resolution.
 - [x] Full MSI-X completion forwarding from IDT to PDX control rings.
 - [x] Standardized `FLSCHED` park in all servers via `libsys::sched::park_on_ring()`.
 - [x] Eradicated all remaining stubs, simulated MMIO, and hardcoded PD IDs.
@@ -205,7 +205,7 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [ ] Graphical Sex-Store Application.
 - [ ] Package browsing & one-click sexting.
 - [ ] Binary caching & SPD image management.
-- [ ] User-contributed sexdrives and apps.
+- [ ] User-contributed sexdrive and apps.
 
 ---
 

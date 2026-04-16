@@ -176,6 +176,34 @@ impl Scheduler {
 
 pub static SCHEDULERS: [Scheduler; 128] = [const { Scheduler::new() }; 128];
 
+/// New per-core local scheduler (Phase 17).
+/// Each core handles its own runqueue and PDX ring messages.
+pub struct LocalScheduler {
+    pub lapic_id: u32,
+}
+
+impl LocalScheduler {
+    pub fn new(lapic_id: u32) -> Self {
+        Self { lapic_id }
+    }
+
+    pub fn tick(&mut self) -> Option<(*mut TaskContext, *const TaskContext)> {
+        // Use the global SCHEDULERS array but indexed by local lapic_id
+        SCHEDULERS[self.lapic_id as usize].tick()
+    }
+
+    pub fn handle_pdx_message(&mut self, msg: crate::ipc::messages::Message) {
+        use crate::ipc::messages::MessageType;
+        match msg.msg_type() {
+            MessageType::Signal(_) => {
+                // Signal handling logic
+            },
+            // MessageType::TlbInvalidate => crate::hal::tlb_flush_local(), // Future
+            _ => {}
+        }
+    }
+}
+
 pub fn park_current_thread() {
     let core_id = crate::core_local::CoreLocal::get().core_id;
     let sched = &SCHEDULERS[core_id as usize];

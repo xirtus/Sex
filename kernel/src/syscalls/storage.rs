@@ -5,7 +5,7 @@ use crate::core_local::CoreLocal;
 
 /// kernel/src/syscalls/storage.rs
 /// Phase 5: Bridge for Storage/DMA operations via PDX.
-/// Maps kernel-level storage requests to the standalone sexdrives server.
+/// Maps kernel-level storage requests to the standalone sexdrive server.
 
 pub fn sys_storage_read(device_cap: u32, offset: u64, size: u64, buffer_vaddr: u64) -> i64 {
     route_storage_call(1 /* FS_READ */, device_cap, offset, size, buffer_vaddr)
@@ -32,13 +32,13 @@ fn route_storage_call(cmd: u32, device_cap_id: u32, offset: u64, size: u64, buff
         _ => return -1,
     };
 
-    let sexdrives_pd = match DOMAIN_REGISTRY.get(target_pd_id) {
+    let sexdrive_pd = match DOMAIN_REGISTRY.get(target_pd_id) {
         Some(pd) => pd,
         None => return -1,
     };
 
     // 2. Create lent-memory capability for zero-copy DMA buffer
-    let buffer_cap_id = sexdrives_pd.grant(CapabilityData::MemLend(MemLendCapData {
+    let buffer_cap_id = sexdrive_pd.grant(CapabilityData::MemLend(MemLendCapData {
         base: buffer_vaddr,
         length: size,
         pku_key: current_pd.pku_key,

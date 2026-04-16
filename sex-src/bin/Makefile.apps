@@ -9,7 +9,7 @@ RUSTCARGO = cargo build --manifest-path ../../Cargo.toml -p sexc
 # Source files
 SRCS = hello.c init.c sexsh.c sexfetch.c ../packages/doom/doom.c ../packages/classicube/cube.c ../lib/malloc.c ../lib/crt0.c ../lib/libSDL2-sexos.c
 OBJS = hello.o init.o sexsh.o sexfetch.o doom.o cube.o ../lib/malloc.o ../lib/crt0.o ../lib/libSDL2-sexos.o
-TARGETS = hello.sex init.sex sexsh.sex sexfetch.sex doom.sex cube.sex sexit.sex sext.sex sexvfs.sex sexc.sex
+TARGETS = hello.sex init.sex sexsh.sex sexfetch.sex doom.sex cube.sex sexit.sex sext.sex sexfiles.sex sexc.sex
 
 all: $(TARGETS)
 
@@ -23,7 +23,7 @@ sext.sex: sext.o ../lib/malloc.o ../lib/crt0.o
 	$(CC) $(LDFLAGS) -o $@ $^
 	@echo "Build successful: $@"
 
-sexvfs.sex: sexvfs.o ../lib/malloc.o ../lib/crt0.o
+sexfiles.sex: sexfiles.o ../lib/malloc.o ../lib/crt0.o
 	$(CC) $(LDFLAGS) -o $@ $^
 	@echo "Build successful: $@"
 

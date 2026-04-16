@@ -30,7 +30,7 @@ pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Re
     let pkru_mask = pku::init_pd_pkru(pku_key);
     unsafe { (*new_pd).current_pkru_mask.store(pkru_mask, core::sync::atomic::Ordering::Release); }
 
-    // 3. Load ELF via PDX to sexvfs
+    // 3. Load ELF via PDX to sexfiles
     let entry = ElfLoader::load_elf(elf_path, pku_key)?;
 
     // 4. Register with Registry (Lock-free insertion)

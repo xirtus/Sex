@@ -118,3 +118,8 @@ pub fn route_signal(target_pd_id: u32, signal: u8) -> Result<(), &'static str> {
 
     unsafe { (*target_pd.signal_ring).enqueue(signal) }
 }
+
+pub fn dequeue_local() -> Option<crate::ipc::messages::Message> {
+    let core_local = crate::core_local::CoreLocal::get();
+    core_local.pdx_ring.dequeue()
+}

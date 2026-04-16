@@ -48,7 +48,7 @@ fn handle_posix_syscall(func_id: u32, arg0: u64) -> u64 {
     match func_id {
         0 => { // sys_read
             let msg = MessageType::VfsCall { command: 1, offset: 0, size: 4096, buffer_cap: arg0 as u32 };
-            // Resolve sexvfs via capability slot 1
+            // Resolve sexfiles via capability slot 1
             pdx_call(1, 0, &msg as *const _ as u64, 0)
         },
         1 => { // sys_write
@@ -63,6 +63,20 @@ fn handle_posix_syscall(func_id: u32, arg0: u64) -> u64 {
         37 => { // sys_kill
             unsafe { core::arch::asm!("syscall", in("rax") 16, in("rdi") arg0); }
             0
+        },
+        16 => { // sys_ioctl (DRM/Display bridge)
+            let cmd = arg0 as u32;
+            match cmd {
+                0x101 => { // DRM_IOCTL_BUFFER_ALLOC
+                    let msg = MessageType::DisplayBufferAlloc { width: 1920, height: 1080, format: 0x32315258 }; // XR24
+                    pdx_call(5 /* Display Cap */, 0, &msg as *const _ as u64, 0)
+                },
+                0x102 => { // DRM_IOCTL_BUFFER_COMMIT
+                    let msg = MessageType::DisplayBufferCommit { buffer_id: 1, damage_x: 0, damage_y: 0, damage_w: 1920, damage_h: 1080 };
+                    pdx_call(5 /* Display Cap */, 0, &msg as *const _ as u64, 0)
+                },
+                _ => u64::MAX,
+            }
         },
         _ => u64::MAX,
     }

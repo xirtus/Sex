@@ -1,0 +1,26 @@
+{
+  "pci": {
+    "10de:2484": {
+      "name": "NVIDIA GeForce RTX 3070",
+      "template": "gpu/nouveau-rtx",
+      "arch": ["x86_64"]
+    },
+    "10ec:8168": {
+      "name": "Realtek RTL8111/8168/8411 PCI Express Gigabit Ethernet Controller",
+      "template": "net/realtek-8111",
+      "arch": ["x86_64"]
+    }
+  },
+  "dt": {
+    "brcm,bcm2712-gpio": {
+      "name": "Raspberry Pi 5 GPIO Controller",
+      "template": "gpio/rpi5-gpio",
+      "arch": ["aarch64"]
+    },
+    "brcm,bcm2712-sdhci": {
+      "name": "Raspberry Pi 5 SDHCI Controller",
+      "template": "storage/rpi5-sdhci",
+      "arch": ["aarch64"]
+    }
+  }
+}

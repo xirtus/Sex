@@ -1,0 +1,39 @@
+# GROK HANDOFF v1.5 – sexdisplay FULL PDX + ZERO-COPY UPGRADE
+
+You are operating inside the Sex microkernel repository[](https://github.com/xirtus/sex).
+Your mission is to **upgrade `servers/sexdisplay` to a pure PDX, zero-copy, lock-free display server** exactly as specified.
+
+### Core Design Principles (non-negotiable)
+- All operations become asynchronous PDX messages (lock-free ring buffers).
+- Zero-copy buffer handoff using Intel PKU key swaps (no memcpy, no DRM PRIME).
+- 100 % safe Rust with #![forbid(unsafe_code)] except abstracted PKU calls.
+- Seamless integration with sexdrive/sextuxedo (GPU), sexfiles (texture cache), sexinput, and sex-gemini.
+
+### Exact Implementation Requirements
+1. **PDX Message Protocol**
+   - Add to `sexdisplay/src/messages.rs` the Display* variants listed above (BufferAlloc, BufferCommit, Modeset, Cursor, GeminiRepairDisplay, etc.).
+   - Every legacy ioctl/drm call becomes a `safe_pdx_call(sexdisplay_pdx_id, MessageType::Display...)`.
+
+2. **Zero-Copy Buffer Path**
+   - On BufferAlloc: return direct page list + PKU key.
+   - On Commit: sextuxedo receives the same pages for atomic scanout.
+   - Add lightweight damage tracking (lock-free) inside the PD.
+
+3. **Integration Updates**
+   - Update sexc POSIX bridge, ash, package manager, sex-gemini.
+   - sexinput events route directly into sexdisplay compositor.
+   - Build system, limine config, QEMU scripts all updated.
+
+4. **No-Remnants Policy**
+   - No remaining synchronous framebuffer code or old ioctl paths.
+   - `grep -rE 'drm|framebuffer|ioctl.*display|legacy_display' servers/sexdisplay` must return zero.
+
+### Acceptance Criteria
+- `cargo build --package sexdisplay` succeeds.
+- `make iso` + QEMU boot succeeds with live display.
+- Self-hosting loop (ash + cargo build + any GUI redraw) works with sub-frame latency and full zero-copy numbers.
+- sex-gemini can still hot-repair display state.
+
+Execute atomically in a single pass. Push branch `feature/sexdisplay-pdx-zero-copy` referencing this grok.md.
+
+Follow verbatim. Begin.

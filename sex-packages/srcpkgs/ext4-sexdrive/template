@@ -30,9 +30,9 @@ do_build() {
 
 do_install() {
     local destdir=$1
-    mkdir -p "${destdir}/usr/lib/sexdrives"
+    mkdir -p "${destdir}/usr/lib/sexdrive"
     
-    cp ext4.elf "${destdir}/usr/lib/sexdrives/"
+    cp ext4.elf "${destdir}/usr/lib/sexdrive/"
     
     # Capability Manifest for the VFS Resolver
     cat <<EOF > "${destdir}/manifest.txt"

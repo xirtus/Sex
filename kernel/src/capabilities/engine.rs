@@ -11,7 +11,7 @@ impl CapEngine {
         // 1. Root VFS capability
         pd.grant(CapabilityData::Node(NodeCapData {
             node_id: 1,
-            sexdrive_pd_id: 100, // sexvfs PD ID
+            sexdrive_pd_id: 100, // sexfiles PD ID
             inode_id: 2,
             permissions: 0x7, // R/W/X
         }));

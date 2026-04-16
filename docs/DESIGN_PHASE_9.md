@@ -5,7 +5,7 @@ Elevate the Sex Microkernel from a functional distributed system to a fully capa
 
 ## 🏛 Architectural Vision: CAPIO & The "Slicer"
 
-Following the **CAPIO (Capability-based I/O)** architecture, sexdrives in Sex are not loaded into the kernel. Instead, they run as isolated compartments in the SASOS.
+Following the **CAPIO (Capability-based I/O)** architecture, sexdrive in Sex are not loaded into the kernel. Instead, they run as isolated compartments in the SASOS.
 
 1.  **Device Manifests:** The kernel stub handles initial device discovery (e.g., PCIe probing for the NVIDIA 3070). It defines a **Device Manifest** that partitions MMIO registers into "Safe Data Plane" and "Privileged Control Plane" (e.g., DMA config).
 2.  **The Slicer:** When a userspace sexdrive (like the NVIDIA PD) starts, the **Slicer** intercepts mapping requests and issues unforgeable hardware capabilities for the specific **byte-slices** of the device MMIO defined in the manifest.
@@ -27,12 +27,12 @@ Following the **CAPIO (Capability-based I/O)** architecture, sexdrives in Sex ar
   - Lift the `mac80211` wireless stack via DDE-Sex.
   - Integrate with the existing `sexnet` PD.
 - [ ] **sexsound PD:**
-  - Lift the ALSA core and Intel HDA / Broadcom audio sexdrives.
+  - Lift the ALSA core and Intel HDA / Broadcom audio sexdrive.
   - Implement a `sexit` service for PipeWire.
 
 ### 2. The Graphics Stack (sexdrm/KMS)
 - [ ] **sexdrm PD:** Implement the compatibility layer for Linux Direct Rendering Manager.
-- [ ] **Mesa Integration:** Ensure Mesa's user-space sexdrives (Nouveau/V3D) can allocate and map graphics memory (GEM/TTM) via Sex PDX calls.
+- [ ] **Mesa Integration:** Ensure Mesa's user-space sexdrive (Nouveau/V3D) can allocate and map graphics memory (GEM/TTM) via Sex PDX calls.
 - [ ] **Wayland Support:** Implement the necessary `AF_UNIX` socket emulation in `sexc` for Wayland client-server communication.
 
 ### 3. The Desktop Experience

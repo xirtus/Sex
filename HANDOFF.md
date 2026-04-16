@@ -1,37 +1,41 @@
-# SexOS Handoff - 2026-04-16 (Standardization & Test Infrastructure Complete)
+# SEX Microkernel: 100% Rust Boot Migration Handoff
 
-## 🏁 Current Status
-**Sex SASOS v1.0.0 is hardened and warning-free.**
-The kernel features functional hardware entropy, type-safe page table abstractions, and a idiomatic IDT implementation. The integration test suite has been standardized with a custom test runner and QEMU exit logic. The kernel now builds with **zero warnings** in the production Docker environment.
+## 1. ARCHITECTURE SUMMARY
+- **Project:** SEX (Single Environment XIPC) Microkernel.
+- **Tenets:** Tiny TCB, 100% `no_std` Rust (2024 Edition).
+- **Isolation:** Intel PKU/MPK + CHERI (Capability-first).
+- **Efficiency:** Single Address Space (SAS), Zero-copy PDX ring-buffer IPC.
+- **Networking/Signals:** Message-based; signals use `MessageType::Signal`.
 
-## 🚀 The Emulation Mandate (QEMU)
-To avoid immediate triple-faults or black-screen hangs, the following invariants MUST be satisfied during emulation:
+## 2. CURRENT TASK
+**Migration to 100% Rust Boot Path via Limine v0.6+ Protocol.**
+Eliminate all remaining C glue and external assembly (`trampoline.asm`) to achieve a pure-Rust trusted computing base.
 
-1.  **Intel PKU (`-cpu max,pku=on`)**: The kernel uses `WRPKRU` for zero-cost domain switching.
-2.  **Modern Chipset (`-machine q35`)**: The kernel expects PCIe and modern APIC mappings.
-3.  **SAS Metadata Memory (`-m 2G`)**: Required for the Bitmap Frame Allocator and global page tables.
-4.  **Headless Output (`-serial stdio -display none`)**: Communication is via **Serial (COM1)**.
+## 3. BLOCKER / PENDING ACTIONS
+The roadmap is approved, but the following code-level implementations are required to complete the migration:
 
-**Canonical Command:** `make run-sasos`
+### A. `kernel/Cargo.toml`
+- Swap `bootloader_api` for `limine = "0.6.0"`.
 
-## 🛠 Next Integration Sprint (Priorities)
-Priority tasks to move from "standardized" to "functionally verified":
+### B. `kernel/src/main.rs`
+- Replace `entry_point!` with `#[no_mangle] pub extern "C" fn _start() -> !`.
+- Implement Limine request markers (`BaseRevision`, `HhdmRequest`, `MemoryMapRequest`, `RsdpRequest`).
+- Align requests in the `.requests` section using `#[link_section = ".requests"]`.
 
-- [ ] **Signal Bridge Rewrite**: Rewrite `phase11_signals.rs` to align with the standalone `sexc` server architecture. The test currently attempts to access kernel-private structures and needs to transition to a pure PDX-based verification.
-- [ ] **Test Execution Hardening**: Execute the standardized tests in `kernel/tests/` via `cargo test` in a QEMU-backed environment. Resolve the `segment_file_offset == 0` assertion failure seen in the ELF mapper during test loading.
-- [ ] **CI Pipeline Integration**: Leverage the new `test_runner` and `exit_qemu` logic (ISA debug exit) to enable automated integration testing in GitHub Actions.
-- [ ] **Advanced Capability Verification**: Expand `phase08_elf_pd_spawn.rs` to verify complex capability delegation (e.g., recursive MemLend) across domain boundaries.
+### C. `kernel/src/smp.rs`
+- **Critical:** Provide the `global_asm!` block for the AP trampoline (16-bit real mode -> 32-bit protected mode -> 64-bit long mode transition).
+- Must load the BSP's P4 page table (passed via `0x508`) to ensure SAS consistency across cores.
+- Must jump to the higher-half Rust `ap_kernel_entry` using the address stored at `0x500`.
 
-### ✅ Recently Completed:
-- **Idiomatic IDT**: Resolved `set_handler_fn` bounds by enabling `abi_x86_interrupt` feature for the `x86_64` crate.
-- **Test Standardization**: Prepended `no_std` boilerplate and custom test runners to all 18 integration tests. Added `exit_qemu` logic via ISA debug port `0xf4`.
-- **Zero-Warning Bootstrap**: Cleaned up 35+ compiler warnings (unused imports, variables, and mutability) across the kernel tree.
-- **Entropy & PTE Extensions**: (Prior Session) Implemented `rdseed` assembly and `PageTableEntryExt` for PKU management.
+### D. `kernel/linker.ld`
+- Define the `.requests` section with **8-byte alignment** (mandatory for Limine protocol).
+- Adjust VMA to Higher Half (`0xffffffff80000000`).
 
-### Preserved Invariants:
-- 100% `no_std` Microkernel.
-- Intel PKU Hardware-Backed Isolation.
-- Lock-Free / Wait-Free Core path.
-- Asynchronous Signal Delivery (No stack hijacking).
+## 4. STRICT REQUIREMENTS
+- **NO C Code:** Zero manual C compilation steps.
+- **NO External .asm:** All assembly must be `global_asm!` or `asm!`.
+- **Platform:** Must support both BIOS and UEFI via Limine's unified protocol.
+- **TCB:** Minimal and memory-safe.
 
-**The repo is standardized, warning-free, and ready for automated integration verification.**
+## 5. NEXT STEPS (FOR NEXT SESSION)
+Generate the full, production-ready code blocks for the files listed above based on the approved migration strategy.

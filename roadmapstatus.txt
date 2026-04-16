@@ -12,7 +12,7 @@
 
    * sexc (POSIX/C Emulation Layer): Stubbed. Functions like open(), read(), write(), and spawn_pd() simply print their arguments to the serial port and return hardcoded simulated
      values (e.g., Ok(3000) for a spawned Process ID).
-   * sexvfs (Virtual File System): Stubbed. It has a basic BTreeMap registry for mount points and translators but resolving an inode or opening a file just returns mock capability data
+   * sexfiles (Virtual File System): Stubbed. It has a basic BTreeMap registry for mount points and translators but resolving an inode or opening a file just returns mock capability data
      (e.g., Ok(0x_TR_A_NS)).
    * sexnet (Networking Stack): Stubbed. It defines ring buffers but functions like create_socket and route_remote_ipc just print to serial and return fake socket IDs like 1234 or
      0x_A11_0K.
@@ -37,7 +37,7 @@
       using Intel PKU, but a full page fault handler, physical frame allocator, and demand-paging mechanism are missing.
    3. Process Scheduling: Linux uses the Completely Fair Scheduler (CFS/EEVDF). SexOS plans for lockless per-core schedulers, but thread context switching, wait queues, and preemption
       are not functionally realized.
-   4. Filesystems (VFS): Linux has Ext4, Btrfs, XFS, etc. SexOS sexvfs handles routing but cannot physically read/write blocks to a disk yet.
+   4. Filesystems (VFS): Linux has Ext4, Btrfs, XFS, etc. SexOS sexfiles handles routing but cannot physically read/write blocks to a disk yet.
    5. Network Stack: BSD and Linux have heavily battle-tested, highly performant TCP/IP stacks. sexnet currently lacks protocol implementations (TCP/UDP/IP/ARP), congestion control,
       and packet parsing.
    6. POSIX Compliance: Linux/BSD are heavily POSIX-compliant, meaning standard C programs compile and run seamlessly. sexc is a good concept but only mocks 3-4 basic syscalls.
@@ -96,7 +96,7 @@
    * Implement PCI enumeration.
    * Write a basic AHCI/SATA or NVMe driver.
    * Write a FAT32 driver.
-   * Implement the sexvfs logic to map file paths to disk sectors.
+   * Implement the sexfiles logic to map file paths to disk sectors.
    * Milestone: The kernel can read a text file from a real hard drive and print it to the screen.
 
   Step 3: Interactive Shell & Libc (Stable 🚀)
@@ -129,9 +129,9 @@
  > okay plan how to tackle the core kernel issues, and begin
 
 Signal Trampoline: COMPLETE
-Phase 3 Services & sexvfs: COMPLETE ✅ (real PDX-based VFS on lock-free foundation)
+Phase 3 Services & sexfiles: COMPLETE ✅ (real PDX-based VFS on lock-free foundation)
 Phase 4 Distribution: COMPLETE ✅ (real remote PDX on lock-free foundation)
-Phase 5 Hardware & sexdrives: COMPLETE ✅ (real zero-copy DMA on lock-free foundation)
+Phase 5 Hardware & sexdrive: COMPLETE ✅ (real zero-copy DMA on lock-free foundation)
 Phase 6 Signal Trampoline: COMPLETE ✅ (ruthless lock-free polish)
 Phase 7 Memory Subsystem & Async Page-Fault Forwarding: COMPLETE ✅ (hardened on new lock-free core)
 Phase 8 Full ELF Loader + PD Spawn: COMPLETE ✅ (hardened on lock-free memory)

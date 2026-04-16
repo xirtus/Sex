@@ -9,7 +9,7 @@ import subprocess
 # Inspired by xbps-src (Void Linux)
 
 TEMPLATES_DIR = "templates"
-SEXDRIVES_JSON = "sexdrives.json"
+SEXDRIVES_JSON = "sexdrive.json"
 
 def load_registry():
     with open(SEXDRIVES_JSON, 'r') as f:

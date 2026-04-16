@@ -24,8 +24,8 @@ fn panic(info: &PanicInfo) -> ! {
 fn test_elf_pd_spawn_lockfree() {
     serial_println!("test: Attempting to spawn ash PD (Lock-Free Path)...");
     
-    // 1. Setup mock environment (Ensures sexvfs is 'present' in registry)
-    // In our SAS bootstrap, we already spawned sexvfs at PD 100.
+    // 1. Setup mock environment (Ensures sexfiles is 'present' in registry)
+    // In our SAS bootstrap, we already spawned sexfiles at PD 100.
     
     // 2. Call sys_spawn_pd
     let path = "/bin/ash\0";

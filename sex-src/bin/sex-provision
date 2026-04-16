@@ -6,7 +6,7 @@ import sys
 # sex-provision: Create a bootable Sex Microkernel image
 # Bundles the kernel + .spd sexdrive images
 
-def provision_image(target, arch, sexdrives):
+def provision_image(target, arch, sexdrive):
     print(f"[*] Provisioning Sex Microkernel image for {target} ({arch})")
     
     # In a real implementation:
@@ -15,7 +15,7 @@ def provision_image(target, arch, sexdrives):
     # 3. Use bootloader-api/limine/u-boot to create a flashable .img or .iso
     
     print(f"  - Bundling kernel...")
-    for drv in sexdrives:
+    for drv in sexdrive:
         print(f"  - Including sexdrive: {drv}.spd")
     
     print(f"  - Generating bootloader config...")
@@ -25,11 +25,11 @@ def main():
     parser = argparse.ArgumentParser(description="sex-provision: Create bootable Sex OS images")
     parser.add_argument("target", choices=["uefi", "pi5"], help="Deployment target")
     parser.add_argument("--arch", default="x86_64", help="Architecture")
-    parser.add_argument("--sexdrives", nargs="+", default=[], help="List of .spd sexdrives to include")
+    parser.add_argument("--sexdrive", nargs="+", default=[], help="List of .spd sexdrive to include")
 
     args = parser.parse_args()
 
-    provision_image(args.target, args.arch, args.sexdrives)
+    provision_image(args.target, args.arch, args.sexdrive)
 
 if __name__ == "__main__":
     main()

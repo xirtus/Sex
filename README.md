@@ -39,7 +39,7 @@ The Sex SASOS requires a specific nightly toolchain and freestanding targets (`x
 ## 📁 Stack Structure
 
 - **Core:** Pure Rust `no_std` Microkernel (< 7 kLOC).
-- **Userspace:** Isolated Standalone ELFs (`sexc`, `sexvfs`, `sexnet`, `sexnode`, etc.).
+- **Userspace:** Isolated Standalone ELFs (`sexc`, `sexfiles`, `sexnet`, `sexnode`, etc.).
 - **Isolation:** Intel MPK (Hardware Keys) + CHERI Metadata Prep.
 
 ## 🛠 Usage Instructions

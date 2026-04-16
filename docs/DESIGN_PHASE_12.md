@@ -6,12 +6,12 @@ Incorporate the structural advantages of **GNU Hurd** and **Redox OS** into the 
 ## 🏛 Architectural Vision: The "Plug-and-Play" OS
 
 1.  **Sexting-Translators (Hurd-style):**
-    *   In SexOS, a "Translator" is a Protection Domain (PD) that is attached to a specific `sexvfs` node.
-    *   If a user accesses `/net/github.com`, the `sexvfs` dynamically spawns or routes the request to a `sexnet` translator PD.
+    *   In SexOS, a "Translator" is a Protection Domain (PD) that is attached to a specific `sexfiles` node.
+    *   If a user accesses `/net/github.com`, the `sexfiles` dynamically spawns or routes the request to a `sexnet` translator PD.
     *   Unlike Hurd, our translators are **hardware-isolated via PKU**, making them both dynamic and stupidly fast.
 2.  **Universal Resource URLs (Redox-style):**
     *   Everything in the DSAS is accessible via a URL scheme:
-        *   `sexvfs://node1/etc/config`
+        *   `sexfiles://node1/etc/config`
         *   `sexnet://tcp/8080`
         *   `sexdrive://nvme0/partition1`
         *   `sexting://shared/buffer_alpha`
@@ -21,9 +21,9 @@ Incorporate the structural advantages of **GNU Hurd** and **Redox OS** into the 
 
 ## 🗺 Implementation Roadmap
 
-### 1. The Translator Engine (`sexvfs` expansion)
+### 1. The Translator Engine (`sexfiles` expansion)
 - [ ] **Node-PD Attachment:** Implement the ability to link a VFS path to a `Capability::IPC` of a specific translator PD.
-- [ ] **On-Demand Translation:** If a node with an attached translator is accessed, `sexvfs` performs an implicit `safe_pdx_call` to the translator to resolve the request.
+- [ ] **On-Demand Translation:** If a node with an attached translator is accessed, `sexfiles` performs an implicit `safe_pdx_call` to the translator to resolve the request.
 
 ### 2. URL Resolver Server (`sexnode` expansion)
 - [ ] **Scheme Registry:** Map schemes (e.g., `sexnet://`) to specific system servers.
@@ -38,4 +38,4 @@ Incorporate the structural advantages of **GNU Hurd** and **Redox OS** into the 
 ## 🧪 Phase 12 Verification
 - **Dynamic Mount:** A user attaches a custom "Encrypted Folder" translator to `/home/user/vault`. Accessing that folder triggers the translator PD transparently.
 - **URL Access:** A POSIX application opens `sexnet://google.com:80` using the standard `sexc::open()` call, and the system routes it to the `sexnet` PD.
-- **Cross-Node URL:** A thread on the Pi 5 opens `sexdrive://x17r1/nvme0` and reads a block from the workstation's SSD via the distributed `sexvfs`.
+- **Cross-Node URL:** A thread on the Pi 5 opens `sexdrive://x17r1/nvme0` and reads a block from the workstation's SSD via the distributed `sexfiles`.

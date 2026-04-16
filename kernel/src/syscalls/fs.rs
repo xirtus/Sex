@@ -5,7 +5,7 @@ use crate::core_local::CoreLocal;
 
 /// kernel/src/syscalls/fs.rs
 /// Phase 3: Bridge for VFS operations via PDX.
-/// Maps kernel-level FS requests to the standalone sexvfs server.
+/// Maps kernel-level FS requests to the standalone sexfiles server.
 
 pub fn sys_read(vfs_cap_id: u32, buffer: u64, size: u64) -> i64 {
     route_vfs_call(1, vfs_cap_id, size, buffer)

@@ -26,6 +26,23 @@ pub enum MessageType {
     StoreReply { status: i64, size: u64 },
     InputCall,
     InputReply { status: i64, size: u64 },
+
+    // Phase 18: Advanced Zero-Copy VFS Protocol
+    VfsOpen { path: [u8; 512], flags: u32, mode: u32 },
+    VfsRead { fd: u64, len: u64, offset: u64 },
+    VfsWrite { fd: u64, len: u64, offset: u64 },
+    VfsClose { fd: u64 },
+    VfsStat { path: [u8; 512] },
+    VfsReaddir { dir_fd: u64, cookie: u64 },
+    VfsZeroCopyHandover { page_count: u16, pfn_list: [u64; 64] },
+
+    // Display Server Protocol (Phase 16: PDX Display)
+    DisplayBufferAlloc { width: u32, height: u32, format: u32 },
+    DisplayBufferCommit { buffer_id: u32, damage_x: u32, damage_y: u32, damage_w: u32, damage_h: u32 },
+    DisplayBufferReply { page_count: u32, pfn_list: [u64; 64], pku_key: u8 },
+    DisplayModeset { width: u32, height: u32, refresh: u32 },
+    DisplayCursor { x: i32, y: i32, visible: bool, buffer_id: u32 },
+    DisplayGeminiRepairDisplay,
 }
 
 #[derive(Debug, Clone, Copy)]

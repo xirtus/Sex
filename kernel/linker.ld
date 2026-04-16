@@ -2,7 +2,8 @@ ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x1000000;  /* PHYSICAL high-memory anchor – Limine will load here */
+    /* Load the kernel in the higher half */
+    . = 0xffffffff80000000;
 
     .text : ALIGN(4096)
     {
@@ -19,13 +20,21 @@ SECTIONS
         *(.data .data.*)
     }
 
+    /* Limine requests section (8-byte alignment mandatory) */
+    .requests : ALIGN(8)
+    {
+        KEEP(*(.requests_start))
+        KEEP(*(.requests))
+        KEEP(*(.requests_end))
+    }
+
     .bss : ALIGN(4096)
     {
         *(.bss .bss.*)
         *(COMMON)
     }
 
-    /* Sex-specific sections */
+    /* Sex-specific SASOS sections */
     .pdx_ring : ALIGN(4096)
     {
         *(.pdx_ring)
@@ -37,4 +46,4 @@ SECTIONS
     }
 
     /DISCARD/ : { *(.eh_frame) *(.comment) }
-}o
+}

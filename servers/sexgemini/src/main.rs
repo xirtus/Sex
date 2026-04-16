@@ -44,7 +44,10 @@ fn handle_violation(fault_addr: u64) -> i64 {
         let compile_res = pdx_call(2 /* sexc_cap */, 2 /* EXEC */, 0 /* "/bin/cargo" */, 0);
         
         if compile_res == 0 {
-            // 4. Execute hot-swap (Kexec or dynamic translation reload) via capability slot 5 (sexnode)
+            // 4. Invoke Display Repair via capability slot 3 (sexdisplay)
+            let _repair_res = pdx_call(3 /* sexdisplay_cap */, 0, &MessageType::DisplayGeminiRepairDisplay as *const _ as u64, 0);
+
+            // 5. Execute hot-swap (Kexec or dynamic translation reload) via capability slot 5 (sexnode)
             let _swap_res = pdx_call(5 /* sexnode_cap */, 1 /* TRANSLATE_ELF */, 0, 0);
             return 0; // Repair Successful
         }

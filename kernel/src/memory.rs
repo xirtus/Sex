@@ -1,4 +1,4 @@
-use bootloader_api::info::{MemoryRegionKind, MemoryRegions};
+use limine::response::MemoryMapEntry;
 use x86_64::{
     structures::paging::{FrameAllocator, Mapper, OffsetPageTable, PageTable, PhysFrame, Size4KiB, Page, PageTableFlags, frame::PhysFrameRangeInclusive, page_table::PageTableEntry},
     PhysAddr, VirtAddr,
@@ -112,7 +112,7 @@ unsafe impl Send for BitmapFrameAllocator {}
 unsafe impl Sync for BitmapFrameAllocator {}
 
 impl BitmapFrameAllocator {
-    pub unsafe fn init(memory_regions: &'static MemoryRegions, _offset: VirtAddr) -> Self {
+    pub unsafe fn init(memory_regions: &'static [&'static MemoryMapEntry], _offset: VirtAddr) -> Self {
         Self {
             inner: BootInfoFrameAllocator::init(memory_regions),
         }
@@ -142,12 +142,12 @@ unsafe impl FrameAllocator<Size4KiB> for BitmapFrameAllocator {
 }
 
 pub struct BootInfoFrameAllocator {
-    memory_regions: &'static MemoryRegions,
+    memory_regions: &'static [&'static MemoryMapEntry],
     next: usize,
 }
 
 impl BootInfoFrameAllocator {
-    pub unsafe fn init(memory_regions: &'static MemoryRegions) -> Self {
+    pub unsafe fn init(memory_regions: &'static [&'static MemoryMapEntry]) -> Self {
         BootInfoFrameAllocator {
             memory_regions,
             next: 0,
@@ -156,8 +156,8 @@ impl BootInfoFrameAllocator {
 
     fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> {
         let regions = self.memory_regions.iter();
-        let usable_regions = regions.filter(|r| r.kind == MemoryRegionKind::Usable);
-        let addr_ranges = usable_regions.map(|r| r.start..r.end);
+        let usable_regions = regions.filter(|r| r.entry_type == limine::response::MemoryMapEntryType::Usable);
+        let addr_ranges = usable_regions.map(|r| r.base..r.base + r.length);
         let frame_addresses = addr_ranges.flat_map(|r| r.step_by(4096));
         frame_addresses.map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
     }
@@ -168,28 +168,5 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
         let frame = self.usable_frames().nth(self.next);
         self.next += 1;
         frame
-    }
-}
-
-pub struct DummyFrameAllocator {
-    pub last_allocated: usize,
-}
-
-impl DummyFrameAllocator {
-    pub fn new() -> Self {
-        Self { last_allocated: 0 }
-    }
-}
-
-unsafe impl FrameAllocator<Size4KiB> for DummyFrameAllocator {
-    fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        for idx in (self.last_allocated + 1)..1000000 {
-            if idx > 1024 {
-                self.last_allocated = idx;
-                let phys_addr = PhysAddr::new((idx as u64) * 4096);
-                return Some(PhysFrame::containing_address(phys_addr));
-            }
-        }
-        None
     }
 }

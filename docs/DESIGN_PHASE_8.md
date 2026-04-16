@@ -34,4 +34,4 @@ Realize the final vision of the Sex Microkernel: transforming a sexnode of indep
 ## 🧪 Phase 8 Verification
 - **Distributed Page Fault:** Accessing a memory address on the Pi 5 that is physically located on the x86_64 node triggers a sexnet fetch and completes successfully.
 - **Remote GPU Acceleration:** The Pi 5 successfully offloads a GPGPU task to the NVIDIA 3070 on the workstation via a remote PDX call.
-- **Seamless Migration:** A running POSIX application is migrated from ARM64 to x86_64 without crashing or losing its sexvfs state.
+- **Seamless Migration:** A running POSIX application is migrated from ARM64 to x86_64 without crashing or losing its sexfiles state.

@@ -37,7 +37,7 @@ case "$COMMAND" in
         if [ -f "$TARGET_ROOT/manifest.txt" ]; then
             echo "sexpac: WARNING: Package requested the following Capabilities:"
             cat "$TARGET_ROOT/manifest.txt" | grep "CAPABILITIES"
-            echo "sexpac: Capabilities registered in sexvfs registry."
+            echo "sexpac: Capabilities registered in sexfiles registry."
         fi
 
         echo "sexpac: SUCCESS. $PKG_NAME is now active in the SexOS SASOS."
