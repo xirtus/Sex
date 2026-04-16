@@ -21,7 +21,7 @@ cp "$TARGET_DIR/sex-kernel" "$ISO_DIR/boot/kernel.bin"
 
 # 5. Copy the Rust Servers (Mapping them to the expected locations)
 # Add any missing servers to this list
-for server in sexc sexnode sexnet sexfiles sexdrive sexgemini sexdisplay sextuxedo sexstore sexinput; do
+for server in sexc sexnode sexnet sexfiles sexdrive sexgemini sexdisplay tuxedo sexstore sexinput; do
     if [ -f "$TARGET_DIR/$server" ]; then
         echo "Packing $server..."
         mkdir -p "$ISO_DIR/servers/$server/bin"

@@ -23,7 +23,7 @@ pub fn init() {
     let sexc = create_protection_domain("/servers/sexc/bin/sexc\0", None).expect("sexc lost");
     let sexfiles = create_protection_domain("/servers/sexfiles/bin/sexfiles\0", None).expect("sexfiles lost");
     let sexdrive = create_protection_domain("/servers/sexdrive/bin/sexdrive\0", None).expect("sexdrive lost");
-    let sextuxedo = create_protection_domain("/servers/sextuxedo/bin/sextuxedo\0", None).expect("sextuxedo lost");
+    let tuxedo = create_protection_domain("/servers/tuxedo/bin/tuxedo\0", None).expect("tuxedo lost");
     let _sexinput = create_protection_domain("/servers/sexinput/bin/sexinput\0", None).expect("sexinput lost");
     let _sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0", None).expect("sexnet lost");
     let sexdisplay = create_protection_domain("/servers/sexdisplay/bin/sexdisplay\0", None).expect("sexdisplay lost");
@@ -41,7 +41,7 @@ pub fn init() {
     sexc_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdisplay, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 5 -> sexdisplay
 
     let sexdisplay_pd = DOMAIN_REGISTRY.get(sexdisplay).unwrap();
-    sexdisplay_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sextuxedo, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 10 -> sextuxedo
+    sexdisplay_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: tuxedo, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 10 -> tuxedo
 
     let sexgemini_pd = DOMAIN_REGISTRY.get(sexgemini).unwrap();
     sexgemini_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexfiles, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 1 -> sexfiles

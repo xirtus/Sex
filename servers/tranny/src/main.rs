@@ -3,7 +3,7 @@
 
 use sex_pdx::{pdx_listen, pdx_reply, MessageType};
 
-/// sextuxedo: Atomic GPU Scanout Engine
+/// tuxedo: Atomic GPU Scanout Engine
 /// Pure PDX, Zero-Copy, Phase 16.
 
 pub fn sys_park() {

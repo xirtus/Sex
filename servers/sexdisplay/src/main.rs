@@ -117,7 +117,7 @@ impl Compositor {
         self.damage_mask.fetch_or(1 << (buffer_id % 32), Ordering::SeqCst);
         self.active_buffer = buffer_id;
 
-        // Forward to sextuxedo (Slot 10) for atomic scanout
+        // Forward to tuxedo (Slot 10) for atomic scanout
         let scanout_msg = MessageType::DisplayBufferCommit {
             buffer_id,
             damage_x: dx,
@@ -125,7 +125,7 @@ impl Compositor {
             damage_w: dw,
             damage_h: dh,
         };
-        pdx_call(10 /* sextuxedo */, 0, &scanout_msg as *const _ as u64, 0);
+        pdx_call(10 /* tuxedo */, 0, &scanout_msg as *const _ as u64, 0);
     }
 
     pub fn modeset(&mut self, w: u32, h: u32, r: u32) {

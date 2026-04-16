@@ -558,7 +558,7 @@ index 0000000..dd1701e
 +
 +    // 1. Initialize High-Performance Storage (NVMe/AHCI)
 +    // In our prototype, we scan for the first NVMe device BAR0.
-+    crate::servers::sexdrives::driver::init_storage(0x_E000_0000); // Simulated BAR0
++    crate::servers::sexdrive::driver::init_storage(0x_E000_0000); // Simulated BAR0
 +
 +    // 2. Initialize Polished Input (PS/2 + USB HID)
 +    // This starts the input polling/interrupt loop in its own context.
@@ -1967,7 +1967,7 @@ index ca1dc23..0000000
 -
 -/// DDE-Sex: Device sexdrive Environment for the Sex Microkernel.
 -/// This module provides a shim for Linux/BSD kernel APIs, allowing 
--/// unmodified or lightly patched sexdrives to run in isolated PDs.
+-/// unmodified or lightly patched sexdrive to run in isolated PDs.
 -
 -pub struct DdeContext {
 -    pub sexdrive_pd_id: u32,
@@ -6739,23 +6739,23 @@ index 0000000..dffff69
 +
 +#[panic_handler]
 +fn panic(_info: &core::panic::PanicInfo) -> ! { loop {} }
-diff --git a/servers/sexdrives/Cargo.toml b/servers/sexdrives/Cargo.toml
+diff --git a/servers/sexdrive/Cargo.toml b/servers/sexdrive/Cargo.toml
 new file mode 100644
 index 0000000..4f211e8
 --- /dev/null
-+++ b/servers/sexdrives/Cargo.toml
++++ b/servers/sexdrive/Cargo.toml
 @@ -0,0 +1,6 @@
 +[package]
-+name = "sexdrives"
++name = "sexdrive"
 +version = "0.1.0"
 +edition = "2021"
 +
 +[dependencies]
-diff --git a/servers/sexdrives/src/driver.rs b/servers/sexdrives/src/driver.rs
+diff --git a/servers/sexdrive/src/driver.rs b/servers/sexdrive/src/driver.rs
 new file mode 100644
 index 0000000..07e38fe
 --- /dev/null
-+++ b/servers/sexdrives/src/driver.rs
++++ b/servers/sexdrive/src/driver.rs
 @@ -0,0 +1,85 @@
 +use crate::ipc::messages::{FsArgs, FS_READ, FS_WRITE};
 +use crate::ipc_ring::SpscRing;
@@ -6842,11 +6842,11 @@ index 0000000..07e38fe
 +    }
 +    crate::serial_println!("sexdrive: Storage PD Initialized (NVMe Active).");
 +}
-diff --git a/servers/sexdrives/src/main.rs b/servers/sexdrives/src/main.rs
+diff --git a/servers/sexdrive/src/main.rs b/servers/sexdrive/src/main.rs
 new file mode 100644
 index 0000000..5e3c06b
 --- /dev/null
-+++ b/servers/sexdrives/src/main.rs
++++ b/servers/sexdrive/src/main.rs
 @@ -0,0 +1,12 @@
 +#![no_std]
 +#![no_main]

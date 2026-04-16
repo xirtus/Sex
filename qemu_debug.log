@@ -1,0 +1,8 @@
+ahci: IRQ#2 level:1
+ahci: IRQ#2 level:1
+ahci: IRQ#2 level:1
+ahci: IRQ#2 level:1
+ahci: IRQ#2 level:1
+ahci: IRQ#2 level:1
+ahci: IRQ#2 level:1
+qemu-system-x86_64: terminating on signal 15 from pid 35588 (<unknown process>)

@@ -10,7 +10,6 @@ members = [
     "servers/sexstore",
     "servers/sexinput",
     "servers/sexdisplay",
-    "servers/sextuxedo",
     "servers/sexdrive",
     "servers/tuxedo",
 ]

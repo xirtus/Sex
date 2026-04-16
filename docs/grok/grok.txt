@@ -7,7 +7,7 @@ Your mission is to **upgrade `servers/sexdisplay` to a pure PDX, zero-copy, lock
 - All operations become asynchronous PDX messages (lock-free ring buffers).
 - Zero-copy buffer handoff using Intel PKU key swaps (no memcpy, no DRM PRIME).
 - 100 % safe Rust with #![forbid(unsafe_code)] except abstracted PKU calls.
-- Seamless integration with sexdrive/sextuxedo (GPU), sexfiles (texture cache), sexinput, and sex-gemini.
+- Seamless integration with sexdrive/tuxedo (GPU), sexfiles (texture cache), sexinput, and sex-gemini.
 
 ### Exact Implementation Requirements
 1. **PDX Message Protocol**
@@ -16,7 +16,7 @@ Your mission is to **upgrade `servers/sexdisplay` to a pure PDX, zero-copy, lock
 
 2. **Zero-Copy Buffer Path**
    - On BufferAlloc: return direct page list + PKU key.
-   - On Commit: sextuxedo receives the same pages for atomic scanout.
+   - On Commit: tuxedo receives the same pages for atomic scanout.
    - Add lightweight damage tracking (lock-free) inside the PD.
 
 3. **Integration Updates**

@@ -1137,7 +1137,7 @@ warning: unused import: `crate::messages::MessageType`
 warning: `libsys` (lib) generated 1 warning (run `cargo fix --lib -p libsys` to apply 1 suggestion)
    Compiling sexvfs v0.1.0 (/sex/servers/sexvfs)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
-cargo build --manifest-path servers/sexdrives/Cargo.toml --target x86_64-unknown-none
+cargo build --manifest-path servers/sexdrive/Cargo.toml --target x86_64-unknown-none
 warning: unused import: `crate::messages::MessageType`
  --> sex-src/lib/libsys/src/pdx.rs:1:5
   |
@@ -1147,7 +1147,7 @@ warning: unused import: `crate::messages::MessageType`
   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
 
 warning: `libsys` (lib) generated 1 warning (run `cargo fix --lib -p libsys` to apply 1 suggestion)
-   Compiling sexdrives v0.1.0 (/sex/servers/sexdrives)
+   Compiling sexdrive v0.1.0 (/sex/servers/sexdrive)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
 cargo build --manifest-path servers/sexinput/Cargo.toml --target x86_64-unknown-none
 warning: unused import: `crate::messages::MessageType`
@@ -1282,7 +1282,7 @@ warning: `sexgemini` (bin "sexgemini") generated 1 warning (run `cargo fix --bin
 python3 sex-src/bin/sexpac.py --out initrd.sex \
 	target/x86_64-unknown-none/debug/sexc \
 	target/x86_64-unknown-none/debug/sexvfs \
-	target/x86_64-unknown-none/debug/sexdrives \
+	target/x86_64-unknown-none/debug/sexdrive \
 	target/x86_64-unknown-none/debug/sexinput \
 	target/x86_64-unknown-none/debug/sexnet \
 	target/x86_64-unknown-none/debug/sexdisplay \
@@ -1293,8 +1293,8 @@ sexpac: Stripping target/x86_64-unknown-none/debug/sexc...
 sexpac: Packed target/x86_64-unknown-none/debug/sexc (8704 bytes, SHA-256 verified)
 sexpac: Stripping target/x86_64-unknown-none/debug/sexvfs...
 sexpac: Packed target/x86_64-unknown-none/debug/sexvfs (5784 bytes, SHA-256 verified)
-sexpac: Stripping target/x86_64-unknown-none/debug/sexdrives...
-sexpac: Packed target/x86_64-unknown-none/debug/sexdrives (9640 bytes, SHA-256 verified)
+sexpac: Stripping target/x86_64-unknown-none/debug/sexdrive...
+sexpac: Packed target/x86_64-unknown-none/debug/sexdrive (9640 bytes, SHA-256 verified)
 sexpac: Stripping target/x86_64-unknown-none/debug/sexinput...
 sexpac: Packed target/x86_64-unknown-none/debug/sexinput (2184 bytes, SHA-256 verified)
 sexpac: Stripping target/x86_64-unknown-none/debug/sexnet...

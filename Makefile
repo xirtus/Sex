@@ -37,7 +37,7 @@ build-servers:
 	$(CARGO) build --manifest-path servers/sexinput/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexnet/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexdisplay/Cargo.toml --target x86_64-unknown-none
-	$(CARGO) build --manifest-path servers/sextuxedo/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path servers/tuxedo/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexnode/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexstore/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexgemini/Cargo.toml --target x86_64-unknown-none
@@ -48,7 +48,7 @@ initrd: build-servers
 		target/x86_64-unknown-none/debug/sexc \
 		target/x86_64-unknown-none/debug/sexfiles \
 		target/x86_64-unknown-none/debug/sexdrive \
-		target/x86_64-unknown-none/debug/sextuxedo \
+		target/x86_64-unknown-none/debug/tuxedo \
 		target/x86_64-unknown-none/debug/sexinput \
 		target/x86_64-unknown-none/debug/sexnet \
 		target/x86_64-unknown-none/debug/sexdisplay \
