@@ -1,7 +1,9 @@
 # SexOS v1.0.0 - Official Production Release
 ### Single Address Space Microkernel (SASOS)
 
-Sex is a revolutionary microkernel written in Rust, designed for high-performance and hardware-enforced isolation. By leveraging Intel PKU and a 100% lock-free wait-free core, SexOS v1.0.0 achieves sub-cycle context switching and zero-copy I/O throughput that is vastly superior to traditional kernels like Linux.
+96x smaller than Linux, and 4x faster. Sex is a revolutionary tiny microkernel written in Rust*, designed for high-performance and hardware-enforced isolation. By leveraging Intel PKU and a 100% lock-free wait-free core, SexOS v1.0.0 achieves sub-cycle context switching and zero-copy I/O throughput that is vastly superior to traditional kernels like Linux.
+
+*Note SexOs uses a unique Rust-C translator for Select Linux Drivers, these C dependencies are large, much larger than Sex itself.
 
 ## 🚀 Quick Start (Recommended)
 
