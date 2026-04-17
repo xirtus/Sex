@@ -1,0 +1,128 @@
+
+You are an expert Rust OS developer working on the Sex microkernel (https://github.com/xirtus/sex). Use only the latest main branch as reference.
+
+Act as Rust OS microkernel expert. Port relibc to Sex microkernel.
+Sex OS tech: single address space, Intel PKU, zero-copy PDX (`crates/sex-pdx`), ELF servers (`sexfiles`, `sexdisplay`, etc).
+Tasks:
+1. Make `src/platform/sex/`.
+2. Make `sex-rt` crate mapping POSIX to PDX server calls.
+Rules: Zero-copy, mostly safe Rust (unsafe only for PDX/MPK), nightly `x86_64-unknown-none`. Focus file I/O, proc, sockets, pthreads. 
+Output: Arch outline, all code/files, Cargo.tomls, build steps (self-host + srcpkgs), C hello world example.
+
+
+
+
+You are an expert Rust OS developer working on the Sex microkernel (https://github.com/xirtus/sex). 
+
+Role: Expert Rust CLI & OS packaging developer.
+Task: Port `uutils/coreutils` to the Sex microkernel as a drop-in Unix toolset replacement.
+Sex Architecture: Single address space, Intel PKU, zero-copy PDX (`crates/sex-pdx`), `sexfiles` VFS, nightly `x86_64-unknown-none`, self-hosting via `sex-packages`, transitioning to `sex-libc`.
+
+Requirements:
+1. Clean vendor/port of uutils with minimal to no changes to upstream code.
+2. Build as a multicall binary (BusyBox-style) to save space.
+3. Map file I/O to PDX + `sexfiles` (or use the upcoming `sex-libc`).
+4. Ensure drop-in compatibility (correct symlinks in `/bin`, exit codes, behavior).
+5. Fast integration to immediately unblock self-hosting productivity.
+
+Output needed step-by-step:
+1. Architecture plan (uutils -> PDX/sexfiles/build system).
+2. Directory structure & Cargo.toml modifications (feature flags, target configs).
+3. `sex-packages` build recipe for the multicall binary + symlink generation.
+4. Prioritized list of the top 15-20 utilities to include first.
+5. Code example adapting one common utility (e.g., `ls` or `cat`) to Sex's I/O paths.
+6. Example commands to test the tools inside a running Sex instance.
+
+
+
+
+You are an expert Rust OS developer working on the Sex microkernel (https://github.com/xirtus/sex). Use only the latest main branch as reference.
+
+Role: Expert Rust shell & terminal developer.
+Task: Port Redox OS Ion shell and termion to replace the `ash` shell on the Sex microkernel.
+Sex Architecture: Single address space, Intel PKU, zero-copy PDX (`crates/sex-pdx`), nightly `x86_64-unknown-none`, self-hosting OS.
+
+Requirements:
+1. Retain Ion's core logic (parser, scripting, completion, job control).
+2. Replace all Redox/POSIX terminal/file I/O with direct zero-copy PDX calls (e.g., to `sexfiles`).
+3. Fully integrate termion as the terminal backend (raw mode, colors, input events).
+4. Ensure zero-copy, lock-free hot paths for line editing, output, and input handling.
+5. Safe Rust priority; unsafe only for PDX trampolines and buffer handling.
+6. Must be a drop-in replacement, immediately usable for self-hosting (`cargo build`) and scripting.
+
+Output needed step-by-step:
+1. Architecture plan (Ion + termion -> PDX mapping).
+2. Directory structure & Cargo.toml modifications (integrating as default shell in `sex-packages`).
+3. Production Rust code for: PDX protocol definitions, adapted Ion main loop, PDX-based I/O handlers, termion integration, and zero-copy stdout/stderr buffer sharing (PageHandover).
+4. Working example of common shell usage inside Sex OS.
+5. High-level plan for an optional graphical terminal using `sexdisplay`.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+You are an expert Rust OS developer working on the Sex microkernel (https://github.com/xirtus/sex).
+
+Role: Expert Rust build-system & OS packaging developer.
+Task: Adapt Redox OS Cookbook patterns to mature the Sex microkernel's `sex-packages` system.
+Sex Architecture: Single address space, Intel PKU, zero-copy PDX (`crates/sex-pdx`), `x86_64-unknown-none`, existing self-hosting Cargo loop in `srcpkgs/`.
+
+Requirements:
+1. Retain the existing Cargo-based `srcpkgs/` self-hosting workflow.
+2. Add parsing/support for Cookbook-style TOML recipes (aiming for direct Redox TOML drop-in compatibility).
+3. Implement Cookbook's dependency resolution, patch management, version pinning, and reproducible build hooks.
+4. Ensure the build runner is PDX/`sexfiles` aware.
+5. Make porting Redox packages (uutils, Ion, Orbital) trivial.
+
+Output needed step-by-step:
+1. Architecture plan mapping Cookbook concepts to `sex-packages`.
+2. Prioritized list of top 5-10 Cookbook features to adopt first.
+3. Directory structure & Cargo.toml modifications.
+4. Production code for: A Sex-adapted TOML recipe, an updated build runner parsing both old/new formats, and the patch/dependency resolver logic.
+5. Example of automatically importing and building a real Redox recipe (e.g., Ion).
+6. High-level plan for a compatibility mode to directly build git-cloned Redox recipes.
+
+
+
+
+
+
+
+
+
+
+
+
+You are an expert Rust OS developer working on the Sex microkernel (https://github.com/xirtus/sex). Use only the latest main branch. 
+
+Role: Expert Rust OS & graphics programmer.
+Task: Port Redox OS Orbital and orbclient to the Sex microkernel's `sexdisplay` server.
+Sex Architecture: Single address space, Intel PKU, zero-copy PDX (`crates/sex-pdx`), nightly `x86_64-unknown-none`. Vendors `upstream-mesa`/`upstream-wlroots`.
+Orbital Specs: Single-process WM/compositor, uses "orbital:" Redox scheme, `orbclient` API.
+
+Requirements:
+1. Retain Orbital's WM, compositing, input, and routing logic.
+2. Replace all Redox scheme transports with zero-copy PDX calls (`sex-pdx`).
+3. Build `sex-orbclient` exposing the exact `orbclient` API to easily support egui/iced/winit.
+4. Ensure lock-free, zero-copy hot paths (window buffers, drawing, events).
+5. Safe Rust priority; unsafe only for PDX trampolines/buffer sharing.
+
+Output needed step-by-step:
+1. Architecture plan (Orbital -> PDX mapping).
+2. Directory structure & Cargo.toml modifications (including `sex-packages` self-hosting).
+3. Production Rust code for: PDX protocol definitions, `sexdisplay` main loop/handlers, compositing logic, `sex-orbclient` API, and zero-copy buffer sharing (PageHandover).
+4. Minimal egui or winit hello-world example using the new display stack.
+5. High-level plan for Wayland compatibility using vendored wlroots/mesa.
+

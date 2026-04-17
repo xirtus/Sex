@@ -16,8 +16,13 @@ def pack_pd(bin_path, out_file):
     
     # 1. Strip debug symbols
     stripped_path = bin_path + ".stripped"
-    print(f"sexpac: Stripping {bin_path}...")
-    subprocess.run(["rust-strip", "-s", bin_path, "-o", stripped_path], check=True)
+    print(f"sexpac: Preparing {bin_path}...")
+    try:
+        subprocess.run(["rust-strip", "-s", bin_path, "-o", stripped_path], check=True)
+    except Exception:
+        print(f"sexpac: WARNING: rust-strip failed or not found. Using unstripped binary.")
+        import shutil
+        shutil.copy2(bin_path, stripped_path)
     
     # 2. Read data and calculate SHA-256
     with open(stripped_path, "rb") as f:

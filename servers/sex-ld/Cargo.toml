@@ -1,0 +1,16 @@
+[package]
+name = "sex-ld"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+libsys = { path = "../../sex-src/lib/libsys", default-features = false }
+sex-pdx = { path = "../../crates/sex-pdx", default-features = false }
+spin = { version = "0.9.8", default-features = false }
+sex-rt = { path = "../../sex-rt" }
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1

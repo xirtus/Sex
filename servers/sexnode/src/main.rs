@@ -17,6 +17,30 @@ pub extern "C" fn _start() -> ! {
         let msg = unsafe { *(req.arg0 as *const MessageType) };
 
         match msg {
+            MessageType::Node(proto) => match proto {
+                sex_pdx::NodeProtocol::CapabilityResolve { name } => {
+                    let name_str = core::str::from_utf8(&name).unwrap_or("").trim_matches('\0');
+                    // 1. Resolve locally
+                    // 2. If not found, call sexnet (Slot 4) to query cluster
+                    let res = pdx_call(4 /* sexnet */, 0x500 /* CLUSTER_RESOLVE */, name.as_ptr() as u64, 0);
+                    pdx_reply(req.caller_pd, res);
+                },
+                sex_pdx::NodeProtocol::Heartbeat { node_id } => {
+                    // Update cluster load table
+                    pdx_reply(req.caller_pd, 0);
+                },
+                sex_pdx::NodeProtocol::NodeRegister { node_id, addr } => {
+                    // Register new cluster member
+                    pdx_reply(req.caller_pd, 0);
+                },
+                sex_pdx::NodeProtocol::ClusterObjectMigrate { node_id, hash, page } => {
+                    // Notify sexshop (Slot 1) to move object to remote node
+                    let store_msg = sex_pdx::StoreProtocol::ObjectMove { hash: *hash, target_node: *node_id };
+                    pdx_call(1 /* sexshop */, 0, &store_msg as *const _ as u64, 0);
+                    pdx_reply(req.caller_pd, 0);
+                },
+                _ => pdx_reply(req.caller_pd, u64::MAX),
+            },
             MessageType::TranslatorCall { command, path_ptr, code_cap } => {
                 let (status, translated_entry) = handle_translation(command, path_ptr, code_cap);
                 let reply = MessageType::TranslatorReply { status, translated_entry };

@@ -1,0 +1,14 @@
+[package]
+name = "egui-hello"
+version = "0.1.0"
+source = "crates/egui-hello"
+target = "x86_64-unknown-none"
+type = "app"
+
+[dependencies]
+sex-orbclient = "0.1.0"
+
+[build]
+command = "cargo build --release"
+output = "target/x86_64-unknown-none/release/egui-hello"
+install_path = "/bin/egui-hello"

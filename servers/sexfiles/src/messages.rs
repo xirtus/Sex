@@ -1,9 +1,10 @@
-use sex_pdx::{MessageType, PageHandover};
+pub use sex_pdx::{MessageType, PageHandover};
 
 // Re-export the core protocol from our shared crate
 pub use sex_pdx::MessageType as VfsMessageType;
 
 /// Phase 19: Advanced Zero-Copy VFS Protocol
+#[derive(Debug, Clone, Copy)]
 pub enum VfsProtocol {
     Open { path: [u8; 256], flags: u32, mode: u32 },
     Read { fd: u64, len: u64, offset: u64 },

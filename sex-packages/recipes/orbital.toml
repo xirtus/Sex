@@ -1,0 +1,14 @@
+[package]
+name = "orbital"
+version = "0.1.0"
+source = "servers/sexdisplay"
+target = "x86_64-unknown-none"
+type = "server"
+
+[dependencies]
+sex-pdx = "0.1.0"
+
+[build]
+command = "cargo build --release"
+output = "target/x86_64-unknown-none/release/sexdisplay"
+install_path = "/boot/servers/sexdisplay"

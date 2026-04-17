@@ -1,0 +1,12 @@
+[package]
+name = "relibc"
+version = "0.2.0"
+edition = "2021"
+
+[lib]
+name = "relibc"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+sex-rt = { path = "../sex-rt" }
+# core libc deps omitted for brevity

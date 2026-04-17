@@ -1,0 +1,6 @@
+[package]
+name = "relibc"
+version = "0.1.0"
+
+[build]
+template = "shell"

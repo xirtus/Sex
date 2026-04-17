@@ -1,10 +1,16 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+extern crate spin;
+extern crate sex_rt;
+
 mod vfs;
 mod messages;
 mod pdx;
 mod trampoline;
+mod backends;
+mod cache;
 
 use crate::trampoline::trampoline_main;
 

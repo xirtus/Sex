@@ -33,7 +33,7 @@ pub static MOUNT_TABLE: MountTable = MountTable {
 };
 
 impl MountTable {
-    pub fn route(&self, path: &str) -> Option<(&'static dyn FsBackend, &str)> {
+    pub fn route<'a>(&self, path: &'a str) -> Option<(&'static dyn FsBackend, &'a str)> {
         for entry in self.entries.iter().flatten() {
             if path.starts_with(entry.prefix) {
                 return Some((entry.backend, &path[entry.prefix.len()..]));
@@ -50,8 +50,8 @@ pub unsafe fn pku_grant_temporary(key: u8) -> u32 {
     let shift = key * 2;
     core::arch::asm!(
         "rdpkru",
-        "mov {tmp}, eax",
-        "and eax, {mask}",
+        "mov {tmp:e}, eax",
+        "and eax, {mask:e}",
         "xor edx, edx",
         "xor ecx, ecx",
         "wrpkru",

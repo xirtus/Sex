@@ -15,33 +15,98 @@ pub struct PageHandover {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct Rect {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayProtocol {
+    // Phase 16: Basic Display
     DisplayBufferAlloc { width: u32, height: u32, format: u32 },
     DisplayBufferCommit { page: PageHandover },
     Stats,
+
+    // Phase 21: GPU Acceleration
+    DmaBufferSubmit { page: PageHandover, offset: u32, len: u32 },
+    FenceWait { fence_id: u64 },
+    GetGpuCaps,
+
+    // Orbital Port: Window Management
+    CreateWindow { x: i32, y: i32, w: u32, h: u32, flags: u32, title: [u8; 64] },
+    DestroyWindow { window_id: u32 },
+    RequestBuffer { window_id: u32 },
+    CommitDamage { window_id: u32, damage: Rect },
+    PollEvents { window_id: u32 },
+    SetTitle { window_id: u32, title: [u8; 64] },
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum OrbitalEvent {
+    Mouse { x: i32, y: i32 },
+    Button { left: bool, middle: bool, right: bool },
+    Key { code: u32, pressed: bool },
+    Resize { w: u32, h: u32 },
+    Quit,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreProtocol {
+    // Legacy support
     FetchPackage { name: [u8; 256] },
     CacheBinary { name: [u8; 256], image: PageHandover },
+    Stats,
+
+    // Phase 20: Sexshop Advanced Protocol
+    TransactionBegin,
+    TransactionCommit,
+    TransactionAbort,
+
+    KVGet { key: [u8; 64] },
+    KVSet { key: [u8; 64], value_paddr: u64, value_len: u64 },
+    KVDelete { key: [u8; 64] },
+
+    ObjectPut { hash: [u8; 32], data_paddr: u64, data_len: u64 },
+    ObjectGet { hash: [u8; 32] },
+    ObjectExists { hash: [u8; 32] },
+    ObjectMove { hash: [u8; 32], target_node: u32 },
+
+    SyncFilesystem,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LdProtocol {
+    ResolveObject { name: [u8; 256] },
+    MapLibrary { hash: [u8; 32], base_addr: u64 },
+    GetEntry { hash: [u8; 32] },
     Stats,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum NodeProtocol {
     LoadDriver { image: PageHandover },
+    // Phase 21: Cluster Fabric
+    ClusterObjectFetch { node_id: u32, hash: [u8; 32] },
+    ClusterObjectPush { node_id: u32, hash: [u8; 32], page: PageHandover },
+    Heartbeat { node_id: u32 },
+    // Phase 22: Distributed Capabilities
+    CapabilityResolve { name: [u8; 64] },
+    NodeRegister { node_id: u32, addr: [u8; 16] }, // IPv6 addr
+    ClusterObjectMigrate { node_id: u32, hash: [u8; 32], page: PageHandover },
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum MessageType {
     RawCall(u64),
     Signal(u32),
@@ -60,6 +125,9 @@ pub enum MessageType {
     VfsReply { status: i64, size: u64 },
     
     Store(StoreProtocol),
+    StoreReply { status: i64, val: u64 },
+    Ld(LdProtocol),
+    LdReply { status: i64, entry: u64 },
     Node(NodeProtocol),
 
     // Phase 18: Advanced Zero-Copy VFS Protocol
@@ -75,6 +143,7 @@ pub enum MessageType {
     Display(DisplayProtocol),
     DisplayModeset { width: u32, height: u32, refresh: u32 },
     DisplayCursor { x: i32, y: i32, visible: bool, buffer_id: u32 },
+    DisplayBufferCommit { buffer_id: u32, damage_x: u32, damage_y: u32, damage_w: u32, damage_h: u32 },
     DisplayGeminiRepairDisplay,
     RevokeKey { key: u8 },
 }
@@ -117,6 +186,7 @@ impl Message {
 
 pub fn pdx_call(pd: u32, num: u64, arg0: u64, arg1: u64) -> u64 {
     let res: u64;
+    #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!("syscall",
             in("rax") 27, // pdx_call syscall
@@ -127,11 +197,17 @@ pub fn pdx_call(pd: u32, num: u64, arg0: u64, arg1: u64) -> u64 {
             lateout("rax") res,
         );
     }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = (pd, num, arg0, arg1);
+        res = 0;
+    }
     res
 }
 
 pub fn pdx_listen(flags: u32) -> PdxRequest {
     let mut req = PdxRequest::default();
+    #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!("syscall",
             in("rax") 28, // pdx_listen syscall
@@ -144,11 +220,16 @@ pub fn pdx_listen(flags: u32) -> PdxRequest {
             lateout("r8") req.arg2,
         );
     }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = flags;
+    }
     req
 }
 
 pub fn pdx_reply(pd: u32, val: u64) -> u64 {
     let res: u64;
+    #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!("syscall",
             in("rax") 29, // pdx_reply syscall
@@ -156,6 +237,11 @@ pub fn pdx_reply(pd: u32, val: u64) -> u64 {
             in("rsi") val,
             lateout("rax") res,
         );
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = (pd, val);
+        res = 0;
     }
     res
 }

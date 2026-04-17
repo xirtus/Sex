@@ -1,5 +1,8 @@
 #![no_std]
 
+extern crate alloc;
+extern crate spin;
+
 pub mod pdx;
 pub mod vfs;
 pub mod messages;

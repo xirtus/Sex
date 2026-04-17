@@ -41,6 +41,7 @@ build-servers:
 	$(CARGO) build --manifest-path servers/sexnode/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexstore/Cargo.toml --target x86_64-unknown-none
 	$(CARGO) build --manifest-path servers/sexgemini/Cargo.toml --target x86_64-unknown-none
+	$(CARGO) build --manifest-path sex-packages/ion-sexshell/Cargo.toml --target x86_64-unknown-none
 
 initrd: build-servers
 	# Package all SAS artifacts into initrd.sex
@@ -54,7 +55,9 @@ initrd: build-servers
 		target/x86_64-unknown-none/debug/sexdisplay \
 		target/x86_64-unknown-none/debug/sexnode \
 		target/x86_64-unknown-none/debug/sexstore \
-		target/x86_64-unknown-none/debug/sexgemini
+		target/x86_64-unknown-none/debug/sexgemini \
+		target/x86_64-unknown-none/debug/ion-sexshell \
+		destdir/uutils-0.0.25/bin/coreutils
 
 limine:
 	@if [ ! -d "limine" ]; then \

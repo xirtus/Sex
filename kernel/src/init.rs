@@ -28,7 +28,7 @@ pub fn init() {
     let _sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0", None).expect("sexnet lost");
     let sexdisplay = create_protection_domain("/servers/sexdisplay/bin/sexdisplay\0", None).expect("sexdisplay lost");
     let sexnode = create_protection_domain("/servers/sexnode/bin/sexnode\0", None).expect("sexnode lost");
-    let sexstore = create_protection_domain("/servers/sexstore/bin/sexstore\0", None).expect("sexstore lost");
+    let sexshop = create_protection_domain("/servers/sexshop/bin/sexshop\0", None).expect("sexshop lost");
     let sexgemini = create_protection_domain("/servers/sexgemini/bin/sexgemini\0", None).expect("sexgemini lost");
 
     // Phase 14: Formal Verification Verification
@@ -38,6 +38,9 @@ pub fn init() {
     let sexfiles_pd = DOMAIN_REGISTRY.get(sexfiles).unwrap();
     sexfiles_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdrive, entry_point: VirtAddr::new(0x_4000_0000) }));
 
+    let sexshop_pd = DOMAIN_REGISTRY.get(sexshop).unwrap();
+    sexshop_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexfiles, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 1 -> sexfiles
+
     let sexc_pd = DOMAIN_REGISTRY.get(sexc).unwrap();
     sexc_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexfiles, entry_point: VirtAddr::new(0x_4000_0000) }));
     sexc_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexnode, entry_point: VirtAddr::new(0x_4000_0000) }));
@@ -45,16 +48,17 @@ pub fn init() {
 
     let sexdisplay_pd = DOMAIN_REGISTRY.get(sexdisplay).unwrap();
     sexdisplay_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: tuxedo, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 10 -> tuxedo
+    sexdisplay_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdrive, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 11 -> sexdrive (GPU DMA)
 
     let sexgemini_pd = DOMAIN_REGISTRY.get(sexgemini).unwrap();
     sexgemini_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexfiles, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 1 -> sexfiles
     sexgemini_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexc, entry_point: VirtAddr::new(0x_4000_0000) }));     // Slot 2 -> sexc
     sexgemini_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdisplay, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 3 -> sexdisplay
-    sexgemini_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexstore, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 4 -> sexstore
+    sexgemini_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexshop, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 4 -> sexshop
     sexgemini_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexnode, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 5 -> sexnode
     
     let sexnode_pd = DOMAIN_REGISTRY.get(sexnode).unwrap();
-    sexnode_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexstore, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 1 -> sexstore
+    sexnode_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexshop, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 1 -> sexshop
     sexnode_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexc, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 2 -> sexc
 
     // 3. Hardware Bootstrap (Registers with interrupts)
@@ -63,8 +67,10 @@ pub fn init() {
     serial_println!("init: System services active. Phase 15 Linux Driver Translation Ready.");
     serial_println!("init: Triggering hot-plug discovery of Linux drivers...");
 
-    // 4. Spawn User-Space Shell
-    let _ash = create_protection_domain("/bin/ash\0", None);
+    // 4. Spawn User-Space Shell (Ion SexShell)
+    let ion = create_protection_domain("/ion-sexshell\0", None).expect("ion lost");
+    let ion_pd = DOMAIN_REGISTRY.get(ion).unwrap();
+    ion_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdisplay, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 2 -> sexdisplay (Orbital)
 
     serial_println!("init: Full Self-Hosting bootstrap COMPLETE.");
 }

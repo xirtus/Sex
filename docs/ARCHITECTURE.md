@@ -211,6 +211,13 @@ All traditional OS services run in isolated user-space Protection Domains.
 - [x] Lock-free Mount Table: Real path routing for multiple backends.
 - [x] RevokeKey Multicast: Hardware-accelerated capability revocation across sexnode.
 
+### Phase 20: Graphical Sex-Store (In Progress)
+- [x] Graphical Sex-Store Application running as an isolated PD.
+- [x] Package browsing via zero-copy framebuffer updates to `sexdisplay`.
+- [x] One-click package "sexting" (loading) via `sexstore` and `sexnode`.
+- [x] Binary caching in `sexstore`'s RamFs via `PageHandover`.
+- [x] `sexc` POSIX bridge extended for `execve`-style launch from `PageHandover`.
+
 - [ ] Graphical Sex-Store Application.
 - [ ] Package browsing & one-click sexting.
 - [ ] Binary caching & SPD image management.

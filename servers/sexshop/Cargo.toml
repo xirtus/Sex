@@ -1,0 +1,22 @@
+[package]
+name = "sexshop"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+libsys = { path = "../../sex-src/lib/libsys", default-features = false }
+sex-pdx = { path = "../../crates/sex-pdx", default-features = false }
+bitflags = { version = "2.4.0", default-features = false }
+radium = { version = "0.7.0", default-features = false }
+bit_field = { version = "0.10.3", default-features = false }
+volatile = { version = "0.4.6", default-features = false }
+scopeguard = { version = "1.2.0", default-features = false }
+tap = { version = "1.0.1", default-features = false }
+spin = { version = "0.9.8", default-features = false, features = ["rwlock"] }
+sex-rt = { path = "../../sex-rt" }
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1

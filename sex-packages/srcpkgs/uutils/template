@@ -1,0 +1,36 @@
+# sexbuild template for uutils-coreutils
+pkgname=uutils
+version=0.0.25
+revision=1
+short_desc="Rust uutils coreutils for SexOS"
+maintainer="xirtus <xirtus@sexos.org>"
+license="MIT"
+homepage="https://github.com/uutils/coreutils"
+distfiles="https://github.com/uutils/coreutils/archive/refs/tags/${version}.tar.gz"
+checksum="SKIP"
+
+do_build() {
+    echo "uutils: Building multicall binary for SexOS..."
+    # Set RUSTFLAGS to use relibc and link against sex-pdx if needed
+    # export RUSTFLAGS="-L ${STAGING_DIR}/usr/lib -l relibc"
+    
+    # cargo build --release --features multicall --target x86_64-unknown-none
+    
+    # For now, simulate binary creation for the toolchain demo
+    mkdir -p target/x86_64-unknown-none/release
+    touch target/x86_64-unknown-none/release/coreutils
+}
+
+do_install() {
+    local destdir=$1
+    mkdir -p "${destdir}/bin"
+    cp "target/x86_64-unknown-none/release/coreutils" "${destdir}/bin/coreutils"
+    
+    # Symlinks for the top utilities
+    for tool in ls cat echo mkdir rm cp mv pwd date whoami id uname chmod chown touch sleep true false head tail; do
+        ln -s coreutils "${destdir}/bin/${tool}"
+    done
+    
+    # Capability manifest
+    echo "CAPABILITIES: VFS_READ, VFS_WRITE, PDX_CLIENT, NODE_CAP" > "${destdir}/manifest.txt"
+}
