@@ -27,6 +27,8 @@ pub extern "C" fn _start() -> ! {
                 },
                 sex_pdx::NodeProtocol::Heartbeat { node_id } => {
                     // Update cluster load table
+                    // Phase 24: Notify PD of heartbeat/timer tick via SIGALRM (14)
+                    sex_pdx::safe_pdx_call(req.caller_pd, MessageType::Signal(14));
                     pdx_reply(req.caller_pd, 0);
                 },
                 sex_pdx::NodeProtocol::NodeRegister { node_id, addr } => {
@@ -37,6 +39,11 @@ pub extern "C" fn _start() -> ! {
                     // Notify sexshop (Slot 1) to move object to remote node
                     let store_msg = sex_pdx::StoreProtocol::ObjectMove { hash: *hash, target_node: *node_id };
                     pdx_call(1 /* sexshop */, 0, &store_msg as *const _ as u64, 0);
+                    pdx_reply(req.caller_pd, 0);
+                },
+                sex_pdx::NodeProtocol::ClusterSignalForward { target_node, target_pd, signal } => {
+                    // Route via sexnet (Slot 4) for cross-node signal delivery
+                    pdx_call(4 /* sexnet */, 0x600 /* CLUSTER_SIGNAL_SEND */, (*target_node as u64) << 32 | *target_pd as u64, *signal as u64);
                     pdx_reply(req.caller_pd, 0);
                 },
                 _ => pdx_reply(req.caller_pd, u64::MAX),

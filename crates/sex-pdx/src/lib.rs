@@ -103,13 +103,15 @@ pub enum NodeProtocol {
     CapabilityResolve { name: [u8; 64] },
     NodeRegister { node_id: u32, addr: [u8; 16] }, // IPv6 addr
     ClusterObjectMigrate { node_id: u32, hash: [u8; 32], page: PageHandover },
+    ClusterSignalForward { target_node: u32, target_pd: u32, signal: u8 },
 }
 
-#[repr(C)]
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
     RawCall(u64),
-    Signal(u32),
+    Signal(u8),          // POSIX numbers: SIGINT=2, SIGKILL=9, SIGTERM=15, SIGSEGV=11, SIGALRM=14
+    SignalDeliveryAck,
     PageFault { fault_addr: u64, error_code: u32, pd_id: u64 },
     SpawnPD { path_ptr: u64 },
     DmaCall { command: u32, offset: u64, size: u64, buffer_cap: u32, device_cap: u32 },
@@ -123,7 +125,7 @@ pub enum MessageType {
     HardwareInterrupt { vector: u8, data: u64 },
     VfsCall,
     VfsReply { status: i64, size: u64 },
-    
+
     Store(StoreProtocol),
     StoreReply { status: i64, val: u64 },
     Ld(LdProtocol),
@@ -148,6 +150,12 @@ pub enum MessageType {
     RevokeKey { key: u8 },
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct PdxMessage {
+    pub msg_type: MessageType,
+    pub payload: [u8; 64],
+}
 #[derive(Debug, Clone, Copy)]
 pub struct Message(u64);
 
@@ -182,6 +190,14 @@ impl Message {
     
     #[cfg(feature = "serde")]
     pub fn deserialize<'a, T: Deserialize<'a>>(&'a self) -> Option<T> { None }
+}
+
+pub fn safe_pdx_call(pd: u32, msg: MessageType) -> u64 {
+    let mut pdx_msg = PdxMessage {
+        msg_type: msg,
+        payload: [0; 64],
+    };
+    pdx_call(pd, 0, &mut pdx_msg as *mut _ as u64, 0)
 }
 
 pub fn pdx_call(pd: u32, num: u64, arg0: u64, arg1: u64) -> u64 {

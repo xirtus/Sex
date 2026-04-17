@@ -134,6 +134,20 @@ pub extern "C" fn _start() -> ! {
                     let res = pdx_call(11, 0x101 /* FENCE_WAIT */, *fence_id, 0);
                     pdx_reply(req.caller_pd, res);
                 },
+                DisplayProtocol::PollEvents { window_id } => {
+                    // In a real implementation, we would poll the input-sexdrive (Slot 5)
+                    // For Phase 24, we mock a Ctrl+C event
+                    let event = OrbitalEvent::Key { code: 3, pressed: true }; // Mock SIGINT
+                    if let OrbitalEvent::Key { code: 3, pressed: true } = event {
+                        for win in compositor.windows.iter().flatten() {
+                            if win.id == window_id {
+                                sex_pdx::safe_pdx_call(win.owner_pd, MessageType::Signal(2));
+                                break;
+                            }
+                        }
+                    }
+                    pdx_reply(req.caller_pd, 0);
+                },
                 DisplayProtocol::DestroyWindow { window_id } => {
                     compositor.destroy_window(window_id, req.caller_pd);
                     pdx_reply(req.caller_pd, 0);

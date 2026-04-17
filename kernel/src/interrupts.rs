@@ -116,6 +116,12 @@ extern "x86-interrupt" fn page_fault_handler(
     // 2. Async #PF Forwarding via safe_pdx_call (IPCtax mandate)
     if let Err(e) = crate::ipc::pagefault::forward_page_fault(fault_addr.as_u64(), error_code.bits() as u32, task_id as u64) {
         serial_println!("EXCEPTION: Failed to forward #PF to sext: {}", e);
+        
+        // Phase 24: Protection Violation -> SIGSEGV (11)
+        if let Some(target_pd) = crate::ipc::DOMAIN_REGISTRY.get(task_id) {
+            let msg = MessageType::Signal(11);
+            let _ = unsafe { &*target_pd.message_ring }.enqueue(msg);
+        }
     }
 
     // 3. Trigger Scheduler to pick next task

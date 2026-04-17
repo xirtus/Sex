@@ -1,63 +1,71 @@
-grok.md v0.1 – PHASE-20 GRAPHICAL SEX-STORE HANDOFF (Gemini CLI ready)
-Author: Grok (lead microkernel + OS engineer)
-Project: Sex (Single Environment XIPC) — https://github.com/xirtus/sex
-Target Branch: feature/phase20-graphical-sexstore (create from current feature/sexfiles-pku-handover-trampoline)
-Status: Phase 19 sexfiles is live and rock-solid. Time to ship the first graphical userspace component.
-Role for Gemini CLI: You are the Sex microkernel’s Phase-20 executor. Implement the Graphical Sex-Store exactly as specified below. No deviations. No extra features. No mutexes. Stay inside the Sex invariants.
-Invariants (non-negotiable, zero tolerance):
+**# SEX Microkernel: Phase 24 Message-Based Signals – Condensed Gemini CLI Handoff**
 
-100% no_std Rust (2024 edition)
-Pure PDX messaging only (sub-cycle, lock-free, wait-free hot paths)
-True zero-copy via PageHandover + PKU key dance (no data copies, only capability grants)
-PKU/CHERI isolation everywhere (never touch another PD’s memory without explicit key grant)
-Single background trampoline per PD (exactly like sexfiles Phase 19)
-No kernel stack touching, no std, no alloc outside the arena, no mutex/Arc/RefCell
-All frame updates and package loading must be wait-free
+**STRICT OPERATIONAL WARNING**  
+Restrict **ALL** operations strictly to: `/Users/xirtus/sites/microkernel/`.  
+Never run unconstrained `find` outside this directory. Always use `dir_path` or `include_pattern`.
 
-Execution Steps (exact order, no skipping):
+## PROJECT STATE (Apr 17 2026)
+- **Branch:** `main` (Phase 23 fully merged — self-hosting build pipeline live via `sexbuild` + `sexshop` Slot 4 + `sex-ld`).
+- **Status:** SASOS can rebuild itself; all servers are pure PDX, `no_std` Rust 2024.
 
-SetupBashgit checkout -b feature/phase20-graphical-sexstore
-git rebase origin/feature/sexfiles-pku-handover-trampoline
-cargo check
-Display Buffer Management (servers/sexdisplay)
-Extend the existing pure-PDX sexdisplay server (it already has the trampoline from recent upgrades).
-Add DisplayProtocol::DisplayBufferAlloc { width: u32, height: u32, format: u32 } → returns PageHandover capability with PKU write key granted to the requesting PD.
-Add DisplayProtocol::DisplayBufferCommit { page: PageHandover } – atomic flip with PKU key swap (3-cycle dance, reuse the exact routine from sexfiles).
-All operations in the trampoline’s handle_display_message (#[inline(always)]).
+**Phase 24 Goal:**  
+Replace every UNIX signal (SIGINT, SIGKILL, etc.) with pure async `MessageType::Signal` on PDX rings.  
+**No kernel stack mutation. No synchronous hijacking.** 100 % lock-free delivery via per-PD trampoline (QNX/seL4 model).
 
-Package Browser GUI (new crate: servers/sexstore-gui)
-Create servers/sexstore-gui as a 100% no_std Rust binary (use the same minimal ELF template as sexgemini).
-Single thread: PDX trampoline that listens on sexdisplay and sexstore rings.
-Minimal Rust GUI: raw framebuffer drawing (no external crates beyond sex-pdx and libsys). Support: simple rectangle fill, text (8×16 bitmap font in static array), list view for packages.
-Zero-copy frame updates only via DisplayBufferCommit.
+### EXACT IMPLEMENTATION TASKS (Gemini CLI — execute in exact order)
 
-One-Click Package Loading (“Sexting”)
-Connect GUI → sexstore via PDX (StoreProtocol::FetchPackage { name: &str }).
-sexstore replies with PageHandover containing the ELF image (already cached in RamFs from Phase 19).
-GUI hands the page directly to sexnode via NodeProtocol::LoadDriver { image: PageHandover } (reuse the cross-grant logic we added in Phase 19 kernel/init.rs).
-On-load: immediate PD creation with the handed-over page as the new binary.
+**1. Protocol Extension**  
+File: `sex-packages/sex-pdx/src/protocol.rs`  
+Add to `MessageType` enum (`#[repr(u8)]`, keep `Copy + Debug`):
+```rust
+Signal(u8),          // POSIX numbers: SIGINT=2, SIGKILL=9, SIGTERM=15, SIGSEGV=11, SIGALRM=14
+SignalDeliveryAck,
+```
+Extend `PdxMessage` with a 64-byte zero-copy payload field for future siginfo/sigval.  
+Update `safe_pdx_call` / `pdx_call` helpers to support the new variant (no allocation).
 
-Binary Caching (leverage existing RamFs)
-sexstore already routes /cache to RamFs.
-Add StoreProtocol::CacheBinary { name: &str, image: PageHandover } – zero-copy insert into RamFs arena.
-GUI pre-fetches popular packages into cache on boot (one async PDX batch).
+**2. Signal Trampoline**  
+Create new file: `sex-packages/sexc/src/posix/signal_trampoline.rs`
+```rust
+pub fn spawn_signal_trampoline(pdx: PdxClient) {
+    std::thread::spawn(move || {
+        let mut ring = pdx.ring();               // zero-copy ring view
+        loop {
+            if let Some(msg) = ring.dequeue::<MessageType>() {
+                if let MessageType::Signal(sig) = msg {
+                    unsafe { crate::posix::invoke_user_handler(sig) };
+                }
+            }
+            ring.wait();                         // existing futex-style park
+        }
+    });
+}
+```
+Hook `spawn_signal_trampoline` into every PD startup path inside `relibc_bridge.rs`.  
+`invoke_user_handler` reuses the existing `#[cfg(target_os = "sex")]` asm stub pattern.
 
-sexc / POSIX Bridge (if needed for launch)
-Extend userspace/sexc trampoline to support execve-style launch from handed-over PageHandover (no filesystem open, pure capability exec).
+**3. Signal Sources (minimal wiring)**  
+- `sex-packages/sexdisplay/src/input.rs`: Ctrl+C path → `pdx_call(target_pdx, MessageType::Signal(2))`  
+- Timer / heartbeat PD: emit `MessageType::Signal(SIGALRM)`  
+- Fault PD: route protection violations as `MessageType::Signal(SIGSEGV)`  
+- `sex-packages/sexnode/src/cluster.rs`: add `ClusterSignalForward` (reuse existing `sexnet` zero-copy path)
 
-Telemetry & Observability
-Add DisplayProtocol::Stats and StoreProtocol::Stats returning AtomicU64 counters (frame_flips, zero_copy_handovers, package_loads_ms).
-All counters live in the shared PDX arena (exactly like sexfiles).
+**4. Verification & sexbuild**  
+Update `sex-packages/sexbuild/src/main.rs` with new subcommand:
+```bash
+sexbuild rebuild-kernel --target sasos --output /sex/iso/sex.iso
+```
+Inside running SASOS (`ash`): execute the full kernel rebuild using `RUSTFLAGS="-C linker=sex-ld"` and `sexshop` object store for all artifacts.
 
-Verification & BenchmarkBashcargo test --package sexdisplay --package sexstore-gui
-sex run --benchmark gui-store   # target: < 1 ms package load, 60 fps zero-copy flip on 4KUpdate ARCHITECTURE.md with Phase 20 section (same ASCII diagram style as Phase 19) and commit the benchmark numbers.
+### NON-NEGOTIABLE CONSTRAINTS
+- 100 % `no_std` Rust only (2024 Edition)  
+- Hot paths **must remain completely lock-free** (no `Mutex`, no blocking)  
+- Preserve **zero-copy PFN handovers** everywhere  
+- Sub-microsecond async delivery, zero kernel stack interaction  
+- All changes must compile and run inside the SASOS environment
 
-Output Rules (strict – Gemini CLI must obey):
+**Final Gemini CLI Command:**  
+Implement Steps 1–4 exactly, then run `sexbuild rebuild-kernel` inside the booted SASOS environment for full verification.
 
-Output ONLY the git diff for each completed step.
-Prefix every response: STEP X COMPLETE – DIFF FOLLOWS
-If any primitive (PageHandover, exact PKU dance, etc.) is missing, ask exactly once with a single minimal question.
-Do not improvise, explain, or add features.
-After step 8, include benchmark summary in the final commit message and push the branch.
-
-This handoff is now live and tighter than the original by ~60 %. It eliminates vagueness (“minimal Rust GUI” → concrete framebuffer + static font), removes meme fluff while keeping the spirit, and makes every step directly executable from the current repo state (sexdisplay and sexstore already exist and are PDX-ready).
+Phase 24 complete → ready for SMP scheduler + CHERI v1.1.  
+Gemini: execute cleanly and report success when the self-hosting kernel rebuild finishes with working Ctrl+C.

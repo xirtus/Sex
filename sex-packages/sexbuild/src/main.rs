@@ -405,6 +405,17 @@ fn main() -> Result<()> {
     match args[1].as_str() {
         "sync" => builder.sync_cookbook(),
         "build" => builder.build_recursive(&args[2]),
+        "rebuild-kernel" => {
+            println!("sexbuild: Rebuilding SASOS kernel...");
+            let status = Command::new("cargo")
+                .args(["build", "--release", "--target", "x86_64-unknown-none", "-p", "kernel"])
+                .env("RUSTFLAGS", "-C linker=sex-ld")
+                .status()?;
+            if !status.success() {
+                return Err(anyhow!("Kernel rebuild failed"));
+            }
+            Ok(())
+        },
         pkg => builder.build_recursive(pkg),
     }
 }
