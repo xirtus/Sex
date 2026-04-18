@@ -1,18 +1,18 @@
 # ========================================================
 # Sex (Single Environment XIPC) - SASOS Microkernel
-# Production Build & Emulation Environment (v1.0.0)
-# Single-Address-Space Microkernel with PDX ring buffers,
-# message-based signals, trampoline thread in sexc, PKU isolation
+# Phase 28: Strict x86_64 Cross-Compilation Pipeline
 # ========================================================
 
-FROM rustlang/rust:nightly-bullseye
+FROM --platform=linux/amd64 rustlang/rust:nightly-bullseye
 
 # Install system dependencies for kernel build + QEMU emulation
+# Includes limine, make, build-essential, qemu-system-x86_64, xorriso
 RUN apt-get update && apt-get install -y --no-install-recommends \
     qemu-system-x86 \
     lld \
     clang \
     make \
+    build-essential \
     curl \
     git \
     python3 \
@@ -21,25 +21,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     binutils \
     && rm -rf /var/lib/apt/lists/*
 
-# CRITICAL: Freestanding target for no_std kernel
-# This fixes "can't find crate for `core`", bitflags, scopeguard, bit_field, etc.
-RUN rustup target add x86_64-unknown-none && \
-    rustup component add rust-src llvm-tools-preview && \
-    cargo install bootimage cargo-binutils
+# Install limine binaries (v7.x)
+RUN git clone https://github.com/limine-bootloader/limine.git --branch=v7.x-binary --depth=1 /opt/limine && \
+    make -C /opt/limine
 
-# Python deps for build scripts (sexpac.py, etc.)
-RUN pip3 install --no-cache-dir argparse
+# Rust setup (2024 Edition)
+RUN rustup component add rust-src llvm-tools-preview && \
+    rustup target add x86_64-unknown-none && \
+    cargo install cargo-binutils bootimage
 
-# Working directory (must match docker run -w /sexos)
-WORKDIR /sexos
+COPY x86_64-sex.json /usr/local/rustup/targets/x86_64-unknown-none.json
+ENV RUSTFLAGS="-C target-cpu=skylake -C linker=sex-ld -C link-arg=--script=kernel/linker.ld -C code-model=kernel -C relocation-model=static"
+ENV CARGO_BUILD_TARGET="x86_64-unknown-none"
 
-# Copy entire project (kernel, Makefile, Limine config, etc.)
+# Working directory
+WORKDIR /sex
+
+# Copy entire project
 COPY . .
 
-# Default command when the container starts
-CMD ["make", "build"]
+# sexshop persistent volume mount point
+RUN mkdir -p /sex/shop
 
-# Metadata for sex-grok / self-repair engine
-LABEL description="Sex SASOS Microkernel Build Environment - Lock-free PDX IPC + Message-Based Signals + Intel PKU"
-LABEL version="v1.0.0"
+# Entrypoints for build and run
+ENTRYPOINT ["/usr/bin/make"]
+CMD ["build"]
+
+# Metadata
+LABEL description="Sex SASOS Microkernel Phase 28 - Strict x86_64 Cross-Build Pipeline"
+LABEL version="v28.0.0"
 LABEL maintainer="Andreas Xirtus"

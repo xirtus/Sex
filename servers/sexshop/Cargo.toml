@@ -12,7 +12,7 @@ bit_field = { version = "0.10.3", default-features = false }
 volatile = { version = "0.4.6", default-features = false }
 scopeguard = { version = "1.2.0", default-features = false }
 tap = { version = "1.0.1", default-features = false }
-spin = { version = "0.9.8", default-features = false, features = ["rwlock"] }
+spin = { version = "0.9.8", default-features = false, features = ["rwlock", "mutex", "spin_mutex"] }
 sex-rt = { path = "../../sex-rt" }
 
 [profile.release]

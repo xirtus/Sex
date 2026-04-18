@@ -398,6 +398,12 @@ impl SexBuilder {
 }
 
 fn main() -> Result<()> {
+    std::env::set_var("CARGO_BUILD_TARGET", "x86_64-unknown-none");
+
+    if std::env::consts::ARCH == "aarch64" {
+        panic!("aarch64 host detected! Phase 28 requires strict x86_64 cross-compilation. Force linux/amd64 Docker or use x86_64-unknown-none targets explicitly.");
+    }
+
     let args: Vec<String> = std::env::args().collect();
     let builder = SexBuilder::new();
     if args.len() < 2 { return Ok(()); }
@@ -406,10 +412,11 @@ fn main() -> Result<()> {
         "sync" => builder.sync_cookbook(),
         "build" => builder.build_recursive(&args[2]),
         "rebuild-kernel" => {
-            println!("sexbuild: Rebuilding SASOS kernel...");
+            println!("sexbuild: Rebuilding SASOS kernel (x17r1 x86_64)...");
             let status = Command::new("cargo")
-                .args(["build", "--release", "--target", "x86_64-unknown-none", "-p", "kernel"])
-                .env("RUSTFLAGS", "-C linker=sex-ld")
+                .args(["build", "--release", "--target", "x86_64-sex.json", "-p", "kernel"])
+                .env("RUSTFLAGS", "-C linker=sex-ld -C target-cpu=skylake -C link-arg=--script=kernel/linker.ld")
+                .env("CARGO_BUILD_TARGET", "x86_64-unknown-none")
                 .status()?;
             if !status.success() {
                 return Err(anyhow!("Kernel rebuild failed"));

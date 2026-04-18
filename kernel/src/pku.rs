@@ -91,7 +91,7 @@ pub fn multicast_revoke_key(_key: u8) {
         // Destination Shorthand: 0b11 (All excluding self)
         // Delivery Mode: 0b000 (Fixed)
         // Vector: 0x40
-        crate::apic::send_ipi(0, 0x40, (0b11 << 18));
+        crate::apic::send_ipi(0, 0x40, 0b11 << 18);
     }
 
     // 2. Flush local TLB

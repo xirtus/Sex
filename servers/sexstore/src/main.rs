@@ -62,7 +62,8 @@ impl Store {
             },
             StoreProtocol::Stats => {
                 self.package_loads.load(Ordering::Relaxed)
-            }
+            },
+            _ => u64::MAX,
         }
     }
 

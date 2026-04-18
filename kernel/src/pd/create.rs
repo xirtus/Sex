@@ -7,6 +7,7 @@ use crate::capabilities::engine::CapEngine;
 
 use core::sync::atomic::{AtomicU32, Ordering};
 static NEXT_PD_ID: AtomicU32 = AtomicU32::new(4000);
+static BALANCER_CORE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// create_protection_domain: Ruthless Phase 6/8/10 implementation.
 pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Result<u32, &'static str> {
@@ -23,6 +24,10 @@ pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Re
     };
     let pku_key = (pd_id % 15) as u8 + 1;
     
+    // 1.1 Balance placement across cores
+    let total_cores = 4; // Phase 26 target
+    let core_id = BALANCER_CORE.fetch_add(1, Ordering::SeqCst) % total_cores;
+
     // Raw pointer for ProtectionDomain
     let new_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(ProtectionDomain::new(pd_id, pku_key)));
 
@@ -49,7 +54,7 @@ pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Re
     // Phase 13.2.1: Store main task for interrupt unparking
     unsafe { (*new_pd).main_task.store(task_ptr, core::sync::atomic::Ordering::Release); }
     
-    crate::scheduler::SCHEDULERS[0].runqueue.enqueue(task_ptr);
+    crate::scheduler::SCHEDULERS[core_id].runqueue.push(task_ptr);
 
     // 7. Create Dedicated Signal Trampoline Task
     let trampoline_stack_top = 0x_7000_1000_0000u64;
@@ -58,8 +63,8 @@ pub fn create_protection_domain(elf_path: &str, requested_id: Option<u32>) -> Re
         pd_id | 0x8000_0000, 0, trampoline_stack_top, pd_ref, true
     )));
     unsafe { (*new_pd).trampoline_task.store(trampoline_task_ptr, core::sync::atomic::Ordering::Release); }
-    crate::scheduler::SCHEDULERS[0].runqueue.enqueue(trampoline_task_ptr);
+    crate::scheduler::SCHEDULERS[core_id].runqueue.push(trampoline_task_ptr);
 
-    serial_println!("pd: PD {} Spawned (Trampoline task active).", pd_id);
+    serial_println!("pd: PD {} Spawned on Core {} (Trampoline task active).", pd_id, core_id);
     Ok(pd_id)
 }

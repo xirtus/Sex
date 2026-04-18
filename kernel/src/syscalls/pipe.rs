@@ -6,11 +6,13 @@ use crate::ipc::safe_pdx_call;
 
 pub fn sys_pipe(pipe_fds: *mut u32) -> i64 {
     let msg = MessageType::PipeCall {
-        command: 1, // PIPE_CREATE
+        command: 1, // CREATE_PIPE
+        pipe_fds_ptr: pipe_fds as u64,
         pipe_cap: 0,
         buffer_cap: 0,
         size: 0,
     };
+
 
     // Assumes slot 3 is granted to applications as their POSIX interface (sexc)
     match safe_pdx_call(3, &msg as *const _ as u64) {

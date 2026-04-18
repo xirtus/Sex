@@ -98,7 +98,7 @@ pub enum NodeProtocol {
     // Phase 21: Cluster Fabric
     ClusterObjectFetch { node_id: u32, hash: [u8; 32] },
     ClusterObjectPush { node_id: u32, hash: [u8; 32], page: PageHandover },
-    Heartbeat { node_id: u32 },
+    Heartbeat { node_id: u32, load_avg: u32, best_core: u32 },
     // Phase 22: Distributed Capabilities
     CapabilityResolve { name: [u8; 64] },
     NodeRegister { node_id: u32, addr: [u8; 16] }, // IPv6 addr
@@ -110,24 +110,25 @@ pub enum NodeProtocol {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
     RawCall(u64),
-    Signal(u8),          // POSIX numbers: SIGINT=2, SIGKILL=9, SIGTERM=15, SIGSEGV=11, SIGALRM=14
+    Signal(u8),          
     SignalDeliveryAck,
-    PageFault { fault_addr: u64, error_code: u32, pd_id: u64 },
+    PageFault { fault_addr: u64, error_code: u32, pd_id: u64, lent_cap: u32 },
     SpawnPD { path_ptr: u64 },
     DmaCall { command: u32, offset: u64, size: u64, buffer_cap: u32, device_cap: u32 },
     DmaReply { status: i64, size: u64 },
-    NetCall,
+    NetCall { command: u32, socket_cap: u32, offset: u64, size: u64, buffer_cap: u32, remote_node: u32 },
     NetReply { status: i64, size: u64, socket_cap: u32 },
-    TranslatorCall,
+    TranslatorCall { command: u32, path_ptr: u64, code_cap: u32 },
     TranslatorReply { status: i64, translated_entry: u64 },
-    DriverLoadCall,
+    DriverLoadCall { command: u32, driver_name_ptr: u64 },
     DriverLoadReply { status: i64, driver_pd_id: u32 },
     HardwareInterrupt { vector: u8, data: u64 },
-    VfsCall,
+    VfsCall { command: u32, offset: u64, size: u64, buffer_cap: u32 },
     VfsReply { status: i64, size: u64 },
 
     Store(StoreProtocol),
-    StoreReply { status: i64, val: u64 },
+    StoreCall { command: u32, package_name_ptr: u64, buffer_cap: u32 },
+    StoreReply { status: i64, val: u64, size: u64 },
     Ld(LdProtocol),
     LdReply { status: i64, entry: u64 },
     Node(NodeProtocol),
@@ -148,6 +149,15 @@ pub enum MessageType {
     DisplayBufferCommit { buffer_id: u32, damage_x: u32, damage_y: u32, damage_w: u32, damage_h: u32 },
     DisplayGeminiRepairDisplay,
     RevokeKey { key: u8 },
+
+    // Phase 26: SMP Control
+    SetAffinity { core_id: u32 },
+    
+    // Legacy / Phase 11 compatibility
+    ProcCall { command: u32, path_ptr: u64, arg_ptr: u64 },
+    ProcReply { status: i64, pd_id: u32 },
+    PipeCall { command: u32, pipe_fds_ptr: u64, pipe_cap: u32, buffer_cap: u32, size: u64 },
+    PipeReply { status: i64, pipe_cap: u32 },
 }
 
 #[repr(C)]
@@ -156,7 +166,30 @@ pub struct PdxMessage {
     pub msg_type: MessageType,
     pub payload: [u8; 64],
 }
-#[derive(Debug, Clone, Copy)]
+
+pub struct PdxClient {
+    pub slot: u32,
+}
+
+impl PdxClient {
+    pub fn new(slot: u32) -> Self {
+        Self { slot }
+    }
+
+    pub fn ring(&self) -> Option<&'static AtomicRing<MessageType>> {
+        // Mock: In real impl would use shared memory address from capability
+        None
+    }
+
+    pub fn wait(&self) {
+        // Futex-style park
+    }
+
+    pub fn set_affinity(&self, core_id: u32) -> u64 {
+        safe_pdx_call(self.slot, MessageType::SetAffinity { core_id })
+    }
+}
+
 pub struct Message(u64);
 
 impl Message {
@@ -165,28 +198,27 @@ impl Message {
     pub fn as_u64(&self) -> u64 { self.0 }
     
     pub fn msg_type(&self) -> MessageType {
-        // Mock implementation for serialization/deserialization logic
         MessageType::RawCall(self.0)
     }
 
     pub fn status(&self) -> i64 { 0 }
     pub fn caller_pd(&self) -> u32 { 0 }
     
-    pub fn reply(pd: u32, val: u64) -> Self { Message(val) }
+    pub fn reply(_pd: u32, val: u64) -> Self { Message(val) }
     
-    pub fn dma_call(opcode: u32, offset: u64, size: u64, buffer_cap: u32) -> Self { Message(0) }
-    pub fn dma_read(offset: u64, size: u64, buffer_cap: u32, device_cap: u32) -> Self { Message(0) }
-    pub fn dma_write(offset: u64, size: u64, buffer_cap: u32, device_cap: u32) -> Self { Message(0) }
-    pub fn dma_reply(status: i64, size: u64) -> Self { Message(0) }
+    pub fn dma_call(_opcode: u32, _offset: u64, _size: u64, _buffer_cap: u32) -> Self { Message(0) }
+    pub fn dma_read(_offset: u64, _size: u64, _buffer_cap: u32, _device_cap: u32) -> Self { Message(0) }
+    pub fn dma_write(_offset: u64, _size: u64, _buffer_cap: u32, _device_cap: u32) -> Self { Message(0) }
+    pub fn dma_reply(_status: i64, _size: u64) -> Self { Message(0) }
     
-    pub fn vfs_read(fd: u32, buf: *mut u8, len: usize) -> Self { Message(0) }
-    pub fn vfs_write(fd: u32, buf: *const u8, len: usize) -> Self { Message(0) }
+    pub fn vfs_read(_fd: u32, _buf: *mut u8, _len: usize) -> Self { Message(0) }
+    pub fn vfs_write(_fd: u32, _buf: *const u8, _len: usize) -> Self { Message(0) }
     
-    pub fn proc_reply(status: i64, pd_id: u32) -> Self { Message(0) }
-    pub fn pipe_reply(status: i64, size: u64, cap: u32) -> Self { Message(0) }
+    pub fn proc_reply(_status: i64, _pd_id: u32) -> Self { Message(0) }
+    pub fn pipe_reply(_status: i64, _size: u64, _cap: u32) -> Self { Message(0) }
 
     #[cfg(feature = "serde")]
-    pub fn serialize<T: Serialize>(obj: &T) -> Self { Message(0) }
+    pub fn serialize<T: Serialize>(_obj: &T) -> Self { Message(0) }
     
     #[cfg(feature = "serde")]
     pub fn deserialize<'a, T: Deserialize<'a>>(&'a self) -> Option<T> { None }
@@ -273,7 +305,7 @@ pub struct PdxRequest {
 }
 
 pub mod irq {
-    pub fn bind_irq<F: Fn() + Send + Sync + 'static>(irq: u8, handler: F) {
+    pub fn bind_irq<F: Fn() + Send + Sync + 'static>(_irq: u8, _handler: F) {
         // IRQ binding logic via PDX
     }
 }

@@ -95,7 +95,10 @@ extern "x86-interrupt" fn page_fault_handler(
     error_code: PageFaultErrorCode,
 ) {
     use x86_64::registers::control::Cr2;
-    let fault_addr = Cr2::read();
+    let fault_addr = match Cr2::read() {
+        Ok(addr) => addr.as_u64(),
+        Err(e) => e.0,
+    };
 
     // 1. Identify current faulting task
     let mut task_id = 0;
@@ -108,13 +111,13 @@ extern "x86-interrupt" fn page_fault_handler(
             task_id = task.id;
             task.context.rip = stack_frame.instruction_pointer.as_u64();
             task.context.rsp = stack_frame.stack_pointer.as_u64();
-            task.context.rflags = stack_frame.cpu_flags;
+            task.context.rflags = stack_frame.cpu_flags.bits();
             task.state.store(crate::scheduler::STATE_BLOCKED, Ordering::Release);
         }
     }
 
     // 2. Async #PF Forwarding via safe_pdx_call (IPCtax mandate)
-    if let Err(e) = crate::ipc::pagefault::forward_page_fault(fault_addr.as_u64(), error_code.bits() as u32, task_id as u64) {
+    if let Err(e) = crate::ipc::pagefault::forward_page_fault(fault_addr, error_code.bits() as u32, task_id as u64) {
         serial_println!("EXCEPTION: Failed to forward #PF to sext: {}", e);
         
         // Phase 24: Protection Violation -> SIGSEGV (11)
@@ -149,7 +152,7 @@ extern "x86-interrupt" fn timer_interrupt_handler(stack_frame: InterruptStackFra
             let old_ctx = &mut *old_ctx_ptr;
             old_ctx.rip = stack_frame.instruction_pointer.as_u64();
             old_ctx.rsp = stack_frame.stack_pointer.as_u64();
-            old_ctx.rflags = stack_frame.cpu_flags;
+            old_ctx.rflags = stack_frame.cpu_flags.bits();
             send_eoi();
             crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
         }

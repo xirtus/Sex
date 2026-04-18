@@ -3,6 +3,7 @@ members = [
     "kernel",
     "servers/sexc",
     "servers/sext",
+    "servers/sex-ld",
     "servers/sexfiles",
     "servers/sexnode",
     "servers/sexgemini",

@@ -127,11 +127,11 @@ pub extern "C" fn _start() -> ! {
                 DisplayProtocol::DmaBufferSubmit { page, offset, len } => {
                     // Forward to sexdrive (Slot 11) for GPU processing
                     // Zero-copy DMA: we just pass the PageHandover (PFN)
-                    let res = pdx_call(11 /* sexdrive */, 0x100 /* GPU_SUBMIT */, page.pfn, (*offset as u64) << 32 | *len as u64);
+                    let res = pdx_call(11 /* sexdrive */, 0x100 /* GPU_SUBMIT */, page.pfn, (offset as u64) << 32 | len as u64);
                     pdx_reply(req.caller_pd, res);
                 },
                 DisplayProtocol::FenceWait { fence_id } => {
-                    let res = pdx_call(11, 0x101 /* FENCE_WAIT */, *fence_id, 0);
+                    let res = pdx_call(11, 0x101 /* FENCE_WAIT */, fence_id, 0);
                     pdx_reply(req.caller_pd, res);
                 },
                 DisplayProtocol::PollEvents { window_id } => {

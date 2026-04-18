@@ -1,6 +1,5 @@
 use crate::pd::create::create_protection_domain;
 use crate::serial_println;
-use crate::drivers::pci;
 use crate::ipc::DOMAIN_REGISTRY;
 use crate::capability::{CapabilityData, IpcCapData};
 use x86_64::VirtAddr;
@@ -62,7 +61,7 @@ pub fn init() {
     sexnode_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexc, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 2 -> sexc
 
     // 3. Hardware Bootstrap (Registers with interrupts)
-    pci::bootstrap_drivers(sexdrive, sexdisplay);
+    crate::devmgr::init(sexdrive, sexdisplay);
 
     serial_println!("init: System services active. Phase 15 Linux Driver Translation Ready.");
     serial_println!("init: Triggering hot-plug discovery of Linux drivers...");

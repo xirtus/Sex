@@ -6,7 +6,7 @@ extern crate alloc;
 pub mod serial;
 pub mod vga;
 pub mod memory;
-pub mod pci;
+pub mod hal;
 pub mod pku;
 pub mod slab;
 pub mod cheri;
@@ -32,7 +32,7 @@ pub mod syscalls;
 pub mod capabilities;
 pub mod benchmark;
 pub mod init;
-pub mod hal;
+pub mod devmgr;
 
 use linked_list_allocator::LockedHeap;
 

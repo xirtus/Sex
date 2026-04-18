@@ -1,0 +1,4 @@
+#!/bin/bash
+# Phase 28 sex-ld: host linker wrapper for SASOS x86_64-unknown-none
+# Passes through all arguments to rust-lld (gnu flavor).
+exec rust-lld -flavor gnu "$@"

@@ -38,7 +38,7 @@ pub fn sys_store_fetch(store_cap_id: u32, name_ptr: u64, buffer_vaddr: u64, size
     match safe_pdx_call(store_cap_id, &msg as *const _ as u64) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
-            if let MessageType::StoreReply { status, size: fetched_size } = reply {
+            if let MessageType::StoreReply { status, size: fetched_size, .. } = reply {
                 if status == 0 { fetched_size as i64 } else { -1 }
             } else { -1 }
         },

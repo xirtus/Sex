@@ -1,4 +1,3 @@
-use limine::response::MemoryMapEntry;
 use x86_64::{
     structures::paging::{FrameAllocator, Mapper, OffsetPageTable, PageTable, PhysFrame, Size4KiB, Page, PageTableFlags, frame::PhysFrameRangeInclusive, page_table::PageTableEntry},
     PhysAddr, VirtAddr,
@@ -8,6 +7,8 @@ use lazy_static::lazy_static;
 
 pub mod allocator;
 pub mod pku;
+
+pub type MemoryMapEntry = limine::memmap::Entry;
 
 /// The Global Virtual Address Space container.
 pub struct GlobalVas {
@@ -156,15 +157,13 @@ impl BootInfoFrameAllocator {
 
     fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> {
         let regions = self.memory_regions.iter();
-        let usable_regions = regions.filter(|r| r.entry_type == limine::response::MemoryMapEntryType::Usable);
+        let usable_regions = regions.filter(|r| r.type_ == limine::memmap::MEMMAP_USABLE);
         let addr_ranges = usable_regions.map(|r| r.base..r.base + r.length);
         let frame_addresses = addr_ranges.flat_map(|r| r.step_by(4096));
         frame_addresses.map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
     }
-}
 
-unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
-    fn allocate_frame(&mut self) -> Option<PhysFrame> {
+    pub fn allocate_frame(&mut self) -> Option<PhysFrame> {
         let frame = self.usable_frames().nth(self.next);
         self.next += 1;
         frame

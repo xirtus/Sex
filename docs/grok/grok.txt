@@ -1,71 +1,97 @@
-**# SEX Microkernel: Phase 24 Message-Based Signals – Condensed Gemini CLI Handoff**
+**# SEX Microkernel: Phase 28 Strict x86_64 Cross-Compilation Fix Handoff**
 
 **STRICT OPERATIONAL WARNING**  
 Restrict **ALL** operations strictly to: `/Users/xirtus/sites/microkernel/`.  
-Never run unconstrained `find` outside this directory. Always use `dir_path` or `include_pattern`.
+Never run unconstrained `find` outside this directory. Always narrow scope with `dir_path` or `include_pattern`.
 
-## PROJECT STATE (Apr 17 2026)
-- **Branch:** `main` (Phase 23 fully merged — self-hosting build pipeline live via `sexbuild` + `sexshop` Slot 4 + `sex-ld`).
-- **Status:** SASOS can rebuild itself; all servers are pure PDX, `no_std` Rust 2024.
+## 1. ARCHITECTURE SUMMARY
+- **Project:** SEX (Single Environment XIPC) – Single Address Space Microkernel.  
+- **Tenets:** Tiny TCB, 100% `no_std` Rust (2024 Edition), Intel PKU + CHERI isolation.  
+- **Build Target:** **x86_64-unknown-none only** (for x17r1 Intel i7 Skylake+).
 
-**Phase 24 Goal:**  
-Replace every UNIX signal (SIGINT, SIGKILL, etc.) with pure async `MessageType::Signal` on PDX rings.  
-**No kernel stack mutation. No synchronous hijacking.** 100 % lock-free delivery via per-PD trampoline (QNX/seL4 model).
+## 2. PHASES 20–27 COMPLETE + PHASE 28 IN PROGRESS
+- Docker + QEMU SMP + HAL + PCI all verified in emulation.  
+- **Current blocker (mid-install):**  
+  ```  
+  error: error loading target specification: target feature `soft-float` is incompatible with the ABI but gets enabled in target spec
+  ```  
+  This is a classic Rust custom-target JSON mismatch. The target spec (x86_64-sex.json) is incorrectly enabling `soft-float` while the x86_64 ABI expects hardware floating-point (SSE/SSE2). The Docker/cross build is pulling the wrong features during `rustup target add` / cargo build.
 
-### EXACT IMPLEMENTATION TASKS (Gemini CLI — execute in exact order)
+**Phase 28 Goal (this handoff):** Eliminate the `soft-float` conflict, lock the pipeline to pure x86_64 cross-compilation from any host, and restore clean Docker/QEMU self-host loop.
 
-**1. Protocol Extension**  
-File: `sex-packages/sex-pdx/src/protocol.rs`  
-Add to `MessageType` enum (`#[repr(u8)]`, keep `Copy + Debug`):
-```rust
-Signal(u8),          // POSIX numbers: SIGINT=2, SIGKILL=9, SIGTERM=15, SIGSEGV=11, SIGALRM=14
-SignalDeliveryAck,
-```
-Extend `PdxMessage` with a 64-byte zero-copy payload field for future siginfo/sigval.  
-Update `safe_pdx_call` / `pdx_call` helpers to support the new variant (no allocation).
+### EXACT IMPLEMENTATION TASKS (Gemini CLI – execute in order)
 
-**2. Signal Trampoline**  
-Create new file: `sex-packages/sexc/src/posix/signal_trampoline.rs`
-```rust
-pub fn spawn_signal_trampoline(pdx: PdxClient) {
-    std::thread::spawn(move || {
-        let mut ring = pdx.ring();               // zero-copy ring view
-        loop {
-            if let Some(msg) = ring.dequeue::<MessageType>() {
-                if let MessageType::Signal(sig) = msg {
-                    unsafe { crate::posix::invoke_user_handler(sig) };
-                }
-            }
-            ring.wait();                         // existing futex-style park
-        }
-    });
+**1. Fix Target Specification JSON**  
+File: `kernel/x86_64-sex.json` (or wherever the custom target lives — use exact match)  
+Replace entire contents with this exact spec (no `soft-float` anywhere):
+
+```json
+{
+  "llvm-target": "x86_64-unknown-none",
+  "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
+  "arch": "x86_64",
+  "target-endian": "little",
+  "target-pointer-width": "64",
+  "target-c-int-width": "32",
+  "os": "none",
+  "env": "",
+  "vendor": "unknown",
+  "features": "+sse,+sse2,+fxsr,+mmx,+x87",
+  "dynamic-linking": false,
+  "has-rpath": false,
+  "relocation-model": "static",
+  "stack-protector": "none",
+  "supports-stack-protector": false,
+  "disable-redzone": true,
+  "frame-pointer": "none",
+  "function-sections": true,
+  "data-sections": true,
+  "llvm-abiname": "sysv",
+  "max-atomic-width": 128,
+  "panic-strategy": "abort"
 }
 ```
-Hook `spawn_signal_trampoline` into every PD startup path inside `relibc_bridge.rs`.  
-`invoke_user_handler` reuses the existing `#[cfg(target_os = "sex")]` asm stub pattern.
 
-**3. Signal Sources (minimal wiring)**  
-- `sex-packages/sexdisplay/src/input.rs`: Ctrl+C path → `pdx_call(target_pdx, MessageType::Signal(2))`  
-- Timer / heartbeat PD: emit `MessageType::Signal(SIGALRM)`  
-- Fault PD: route protection violations as `MessageType::Signal(SIGSEGV)`  
-- `sex-packages/sexnode/src/cluster.rs`: add `ClusterSignalForward` (reuse existing `sexnet` zero-copy path)
+**2. Dockerfile Hardening (force amd64 + correct target)**  
+Update `Dockerfile`:
+- Change to `FROM --platform=linux/amd64 rust:nightly`
+- Add after rustup:
+  ```dockerfile
+  RUN rustup target add x86_64-unknown-none
+  RUN rustup component add rust-src llvm-tools-preview
+  COPY kernel/x86_64-sex.json /usr/local/rustup/targets/x86_64-unknown-none.json
+  ENV RUSTFLAGS="-C target-cpu=skylake -C linker=sex-ld -C link-arg=--script=kernel/linker.ld"
+  ENV CARGO_BUILD_TARGET="x86_64-unknown-none"
+  ```
 
-**4. Verification & sexbuild**  
-Update `sex-packages/sexbuild/src/main.rs` with new subcommand:
-```bash
-sexbuild rebuild-kernel --target sasos --output /sex/iso/sex.iso
-```
-Inside running SASOS (`ash`): execute the full kernel rebuild using `RUSTFLAGS="-C linker=sex-ld"` and `sexshop` object store for all artifacts.
+**3. Makefile & sexbuild Updates**  
+- Add/ensure targets:
+  ```make
+  cross-build: docker-cross-build
+  docker-cross-build:
+  	docker build --platform linux/amd64 -t sex-builder .
+  	docker run --rm -v $(pwd):/src sex-builder cargo build --target x86_64-unknown-none --release
+  ```
+- In `sex-packages/sexbuild/src/main.rs` enforce:
+  ```rust
+  std::env::set_var("CARGO_BUILD_TARGET", "x86_64-unknown-none");
+  ```
+
+**4. Verification**  
+- Run `make docker-cross-build`  
+- Then `make docker-full-test-x86`  
+- Inside QEMU SASOS (`ash`): `sexbuild rebuild-kernel` must succeed with zero aarch64 or soft-float artifacts.
+
+**5. Cleanup**  
+- Remove any accidental `soft-float` mentions from Cargo.toml, .cargo/config.toml, or RUSTFLAGS.
 
 ### NON-NEGOTIABLE CONSTRAINTS
-- 100 % `no_std` Rust only (2024 Edition)  
-- Hot paths **must remain completely lock-free** (no `Mutex`, no blocking)  
-- Preserve **zero-copy PFN handovers** everywhere  
-- Sub-microsecond async delivery, zero kernel stack interaction  
-- All changes must compile and run inside the SASOS environment
+- 100 % `no_std` Rust (2024 Edition) – x86_64-unknown-none only  
+- Hot paths remain completely lock-free (no `Mutex`)  
+- Preserve zero-copy PFN handovers + sub-µs PDX signals  
+- All builds/tests stay inside Docker/QEMU (no real x17r1 yet)
 
 **Final Gemini CLI Command:**  
-Implement Steps 1–4 exactly, then run `sexbuild rebuild-kernel` inside the booted SASOS environment for full verification.
+Implement Steps 1–5 exactly. Fix the target JSON first, then rebuild. Run full cross-build + QEMU test cycle and confirm the `soft-float` error is gone and the ISO boots cleanly with working signals before reporting success.
 
-Phase 24 complete → ready for SMP scheduler + CHERI v1.1.  
-Gemini: execute cleanly and report success when the self-hosting kernel rebuild finishes with working Ctrl+C.
+Phase 28 now unblocked. We are 2 phases from safe first boot on your x17r1 hardware. Ready for Phase 29 (ACPI + NVMe driver stubs) once this is green.

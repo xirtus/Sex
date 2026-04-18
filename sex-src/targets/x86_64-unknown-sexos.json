@@ -3,8 +3,8 @@
     "data-layout": "e-m:e-i64:64-f80:128-n8:16:32:64-S128",
     "arch": "x86_64",
     "target-endian": "little",
-    "target-pointer-width": "64",
-    "target-c-int-width": "32",
+    "target-pointer-width": 64,
+    "target-c-int-width": 32,
     "os": "sexos",
     "env": "relibc",
     "vendor": "unknown",
@@ -13,11 +13,10 @@
     "linker": "rust-lld",
     "panic-strategy": "abort",
     "disable-redzone": true,
-    "features": "-mmx,-sse,+soft-float,+pku",
+    "features": "-mmx,-sse,+pku",
     "stack-probes": {
-        "strategy": "inline-asm"
+        "kind": "inline"
     },
-    "eliminate-frame-pointer": false,
     "dynamic-linking": true,
     "has-rpath": true,
     "position-independent-executables": true,

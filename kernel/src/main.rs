@@ -3,8 +3,8 @@
 
 extern crate alloc;
 
-use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, RsdpRequest};
-use limine::BaseRevision;
+use limine::request::{FramebufferRequest, HhdmRequest, MemmapRequest, RsdpRequest, MpRequest};
+use limine::{BaseRevision, RequestsStartMarker, RequestsEndMarker};
 use core::panic::PanicInfo;
 use sex_kernel::serial_println;
 use sex_kernel::ipc::DOMAIN_REGISTRY;
@@ -18,11 +18,11 @@ static BASE_REVISION: BaseRevision = BaseRevision::new();
 
 #[used]
 #[link_section = ".requests_start"]
-static REQ_START: limine::request::RequestsStartMarker = limine::request::RequestsStartMarker::new();
+static REQ_START: RequestsStartMarker = RequestsStartMarker::new();
 
 #[used]
 #[link_section = ".requests_end"]
-static REQ_END: limine::request::RequestsEndMarker = limine::request::RequestsEndMarker::new();
+static REQ_END: RequestsEndMarker = RequestsEndMarker::new();
 
 // 2. Bootloader Information Requests
 #[used]
@@ -35,11 +35,15 @@ static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
 
 #[used]
 #[link_section = ".requests"]
-static MEMORY_MAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
+static MEMMAP_REQUEST: MemmapRequest = MemmapRequest::new();
 
 #[used]
 #[link_section = ".requests"]
 static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
+
+#[used]
+#[link_section = ".requests"]
+static SMP_REQUEST: MpRequest = MpRequest::new(0);
 
 /// The absolute entry point for the SEX microkernel (Pure Rust).
 #[no_mangle]
@@ -50,11 +54,12 @@ pub extern "C" fn _start() -> ! {
     }
 
     // 1. Capture early bootloader responses
-    let hhdm = HHDM_REQUEST.get_response().unwrap();
-    let phys_mem_offset = VirtAddr::new(hhdm.offset());
+    let hhdm = HHDM_REQUEST.response().unwrap();
+    let phys_mem_offset = VirtAddr::new(hhdm.offset);
     
-    let mmap = MEMORY_MAP_REQUEST.get_response().unwrap();
-    let rsdp = RSDP_REQUEST.get_response().unwrap();
+    let mmap = MEMMAP_REQUEST.response().unwrap();
+    let rsdp = RSDP_REQUEST.response().unwrap();
+    let smp = SMP_REQUEST.response().unwrap();
 
     // 2. Initialize Core HAL (GDT, IDT, PIC)
     sex_kernel::hal::init();
@@ -82,8 +87,8 @@ pub extern "C" fn _start() -> ! {
     }
 
     // 5. Symmetric Multi-Processing (SMP) - Deliverable 2
-    sex_kernel::apic::init_apic(rsdp.address().as_ptr() as u64, phys_mem_offset);
-    sex_kernel::smp::boot_aps();
+    sex_kernel::apic::init_apic(rsdp.address as u64, phys_mem_offset);
+    sex_kernel::smp::boot_aps(smp);
 
     // 6. Spawn Core System Domains (Isolation Level 1)
     serial_println!("Sex SASOS: Production Ready (Phase 16).");
