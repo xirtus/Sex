@@ -28,15 +28,8 @@ In large repositories, consider narrowing your search scope by specifying a 'dir
 - **Servers:** `sexshop`, `sex-ld`, `sexnode`, `sexnet` all updated with Phase 21/22 protocols.
 - **Kernel:** `init.rs` grants IPC slots for `sexdisplay` → `sexdrive` (11) and `sexnode` → `sexshop` (1).
 
-## 4. PHASE 23: SELF-HOSTING BUILD OPTIMIZATION
-The goal is to make the `sexbuild` tool natively aware of the Sex OS object store and dynamic linker.
+## 4. PHASE 28: BUILD OPTIMIZATION
 
-### Objectives:
-1. **sexbuild Update:** Modify `sex-packages/sexbuild/src/main.rs` to use `StoreProtocol` for all artifact storage.
-   - Replace `std::fs` calls with `pdx_call` to `sexshop` (Slot 4).
-   - Use `ObjectPut` to cache compilation units and `ObjectGet` for reuse.
-2. **Native Toolchain:** Ensure `sex-ld` is used by `sexbuild` for linking SPD packages.
-3. **Verification:** Re-verify that `kernel` can be compiled entirely within the SASOS environment using the optimized toolchain.
 
 ### Implementation Plan:
 1. Define a `no_std` compatible PDX client for `sexbuild`.
