@@ -1,0 +1,58 @@
+This is a great idea. Moving between M1 architecture and bare-metal Intel emulation while fighting `no_std` dependency leaks is a minefield. 
+
+Here is a concise "System Quirks & Conventions" guide for the **Sex Microkernel** handoff.
+
+---
+
+## 🛠 The Toolchain: "Infinite Nightly"
+We operate exclusively on the **Rust Nightly** channel. To avoid the "stable vs. nightly" path shadowing (especially on macOS with Conda), we use a project-level lock.
+
+* **The Guard:** `rust-toolchain.toml` must exist in the root.
+* **The Command:** Use `cargo build` directly. If it complains about `-Z`, the shell is likely using a non-rustup `cargo` (Check `which cargo`).
+* **The Foundation:** We use `-Z build-std=core,alloc`. This is because `x86_64-unknown-none` has no pre-compiled core; we compile it from source to match our specific Intel i7 target.
+
+---
+
+## 🏗 Build Conventions: "The no_std Diet"
+The biggest point of failure is **Dependency Leakage**. If a crate pulls in `std`, the build will cascade into 5,000+ errors (missing `Some`, `None`, etc.).
+
+* **Dependency Rule:** Every crate in `Cargo.toml` **must** have `default-features = false`.
+    * *Bad:* `serde = "1.0"`
+    * *Good:* `serde = { version = "1.0", default-features = false, features = ["derive"] }`
+* **The Script:** Use `fix_dependencies.sh` (Perl-based) to mass-patch these if they creep back in.
+
+---
+
+## 🖥 Hardware Emulation: Intel i7 on M1
+We are emulating a modern Intel environment on Apple Silicon. This requires specific QEMU "magic" to support the microkernel's isolation features.
+
+### The 16 Hardware Space Locks (PKU)
+The system uses **Intel Protection Keys for Userspace (PKU/MPK)** for memory isolation.
+* **QEMU Flag:** Must use `-cpu Skylake-Client,+pku`.
+* **Machine Type:** Must use `-machine q35`. The default `pc` machine does not support the IOMMU or the PKU data bus.
+* **Kernel Requirement:** The kernel **must** set `CR4.PKE = 1`. If this bit isn't flipped, `WRPKRU` instructions will triple-fault.
+
+---
+
+## 🍎 macOS vs. Linux Quirks
+Since we develop on a MacBook Air, standard Linux shell scripts often break.
+
+* **`sed` is Forbidden:** macOS `sed` (BSD) handles in-place editing (`-i`) differently than Linux `sed` (GNU).
+* **The Convention:** Use **Perl** for surgical source patching. 
+    * *Example:* `perl -i -pe 's/search/replace/g' file.rs`
+* **Binary Location:** Built binaries are always in `target/x86_64-unknown-none/release/`. Watch out for `.cargo-build-lock`—it is a file, not a binary!
+
+---
+
+## 🔄 The "Golden Loop"
+If the system starts throwing weird "crate not found" errors:
+1.  **Neutralize:** `rm Cargo.lock`
+2.  **Audit:** Run `./audit_toml.sh` to strip `std` from dependencies.
+3.  **Sync:** `rustup target add x86_64-unknown-none`
+4.  **Launch:** `./run_sex.sh`
+
+---
+
+> **Note on PKU Locks:** When implementing the 16 hardware locks in `pdx.rs`, remember that the `PKRU` register is 32-bits wide. Each 2-bit pair represents one of the 16 keys (Access Disable and Write Disable). **Don't forget to save/restore this register during context switches!**
+
+Does this cover the main pain points you've run into so far, or should we add a section on the GDT/IDT alignment quirks?

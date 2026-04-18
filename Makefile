@@ -44,8 +44,20 @@ cross-build: docker-cross-build
 
 docker-cross-build:
 	docker build --platform linux/amd64 -t sex-builder .
-	docker run --rm -v $(PWD):/sex --entrypoint cargo sex-builder build --target x86_64-unknown-none --release
-
+	docker run --rm -v $(PWD):/sex --entrypoint bash sex-builder -c \
+		"set -e && \
+		echo '=== Building SASOS Workspace (x86_64-unknown-none) ===' && \
+		RUSTFLAGS='-C target-cpu=skylake -C linker=rust-lld -C link-arg=--script=kernel/linker.ld' \
+		cargo build -Z build-std=core,alloc \
+			--target x86_64-unknown-none \
+			--release \
+			--workspace \
+			--exclude sexbuild \
+			--exclude egui-hello"
+			
+			
+			
+			   
 docker-full-test-x86: docker-build
 	$(DOCKER_RUN) release
 	$(DOCKER_RUN) run-sasos
@@ -137,3 +149,5 @@ clean:
 	rm -rf target/
 	rm -rf $(ISO_ROOT) $(ISO_IMAGE) initrd.sex limine
 
+verify-abi:
+	@! readelf -A target/x86_64-unknown-none/release/kernel | grep -i "soft-float" || (echo "ABI Mismatch Detected!" && exit 1)

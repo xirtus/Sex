@@ -1,4 +1,6 @@
+#![no_std]
 [package]
+
 name = "relibc"
 version = "0.2.0"
 edition = "2021"
@@ -7,6 +9,27 @@ edition = "2021"
 name = "relibc"
 crate-type = ["staticlib", "rlib"]
 
-[dependencies]
-sex-rt = { path = "../sex-rt" }
 # core libc deps omitted for brevity
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[dependencies]
+serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
+bitflags = { version = "2.6.0", default-features = false }
+spin = "0.9.8"
+sex-pdx = { path = "../crates/sex-pdx" }
+sex-rt = { path = "../sex-rt" }
+libsys = { path = "../sex-src/lib/libsys" }

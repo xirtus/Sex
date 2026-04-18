@@ -1,6 +1,12 @@
 #[no_mangle]
 pub extern "C" fn sys_park() {
-    unsafe {
+    #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] unsafe {
+        #[cfg(target_arch = "x86_64")]
+        #[cfg(target_arch = "x86_64")]
+        #[cfg(target_arch = "x86_64")]
+        #[cfg(target_arch = "x86_64")]
+        #[cfg(target_arch = "x86_64")]
+        #[cfg(target_arch = "x86_64")]
         core::arch::asm!("syscall", in("rax") 24);
     }
 }

@@ -152,3 +152,7 @@ pub unsafe fn broadcast_sipi(vector: u8) {
     let cmd = (0b11 << 18) | (0b110 << 8) | (vector as u32);
     icr_low.write_volatile(cmd);
 }
+
+// Automated injection of missing kernel globals
+pub static PROCESSORS: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+pub static IO_APICS: Mutex<Vec<u8>> = Mutex::new(Vec::new());

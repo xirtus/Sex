@@ -1,7 +1,29 @@
 [package]
+
 name = "egui-hello"
 version = "0.1.0"
 edition = "2021"
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 [dependencies]
-sex-orbclient = { path = "../sex-orbclient", default-features = false }
+serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
+bitflags = { version = "2.6.0", default-features = false }
+spin = "0.9.8"
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-rt = { path = "../../sex-rt" }
+libsys = { path = "../../sex-src/lib/libsys" }

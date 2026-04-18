@@ -1,8 +1,29 @@
 [package]
+
 name = "sex-rt"
 version = "0.1.0"
 edition = "2021"
 description = "POSIX to PDX syscall mapper for Sex Microkernel"
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 [dependencies]
+serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
+bitflags = { version = "2.6.0", default-features = false }
+spin = "0.9.8"
+libsys = { path = "../sex-src/lib/libsys" }
 sex-pdx = { path = "../crates/sex-pdx" }

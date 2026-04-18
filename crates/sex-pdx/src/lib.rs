@@ -254,7 +254,7 @@ pub fn pdx_call(pd: u32, num: u64, arg0: u64, arg1: u64) -> u64 {
 }
 
 pub fn pdx_listen(flags: u32) -> PdxRequest {
-    let mut req = PdxRequest::default();
+    let req = PdxRequest::default();
     #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!("syscall",

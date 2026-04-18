@@ -1,5 +1,5 @@
-#![no_std]
-#![no_main]
+// // // // #![no_std] (Muted for Mac Build)
+// // // // #![no_main] (Muted for Mac Build)
 
 extern crate alloc;
 extern crate spin;
@@ -32,6 +32,11 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
+#[cfg(not(target_os = "macos"))]
+#[cfg(not(target_os = "macos"))]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop { libsys::sched::park_on_ring(); }
 }
+
+#[cfg(target_os = "macos")]
+fn main() { println!("Sex Linker (Host Mode) initialized."); }

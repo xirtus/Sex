@@ -10,6 +10,9 @@ use libsys::sched::park_on_ring;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    // Phase 24: start the lock-free signal trampoline
+    trampoline::start_signal_trampoline();
+
     loop {
         park_on_ring();
 

@@ -1,20 +1,38 @@
 [package]
+
 name = "ion-sexshell"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
-sex-pdx = { path = "../../crates/sex-pdx" }
-sex-rt = { path = "../../sex-rt" }
 # Ion dependencies (placeholders for ported versions)
-# ion-shell = { git = "https://gitlab.redox-os.org/redox-os/ion", branch = "master", default-features = false }
-# termion = { git = "https://gitlab.redox-os.org/redox-os/termion", branch = "master", default-features = false }
+# ion-shell = { git = "https://gitlab.redox-os.org/redox-os/ion", branch = "master", }
+# termion = { git = "https://gitlab.redox-os.org/redox-os/termion", branch = "master", }
 
 [features]
 default = ["no_std_compat"]
 no_std_compat = []
 
-[profile.release]
-panic = "abort"
-lto = true
-opt-level = "z"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[dependencies]
+serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
+bitflags = { version = "2.6.0", default-features = false }
+spin = "0.9.8"
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-rt = { path = "../../sex-rt" }
+libsys = { path = "../../sex-src/lib/libsys" }

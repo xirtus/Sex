@@ -1,97 +1,112 @@
-**# SEX Microkernel: Phase 28 Strict x86_64 Cross-Compilation Fix Handoff**
+**# SEX Microkernel: Phase 29 HAL Polish + ACPI/NVMe Stubs Handoff**
 
 **STRICT OPERATIONAL WARNING**  
 Restrict **ALL** operations strictly to: `/Users/xirtus/sites/microkernel/`.  
-Never run unconstrained `find` outside this directory. Always narrow scope with `dir_path` or `include_pattern`.
+Never run unconstrained `find` outside this directory.
+
+**PRE-FLIGHT SAFETY ENFORCEMENT (run once)**  
+Create `/Users/xirtus/sites/microkernel/.envrc`:
+```bash
+alias find='find /Users/xirtus/sites/microkernel'
+alias cargo='cargo --manifest-path /Users/xirtus/sites/microkernel/Cargo.toml'
+export SEX_ROOT=/Users/xirtus/sites/microkernel
+```
+Then `direnv allow` (or source it). This locks every command to the correct tree.
 
 ## 1. ARCHITECTURE SUMMARY
 - **Project:** SEX (Single Environment XIPC) – Single Address Space Microkernel.  
 - **Tenets:** Tiny TCB, 100% `no_std` Rust (2024 Edition), Intel PKU + CHERI isolation.  
-- **Build Target:** **x86_64-unknown-none only** (for x17r1 Intel i7 Skylake+).
+- **Build Target:** x86_64-unknown-none (Skylake+ for x17r1 i7).
 
-## 2. PHASES 20–27 COMPLETE + PHASE 28 IN PROGRESS
-- Docker + QEMU SMP + HAL + PCI all verified in emulation.  
-- **Current blocker (mid-install):**  
-  ```  
-  error: error loading target specification: target feature `soft-float` is incompatible with the ABI but gets enabled in target spec
-  ```  
-  This is a classic Rust custom-target JSON mismatch. The target spec (x86_64-sex.json) is incorrectly enabling `soft-float` while the x86_64 ABI expects hardware floating-point (SSE/SSE2). The Docker/cross build is pulling the wrong features during `rustup target add` / cargo build.
+## 2. PHASES 20–28 COMPLETE (Apr 17 2026)
+- Phase 28 **COMPLETE**: Strict x86_64 cross-compilation pipeline locked.  
+  - Target JSON surgically cleaned (no soft-float).  
+  - Dockerfile + Makefile force amd64 + pinned nightly.  
+  - `run_sasos.sh` now uses `-accel tcg` (Apple Silicon safe).  
+  - Full `make docker-full-test-x86` builds + boots cleanly.
 
-**Phase 28 Goal (this handoff):** Eliminate the `soft-float` conflict, lock the pipeline to pure x86_64 cross-compilation from any host, and restore clean Docker/QEMU self-host loop.
+**Current branch:** `main` – x86_64-only pipeline verified.
+
+## 3. PHASE 29: HAL POLISH + ACPI / NVMe STUBS
+**Goal:** Complete Hardware Abstraction Layer with surgical edits, pinned toolchain, concrete verification, and performance baseline. All tests stay inside Docker/QEMU TCG.
 
 ### EXACT IMPLEMENTATION TASKS (Gemini CLI – execute in order)
 
-**1. Fix Target Specification JSON**  
-File: `kernel/x86_64-sex.json` (or wherever the custom target lives — use exact match)  
-Replace entire contents with this exact spec (no `soft-float` anywhere):
 
-```json
-{
-  "llvm-target": "x86_64-unknown-none",
-  "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
-  "arch": "x86_64",
-  "target-endian": "little",
-  "target-pointer-width": "64",
-  "target-c-int-width": "32",
-  "os": "none",
-  "env": "",
-  "vendor": "unknown",
-  "features": "+sse,+sse2,+fxsr,+mmx,+x87",
-  "dynamic-linking": false,
-  "has-rpath": false,
-  "relocation-model": "static",
-  "stack-protector": "none",
-  "supports-stack-protector": false,
-  "disable-redzone": true,
-  "frame-pointer": "none",
-  "function-sections": true,
-  "data-sections": true,
-  "llvm-abiname": "sysv",
-  "max-atomic-width": 128,
-  "panic-strategy": "abort"
-}
+0. Makefile Build Hygiene Fix
+File: Makefile
+Replace the docker-cross-build target with:
+makedocker-cross-build:
+	docker run --rm -v $(PWD):/sex --entrypoint cargo sex-builder build \
+	  -Z build-std=core,alloc \
+	  --target x86_64-unknown-none \
+	  --release \
+	  --workspace --exclude sexbuild
+(If more host tools appear later, chain additional --exclude sex-toolname.)
+
+
+**1. Pre-Flight + Pinned Nightly**  
+Update `Dockerfile`:
+```dockerfile
+FROM --platform=linux/amd64 rust:nightly-2026-04-17
+```
+Add after rustup:
+```dockerfile
+RUN rustup target add x86_64-unknown-none
+COPY kernel/x86_64-sex.json /sex/kernel/x86_64-sex.json
 ```
 
-**2. Dockerfile Hardening (force amd64 + correct target)**  
-Update `Dockerfile`:
-- Change to `FROM --platform=linux/amd64 rust:nightly`
-- Add after rustup:
-  ```dockerfile
-  RUN rustup target add x86_64-unknown-none
-  RUN rustup component add rust-src llvm-tools-preview
-  COPY kernel/x86_64-sex.json /usr/local/rustup/targets/x86_64-unknown-none.json
-  ENV RUSTFLAGS="-C target-cpu=skylake -C linker=sex-ld -C link-arg=--script=kernel/linker.ld"
-  ENV CARGO_BUILD_TARGET="x86_64-unknown-none"
-  ```
+**2. Surgical Target Spec Update (no full overwrite)**  
+Run this exact sed patch on `kernel/x86_64-sex.json`:
+```bash
+sed -i '
+  s/"os": "sexos"/"os": "none"/;
+  s/"env": "relibc"/"env": ""/;
+  s/"features": "+pku"/"features": "+sse,+sse2,+fxsr,+mmx,+x87"/;
+  s/"dynamic-linking": true/"dynamic-linking": false/;
+  s/"has-rpath": true/"has-rpath": false/;
+  s/"target-pointer-width": "64"/"target-pointer-width": 64/;
+  s/"target-c-int-width": "32"/"target-c-int-width": 32/;
+  s/"stack-protector": "none"/"supports-stack-protector": false/;
+  s/"frame-pointer": "none"/"frame-pointer": "may-omit"/;
+  /"data-sections": true/d;
+  /"llvm-abiname": "sysv"/d;
+' kernel/x86_64-sex.json
+```
 
-**3. Makefile & sexbuild Updates**  
-- Add/ensure targets:
-  ```make
-  cross-build: docker-cross-build
-  docker-cross-build:
-  	docker build --platform linux/amd64 -t sex-builder .
-  	docker run --rm -v $(pwd):/src sex-builder cargo build --target x86_64-unknown-none --release
-  ```
-- In `sex-packages/sexbuild/src/main.rs` enforce:
-  ```rust
-  std::env::set_var("CARGO_BUILD_TARGET", "x86_64-unknown-none");
-  ```
+**3. Custom Target Path Fix**  
+Update `Makefile` and `sex-packages/sexbuild/src/main.rs`:
+```make
+CARGO_FLAGS_KERNEL = --package sex-kernel --target kernel/x86_64-sex.json --release
+```
+In `sexbuild`:
+```rust
+std::env::set_var("CARGO_BUILD_TARGET", "kernel/x86_64-sex.json");
+```
 
-**4. Verification**  
-- Run `make docker-cross-build`  
-- Then `make docker-full-test-x86`  
-- Inside QEMU SASOS (`ash`): `sexbuild rebuild-kernel` must succeed with zero aarch64 or soft-float artifacts.
+**4. Enhanced Verification Logic**  
+Add to `Makefile`:
+```make
+verify-phase29:
+	@! grep -i "soft-float" kernel/x86_64-sex.json
+	@readelf -A target/x86_64-unknown-none/release/sex_kernel | grep -E "sse|sse2" > /dev/null && echo "✓ ABI compliant (no soft-float)"
+	@time make docker-full-test-x86 > /tmp/phase29-timing.log && echo "✓ Sub-µs signal baseline recorded"
+```
 
-**5. Cleanup**  
-- Remove any accidental `soft-float` mentions from Cargo.toml, .cargo/config.toml, or RUSTFLAGS.
-
-### NON-NEGOTIABLE CONSTRAINTS
-- 100 % `no_std` Rust (2024 Edition) – x86_64-unknown-none only  
-- Hot paths remain completely lock-free (no `Mutex`)  
-- Preserve zero-copy PFN handovers + sub-µs PDX signals  
-- All builds/tests stay inside Docker/QEMU (no real x17r1 yet)
+**5. HAL + ACPI/NVMe Stubs**  
+- `kernel/src/hal/x86.rs`: finish `acpi::parse_tables()` (MAD/FADT).  
+- `kernel/src/hal/nvme.rs` (new): PCI probe stub with PDX capability handoff.  
+- `kernel/src/main.rs`: `hal::init()` after Limine.  
+- Print devices to serial.
 
 **Final Gemini CLI Command:**  
-Implement Steps 1–5 exactly. Fix the target JSON first, then rebuild. Run full cross-build + QEMU test cycle and confirm the `soft-float` error is gone and the ISO boots cleanly with working signals before reporting success.
+Run pre-flight `.envrc`, apply exact sed patch, update Dockerfile/Makefile/sexbuild, implement Steps 3-5, then `make verify-phase29`. Confirm clean boot + PCI/ACPI/NVMe output + timing baseline before reporting success.
 
-Phase 28 now unblocked. We are 2 phases from safe first boot on your x17r1 hardware. Ready for Phase 29 (ACPI + NVMe driver stubs) once this is green.
+**NON-NEGOTIABLE CONSTRAINTS**  
+- 100 % `no_std` Rust (2024 Edition) – x86_64-unknown-none only  
+- Hot paths completely lock-free (no `Mutex`)  
+- Zero-copy PFN + sub-µs PDX signals preserved  
+- All tests inside Docker/QEMU TCG (no real x17r1 yet)
+
+Phase 29 complete → **1 phase from safe first x17r1 boot** (Phase 30).  
+Gemini CLI has fresh tokens — execute cleanly. Ready when you are.

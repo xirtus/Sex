@@ -2,7 +2,15 @@
 #[no_mangle]
 pub extern "C" fn pdx_listen(_port: u32) -> crate::pdx::PdxRequest {
     let mut req = PdxRequest { caller_pd: 0, num: 0, arg0: 0, arg1: 0, arg2: 0 };
-    unsafe {
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] unsafe {
         core::arch::asm!("syscall", 
             in("rax") 25, // pdx_listen syscall
             inout("rdi") req.caller_pd,
@@ -17,7 +25,15 @@ pub extern "C" fn pdx_listen(_port: u32) -> crate::pdx::PdxRequest {
 
 #[no_mangle]
 pub extern "C" fn pdx_reply(caller_pd: u32, result: u64) {
-    unsafe {
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] unsafe {
         core::arch::asm!("syscall", 
             in("rax") 26, // pdx_reply syscall
             in("rdi") caller_pd,
@@ -28,8 +44,16 @@ pub extern "C" fn pdx_reply(caller_pd: u32, result: u64) {
 
 #[no_mangle]
 pub extern "C" fn pdx_call(target_pd: u32, num: u64, arg0: u64, arg1: u64) -> u64 {
-    let res: u64;
-    unsafe {
+    let mut res: u64 = 0;
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] unsafe {
         core::arch::asm!("syscall",
             in("rax") 27, // pdx_call syscall
             in("rdi") target_pd,
@@ -48,9 +72,17 @@ pub enum SysError {
     Unknown = 255,
 }
 
-pub fn safe_pdx_register(service_name: &str) -> Result<*mut u8, SysError> {
-    let res: u64;
-    unsafe {
+pub fn safe_pdx_register(__________service_name: &str) -> Result<*mut u8, SysError> {
+    let mut res: u64 = 0;
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")]
+    #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] unsafe {
         core::arch::asm!("syscall",
             in("rax") 0x10A, // SYS_PDX_REG
             in("rdi") service_name.as_ptr(),
@@ -73,3 +105,6 @@ pub struct PdxRequest {
     pub arg1: u64,
     pub arg2: u64,
 }
+
+#[cfg(not(target_arch = "x86_64"))]
+#[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] unsafe fn syscall_fallback() { loop {} }

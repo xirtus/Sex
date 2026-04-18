@@ -1,15 +1,9 @@
+[build]
+target = "x86_64-unknown-none"
+
 [unstable]
-build-std = ["core", "alloc", "compiler_builtins"]
+build-std = ["core", "alloc"]
 build-std-features = ["compiler-builtins-mem"]
 
-[build]
-target = "x86_64-sex.json"
-
-[target.x86_64-sex]
-rustflags = [
-    "-C", "linker=sex-ld",
-    "-C", "target-cpu=skylake",
-    "-C", "link-arg=-Tkernel/linker.ld",
-    "-C", "code-model=kernel",
-    "-C", "relocation-model=static",
-]
+[target.x86_64-unknown-none]
+runner = "qemu-system-x86_64 -machine q35 -cpu Skylake-Client,+pku,+smep,+smap -m 2G -serial stdio -display none -device intel-iommu -drive format=raw,file="

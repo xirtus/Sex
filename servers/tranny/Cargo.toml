@@ -1,11 +1,9 @@
 [package]
+
 name = "tuxedo"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
-sex-pdx = { path = "../../crates/sex-pdx", default-features = false }
-serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 [lib]
 name = "tuxedo"
@@ -15,8 +13,27 @@ path = "src/lib.rs"
 name = "tuxedo"
 path = "src/main.rs"
 
-[profile.release]
-opt-level = 3
-lto = true
-panic = "abort"
-codegen-units = 1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[dependencies]
+serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
+bitflags = { version = "2.6.0", default-features = false }
+spin = "0.9.8"
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-rt = { path = "../../sex-rt" }
+libsys = { path = "../../sex-src/lib/libsys" }
