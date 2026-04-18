@@ -1,4 +1,3 @@
-use crate::messages::MessageType;
 
 #[no_mangle]
 pub extern "C" fn pdx_listen(_port: u32) -> crate::pdx::PdxRequest {

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use libsys::pdx::{pdx_listen, pdx_reply, pdx_call};
+use libsys::pdx::pdx_call;
 use libsys::messages::MessageType;
 
 /// sexinput: Standalone Input Driver (PS/2 + USB HID)

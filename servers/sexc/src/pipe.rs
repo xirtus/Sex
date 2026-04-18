@@ -1,5 +1,4 @@
 use libsys::pdx::pdx_call;
-use libsys::messages::MessageType;
 
 /// sexc pipe: POSIX pipe implementation via lent-memory ring buffers.
 /// Phase 11: asynchronous GNU pipeline support.
@@ -14,10 +13,10 @@ pub fn create_pipe() -> (u32, u32) {
     (frame_cap, frame_cap + 1)
 }
 
-pub fn handle_pipe_call(cmd: u32, pipe_cap: u32, buffer_cap: u32, size: u64) -> (i64, u64, u32) {
+pub fn handle_pipe_call(cmd: u32, pipe_cap: u32, _buffer_cap: u32, size: u64) -> (i64, u64, u32) {
     match cmd {
         1 => { // PIPE_CREATE
-            let (r, w) = create_pipe();
+            let (r, _w) = create_pipe();
             (0, 0, r) // Returning first cap for simplicity
         },
         2 => { // PIPE_WRITE

@@ -3,7 +3,6 @@
 
 mod trampoline;
 mod pipe;
-use trampoline::{SIGNAL_STATE, SigAction, sexc_trampoline_entry};
 use pipe::handle_pipe_call;
 use libsys::pdx::{pdx_listen, pdx_reply, pdx_call};
 use libsys::messages::{MessageType, PageHandover};
@@ -40,7 +39,7 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
-fn handle_posix_syscall(func_id: u32, arg0: u64) -> u64 {
+fn handle_posix_syscall(_func_id: u32, _arg0: u64) -> u64 {
     // ... (same as before)
     u64::MAX
 }

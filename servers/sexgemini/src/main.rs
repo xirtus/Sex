@@ -34,7 +34,7 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
-fn handle_violation(fault_addr: u64) -> i64 {
+fn handle_violation(_fault_addr: u64) -> i64 {
     // 1. Analyze the violation (e.g., unauthorized access or kernel panic loop)
     // 2. Invoke sexstore to fetch fresh source / manifest via capability slot 4
     let fetch_res = pdx_call(4 /* sexstore_cap */, 1 /* FETCH_PACKAGE */, 0 /* "kernel" */, 0 /* buf_cap */);
