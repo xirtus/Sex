@@ -44,7 +44,7 @@ impl FsBackend for DiskFs {
         }
     }
 
-    fn write(&self, _inode: u64, offset: u64, len: u32, page: PageHandover) -> Result<u32, i64> {
+    fn write(&self, _inode: u64, offset: u64, len: u32, _page: PageHandover) -> Result<u32, i64> {
         let msg = MessageType::DmaCall {
             command: 2, // WRITE
             offset,

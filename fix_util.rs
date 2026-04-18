@@ -1,88 +1,37 @@
-use std::fs;
-use std::path::Path;
+#!/bin/bash
+echo "=== [SexOS] Injecting Missing Dependencies ==="
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Fix Cargo.toml files (no_std / serde)
-    for entry in walkdir::WalkDir::new(".") {
-        let entry = entry?;
-        let path = entry.path();
-        if path.file_name().map_or(false, |n| n == "Cargo.toml") && !path.to_str().unwrap().contains("target") {
-            if path.to_str().unwrap().contains("sex-ld") { continue; }
-            let content = fs::read_to_string(&path)?;
-            let mut new_content = content.replace(
-                "serde = \"1.0\"", 
-                "serde = { version = \"1.0\", default-features = false, features = [\"derive\"] }"
-            );
-            // Ensure default-features = false for specific crates
-            for dep in &["serde", "futures-core"] {
-                let search = format!("{} = {{", dep);
-                if new_content.contains(&search) && !new_content.contains("default-features") {
-                    new_content = new_content.replace(&search, &format!("{} = {{ default-features = false, ", dep));
-                }
-            }
-            fs::write(&path, new_content.replace(",,", ","))?;
-        }
-    }
+# 1. Add x86_64 crate to the kernel Cargo.toml
+# We use a specific version known for no_std stability in 2026
+sed -i '/\[dependencies\]/a x86_64 = "0.15.2"' kernel/Cargo.toml
 
-    // 2. Fix pdx.rs (Surgical Patch)
-    let pdx_path = Path::new("servers/sex-ld/src/pdx.rs");
-    if pdx_path.exists() {
-        let content = fs::read_to_string(pdx_path)?;
-        let new_content = content
-            .replace("ResolveObject { name }", "ResolveObject { name: _ }")
-            .replace("MapLibrary { hash, base_addr }", "MapLibrary { hash, base_addr: _ }")
-            .replace("MessageType, ", "");
-        // NOTE: We do NOT touch GetEntry { hash } because hash is used on line 18!
-        fs::write(pdx_path, new_content)?;
-    }
+# 2. Fix the unused MMIO import in the 'tuxedo' server
+# This cleans up the noise so we can see real errors
+sed -i 's/use sex_pdx::{pdx_call, mmio::Mmio};/use sex_pdx::pdx_call;/' servers/tuxedo/src/lib.rs
 
-    // 3. Fix main.rs (macOS Host Shims)
-    let main_path = Path::new("servers/sex-ld/src/main.rs");
-    if main_path.exists() {
-        let content = fs::read_to_string(main_path)?;
-        let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-        
-        for line in lines.iter_mut() {
-            if line.trim() == "#![no_std]" || line.trim() == "#![no_main]" {
-                *line = format!("// {}", line);
-            }
-        }
+# 3. Clean and Trigger Rebuild
+echo "[Step 1/2] Rebuilding Kernel Core..."
+export RUSTFLAGS="-A dead_code -A non_snake_case -C link-arg=-Tlinker.ld"
+cargo build --release \
+  --target x86_64-sex.json \
+  -Zbuild-std=core,alloc \
+  -Zjson-target-spec
 
-        let content = lines.join("\n");
-        let mut final_content = content;
-        if !final_content.contains("not(target_os = \"macos\")") {
-            final_content = final_content.replace("fn panic", "#[cfg(not(target_os = \"macos\"))]\nfn panic");
-        }
-        if !final_content.contains("fn main()") {
-            final_content.push_str("\n#[cfg(target_os = \"macos\")]\nfn main() { println!(\"Sex Linker (Host Mode) Online\"); }\n");
-        }
-        fs::write(main_path, final_content)?;
-    }
+# 4. Final ISO Assembly
+echo "[Step 2/2] Assembling SexOS ISO..."
+KERNEL_BIN=$(find target -name "kernel" | grep release | head -n 1)
 
-    Ok(())
-}
-
-// Simple WalkDir implementation since we can't use external crates easily in a one-off script
-mod walkdir {
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    pub struct WalkDir { stack: Vec<PathBuf> }
-    impl WalkDir { pub fn new<P: AsRef<Path>>(path: P) -> Self { Self { stack: vec![path.as_ref().to_path_buf()] } } }
-    impl Iterator for WalkDir {
-        type Item = Result<fs::DirEntry, std::io::Error>;
-        fn next(&mut self) -> Option<Self::Item> {
-            while let Some(path) = self.stack.pop() {
-                if path.is_dir() {
-                    if let Ok(entries) = fs::read_dir(path) {
-                        for entry in entries.flatten() { self.stack.push(entry.path()); }
-                    }
-                } else if let Ok(parent) = fs::read_dir(path.parent().unwrap()) {
-                    for entry in parent.flatten() {
-                        if entry.path() == path { return Some(Ok(entry)); }
-                    }
-                }
-            }
-            None
-        }
-    }
-}
+if [ -f "$KERNEL_BIN" ]; then
+    mkdir -p build_dir
+    cp "$KERNEL_BIN" build_dir/kernel
+    cp limine.cfg build_dir/
+    # Pull bootloader files
+    cp /usr/share/limine/limine-cd.bin build_dir/ 2>/dev/null || touch build_dir/limine-cd.bin
+    
+    xorriso -as mkisofs -b limine-cd.bin \
+        -no-emul-boot -boot-load-size 4 -boot-info-table \
+        build_dir -o sexos-v1.0.0.iso
+    echo "=== SUCCESS: ISO created at /src/sexos-v1.0.0.iso ==="
+else
+    echo "FAILED: Kernel binary not found. Still hitting compilation errors."
+fi

@@ -1,129 +1,102 @@
 #![no_std]
 #![no_main]
 
-extern crate alloc;
-
-use limine::request::{FramebufferRequest, HhdmRequest, MemmapRequest, RsdpRequest, MpRequest};
-use limine::{BaseRevision, RequestsStartMarker, RequestsEndMarker};
+use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, RsdpRequest};
+use limine::BaseRevision;
 use core::panic::PanicInfo;
-use sex_kernel::serial_println;
-use sex_kernel::ipc::DOMAIN_REGISTRY;
-use sex_kernel::pd::create::create_protection_domain;
-use x86_64::VirtAddr;
-
-// 1. Limine Protocol Requirements
-#[used]
-#[link_section = ".requests"]
-static BASE_REVISION: BaseRevision = BaseRevision::new();
 
 #[used]
-#[link_section = ".requests_start"]
-static REQ_START: RequestsStartMarker = RequestsStartMarker::new();
+#[link_section = ".limine_reqs"]
+static FB_REQUEST: FramebufferRequest = FramebufferRequest::new();
 
 #[used]
-#[link_section = ".requests_end"]
-static REQ_END: RequestsEndMarker = RequestsEndMarker::new();
-
-// 2. Bootloader Information Requests
-#[used]
-#[link_section = ".requests"]
-static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
-
-#[used]
-#[link_section = ".requests"]
+#[link_section = ".limine_reqs"]
 static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
 
 #[used]
-#[link_section = ".requests"]
-static MEMMAP_REQUEST: MemmapRequest = MemmapRequest::new();
+#[link_section = ".limine_reqs"]
+static MEMMAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
 
 #[used]
-#[link_section = ".requests"]
+#[link_section = ".limine_reqs"]
 static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
 
 #[used]
-#[link_section = ".requests"]
-static SMP_REQUEST: MpRequest = MpRequest::new(0);
+#[link_section = ".limine_reqs"]
+static BASE_REVISION: BaseRevision = BaseRevision::new();
 
-/// The absolute entry point for the SEX microkernel (Pure Rust).
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // Ensure the bootloader is compatible with our version of the protocol
-    if !BASE_REVISION.is_supported() {
-        loop { x86_64::instructions::hlt(); }
-    }
+    if !BASE_REVISION.is_supported() { loop {} }
 
-    // 1. Capture early bootloader responses
-    let hhdm = HHDM_REQUEST.response().unwrap();
-    let phys_mem_offset = VirtAddr::new(hhdm.offset);
-    
-    let mmap = MEMMAP_REQUEST.response().unwrap();
-    let rsdp = RSDP_REQUEST.response().unwrap();
-    let smp = SMP_REQUEST.response().unwrap();
+    let hhdm = HHDM_REQUEST.get_response().expect("hhdm failed");
+    let fb_res = FB_REQUEST.get_response().expect("fb failed");
+    let mmap = MEMMAP_REQUEST.get_response().expect("mmap failed");
+    let rsdp = RSDP_REQUEST.get_response().expect("rsdp failed");
 
-    // 2. Initialize Core HAL (GDT, IDT, PIC)
-    sex_kernel::hal::init();
+    unsafe {
+        // 1. Foundation: Initialize CPU (GDT, IDT)
+        sex_kernel::hal::init();
 
-    // 3. Setup Virtual Memory & Page Mapping (SASOS)
-    let mapper = unsafe { sex_kernel::memory::init_sexting(phys_mem_offset) };
-    let frame_allocator = unsafe {
-        sex_kernel::memory::BitmapFrameAllocator::init(mmap.entries(), phys_mem_offset)
-    };
+        // 2. Memory: Initialize Paging and Heap
+        sex_kernel::memory::init(mmap, hhdm.offset());
 
-    // Phase 14: Bootstrap the Global Virtual Address Space
-    let mut global_vas_inst = sex_kernel::memory::GlobalVas {
-        mapper,
-        frame_allocator,
-        phys_mem_offset,
-    };
+        // 2b. Hardware Discovery: ACPI and PCIe
+        let rsdp_addr = rsdp.address().as_ptr().unwrap() as u64;
+        sex_kernel::hw::init::init(rsdp_addr, hhdm.offset());
 
-    // 4. Global Allocator Initialization (Heap)
-    sex_kernel::allocator::init_heap(&mut global_vas_inst.mapper, &mut global_vas_inst.frame_allocator)
-        .expect("Heap initialization failed");
+        // 3. APIC & Timer: Initialize interrupts for scheduling
+        let offset = x86_64::VirtAddr::new(hhdm.offset());
+        let rsdp_phys = rsdp.address().as_ptr().unwrap() as u64 - hhdm.offset();
+        sex_kernel::apic::init_apic(rsdp_phys, offset);
+        sex_kernel::apic::init_timer();
 
-    {
-        let mut gvas = sex_kernel::memory::GLOBAL_VAS.lock();
-        *gvas = Some(global_vas_inst);
-    }
+        // 4. Core Local: Initialize per-core state for BSP (Core 0)
+        sex_kernel::core_local::CoreLocal::init(0);
 
-    // 5. Symmetric Multi-Processing (SMP) - Deliverable 2
-    sex_kernel::apic::init_apic(rsdp.address as u64, phys_mem_offset);
-    sex_kernel::smp::boot_aps(smp);
+        let fb = fb_res.framebuffers().next().expect("no framebuffer");
+        
+        // Limine FB address is already virtual.
+        let fb_ptr = fb.address as *mut u32;
 
-    // 6. Spawn Core System Domains (Isolation Level 1)
-    serial_println!("Sex SASOS: Production Ready (Phase 16).");
-    serial_println!("pd: Spawning core services...");
-    
-    // Root Domain (Slot 0)
-    let root_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(sex_kernel::capability::ProtectionDomain::new(0, 0)));
-    DOMAIN_REGISTRY.insert(0, root_pd);
+        sex_kernel::serial_println!("Sex: Framebuffer found at {:?}, {}x{} (pitch={})", fb.address, fb.width, fb.height, fb.pitch);
 
-    let _sext = create_protection_domain("/servers/sext/bin/sext\0", None).expect("sext lost");
-    
-    // 7. Advanced Interaction Suite (Capability Engine)
-    sex_kernel::bootstrap_advanced_services();
-
-    let _sexinput = create_protection_domain("/servers/sexinput/bin/sexinput\0", None).expect("sexinput lost");
-    let _sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0", None).expect("sexnet lost");
-
-    // 8. Yield to Scheduler (BSP context)
-    if let Some((_, next_ctx)) = sex_kernel::scheduler::SCHEDULERS[0].tick() {
-        unsafe {
-            sex_kernel::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx);
+        // Pure Rust Driver: Draw Blue-Green Gradient (Fallback/Splash)
+        sex_kernel::serial_println!("Sex: Drawing splash gradient...");
+        for y in 0..fb.height {
+            for x in 0..fb.width {
+                let color = ((x % 255) as u32) | (((y % 255) as u32) << 8);
+                unsafe {
+                    let index = (y * (fb.pitch / 4) + x) as usize;
+                    fb_ptr.add(index).write_volatile(color);
+                }
+            }
         }
-    } else {
-        panic!("Main loop failed to enqueue scheduler!");
+        sex_kernel::serial_println!("Sex: Splash complete.");
+
+        // Phase 17: Bridge the Gap
+        // 1. Bootstrap Core System Servers (sext, sexfiles, sexdisplay, etc.)
+        sex_kernel::serial_println!("Sex: Bootstrapping system domains...");
+        sex_kernel::init::init();
+
+        // 2. Handoff Framebuffer to sexdisplay PD via lock-free PDX
+        sex_kernel::serial_println!("Sex: Handing off FB to sexdisplay...");
+        sex_kernel::graphics::handoff::ship_to_sexdisplay(fb, hhdm.offset());
+
+        // 5. Finalize: Enable Interrupts and Spin
+        sex_kernel::serial_println!("Sex: Enabling interrupts. System active.");
+        x86_64::instructions::interrupts::enable();
     }
 
     loop {
-        x86_64::instructions::hlt();
+        core::hint::spin_loop();
     }
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    serial_println!("KERNEL PANIC: {}", info);
+    sex_kernel::serial_println!("{}", info);
     loop {
-        x86_64::instructions::hlt();
+        core::hint::spin_loop();
     }
 }

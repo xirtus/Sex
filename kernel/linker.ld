@@ -1,49 +1,36 @@
+OUTPUT_FORMAT(elf64-x86-64)
 ENTRY(_start)
 
 SECTIONS
 {
-    /* Load the kernel in the higher half */
-    . = 0xffffffff80000000;
+    /* THIS IS THE FIX: Move base address to the Higher Half */
+    . = 0xffffffff80200000;
 
-    .text : ALIGN(4096)
-    {
+    .text : ALIGN(4K) {
         *(.text .text.*)
-    }
+    } :text
 
-    .rodata : ALIGN(4096)
-    {
+    .rodata : ALIGN(4K) {
         *(.rodata .rodata.*)
-    }
+    } :rodata
 
-    .data : ALIGN(4096)
-    {
+    .data : ALIGN(4K) {
         *(.data .data.*)
-    }
-
-    /* Limine requests section (8-byte alignment mandatory) */
-    .requests : ALIGN(8)
-    {
+        KEEP(*(.limine_reqs))
         KEEP(*(.requests_start))
         KEEP(*(.requests))
         KEEP(*(.requests_end))
-    }
+    } :data
 
-    .bss : ALIGN(4096)
-    {
-        *(.bss .bss.*)
+    .bss : ALIGN(4K) {
         *(COMMON)
-    }
+        *(.bss .bss.*)
+    } :data
+}
 
-    /* Sex-specific SASOS sections */
-    .pdx_ring : ALIGN(4096)
-    {
-        *(.pdx_ring)
-    }
-
-    .gemini_repair : ALIGN(4096)
-    {
-        *(.gemini_repair)
-    }
-
-    /DISCARD/ : { *(.eh_frame) *(.comment) }
+PHDRS
+{
+    text PT_LOAD FLAGS(5);    /* R E */
+    rodata PT_LOAD FLAGS(4);  /* R */
+    data PT_LOAD FLAGS(6);    /* RW */
 }

@@ -44,6 +44,7 @@ pub enum DisplayProtocol {
     CommitDamage { window_id: u32, damage: Rect },
     PollEvents { window_id: u32 },
     SetTitle { window_id: u32, title: [u8; 64] },
+    AuthenticateWindow { window_id: u32, auth_token: [u8; 32] },
 }
 
 #[repr(C)]
@@ -123,6 +124,7 @@ pub enum MessageType {
     DriverLoadCall { command: u32, driver_name_ptr: u64 },
     DriverLoadReply { status: i64, driver_pd_id: u32 },
     HardwareInterrupt { vector: u8, data: u64 },
+    HIDEvent { ev_type: u16, code: u16, value: i32 },
     VfsCall { command: u32, offset: u64, size: u64, buffer_cap: u32 },
     VfsReply { status: i64, size: u64 },
 
@@ -144,6 +146,7 @@ pub enum MessageType {
 
     // Display Server Protocol (Phase 16: PDX Display)
     Display(DisplayProtocol),
+    DisplayPrimaryFramebuffer { virt_addr: u64, width: u32, height: u32, pitch: u32 },
     DisplayModeset { width: u32, height: u32, refresh: u32 },
     DisplayCursor { x: i32, y: i32, visible: bool, buffer_id: u32 },
     DisplayBufferCommit { buffer_id: u32, damage_x: u32, damage_y: u32, damage_w: u32, damage_h: u32 },
@@ -241,8 +244,10 @@ pub fn pdx_call(pd: u32, num: u64, arg0: u64, arg1: u64) -> u64 {
             in("rdi") pd,
             in("rsi") num,
             in("rdx") arg0,
-            in("rcx") arg1,
+            in("r10") arg1,
             lateout("rax") res,
+            lateout("rcx") _, // clobbered
+            lateout("r11") _, // clobbered
         );
     }
     #[cfg(not(target_arch = "x86_64"))]

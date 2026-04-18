@@ -1,0 +1,120 @@
+##Docker Build begins like this, 
+
+(base) xirtus@andreass-MacBook-Air-2 microkernel % docker run -it -v $(pwd):/src -w /src 4ccfab8b5750          
+Unable to find image '4ccfab8b5750:latest' locally
+docker: Error response from daemon: pull access denied for 4ccfab8b5750, repository does not exist or may require 'docker login': denied: requested access to the resource is denied
+
+Run 'docker run --help' for more information
+(base) xirtus@andreass-MacBook-Air-2 microkernel % docker images
+REPOSITORY      TAG       IMAGE ID       CREATED             SIZE
+sexos-builder   latest    75d6623e7d84   About an hour ago   1.61GB
+(base) xirtus@andreass-MacBook-Air-2 microkernel % docker run -it -v $(pwd):/src -w /src sexos-builder bash
+WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
+root@cd2bbdc3dbb5:/src# ls -F
+ ARCHITECTURE.md@						       hello.o
+ Cargo.lock							       initrd.img
+ Cargo.toml							       kernel/
+ Dockerfile							       limine.cfg
+ HANDOFF.md							       linker.ld
+ HANDOFF_README.txt						       nuclear_split_build.sh*
+ IPCtax.txt							       patch_pdx_and_build.sh*
+ LICENSE							       precision_fix.sh*
+ Makefile							       qemu_debug.log
+'Please provide the specific change you'\''d like to make to `docs'/   qemu_direct.log
+ README.md							       qemu_long.log
+ absolute_final_fix.sh*						       qemu_monitor.log
+ absolute_zero_fix.sh*						       qemu_output.log
+ audit_toml.sh*							       qemu_serial.log
+ binpkgs/							       qemu_stderr.log
+ borrow_fix.sh*							       qurks.txt
+ build/								       relibc/
+ build_and_run.sh*						       roadmapstatus.txt
+ build_dir/							       run_sasos.sh*
+ build_error_logs/						       run_sex.sh*
+ build_microkernel.sh*						       run_sex_full_automation.sh
+ crates/							       rust-toolchain.toml
+ crates_to_add.txt						       rust_output/
+ deep_kernel_fix.sh*						       scripts/
+ destdir/							       servers/
+ docs/								       sex-packages/
+ example/							       sex-rt/
+ execute_sex_automation_now.sh*					       sex-src/
+ final_final_fix.sh*						       sex_docker_build_m1.sh*
+ final_output.diff						       sex_fix_pdx_and_boot.sh*
+ final_pdx_patch.sh*						       sexc/
+ final_peace_treaty.sh*						       sexos-v1.0.0.iso
+ final_peace_treaty_v5.sh*					       sexshop/
+ final_pointer_fix.sh*						       shop/
+ final_strike.sh*						       show_pdx.sh*
+ final_strike_fixed.sh*						       super_fix_and_build.sh*
+ finalize_build.sh*						       super_nuclear_fix.sh*
+ finalize_sex.sh*						       surgical_finality.sh*
+ finalize_sex_fixed.sh*						       surgical_finality_v2.sh*
+ finalize_sex_pdx.sh*						       surgical_repair.sh*
+ fix.sh*							       target/
+ fix_all.sh*							       tests/
+ fix_and_build.sh*						       total_kernel_repair.sh*
+ fix_dependencies.sh*						       upstream-linux/
+ fix_sex_pdx.sh*						       upstream-mesa/
+ fix_util.rs*							       upstream-wlroots/
+ god_mode_fix.sh*						       x86_64-sex.json
+ hello.elf*							       xtasks/
+root@cd2bbdc3dbb5:/src# # 1. Update the import from MpRequest to SmpRequest
+sed -i 's/MpRequest/SmpRequest/g' kernel/src/main.rs
+
+# 2. Fix the initialization arguments (adding '0' to new())
+sed -i 's/Request::new()/Request::new(0)/g' kernel/src/main.rs
+
+# 3. Use raw pointer dereferencing (The most robust way to handle Ptr<T>)
+# This converts .response().unwrap() or similar messy calls into stable raw pointer access.
+sed -i 's/\.response()\.unwrap()/unsafe { \&*get_response().as_ptr() }/g' kernel/src/main.rs
+# And handle any previous v3/v4 mess:
+sed -i 's/get_response()\.as_ptr()\.as_mut()\.expect([^)]*)/unsafe { \&mut *get_response().as_ptr() }/g' kernel/src/main.rs
+
+# 4. Remove those pesky unused markers/attributes causing warnings/errors
+sed -i '/REQ_START/d' kernel/src/main.rs
+sed -i '/REQ_END/d' kernel/src/main.rs
+sed -i '/#\[used\]/d' kernel/src/main.rs
+sed -i '/#\[link_section = ".requests"\]/d' kernel/src/main.rs
+
+# 5. Build it!
+export RUSTFLAGS="-A dead_code -A unused_imports"
+cargo build --release --package sex-kernel --target x86_64-sex.json -Zbuild-std=core,alloc -Zjson-target-spec
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-18 for version 1.97.0-nightly (e9e32aca5 2026-04-17)
+info: downloading 5 components
+
+
+
+#Then the build fails and ends like this.
+
+   Compiling sex-kernel v0.1.0 (/src/kernel)
+warning: unnecessary `unsafe` block
+  --> kernel/src/smp.rs:12:9
+   |
+12 |         unsafe {
+   |         ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sex-kernel` (lib) generated 1 warning
+error: expected identifier, found keyword `unsafe`
+  --> kernel/src/main.rs:38:29
+   |
+38 |     let hhdm = HHDM_REQUEST.unsafe { &mut *get_response().as_ptr() };
+   |                             ^^^^^^ expected identifier, found keyword
+   |
+help: escape `unsafe` to use it as an identifier
+   |
+38 |     let hhdm = HHDM_REQUEST.r#unsafe { &mut *get_response().as_ptr() };
+   |                             ++
+
+error: expected one of `(`, `.`, `::`, `;`, `?`, `else`, or an operator, found `{`
+  --> kernel/src/main.rs:38:36
+   |
+38 |     let hhdm = HHDM_REQUEST.unsafe { &mut *get_response().as_ptr() };
+   |                                    ^ expected one of 7 possible tokens
+
+error: could not compile `sex-kernel` (bin "sex-kernel") due to 2 previous errors
+root@cd2bbdc3dbb5:/src# 
+

@@ -1,25 +1,85 @@
-pub use sex_pdx::MessageType;
+/// IPCtax-compliant Message structures for Driver/VFS interaction.
+/// 100% Zero-Copy via Lent Capabilities.
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct Message {
-    pub caller_pd: u32,
-    pub msg_type: MessageType,
-    pub arg0: u64,
-    pub arg1: u64,
+pub struct FsArgs {
+    pub command: u32,
+    pub offset: u64,
+    pub size: u64,
+    pub buffer: u64, // Virtual address of lent-memory buffer
 }
 
-impl Message {
-    pub fn new(msg_type: MessageType) -> Self {
-        Self {
-            caller_pd: 0,
-            msg_type,
-            arg0: 0,
-            arg1: 0,
-        }
-    }
+pub const FS_READ: u32 = 1;
+pub const FS_WRITE: u32 = 2;
+pub const FS_LOOKUP: u32 = 3;
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct InputEvent {
+    pub ev_type: u16,
+    pub code: u16,
+    pub value: i32,
+}
+
+pub const EV_KEY: u16 = 1;
+pub const EV_ABS: u16 = 3;
+
+/// Ring buffer message for Storage Completion.
+#[repr(C)]
+pub struct StorageCompletion {
+    pub id: u64,
+    pub status: i32,
+}
+
+/// Message types for XIPC Communication (PDX ring-buffer protocol).
+#[derive(Debug, Clone, Copy)]
+pub enum MessageType {
+    Empty,
+    Signal(u8),
+    IpcCall { func_id: u32, arg0: u64 },
+    IpcReply(u64),
+    PageFault { fault_addr: u64, error_code: u32, pd_id: u64, lent_cap: u64 },
+    Spawn { path_ptr: u64 },
+    VfsCall { command: u32, offset: u64, size: u64, buffer_cap: u32 },
+    VfsReply { status: i64, size: u64 },
+    NetCall { command: u32, socket_cap: u32, offset: u64, size: u64, buffer_cap: u32, remote_node: u32 },
+    NetReply { status: i64, size: u64, socket_cap: u32 },
+    DmaCall { command: u32, offset: u64, size: u64, buffer_cap: u32, device_cap: u32 },
+    DmaReply { status: i64, size: u64 },
+    GpuCall { command: u32, buffer_cap: u32, width: u32, height: u32 },
+    GpuReply { status: i64 },
+    HIDEvent { ev_type: u16, code: u16, value: i32 },
+    PipeCall { command: u32, pipe_cap: u32, buffer_cap: u32, size: u64 },
+    PipeReply { status: i64, size: u64, pipe_cap: u32 },
+    ProcCall { command: u32, path_ptr: u64, arg_ptr: u64 },
+    ProcReply { status: i64, pd_id: u32 },
+    TranslatorCall { command: u32, path_ptr: u64, code_cap: u32 },
+    TranslatorReply { status: i64, translated_entry: u64 },
+    StoreCall { command: u32, package_name_ptr: u64, buffer_cap: u32 },
+    StoreReply { status: i64, size: u64 },
+    HardwareInterrupt { vector: u8, data: u64 },
+    DriverLoadCall { command: u32, driver_name_ptr: u64 },
+    DriverLoadReply { status: i64, driver_pd_id: u32 },
+
+    // Display Server Protocol (Phase 16: PDX Display)
+    DisplayBufferAlloc { width: u32, height: u32, format: u32 },
+    DisplayBufferCommit { buffer_id: u32, damage_x: u32, damage_y: u32, damage_w: u32, damage_h: u32 },
+    DisplayBufferReply { page_count: u32, pfn_list: [u64; 64], pku_key: u8 },
+    DisplayModeset { width: u32, height: u32, refresh: u32 },
+    DisplayCursor { x: i32, y: i32, visible: bool, buffer_id: u32 },
+    DisplayGeminiRepairDisplay,
+    DisplayPrimaryFramebuffer { virt_addr: u64, width: u32, height: u32, pitch: u32 },
+}
+
+/// Compatibility alias — the rest of the kernel (ipc.rs / core_local.rs / scheduler.rs) still references `Message`
+pub type Message = MessageType;
+
+/// Shim for legacy call sites that expect .msg_type() on the old wrapper struct
+/// (keeps scheduler.rs:252 and any other match sites working without further changes)
+impl MessageType {
+    #[inline(always)]
     pub fn msg_type(&self) -> MessageType {
-        self.msg_type
+        *self
     }
 }

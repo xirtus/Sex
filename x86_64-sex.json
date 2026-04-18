@@ -6,16 +6,12 @@
   "target-pointer-width": 64,
   "target-c-int-width": 32,
   "os": "none",
-  "env": "",
-  "vendor": "unknown",
-  "features": "+sse,+sse2,+fxsr,+mmx,+x87",
-  "dynamic-linking": false,
-  "has-rpath": false,
-  "relocation-model": "static",
-  "supports-stack-protector": false,
+  "linker-flavor": "ld.lld",
+  "linker": "rust-lld",
+  "rustc-abi": "x86-softfloat",
+  "features": "-mmx,-sse,-sse2,+soft-float",
   "disable-redzone": true,
-  "frame-pointer": "may-omit",
-  "function-sections": true,
-  "max-atomic-width": 128,
-  "panic-strategy": "abort"
+  "panic-strategy": "abort",
+  "code-model": "kernel",
+  "relocation-model": "static"
 }

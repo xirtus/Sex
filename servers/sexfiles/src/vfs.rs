@@ -1,4 +1,4 @@
-use crate::messages::{VfsProtocol, PageHandover};
+use crate::messages::VfsProtocol;
 use sex_pdx::ring::PdxReply;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::backends::FsBackend;
@@ -94,7 +94,7 @@ pub fn handle_vfs_message(msg: &VfsProtocol, reply: &mut PdxReply) {
                 reply.status = -2; // ENOENT
             }
         },
-        VfsProtocol::HandoverRead { page, offset, len } => {
+        VfsProtocol::HandoverRead { page, offset: _, len } => {
             ZERO_COPY_HANDOVERS.fetch_add(1, Ordering::Relaxed);
             // In a real system, we would use the inode/fd to call the backend
             // Here we simulate the 3-cycle PKU dance
@@ -106,7 +106,7 @@ pub fn handle_vfs_message(msg: &VfsProtocol, reply: &mut PdxReply) {
             reply.status = 0;
             reply.size = *len as u64;
         },
-        VfsProtocol::HandoverWrite { page, offset, len } => {
+        VfsProtocol::HandoverWrite { page, offset: _, len } => {
             ZERO_COPY_HANDOVERS.fetch_add(1, Ordering::Relaxed);
             unsafe {
                 let old_pkru = pku_grant_temporary(page.pku_key);

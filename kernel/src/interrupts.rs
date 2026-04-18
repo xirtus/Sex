@@ -76,8 +76,73 @@ lazy_static! {
     };
 }
 
+use x86_64::registers::model_specific::{LStar, Star, SFMask, Efer, EferFlags};
+use x86_64::VirtAddr;
+
 pub fn init_idt() {
     IDT.load();
+
+    // Phase 19: Enable Syscall (LSTAR)
+    unsafe {
+        LStar::write(VirtAddr::new(syscall_entry as u64));
+
+        let selectors = crate::gdt::get_selectors();
+        Star::write(
+            selectors.user_code_selector,
+            selectors.user_data_selector,
+            selectors.code_selector,
+            selectors.user_data_selector,
+        ).unwrap();
+
+        // Interrupt flag masked during syscall
+        SFMask::write(x86_64::registers::rflags::RFlags::INTERRUPT_FLAG);
+        Efer::write(Efer::read() | EferFlags::SYSTEM_CALL_EXTENSIONS);
+    }
+}
+
+#[unsafe(naked)]
+pub unsafe extern "C" fn syscall_entry() {
+    core::arch::naked_asm!(
+        "swapgs",
+        "mov gs:[16], rsp", // Save user stack
+        "mov rsp, gs:[8]",  // Switch to kernel stack
+        "push r11",         // Save user rflags
+        "push rcx",         // Save user rip
+        "push rbp", "push rbx", "push r12", "push r13", "push r14", "push r15",
+        "mov rbp, rsp",
+        "mov r8, r10",      // arg3 (r10 in syscall -> r8 in C)
+        "call syscall_dispatch",
+        "pop r15", "pop r14", "pop r13", "pop r12", "pop rbx", "pop rbp",
+        "pop rcx",          // Restore user rip
+        "pop r11",          // Restore user rflags
+        "mov rsp, gs:[16]", // Restore user stack
+        "swapgs",
+        "sysretq"
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn syscall_dispatch(rax: u64, rdi: u64, rsi: u64, rdx: u64, r8: u64) -> u64 {
+    match rax {
+        27 => { // pdx_call(pd, num, arg0, arg1)
+             match crate::ipc::safe_pdx_call(rdi as u32, rdx) {
+                 Ok(res) => res,
+                 Err(_) => u64::MAX,
+             }
+        },
+        28 => { // pdx_listen(flags)
+             0
+        },
+        29 => { // pdx_reply(target_pd, val)
+             let caller_pd = crate::core_local::CoreLocal::get().current_pd();
+             crate::ipc::router::route_signal(caller_pd, rdi as u32, rsi as u8, 0).is_ok() as u64
+        },
+        24 => { // sys_park
+             crate::scheduler::park_current_thread();
+             0
+        },
+        _ => u64::MAX,
+    }
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {

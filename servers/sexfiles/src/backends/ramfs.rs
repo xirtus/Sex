@@ -34,7 +34,7 @@ impl FsBackend for RamFs {
         Ok(id)
     }
 
-    fn read(&self, _inode: u64, _offset: u64, len: u32) -> Result<PageHandover, i64> {
+    fn read(&self, _inode: u64, _offset: u64, _len: u32) -> Result<PageHandover, i64> {
         // Return mock page handover from arena
         Ok(PageHandover { pfn: 0x1000, pku_key: 3 })
     }

@@ -52,7 +52,7 @@ impl Gui {
             match msg {
                 MessageType::HardwareInterrupt { vector, data: _ } => {
                     if vector == 0x80 { // Keyboard Interrupt
-                        let scancode: u8 = unsafe { x86_64::instructions::port::Port::new(0x60).read() };
+                        let scancode: u8 = 0; // TODO: Get via PDX Input Message
                         if scancode == 2 { // '1' key
                             self.load_package("bash");
                         }

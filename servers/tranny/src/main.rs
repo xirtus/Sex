@@ -12,8 +12,17 @@ pub fn sys_park() {
     }
 }
 
+fn dbg_print(s: &str) {
+    for b in s.bytes() {
+        unsafe {
+            core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b);
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    dbg_print("tuxedo: Protection Domain _start reaching main loop.\n");
     loop {
         sys_park();
         let req = pdx_listen(0);

@@ -46,7 +46,29 @@ impl<T, const N: usize> AtomicRing<T, N> {
             } else if diff < 0 {
                 return None; // Queue empty
             }
-            // diff > 0: Slot being written, or we lagged behind. Loop.
+            core::hint::spin_loop();
+        }
+    }
+
+    pub fn dequeue_ptr(&self) -> Option<*const T> {
+        loop {
+            let h = self.head.load(Ordering::Relaxed);
+            let slot = &self.buffer[h as usize % N];
+            let seq = slot.sequence.load(Ordering::Acquire);
+            let diff = seq as i64 - (h as i64 + 1);
+
+            if diff == 0 {
+                if self.head.compare_exchange(h, h + 1, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+                    let ptr = slot.item.as_ptr();
+                    // We don't advance the sequence yet to prevent reuse immediately?
+                    // Actually, if we advance it, the slot is free.
+                    // Client must copy the data before it's overwritten.
+                    slot.sequence.store(h.wrapping_add(N as u64), Ordering::Release);
+                    return Some(ptr);
+                }
+            } else if diff < 0 {
+                return None;
+            }
             core::hint::spin_loop();
         }
     }

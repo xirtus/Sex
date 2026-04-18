@@ -1,0 +1,28 @@
+# SexOS Phase 19/20 Handoff: Final Protocol & Efficiency Mandates
+
+## Status: SYSCALL LIVE, INPUT ROUTED 🚀
+- **Kernel:** `LSTAR` syscall handler enabled (rax=24,27,28,29). `CoreLocal` stack switching active.
+- **Protocol:** `sex-pdx` unified with `HIDEvent`. `libsys` dependency minimized.
+- **Input:** `sexinput` routes PS/2 scancodes to `sexdisplay` via PDX.
+- **Display:** `sexdisplay` handles `HIDEvent`. Routes events to window `AtomicRing` buffers.
+- **Build:** Darwin ARM fix verified. Darwin `rust-lld` injection stable.
+- **Dependencies:** `Cargo.toml` modernized (acpi 6.1.1, smoltcp, RustCrypto). `pic8259` removed.
+
+## ⚡ Efficiency Protocol (No Waste Mode)
+- **Communication:** Terse caveman mode MANDATORY. No articles, filler, pleasantries.
+- **Pattern:** `[thing] [action] [reason]. [next step].`
+- **Tooling:** Parallel search/read. Scoped grep. No redundant reads.
+- **Context:** Minimize turns. Provide enough context in edits for single-turn success.
+
+## Phase 20 Plan: Redox Rustification & Orbital Maturity
+1. **Redox Integration:** Audit `docs/grok/redox.txt`. Implement `acpi` 6.1.1 logic in `kernel/src/apic.rs`.
+2. **Orbital Evolution:** Implement Z-order and focus logic in `sexdisplay`.
+3. **Rust Drivers:** Replace legacy C VGA/PS2 code with pure Rust crates.
+4. **COSMIC Adaptation:** Port `cosmic-comp` sub-components to SASOS domains.
+
+## Next Steps
+- Verify `egui-hello` event loop (mouse/key) in QEMU.
+- Implement `acpi` table discovery for PCIe/NVMe.
+- Add `RustCrypto` backend to `sexdisplay` window authentication.
+
+Input pipeline hot. Syscalls fast. Efficiency mandated. 🦀

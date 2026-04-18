@@ -1,3 +1,4 @@
+use x86_64::{VirtAddr, PhysAddr, structures::paging::*};
 use core::arch::asm;
 
 pub struct Pkru;

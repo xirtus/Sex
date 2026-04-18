@@ -1,5 +1,5 @@
-// // // // #![no_std] (Muted for Mac Build)
-// // // // #![no_main] (Muted for Mac Build)
+#![no_std]
+#![no_main]
 
 extern crate alloc;
 extern crate spin;
@@ -24,7 +24,7 @@ pub extern "C" fn _start() -> ! {
         // In production, we'd validate the MessageType
         let msg = unsafe { *(req.arg0 as *const sex_pdx::LdProtocol) };
         
-        let mut reply = PdxReply::default();
+        let mut reply = PdxReply { status: 0, size: 0 };
         handle_ld_message(&msg, &mut reply);
         
         pdx_reply(req.caller_pd, &reply as *const _ as u64);
@@ -32,11 +32,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-#[cfg(not(target_os = "macos"))]
-#[cfg(not(target_os = "macos"))]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop { libsys::sched::park_on_ring(); }
 }
-
-#[cfg(target_os = "macos")]
-fn main() { println!("Sex Linker (Host Mode) initialized."); }

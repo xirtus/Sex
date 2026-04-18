@@ -1,4 +1,5 @@
-use acpi::{AcpiHandler, AcpiTables, PhysicalMapping};
+use acpi::{AcpiTables, PhysicalMapping, Handler};
+use acpi::platform::interrupt::InterruptModel;
 use core::ptr::NonNull;
 use x86_64::VirtAddr;
 use crate::serial_println;
@@ -11,21 +12,48 @@ pub struct SexAcpiHandler {
     pub physical_memory_offset: VirtAddr,
 }
 
-impl AcpiHandler for SexAcpiHandler {
+impl Handler for SexAcpiHandler {
     unsafe fn map_physical_region<T>(&self, physical_address: usize, size: usize) -> PhysicalMapping<Self, T> {
         let virt_addr = self.physical_memory_offset + physical_address as u64;
-        PhysicalMapping::new(
-            physical_address,
-            NonNull::new(virt_addr.as_mut_ptr()).unwrap(),
-            size,
-            size,
-            self.clone(),
-        )
+        PhysicalMapping {
+            physical_start: physical_address,
+            virtual_start: NonNull::new(virt_addr.as_mut_ptr()).unwrap(),
+            region_length: size,
+            mapped_length: size,
+            handler: self.clone(),
+        }
     }
 
     fn unmap_physical_region<T>(_mapping: &PhysicalMapping<Self, T>) {
         // No-op
     }
+
+    fn read_u8(&self, _: usize) -> u8 { todo!() }
+    fn read_u16(&self, _: usize) -> u16 { todo!() }
+    fn read_u32(&self, _: usize) -> u32 { todo!() }
+    fn read_u64(&self, _: usize) -> u64 { todo!() }
+    fn write_u8(&self, _: usize, _: u8) { todo!() }
+    fn write_u16(&self, _: usize, _: u16) { todo!() }
+    fn write_u32(&self, _: usize, _: u32) { todo!() }
+    fn write_u64(&self, _: usize, _: u64) { todo!() }
+    fn read_io_u8(&self, _: u16) -> u8 { todo!() }
+    fn read_io_u16(&self, _: u16) -> u16 { todo!() }
+    fn read_io_u32(&self, _: u16) -> u32 { todo!() }
+    fn write_io_u8(&self, _: u16, _: u8) { todo!() }
+    fn write_io_u16(&self, _: u16, _: u16) { todo!() }
+    fn write_io_u32(&self, _: u16, _: u32) { todo!() }
+    fn read_pci_u8(&self, _: acpi::PciAddress, _: u16) -> u8 { todo!() }
+    fn read_pci_u16(&self, _: acpi::PciAddress, _: u16) -> u16 { todo!() }
+    fn read_pci_u32(&self, _: acpi::PciAddress, _: u16) -> u32 { todo!() }
+    fn write_pci_u8(&self, _: acpi::PciAddress, _: u16, _: u8) { todo!() }
+    fn write_pci_u16(&self, _: acpi::PciAddress, _: u16, _: u16) { todo!() }
+    fn write_pci_u32(&self, _: acpi::PciAddress, _: u16, _: u32) { todo!() }
+    fn nanos_since_boot(&self) -> u64 { todo!() }
+    fn stall(&self, _: u64) { todo!() }
+    fn sleep(&self, _: u64) { todo!() }
+    fn create_mutex(&self) -> acpi::Handle { todo!() }
+    fn acquire(&self, _: acpi::Handle, _: u16) -> Result<(), acpi::aml::AmlError> { todo!() }
+    fn release(&self, _: acpi::Handle) { todo!() }
 }
 
 pub struct ProcessorInfo {
@@ -40,9 +68,17 @@ pub struct IoApicInfo {
     pub global_system_interrupt_base: u32,
 }
 
+pub struct SexPciRegion {
+    pub segment: u16,
+    pub bus_start: u8,
+    pub bus_end: u8,
+    pub phys_addr: usize,
+}
+
 lazy_static! {
     pub static ref PROCESSORS: Mutex<Vec<ProcessorInfo>> = Mutex::new(Vec::new());
     pub static ref IO_APICS: Mutex<Vec<IoApicInfo>> = Mutex::new(Vec::new());
+    pub static ref PCI_REGIONS: Mutex<Vec<SexPciRegion>> = Mutex::new(Vec::new());
 }
 
 pub static LAPIC_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -51,9 +87,26 @@ pub fn init_apic(rsdp_addr: u64, physical_memory_offset: VirtAddr) {
     let handler = SexAcpiHandler { physical_memory_offset };
     let tables = unsafe { AcpiTables::from_rsdp(handler, rsdp_addr as usize).expect("ACPI: Failed to parse tables") };
 
-    let platform_info = tables.platform_info_in(alloc::alloc::Global).expect("ACPI: Failed to get platform info");
-    
-    if let acpi::InterruptModel::Apic(apic_info) = platform_info.interrupt_model {
+    let platform = acpi::platform::AcpiPlatform::new(tables, handler).expect("ACPI: Failed to get platform info");
+
+    // Discover PCI Configuration Regions (MCFG)
+    if let Some(mcfg) = platform.tables.find_table::<acpi::sdt::mcfg::Mcfg>() {
+        let mut regions = PCI_REGIONS.lock();
+        for region in mcfg.entries() {
+            serial_println!("APIC: Found PCI Region (Segment {}, Bus {}-{}, Phys {:#x})",
+                region.pci_segment_group, region.bus_number_start, region.bus_number_end, region.base_address);
+            regions.push(SexPciRegion {
+                segment: region.pci_segment_group,
+                bus_start: region.bus_number_start,
+                bus_end: region.bus_number_end,
+                phys_addr: region.base_address as usize,
+            });
+        }
+    } else {
+        serial_println!("APIC: Warning: MCFG table not found or failed to parse. PCIe may not work.");
+    }
+
+    if let InterruptModel::Apic(apic_info) = platform.interrupt_model {
         let lapic_virt = physical_memory_offset + apic_info.local_apic_address;
         LAPIC_ADDR.store(lapic_virt.as_u64(), core::sync::atomic::Ordering::Release);
         serial_println!("APIC: Found LAPIC at {:#x}", apic_info.local_apic_address);
@@ -73,7 +126,7 @@ pub fn init_apic(rsdp_addr: u64, physical_memory_offset: VirtAddr) {
         }
 
         let mut processors = PROCESSORS.lock();
-        if let Some(proc_info) = platform_info.processor_info {
+        if let Some(proc_info) = platform.processor_info {
             for proc in proc_info.application_processors.iter() {
                 processors.push(ProcessorInfo {
                     id: proc.processor_uid,
@@ -153,6 +206,20 @@ pub unsafe fn broadcast_sipi(vector: u8) {
     icr_low.write_volatile(cmd);
 }
 
-// Automated injection of missing kernel globals
-pub static PROCESSORS: Mutex<Vec<u8>> = Mutex::new(Vec::new());
-pub static IO_APICS: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+/// Initializes the LAPIC timer for pre-emptive scheduling (Vector 0x20).
+pub fn init_timer() {
+    let lapic_vaddr = LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire);
+    if lapic_vaddr == 0 { return; }
+    let lapic_ptr = lapic_vaddr as *mut u32;
+
+    unsafe {
+        // Divide by 16
+        lapic_ptr.offset(0x3E0 / 4).write_volatile(0x3);
+        // Set LVT Timer: Periodic (0x20000) + Vector 0x20
+        lapic_ptr.offset(0x320 / 4).write_volatile(0x20000 | 0x20);
+        // Initial Count (1ms approx at 100MHz LAPIC clock)
+        lapic_ptr.offset(0x380 / 4).write_volatile(10000);
+
+        serial_println!("APIC: LAPIC Timer initialized at Vector 0x20.");
+    }
+}

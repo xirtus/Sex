@@ -1,4 +1,4 @@
-use sex_pdx::{pdx_call, MessageType, PageHandover, StoreProtocol};
+use sex_pdx::{pdx_call, MessageType, PageHandover};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Phase 20: Superior storage backend using sexfiles VFS
@@ -42,7 +42,7 @@ impl Storage {
         Ok(PageHandover { pfn: res, pku_key: 7 })
     }
 
-    pub fn kv_get(&self, key: &[u8; 64]) -> Result<u64, i32> {
+    pub fn kv_get(&self, _key: &[u8; 64]) -> Result<u64, i32> {
         // Search /etc/sexshop.kv (Slot 1)
         // For prototype, return 0 if key not found
         Ok(0)
@@ -53,7 +53,7 @@ impl Storage {
         0
     }
 
-    pub fn object_put(&self, hash: &[u8; 32], paddr: u64, len: u64) -> i32 {
+    pub fn object_put(&self, _hash: &[u8; 32], _paddr: u64, _len: u64) -> i32 {
         self.object_count.fetch_add(1, Ordering::Relaxed);
         // Map hash to path /etc/sexshop/obj/<hash_hex>
         // Write paddr data to VFS via VfsWrite

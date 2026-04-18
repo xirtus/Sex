@@ -72,7 +72,7 @@ pub enum SysError {
     Unknown = 255,
 }
 
-pub fn safe_pdx_register(__________service_name: &str) -> Result<*mut u8, SysError> {
+pub fn safe_pdx_register(_______service_name: &str) -> Result<*mut u8, SysError> {
     let mut res: u64 = 0;
     #[cfg(target_arch = "x86_64")]
     #[cfg(target_arch = "x86_64")]
@@ -85,8 +85,8 @@ pub fn safe_pdx_register(__________service_name: &str) -> Result<*mut u8, SysErr
     #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] unsafe {
         core::arch::asm!("syscall",
             in("rax") 0x10A, // SYS_PDX_REG
-            in("rdi") __________service_name.as_ptr(),
-            in("rsi") __________service_name.len(),
+            in("rdi") _______service_name.as_ptr(),
+            in("rsi") _______service_name.len(),
             lateout("rax") res,
         );
     }

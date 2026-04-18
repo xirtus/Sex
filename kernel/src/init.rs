@@ -4,6 +4,8 @@ use crate::ipc::DOMAIN_REGISTRY;
 use crate::capability::{CapabilityData, IpcCapData};
 use x86_64::VirtAddr;
 
+pub static mut SEXDISPLAY_PD_ID: u32 = 0;
+
 /// init: The root initialization sequence for the microkernel.
 /// Phase 16: Official v1.0.0 Public Release.
 pub fn init() {
@@ -12,6 +14,10 @@ pub fn init() {
     serial_println!("  100% LOCK-FREE SASOS PRODUCTION RELEASE        ");
     serial_println!("--------------------------------------------------");
     serial_println!("init: Bootstrapping system Protection Domains...");
+
+    // Phase 17: Initialize Kernel PD (ID 0) to allow early ELF Loading
+    let kernel_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(crate::capability::ProtectionDomain::new(0, 0)));
+    DOMAIN_REGISTRY.insert(0, kernel_pd);
 
     // Final Validation Suite (Superiority Assertions)
     assert!(crate::memory::allocator::GLOBAL_ALLOCATOR.verify_invariants());
@@ -26,6 +32,7 @@ pub fn init() {
     let _sexinput = create_protection_domain("/servers/sexinput/bin/sexinput\0", None).expect("sexinput lost");
     let _sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0", None).expect("sexnet lost");
     let sexdisplay = create_protection_domain("/servers/sexdisplay/bin/sexdisplay\0", None).expect("sexdisplay lost");
+    unsafe { SEXDISPLAY_PD_ID = sexdisplay; }
     let sexnode = create_protection_domain("/servers/sexnode/bin/sexnode\0", None).expect("sexnode lost");
     let sexshop = create_protection_domain("/servers/sexshop/bin/sexshop\0", None).expect("sexshop lost");
     let sexgemini = create_protection_domain("/servers/sexgemini/bin/sexgemini\0", None).expect("sexgemini lost");
@@ -71,5 +78,11 @@ pub fn init() {
     let ion_pd = DOMAIN_REGISTRY.get(ion).unwrap();
     ion_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdisplay, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 2 -> sexdisplay (Orbital)
 
+    // Phase 18: Spawn Desktop Prototype (Egui Hello)
+    let egui = create_protection_domain("/servers/egui-hello/bin/egui-hello\0", None).expect("egui lost");
+    let egui_pd = DOMAIN_REGISTRY.get(egui).unwrap();
+    egui_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdisplay, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 2 -> sexdisplay (Orbital)
+
     serial_println!("init: Full Self-Hosting bootstrap COMPLETE.");
+    serial_println!("init: System is now running in SASOS Mode.");
 }

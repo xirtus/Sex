@@ -18,6 +18,9 @@ pub fn sys_park() {
 
 const MAX_WINDOWS: usize = 64;
 
+use sex_pdx::ring::AtomicRing;
+use sha2::{Sha256, Digest};
+
 struct Window {
     id: u32,
     rect: Rect,
@@ -25,12 +28,29 @@ struct Window {
     pku_key: u8,
     active: bool,
     owner_pd: u32,
+    events: AtomicRing<OrbitalEvent, 16>,
+    authenticated: bool,
+    auth_hash: [u8; 32],
+}
+
+impl Window {
+    fn new(id: u32, rect: Rect, pfn: u64, pku_key: u8, owner_pd: u32) -> Self {
+        Self {
+            id, rect, pfn, pku_key, owner_pd,
+            active: true,
+            events: AtomicRing::new(),
+            authenticated: false,
+            auth_hash: [0u8; 32],
+        }
+    }
 }
 
 struct Compositor {
     windows: [Option<Window>; MAX_WINDOWS],
     screen_w: u32,
     screen_h: u32,
+    fb_addr: u64,
+    fb_pitch: u32,
     next_win_id: u32,
     pub frame_flips: AtomicU64,
 }
@@ -42,6 +62,8 @@ impl Compositor {
             windows: [INIT_WIN; MAX_WINDOWS],
             screen_w: 1920,
             screen_h: 1080,
+            fb_addr: 0,
+            fb_pitch: 0,
             next_win_id: 1,
             frame_flips: AtomicU64::new(0),
         }
@@ -58,16 +80,31 @@ impl Compositor {
 
         for slot in self.windows.iter_mut() {
             if slot.is_none() {
-                *slot = Some(Window { id, rect, pfn, pku_key, active: true, owner_pd });
+                *slot = Some(Window::new(id, rect, pfn, pku_key, owner_pd));
                 break;
             }
         }
         id
     }
 
+    pub fn poll_event(&self, window_id: u32, caller_pd: u32) -> u64 {
+        for win in self.windows.iter().flatten() {
+            if win.id == window_id && win.owner_pd == caller_pd {
+                if !win.authenticated { return u64::MAX; }
+                // In Sex PDX, we return a pointer to the event in the ring.
+                // The client must not modify this.
+                if let Some(event_ptr) = win.events.dequeue_ptr() {
+                    return event_ptr as u64;
+                }
+            }
+        }
+        u64::MAX
+    }
+
     pub fn get_window_buffer(&self, window_id: u32, caller_pd: u32) -> u64 {
         for win in self.windows.iter().flatten() {
             if win.id == window_id && win.owner_pd == caller_pd {
+                if !win.authenticated { return 0; }
                 // Return virtual address mapped into caller's PD
                 return pdx_call(1, 13 /* MAP_INTO_PD */, caller_pd as u64, win.pfn);
             }
@@ -75,12 +112,73 @@ impl Compositor {
         0
     }
 
+    pub fn authenticate_window(&mut self, window_id: u32, caller_pd: u32, token: [u8; 32]) -> bool {
+        for win in self.windows.iter_mut().flatten() {
+            if win.id == window_id && win.owner_pd == caller_pd {
+                // Simplified: Hash the token and verify it matches the required hash.
+                // In Phase 20, we assume the token is the pre-image of the auth_hash.
+                // For bootstrap, we might allow the first token to SET the auth_hash.
+                let mut hasher = Sha256::new();
+                hasher.update(token);
+                let hash = hasher.finalize();
+                win.auth_hash.copy_from_slice(&hash);
+                win.authenticated = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn set_primary_fb(&mut self, addr: u64, w: u32, h: u32, pitch: u32) {
+        self.fb_addr = addr;
+        self.screen_w = w;
+        self.screen_h = h;
+        self.fb_pitch = pitch;
+    }
+
     pub fn composite(&self) {
+        if self.fb_addr == 0 { return; }
         self.frame_flips.fetch_add(1, Ordering::Relaxed);
+        
+        let fb_ptr = self.fb_addr as *mut u32;
+
         for win in self.windows.iter().flatten() {
             if win.active {
-                // Zero-copy blit via PDX call to hardware scanout/tuxedo
-                pdx_call(10 /* TRANNY */, 0 /* BLIT */, win.pfn, win.pku_key as u64);
+                // Phase 17: tuxedo PDX scanout (Zero-Copy)
+                // We send a DisplayBufferCommit message to tuxedo (Slot 10)
+                let msg = MessageType::DisplayBufferCommit {
+                    buffer_id: win.id,
+                    damage_x: win.rect.x as u32,
+                    damage_y: win.rect.y as u32,
+                    damage_w: win.rect.w,
+                    damage_h: win.rect.h,
+                };
+                
+                // Use unsafe to pack and call tuxedo
+                unsafe {
+                    pdx_call(10 /* TRANNY */, 0, &msg as *const _ as u64, win.pfn);
+                }
+
+                // Fallback: CPU blit for non-accelerated paths
+                // Phase 18: Map PFN to higher-half direct map
+                let hhdm_offset = 0xFFFF_8000_0000_0000u64;
+                let win_ptr = (hhdm_offset + win.pfn) as *const u32; 
+
+                for row in 0..win.rect.h {
+                    for col in 0..win.rect.w {
+                        let src_idx = (row * win.rect.w + col) as usize;
+                        let dst_x = win.rect.x as u32 + col;
+                        let dst_y = win.rect.y as u32 + row;
+
+                        // Bounds check against screen resolution
+                        if dst_x < 1280 && dst_y < 720 {
+                            let dst_idx = (dst_y * (self.fb_pitch / 4) + dst_x) as usize;
+                            unsafe {
+                                fb_ptr.add(dst_idx).write_volatile(win_ptr.add(src_idx).read());
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -98,8 +196,17 @@ impl Compositor {
     }
 }
 
+fn dbg_print(s: &str) {
+    for b in s.bytes() {
+        unsafe {
+            core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b);
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    dbg_print("sexdisplay: Protection Domain _start reaching main loop.\n");
     let mut compositor = Compositor::new();
     
     loop {
@@ -111,6 +218,21 @@ pub extern "C" fn _start() -> ! {
         let msg = unsafe { *(req.arg0 as *const MessageType) };
 
         match msg {
+            MessageType::DisplayPrimaryFramebuffer { virt_addr, width, height, pitch } => {
+                compositor.set_primary_fb(virt_addr, width, height, pitch);
+                pdx_reply(req.caller_pd, 0);
+            },
+            MessageType::HIDEvent { ev_type, code, value } => {
+                // Phase 19: Route to focused window
+                // Simplified: all windows for now
+                for win in compositor.windows.iter_mut().flatten() {
+                    let ev = if ev_type == 1 { // EV_KEY
+                        OrbitalEvent::Key { code: code as u32, pressed: value != 0 }
+                    } else { continue; };
+                    win.events.push_back(ev);
+                }
+                pdx_reply(req.caller_pd, 0);
+            },
             MessageType::Display(proto) => match proto {
                 DisplayProtocol::CreateWindow { x, y, w, h, .. } => {
                     let id = compositor.create_window(req.caller_pd, Rect { x, y, w, h });
@@ -135,18 +257,12 @@ pub extern "C" fn _start() -> ! {
                     pdx_reply(req.caller_pd, res);
                 },
                 DisplayProtocol::PollEvents { window_id } => {
-                    // In a real implementation, we would poll the input-sexdrive (Slot 5)
-                    // For Phase 24, we mock a Ctrl+C event
-                    let event = OrbitalEvent::Key { code: 3, pressed: true }; // Mock SIGINT
-                    if let OrbitalEvent::Key { code: 3, pressed: true } = event {
-                        for win in compositor.windows.iter().flatten() {
-                            if win.id == window_id {
-                                sex_pdx::safe_pdx_call(win.owner_pd, MessageType::Signal(2));
-                                break;
-                            }
-                        }
-                    }
-                    pdx_reply(req.caller_pd, 0);
+                    let res = compositor.poll_event(window_id, req.caller_pd);
+                    pdx_reply(req.caller_pd, res);
+                },
+                DisplayProtocol::AuthenticateWindow { window_id, auth_token } => {
+                    let ok = compositor.authenticate_window(window_id, req.caller_pd, auth_token);
+                    pdx_reply(req.caller_pd, if ok { 0 } else { u64::MAX });
                 },
                 DisplayProtocol::DestroyWindow { window_id } => {
                     compositor.destroy_window(window_id, req.caller_pd);

@@ -1,6 +1,6 @@
 #![no_std]
 
-use sex_pdx::{pdx_call, mmio::Mmio};
+use sex_pdx::pdx_call;
 use core::sync::atomic::{AtomicU16, Ordering};
 
 #[repr(C)]

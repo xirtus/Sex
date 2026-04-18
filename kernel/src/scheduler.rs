@@ -40,10 +40,10 @@ impl Task {
     pub fn new(id: u32, entry_point: u64, stack_top: u64, pd: &ProtectionDomain, is_user: bool) -> Self {
         let pkru = pd.current_pkru_mask.load(Ordering::SeqCst);
         let selectors = crate::gdt::get_selectors();
-        let (cs, ss) = if is_user {
-            (selectors.user_code_selector.0 as u64 | 3, selectors.user_data_selector.0 as u64 | 3)
+        let (cs, ss, rflags) = if is_user {
+            (selectors.user_code_selector.0 as u64 | 3, selectors.user_data_selector.0 as u64 | 3, 0x3202)
         } else {
-            (selectors.code_selector.0 as u64, 0)
+            (selectors.code_selector.0 as u64, 0, 0x202)
         };
 
         Self {
@@ -51,7 +51,7 @@ impl Task {
             context: TaskContext {
                 r15: 0, r14: 0, r13: 0, r12: 0, rbx: 0, rbp: 0,
                 pkru, pd_id: pd.id,
-                rip: entry_point, cs, rflags: 0x202, rsp: stack_top, ss,
+                rip: entry_point, cs, rflags, rsp: stack_top, ss,
                 pd_ptr: pd as *const _,
             },
             state: AtomicU32::new(TaskState::Ready as u32),

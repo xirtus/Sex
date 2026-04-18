@@ -1,4 +1,4 @@
-use libsys::pdx::{safe_pdx_register, PdxRequest};
+use libsys::pdx::safe_pdx_register;
 use sex_pdx::ring::{AtomicRing, PdxReply};
 use crate::messages::VfsProtocol;
 

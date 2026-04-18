@@ -21,7 +21,7 @@ QEMU_CMD="qemu-system-x86_64 \
   -smp 4 \
   -m 2G \
   -serial stdio \
-  -display none \
+  -boot d \
   -cdrom dist/${ISO_FILE}"
 
 echo "=== Sex SASOS QEMU Production Boot ==="

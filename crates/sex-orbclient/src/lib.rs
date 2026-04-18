@@ -16,18 +16,17 @@ impl Window {
         title_buf[..len].copy_from_slice(&title.as_bytes()[..len]);
 
         // PDX Call: CreateWindow
-        // We use arg1 as the pointer to the DisplayProtocol variant on stack.
+        // We use command 0 as sexdisplay handles DisplayProtocol via MessageType in arg0.
         let msg = MessageType::Display(DisplayProtocol::CreateWindow { x, y, w, h, flags: 0, title: title_buf });
-        let id = pdx_call(2 /* DISPLAY_PD */, 100 /* CREATE_WINDOW_CMD */, 
+        let id = pdx_call(2 /* DISPLAY_PD */, 0 /* CMD_DISPLAY */, 
             &msg as *const _ as u64, 
             0) as u32;
 
         if id == 0 { return None; }
 
         // PDX Call: RequestBuffer
-        // Returns the virtual address mapped by sexdisplay into this PD's address space.
         let msg_req = MessageType::Display(DisplayProtocol::RequestBuffer { window_id: id });
-        let buf_ptr = pdx_call(2, 101 /* REQUEST_BUFFER_CMD */, 
+        let buf_ptr = pdx_call(2, 0 /* CMD_DISPLAY */, 
             &msg_req as *const _ as u64, 
             0) as *mut u32;
 
@@ -41,7 +40,7 @@ impl Window {
             window_id: self.id, 
             damage: Rect { x: 0, y: 0, w: self.w, h: self.h } 
         });
-        pdx_call(2, 102 /* COMMIT_DAMAGE_CMD */, 
+        pdx_call(2, 0 /* CMD_DISPLAY */, 
             &msg as *const _ as u64, 
             0);
     }
@@ -52,7 +51,7 @@ impl Window {
     
     pub fn events(&self) -> Option<OrbitalEvent> {
         let msg = MessageType::Display(DisplayProtocol::PollEvents { window_id: self.id });
-        let res = pdx_call(2, 103 /* POLL_EVENTS_CMD */, 
+        let res = pdx_call(2, 0 /* CMD_DISPLAY */, 
             &msg as *const _ as u64, 
             0);
         
@@ -67,6 +66,6 @@ impl Window {
 impl Drop for Window {
     fn drop(&mut self) {
         let msg = MessageType::Display(DisplayProtocol::DestroyWindow { window_id: self.id });
-        pdx_call(2, 104 /* DESTROY_WINDOW_CMD */, &msg as *const _ as u64, 0);
+        pdx_call(2, 0 /* CMD_DISPLAY */, &msg as *const _ as u64, 0);
     }
 }

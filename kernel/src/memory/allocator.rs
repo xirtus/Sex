@@ -1,3 +1,4 @@
+use x86_64::{VirtAddr, PhysAddr, structures::paging::*};
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 pub const MAX_ORDER: usize = 18; // Up to 1 GiB
@@ -44,18 +45,42 @@ impl LockFreeBuddyAllocator {
         }
     }
 
-    pub unsafe fn init_from_mmap(&self, start_phys: u64, size: u64, metadata_vaddr: u64) {
+    pub unsafe fn init_metadata(&self, metadata_vaddr: u64, total_pages: u64) {
         self.metadata_base.store(metadata_vaddr, Ordering::Release);
-        let count = size / PAGE_SIZE;
-        self.total_pages.store(count, Ordering::Release);
+        self.total_pages.store(total_pages, Ordering::Release);
         
-        // Zero out metadata
         let ptr = metadata_vaddr as *mut u8;
-        core::ptr::write_bytes(ptr, 0, count as usize * core::mem::size_of::<PageMetadata>());
+        core::ptr::write_bytes(ptr, 0, total_pages as usize * core::mem::size_of::<PageMetadata>());
+    }
 
-        for i in 0..count {
-            let phys = start_phys + (i * PAGE_SIZE);
-            self.free(phys, 0);
+    pub unsafe fn add_memory_region(&self, start_phys: u64, size: u64) {
+        let mut current_start = start_phys;
+        let mut remaining_size = size;
+
+        while remaining_size >= PAGE_SIZE {
+            // Find the largest order that fits and is aligned
+            let mut order = MAX_ORDER;
+            while order > 0 {
+                let block_size = PAGE_SIZE << order;
+                if remaining_size >= block_size && (current_start % block_size) == 0 {
+                    break;
+                }
+                order -= 1;
+            }
+
+            let phys = current_start;
+            let meta = self.get_metadata(phys);
+            if !meta.is_null() {
+                unsafe {
+                    (*meta).state.store(0, Ordering::Release);
+                    (*meta).order.store(order as u8, Ordering::Release);
+                }
+            }
+            self.push_free_global(order, phys);
+
+            let consumed = PAGE_SIZE << order;
+            current_start += consumed;
+            remaining_size -= consumed;
         }
     }
 

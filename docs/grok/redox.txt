@@ -52,8 +52,8 @@
 
 
 
-The two scripts below are **copy-paste ready** and will execute the entire v2.2 plan in one `bash scripts/migrate-pure-rust-v23.sh` command.  
-
+The two scripts below are **copy-paste ready** and may be useful to execute the entire v2.2 plan in one `bash scripts/migrate-pure-rust-v23.sh` command.  
+let it inspire you in your own strategy
 ---
 
 ### 1. Bootloader and The Handoff (Pure Rust Entry)  

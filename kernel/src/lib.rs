@@ -32,7 +32,9 @@ pub mod syscalls;
 pub mod capabilities;
 pub mod benchmark;
 pub mod init;
+pub mod graphics;
 pub mod devmgr;
+pub mod hw;
 
 use linked_list_allocator::LockedHeap;
 
@@ -42,7 +44,7 @@ pub use crate::memory::allocator;
 pub static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 pub const HEAP_START: usize = 0x_4444_4444_0000;
-pub const HEAP_SIZE: usize = 1024 * 1024; // 1 MiB
+pub const HEAP_SIZE: usize = 16 * 1024 * 1024; // 16 MiB
 
 pub fn bootstrap_advanced_services() {
     serial_println!("SexOS: Advanced interaction suite initialized via standalone PDs.");

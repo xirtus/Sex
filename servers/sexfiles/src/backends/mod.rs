@@ -1,5 +1,4 @@
-use crate::messages::{VfsProtocol, PageHandover};
-use sex_pdx::ring::PdxReply;
+use crate::messages::PageHandover;
 
 /// FsBackend: Filesystem backend trait.
 /// 100% lock-free signatures.

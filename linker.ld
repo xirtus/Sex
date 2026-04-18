@@ -1,38 +1,12 @@
 ENTRY(_start)
-
-SECTIONS
-{
-    . = 0x1000000;
-
-    .note.pvh : ALIGN(4K)
-    {
-        KEEP(*(.note.pvh))
-    }
-
-    .text : ALIGN(4K)
-    {
-        *(.text .text.*)
-    }
-
-    .rodata : ALIGN(4K)
-    {
-        *(.rodata .rodata.*)
-    }
-
-    .data : ALIGN(4K)
-    {
+SECTIONS {
+    . = 0xffffffff80000000;
+    .text : { *(.text .text.*) }
+    .rodata : { *(.rodata .rodata.*) }
+    .data : {
         *(.data .data.*)
+        . = ALIGN(8);
+        KEEP(*(.limine_reqs))
     }
-
-    .bss : ALIGN(4K)
-    {
-        *(.bss .bss.*)
-        *(COMMON)
-    }
-
-    /DISCARD/ :
-    {
-        *(.eh_frame)
-        *(.comment)
-    }
+    .bss : { *(.bss .bss.*) }
 }

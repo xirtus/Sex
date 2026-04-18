@@ -1,13 +1,16 @@
 #![no_std]
 #![no_main]
 
-use libsys::pdx::pdx_call;
-use libsys::messages::MessageType;
+use sex_pdx::{pdx_call, MessageType};
 
 /// sexinput: Standalone Input Driver (PS/2 + USB HID)
 /// Phase 10: Routing HID events to graphical PD.
 
-use libsys::sched::park_on_ring;
+pub fn sys_park() {
+    unsafe {
+        core::arch::asm!("syscall", in("rax") 24u64);
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -17,7 +20,7 @@ pub extern "C" fn _start() -> ! {
         
         if scancode != 0 && scancode != 0xFF {
             // 2. Route scancode to Graphical Server via capability (Slot 5)
-            // Using zero-copy event message
+            // Using unified HIDEvent message
             let msg = MessageType::HIDEvent { 
                 ev_type: 1, // EV_KEY
                 code: scancode as u16, 
@@ -27,11 +30,11 @@ pub extern "C" fn _start() -> ! {
         }
 
         // 3. FLSCHED wait-free park until HID interrupt
-        park_on_ring();
+        sys_park();
     }
 }
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop { park_on_ring(); }
+    loop { sys_park(); }
 }

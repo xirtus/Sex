@@ -1,4 +1,3 @@
-use libsys::messages::MessageType;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 // Global signal state (will become per-PD later)

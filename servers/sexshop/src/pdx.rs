@@ -1,4 +1,4 @@
-use sex_pdx::{StoreProtocol, PdxReply, PageHandover, MessageType};
+use sex_pdx::{StoreProtocol, PdxReply};
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::storage::STORAGE;
 use crate::cache::CACHE;
@@ -47,7 +47,7 @@ pub fn handle_store_message(msg: &StoreProtocol, reply: &mut PdxReply) {
         StoreProtocol::KVSet { key, value_paddr, value_len } => {
             reply.status = STORAGE.kv_set(key, *value_paddr, *value_len) as i64;
         },
-        StoreProtocol::KVDelete { key } => {
+        StoreProtocol::KVDelete { key: _ } => {
             // Implementation: STORAGE.kv_delete(key)
             reply.status = 0;
         },
