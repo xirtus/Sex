@@ -336,7 +336,7 @@ impl SexBuilder {
         let toml_path = self.recipes_dir.join(name).join("recipe.toml");
         if toml_path.exists() {
             let content = fs::read_to_string(&toml_path)?;
-            Ok(toml::from_str(&content)?)
+            Ok(toml::from_str::<Recipe>(&content)?)
         } else {
             let redox_root = self.recipes_dir.join("redox-os/recipes");
             if redox_root.exists() {

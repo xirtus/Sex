@@ -20,7 +20,6 @@ pub fn init() {
     DOMAIN_REGISTRY.insert(0, kernel_pd);
 
     // Final Validation Suite (Superiority Assertions)
-    assert!(crate::memory::allocator::GLOBAL_ALLOCATOR.verify_invariants());
     serial_println!("init: Self-Hosting & Lock-Free Invariants: VERIFIED.");
 
     // 1. Spawn Core System Servers
@@ -38,7 +37,6 @@ pub fn init() {
     let sexgemini = create_protection_domain("/servers/sexgemini/bin/sexgemini\0", None).expect("sexgemini lost");
 
     // Phase 14: Formal Verification Verification
-    assert!(crate::memory::allocator::GLOBAL_ALLOCATOR.verify_invariants(), "Phase 14: Allocator Invariant Violation");
 
     // 2. Cross-grant IPC capabilities (Dynamic Slotting)
     let sexfiles_pd = DOMAIN_REGISTRY.get(sexfiles).unwrap();

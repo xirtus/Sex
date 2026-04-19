@@ -1,0 +1,24 @@
+WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-19 for version 1.97.0-nightly (0febdbab2 2026-04-18)
+info: downloading 3 components
+info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+
+  nightly-x86_64-unknown-linux-gnu installed - rustc 1.97.0-nightly (0febdbab2 2026-04-18)
+
+info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/src/rust-toolchain.toml')
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-19 for version 1.97.0-nightly (0febdbab2 2026-04-18)
+info: downloading component rust-src
+info: component rust-src is up to date
+error: failed to load manifest for workspace member `/src/crates/egui-hello`
+referenced by workspace at `/src/Cargo.toml`
+
+Caused by:
+  failed to load manifest for dependency `sex_rt`
+
+Caused by:
+  failed to read `/src/crates/sex_rt/Cargo.toml`
+
+Caused by:
+  No such file or directory (os error 2)

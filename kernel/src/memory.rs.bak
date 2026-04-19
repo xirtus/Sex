@@ -1,3 +1,5 @@
+use crate::MEMMAP_REQUEST;
+use crate::HHDM_REQUEST;
 use x86_64::{
     structures::paging::{FrameAllocator, Mapper, OffsetPageTable, PageTable, PhysFrame, Size4KiB, Page, PageTableFlags, frame::PhysFrameRangeInclusive, page_table::PageTableEntry},
     PhysAddr, VirtAddr,
@@ -41,7 +43,7 @@ lazy_static! {
     pub static ref GLOBAL_VAS: Mutex<Option<GlobalVas>> = Mutex::new(None);
 }
 
-pub fn init(mmap: &limine::request::MemmapResponse, hhdm_offset: u64) {
+pub fn init(mmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) {
     crate::serial_println!("Sex: Memory init starting...");
     let offset = VirtAddr::new(hhdm_offset);
     let mut mapper = unsafe { init_sexting(offset) };
@@ -51,7 +53,9 @@ pub fn init(mmap: &limine::request::MemmapResponse, hhdm_offset: u64) {
     let mut frame_allocator = unsafe { BitmapFrameAllocator::init(entries, offset) };
 
     crate::serial_println!("Sex: Initializing kernel heap...");
-    allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Kernel Heap Init Failed");
+    let mmap = MEMMAP_REQUEST.get_response().unwrap();
+    let hhdm = HHDM_REQUEST.get_response().unwrap();
+    allocator::init_heap(mmap, hhdm.offset);
 
     crate::serial_println!("Sex: Initializing buddy allocator...");
     let mut _total_usable_pages = 0;

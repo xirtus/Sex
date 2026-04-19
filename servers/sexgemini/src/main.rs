@@ -1,66 +1,57 @@
+#![no_std]
+#![no_main]
 #![feature(alloc_error_handler)]
+
+extern crate alloc;
+use linked_list_allocator::LockedHeap;
+
+#[global_allocator]
+static ALLOCATOR: LockedHeap = LockedHeap::empty();
+
+#[alloc_error_handler]
+fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
+    loop {}
+}
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
+
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    // In Phase 19, this will be replaced by a PDX call to the kernel 
+    // to map the shared heap region.
+    loop {}
+}
+
 extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::boxed::Box;
-#![no_std]
-#![no_main]
 
 use libsys::pdx::{pdx_listen, pdx_reply, pdx_call};
 use libsys::messages::MessageType;
 use libsys::sched::park_on_ring;
 
-/// sex-gemini: Standalone Self-Repair and AI Operations Agent.
-/// Phase 13.2.1: Real operational logic for capability violations.
+fn main() {}
 
-#[no_mangle]
-pub extern "C" fn _start() -> ! {
-    loop {
-        // Standard FLSCHED park
-        park_on_ring();
-
-        let req = pdx_listen(0);
-        let msg = unsafe { *(req.arg0 as *const MessageType) };
-
-        match msg {
-            MessageType::HardwareInterrupt { vector, data } => {
-                // Vector 0x8E is mocked as the Capability Violation / Fault interrupt
-                if vector == 0x8E {
-                    let status = handle_violation(data);
-                    pdx_reply(req.caller_pd, status as u64);
-                } else {
-                    pdx_reply(req.caller_pd, 0);
-                }
-            },
-            _ => {
-                pdx_reply(req.caller_pd, u64::MAX);
-            }
-        }
-    }
+use core::alloc::{GlobalAlloc, Layout};
+struct SimpleAlloc;
+#[global_allocator]
+static ALLOCATOR: SimpleAlloc = SimpleAlloc;
+unsafe impl GlobalAlloc for SimpleAlloc {
+    unsafe fn alloc(&self, _layout: Layout) -> *mut u8 { core::ptr::null_mut() }
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
 }
 
-fn handle_violation(_fault_addr: u64) -> i64 {
-    // 1. Analyze the violation (e.g., unauthorized access or kernel panic loop)
-    // 2. Invoke sexstore to fetch fresh source / manifest via capability slot 4
-    let fetch_res = pdx_call(4 /* sexstore_cap */, 1 /* FETCH_PACKAGE */, 0 /* "kernel" */, 0 /* buf_cap */);
-    
-    if fetch_res == 0 {
-        // 3. Invoke compiler toolchain in sexc (Execve GCC/Cargo on lent buffer) via capability slot 2
-        let compile_res = pdx_call(2 /* sexc_cap */, 2 /* EXEC */, 0 /* "/bin/cargo" */, 0);
-        
-        if compile_res == 0 {
-            // 4. Invoke Display Repair via capability slot 3 (sexdisplay)
-            let _repair_res = pdx_call(3 /* sexdisplay_cap */, 0, &MessageType::DisplayGeminiRepairDisplay as *const _ as u64, 0);
-
-            // 5. Execute hot-swap (Kexec or dynamic translation reload) via capability slot 5 (sexnode)
-            let _swap_res = pdx_call(5 /* sexnode_cap */, 1 /* TRANSLATE_ELF */, 0, 0);
-            return 0; // Repair Successful
-        }
-    }
-    -1 // Repair Failed
+#[alloc_error_handler]
+fn alloc_error_handler(_layout: Layout) -> ! {
+    loop {}
 }
+
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop { park_on_ring(); }
+    loop {}
 }

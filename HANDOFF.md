@@ -28,6 +28,7 @@ STATUS_EOF
 
 **Date:** April 18, 2026
 **Phase:** 17.5 (Pure Rust Driver Active) → Transitioning to Phase 18 (Cosmic/Orbital GUI Handoff).
+**Tranny Replaced with Tuxedo** the tranny tool has been purged and replaced by the rust tool Tuxedo
 **Status:** The "Black Screen of Life" is solved. The Higher-Half kernel boots in QEMU, and a pure in-kernel Rust driver is rendering a full-screen 32-bit ARGB blue gradient to the Limine Framebuffer.
 
 ---

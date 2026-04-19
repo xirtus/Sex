@@ -1,0 +1,323 @@
+WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-19 for version 1.97.0-nightly (0febdbab2 2026-04-18)
+info: downloading 3 components
+info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+
+  nightly-x86_64-unknown-linux-gnu installed - rustc 1.97.0-nightly (0febdbab2 2026-04-18)
+
+info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/src/rust-toolchain.toml')
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-19 for version 1.97.0-nightly (0febdbab2 2026-04-18)
+info: downloading component rust-src
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded conquer-util v0.3.0
+  Downloaded bit_field v0.10.3
+  Downloaded cfg-if v1.0.4
+  Downloaded bit v0.1.1
+  Downloaded tap v1.0.1
+  Downloaded limine v0.6.3
+  Downloaded managed v0.8.0
+  Downloaded lazy_static v1.5.0
+  Downloaded crossbeam-queue v0.3.12
+  Downloaded x2apic v0.5.0
+  Downloaded scopeguard v1.2.0
+  Downloaded volatile v0.4.6
+  Downloaded wyz v0.5.1
+  Downloaded unicode-ident v1.0.24
+  Downloaded spinning_top v0.3.0
+  Downloaded serde_derive v1.0.228
+  Downloaded serde v1.0.228
+  Downloaded x86_64 v0.15.4
+  Downloaded raw-cpuid v11.6.0
+  Downloaded heapless v0.9.2
+  Downloaded raw-cpuid v10.7.0
+  Downloaded serde_core v1.0.228
+  Downloaded proc-macro2 v1.0.106
+  Downloaded log v0.4.29
+  Downloaded aml v0.16.4
+  Downloaded spin v0.9.8
+  Downloaded paste v1.0.15
+  Downloaded lock_api v0.4.14
+  Downloaded linked_list_allocator v0.10.6
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded bitflags v2.11.1
+  Downloaded spinning_top v0.2.5
+  Downloaded spin v0.10.0
+  Downloaded rustversion v1.0.22
+  Downloaded quote v1.0.45
+  Downloaded pci_types v0.10.1
+  Downloaded nvme-oxide v0.4.1
+  Downloaded hash32 v0.3.1
+  Downloaded const_fn v0.4.12
+  Downloaded conquer-once v0.4.0
+  Downloaded bitvec v1.0.1
+  Downloaded byteorder v1.5.0
+  Downloaded bitflags v1.3.2
+  Downloaded acpi v6.1.1
+  Downloaded uart_16550 v0.3.2
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded radium v0.7.0
+  Downloaded funty v2.0.0
+  Downloaded syn v2.0.117
+  Downloaded smoltcp v0.13.0
+  Downloaded x86 v0.52.0
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded rustc-literal-escaper v0.0.7
+  Downloaded getopts v0.2.24
+  Downloaded foldhash v0.2.0
+  Downloaded rustc-demangle v0.1.27
+  Downloaded hashbrown v0.17.0
+  Downloaded libc v0.2.185
+   Compiling compiler_builtins v0.1.160 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling rustversion v1.0.22
+   Compiling proc-macro2 v1.0.106
+   Compiling const_fn v0.4.12
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.228
+   Compiling radium v0.7.0
+   Compiling paste v1.0.15
+   Compiling crossbeam-utils v0.8.21
+   Compiling x86 v0.52.0
+   Compiling heapless v0.9.2
+   Compiling serde v1.0.228
+   Compiling smoltcp v0.13.0
+   Compiling syn v2.0.117
+   Compiling serde_derive v1.0.228
+   Compiling alloc v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling scopeguard v1.2.0
+   Compiling bit_field v0.10.3
+   Compiling bitflags v2.11.1
+   Compiling byteorder v1.5.0
+   Compiling volatile v0.4.6
+   Compiling bitflags v1.3.2
+   Compiling tap v1.0.1
+   Compiling raw-cpuid v10.7.0
+   Compiling lock_api v0.4.14
+   Compiling log v0.4.29
+   Compiling wyz v0.5.1
+   Compiling hash32 v0.3.1
+   Compiling x86_64 v0.15.4
+   Compiling stable_deref_trait v1.2.1
+   Compiling spin v0.9.8
+   Compiling spinning_top v0.2.5
+   Compiling funty v2.0.0
+   Compiling spinning_top v0.3.0
+   Compiling bitvec v1.0.1
+   Compiling spin v0.10.0
+   Compiling pci_types v0.10.1
+   Compiling conquer-util v0.3.0
+   Compiling bit v0.1.1
+   Compiling managed v0.8.0
+   Compiling cfg-if v1.0.4
+   Compiling crossbeam-queue v0.3.12
+   Compiling conquer-once v0.4.0
+   Compiling acpi v6.1.1
+   Compiling x2apic v0.5.0
+   Compiling uart_16550 v0.3.2
+   Compiling libsys v0.1.0 (/src/sex-src/lib/libsys)
+   Compiling nvme-oxide v0.4.1
+   Compiling sex-pdx v0.1.0 (/src/crates/sex-pdx)
+   Compiling lazy_static v1.5.0
+   Compiling linked_list_allocator v0.10.6
+   Compiling aml v0.16.4
+   Compiling raw-cpuid v11.6.0
+   Compiling limine v0.6.3
+   Compiling sex-rt v0.1.0 (/src/sex-rt)
+   Compiling egui-hello v0.1.0 (/src/crates/egui-hello)
+warning: unused import: `sex_rt`
+ --> crates/egui-hello/src/main.rs:6:5
+  |
+6 | use sex_rt; // Corrected syntax: underscores only
+  |     ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `egui-hello` (bin "egui-hello") generated 1 warning (run `cargo fix --bin "egui-hello" -p egui-hello` to apply 1 suggestion)
+   Compiling sex-kernel v0.1.0 (/src/kernel)
+error[E0432]: unresolved import `limine::request::MemoryMapRequest`
+ --> kernel/src/memory/allocator.rs:2:5
+  |
+2 | use limine::request::MemoryMapRequest;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `MemoryMapRequest` in `request`
+  |
+help: a similar name exists in the module
+  |
+2 - use limine::request::MemoryMapRequest;
+2 + use limine::request::MemmapRequest;
+  |
+
+error[E0432]: unresolved import `limine::memory_map`
+ --> kernel/src/memory/allocator.rs:3:13
+  |
+3 | use limine::memory_map::EntryType;
+  |             ^^^^^^^^^^ could not find `memory_map` in `limine`
+
+error[E0433]: cannot find `pd` in `crate`
+ --> kernel/src/init.rs:1:12
+  |
+1 | use crate::pd::create::create_protection_domain;
+  |            ^^ could not find `pd` in the crate root
+
+error[E0432]: unresolved import `limine::request::MemoryMapRequest`
+ --> kernel/src/lib.rs:7:23
+  |
+7 | use limine::request::{MemoryMapRequest, HhdmRequest};
+  |                       ^^^^^^^^^^^^^^^^ no `MemoryMapRequest` in `request`
+  |
+help: a similar name exists in the module
+  |
+7 - use limine::request::{MemoryMapRequest, HhdmRequest};
+7 + use limine::request::{MemmapRequest, HhdmRequest};
+  |
+
+error[E0432]: unresolved import `crate::serial_println`
+ --> kernel/src/init.rs:2:5
+  |
+2 | use crate::serial_println;
+  |     ^^^^^^^^^^^^^^^^^^^^^ no `serial_println` in the root
+
+error[E0432]: unresolved import `crate::ipc`
+ --> kernel/src/init.rs:3:12
+  |
+3 | use crate::ipc::DOMAIN_REGISTRY;
+  |            ^^^ could not find `ipc` in the crate root
+
+error[E0432]: unresolved import `crate::capability`
+ --> kernel/src/init.rs:4:12
+  |
+4 | use crate::capability::{CapabilityData, IpcCapData};
+  |            ^^^^^^^^^^ unresolved import
+  |
+help: a similar path exists
+  |
+4 | use crate::pci_types::capability::{CapabilityData, IpcCapData};
+  |            +++++++++++
+
+error[E0433]: cannot find `serial_println` in `crate`
+   --> kernel/src/memory.rs:198:25
+    |
+198 |                  crate::serial_println!("FATAL: BitmapFrameAllocator failed contiguity invariant! count={}, i={}", count, i);
+    |                         ^^^^^^^^^^^^^^ could not find `serial_println` in the crate root
+
+error[E0433]: cannot find `serial_println` in `crate`
+   --> kernel/src/memory.rs:111:12
+    |
+111 |     crate::serial_println!("Sex: Memory init complete.");
+    |            ^^^^^^^^^^^^^^ could not find `serial_println` in the crate root
+
+error[E0433]: cannot find `serial_println` in `crate`
+  --> kernel/src/memory.rs:61:12
+   |
+61 |     crate::serial_println!("Sex: Initializing buddy allocator...");
+   |            ^^^^^^^^^^^^^^ could not find `serial_println` in the crate root
+
+error[E0433]: cannot find `serial_println` in `crate`
+  --> kernel/src/memory.rs:56:12
+   |
+56 |     crate::serial_println!("Sex: Initializing kernel heap...");
+   |            ^^^^^^^^^^^^^^ could not find `serial_println` in the crate root
+
+error[E0433]: cannot find `serial_println` in `crate`
+  --> kernel/src/memory.rs:48:12
+   |
+48 |     crate::serial_println!("Sex: Memory init starting...");
+   |            ^^^^^^^^^^^^^^ could not find `serial_println` in the crate root
+
+error[E0433]: cannot find `serial_println` in `crate`
+  --> kernel/src/memory/pku.rs:29:20
+   |
+29 |             crate::serial_println!("PKU: Security Violation - Invalid PKRU state attempted: {:#x}", val);
+   |                    ^^^^^^^^^^^^^^ could not find `serial_println` in the crate root
+
+error[E0433]: cannot find module or crate `alloc` in this scope
+  --> kernel/src/init.rs:19:21
+   |
+19 |     let kernel_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(crate::capability::ProtectionDomain::new(0, 0)));
+   |                     ^^^^^ use of unresolved module or unlinked crate `alloc`
+   |
+   = help: add `extern crate alloc` to use the `alloc` crate
+
+error[E0433]: cannot find module or crate `alloc` in this scope
+  --> kernel/src/init.rs:19:49
+   |
+19 |     let kernel_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(crate::capability::ProtectionDomain::new(0, 0)));
+   |                                                 ^^^^^ use of unresolved module or unlinked crate `alloc`
+   |
+   = help: add `extern crate alloc` to use the `alloc` crate
+
+error[E0433]: cannot find `capability` in `crate`
+  --> kernel/src/init.rs:19:79
+   |
+19 |     let kernel_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(crate::capability::ProtectionDomain::new(0, 0)));
+   |                                                                               ^^^^^^^^^^ unresolved import
+   |
+help: a similar path exists
+   |
+19 |     let kernel_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(crate::pci_types::capability::ProtectionDomain::new(0, 0)));
+   |                                                                               +++++++++++
+
+error[E0433]: cannot find `devmgr` in `crate`
+  --> kernel/src/init.rs:69:12
+   |
+69 |     crate::devmgr::init(sexdrive, sexdisplay);
+   |            ^^^^^^ could not find `devmgr` in the crate root
+
+warning: unused import: `core::alloc::GlobalAlloc`
+ --> kernel/src/memory.rs:1:5
+  |
+1 | use core::alloc::GlobalAlloc;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: no method named `get_response` found for struct `limine::request::Request<HhdmRespData>` in the current scope
+  --> kernel/src/memory.rs:58:29
+   |
+58 |     let hhdm = HHDM_REQUEST.get_response().unwrap();
+   |                             ^^^^^^^^^^^^
+   |
+help: there is a method `response` with a similar name
+   |
+58 -     let hhdm = HHDM_REQUEST.get_response().unwrap();
+58 +     let hhdm = HHDM_REQUEST.response().unwrap();
+   |
+
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+  --> kernel/src/memory.rs:59:5
+   |
+59 |     allocator::init_heap(mmap, hhdm.offset);
+   |     ^^^^^^^^^^^^^^^^^^^^       ----------- unexpected argument #2
+   |
+note: function defined here
+  --> kernel/src/memory/allocator.rs:10:8
+   |
+10 | pub fn init_heap(mmap_request: &MemoryMapRequest) {
+   |        ^^^^^^^^^
+help: remove the extra argument
+   |
+59 -     allocator::init_heap(mmap, hhdm.offset);
+59 +     allocator::init_heap(mmap);
+   |
+
+error[E0599]: no method named `init_metadata` found for struct `LockedHeap` in the current scope
+  --> kernel/src/memory.rs:85:37
+   |
+85 |         allocator::GLOBAL_ALLOCATOR.init_metadata(metadata_vaddr, total_pages);
+   |                                     ^^^^^^^^^^^^^ method not found in `LockedHeap`
+
+error[E0599]: no method named `add_memory_region` found for struct `LockedHeap` in the current scope
+   --> kernel/src/memory.rs:100:49
+    |
+100 |                     allocator::GLOBAL_ALLOCATOR.add_memory_region(start, len);
+    |                                                 ^^^^^^^^^^^^^^^^^ method not found in `LockedHeap`
+
+Some errors have detailed explanations: E0061, E0432, E0433, E0599.
+For more information about an error, try `rustc --explain E0061`.
+warning: `sex-kernel` (lib) generated 1 warning
+error: could not compile `sex-kernel` (lib) due to 21 previous errors; 1 warning emitted
+warning: build failed, waiting for other jobs to finish...

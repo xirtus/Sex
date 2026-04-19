@@ -1,0 +1,27 @@
+#![no_std]
+#![feature(alloc_error_handler)]
+
+extern crate alloc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::boxed::Box;
+
+use core::alloc::{GlobalAlloc, Layout};
+
+struct SimpleAlloc;
+#[global_allocator]
+static ALLOCATOR: SimpleAlloc = SimpleAlloc;
+unsafe impl GlobalAlloc for SimpleAlloc {
+    unsafe fn alloc(&self, _layout: Layout) -> *mut u8 { core::ptr::null_mut() }
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
+}
+
+#[alloc_error_handler]
+fn alloc_error_handler(_layout: Layout) -> ! { loop {} }
+
+// ... Existing orbclient logic follows ...
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}

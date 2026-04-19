@@ -1,0 +1,167 @@
+WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-19 for version 1.97.0-nightly (0febdbab2 2026-04-18)
+info: downloading 3 components
+info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+
+  nightly-x86_64-unknown-linux-gnu installed - rustc 1.97.0-nightly (0febdbab2 2026-04-18)
+
+info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/src/rust-toolchain.toml')
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-19 for version 1.97.0-nightly (0febdbab2 2026-04-18)
+info: downloading component rust-src
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded conquer-util v0.3.0
+  Downloaded scopeguard v1.2.0
+  Downloaded crossbeam-queue v0.3.12
+  Downloaded byteorder v1.5.0
+  Downloaded hash32 v0.3.1
+  Downloaded const_fn v0.4.12
+  Downloaded uart_16550 v0.3.2
+  Downloaded limine v0.6.3
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded cfg-if v1.0.4
+  Downloaded bit_field v0.10.3
+  Downloaded lazy_static v1.5.0
+  Downloaded managed v0.8.0
+  Downloaded conquer-once v0.4.0
+  Downloaded bit v0.1.1
+  Downloaded volatile v0.4.6
+  Downloaded tap v1.0.1
+  Downloaded x2apic v0.5.0
+  Downloaded paste v1.0.15
+  Downloaded aml v0.16.4
+  Downloaded radium v0.7.0
+  Downloaded funty v2.0.0
+  Downloaded bitflags v1.3.2
+  Downloaded wyz v0.5.1
+  Downloaded rustversion v1.0.22
+  Downloaded linked_list_allocator v0.10.6
+  Downloaded quote v1.0.45
+  Downloaded nvme-oxide v0.4.1
+  Downloaded pci_types v0.10.1
+  Downloaded spin v0.10.0
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded spin v0.9.8
+  Downloaded lock_api v0.4.14
+  Downloaded log v0.4.29
+  Downloaded serde_derive v1.0.228
+  Downloaded bitflags v2.11.1
+  Downloaded unicode-ident v1.0.24
+  Downloaded spinning_top v0.3.0
+  Downloaded spinning_top v0.2.5
+  Downloaded proc-macro2 v1.0.106
+  Downloaded serde_core v1.0.228
+  Downloaded serde v1.0.228
+  Downloaded raw-cpuid v10.7.0
+  Downloaded x86_64 v0.15.4
+  Downloaded raw-cpuid v11.6.0
+  Downloaded acpi v6.1.1
+  Downloaded heapless v0.9.2
+  Downloaded bitvec v1.0.1
+  Downloaded syn v2.0.117
+  Downloaded smoltcp v0.13.0
+  Downloaded x86 v0.52.0
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded rustc-literal-escaper v0.0.7
+  Downloaded rustc-demangle v0.1.27
+  Downloaded foldhash v0.2.0
+  Downloaded getopts v0.2.24
+  Downloaded hashbrown v0.17.0
+  Downloaded libc v0.2.185
+   Compiling compiler_builtins v0.1.160 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling serde_core v1.0.228
+   Compiling radium v0.7.0
+   Compiling x86 v0.52.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling serde v1.0.228
+   Compiling heapless v0.9.2
+   Compiling smoltcp v0.13.0
+   Compiling alloc v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling scopeguard v1.2.0
+   Compiling bit_field v0.10.3
+   Compiling bitflags v2.11.1
+   Compiling volatile v0.4.6
+   Compiling bitflags v1.3.2
+   Compiling byteorder v1.5.0
+   Compiling log v0.4.29
+   Compiling raw-cpuid v10.7.0
+   Compiling lock_api v0.4.14
+   Compiling tap v1.0.1
+   Compiling funty v2.0.0
+   Compiling hash32 v0.3.1
+   Compiling x86_64 v0.15.4
+   Compiling wyz v0.5.1
+   Compiling stable_deref_trait v1.2.1
+   Compiling spin v0.9.8
+   Compiling spinning_top v0.2.5
+   Compiling bitvec v1.0.1
+   Compiling spin v0.10.0
+   Compiling spinning_top v0.3.0
+   Compiling pci_types v0.10.1
+   Compiling managed v0.8.0
+   Compiling cfg-if v1.0.4
+   Compiling conquer-util v0.3.0
+   Compiling bit v0.1.1
+   Compiling uart_16550 v0.3.2
+   Compiling x2apic v0.5.0
+   Compiling crossbeam-queue v0.3.12
+   Compiling acpi v6.1.1
+   Compiling conquer-once v0.4.0
+   Compiling nvme-oxide v0.4.1
+   Compiling sex-pdx v0.1.0 (/src/crates/sex-pdx)
+   Compiling lazy_static v1.5.0
+   Compiling aml v0.16.4
+   Compiling libsys v0.1.0 (/src/sex-src/lib/libsys)
+   Compiling linked_list_allocator v0.10.6
+   Compiling raw-cpuid v11.6.0
+   Compiling limine v0.6.3
+   Compiling sex-rt v0.1.0 (/src/sex-rt)
+   Compiling egui-hello v0.1.0 (/src/crates/egui-hello)
+warning: unused import: `sex_rt`
+ --> crates/egui-hello/src/main.rs:6:5
+  |
+6 | use sex_rt; // Corrected syntax: underscores only
+  |     ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `egui-hello` (bin "egui-hello") generated 1 warning (run `cargo fix --bin "egui-hello" -p egui-hello` to apply 1 suggestion)
+   Compiling sex-kernel v0.1.0 (/src/kernel)
+error[E0432]: unresolved import `limine::memory_map`
+ --> kernel/src/memory/allocator.rs:3:13
+  |
+3 | use limine::memory_map::EntryType;
+  |             ^^^^^^^^^^ could not find `memory_map` in `limine`
+
+error[E0432]: unresolved import `limine::request::MemoryMapRequest`
+ --> kernel/src/lib.rs:7:23
+  |
+7 | use limine::request::{MemoryMapRequest, HhdmRequest};
+  |                       ^^^^^^^^^^^^^^^^ no `MemoryMapRequest` in `request`
+  |
+help: a similar name exists in the module
+  |
+7 - use limine::request::{MemoryMapRequest, HhdmRequest};
+7 + use limine::request::{MemmapRequest, HhdmRequest};
+  |
+
+error[E0599]: no method named `get_response` found for reference `&limine::request::Request<MemmapRespData>` in the current scope
+  --> kernel/src/memory/allocator.rs:11:33
+   |
+11 |     let response = mmap_request.get_response().expect("Limine Memmap Request Failed");
+   |                                 ^^^^^^^^^^^^
+   |
+help: there is a method `response` with a similar name
+   |
+11 -     let response = mmap_request.get_response().expect("Limine Memmap Request Failed");
+11 +     let response = mmap_request.response().expect("Limine Memmap Request Failed");
+   |
+
+Some errors have detailed explanations: E0432, E0599.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `sex-kernel` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...

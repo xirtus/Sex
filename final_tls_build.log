@@ -1,0 +1,268 @@
+WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-19 for version 1.97.0-nightly (0febdbab2 2026-04-18)
+info: downloading 3 components
+
+info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+  nightly-x86_64-unknown-linux-gnu installed - rustc 1.97.0-nightly (0febdbab2 2026-04-18)
+
+info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/src/rust-toolchain.toml')
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-19 for version 1.97.0-nightly (0febdbab2 2026-04-18)
+info: downloading component rust-src
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded acpi v6.1.1
+  Downloaded radium v0.7.0
+  Downloaded cfg-if v1.0.4
+  Downloaded crossbeam-queue v0.3.12
+  Downloaded conquer-once v0.4.0
+  Downloaded hash32 v0.3.1
+  Downloaded scopeguard v1.2.0
+  Downloaded tap v1.0.1
+  Downloaded funty v2.0.0
+  Downloaded volatile v0.4.6
+  Downloaded x2apic v0.5.0
+  Downloaded bit_field v0.10.3
+  Downloaded managed v0.8.0
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded bit v0.1.1
+  Downloaded uart_16550 v0.3.2
+  Downloaded const_fn v0.4.12
+  Downloaded conquer-util v0.3.0
+  Downloaded lazy_static v1.5.0
+  Downloaded limine v0.6.3
+  Downloaded byteorder v1.5.0
+  Downloaded paste v1.0.15
+  Downloaded linked_list_allocator v0.10.6
+  Downloaded lock_api v0.4.14
+  Downloaded wyz v0.5.1
+  Downloaded pci_types v0.10.1
+  Downloaded nvme-oxide v0.4.1
+  Downloaded bitflags v1.3.2
+  Downloaded rustversion v1.0.22
+  Downloaded spin v0.10.0
+  Downloaded spin v0.9.8
+  Downloaded quote v1.0.45
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded bitflags v2.11.1
+  Downloaded spinning_top v0.2.5
+  Downloaded proc-macro2 v1.0.106
+  Downloaded spinning_top v0.3.0
+  Downloaded serde_core v1.0.228
+  Downloaded serde_derive v1.0.228
+  Downloaded unicode-ident v1.0.24
+  Downloaded aml v0.16.4
+  Downloaded log v0.4.29
+  Downloaded serde v1.0.228
+  Downloaded x86_64 v0.15.4
+  Downloaded raw-cpuid v11.6.0
+  Downloaded raw-cpuid v10.7.0
+  Downloaded heapless v0.9.2
+  Downloaded bitvec v1.0.1
+  Downloaded syn v2.0.117
+  Downloaded smoltcp v0.13.0
+  Downloaded x86 v0.52.0
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded rustc-demangle v0.1.27
+  Downloaded foldhash v0.2.0
+  Downloaded rustc-literal-escaper v0.0.7
+  Downloaded getopts v0.2.24
+  Downloaded hashbrown v0.17.0
+  Downloaded libc v0.2.185
+   Compiling compiler_builtins v0.1.160 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling serde_core v1.0.228
+   Compiling radium v0.7.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling heapless v0.9.2
+   Compiling paste v1.0.15
+   Compiling serde v1.0.228
+   Compiling x86 v0.52.0
+   Compiling smoltcp v0.13.0
+   Compiling alloc v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling scopeguard v1.2.0
+   Compiling bitflags v2.11.1
+   Compiling bit_field v0.10.3
+   Compiling bitflags v1.3.2
+   Compiling volatile v0.4.6
+   Compiling byteorder v1.5.0
+   Compiling log v0.4.29
+   Compiling raw-cpuid v10.7.0
+   Compiling lock_api v0.4.14
+   Compiling tap v1.0.1
+   Compiling funty v2.0.0
+   Compiling hash32 v0.3.1
+   Compiling x86_64 v0.15.4
+   Compiling wyz v0.5.1
+   Compiling spin v0.9.8
+   Compiling spinning_top v0.2.5
+   Compiling stable_deref_trait v1.2.1
+   Compiling bitvec v1.0.1
+   Compiling spin v0.10.0
+   Compiling spinning_top v0.3.0
+   Compiling pci_types v0.10.1
+   Compiling conquer-util v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling managed v0.8.0
+   Compiling bit v0.1.1
+   Compiling uart_16550 v0.3.2
+   Compiling x2apic v0.5.0
+   Compiling conquer-once v0.4.0
+   Compiling acpi v6.1.1
+   Compiling crossbeam-queue v0.3.12
+   Compiling nvme-oxide v0.4.1
+   Compiling libsys v0.1.0 (/src/sex-src/lib/libsys)
+   Compiling aml v0.16.4
+   Compiling sex-pdx v0.1.0 (/src/crates/sex-pdx)
+   Compiling lazy_static v1.5.0
+   Compiling linked_list_allocator v0.10.6
+   Compiling raw-cpuid v11.6.0
+   Compiling limine v0.6.3
+   Compiling sex-rt v0.1.0 (/src/sex-rt)
+   Compiling egui-hello v0.1.0 (/src/crates/egui-hello)
+warning: unused import: `sex_rt`
+ --> crates/egui-hello/src/main.rs:6:5
+  |
+6 | use sex_rt; // Corrected syntax: underscores only
+  |     ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `egui-hello` (bin "egui-hello") generated 1 warning (run `cargo fix --bin "egui-hello" -p egui-hello` to apply 1 suggestion)
+   Compiling sex-kernel v0.1.0 (/src/kernel)
+error[E0658]: use of unstable library feature `alloc_error_handler`
+  --> kernel/src/memory/allocator.rs:29:3
+   |
+29 | #[alloc_error_handler]
+   |   ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: see issue #51540 <https://github.com/rust-lang/rust/issues/51540> for more information
+   = help: add `#![feature(alloc_error_handler)]` to the crate attributes to enable
+   = note: this compiler was built on 2026-04-18; consider upgrading it if it is out of date
+
+error[E0432]: unresolved import `crate::memory::allocator::GLOBAL_ALLOCATOR`
+ --> kernel/src/loader/elf.rs:1:5
+  |
+1 | use crate::memory::allocator::GLOBAL_ALLOCATOR;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `GLOBAL_ALLOCATOR` in `memory::allocator`
+
+error[E0433]: cannot find module or crate `sex_kernel` in this scope
+  --> kernel/src/memory/allocator.rs:26:5
+   |
+26 |     sex_kernel::serial_println!("[SexOS] LockedHeap initialized at virtual {:#x}", virt_addr);
+   |     ^^^^^^^^^^ use of unresolved module or unlinked crate `sex_kernel`
+
+error[E0433]: cannot find `response` in `limine`
+  --> kernel/src/memory/allocator.rs:16:43
+   |
+16 |         .find(|e| e.entry_type == limine::response::EntryType::USABLE && e.length >= HEAP_SIZE as u64)
+   |                                           ^^^^^^^^ could not find `response` in `limine`
+
+error[E0425]: cannot find type `PageMetadata` in module `allocator`
+  --> kernel/src/memory.rs:69:71
+   |
+69 |     let metadata_size = total_pages * core::mem::size_of::<allocator::PageMetadata>() as u64;
+   |                                                                       ^^^^^^^^^^^^ not found in `allocator`
+
+error[E0425]: cannot find value `GLOBAL_ALLOCATOR` in module `allocator`
+  --> kernel/src/memory.rs:80:20
+   |
+80 |         allocator::GLOBAL_ALLOCATOR.init_metadata(metadata_vaddr, total_pages);
+   |                    ^^^^^^^^^^^^^^^^ not found in `allocator`
+
+error[E0425]: cannot find value `GLOBAL_ALLOCATOR` in module `allocator`
+  --> kernel/src/memory.rs:95:32
+   |
+95 |                     allocator::GLOBAL_ALLOCATOR.add_memory_region(start, len);
+   |                                ^^^^^^^^^^^^^^^^ not found in `allocator`
+
+error[E0425]: cannot find function `alloc_frame` in module `crate::memory::allocator`
+  --> kernel/src/benchmark.rs:39:44
+   |
+39 |     let buffer = crate::memory::allocator::alloc_frame().expect("Bench: OOM");
+   |                                            ^^^^^^^^^^^ not found in `crate::memory::allocator`
+
+error[E0425]: cannot find value `GLOBAL_ALLOCATOR` in module `crate::memory::allocator`
+  --> kernel/src/init.rs:23:39
+   |
+23 |     assert!(crate::memory::allocator::GLOBAL_ALLOCATOR.verify_invariants());
+   |                                       ^^^^^^^^^^^^^^^^ not found in `crate::memory::allocator`
+
+error[E0425]: cannot find value `GLOBAL_ALLOCATOR` in module `crate::memory::allocator`
+  --> kernel/src/init.rs:41:39
+   |
+41 |     assert!(crate::memory::allocator::GLOBAL_ALLOCATOR.verify_invariants(), "Phase 14: Allocator Invariant Violation");
+   |                                       ^^^^^^^^^^^^^^^^ not found in `crate::memory::allocator`
+
+error: cannot define multiple global allocators
+  --> kernel/src/lib.rs:44:1
+   |
+43 | #[global_allocator]
+   | ------------------- in this attribute macro expansion
+44 | pub static ALLOCATOR: LockedHeap = LockedHeap::empty();
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot define a new global allocator
+   |
+  ::: kernel/src/memory/allocator.rs:8:1
+   |
+ 8 | static ALLOCATOR: LockedHeap = LockedHeap::empty();
+   | --------------------------------------------------- previous global allocator defined here
+
+warning: unused import: `x86_64::structures::paging::mapper::MapToError`
+ --> kernel/src/memory/allocator.rs:1:5
+  |
+1 | use x86_64::structures::paging::mapper::MapToError;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `FrameAllocator`, `Mapper`, `PageTableFlags`, `Page`, and `Size4KiB`
+ --> kernel/src/memory/allocator.rs:2:34
+  |
+2 | use x86_64::structures::paging::{FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB};
+  |                                  ^^^^^^^^^^^^^^  ^^^^^^  ^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^
+
+warning: unused import: `x86_64::VirtAddr`
+ --> kernel/src/memory/allocator.rs:3:5
+  |
+3 | use x86_64::VirtAddr;
+  |     ^^^^^^^^^^^^^^^^
+
+error[E0609]: no field `entry_type` on type `&&&limine::memmap::Entry`
+  --> kernel/src/memory/allocator.rs:16:21
+   |
+16 |         .find(|e| e.entry_type == limine::response::EntryType::USABLE && e.length >= HEAP_SIZE as u64)
+   |                     ^^^^^^^^^^ unknown field
+   |
+   = note: available fields are: `base`, `length`, `type_`
+
+error[E0308]: arguments to this function are incorrect
+  --> kernel/src/memory.rs:54:5
+   |
+54 |     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Kernel Heap Init Failed");
+   |     ^^^^^^^^^^^^^^^^^^^^              -------------------- expected `u64`, found `&mut BitmapFrameAllocator`
+   |
+note: expected `&Response<MemmapRespData>`, found `&mut OffsetPageTable<'_>`
+  --> kernel/src/memory.rs:54:26
+   |
+54 |     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Kernel Heap Init Failed");
+   |                          ^^^^^^^^^^^
+   = note:      expected reference `&'static Response<MemmapRespData>`
+           found mutable reference `&mut OffsetPageTable<'_>`
+note: function defined here
+  --> kernel/src/memory/allocator.rs:13:8
+   |
+13 | pub fn init_heap(mmap: &'static MemmapResponse, hhdm_offset: u64) {
+   |        ^^^^^^^^^ -----------------------------  ----------------
+
+error[E0599]: no method named `expect` found for unit type `()` in the current scope
+  --> kernel/src/memory.rs:54:61
+   |
+54 |     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Kernel Heap Init Failed");
+   |                                                             ^^^^^^ method not found in `()`
+
+Some errors have detailed explanations: E0308, E0425, E0432, E0433, E0599, E0609, E0658.
+For more information about an error, try `rustc --explain E0308`.
+warning: `sex-kernel` (lib) generated 3 warnings
+error: could not compile `sex-kernel` (lib) due to 14 previous errors; 3 warnings emitted

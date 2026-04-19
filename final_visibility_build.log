@@ -1,0 +1,204 @@
+WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-19 for version 1.97.0-nightly (0febdbab2 2026-04-18)
+info: downloading 3 components
+info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+
+  nightly-x86_64-unknown-linux-gnu installed - rustc 1.97.0-nightly (0febdbab2 2026-04-18)
+
+info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/src/rust-toolchain.toml')
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-19 for version 1.97.0-nightly (0febdbab2 2026-04-18)
+info: downloading component rust-src
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded lock_api v0.4.14
+  Downloaded limine v0.6.3
+  Downloaded aml v0.16.4
+  Downloaded hash32 v0.3.1
+  Downloaded crossbeam-queue v0.3.12
+  Downloaded bit_field v0.10.3
+  Downloaded volatile v0.4.6
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded radium v0.7.0
+  Downloaded funty v2.0.0
+  Downloaded const_fn v0.4.12
+  Downloaded conquer-util v0.3.0
+  Downloaded scopeguard v1.2.0
+  Downloaded bit v0.1.1
+  Downloaded uart_16550 v0.3.2
+  Downloaded conquer-once v0.4.0
+  Downloaded managed v0.8.0
+  Downloaded lazy_static v1.5.0
+  Downloaded x2apic v0.5.0
+  Downloaded tap v1.0.1
+  Downloaded byteorder v1.5.0
+  Downloaded nvme-oxide v0.4.1
+  Downloaded quote v1.0.45
+  Downloaded cfg-if v1.0.4
+  Downloaded wyz v0.5.1
+  Downloaded paste v1.0.15
+  Downloaded linked_list_allocator v0.10.6
+  Downloaded bitflags v1.3.2
+  Downloaded spin v0.9.8
+  Downloaded rustversion v1.0.22
+  Downloaded bitflags v2.11.1
+  Downloaded pci_types v0.10.1
+  Downloaded serde_core v1.0.228
+  Downloaded spin v0.10.0
+  Downloaded spinning_top v0.3.0
+  Downloaded log v0.4.29
+  Downloaded proc-macro2 v1.0.106
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded unicode-ident v1.0.24
+  Downloaded spinning_top v0.2.5
+  Downloaded serde_derive v1.0.228
+  Downloaded serde v1.0.228
+  Downloaded raw-cpuid v10.7.0
+  Downloaded x86_64 v0.15.4
+  Downloaded raw-cpuid v11.6.0
+  Downloaded acpi v6.1.1
+  Downloaded heapless v0.9.2
+  Downloaded bitvec v1.0.1
+  Downloaded syn v2.0.117
+  Downloaded smoltcp v0.13.0
+  Downloaded x86 v0.52.0
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded foldhash v0.2.0
+  Downloaded rustc-literal-escaper v0.0.7
+  Downloaded hashbrown v0.17.0
+  Downloaded rustc-demangle v0.1.27
+  Downloaded getopts v0.2.24
+  Downloaded libc v0.2.185
+   Compiling compiler_builtins v0.1.160 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling serde_core v1.0.228
+   Compiling radium v0.7.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling heapless v0.9.2
+   Compiling serde v1.0.228
+   Compiling x86 v0.52.0
+   Compiling smoltcp v0.13.0
+   Compiling alloc v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling scopeguard v1.2.0
+   Compiling bitflags v2.11.1
+   Compiling bit_field v0.10.3
+   Compiling bitflags v1.3.2
+   Compiling byteorder v1.5.0
+   Compiling volatile v0.4.6
+   Compiling tap v1.0.1
+   Compiling raw-cpuid v10.7.0
+   Compiling lock_api v0.4.14
+   Compiling log v0.4.29
+   Compiling wyz v0.5.1
+   Compiling funty v2.0.0
+   Compiling x86_64 v0.15.4
+   Compiling hash32 v0.3.1
+   Compiling spin v0.9.8
+   Compiling spinning_top v0.2.5
+   Compiling stable_deref_trait v1.2.1
+   Compiling spinning_top v0.3.0
+   Compiling bitvec v1.0.1
+   Compiling spin v0.10.0
+   Compiling pci_types v0.10.1
+   Compiling conquer-util v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling managed v0.8.0
+   Compiling bit v0.1.1
+   Compiling uart_16550 v0.3.2
+   Compiling conquer-once v0.4.0
+   Compiling x2apic v0.5.0
+   Compiling acpi v6.1.1
+   Compiling crossbeam-queue v0.3.12
+   Compiling nvme-oxide v0.4.1
+   Compiling sex-pdx v0.1.0 (/src/crates/sex-pdx)
+   Compiling lazy_static v1.5.0
+   Compiling aml v0.16.4
+   Compiling linked_list_allocator v0.10.6
+   Compiling libsys v0.1.0 (/src/sex-src/lib/libsys)
+   Compiling raw-cpuid v11.6.0
+   Compiling limine v0.6.3
+   Compiling sex-rt v0.1.0 (/src/sex-rt)
+   Compiling egui-hello v0.1.0 (/src/crates/egui-hello)
+warning: unused import: `sex_rt`
+ --> crates/egui-hello/src/main.rs:6:5
+  |
+6 | use sex_rt; // Corrected syntax: underscores only
+  |     ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling sex-kernel v0.1.0 (/src/kernel)
+warning: `egui-hello` (bin "egui-hello") generated 1 warning (run `cargo fix --bin "egui-hello" -p egui-hello` to apply 1 suggestion)
+error[E0432]: unresolved import `limine::response`
+ --> kernel/src/memory/allocator.rs:2:13
+  |
+2 | use limine::response::MemoryMapResponse;
+  |             ^^^^^^^^ could not find `response` in `limine`
+
+error[E0432]: unresolved import `limine::memory_map`
+ --> kernel/src/memory/allocator.rs:3:13
+  |
+3 | use limine::memory_map::EntryType;
+  |             ^^^^^^^^^^ could not find `memory_map` in `limine`
+
+error[E0432]: unresolved import `crate::MEMMAP_REQUEST`
+ --> kernel/src/memory.rs:1:5
+  |
+1 | use crate::MEMMAP_REQUEST;
+  |     ^^^^^^^^^^^^^^^^^^^^^ no `MEMMAP_REQUEST` in the root
+
+error[E0432]: unresolved import `crate::HHDM_REQUEST`
+ --> kernel/src/memory.rs:2:5
+  |
+2 | use crate::HHDM_REQUEST;
+  |     ^^^^^^^^^^^^^^^^^^^ no `HHDM_REQUEST` in the root
+
+error[E0432]: unresolved import `crate::memory::allocator::GLOBAL_ALLOCATOR`
+ --> kernel/src/loader/elf.rs:1:5
+  |
+1 | use crate::memory::allocator::GLOBAL_ALLOCATOR;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `GLOBAL_ALLOCATOR` in `memory::allocator`
+
+error[E0425]: cannot find value `GLOBAL_ALLOCATOR` in module `allocator`
+  --> kernel/src/memory.rs:84:20
+   |
+84 |         allocator::GLOBAL_ALLOCATOR.init_metadata(metadata_vaddr, total_pages);
+   |                    ^^^^^^^^^^^^^^^^ not found in `allocator`
+
+error[E0425]: cannot find value `GLOBAL_ALLOCATOR` in module `allocator`
+  --> kernel/src/memory.rs:99:32
+   |
+99 |                     allocator::GLOBAL_ALLOCATOR.add_memory_region(start, len);
+   |                                ^^^^^^^^^^^^^^^^ not found in `allocator`
+
+error[E0425]: cannot find value `GLOBAL_ALLOCATOR` in module `crate::memory::allocator`
+  --> kernel/src/init.rs:23:39
+   |
+23 |     assert!(crate::memory::allocator::GLOBAL_ALLOCATOR.verify_invariants());
+   |                                       ^^^^^^^^^^^^^^^^ not found in `crate::memory::allocator`
+
+error[E0425]: cannot find value `GLOBAL_ALLOCATOR` in module `crate::memory::allocator`
+  --> kernel/src/init.rs:41:39
+   |
+41 |     assert!(crate::memory::allocator::GLOBAL_ALLOCATOR.verify_invariants(), "Phase 14: Allocator Invariant Violation");
+   |                                       ^^^^^^^^^^^^^^^^ not found in `crate::memory::allocator`
+
+error: cannot define multiple global allocators
+  --> kernel/src/lib.rs:44:1
+   |
+43 | #[global_allocator]
+   | ------------------- in this attribute macro expansion
+44 | pub static ALLOCATOR: LockedHeap = LockedHeap::empty();
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot define a new global allocator
+   |
+  ::: kernel/src/memory/allocator.rs:9:1
+   |
+ 9 | pub static ALLOCATOR: LockedHeap = LockedHeap::empty();
+   | ------------------------------------------------------- previous global allocator defined here
+
+Some errors have detailed explanations: E0425, E0432.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `sex-kernel` (lib) due to 10 previous errors
+warning: build failed, waiting for other jobs to finish...
