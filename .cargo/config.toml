@@ -1,9 +1,6 @@
 [build]
 target = "x86_64-unknown-none"
+rustflags = ["-C", "target-cpu=generic"]
 
 [unstable]
-build-std = ["core", "alloc"]
-build-std-features = ["compiler-builtins-mem"]
-
-[target.x86_64-unknown-none]
-runner = "qemu-system-x86_64 -machine q35 -cpu Skylake-Client,+pku,+smep,+smap -m 2G -serial stdio -display none -device intel-iommu -drive format=raw,file="
+build-std = ["core", "alloc", "compiler_builtins"]

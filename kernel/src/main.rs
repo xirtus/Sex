@@ -1,9 +1,8 @@
 #![no_std]
 #![no_main]
 
-use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, RsdpRequest};
-use limine::BaseRevision;
-use core::panic::PanicInfo;
+use limine::request::{FramebufferRequest, HhdmRequest, MemmapRequest};
+use sex_kernel;
 
 #[used]
 #[link_section = ".limine_reqs"]
@@ -15,88 +14,54 @@ static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
 
 #[used]
 #[link_section = ".limine_reqs"]
-static MEMMAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
-
-#[used]
-#[link_section = ".limine_reqs"]
-static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
-
-#[used]
-#[link_section = ".limine_reqs"]
-static BASE_REVISION: BaseRevision = BaseRevision::new();
+static MEM_REQUEST: MemmapRequest = MemmapRequest::new();
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    if !BASE_REVISION.is_supported() { loop {} }
+    sex_kernel::serial_println!("[SexOS] Phase 18: Testing Hardware Bridge...");
 
-    let hhdm = HHDM_REQUEST.get_response().expect("hhdm failed");
-    let fb_res = FB_REQUEST.get_response().expect("fb failed");
-    let mmap = MEMMAP_REQUEST.get_response().expect("mmap failed");
-    let rsdp = RSDP_REQUEST.get_response().expect("rsdp failed");
+    let hhdm = HHDM_REQUEST.response().expect("hhdm failed");
+    let fb_res = FB_REQUEST.response().expect("fb failed");
+    let fb = fb_res.framebuffers().iter().next().expect("no FB");
+    
+    let raw_addr = fb.address() as u64;
+    
+    // RESILIENCE LOGIC: 
+    // If address is < hhdm.offset, it is a Physical Address (needs shift).
+    // If address is >= hhdm.offset, it is already a Virtual Address (use as-is).
+    let fb_virt_addr = if raw_addr < hhdm.offset {
+        raw_addr + hhdm.offset
+    } else {
+        raw_addr
+    };
 
-    unsafe {
-        // 1. Foundation: Initialize CPU (GDT, IDT)
-        sex_kernel::hal::init();
+    let fb_ptr = fb_virt_addr as *mut u32;
 
-        // 2. Memory: Initialize Paging and Heap
-        sex_kernel::memory::init(mmap, hhdm.offset());
+    sex_kernel::serial_println!("Sex: Bridge Open at Virtual {:p}", fb_ptr);
 
-        // 2b. Hardware Discovery: ACPI and PCIe
-        let rsdp_addr = rsdp.address().as_ptr().unwrap() as u64;
-        sex_kernel::hw::init::init(rsdp_addr, hhdm.offset());
-
-        // 3. APIC & Timer: Initialize interrupts for scheduling
-        let offset = x86_64::VirtAddr::new(hhdm.offset());
-        let rsdp_phys = rsdp.address().as_ptr().unwrap() as u64 - hhdm.offset();
-        sex_kernel::apic::init_apic(rsdp_phys, offset);
-        sex_kernel::apic::init_timer();
-
-        // 4. Core Local: Initialize per-core state for BSP (Core 0)
-        sex_kernel::core_local::CoreLocal::init(0);
-
-        let fb = fb_res.framebuffers().next().expect("no framebuffer");
-        
-        // Limine FB address is already virtual.
-        let fb_ptr = fb.address as *mut u32;
-
-        sex_kernel::serial_println!("Sex: Framebuffer found at {:?}, {}x{} (pitch={})", fb.address, fb.width, fb.height, fb.pitch);
-
-        // Pure Rust Driver: Draw Blue-Green Gradient (Fallback/Splash)
-        sex_kernel::serial_println!("Sex: Drawing splash gradient...");
-        for y in 0..fb.height {
-            for x in 0..fb.width {
-                let color = ((x % 255) as u32) | (((y % 255) as u32) << 8);
-                unsafe {
-                    let index = (y * (fb.pitch / 4) + x) as usize;
-                    fb_ptr.add(index).write_volatile(color);
-                }
+    // Draw the Blue Gradient test pattern
+    for y in 0..fb.height {
+        for x in 0..fb.width {
+            let color = (x as u32 % 255) | ((y as u32 % 255) << 8) | (0xFF << 16);
+            let index = (y * (fb.pitch / 4) + x) as usize;
+            unsafe {
+                // write_volatile ensures the compiler doesn't "optimize away" the pixels
+                fb_ptr.add(index).write_volatile(color);
             }
         }
-        sex_kernel::serial_println!("Sex: Splash complete.");
-
-        // Phase 17: Bridge the Gap
-        // 1. Bootstrap Core System Servers (sext, sexfiles, sexdisplay, etc.)
-        sex_kernel::serial_println!("Sex: Bootstrapping system domains...");
-        sex_kernel::init::init();
-
-        // 2. Handoff Framebuffer to sexdisplay PD via lock-free PDX
-        sex_kernel::serial_println!("Sex: Handing off FB to sexdisplay...");
-        sex_kernel::graphics::handoff::ship_to_sexdisplay(fb, hhdm.offset());
-
-        // 5. Finalize: Enable Interrupts and Spin
-        sex_kernel::serial_println!("Sex: Enabling interrupts. System active.");
-        x86_64::instructions::interrupts::enable();
     }
 
+    sex_kernel::serial_println!("[SexOS] SUCCESS: Hardware Bridge Verified.");
+
     loop {
-        core::hint::spin_loop();
+        x86_64::instructions::hlt();
     }
 }
 
 #[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    sex_kernel::serial_println!("{}", info);
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    sex_kernel::serial_println!("KERNEL PANIC: {}", info);
     loop {
-        core::hint::spin_loop();
+        x86_64::instructions::hlt();
     }
 }

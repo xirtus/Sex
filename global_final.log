@@ -1,0 +1,375 @@
+WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-18 for version 1.97.0-nightly (e9e32aca5 2026-04-17)
+info: downloading 3 components
+info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+
+  nightly-x86_64-unknown-linux-gnu installed - rustc 1.97.0-nightly (e9e32aca5 2026-04-17)
+
+info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/src/rust-toolchain.toml')
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-18 for version 1.97.0-nightly (e9e32aca5 2026-04-17)
+info: downloading component rust-src
+info: component rust-src is up to date
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded cfg-if v1.0.4
+  Downloaded cipher v0.4.4
+  Downloaded block-buffer v0.10.4
+  Downloaded crossbeam-queue v0.3.12
+  Downloaded bit_field v0.10.3
+  Downloaded generic-array v0.14.7
+  Downloaded cpufeatures v0.2.17
+  Downloaded aead v0.5.2
+  Downloaded hash32 v0.3.1
+  Downloaded universal-hash v0.5.1
+  Downloaded lazy_static v1.5.0
+  Downloaded const_fn v0.4.12
+  Downloaded conquer-once v0.4.0
+  Downloaded opaque-debug v0.3.1
+  Downloaded pci_types v0.10.1
+  Downloaded lock_api v0.4.14
+  Downloaded crypto-common v0.1.7
+  Downloaded limine v0.6.3
+  Downloaded managed v0.8.0
+  Downloaded radium v0.7.0
+  Downloaded uart_16550 v0.3.2
+  Downloaded tap v1.0.1
+  Downloaded bit v0.1.1
+  Downloaded funty v2.0.0
+  Downloaded conquer-util v0.3.0
+  Downloaded inout v0.1.4
+  Downloaded subtle v2.6.1
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded version_check v0.9.5
+  Downloaded volatile v0.4.6
+  Downloaded x2apic v0.5.0
+  Downloaded chacha20 v0.9.1
+  Downloaded byteorder v1.5.0
+  Downloaded bitflags v1.3.2
+  Downloaded linked_list_allocator v0.10.6
+  Downloaded digest v0.10.7
+  Downloaded serde_derive v1.0.228
+  Downloaded paste v1.0.15
+  Downloaded quote v1.0.45
+  Downloaded scopeguard v1.2.0
+  Downloaded rustversion v1.0.22
+  Downloaded nvme-oxide v0.4.1
+  Downloaded zeroize v1.8.2
+  Downloaded wyz v0.5.1
+  Downloaded bitflags v2.11.1
+  Downloaded sha2 v0.10.9
+  Downloaded spin v0.9.8
+  Downloaded spin v0.10.0
+  Downloaded proc-macro2 v1.0.106
+  Downloaded poly1305 v0.8.0
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded spinning_top v0.2.5
+  Downloaded unicode-ident v1.0.24
+  Downloaded aml v0.16.4
+  Downloaded spinning_top v0.3.0
+  Downloaded log v0.4.29
+  Downloaded chacha20poly1305 v0.10.1
+  Downloaded acpi v6.1.1
+  Downloaded serde v1.0.228
+  Downloaded serde_core v1.0.228
+  Downloaded typenum v1.19.0
+  Downloaded raw-cpuid v10.7.0
+  Downloaded x86_64 v0.15.4
+  Downloaded heapless v0.9.2
+  Downloaded raw-cpuid v11.6.0
+  Downloaded bitvec v1.0.1
+  Downloaded syn v2.0.117
+  Downloaded smoltcp v0.13.0
+  Downloaded x86 v0.52.0
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded rustc-literal-escaper v0.0.7
+  Downloaded foldhash v0.2.0
+  Downloaded getopts v0.2.24
+  Downloaded rustc-demangle v0.1.27
+  Downloaded hashbrown v0.17.0
+  Downloaded libc v0.2.185
+   Compiling compiler_builtins v0.1.160 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling rustversion v1.0.22
+   Compiling const_fn v0.4.12
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling version_check v0.9.5
+   Compiling typenum v1.19.0
+   Compiling radium v0.7.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling x86 v0.52.0
+   Compiling generic-array v0.14.7
+   Compiling heapless v0.9.2
+   Compiling paste v1.0.15
+   Compiling smoltcp v0.13.0
+   Compiling syn v2.0.117
+   Compiling serde_derive v1.0.228
+   Compiling alloc v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling scopeguard v1.2.0
+   Compiling bit_field v0.10.3
+   Compiling bitflags v2.11.1
+   Compiling volatile v0.4.6
+   Compiling cfg-if v1.0.4
+   Compiling bitflags v1.3.2
+   Compiling byteorder v1.5.0
+   Compiling lock_api v0.4.14
+   Compiling raw-cpuid v10.7.0
+   Compiling cpufeatures v0.2.17
+   Compiling x86_64 v0.15.4
+   Compiling tap v1.0.1
+   Compiling log v0.4.29
+   Compiling spin v0.9.8
+   Compiling spinning_top v0.2.5
+   Compiling wyz v0.5.1
+   Compiling hash32 v0.3.1
+   Compiling crypto-common v0.1.7
+   Compiling inout v0.1.4
+   Compiling funty v2.0.0
+   Compiling zeroize v1.8.2
+   Compiling sex-pdx v0.1.0 (/src/crates/sex-pdx)
+   Compiling stable_deref_trait v1.2.1
+   Compiling subtle v2.6.1
+   Compiling cipher v0.4.4
+   Compiling bitvec v1.0.1
+   Compiling block-buffer v0.10.4
+   Compiling universal-hash v0.5.1
+   Compiling spin v0.10.0
+   Compiling libsys v0.1.0 (/src/sex-src/lib/libsys)
+   Compiling spinning_top v0.3.0
+   Compiling pci_types v0.10.1
+   Compiling sex-rt v0.1.0 (/src/sex-rt)
+   Compiling bit v0.1.1
+   Compiling conquer-util v0.3.0
+   Compiling opaque-debug v0.3.1
+   Compiling managed v0.8.0
+   Compiling x2apic v0.5.0
+   Compiling conquer-once v0.4.0
+   Compiling uart_16550 v0.3.2
+   Compiling acpi v6.1.1
+   Compiling poly1305 v0.8.0
+   Compiling crossbeam-queue v0.3.12
+   Compiling nvme-oxide v0.4.1
+   Compiling aml v0.16.4
+   Compiling digest v0.10.7
+   Compiling chacha20 v0.9.1
+   Compiling aead v0.5.2
+   Compiling lazy_static v1.5.0
+   Compiling linked_list_allocator v0.10.6
+   Compiling raw-cpuid v11.6.0
+   Compiling limine v0.6.3
+   Compiling chacha20poly1305 v0.10.1
+   Compiling sha2 v0.10.9
+   Compiling tuxedo v0.1.0 (/src/servers/tuxedo)
+   Compiling sexfiles v0.1.0 (/src/servers/sexfiles)
+   Compiling sex-orbclient v0.1.0 (/src/crates/sex-orbclient)
+warning: unused imports: `String` and `ToString`
+ --> servers/tuxedo/src/lib.rs:5:21
+  |
+5 | use alloc::string::{String, ToString};
+  |                     ^^^^^^  ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `alloc::vec::Vec`
+ --> servers/tuxedo/src/lib.rs:6:5
+  |
+6 | use alloc::vec::Vec;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::boxed::Box`
+ --> servers/tuxedo/src/lib.rs:7:5
+  |
+7 | use alloc::boxed::Box;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `String` and `ToString`
+ --> servers/sexfiles/src/lib.rs:5:21
+  |
+5 | use alloc::string::{String, ToString};
+  |                     ^^^^^^  ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `alloc::vec::Vec`
+ --> servers/sexfiles/src/lib.rs:6:5
+  |
+6 | use alloc::vec::Vec;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::boxed::Box`
+ --> servers/sexfiles/src/lib.rs:7:5
+  |
+7 | use alloc::boxed::Box;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: feature `alloc_error_handler` is declared but not used
+ --> servers/tuxedo/src/lib.rs:3:12
+  |
+3 | #![feature(alloc_error_handler)]
+  |            ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_features)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling sexinput v0.1.0 (/src/servers/sexinput)
+warning: `tuxedo` (lib) generated 4 warnings (run `cargo fix --lib -p tuxedo` to apply 3 suggestions)
+error: no global memory allocator found but one is required; link to std or add `#[global_allocator]` to a static item that implements the GlobalAlloc trait
+
+warning: unused imports: `String` and `ToString`
+ --> servers/tuxedo/src/main.rs:5:21
+  |
+5 | use alloc::string::{String, ToString};
+  |                     ^^^^^^  ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `alloc::vec::Vec`
+ --> servers/tuxedo/src/main.rs:6:5
+  |
+6 | use alloc::vec::Vec;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::boxed::Box`
+ --> servers/tuxedo/src/main.rs:7:5
+  |
+7 | use alloc::boxed::Box;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `String` and `ToString`
+ --> servers/sexinput/src/main.rs:5:21
+  |
+5 | use alloc::string::{String, ToString};
+  |                     ^^^^^^  ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `alloc::vec::Vec`
+ --> servers/sexinput/src/main.rs:6:5
+  |
+6 | use alloc::vec::Vec;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::boxed::Box`
+ --> servers/sexinput/src/main.rs:7:5
+  |
+7 | use alloc::boxed::Box;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: fields `fifo_q` and `lru_q` are never read
+ --> servers/sexfiles/src/cache.rs:8:5
+  |
+7 | pub struct LruCache<const N: usize = 1024> {
+  |            -------- fields in this struct
+8 |     fifo_q: AtomicRing<u64, N>, // Q1: Recent accesses
+  |     ^^^^^^
+9 |     lru_q: AtomicRing<u64, N>,  // Q2: Frequent accesses
+  |     ^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `id` and `size` are never read
+  --> servers/sexfiles/src/backends/ramfs.rs:15:5
+   |
+14 | struct Inode {
+   |        ----- fields in this struct
+15 |     id: u64,
+   |     ^^
+16 |     size: u64,
+   |     ^^^^
+
+   Compiling egui-hello v0.1.0 (/src/crates/egui-hello)
+   Compiling sexdisplay v0.1.0 (/src/servers/sexdisplay)
+warning: `sexinput` (bin "sexinput") generated 3 warnings
+error: could not compile `sexinput` (bin "sexinput") due to 1 previous error; 3 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+warning: `tuxedo` (bin "tuxedo") generated 3 warnings
+error: could not compile `tuxedo` (bin "tuxedo") due to 1 previous error; 3 warnings emitted
+error: an inner attribute is not permitted in this context
+  --> servers/sexdisplay/src/main.rs:9:1
+   |
+ 9 | #![allow(unsafe_code)]
+   | ^^^^^^^^^^^^^^^^^^^^^^
+10 |
+11 | mod messages;
+   | ------------- the inner attribute doesn't annotate this module
+   |
+   = note: inner attributes, like `#![no_std]`, annotate the item enclosing them, and are usually found at the beginning of source files
+help: to annotate the module, change the attribute from inner to outer style
+   |
+ 9 - #![allow(unsafe_code)]
+ 9 + #[allow(unsafe_code)]
+   |
+
+warning: unused variable: `code`
+  --> crates/egui-hello/src/main.rs:15:46
+   |
+15 |                 sex_pdx::OrbitalEvent::Key { code, pressed } => {
+   |                                              ^^^^ help: try ignoring the field: `code: _`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `y`
+  --> crates/egui-hello/src/main.rs:23:51
+   |
+23 |                 sex_pdx::OrbitalEvent::Mouse { x, y } => {
+   |                                                   ^ help: try ignoring the field: `y: _`
+
+warning: unused imports: `String` and `ToString`
+ --> servers/sexdisplay/src/main.rs:5:21
+  |
+5 | use alloc::string::{String, ToString};
+  |                     ^^^^^^  ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `alloc::vec::Vec`
+ --> servers/sexdisplay/src/main.rs:6:5
+  |
+6 | use alloc::vec::Vec;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::boxed::Box`
+ --> servers/sexdisplay/src/main.rs:7:5
+  |
+7 | use alloc::boxed::Box;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `PageHandover`
+  --> servers/sexdisplay/src/main.rs:13:78
+   |
+13 | use sex_pdx::{pdx_listen, pdx_reply, pdx_call, MessageType, DisplayProtocol, PageHandover, Rect, OrbitalEvent};
+   |                                                                              ^^^^^^^^^^^^
+
+warning: feature `alloc_error_handler` is declared but not used
+ --> servers/sexfiles/src/lib.rs:3:12
+  |
+3 | #![feature(alloc_error_handler)]
+  |            ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_features)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+   --> servers/sexdisplay/src/main.rs:164:17
+    |
+164 |                 unsafe {
+    |                 ^^^^^^ unnecessary `unsafe` block
+    |
+    = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sexfiles` (lib) generated 6 warnings (run `cargo fix --lib -p sexfiles` to apply 3 suggestions)
+warning: unused variable: `window_id`
+   --> servers/sexdisplay/src/main.rs:251:49
+    |
+251 |                 DisplayProtocol::CommitDamage { window_id, .. } => {
+    |                                                 ^^^^^^^^^ help: try ignoring the field: `window_id: _`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sexdisplay` (bin "sexdisplay") generated 6 warnings
+error: could not compile `sexdisplay` (bin "sexdisplay") due to 2 previous errors; 6 warnings emitted
+warning: `egui-hello` (bin "egui-hello") generated 2 warnings (run `cargo fix --bin "egui-hello" -p egui-hello` to apply 2 suggestions)

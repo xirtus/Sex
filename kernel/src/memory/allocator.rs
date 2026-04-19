@@ -1,4 +1,3 @@
-use x86_64::structures::paging::*;
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 pub const MAX_ORDER: usize = 18; // Up to 1 GiB

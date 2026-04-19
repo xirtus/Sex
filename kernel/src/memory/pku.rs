@@ -1,4 +1,3 @@
-use x86_64::structures::paging::*;
 use core::arch::asm;
 
 pub struct Pkru;

@@ -84,7 +84,7 @@ pub fn init_idt() {
 
     // Phase 19: Enable Syscall (LSTAR)
     unsafe {
-        LStar::write(VirtAddr::new(syscall_entry as u64));
+        LStar::write(VirtAddr::new(syscall_entry as *const () as u64));
 
         let selectors = crate::gdt::get_selectors();
         Star::write(
