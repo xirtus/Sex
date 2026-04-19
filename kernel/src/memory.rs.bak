@@ -41,7 +41,7 @@ lazy_static! {
     pub static ref GLOBAL_VAS: Mutex<Option<GlobalVas>> = Mutex::new(None);
 }
 
-pub fn init(mmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) {
+pub fn init(mmap: &limine::request::MemmapResponse, hhdm_offset: u64) {
     crate::serial_println!("Sex: Memory init starting...");
     let offset = VirtAddr::new(hhdm_offset);
     let mut mapper = unsafe { init_sexting(offset) };

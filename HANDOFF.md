@@ -36,7 +36,7 @@ STATUS_EOF
 To prevent 429 Quota Exhaustion and maintain context integrity during CLI sessions, the AI must adhere to the following constraints:
 * **Search Boundaries:** NEVER run unconstrained `find` commands from the macOS home directory. Restrict ALL file operations explicitly to: `/Users/xirtus/sites/microkernel/`. Use `dir_path` or `include_pattern` to narrow scope.
 * **Compression Modes:** * Trigger `/caveman ultra` for telegraphic, high-density English output (skip pleasantries, output raw logic/code).
-  * Trigger `/caveman wenyan` for maximum compression via Classical Chinese (decompress locally if needed).
+  * Trigger `/caveman wenyan` for maximum compression via Classical Chinese (decompress locally if needed), All code must be commited in plain english rust.
 * **Driver Forge Pipeline:** For legacy C porting, utilize `c2rust` combined with the `sex-driver-forge` agent to handle the mechanical translation before applying borrow-checker logic.
 
 ---
@@ -49,7 +49,7 @@ To prevent 429 Quota Exhaustion and maintain context integrity during CLI sessio
 
 ---
 
-## 3. PHASE 18: THE ZERO-COPY GUI HANDOFF
+## 3. PHASE 28a: THE ZERO-COPY GUI HANDOFF
 The userland graphics stack is currently deferred. We will remain in the pure in-kernel Rust driver until the explicit command: **"ship orbital compositor"** is issued. 
 
 When triggered, the Phase 18 execution sequence is:

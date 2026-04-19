@@ -1,6 +1,6 @@
 use limine::request::MpResponse;
 use limine::mp::MpInfo;
-
+use core::sync::atomic::Ordering;
 
 pub fn boot_aps(smp: &MpResponse) {
     let bsp_id = smp.bsp_lapic_id;

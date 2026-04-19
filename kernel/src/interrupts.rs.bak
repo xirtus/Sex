@@ -122,7 +122,7 @@ pub unsafe extern "C" fn syscall_entry() {
 }
 
 #[no_mangle]
-pub extern "C" fn syscall_dispatch(rax: u64, rdi: u64, rsi: u64, rdx: u64, _r8: u64) -> u64 {
+pub extern "C" fn syscall_dispatch(rax: u64, rdi: u64, rsi: u64, rdx: u64, r8: u64) -> u64 {
     match rax {
         27 => { // pdx_call(pd, num, arg0, arg1)
              match crate::ipc::safe_pdx_call(rdi as u32, rdx) {

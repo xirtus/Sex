@@ -1,0 +1,1236 @@
+WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-18 for version 1.97.0-nightly (e9e32aca5 2026-04-17)
+info: downloading 3 components
+info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+
+  nightly-x86_64-unknown-linux-gnu installed - rustc 1.97.0-nightly (e9e32aca5 2026-04-17)
+
+info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/src/rust-toolchain.toml')
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-18 for version 1.97.0-nightly (e9e32aca5 2026-04-17)
+info: downloading component rust-src
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded bit_field v0.10.3
+  Downloaded quote v1.0.45
+  Downloaded serde_derive v1.0.228
+  Downloaded scopeguard v1.2.0
+  Downloaded const_fn v0.4.12
+  Downloaded serde_core v1.0.228
+  Downloaded rustversion v1.0.22
+  Downloaded lock_api v0.4.14
+  Downloaded spin v0.9.8
+  Downloaded proc-macro2 v1.0.106
+  Downloaded serde v1.0.228
+  Downloaded bitflags v2.11.1
+  Downloaded volatile v0.4.6
+  Downloaded unicode-ident v1.0.24
+  Downloaded x86_64 v0.15.4
+  Downloaded syn v2.0.117
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded rustc-literal-escaper v0.0.7
+  Downloaded cfg-if v1.0.4
+  Downloaded foldhash v0.2.0
+  Downloaded rustc-demangle v0.1.27
+  Downloaded getopts v0.2.24
+  Downloaded hashbrown v0.17.0
+  Downloaded libc v0.2.185
+   Compiling compiler_builtins v0.1.160 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling alloc v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling scopeguard v1.2.0
+   Compiling bitflags v2.11.1
+   Compiling bit_field v0.10.3
+   Compiling volatile v0.4.6
+   Compiling lock_api v0.4.14
+   Compiling x86_64 v0.15.4
+   Compiling spin v0.9.8
+   Compiling sex-pdx v0.1.0 (/src/crates/sex-pdx)
+   Compiling libsys v0.1.0 (/src/sex-src/lib/libsys)
+   Compiling sex-rt v0.1.0 (/src/sex-rt)
+   Compiling sexbuild v0.1.0 (/src/sex-packages/sexbuild)
+error[E0463]: can't find crate for `std`
+  |
+  = note: the `x86_64-sex` target may not support the standard library
+  = note: `std` is required by `sexbuild` because it does not declare `#![no_std]`
+  = help: consider building the standard library from source with `cargo build -Zbuild-std`
+
+error: cannot resolve a prelude import
+
+error[E0463]: can't find crate for `std`
+ --> sex-packages/sexbuild/src/main.rs:2:5
+  |
+2 | use std::collections::{HashMap, HashSet};
+  |     ^^^ can't find crate
+  |
+  = note: the `x86_64-sex` target may not support the standard library
+  = help: consider building the standard library from source with `cargo build -Zbuild-std`
+
+error[E0433]: cannot find module or crate `petgraph` in this scope
+ --> sex-packages/sexbuild/src/main.rs:8:5
+  |
+8 | use petgraph::graph::DiGraph;
+  |     ^^^^^^^^ use of unresolved module or unlinked crate `petgraph`
+  |
+  = help: if you wanted to use a crate named `petgraph`, use `cargo add petgraph` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find module or crate `petgraph` in this scope
+ --> sex-packages/sexbuild/src/main.rs:9:5
+  |
+9 | use petgraph::algo::toposort;
+  |     ^^^^^^^^ use of unresolved module or unlinked crate `petgraph`
+  |
+  = help: if you wanted to use a crate named `petgraph`, use `cargo add petgraph` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `anyhow`
+ --> sex-packages/sexbuild/src/main.rs:7:5
+  |
+7 | use anyhow::{Context, Result, anyhow};
+  |     ^^^^^^ use of unresolved module or unlinked crate `anyhow`
+  |
+  = help: if you wanted to use a crate named `anyhow`, use `cargo add anyhow` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `sha2`
+  --> sex-packages/sexbuild/src/main.rs:10:5
+   |
+10 | use sha2::{Sha256, Digest};
+   |     ^^^^ use of unresolved module or unlinked crate `sha2`
+   |
+   = help: if you wanted to use a crate named `sha2`, use `cargo add sha2` to add it to your `Cargo.toml`
+
+error: cannot find macro `println` in this scope
+   --> sex-packages/sexbuild/src/main.rs:415:13
+    |
+415 |             println!("sexbuild: Rebuilding SASOS kernel (x17r1 x86_64)...");
+    |             ^^^^^^^
+
+error: cannot find macro `panic` in this scope
+   --> sex-packages/sexbuild/src/main.rs:404:9
+    |
+404 | ...   panic!("aarch64 host detected! Phase 28 requires strict x86_64 cross-compilation. Force linux/amd64 Docker or use x86_64-unkn...
+    |       ^^^^^
+    |
+help: consider importing this macro
+    |
+  1 + use core::panic;
+    |
+
+error: cannot find macro `vec` in this scope
+   --> sex-packages/sexbuild/src/main.rs:371:27
+    |
+371 |         let mut pending = vec![name.to_string()];
+    |                           ^^^
+
+error: cannot find macro `println` in this scope
+   --> sex-packages/sexbuild/src/main.rs:321:9
+    |
+321 |         println!("sexbuild: Running legacy shell builder for {}...", name);
+    |         ^^^^^^^
+
+error: cannot find macro `println` in this scope
+   --> sex-packages/sexbuild/src/main.rs:296:9
+    |
+296 |         println!("sexbuild: Running real cargo build for {}...", name);
+    |         ^^^^^^^
+
+error: cannot find macro `println` in this scope
+   --> sex-packages/sexbuild/src/main.rs:281:9
+    |
+281 |         println!("sexbuild: Cooking {} v{}...", name, version);
+    |         ^^^^^^^
+
+error: cannot find macro `println` in this scope
+   --> sex-packages/sexbuild/src/main.rs:274:9
+    |
+274 |         println!("sexbuild: Generated SPD for {}", name);
+    |         ^^^^^^^
+
+error: cannot find macro `vec` in this scope
+   --> sex-packages/sexbuild/src/main.rs:272:22
+    |
+272 |         f.write_all(&vec![0u8; padding as usize])?;
+    |                      ^^^
+
+error: cannot find macro `format` in this scope
+   --> sex-packages/sexbuild/src/main.rs:261:46
+    |
+261 |         let out_path = self.binpkgs_dir.join(format!("{}-{}.spd", name, version));
+    |                                              ^^^^^^
+
+error: cannot find macro `println` in this scope
+   --> sex-packages/sexbuild/src/main.rs:255:13
+    |
+255 |             println!("sexbuild: Uploading {} to sexshop object store...", name);
+    |             ^^^^^^^
+
+error: cannot find macro `println` in this scope
+   --> sex-packages/sexbuild/src/main.rs:253:13
+    |
+253 |             println!("sexbuild: Artifact {} already in sexshop object store (dedup)", name);
+    |             ^^^^^^^
+
+error: cannot find macro `println` in this scope
+   --> sex-packages/sexbuild/src/main.rs:227:17
+    |
+227 |                 println!("sexbuild: Cloning {}...", git_url);
+    |                 ^^^^^^^
+
+error: cannot find macro `println` in this scope
+   --> sex-packages/sexbuild/src/main.rs:196:17
+    |
+196 |                 println!("sexbuild: Fetching {}...", url);
+    |                 ^^^^^^^
+
+error: cannot find macro `println` in this scope
+   --> sex-packages/sexbuild/src/main.rs:187:25
+    |
+187 |                         println!("sexbuild: Source for {} found in sexshop object store", name);
+    |                         ^^^^^^^
+
+error: cannot find macro `println` in this scope
+   --> sex-packages/sexbuild/src/main.rs:166:13
+    |
+166 |             println!("sexbuild: Syncing Redox Cookbook...");
+    |             ^^^^^^^
+
+error: cannot find macro `println` in this scope
+   --> sex-packages/sexbuild/src/main.rs:161:13
+    |
+161 |             println!("sexbuild: Cloning Redox Cookbook...");
+    |             ^^^^^^^
+
+error: cannot find attribute `derive` in this scope
+   --> sex-packages/sexbuild/src/main.rs:130:3
+    |
+130 | #[derive(Debug, Deserialize, Clone)]
+    |   ^^^^^^
+    |
+help: consider importing this attribute macro
+    |
+  1 + use core::derive;
+    |
+
+error: cannot find attribute `derive` in this scope
+   --> sex-packages/sexbuild/src/main.rs:123:3
+    |
+123 | #[derive(Debug, Deserialize, Clone)]
+    |   ^^^^^^
+    |
+help: consider importing this attribute macro
+    |
+  1 + use core::derive;
+    |
+
+error: cannot find attribute `derive` in this scope
+   --> sex-packages/sexbuild/src/main.rs:113:3
+    |
+113 | #[derive(Debug, Deserialize, Clone, Default)]
+    |   ^^^^^^
+    |
+help: consider importing this attribute macro
+    |
+  1 + use core::derive;
+    |
+
+error: cannot find attribute `serde` in this scope
+   --> sex-packages/sexbuild/src/main.rs:115:7
+    |
+115 |     #[serde(default)]
+    |       ^^^^^
+    |
+    = note: `serde` is an attribute that can be used by the derive macros `Deserialize` and `Serialize`, you might be missing a `derive` attribute
+    = note: `serde` is in scope, but it is a crate, not an attribute
+
+error: cannot find attribute `serde` in this scope
+   --> sex-packages/sexbuild/src/main.rs:117:7
+    |
+117 |     #[serde(default = "default_version")]
+    |       ^^^^^
+    |
+    = note: `serde` is an attribute that can be used by the derive macros `Deserialize` and `Serialize`, you might be missing a `derive` attribute
+    = note: `serde` is in scope, but it is a crate, not an attribute
+
+error: cannot find attribute `derive` in this scope
+   --> sex-packages/sexbuild/src/main.rs:104:3
+    |
+104 | #[derive(Debug, Deserialize, Clone)]
+    |   ^^^^^^
+    |
+help: consider importing this attribute macro
+    |
+  1 + use core::derive;
+    |
+
+error: cannot find attribute `serde` in this scope
+   --> sex-packages/sexbuild/src/main.rs:106:7
+    |
+106 |     #[serde(default)]
+    |       ^^^^^
+    |
+    = note: `serde` is an attribute that can be used by the derive macros `Deserialize` and `Serialize`, you might be missing a `derive` attribute
+    = note: `serde` is in scope, but it is a crate, not an attribute
+
+error: cannot find attribute `serde` in this scope
+   --> sex-packages/sexbuild/src/main.rs:108:7
+    |
+108 |     #[serde(default)]
+    |       ^^^^^
+    |
+    = note: `serde` is an attribute that can be used by the derive macros `Deserialize` and `Serialize`, you might be missing a `derive` attribute
+    = note: `serde` is in scope, but it is a crate, not an attribute
+
+error: cannot find macro `vec` in this scope
+  --> sex-packages/sexbuild/src/main.rs:59:28
+   |
+59 |             let mut data = vec![0u8; 4096]; // Prototype size
+   |                            ^^^
+
+error[E0433]: cannot find module or crate `reqwest` in this scope
+   --> sex-packages/sexbuild/src/main.rs:197:36
+    |
+197 |                 let mut response = reqwest::blocking::get(url)?;
+    |                                    ^^^^^^^ use of unresolved module or unlinked crate `reqwest`
+    |
+    = help: if you wanted to use a crate named `reqwest`, use `cargo add reqwest` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find module or crate `walkdir` in this scope
+   --> sex-packages/sexbuild/src/main.rs:338:30
+    |
+338 |                 for entry in walkdir::WalkDir::new(&redox_root)
+    |                              ^^^^^^^ use of unresolved module or unlinked crate `walkdir`
+    |
+    = help: if you wanted to use a crate named `walkdir`, use `cargo add walkdir` to add it to your `Cargo.toml`
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> sex-packages/sexbuild/src/main.rs:41:24
+   |
+41 |                 return Err(anyhow!("PDX ObjectPut failed: {}", res));
+   |                        ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+ 1 + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> sex-packages/sexbuild/src/main.rs:44:9
+   |
+44 |         Ok(())
+   |         ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+ 1 + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find type `Vec` in this scope
+  --> sex-packages/sexbuild/src/main.rs:47:56
+   |
+47 |     pub fn get_object(&self, hash: [u8; 32]) -> Result<Vec<u8>> {
+   |                                                        ^^^ not found in this scope
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> sex-packages/sexbuild/src/main.rs:54:24
+   |
+54 |                 return Err(anyhow!("PDX ObjectGet failed or not found"));
+   |                        ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+ 1 + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> sex-packages/sexbuild/src/main.rs:63:13
+   |
+63 |             Ok(data)
+   |             ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+ 1 + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+  --> sex-packages/sexbuild/src/main.rs:92:24
+   |
+92 |                 return Err(anyhow!("Physical allocation failed"));
+   |                        ^^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+ 1 + use core::result::Result::Err;
+   |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+  --> sex-packages/sexbuild/src/main.rs:94:13
+   |
+94 |             Ok(res)
+   |             ^^ not found in this scope
+   |
+help: consider importing this tuple variant
+   |
+ 1 + use core::result::Result::Ok;
+   |
+
+error[E0425]: cannot find type `Option` in this scope
+   --> sex-packages/sexbuild/src/main.rs:107:18
+    |
+107 |     pub package: Option<Package>,
+    |                  ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+  1 + use core::option::Option;
+    |
+
+error[E0425]: cannot find type `Option` in this scope
+   --> sex-packages/sexbuild/src/main.rs:109:17
+    |
+109 |     pub source: Option<Source>,
+    |                 ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+  1 + use core::option::Option;
+    |
+
+error[E0425]: cannot find type `Option` in this scope
+   --> sex-packages/sexbuild/src/main.rs:110:16
+    |
+110 |     pub build: Option<Build>,
+    |                ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+  1 + use core::option::Option;
+    |
+
+error[E0425]: cannot find type `String` in this scope
+   --> sex-packages/sexbuild/src/main.rs:116:15
+    |
+116 |     pub name: String,
+    |               ^^^^^^ not found in this scope
+    |
+help: there is an enum variant `serde::__private228::de::Content::String`; try using the variant's enum
+    |
+116 -     pub name: String,
+116 +     pub name: serde::__private228::de::Content,
+    |
+
+error[E0425]: cannot find type `String` in this scope
+   --> sex-packages/sexbuild/src/main.rs:118:18
+    |
+118 |     pub version: String,
+    |                  ^^^^^^ not found in this scope
+    |
+help: there is an enum variant `serde::__private228::de::Content::String`; try using the variant's enum
+    |
+118 -     pub version: String,
+118 +     pub version: serde::__private228::de::Content,
+    |
+
+error[E0425]: cannot find type `String` in this scope
+   --> sex-packages/sexbuild/src/main.rs:121:25
+    |
+121 | fn default_version() -> String { "0.1.0".to_string() }
+    |                         ^^^^^^ not found in this scope
+    |
+help: there is an enum variant `serde::__private228::de::Content::String`; try using the variant's enum
+    |
+121 - fn default_version() -> String { "0.1.0".to_string() }
+121 + fn default_version() -> serde::__private228::de::Content { "0.1.0".to_string() }
+    |
+
+error[E0425]: cannot find type `Option` in this scope
+   --> sex-packages/sexbuild/src/main.rs:125:14
+    |
+125 |     pub git: Option<String>,
+    |              ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+  1 + use core::option::Option;
+    |
+
+error[E0425]: cannot find type `String` in this scope
+   --> sex-packages/sexbuild/src/main.rs:125:21
+    |
+125 |     pub git: Option<String>,
+    |                     ^^^^^^ not found in this scope
+    |
+help: there is an enum variant `serde::__private228::de::Content::String`; try using the variant's enum
+    |
+125 -     pub git: Option<String>,
+125 +     pub git: Option<serde::__private228::de::Content>,
+    |
+help: you might be missing a type parameter
+    |
+124 | pub struct Source<String> {
+    |                  ++++++++
+
+error[E0425]: cannot find type `Option` in this scope
+   --> sex-packages/sexbuild/src/main.rs:126:14
+    |
+126 |     pub tar: Option<String>,
+    |              ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+  1 + use core::option::Option;
+    |
+
+error[E0425]: cannot find type `String` in this scope
+   --> sex-packages/sexbuild/src/main.rs:126:21
+    |
+126 |     pub tar: Option<String>,
+    |                     ^^^^^^ not found in this scope
+    |
+help: there is an enum variant `serde::__private228::de::Content::String`; try using the variant's enum
+    |
+126 -     pub tar: Option<String>,
+126 +     pub tar: Option<serde::__private228::de::Content>,
+    |
+help: you might be missing a type parameter
+    |
+124 | pub struct Source<String> {
+    |                  ++++++++
+
+error[E0425]: cannot find type `Option` in this scope
+   --> sex-packages/sexbuild/src/main.rs:127:17
+    |
+127 |     pub sha256: Option<String>,
+    |                 ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+  1 + use core::option::Option;
+    |
+
+error[E0425]: cannot find type `String` in this scope
+   --> sex-packages/sexbuild/src/main.rs:127:24
+    |
+127 |     pub sha256: Option<String>,
+    |                        ^^^^^^ not found in this scope
+    |
+help: there is an enum variant `serde::__private228::de::Content::String`; try using the variant's enum
+    |
+127 -     pub sha256: Option<String>,
+127 +     pub sha256: Option<serde::__private228::de::Content>,
+    |
+help: you might be missing a type parameter
+    |
+124 | pub struct Source<String> {
+    |                  ++++++++
+
+error[E0425]: cannot find type `Option` in this scope
+   --> sex-packages/sexbuild/src/main.rs:132:19
+    |
+132 |     pub template: Option<String>,
+    |                   ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+  1 + use core::option::Option;
+    |
+
+error[E0425]: cannot find type `String` in this scope
+   --> sex-packages/sexbuild/src/main.rs:132:26
+    |
+132 |     pub template: Option<String>,
+    |                          ^^^^^^ not found in this scope
+    |
+help: there is an enum variant `serde::__private228::de::Content::String`; try using the variant's enum
+    |
+132 -     pub template: Option<String>,
+132 +     pub template: Option<serde::__private228::de::Content>,
+    |
+help: you might be missing a type parameter
+    |
+131 | pub struct Build<String> {
+    |                 ++++++++
+
+error[E0425]: cannot find type `Option` in this scope
+   --> sex-packages/sexbuild/src/main.rs:133:18
+    |
+133 |     pub depends: Option<Vec<String>>,
+    |                  ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+  1 + use core::option::Option;
+    |
+
+error[E0425]: cannot find type `Vec` in this scope
+   --> sex-packages/sexbuild/src/main.rs:133:25
+    |
+133 |     pub depends: Option<Vec<String>>,
+    |                         ^^^ not found in this scope
+
+error[E0425]: cannot find type `String` in this scope
+   --> sex-packages/sexbuild/src/main.rs:133:29
+    |
+133 |     pub depends: Option<Vec<String>>,
+    |                             ^^^^^^ not found in this scope
+    |
+help: there is an enum variant `serde::__private228::de::Content::String`; try using the variant's enum
+    |
+133 -     pub depends: Option<Vec<String>>,
+133 +     pub depends: Option<Vec<serde::__private228::de::Content>>,
+    |
+help: you might be missing a type parameter
+    |
+131 | pub struct Build<String> {
+    |                 ++++++++
+
+error[E0425]: cannot find type `Option` in this scope
+   --> sex-packages/sexbuild/src/main.rs:134:19
+    |
+134 |     pub manifest: Option<String>,
+    |                   ^^^^^^ not found in this scope
+    |
+help: consider importing this enum
+    |
+  1 + use core::option::Option;
+    |
+
+error[E0425]: cannot find type `String` in this scope
+   --> sex-packages/sexbuild/src/main.rs:134:26
+    |
+134 |     pub manifest: Option<String>,
+    |                          ^^^^^^ not found in this scope
+    |
+help: there is an enum variant `serde::__private228::de::Content::String`; try using the variant's enum
+    |
+134 -     pub manifest: Option<String>,
+134 +     pub manifest: Option<serde::__private228::de::Content>,
+    |
+help: you might be missing a type parameter
+    |
+131 | pub struct Build<String> {
+    |                 ++++++++
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:171:9
+    |
+171 |         Ok(())
+    |         ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:179:16
+    |
+179 |         if let Some(url) = &source.tar {
+    |                ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:183:20
+    |
+183 |             if let Some(expected_hash) = &source.sha256 {
+    |                    ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:190:32
+    |
+190 |                         return Ok(tarball_path);
+    |                                ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:202:20
+    |
+202 |             if let Some(expected_hash) = &source.sha256 {
+    |                    ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:206:27
+    |
+206 |                 while let Ok(n) = file.read(&mut buffer) {
+    |                           ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> sex-packages/sexbuild/src/main.rs:213:28
+    |
+213 |                     return Err(anyhow!("Hash mismatch! Expected {}, got {}", expected_hash, actual_hash));
+    |                            ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Err;
+    |
+
+error[E0433]: cannot find type `Vec` in this scope
+   --> sex-packages/sexbuild/src/main.rs:219:32
+    |
+219 |                 let mut data = Vec::new();
+    |                                ^^^ use of undeclared type `Vec`
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:223:13
+    |
+223 |             Ok(tarball_path)
+    |             ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:224:23
+    |
+224 |         } else if let Some(git_url) = &source.git {
+    |                       ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:230:13
+    |
+230 |             Ok(git_path)
+    |             ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> sex-packages/sexbuild/src/main.rs:232:13
+    |
+232 |             Err(anyhow!("No tar or git source"))
+    |             ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Err;
+    |
+
+error[E0433]: cannot find type `Vec` in this scope
+   --> sex-packages/sexbuild/src/main.rs:242:24
+    |
+242 |         let mut data = Vec::new();
+    |                        ^^^ use of undeclared type `Vec`
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:275:9
+    |
+275 |         Ok(())
+    |         ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:283:16
+    |
+283 |         if let Some(build) = &recipe.build {
+    |                ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:284:45
+    |
+284 |             if build.template.as_deref() == Some("shell") {
+    |                                             ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> sex-packages/sexbuild/src/main.rs:306:20
+    |
+306 |             return Err(anyhow!("Cargo build failed for {}", name));
+    |                    ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> sex-packages/sexbuild/src/main.rs:314:21
+    |
+314 |              return Err(anyhow!("Binary not found at {:?}", bin_path));
+    |                     ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:327:31
+    |
+327 |         if status.success() { Ok(()) } else { Err(anyhow!("Legacy build failed")) }
+    |                               ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> sex-packages/sexbuild/src/main.rs:327:47
+    |
+327 |         if status.success() { Ok(()) } else { Err(anyhow!("Legacy build failed")) }
+    |                                               ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:334:13
+    |
+334 |             Ok(toml::from_str(&content)?)
+    |             ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:341:85
+    |
+341 |                     .filter(|e| e.file_type().is_dir() && e.file_name().to_str() == Some(name))
+    |                                                                                     ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:348:44
+    |
+348 | ...                   recipe.build = Some(Build { template: Some("cargo".to_string()), depends: None, manifest: None });
+    |                                      ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:348:67
+    |
+348 | ...                   recipe.build = Some(Build { template: Some("cargo".to_string()), depends: None, manifest: None });
+    |                                                             ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> sex-packages/sexbuild/src/main.rs:348:103
+    |
+348 | ...                   recipe.build = Some(Build { template: Some("cargo".to_string()), depends: None, manifest: None });
+    |                                                                                                 ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+  1 + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> sex-packages/sexbuild/src/main.rs:348:119
+    |
+348 | ...                   recipe.build = Some(Build { template: Some("cargo".to_string()), depends: None, manifest: None });
+    |                                                                                                                 ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+  1 + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:350:32
+    |
+350 |                         return Ok(recipe);
+    |                                ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:357:17
+    |
+357 |                 Ok(Recipe {
+    |                 ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:358:30
+    |
+358 |                     package: Some(Package { name: name.to_string(), version: "legacy".to_string() }),
+    |                              ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> sex-packages/sexbuild/src/main.rs:359:29
+    |
+359 |                     source: None,
+    |                             ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+  1 + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:360:28
+    |
+360 |                     build: Some(Build { template: Some("shell".to_string()), depends: None, manifest: None }),
+    |                            ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:360:51
+    |
+360 |                     build: Some(Build { template: Some("shell".to_string()), depends: None, manifest: None }),
+    |                                                   ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> sex-packages/sexbuild/src/main.rs:360:87
+    |
+360 |                     build: Some(Build { template: Some("shell".to_string()), depends: None, manifest: None }),
+    |                                                                                       ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+  1 + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> sex-packages/sexbuild/src/main.rs:360:103
+    |
+360 |                     build: Some(Build { template: Some("shell".to_string()), depends: None, manifest: None }),
+    |                                                                                                       ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+  1 + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> sex-packages/sexbuild/src/main.rs:363:17
+    |
+363 |                 Err(anyhow!("Recipe {} not found", name))
+    |                 ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find type `String` in this scope
+   --> sex-packages/sexbuild/src/main.rs:369:35
+    |
+369 |         let mut graph = DiGraph::<String, ()>::new();
+    |                                   ^^^^^^ not found in this scope
+    |
+help: there is an enum variant `serde::__private228::de::Content::String`; try using the variant's enum
+    |
+369 -         let mut graph = DiGraph::<String, ()>::new();
+369 +         let mut graph = DiGraph::<serde::__private228::de::Content, ()>::new();
+    |
+help: you might be missing a type parameter
+    |
+146 | impl<String> SexBuilder {
+    |     ++++++++
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:374:19
+    |
+374 |         while let Some(current) = pending.pop() {
+    |                   ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:381:20
+    |
+381 |             if let Some(build) = recipe.build {
+    |                    ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0531]: cannot find tuple struct or tuple variant `Some` in this scope
+   --> sex-packages/sexbuild/src/main.rs:382:24
+    |
+382 |                 if let Some(deps) = build.depends {
+    |                        ^^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::option::Option::Some;
+    |
+
+error[E0425]: cannot find value `None` in this scope
+   --> sex-packages/sexbuild/src/main.rs:392:39
+    |
+392 |         let sorted = toposort(&graph, None).map_err(|_| anyhow!("Dependency cycle"))?;
+    |                                       ^^^^ not found in this scope
+    |
+help: consider importing this unit variant
+    |
+  1 + use core::option::Option::None;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:396:9
+    |
+396 |         Ok(())
+    |         ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find type `Vec` in this scope
+   --> sex-packages/sexbuild/src/main.rs:407:15
+    |
+407 |     let args: Vec<String> = std::env::args().collect();
+    |               ^^^ not found in this scope
+
+error[E0425]: cannot find type `String` in this scope
+   --> sex-packages/sexbuild/src/main.rs:407:19
+    |
+407 |     let args: Vec<String> = std::env::args().collect();
+    |                   ^^^^^^ not found in this scope
+    |
+help: there is an enum variant `serde::__private228::de::Content::String`; try using the variant's enum
+    |
+407 -     let args: Vec<String> = std::env::args().collect();
+407 +     let args: Vec<serde::__private228::de::Content> = std::env::args().collect();
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:409:32
+    |
+409 |     if args.len() < 2 { return Ok(()); }
+    |                                ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Err` in this scope
+   --> sex-packages/sexbuild/src/main.rs:422:24
+    |
+422 |                 return Err(anyhow!("Kernel rebuild failed"));
+    |                        ^^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Err;
+    |
+
+error[E0425]: cannot find function, tuple struct or tuple variant `Ok` in this scope
+   --> sex-packages/sexbuild/src/main.rs:424:13
+    |
+424 |             Ok(())
+    |             ^^ not found in this scope
+    |
+help: consider importing this tuple variant
+    |
+  1 + use core::result::Result::Ok;
+    |
+
+warning: unused import: `serde::Deserialize`
+ --> sex-packages/sexbuild/src/main.rs:1:5
+  |
+1 | use serde::Deserialize;
+  |     ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error: `#[panic_handler]` function required, but not found
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> sex-packages/sexbuild/src/main.rs:121:42
+    |
+121 | fn default_version() -> String { "0.1.0".to_string() }
+    |                                          ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  1 + use alloc::string::ToString;
+    |
+
+error[E0433]: cannot find module or crate `hex` in this scope
+   --> sex-packages/sexbuild/src/main.rs:185:20
+    |
+185 |                 if hex::decode_to_slice(expected_hash, &mut hash_bytes).is_ok() {
+    |                    ^^^ use of unresolved module or unlinked crate `hex`
+    |
+    = help: if you wanted to use a crate named `hex`, use `cargo add hex` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find module or crate `hex` in this scope
+   --> sex-packages/sexbuild/src/main.rs:211:35
+    |
+211 |                 let actual_hash = hex::encode(hash);
+    |                                   ^^^ use of unresolved module or unlinked crate `hex`
+    |
+    = help: if you wanted to use a crate named `hex`, use `cargo add hex` to add it to your `Cargo.toml`
+
+error[E0599]: no method named `min` found for type `usize` in the current scope
+    --> sex-packages/sexbuild/src/main.rs:239:36
+     |
+ 239 |         let len = name_bytes.len().min(32);
+     |                                    ^^^ method not found in `usize`
+     |
+    ::: /usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/cmp.rs:1072:8
+     |
+1072 |     fn min(self, other: Self) -> Self
+     |        --- the method is available for `usize` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `Ord` which provides `min` is implemented but not in scope; perhaps you want to import it
+     |
+   1 + use core::cmp::Ord;
+     |
+
+error[E0433]: cannot find module or crate `toml` in this scope
+   --> sex-packages/sexbuild/src/main.rs:334:16
+    |
+334 |             Ok(toml::from_str(&content)?)
+    |                ^^^^ use of unresolved module or unlinked crate `toml`
+    |
+    = help: if you wanted to use a crate named `toml`, use `cargo add toml` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find module or crate `toml` in this scope
+   --> sex-packages/sexbuild/src/main.rs:346:50
+    |
+346 |                         let mut recipe: Recipe = toml::from_str(&content)?;
+    |                                                  ^^^^ use of unresolved module or unlinked crate `toml`
+    |
+    = help: if you wanted to use a crate named `toml`, use `cargo add toml` to add it to your `Cargo.toml`
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> sex-packages/sexbuild/src/main.rs:348:80
+    |
+348 | ...                   recipe.build = Some(Build { template: Some("cargo".to_string()), depends: None, manifest: None });
+    |                                                                          ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  1 + use alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> sex-packages/sexbuild/src/main.rs:358:56
+    |
+358 |                     package: Some(Package { name: name.to_string(), version: "legacy".to_string() }),
+    |                                                        ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  1 + use alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> sex-packages/sexbuild/src/main.rs:358:87
+    |
+358 |                     package: Some(Package { name: name.to_string(), version: "legacy".to_string() }),
+    |                                                                                       ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  1 + use alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> sex-packages/sexbuild/src/main.rs:360:64
+    |
+360 |                     build: Some(Build { template: Some("shell".to_string()), depends: None, manifest: None }),
+    |                                                                ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  1 + use alloc::string::ToString;
+    |
+
+Some errors have detailed explanations: E0425, E0432, E0433, E0463, E0531, E0599.
+For more information about an error, try `rustc --explain E0425`.
+warning: `sexbuild` (bin "sexbuild") generated 1 warning
+error: could not compile `sexbuild` (bin "sexbuild") due to 117 previous errors; 1 warning emitted

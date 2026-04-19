@@ -1,3 +1,8 @@
+#![feature(alloc_error_handler)]
+extern crate alloc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::boxed::Box;
 #![no_std]
 
 use sex_pdx::pdx_call;

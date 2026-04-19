@@ -1,0 +1,97 @@
+WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-18 for version 1.97.0-nightly (e9e32aca5 2026-04-17)
+info: downloading 3 components
+
+info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+  nightly-x86_64-unknown-linux-gnu installed - rustc 1.97.0-nightly (e9e32aca5 2026-04-17)
+
+info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/src/rust-toolchain.toml')
+info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-18 for version 1.97.0-nightly (e9e32aca5 2026-04-17)
+info: downloading component rust-src
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded scopeguard v1.2.0
+  Downloaded rustversion v1.0.22
+  Downloaded quote v1.0.45
+  Downloaded bit_field v0.10.3
+  Downloaded const_fn v0.4.12
+  Downloaded serde_derive v1.0.228
+  Downloaded lock_api v0.4.14
+  Downloaded spin v0.9.8
+  Downloaded bitflags v2.11.1
+  Downloaded volatile v0.4.6
+  Downloaded serde_core v1.0.228
+  Downloaded proc-macro2 v1.0.106
+  Downloaded serde v1.0.228
+  Downloaded unicode-ident v1.0.24
+  Downloaded x86_64 v0.15.4
+  Downloaded syn v2.0.117
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded rustc-literal-escaper v0.0.7
+  Downloaded cfg-if v1.0.4
+  Downloaded rustc-demangle v0.1.27
+  Downloaded foldhash v0.2.0
+  Downloaded getopts v0.2.24
+  Downloaded hashbrown v0.17.0
+  Downloaded libc v0.2.185
+   Compiling compiler_builtins v0.1.160 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling alloc v0.0.0 (/usr/local/rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+   Compiling scopeguard v1.2.0
+   Compiling bitflags v2.11.1
+   Compiling volatile v0.4.6
+   Compiling bit_field v0.10.3
+   Compiling lock_api v0.4.14
+   Compiling x86_64 v0.15.4
+   Compiling spin v0.9.8
+   Compiling sex-pdx v0.1.0 (/src/crates/sex-pdx)
+   Compiling libsys v0.1.0 (/src/sex-src/lib/libsys)
+   Compiling sex-rt v0.1.0 (/src/sex-rt)
+   Compiling tuxedo v0.1.0 (/src/servers/tuxedo)
+error: an inner attribute is not permitted in this context
+ --> servers/tuxedo/src/lib.rs:6:1
+  |
+6 | #![no_std]
+  | ^^^^^^^^^^
+7 |
+8 | use sex_pdx::pdx_call;
+  | ---------------------- the inner attribute doesn't annotate this `use` import
+  |
+  = note: inner attributes, like `#![no_std]`, annotate the item enclosing them, and are usually found at the beginning of source files
+
+error[E0463]: can't find crate for `std`
+  |
+  = note: the `x86_64-sex` target may not support the standard library
+  = note: `std` is required by `tuxedo` because it does not declare `#![no_std]`
+  = help: consider building the standard library from source with `cargo build -Zbuild-std`
+
+error: cannot resolve a prelude import
+
+warning: unused imports: `String` and `ToString`
+ --> servers/tuxedo/src/lib.rs:3:21
+  |
+3 | use alloc::string::{String, ToString};
+  |                     ^^^^^^  ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `alloc::vec::Vec`
+ --> servers/tuxedo/src/lib.rs:4:5
+  |
+4 | use alloc::vec::Vec;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `alloc::boxed::Box`
+ --> servers/tuxedo/src/lib.rs:5:5
+  |
+5 | use alloc::boxed::Box;
+  |     ^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0463`.
+warning: `tuxedo` (lib) generated 3 warnings
+error: could not compile `tuxedo` (lib) due to 3 previous errors; 3 warnings emitted

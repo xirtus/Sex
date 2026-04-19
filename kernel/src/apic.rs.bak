@@ -94,7 +94,7 @@ pub fn init_apic(rsdp_addr: u64, physical_memory_offset: VirtAddr) {
         let mut regions = PCI_REGIONS.lock();
         for region in mcfg.entries() {
             serial_println!("APIC: Found PCI Region (Segment {}, Bus {}-{}, Phys {:#x})",
-                {region.pci_segment_group}, {region.bus_number_start}, {region.bus_number_end}, {region.base_address});
+                region.pci_segment_group, region.bus_number_start, region.bus_number_end, region.base_address);
             regions.push(SexPciRegion {
                 segment: region.pci_segment_group,
                 bus_start: region.bus_number_start,

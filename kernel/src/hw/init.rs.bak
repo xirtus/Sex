@@ -1,7 +1,7 @@
 // kernel/src/hw/init.rs
 use acpi::{Handler, AcpiTables, PhysicalMapping};
 use core::ptr::NonNull;
-
+use x86_64::PhysAddr;
 
 #[derive(Clone)]
 pub struct SexAcpiHandler {

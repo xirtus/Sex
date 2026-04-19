@@ -1,0 +1,28 @@
+[workspace]
+members = [
+    "kernel",
+    "servers/sexc",
+    "servers/sext",
+    "servers/sex-ld",
+    "servers/sexfiles",
+    "servers/sexnode",
+    "servers/sexgemini",
+    "servers/sexnet",
+    "servers/sexstore",
+    "servers/sexshop",
+    "servers/sexinput",
+    "servers/sexdisplay",
+    "servers/sexdrive",
+    "servers/tuxedo",
+    "servers/sexstore-gui",
+    "relibc",
+    "sex-rt",
+    "sex-packages/ion-sexshell", "sex-packages/sexbuild",
+    "crates/egui-hello",
+]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = 'abort'
