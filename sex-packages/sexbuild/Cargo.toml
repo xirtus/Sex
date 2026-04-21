@@ -3,10 +3,13 @@ name = "sexbuild"
 version = "0.1.0"
 edition = "2021"
 
+build = false
+
 [dependencies]
 anyhow = "1.0"
 petgraph = "0.6"
 sha2 = "0.10"
+blake3 = "1.5"
 hex = "0.4"
 walkdir = "2.4"
 # Pivot: Disable default features (OpenSSL) and enable rustls-tls

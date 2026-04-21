@@ -1,0 +1,7 @@
+[package]
+name = "sex-graphics"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sex-pdx = { path = "../sex-pdx" }

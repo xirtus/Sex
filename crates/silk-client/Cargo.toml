@@ -1,0 +1,16 @@
+[package]
+name = "silkclient"
+version = "0.1.0"
+edition = "2021"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+opt-level = "s"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }

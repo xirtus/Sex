@@ -19,6 +19,9 @@ members = [
     "sex-rt",
     "sex-packages/ion-sexshell", "sex-packages/sexbuild",
     "crates/egui-hello",
+    "crates/sex-graphics",
+    "tools/sex-forge",
+    "apps/linen", "apps/sexsh", "apps/kaleidoscope", "apps/qupid", "crates/silkbar", "crates/silknet", "crates/tatami", "crates/toys", "crates/sex-pkg",
 ]
 resolver = "2"
 

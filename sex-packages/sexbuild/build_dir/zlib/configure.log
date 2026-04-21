@@ -1,0 +1,15 @@
+--------------------
+./configure --prefix=/usr --static
+Tue Apr 21 02:31:36 AM CEST 2026
+Using llvm-ar
+=== ztest37146.c ===
+extern int getchar();
+int hello() {return getchar();}
+===
+sexos-cc -c ztest37146.c
+... using sexos-cc
+
+--------------------
+./configure --prefix=/usr --static
+Tue Apr 21 02:36:30 AM CEST 2026
+Using llvm-ar

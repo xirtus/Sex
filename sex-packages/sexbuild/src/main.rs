@@ -130,6 +130,7 @@ pub struct Source {
     pub git: Option<String>,
     pub tar: Option<String>,
     pub sha256: Option<String>,
+    pub blake3: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -137,6 +138,7 @@ pub struct Build {
     pub template: Option<String>,
     pub depends: Option<Vec<String>>,
     pub manifest: Option<String>,
+    pub script: Option<String>,
 }
 
 pub struct SexBuilder {
@@ -150,12 +152,14 @@ pub struct SexBuilder {
 
 impl SexBuilder {
     pub fn new() -> Self {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let base = PathBuf::from(manifest_dir);
         Self {
-            recipes_dir: PathBuf::from("recipes"),
-            templates_dir: PathBuf::from("srcpkgs"),
-            build_dir: PathBuf::from("build_dir"),
-            binpkgs_dir: PathBuf::from("../binpkgs"),
-            sasroot: PathBuf::from("../sasroot"),
+            recipes_dir: base.join("recipes"),
+            templates_dir: base.join("srcpkgs"),
+            build_dir: base.join("build_dir"),
+            binpkgs_dir: base.join("../binpkgs"),
+            sasroot: base.join("../sasroot"),
             pdx: PdxClient::new(),
         }
     }
@@ -185,7 +189,7 @@ impl SexBuilder {
             let tarball_path = pkg_build_dir.join("source.tar.gz");
             
             // Phase 23: Check sexshop object store first
-            if let Some(expected_hash) = &source.sha256 {
+            if let Some(expected_hash) = source.sha256.as_ref().or(source.blake3.as_ref()) {
                 let mut hash_bytes = [0u8; 32];
                 if hex::decode_to_slice(expected_hash, &mut hash_bytes).is_ok() {
                     if self.pdx.exists(hash_bytes) {
@@ -204,28 +208,58 @@ impl SexBuilder {
                 response.copy_to(&mut file)?;
             }
 
-            if let Some(expected_hash) = &source.sha256 {
+            if let Some(expected_hash) = source.sha256.as_ref().or(source.blake3.as_ref()) {
                 let mut file = File::open(&tarball_path)?;
-                let mut hasher = Sha256::new();
-                let mut buffer = [0; 8192];
-                while let Ok(n) = file.read(&mut buffer) {
-                    if n == 0 { break; }
-                    hasher.update(&buffer[..n]);
-                }
-                let hash = hasher.finalize();
-                let actual_hash = hex::encode(hash);
+                
+                let actual_hash = if source.blake3.is_some() {
+                    let mut hasher = blake3::Hasher::new();
+                    let mut buffer = [0; 8192];
+                    while let Ok(n) = file.read(&mut buffer) {
+                        if n == 0 { break; }
+                        hasher.update(&buffer[..n]);
+                    }
+                    hasher.finalize().to_hex().to_string()
+                } else {
+                    let mut hasher = Sha256::new();
+                    let mut buffer = [0; 8192];
+                    while let Ok(n) = file.read(&mut buffer) {
+                        if n == 0 { break; }
+                        hasher.update(&buffer[..n]);
+                    }
+                    hex::encode(hasher.finalize())
+                };
+
                 if actual_hash != *expected_hash {
                     return Err(anyhow!("Hash mismatch! Expected {}, got {}", expected_hash, actual_hash));
                 }
 
                 // Cache in sexshop
                 let mut hash_bytes = [0u8; 32];
-                hash_bytes.copy_from_slice(&hash);
-                let mut data = Vec::new();
-                File::open(&tarball_path)?.read_to_end(&mut data)?;
-                self.pdx.put_object(hash_bytes, &data)?;
+                // For simplicity, we only cache if it was sha256 or if blake3 is same size
+                if !source.blake3.is_some() {
+                     let mut file = File::open(&tarball_path)?;
+                     let mut hasher = Sha256::new();
+                     let mut buffer = [0; 8192];
+                     while let Ok(n) = file.read(&mut buffer) {
+                         if n == 0 { break; }
+                         hasher.update(&buffer[..n]);
+                     }
+                     let hash = hasher.finalize();
+                     hash_bytes.copy_from_slice(&hash);
+                     let mut data = Vec::new();
+                     File::open(&tarball_path)?.read_to_end(&mut data)?;
+                     self.pdx.put_object(hash_bytes, &data)?;
+                }
             }
-            Ok(tarball_path)
+
+            println!("sexbuild: Extracting source for {}...", name);
+            let status = Command::new("tar")
+                .args(["xf", tarball_path.to_str().unwrap(), "-C", pkg_build_dir.to_str().unwrap(), "--strip-components=1"])
+                .status()?;
+            if !status.success() {
+                return Err(anyhow!("Failed to extract tarball"));
+            }
+            Ok(pkg_build_dir)
         } else if let Some(git_url) = &source.git {
             let git_path = pkg_build_dir.join("source");
             if !git_path.exists() {
@@ -285,16 +319,78 @@ impl SexBuilder {
         let version = recipe.package.as_ref().map(|p| p.version.clone()).unwrap_or_else(default_version);
         println!("sexbuild: Cooking {} v{}...", name, version);
 
+        if recipe.source.is_some() {
+            self.fetch_source(name, &recipe)?;
+        }
+
         if let Some(build) = &recipe.build {
             if build.template.as_deref() == Some("shell") {
                 return self.run_legacy_shell(name);
             }
+            if build.template.as_deref() == Some("custom") {
+                return self.run_custom_build(name, &recipe);
+            }
         }
 
-        if recipe.source.is_some() {
-            self.fetch_source(name, &recipe)?;
-        }
         self.run_cargo_build(name, &recipe)
+    }
+
+    fn run_custom_build(&self, name: &str, recipe: &Recipe) -> Result<()> {
+        println!("sexbuild: Running custom build for {}...", name);
+        let build = recipe.build.as_ref().ok_or(anyhow!("No build section"))?;
+        let script = build.script.as_ref().ok_or(anyhow!("No script in custom build"))?;
+        
+        let pkg_build_dir = self.build_dir.join(name);
+        fs::create_dir_all(&pkg_build_dir)?;
+        
+        let source_path = pkg_build_dir.join("source");
+        if source_path.exists() {
+            println!("sexbuild: Using extracted source in {:?}", source_path);
+        }
+
+        let shim = r#"
+function DYNAMIC_INIT {
+    echo "sexbuild: DYNAMIC_INIT"
+}
+function cookbook_configure {
+    echo "sexbuild: cookbook_configure"
+    if [ -f "./configure" ]; then
+        ./configure "${COOKBOOK_CONFIGURE_FLAGS[@]}"
+    fi
+}
+export TARGET="x86_64-sex"
+export CC="sexos-cc"
+export CXX="sexos-cc"
+export AR="llvm-ar"
+export NM="llvm-nm"
+export STRIP="llvm-strip"
+export COOKBOOK_CONFIGURE="./configure"
+export COOKBOOK_MAKE="make"
+export COOKBOOK_STAGE="stage"
+"#;
+
+        let mut final_script = String::from(shim);
+        final_script.push_str(script);
+        
+        let script_path = pkg_build_dir.join("build.sh");
+        fs::write(&script_path, final_script)?;
+        
+        let project_root = std::env::current_dir()?;
+        let bin_dir = project_root.join("sex-src/bin");
+
+        // Execute the script using the microkernel builder environment
+        let status = Command::new("bash")
+            .arg("build.sh")
+            .current_dir(&pkg_build_dir)
+            .env("PATH", format!("{}:{}", bin_dir.to_str().unwrap(), std::env::var("PATH").unwrap()))
+            .status()?;
+            
+        if status.success() {
+            println!("sexbuild: Custom build for {} succeeded", name);
+            Ok(())
+        } else {
+            Err(anyhow!("Custom build failed for {}", name))
+        }
     }
 
     fn run_cargo_build(&self, name: &str, recipe: &Recipe) -> Result<()> {
@@ -350,7 +446,7 @@ impl SexBuilder {
                         let content = fs::read_to_string(&r_path)?;
                         let mut recipe: Recipe = toml::from_str(&content)?;
                         if recipe.build.is_none() {
-                            recipe.build = Some(Build { template: Some("cargo".to_string()), depends: None, manifest: None });
+                            recipe.build = Some(Build { template: Some("cargo".to_string()), depends: None, manifest: None, script: None });
                         }
                         return Ok(recipe);
                     }
@@ -362,7 +458,7 @@ impl SexBuilder {
                 Ok(Recipe {
                     package: Some(Package { name: name.to_string(), version: "legacy".to_string() }),
                     source: None,
-                    build: Some(Build { template: Some("shell".to_string()), depends: None, manifest: None }),
+                    build: Some(Build { template: Some("shell".to_string()), depends: None, manifest: None, script: None }),
                 })
             } else {
                 Err(anyhow!("Recipe {} not found", name))

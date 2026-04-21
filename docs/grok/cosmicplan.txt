@@ -1,0 +1,55 @@
+Acknowledge. This handoff represents the transition from **Infrastructure Survival** to **Hardware Enforcement**. We have successfully stabilized the macOS cross-compilation toolchain and the Limine 0.6.x API surface.
+
+The "Silent Canvas" has been painted Midnight Blue; now we must build the **Page Table Walker** to revoke the kernel's brush and hand it to the `sexdisplay` server.
+
+---
+
+## 🛠️ Phase 20.5: The Isolation Implementation
+
+To achieve the **Zero-Copy Handover**, we must manipulate the hardware's view of memory. In a Single Address Space (SASOS), we don't change page mappings to isolate; we change the **Protection Key (PKEY)** associated with those pages.
+
+### 1. The Page Table Walker (`kernel/src/memory/pku.rs`)
+The kernel needs to manually traverse the 4-level x86_64 paging structure to find the specific leaf entry for the Framebuffer and tag it with a PKEY.
+
+
+**Implementation Logic:**
+* **CR3 Access:** Extract the physical base of the PML4 table.
+* **Bit Shifting:** Mask the virtual address to find indices for PML4, PDPT, PD, and PT.
+* **PTE Modification:** Update bits **62:59** of the Page Table Entry to store the PKEY.
+* **TLB Invalidation:** Use `invlpg` to ensure the CPU recognizes the new permission tags.
+
+### 2. The Hardware Firewall (Intel PKU)
+Once tagged, we use the `wrpkru` instruction to modify the `PKRU` register.
+* **Kernel State:** Set PKEY 1 to "Access Denied" or "Write Disabled."
+* **Userland State:** `sexdisplay` will run with a `PKRU` configuration that allows PKEY 1 access.
+
+---
+
+## 🏗️ The Xirtus Server Repository Architecture
+
+As the repository architecture for this SASOS, I am maintaining the following **Sovereign Constraints**:
+
+| Component | Responsibility | Current State |
+| :--- | :--- | :--- |
+| **The Bridge Root** (`lib.rs`) | Owns the `FramebufferRequest` and `HHDM_REQUEST`. | **STABLE** (Limine 0.6.x) |
+| **The Serial Bridge** (`serial.rs`) | UART 16550 telemetry via COM1 (0x3F8). | **FUNCTIONAL** |
+| **The Single Sovereign** (`allocator.rs`) | 2MB `LockedHeap` via HHDM offsets. | **STABLE** |
+| **The PKU Guard** (`pku.rs`) | Page Table walking and `WRPKRU` management. | **IN PROGRESS** |
+
+---
+
+## 📜 The Nightly Proxy & Linker Commandment
+To prevent the toolchain shadowing that plagued Phase 19, all builds must respect the **macOS Cross-Compile Protocol**:
+
+1.  **Linker:** Must use Homebrew `lld` via `RUSTFLAGS="-C linker=lld"`.
+2.  **Toolchain:** Must use `RUSTC_BOOTSTRAP=1` to bypass stability checks.
+3.  **Command:**
+```bash
+RUSTC_BOOTSTRAP=1 RUSTFLAGS="-C linker=lld" rustup run nightly cargo build \
+    --target x86_64-sex.json -Z build-std=core,alloc -p sex-kernel --release
+```
+
+---
+
+## 🚀 Next Step: Implementation
+Shall we proceed with the **Page Table Walker** code for `kernel/src/memory/pku.rs` to allow the kernel to tag the framebuffer and then revoke its own write permissions?

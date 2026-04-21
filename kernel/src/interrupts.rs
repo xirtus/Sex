@@ -79,6 +79,10 @@ lazy_static! {
 use x86_64::registers::model_specific::{LStar, Star, SFMask, Efer, EferFlags};
 use x86_64::VirtAddr;
 
+use crate::memory::manager::{GLOBAL_VAS, active_level_4_table};
+use x86_64::{PhysAddr};
+use x86_64::structures::paging::{FrameAllocator, Mapper, OffsetPageTable, Page, PageTableFlags, PhysFrame, Size4KiB};
+
 pub fn init_idt() {
     IDT.load();
 
@@ -137,6 +141,81 @@ pub extern "C" fn syscall_dispatch(rax: u64, rdi: u64, rsi: u64, rdx: u64, _r8: 
              let caller_pd = crate::core_local::CoreLocal::get().current_pd();
              crate::ipc::router::route_signal(caller_pd, rdi as u32, rsi as u8, 0).is_ok() as u64
         },
+        crate::MAP_MEMORY_SYSCALL_NUM => { // PdxMapMemory(pfn, size)
+            let pfn = rdi; // arg1 is pfn
+            let size = rsi; // arg2 is size in bytes
+            
+            let mapped_vaddr_result = {
+                let mut global_vas_locked = GLOBAL_VAS.lock();
+                let mut global_vas = global_vas_locked.as_mut().expect("GLOBAL_VAS not initialized");
+
+                let phys_mem_offset = global_vas.phys_mem_offset;
+                
+                // Get the current PD's active Level 4 page table
+                let level_4_table = unsafe { active_level_4_table(phys_mem_offset) };
+                let mut mapper = unsafe { OffsetPageTable::new(level_4_table, phys_mem_offset) };
+
+                // For now, use a fixed high virtual address.
+                // A proper solution would use a virtual address allocator.
+                let mut current_vaddr = VirtAddr::new(0x_4000_0000_0000); // Start mapping at a high address
+                
+                let mut allocated_vaddr: Option<VirtAddr> = None;
+
+                let page_size = Size4KiB::SIZE; // 4096 bytes
+                let num_pages = (size + page_size - 1) / page_size;
+
+                for i in 0..num_pages {
+                    let phys_addr = PhysAddr::new(pfn * page_size + i * page_size);
+                    let frame = PhysFrame::containing_address(phys_addr);
+                    let page = Page::containing_address(current_vaddr);
+
+                    let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+
+                    // Use the kernel's frame allocator
+                    let mut frame_allocator = &mut global_vas.frame_allocator;
+                    
+                    // Perform the mapping
+                    match unsafe { mapper.map_to(page, frame, flags, frame_allocator) } {
+                        Ok(mapper_flush_guard) => {
+                            mapper_flush_guard.flush();
+                            if allocated_vaddr.is_none() {
+                                allocated_vaddr = Some(current_vaddr);
+                            }
+                            current_vaddr += page_size;
+                        },
+                        Err(_) => {
+                            serial_println!("Kernel: PdxMapMemory failed to map page {:#x} to {:#x}", phys_addr.as_u64(), current_vaddr.as_u64());
+                            return u64::MAX; // Indicate error
+                        }
+                    }
+                }
+                allocated_vaddr.map_or(u64::MAX, |vaddr| vaddr.as_u64())
+            };
+            mapped_vaddr_result
+        },
+        crate::ALLOCATE_MEMORY_SYSCALL_NUM => { // PdxAllocateMemory(size)
+            let size = rdi; // arg1 is size in bytes
+            let num_pages = (size + Size4KiB::SIZE - 1) / Size4KiB::SIZE;
+
+            let allocated_pfn_result = {
+                let mut global_vas_locked = GLOBAL_VAS.lock();
+                let mut global_vas = global_vas_locked.as_mut().expect("GLOBAL_VAS not initialized");
+
+                let mut frame_allocator = &mut global_vas.frame_allocator;
+
+                match frame_allocator.allocate_contiguous(num_pages as usize) {
+                    Some(frame_range) => {
+                        let pfn = frame_range.start.start_address().as_u64() / Size4KiB::SIZE;
+                        pfn
+                    },
+                    None => {
+                        serial_println!("Kernel: PdxAllocateMemory failed to allocate {} pages.", num_pages);
+                        u64::MAX // Indicate error
+                    }
+                }
+            };
+            allocated_pfn_result
+        },
         24 => { // sys_park
              crate::scheduler::park_current_thread();
              0
@@ -144,6 +223,7 @@ pub extern "C" fn syscall_dispatch(rax: u64, rdi: u64, rsi: u64, rdx: u64, _r8: 
         _ => u64::MAX,
     }
 }
+
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
     serial_println!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);

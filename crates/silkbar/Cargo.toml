@@ -1,0 +1,17 @@
+[package]
+name = "silkbar"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "silkbar"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx      = { path = "../sex-pdx" }
+sex-graphics = { path = "../sex-graphics" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"

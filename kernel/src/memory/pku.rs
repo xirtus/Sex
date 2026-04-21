@@ -1,94 +1,65 @@
 use core::arch::asm;
+use crate::{FB_REQUEST, HHDM_REQUEST};
 
-pub struct Pkru;
+static mut HHDM_OFFSET: u64 = 0;
 
-impl Pkru {
-    /// Reads the current PKRU register value.
-    #[inline]
-    pub fn read() -> u32 {
-        let pkru: u32;
-        unsafe {
-            asm!(
-                "rdpkru",
-                out("eax") pkru,
-                in("ecx") 0,
-                out("edx") _,
-            );
-        }
-        pkru
-    }
-
-    /// Writes a new value to the PKRU register with runtime validation.
-    /// Phase 14: Hardened WRPKRU validation.
-    #[inline]
-    pub fn write(val: u32) {
-        // [Formal Proof Hook: DESIGN_PHASE14]
-        // Runtime check: Ensure the value is consistent with current core context.
-        // Rule: Key 0 (Kernel) must never be fully disabled (0b11).
-        if !Self::validate_pkru(val) {
-            crate::serial_println!("PKU: Security Violation - Invalid PKRU state attempted: {:#x}", val);
-            // In a production system, this triggers a kernel security fault or panic.
-        }
-
-        unsafe {
-            asm!(
-                "wrpkru",
-                in("eax") val,
-                in("ecx") 0,
-                in("edx") 0,
-            );
+fn init_hhdm_offset() {
+    unsafe {
+        if let Some(resp) = HHDM_REQUEST.response() {
+            // FIX: access .offset as a field, not a method
+            HHDM_OFFSET = resp.offset;
         }
     }
+}
 
-    /// Formal Verification Hook: PKRU Validation
-    /// Asserts that kernel-reserved keys are always accessible.
-    fn validate_pkru(val: u32) -> bool {
-        // Key 0 is kernel/boot; it must not be fully disabled (0b11)
-        (val & 0b11) != 0b11
+fn get_cr3() -> u64 {
+    let cr3: u64;
+    unsafe { asm!("mov {}, cr3", out(reg) cr3) };
+    cr3 & 0xFFFF_FFFF_FFFF_F000
+}
+
+pub unsafe fn tag_virtual_address(va: u64, pkey: u8) {
+    init_hhdm_offset();
+    let pml4_phys = get_cr3();
+    let pml4_virt = (pml4_phys + HHDM_OFFSET) as *const u64;
+
+    let pml4_idx = (va >> 39) & 0x1FF;
+    let pdpt_idx = (va >> 30) & 0x1FF;
+    let pd_idx   = (va >> 21) & 0x1FF;
+    let pt_idx   = (va >> 12) & 0x1FF;
+
+    let pdpt_entry = *pml4_virt.add(pml4_idx as usize);
+    let pdpt_virt = ((pdpt_entry & 0xFFFF_FFFF_FFFF_F000) + HHDM_OFFSET) as *const u64;
+
+    let pd_entry = *pdpt_virt.add(pdpt_idx as usize);
+    let pd_virt = ((pd_entry & 0xFFFF_FFFF_FFFF_F000) + HHDM_OFFSET) as *const u64;
+
+    let pt_entry = *pd_virt.add(pd_idx as usize);
+    let pt_virt = ((pt_entry & 0xFFFF_FFFF_FFFF_F000) + HHDM_OFFSET) as *mut u64;
+
+    let mut pte = *pt_virt.add(pt_idx as usize);
+    pte &= !(0xF << 59); 
+    // FIX: Removed unnecessary parentheses per compiler warning
+    pte |= (pkey as u64 & 0xF) << 59; 
+    *pt_virt.add(pt_idx as usize) = pte;
+
+    asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
+}
+
+pub unsafe fn wrpkru(value: u32) {
+    asm!("xor ecx, ecx", "xor edx, edx", "wrpkru", in("eax") value);
+}
+
+pub fn init_pku_isolation() {
+    init_hhdm_offset();
+    if let Some(fb_res) = FB_REQUEST.response() {
+        if let Some(fb) = fb_res.framebuffers().first() {
+            let fb_virt = fb.address() as u64;
+            unsafe { tag_virtual_address(fb_virt, 1); }
+            crate::serial_println!("[SexOS] Framebuffer PTE tagged with PKEY 1");
+        }
     }
-}
-
-/// Helpers for safe domain entry/exit.
-/// IPCtax: Hardware-enforced isolation via MPK.
-pub fn safe_pku_enter(key: u8, disable_access: bool, disable_write: bool) {
-    let mut current = Pkru::read();
-    let shift = key * 2;
-    current &= !(0b11 << shift);
-    if disable_access { current |= 0b01 << shift; }
-    if disable_write { current |= 0b10 << shift; }
-    Pkru::write(current);
-}
-
-pub fn safe_pku_exit(key: u8) {
-    safe_pku_enter(key, true, true);
-}
-
-/// Initializes PKRU for a new PD.
-/// IPCtax: Every PD starts with only its own key enabled.
-/// Phase 14: Isolation Proof Hook.
-pub fn init_pd_pkru(pku_key: u8) -> u32 {
-    // [Formal Proof: DESIGN_PHASE14]
-    // Invariant: For all PDs i != j, PD(i).pku_key != PD(j).pku_key (where key > 0)
-    let mut pkru: u32 = 0xFFFF_FFFF; // Disable all by default
-    let shift = pku_key * 2;
-    pkru &= !(0b11 << shift); // Enable R/W for own key
-    pkru
-}
-
-/// Formal Verification: Isolation Proof
-/// Verifies that no capability violation can occur given the current PKRU mask.
-pub fn verify_isolation_invariant(pkru: u32, target_key: u8) -> bool {
-    let shift = target_key * 2;
-    // PD can only access target if the bits are clear (00)
-    ((pkru >> shift) & 0b11) == 0
-}
-
-/// CHERI Prep: Capability encoding metadata.
-/// Future integration point for hardware-backed capability validation.
-#[repr(C, align(16))]
-pub struct PkuCheriMeta {
-    pub key: u8,
-    pub permissions: u8,
-    pub base: u64,
-    pub length: u64,
+    // Revoke kernel access: PKEY 1 -> bits 2 (AD) and 3 (WD) set
+    unsafe { wrpkru(0b1100); } 
+    crate::serial_println!("[SexOS] Kernel write access revoked via WRPKRU.");
 }

@@ -5,13 +5,17 @@
   "target-endian": "little",
   "target-pointer-width": 64,
   "target-c-int-width": 32,
-  "os": "none",
+  "os": "redox",
+  "env": "relibc",
+  "target-family": ["unix"],
+  "has-rpath": false,
+  "executables": true,
+  "relocation-model": "static",
   "linker-flavor": "ld.lld",
   "linker": "rust-lld",
   "rustc-abi": "x86-softfloat",
   "features": "-mmx,-sse,-sse2,+soft-float",
   "disable-redzone": true,
   "panic-strategy": "abort",
-  "code-model": "kernel",
-  "relocation-model": "static"
+  "code-model": "kernel"
 }

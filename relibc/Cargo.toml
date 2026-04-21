@@ -1,12 +1,12 @@
 #![no_std]
 [package]
 
-name = "relibc"
-version = "0.2.0"
+name = "libc"
+version = "0.2.185"
 edition = "2021"
 
 [lib]
-name = "relibc"
+name = "libc"
 crate-type = ["staticlib", "rlib"]
 
 # core libc deps omitted for brevity
@@ -25,6 +25,12 @@ crate-type = ["staticlib", "rlib"]
 
 
 
+
+[features]
+rustc-dep-of-std = []
+rustc-std-workspace-core = []
+align = []
+std = []
 
 [dependencies]
 serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }

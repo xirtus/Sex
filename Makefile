@@ -36,3 +36,47 @@ clean:
 
 limine: limine.c
 	$(CC) $(CFLAGS) -Wall -Wextra $(WERROR_FLAG) $(CPPFLAGS) $(LDFLAGS) -std=c99 limine.c $(LIBS) -o $@
+
+# ==========================================
+# PHASE 20 AUTOMATION TARGETS
+# ==========================================
+
+release:
+	@echo "[*] Compiling Kernel & Userland Payload..."
+	./build_payload.sh
+	@echo "[*] Building ISO..."
+	@# If your ISO target is named differently, adjust the line below:
+	$(MAKE) iso
+
+run-sasos:
+	@echo "[*] Booting SASOS Hardware Isolation Substrate..."
+	qemu-system-x86_64 \
+		-M q35 \
+		-m 512M \
+		-cpu max,+pku \
+		-cdrom sexos-v1.0.0.iso \
+		-serial stdio \
+		-boot d
+
+
+# ==========================================
+# PHASE 20 AUTOMATION TARGETS
+# ==========================================
+
+release:
+	@echo "[*] Compiling Kernel & Userland Payload..."
+	./build_payload.sh
+	@echo "[*] Building ISO..."
+	@# If your ISO target is named differently, adjust the line below:
+	$(MAKE) iso
+
+run-sasos:
+	@echo "[*] Booting SASOS Hardware Isolation Substrate..."
+	qemu-system-x86_64 \
+		-M q35 \
+		-m 512M \
+		-cpu max,+pku \
+		-cdrom sexos-v1.0.0.iso \
+		-serial stdio \
+		-boot d
+
