@@ -69,8 +69,6 @@ Generate the bootable Limine ISO safely:
 ./scripts/clean_build.sh
 ```
 
-### 2. 
-
 ### 2. Run SexOS
 — the sex microkernel SASOS, protected by the physical Intel MPK (Memory Protection Keys), also known as PKU or PKEY, on all 10th gen and up hardware locks for PDX memory.
 SexOS boots as a single-address-space microkernel where every Protection Domain (PD) is hardware-isolated at the page-table level using Intel MPK/PKU (no TLB flushes, zero context-switch tax). The Limine-generated ISO is ready for both QEMU and bare-metal 10th-gen+ Intel hardware.
