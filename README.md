@@ -69,7 +69,52 @@ Generate the bootable Limine ISO safely:
 ./scripts/clean_build.sh
 ```
 
-### 2. Run in QEMU
+### 2. 
+
+### 2. Run SexOS
+— the sex microkernel SASOS, protected by the physical Intel MPK (Memory Protection Keys), also known as PKU or PKEY, on all 10th gen and up hardware locks for PDX memory.
+SexOS boots as a single-address-space microkernel where every Protection Domain (PD) is hardware-isolated at the page-table level using Intel MPK/PKU (no TLB flushes, zero context-switch tax). The Limine-generated ISO is ready for both QEMU and bare-metal 10th-gen+ Intel hardware.
+2.1 Run in QEMU (fastest dev loop)
+Bash# Clean build + launch with full PKU passthrough
+./scripts/clean_build.sh && make run-sasos
+make run-sasos expands to the QEMU command with -cpu host,+pku (or -cpu max,+pku on non-host CPUs) so the kernel detects PKU support and enables the full PDX memory lock system.
+2.2 Run on Real Hardware (native Intel MPK/PKU boot)
+
+### Build the bootable ISO
+(same as above):Bash./scripts/clean_build.shThis produces sexos-v1.0.0.iso in the project root (Limine UEFI + BIOS payload + kernel + sexdisplay server pre-spawned).
+Create a bootable USB drive (UEFI only):
+Linux / macOS:Bashsudo dd if=sexos-v1.0.0.iso of=/dev/sdX bs=4M status=progress && sync(replace /dev/sdX with your USB device — check with lsblk).
+Windows — use Rufus → select the ISO → DD Image mode → start.
+
+### Boot:
+Insert the USB.
+Enter BIOS/UEFI (usually F2 / Del / F10).
+Mandatory:
+Boot mode = UEFI (Legacy/CSM disabled).
+Secure Boot = Disabled (or enroll the Limine key if you want it).
+CPU must be Intel 10th Gen (Ice Lake) or newer — the kernel checks CPUID.7.0.EBX[3] (PKU bit) and will GPF/halt on older silicon.
+
+Select the USB as boot device → SexOS boots directly into the sex microkernel SASOS with PDX memory already locked by physical Intel MPK/PKU.
+
+
+Expected serial / early boot output on real hardware (same as QEMU):
+textX86Hal: Initializing foundation (BSP)...
+PKU: Protection Keys enabled in CR4.
+init: Bootstrapping system Protection Domains...
+PDX: Registered PD 1 (sexdisplay) — PKEY 1 locked
+kernel: Handing off to sexdisplay @ 0x... (ring 3)
+Once booted you are inside the sex microkernel SASOS with hardware-enforced PDX isolation. All future servers (sexfiles, sexdrive, sexinput, silk-shell, etc.) spawn as additional Protection Domains, each with their own 4-bit PKEY enforced by the CPU’s PKRU register.
+Hardware notes (from system manual)
+
+AMD Zen 3+ also works (PKU support added in Ryzen 5000 series).
+8th/9th-gen Intel or older → kernel will refuse to enable PKU and panic (by design).
+Framebuffer handoff and compositor (sexdisplay) run in ring-3 PKEY 1 immediately after IRETQ.
+
+
+
+
+
+### Run in QEMU
 Launch the SASOS environment with hardware PKU support:
 ```bash
 make run-sasos
