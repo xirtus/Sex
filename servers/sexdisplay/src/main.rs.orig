@@ -1,0 +1,51 @@
+#![no_std]
+#![no_main]
+
+use core::alloc::{GlobalAlloc, Layout};
+use sex_pdx::{pdx_call, pdx_listen, PDX_GET_DISPLAY_INFO, DisplayInfo};
+
+pub struct DummyAllocator;
+unsafe impl GlobalAlloc for DummyAllocator {
+    unsafe fn alloc(&self, _layout: Layout) -> *mut u8 { core::ptr::null_mut() }
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
+}
+
+#[global_allocator]
+static ALLOCATOR: DummyAllocator = DummyAllocator;
+
+// Catppuccin Mocha Base: #1E1E2E (ARGB: 0xFF1E1E2E)
+const BG_COLOR: u32 = 0xFF1E1E2E;
+
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    let mut info = DisplayInfo { virt_addr: 0, width: 0, height: 0, pitch: 0 };
+
+    let ret = unsafe { pdx_call(0, PDX_GET_DISPLAY_INFO, &mut info as *mut _ as u64, 0) };
+
+    if ret == 0 && info.virt_addr != 0 && info.width > 0 && info.height > 0 {
+        let stride = info.pitch / 4;
+        let fb = info.virt_addr as *mut u32;
+        for row in 0..info.height as isize {
+            for col in 0..stride as isize {
+                unsafe { fb.offset(row * stride as isize + col).write_volatile(BG_COLOR); }
+            }
+        }
+    }
+
+    // Input event routing loop
+    loop {
+        // (Just keep original simple loop to at least have the framebuffers work)
+        // ...
+        // Re-clear to green every frame
+        let stride = info.pitch / 4;
+        let fb = info.virt_addr as *mut u32;
+        for row in 0..info.height as isize {
+            for col in 0..stride as isize {
+                unsafe { fb.offset(row * stride as isize + col).write_volatile(0xFF00FF00u32); }
+            }
+        }
+    }
+}
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! { loop {} }

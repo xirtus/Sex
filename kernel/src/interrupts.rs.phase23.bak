@@ -1,0 +1,533 @@
+use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use crate::serial_println;
+use crate::gdt;
+use crate::ipc_ring::RingBuffer;
+use lazy_static::lazy_static;
+
+use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use crate::ipc::messages::MessageType;
+
+/// The event structure for a page fault.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct PageFaultEvent {
+    pub addr: u64,
+    pub error_code: u64,
+    pub task_id: u32,
+}
+
+/// The event structure for a hardware interrupt.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct InterruptEvent {
+    pub irq: u8,
+    pub vector: u8,
+}
+
+/// The event structure for a system-wide fault (Security or #PF).
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct SystemFaultEvent {
+    pub pd_id: u32,
+    pub fault_addr: u64,
+    pub fault_type: u8, // 0: #PF, 1: CAP_VIOLATION
+}
+
+lazy_static! {
+    /// Global Uptime Ticks (incremented by LAPIC timer).
+    pub static ref TICKS: AtomicU64 = AtomicU64::new(0);
+
+    /// The global asynchronous queue for Page Faults (sext pager).
+    pub static ref SEXT_QUEUE: RingBuffer<PageFaultEvent, 256> = RingBuffer::new();
+    
+    /// The global fault interception ring for sexit (PID 1).
+    pub static ref FAULT_RING: RingBuffer<SystemFaultEvent, 128> = RingBuffer::new();
+}
+
+/// Static mapping for Hardware Vector -> Driver PD.
+/// IPCtax: Lock-free interrupt delivery.
+static VECTOR_OWNERS: [AtomicU32; 256] = [const { AtomicU32::new(0) }; 256];
+
+pub fn register_irq_route(vector: u8, pd_id: u32) {
+    VECTOR_OWNERS[vector as usize].store(pd_id, Ordering::Release);
+    serial_println!("IRQ: Registered Vector {:#x} to PD {}", vector, pd_id);
+}
+
+lazy_static! {
+    static ref IDT: InterruptDescriptorTable = {
+        let mut idt = InterruptDescriptorTable::new();
+        idt.breakpoint.set_handler_fn(breakpoint_handler);
+        unsafe {
+            idt.double_fault.set_handler_fn(double_fault_handler)
+                .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
+        }
+        idt.page_fault.set_handler_fn(page_fault_handler);
+
+        // Timer at 0x20
+        idt[0x20].set_handler_fn(timer_interrupt_handler);
+
+        // Revocation IPI at 0x40
+        idt[0x40].set_handler_fn(revoke_key_handler);
+
+        // Map hardware vectors (0x21 to 0x30) to generic_irq_handler
+        idt[0x21].set_handler_fn(keyboard_interrupt_handler);
+        idt[0x22].set_handler_fn(generic_irq_handler); 
+        idt
+    };
+}
+
+use x86_64::registers::model_specific::{LStar, Star, SFMask, Efer, EferFlags};
+use x86_64::VirtAddr;
+
+use crate::memory::manager::{GLOBAL_VAS, active_level_4_table};
+use x86_64::{PhysAddr};
+use x86_64::structures::paging::{FrameAllocator, Mapper, OffsetPageTable, Page, PageTableFlags, PhysFrame, Size4KiB, PageSize};
+
+pub fn init_idt() {
+    serial_println!("   → Loading IDTR...");
+    IDT.load();
+    serial_println!("   → IDTR loaded successfully");
+
+    // Phase 19: Enable Syscall (LSTAR)
+    unsafe {
+        serial_println!("   → Setting up LSTAR (Syscall Entry)...");
+        LStar::write(VirtAddr::new(syscall_entry as *const () as u64));
+        serial_println!("   → LSTAR set to {:#x}", syscall_entry as *const () as u64);
+
+        let selectors = crate::gdt::get_selectors();
+        serial_println!("   → Setting up STAR...");
+        Star::write(
+            selectors.user_code_selector, // SYSRET 64-bit CS = 0x28, SS = 0x20
+            selectors.user_data_selector,
+            selectors.code_selector,
+            selectors.data_selector,
+        ).unwrap();
+        serial_println!("   → STAR set successfully");
+
+        // Interrupt flag masked during syscall
+        serial_println!("   → Setting up SFMask and Efer...");
+        SFMask::write(x86_64::registers::rflags::RFlags::INTERRUPT_FLAG);
+        Efer::write(Efer::read() | EferFlags::SYSTEM_CALL_EXTENSIONS);
+        serial_println!("   → Syscall setup COMPLETE");
+    }
+}
+
+#[repr(C)]
+pub struct SyscallRegs {
+    pub rax: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rdx: u64,
+    pub r8: u64,
+    pub rcx: u64,
+    pub r11: u64,
+}
+
+#[unsafe(naked)]
+pub unsafe extern "C" fn syscall_entry() {
+    core::arch::naked_asm!(
+        "swapgs",
+        "mov gs:[16], rsp", // Save user stack
+        "mov rsp, gs:[8]",  // Switch to kernel stack
+        "push r11",         // Save user rflags
+        "push rcx",         // Save user rip
+        "push rbp", "push rbx", "push r12", "push r13", "push r14", "push r15",
+        "mov rbp, rsp",
+        
+        // Prepare SyscallRegs on stack
+        "push r11", // r11
+        "push rcx", // rcx
+        "push r10", // r8 (user r10 -> kernel r8)
+        "push rdx", // rdx
+        "push rsi", // rsi
+        "push rdi", // rdi
+        "push rax", // rax
+        
+        "mov rdi, rsp", // Pass pointer to SyscallRegs
+        "call syscall_dispatch",
+        
+        // Restore from SyscallRegs
+        "pop rax",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop r10", // Restore r8 (user r10)
+        "pop rcx",
+        "pop r11",
+
+        "pop r15", "pop r14", "pop r13", "pop r12", "pop rbx", "pop rbp",
+        "pop rcx",          // Restore user rip
+        "pop r11",          // Restore user rflags
+        "mov rsp, gs:[16]", // Restore user stack
+        "swapgs",
+        "sysretq"
+    );
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserMessageType {
+    RawCall(u64) = 0,
+    Signal(u8) = 1,
+    // ... skipping variants ...
+    HardwareInterrupt { vector: u8, data: u64 } = 13,
+    HIDEvent { ev_type: u16, code: u16, value: i32 } = 14,
+    // ... skipping variants ...
+    DisplayPrimaryFramebuffer { virt_addr: u64, width: u32, height: u32, pitch: u32 } = 33,
+}
+
+#[repr(C)]
+pub struct PdxMessage {
+    pub msg_type: UserMessageType,
+    pub payload: [u8; 64],
+}
+
+#[no_mangle]
+pub extern "C" fn syscall_dispatch(regs: &mut SyscallRegs) {
+    let rax = regs.rax;
+    let rdi = regs.rdi;
+    let rsi = regs.rsi;
+    let rdx = regs.rdx;
+    let r8 = regs.r8;
+
+    match rax {
+        27 => { // pdx_call(pd, num, arg0, arg1)
+             if rdi == 0 {
+                 // Kernel Direct Calls
+                 match rsi {
+                     0xDD => { // PDX_COMPOSITOR_COMMIT
+                         let params_ptr = rdx as *const [u64; 5];
+                         unsafe {
+                             let params = *params_ptr;
+                             let pfn_list_ptr = params[0] as *const u64;
+                             let _num_pages = params[1] as usize;
+                             let width = params[2] as u32;
+                             let height = params[3] as u32;
+
+                             if let Some(fb_response) = crate::FB_REQUEST.response() {
+                                 if let Some(fb) = fb_response.framebuffers().iter().next() {
+                                     let src_pfn = *pfn_list_ptr;
+                                     let hhdm_offset = crate::HHDM_REQUEST.response().unwrap().offset;
+                                     let src_ptr = (hhdm_offset + (src_pfn * 4096)) as *const u32;
+                                     let dst_ptr = fb.address() as *mut u32;
+
+                                     // Temporarily allow kernel to access PKEY 0 (HHDM/FB)
+                                     let old_pkru = crate::pku::Pkru::read();
+                                     unsafe { crate::pku::Pkru::write(0); }
+
+                                     let num_pixels = (width * height) as usize;
+                                     core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, num_pixels);
+                                     
+                                     unsafe { crate::pku::Pkru::write(old_pkru); }
+
+                                 }
+                             }
+                             regs.rax = 0;
+                         }
+                     },
+                     31 => { // PdxAllocateMemory(size)
+                          let size = rdx; 
+                          let num_pages = (size + Size4KiB::SIZE - 1) / Size4KiB::SIZE;
+
+                          let allocated_pfn_result = {
+                              let mut global_vas_locked = GLOBAL_VAS.lock();
+                              let mut global_vas = global_vas_locked.as_mut().expect("GLOBAL_VAS not initialized");
+                              let mut frame_allocator = &mut global_vas.frame_allocator;
+
+                              match frame_allocator.allocate_contiguous(num_pages as usize) {
+                                  Some(frame_range) => {
+                                      frame_range.start.start_address().as_u64() / Size4KiB::SIZE
+                                  },
+                                  None => {
+                                      serial_println!("Kernel: PdxAllocateMemory failed to allocate {} pages.", num_pages);
+                                      u64::MAX 
+                                  }
+                              }
+                          };
+                          regs.rax = allocated_pfn_result;
+                     },
+                     30 => { // PdxMapMemory(pfn, size)
+                          let pfn = rdx;
+                          let size = r8; // r8 in dispatch is r10 in asm (arg1)
+                          
+                          let va = match crate::memory::va_allocator::allocate_va(size as usize) {
+                              Some(va) => va,
+                              None => {
+                                  regs.rax = u64::MAX;
+                                  return;
+                              }
+                          };
+
+                          let mapped_vaddr_result = {
+                              let mut global_vas_locked = GLOBAL_VAS.lock();
+                              let mut global_vas = global_vas_locked.as_mut().expect("GLOBAL_VAS not initialized");
+
+                              let phys_mem_offset = global_vas.phys_mem_offset;
+                              let level_4_table = unsafe { active_level_4_table(phys_mem_offset) };
+                              let mut mapper = unsafe { OffsetPageTable::new(level_4_table, phys_mem_offset) };
+
+                              let mut current_vaddr = VirtAddr::new(va); 
+                              let mut allocated_vaddr: Option<VirtAddr> = None;
+
+                              let page_size = Size4KiB::SIZE; 
+                              let num_pages = (size + page_size - 1) / page_size;
+
+                              let pku_key = crate::core_local::CoreLocal::get().current_pd_ref().pku_key;
+
+                              for i in 0..num_pages {
+                                  let phys_addr = PhysAddr::new(pfn * page_size + i * page_size);
+                                  let frame: PhysFrame<Size4KiB> = PhysFrame::containing_address(phys_addr);
+                                  let page = Page::containing_address(current_vaddr);
+                                  let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+                                  let frame_allocator = &mut global_vas.frame_allocator;
+                                  
+                                  match unsafe { mapper.map_to(page, frame, flags, frame_allocator) } {
+                                      Ok(mapper_flush_guard) => {
+                                          mapper_flush_guard.flush();
+                                          unsafe {
+                                              crate::memory::manager::update_page_pkey(page, pku_key, phys_mem_offset);
+                                          }
+                                          if allocated_vaddr.is_none() {
+                                              allocated_vaddr = Some(current_vaddr);
+                                          }
+                                          current_vaddr += page_size;
+                                      },
+                                      Err(e) => {
+                                          serial_println!("Kernel: PdxMapMemory failed to map page {:#x} to {:#x}: {:?}", phys_addr.as_u64(), page.start_address().as_u64(), e);
+                                          regs.rax = u64::MAX;
+                                          return;
+                                      }
+                                  }
+                              }
+                              allocated_vaddr.map_or(u64::MAX, |vaddr| vaddr.as_u64())
+                          };
+                          regs.rax = mapped_vaddr_result;
+                     },
+                     _ => {
+                         // Check for Message-based calls
+                         if let Some(_target_pd) = crate::ipc::DOMAIN_REGISTRY.get(rsi as u32) {
+                             let msg_ptr = rdx as *const PdxMessage; // This is User PdxMessage
+                             // Wait, kernel internal Spawn message uses kernel MessageType
+                             // But pdx_call from userland provides UserMessageType.
+                             
+                             // For now, assume it's UserMessageType
+                             unsafe {
+                                 // We'll skip the detailed match for now to fix compile
+                                 regs.rax = u64::MAX; 
+                             }
+                         } else {
+                             regs.rax = u64::MAX;
+                         }
+                     }
+                 }
+             } else {
+                 match crate::ipc::safe_pdx_call(rdi as u32, rdx) {
+                     Ok(res) => regs.rax = res,
+                     Err(_) => regs.rax = u64::MAX,
+                 }
+             }
+        },
+        28 => { // pdx_listen(flags)
+             let core_local = crate::core_local::CoreLocal::get();
+             let pd_id = core_local.current_pd();
+             if let Some(target_pd) = crate::ipc::DOMAIN_REGISTRY.get(pd_id) {
+                 loop {
+                     unsafe {
+                         match (*target_pd.message_ring).dequeue() {
+                             Some(msg) => {
+                                 let user_msg_ptr = core_local.syscall_msg_ptr as *mut PdxMessage;
+                                 
+                                 // Temporarily allow kernel to write to any PKEY
+                                 let old_pkru = crate::pku::Pkru::read();
+                                 unsafe { crate::pku::Pkru::write(0); } // Allow all
+                                 
+                                 match msg {
+                                     MessageType::HardwareInterrupt { vector, data } => {
+                                         (*user_msg_ptr).msg_type = UserMessageType::HardwareInterrupt { vector, data };
+                                     },
+                                     MessageType::IpcCall { func_id, arg0 } => {
+                                         (*user_msg_ptr).msg_type = UserMessageType::RawCall(arg0); // Hack
+                                     },
+                                     MessageType::DisplayPrimaryFramebuffer { virt_addr, width, height, pitch } => {
+                                         (*user_msg_ptr).msg_type = UserMessageType::DisplayPrimaryFramebuffer { virt_addr, width, height, pitch };
+                                     },
+                                     MessageType::HIDEvent { ev_type, code, value } => {
+                                         (*user_msg_ptr).msg_type = UserMessageType::HIDEvent { ev_type, code, value };
+                                     }
+                                     _ => {
+                                         unsafe { crate::pku::Pkru::write(old_pkru); }
+                                         // For now, return empty or zero
+                                         regs.rax = 0;
+                                         regs.rsi = 0;
+                                         regs.rdx = 0;
+                                         break;
+                                     }
+                                 }
+                                 
+                                 unsafe { crate::pku::Pkru::write(old_pkru); }
+
+                                 regs.rax = 0; // Success
+                                 regs.rdi = 0; // Kernel
+                                 regs.rsi = 1; // num (1 message)
+                                 regs.rdx = core_local.syscall_msg_ptr; // arg0 = pointer to message
+                                 regs.rcx = 0;
+                                 regs.r8 = 0;
+                                 break;
+                             }
+                             None => {
+                                 regs.rax = 0; // Success
+                                 regs.rdi = 0;
+                                 regs.rsi = 0; // num=0
+                                 regs.rdx = 0; // arg0=0 -> NO MESSAGE
+                                 regs.rcx = 0;
+                                 regs.r8 = 0;
+                                 break;
+                             }
+                         }
+                     }
+                 }
+             } else {
+                 regs.rax = u64::MAX;
+             }
+        },
+        29 => { // pdx_reply(target_pd, val)
+             let caller_pd = crate::core_local::CoreLocal::get().current_pd();
+             regs.rax = crate::ipc::router::route_signal(caller_pd, rdi as u32, rsi as u8, 0).is_ok() as u64;
+        },
+        69 => { // serial_print(ptr, len)
+             let ptr = rdi as *const u8;
+             let len = rsi as usize;
+             unsafe {
+                 let s = core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len));
+                 crate::serial_print!("{}", s);
+             }
+             regs.rax = 0;
+        },
+        24 => { // sys_park
+             crate::scheduler::park_current_thread();
+             regs.rax = 0;
+        },
+        _ => regs.rax = u64::MAX,
+    }
+}
+
+
+extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
+    serial_println!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
+}
+
+extern "x86-interrupt" fn double_fault_handler(
+    stack_frame: InterruptStackFrame, _error_code: u64) -> ! 
+{
+    let rdx: u64;
+    unsafe {
+        core::arch::asm!("mov {}, rdx", out(reg) rdx);
+    }
+    serial_println!("EXCEPTION: DOUBLE FAULT\n{:#?}\nRDX: {:#x}", stack_frame, rdx);
+    panic!("EXCEPTION: DOUBLE FAULT");
+}
+
+extern "x86-interrupt" fn page_fault_handler(
+    stack_frame: InterruptStackFrame,
+    error_code: PageFaultErrorCode,
+) {
+    use x86_64::registers::control::Cr2;
+    let fault_addr = match Cr2::read() {
+        Ok(addr) => addr.as_u64(),
+        Err(e) => e.0,
+    };
+
+    // 1. Identify current faulting task
+    let mut task_id = 0;
+    let core_id = crate::core_local::CoreLocal::get().core_id;
+    let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
+    let current_ptr = sched.current_task.load(Ordering::Acquire);
+    if !current_ptr.is_null() {
+        unsafe {
+            let task = &mut *current_ptr;
+            task_id = task.id;
+            task.context.rip = stack_frame.instruction_pointer.as_u64();
+            task.context.rsp = stack_frame.stack_pointer.as_u64();
+            task.context.rflags = stack_frame.cpu_flags.bits();
+            task.state.store(crate::scheduler::STATE_BLOCKED, Ordering::Release);
+        }
+    }
+
+    // 2. Async #PF Forwarding via safe_pdx_call (IPCtax mandate)
+    if let Err(e) = crate::ipc::pagefault::forward_page_fault(fault_addr, error_code.bits() as u32, task_id as u64) {
+        serial_println!("EXCEPTION: Failed to forward #PF to sext: {}", e);
+        
+        // Phase 24: Protection Violation -> SIGSEGV (11)
+        if let Some(target_pd) = crate::ipc::DOMAIN_REGISTRY.get(task_id) {
+            let msg = MessageType::Signal(11);
+            let _ = unsafe { &*target_pd.message_ring }.enqueue(msg);
+        }
+    }
+
+    // 3. Trigger Scheduler to pick next task
+    sched.tick();
+    unsafe { send_eoi(); }
+}
+
+pub unsafe fn send_eoi() {
+    let lapic_vaddr = crate::apic::LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire);
+    if lapic_vaddr != 0 {
+        let lapic_ptr = lapic_vaddr as *mut u32;
+        let eoi_reg = lapic_ptr.offset(0x0B0 / 4);
+        eoi_reg.write_volatile(0);
+    } else {
+        core::arch::asm!("mov al, 0x20", "out 0x20, al", "out 0xa0, al");
+    }
+}
+
+extern "x86-interrupt" fn timer_interrupt_handler(stack_frame: InterruptStackFrame) {
+    TICKS.fetch_add(1, Ordering::Relaxed);
+    let core_id = crate::core_local::CoreLocal::get().core_id;
+    let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
+    if let Some((old_ctx_ptr, next_ctx_ptr)) = sched.tick() {
+        unsafe {
+            let old_ctx = &mut *old_ctx_ptr;
+            old_ctx.rip = stack_frame.instruction_pointer.as_u64();
+            old_ctx.rsp = stack_frame.stack_pointer.as_u64();
+            old_ctx.rflags = stack_frame.cpu_flags.bits();
+            send_eoi();
+            crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
+        }
+    }
+    unsafe { send_eoi(); }
+}
+
+extern "x86-interrupt" fn generic_irq_handler(_stack_frame: InterruptStackFrame) {
+    route_interrupt(0x22);
+}
+
+extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    route_interrupt(0x21);
+}
+
+extern "x86-interrupt" fn revoke_key_handler(_stack_frame: InterruptStackFrame) {
+    // Phase 19: Multicast Revocation TLB Shootdown
+    crate::hal::tlb_flush_local();
+    unsafe { send_eoi(); }
+}
+
+fn route_interrupt(vector: u8) {
+    let pd_id = VECTOR_OWNERS[vector as usize].load(Ordering::Acquire);
+    if pd_id == 0 {
+        unsafe { send_eoi(); }
+        return;
+    }
+
+    if let Some(target_pd) = crate::ipc::DOMAIN_REGISTRY.get(pd_id) {
+        let msg = MessageType::HardwareInterrupt { vector, data: 0 };
+        let _ = unsafe { &*target_pd.message_ring }.enqueue(msg);
+        
+        // Wake the driver trampoline/main thread
+        let main_task = target_pd.main_task.load(Ordering::Acquire);
+        if !main_task.is_null() {
+            crate::scheduler::unpark_thread(main_task);
+        }
+    }
+
+    unsafe { send_eoi(); }
+}

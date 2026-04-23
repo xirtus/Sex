@@ -1,0 +1,8 @@
+[package]
+name = "cosmic-settings"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-graphics = { path = "../../crates/sex-graphics" }

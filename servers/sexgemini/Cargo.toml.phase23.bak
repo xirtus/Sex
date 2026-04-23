@@ -1,0 +1,8 @@
+[package]
+name = "sexgemini"
+version = "0.23.4"
+edition = "2021"
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+core = { version = "1.0", features = ["panic_immediate_abort"] }
+alloc = { version = "1.0", features = ["panic_immediate_abort"] }

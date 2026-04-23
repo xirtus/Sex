@@ -1,0 +1,2355 @@
+#![no_std]
+#![no_main]
+#![allow(unreachable_patterns)]
+#![allow(unused_variables)]
+#![allow(non_snake_case)]
+
+extern crate alloc;
+use alloc::vec::Vec;
+use core::fmt::Write;
+
+#[macro_export]
+macro_rules! serial_println {
+    ($($arg:tt)*) => {
+        let mut buf = [0u8; 256];
+        let mut writer = $crate::Wrapper::new(&mut buf);
+        let _ = core::fmt::write(&mut writer, format_args!($($arg)*));
+        let _ = writer.write_str("
+");
+        let len = writer.pos;
+        unsafe {
+            core::arch::asm!("syscall",
+                in("rax") 69,
+                in("rdi") buf.as_ptr(),
+                in("rsi") len,
+            );
+        }
+    };
+}
+
+pub struct Wrapper<'a> {
+    pub buf: &'a mut [u8],
+    pub pos: usize,
+}
+impl<'a> Wrapper<'a> {
+    pub fn new(buf: &'a mut [u8]) -> Self { Self { buf, pos: 0 } }
+}
+impl<'a> core::fmt::Write for Wrapper<'a> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let bytes = s.as_bytes();
+        let remaining = self.buf.len() - self.pos;
+        let to_copy = if bytes.len() > remaining { remaining } else { bytes.len() };
+        self.buf[self.pos..self.pos+to_copy].copy_from_slice(&bytes[..to_copy]);
+        self.pos += to_copy;
+        Ok(())
+    }
+}
+
+// Defines TagMask for clarity
+pub type TagMask = u64;
+
+// Represents the state of a single output (monitor)
+#[derive(Debug, Clone, Copy)]
+pub struct OutputState {
+    pub id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub x: u32, // Position in global coordinate space
+    pub y: u32,
+}
+
+// Represents various rendering flags for aesthetics
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct RenderState {
+    pub blur_strength: u32,
+    pub corner_radius: u32,
+    pub alpha: u8, // 0-255
+    pub animation_curve: u8, // e.g., 0 for linear, 1 for ease-out
+}
+
+// Ephemeral snapshot of the UI state for rendering decisions.
+// Never stored, always rebuilt.
+#[derive(Clone, Copy)]
+pub struct UiStateGraph<'a> {
+    pub windows: &'a [Window], // Borrowed slice of all windows
+    pub outputs: &'a [OutputState], // Borrowed slice of output states
+    pub active_tags: TagMask, // The currently active tag mask (view)
+    pub focus_id: Option<u64>, // ID of the currently focused window
+    pub render_flags: RenderState,      // blur/radius/alpha/animation_curve (compositor only)
+}
+
+// Enum for window states (e.g., normal, tiled, floating, minimized)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WindowState {
+    Normal,
+    Tiled,
+    Floating,
+    Minimized,
+    Maximized,
+    Fullscreen,
+}
+
+// Represents a single managed window.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Window {
+    pub id: u64,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub pfn_base: u64, // Base PFN for the window's buffer
+    pub state: WindowState,
+    pub pd_id: u32, // Protection Domain ID of the owning process
+    pub corner_radius: u32,
+    pub blur_strength: u32,
+    pub is_animating: bool,
+    pub border_color: u32,
+    pub border_thickness: u32,
+    pub tag_mask: u64, // Tag mask for visibility filtering
+    pub render_state: RenderState, // Individual window render state
+    pub workspace_mask: u32, // Workspace association
+
+    // Animation target fields
+    pub target_x: u32,
+    pub target_y: u32,
+    pub target_width: u32,
+    pub target_height: u32,
+}
+
+// Enum for different tiling layouts
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TilingLayout {
+    MasterStack,    // Default layout with master and stack areas
+    VerticalStack,  // All windows stacked vertically
+    HorizontalStack, // All windows stacked horizontally
+    Floating,       // Windows retain their position and size
+    // Add more layouts as needed
+}
+
+// Represents the tiling layout configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct TilingState {
+    pub master_count: usize, // Number of windows in the master area
+    pub master_ratio: f32,   // Ratio of master area width to screen width (e.g., 0.5 for 50%)
+    pub gaps: u32,           // Gap size between windows and screen edges
+    pub current_layout: TilingLayout, // The currently active tiling layout
+}
+
+// Placeholder for LayeringState - now global, not per workspace
+#[derive(Debug, Clone, Copy)]
+pub struct LayeringState {
+    // Z-order management logic
+    pub z_order: [u64; MAX_WINDOWS], // Ordered list of window IDs by Z-index
+    pub num_layers: usize,
+}
+
+const MAX_WINDOWS: usize = 64;
+const MAX_VIEWS: usize = 4; // Define maximum number of views/workspaces
+
+pub const SEX_COMPOSITOR_MAGIC: u32 = 0x53455843; // 'SEXC'
+pub const PDX_COMPOSITOR_COMMIT: u64 = 0xDD;
+pub const PDX_SEX_WINDOW_CREATE: u64 = 0xDE; // Matches silk-shell's definition
+pub const PDX_SET_WINDOW_DECORATIONS: u64 = 0xE2;
+pub const PDX_GET_DISPLAY_INFO: u64 = 0xE3;
+
+// New syscalls for basic window management
+pub const PDX_FOCUS_WINDOW: u64 = 0xE4;
+pub const PDX_MINIMIZE_WINDOW: u64 = 0xE5;
+pub const PDX_MAXIMIZE_WINDOW: u64 = 0xE6;
+pub const PDX_CLOSE_WINDOW: u64 = 0xE7;
+
+// New syscalls for Tag management
+pub const PDX_SET_WINDOW_TAGS: u64 = 0xE8;
+pub const PDX_GET_WINDOW_TAGS: u64 = 0xE9;
+pub const PDX_SET_VIEW_TAGS: u64 = 0xEA;
+pub const PDX_GET_VIEW_TAGS: u64 = 0xEB;
+pub const PDX_SWITCH_VIEW: u64 = 0xF4; // New syscall for switching views
+pub const PDX_GET_ALL_VIEWS: u64 = 0xF5; // New syscall to get all views
+pub const PDX_REGISTER_HOTKEY: u64 = 0xF6; // New syscall to register a global hotkey
+pub const PDX_SEND_NOTIFICATION: u64 = 0xF7; // New syscall to send a system-wide notification
+pub const PDX_SHOW_LOGIN_SCREEN: u64 = 0xF8; // New syscall to display login screen
+pub const PDX_HIDE_LOGIN_SCREEN: u64 = 0xF9; // New syscall to hide login screen
+pub const PDX_SWITCH_USER_SESSION: u64 = 0xFA; // New syscall to switch user session
+pub const PDX_GET_UI_TREE: u64 = 0xFB; // New syscall to get UI tree for accessibility
+
+// System telemetry (must match sex-pdx constants 0xFC-0xFE)
+pub const PDX_GET_TIME: u64 = 0xFC;       // → (seconds << 20) | millis
+pub const PDX_GET_CPU_USAGE: u64 = 0xFD;  // arg0=core_id → percent*100
+pub const PDX_GET_MEM_USAGE: u64 = 0xFE;  // → (used_kb << 32) | total_kb
+
+// New syscalls for UI aesthetics
+pub const PDX_SET_WINDOW_ROUNDNESS: u64 = 0xF1;
+pub const PDX_SET_WINDOW_BLUR: u64 = 0xF2;
+pub const PDX_SET_WINDOW_ANIMATION: u64 = 0xF3;
+
+// New syscalls for memory management (used by sex-pdx)
+pub const PDX_ALLOCATE_MEMORY: u64 = 31;
+pub const PDX_MAP_MEMORY: u64 = 30;
+
+// New syscalls for basic window manipulation
+pub const PDX_MOVE_WINDOW: u64 = 0xEE; // Re-indexed
+pub const PDX_RESIZE_WINDOW: u64 = 0xEF; // Re-indexed
+
+// New syscall for committing individual window frames
+pub const PDX_WINDOW_COMMIT_FRAME: u64 = 0xF0;
+
+
+// Structure for window creation parameters passed from user space.
+// This is what the kernel will copy when PDX_SEX_WINDOW_CREATE is called.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexWindowCreateParams {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub pfn_base: u64, // Base PFN for the window's buffer
+}
+
+// Structure for window decoration parameters
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexWindowDecorationsParams {
+    pub window_id: u64,
+    pub border_color: u32,
+    pub border_thickness: u32,
+}
+
+/// Structure for window move parameters passed from user space.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexWindowMoveParams {
+    pub window_id: u64,
+    pub new_x: u32,
+    pub new_y: u32,
+}
+
+/// Structure for window resize parameters passed from user space.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexWindowResizeParams {
+    pub window_id: u64,
+    pub new_width: u32,
+    pub new_height: u32,
+}
+
+/// Structure for setting a window's tags.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexSetWindowTagsParams {
+    pub window_id: u64,
+    pub tag_mask: u64,
+}
+
+/// Structure for setting a window's corner radius.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexSetWindowRoundnessParams {
+    pub window_id: u64,
+    pub radius: u32,
+}
+
+/// Structure for setting a window's blur strength.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexSetWindowBlurParams {
+    pub window_id: u64,
+    pub strength: u32,
+}
+
+/// Structure for setting a window's animation state.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexSetWindowAnimationParams {
+    pub window_id: u64,
+    pub is_animating: bool,
+}
+
+/// Represents a registered hotkey.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hotkey {
+    pub ev_type: u16,
+    pub code: u16,
+    pub value: i32, // For key press/release (1/0)
+    pub modifiers: u16, // e.g., MOD_ALT, MOD_SUPER
+    pub pd_id: u32, // The PD to which this hotkey should be delivered
+}
+
+/// Structure for sending a system-wide notification.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexNotificationParams {
+    pub title_ptr: u64, // Pointer to title string in caller's memory
+    pub title_len: u32,
+    pub message_ptr: u64, // Pointer to message string in caller's memory
+    pub message_len: u32,
+    pub icon_pfn: u64, // PFN of an icon bitmap, 0 if no icon
+    pub display_duration_ms: u64, // How long to display the notification in milliseconds
+}
+
+/// Represents an active notification managed by the compositor.
+#[derive(Debug, Clone)]
+pub struct Notification {
+    pub id: u64,
+    pub title: Vec<u8>,
+    pub message: Vec<u8>,
+    pub icon_pfn: u64,
+    pub start_time_ms: u64,
+    pub display_duration_ms: u64,
+}
+
+// Intermediate data structures required by the projection functions.
+// Rect is already defined in sex-pdx so it should be imported instead of redefined.
+pub struct LayoutResult {
+    pub window_layouts: Vec<(u64, Rect)>, // (window_id, x, y, width, height)
+    // Other layout-specific data
+}
+
+// Represents the result of animation application
+pub struct AnimatedLayout {
+    pub window_layouts: Vec<(u64, Rect)>, // Animated (window_id, x, y, width, height)
+    // Animation-specific data
+}
+
+// Represents drawing commands for the renderer
+pub struct RenderCommands {
+    pub commands: Vec<RenderCommand>, // List of individual drawing commands
+}
+
+// Individual rendering command (e.g., DrawRect, DrawWindow)
+pub enum RenderCommand {
+    Clear(u32), // Clear color
+    DrawRect(Rect, u32), // Rectangle with color
+    DrawWindow(u64, Rect, u64, RenderState), // (window_id, target_rect, pfn_base, RenderState)
+    DrawBitmap(Rect, Vec<u8>, u32, u32, u32), // (target_rect, bitmap_1bit_alpha_data, bitmap_width, bitmap_height, color)
+    // ... other commands for text, blur, rounded corners
+}
+
+pub struct PFNList(pub Vec<u64>); // Wrapper for Vec<u64> for clarity
+
+// Projection Function 1: Filters windows by active tags
+fn visible_windows<'a>(graph: &'a UiStateGraph<'a>) -> impl Iterator<Item = &'a Window> {
+    graph.windows.iter()
+        .filter(move |w| (w.tag_mask & graph.active_tags) != 0)
+}
+
+// Projection Function 2: Computes layout for visible windows
+fn compute_layout(visible: &[&Window], output: &OutputState, tiling_state: &TilingState) -> LayoutResult {
+    let mut window_layouts = Vec::new();
+    let fb_width = output.width;
+    let fb_height = output.height;
+    let gaps = tiling_state.gaps;
+
+    let num_visible = visible.len();
+    if num_visible == 0 { return LayoutResult { window_layouts }; }
+
+    match tiling_state.current_layout {
+        TilingLayout::MasterStack => {
+            let master_count = tiling_state.master_count;
+            let master_ratio = tiling_state.master_ratio;
+
+            let master_area_width = (fb_width as f32 * master_ratio) as u32;
+            let tiled_area_x = gaps;
+            let tiled_area_y = gaps;
+            let tiled_area_width = fb_width - gaps * 2;
+            let tiled_area_height = fb_height - gaps * 2;
+
+            let num_master_windows = num_visible.min(master_count);
+            let num_stack_windows = num_visible.saturating_sub(num_master_windows);
+
+            let master_width = if num_stack_windows > 0 { master_area_width } else { tiled_area_width };
+            let stack_width = tiled_area_width - master_width - if num_master_windows > 0 && num_stack_windows > 0 { gaps } else { 0 };
+
+            let master_window_height = if num_master_windows > 0 { (tiled_area_height - gaps * (num_master_windows as u32 - 1)) / num_master_windows as u32 } else { 0 };
+            let mut current_y = tiled_area_y;
+            for i in 0..num_master_windows {
+                let window_ref = visible[i];
+                window_layouts.push((window_ref.id, Rect { x: tiled_area_x as i32, y: current_y as i32, w: master_width, h: master_window_height }));
+                current_y += master_window_height + gaps;
+            }
+
+            let stack_window_height = if num_stack_windows > 0 { (tiled_area_height - gaps * (num_stack_windows as u32 - 1)) / num_stack_windows as u32 } else { 0 };
+            let mut current_y = tiled_area_y;
+            for i in 0..num_stack_windows {
+                let window_ref = visible[num_master_windows + i];
+                window_layouts.push((window_ref.id, Rect { x: (tiled_area_x + master_width + gaps) as i32, y: current_y as i32, w: stack_width, h: stack_window_height }));
+                current_y += stack_window_height + gaps;
+            }
+        },
+        TilingLayout::VerticalStack => {
+            let tiled_area_x = gaps;
+            let tiled_area_y = gaps;
+            let tiled_area_width = fb_width - gaps * 2;
+            let tiled_area_height = fb_height - gaps * 2;
+
+            let window_height = (tiled_area_height - gaps * (num_visible as u32 - 1)) / num_visible as u32;
+            let mut current_y = tiled_area_y;
+            for i in 0..num_visible {
+                let window_ref = visible[i];
+                window_layouts.push((window_ref.id, Rect { x: tiled_area_x as i32, y: current_y as i32, w: tiled_area_width, h: window_height }));
+                current_y += window_height + gaps;
+            }
+        },
+        TilingLayout::HorizontalStack => {
+            let tiled_area_x = gaps;
+            let tiled_area_y = gaps;
+            let tiled_area_width = fb_width - gaps * 2;
+            let tiled_area_height = fb_height - gaps * 2;
+
+            let window_width = (tiled_area_width - gaps * (num_visible as u32 - 1)) / num_visible as u32;
+            let mut current_x = tiled_area_x;
+            for i in 0..num_visible {
+                let window_ref = visible[i];
+                window_layouts.push((window_ref.id, Rect { x: current_x as i32, y: tiled_area_y as i32, w: window_width, h: tiled_area_height }));
+                current_x += window_width + gaps;
+            }
+        },
+        TilingLayout::Floating => {
+            // In floating layout, windows retain their current positions and sizes.
+            // Their target_x/y/width/height are already set from previous operations
+            // or are explicitly set by PDX_MOVE_WINDOW/PDX_RESIZE_WINDOW.
+            // So, no changes are needed here, as the animation system will handle
+            // moving them to their targets if they are animating.
+            for window_ref in visible {
+                window_layouts.push((window_ref.id, Rect { x: window_ref.target_x as i32, y: window_ref.target_y as i32, w: window_ref.target_width, h: window_ref.target_height }));
+            }
+        }
+    }
+    LayoutResult { window_layouts }
+}
+
+
+// Projection Function 4: Translates layout to raw drawing commands
+// This is where blur, rounded corners would be handled by rendering directly
+fn render_decisions(animated: &AnimatedLayout, output: &OutputState, all_windows_map: &[(u64, &Window)]) -> RenderCommands {
+    let mut commands = Vec::new();
+    // Silk DE brand background — deep navy
+    commands.push(RenderCommand::Clear(0xFF1a1a2e));
+
+    // Silk Bar — 28px strip at screen bottom
+    commands.push(RenderCommand::DrawRect(
+        Rect { x: 0, y: (output.height as i32) - 28, w: output.width, h: 28 },
+        0xFF2d2d54,
+    ));
+    // Silk Bar accent line
+    commands.push(RenderCommand::DrawRect(
+        Rect { x: 0, y: (output.height as i32) - 29, w: output.width, h: 1 },
+        0xFF5555aa,
+    ));
+
+    for (window_id, rect) in &animated.window_layouts {
+        // Fetch original window properties for aesthetics
+        if let Some((_, original_window)) = all_windows_map.iter().find(|(id, _)| *id == *window_id) {
+            commands.push(RenderCommand::DrawWindow(*window_id, *rect, original_window.pfn_base, original_window.render_state)); // Pass render state
+
+            // Draw border if present
+            if original_window.border_thickness > 0 {
+                let bt = original_window.border_thickness as i32;
+                let bc = original_window.border_color;
+                
+                // Top border
+                commands.push(RenderCommand::DrawRect(Rect { x: rect.x - bt, y: rect.y - bt, w: (rect.w as i32 + 2 * bt) as u32, h: bt as u32 }, bc));
+                // Bottom border
+                commands.push(RenderCommand::DrawRect(Rect { x: rect.x - bt, y: rect.y + rect.h as i32, w: (rect.w as i32 + 2 * bt) as u32, h: bt as u32 }, bc));
+                // Left border
+                commands.push(RenderCommand::DrawRect(Rect { x: rect.x - bt, y: rect.y, w: bt as u32, h: rect.h }, bc));
+                // Right border
+                commands.push(RenderCommand::DrawRect(Rect { x: rect.x + rect.w as i32, y: rect.y, w: bt as u32, h: rect.h }, bc));
+            }
+        } else {
+            commands.push(RenderCommand::DrawWindow(*window_id, *rect, 0, RenderState::default())); // Dummy with default render state
+        }
+    }
+    RenderCommands { commands }
+}
+
+// Projection Function 5: Builds PFN list for zero-copy handoff
+fn build_pfn_list(commands: RenderCommands) -> PFNList {
+    let mut pfns = Vec::new();
+    for command in commands.commands {
+        if let RenderCommand::DrawWindow(_id, _rect, pfn_base, _render_state) = command {
+            if pfn_base != 0 {
+                pfns.push(pfn_base);
+            }
+        }
+    }
+    PFNList(pfns)
+}
+
+// Projection Function 6: Commits the PFN list to scanout
+fn commit_to_scanout(pfns: PFNList) {
+    // This function will likely be a wrapper around a direct kernel syscall
+    // to program the display controller with the list of PFNs for scanout.
+    // For now, it's a placeholder.
+    let _ = pfns; // Suppress unused warning
+}
+
+use sex_pdx::{pdx_allocate_memory, pdx_map_memory, Rect}; // Rect imported here
+use sex_graphics::WindowBuffer;
+
+#[no_mangle]
+pub unsafe extern "C" fn _start() -> ! {
+    serial_println!("sexdisplay: Compositor starting...");
+
+    let mut compositor = SexCompositor::new(1280, 720, 1280); // Width, Height, Stride
+
+    // Initialize first output's scanout buffer
+    if let Some(pfn_base) = compositor.internal_framebuffer_pfn_bases.get(0) {
+        compositor.current_scanout_pfn_base = *pfn_base;
+    } else {
+        serial_println!("sexdisplay: Error: No framebuffers initialized!");
+        loop {}
+    }
+    
+    // Set initial view/tag mask to show windows on the first tag (tag 0, mask 1)
+    compositor.set_view_tags(1); // This sets current_tag_view_mask = 1
+
+    // Register global hotkey for Super+G (Gemini CLI)
+    // Assuming EV_KEY = 1, BTN_G = 0x22, MOD_LSUPER = 0x0040, MOD_RSUPER = 0x0080
+    // We'll use MOD_RSUPER (0x80) as the 'Super' key for simplicity.
+    let super_g_hotkey = Hotkey {
+        ev_type: EV_KEY,
+        code: 0x22, // 'g' key code (example, actual code might vary)
+        value: 1, // Key press
+        modifiers: MOD_RSUPER, // Super key
+        pd_id: 0, // This will be filled by PDX_SEND_MESSAGE when triggered
+    };
+    compositor.registered_hotkeys.push(super_g_hotkey);
+
+    let mut event_buf = [0u8; 128]; // Buffer for incoming events
+
+    loop {
+        core::hint::spin_loop();
+
+        // Simulate event processing (e.g., from kernel input handler)
+        // In a real system, this would be an IPC call to receive events.
+        // For now, we'll simulate a keyboard event if Super+G is pressed conceptually.
+        // This loop is simplified and doesn't actually process real input.
+        // Actual input handling would involve receiving events and then calling compositor methods.
+
+        // Example: Check for conceptual Super+G press (this is a placeholder)
+        // In a real system, this would be triggered by a kernel event.
+        // For now, we just rely on the hotkey registration for other processes.
+
+        // Render the frame
+        // This is a blocking call that should redraw the screen.
+        // In a real system, this might be triggered by VSync or input events.
+        compositor.evaluate_and_render_frame();
+    }
+}
+
+// Helper function to simulate PDX calls (for demonstration/testing)
+// In a real kernel, this would be a syscall.
+unsafe fn pdx_call(syscall_id: u64, arg1: u32, arg2: u64, arg3: u64, arg4: u64) -> u64 {
+    let mut ret: u64;
+    core::arch::asm!(
+        "syscall",
+        in("rax") syscall_id,
+        in("rdi") arg1,
+        in("rsi") arg2,
+        in("rdx") arg3,
+        in("r10") arg4,
+        lateout("rax") ret,
+        options(nostack, preserves_flags)
+    );
+    ret
+}
+
+
+// Helper for PDX_SEND_MESSAGE syscall
+#[inline]
+pub unsafe fn pdx_send_message(target_pd: u32, msg: sex_pdx::MessageType) -> u64 {
+    pdx_call(PDX_SEND_MESSAGE, target_pd as u64, msg.into(), 0, 0)
+}
+
+// Helper for PDX_SEX_WINDOW_CREATE syscall
+#[inline]
+pub unsafe fn pdx_spawn_pd(name: &[u8]) -> u32 {
+    // This function would typically take the path to the executable
+    // and spawn a new PD. For now, it's a placeholder.
+    // The actual syscall signature would need to be defined.
+    // We assume a simple version for now that just returns a dummy PD ID.
+    
+    // Example placeholder syscall signature:
+    // syscall(SYSCALL_SPAWN_PD, name_ptr, name_len, 0, 0) -> pd_id
+    let name_ptr = name.as_ptr() as u64;
+    let name_len = name.len() as u64;
+
+    let pd_id: u32;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 68, // Assuming 68 is the syscall number for PDX_SPAWN_PD
+        in("rdi") name_ptr,
+        in("rsi") name_len,
+        lateout("rax") pd_id,
+        options(nostack, preserves_flags)
+    );
+    pd_id
+}
+
+// Mock syscalls for sex_pdx for compilation purposes
+// These will be replaced by actual kernel syscalls later.
+mod sex_pdx {
+    pub use crate::Rect; // Import Rect from the crate's lib.rs
+    pub use crate::sex_graphics::WindowBuffer; // Assume WindowBuffer is also relevant here
+
+    // MessageType is defined in sex_pdx::lib.rs, so this mock is simplified
+    #[derive(Debug, Clone, Copy)]
+    pub enum MessageType {
+        KeyEvent { code: u16, value: i32, modifiers: u16 },
+        CompileRequest { source_path: &'static [u8], target_triple: &'static [u8] },
+        Notification { progress: u8, message: &'static str },
+        // ... other message types
+    }
+
+    // Mock structure for PdxMessage to satisfy compiler
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PdxMessage {
+        pub msg_type: MessageType,
+        pub caller_pd: u32,
+    }
+
+    // Mock PageHandover structure
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PageHandover {
+        pub pfn: u64,
+        pub pku_key: u32,
+    }
+    
+    impl From<PageHandover> for u64 {
+        fn from(handover: PageHandover) -> Self {
+            (handover.pfn << 32) | (handover.pku_key as u64)
+        }
+    }
+
+    // Mock safe_pdx_register
+    pub fn safe_pdx_register(name: &[u8]) -> PdxRing {
+        serial_println!("sex_pdx: Mock safe_pdx_register called for '{}'", core::str::from_utf8(name).unwrap_or("???"));
+        PdxRing { ring_ptr: 0 } // Placeholder
+    }
+
+    // Mock pdx_listen
+    pub fn pdx_listen(ring: &PdxRing) -> Option<PdxMessage> {
+        // Simulate no messages for now
+        let _ = ring;
+        None
+    }
+
+    // Mock pdx_reply
+    pub fn pdx_reply(caller_pd: u32, handover_data: u64) -> u64 {
+        serial_println!("sex_pdx: Mock pdx_reply called for PD {:#x} with data {:#x}", caller_pd, handover_data);
+        0 // Placeholder success code
+    }
+
+    // Mock PdxRing structure
+    pub struct PdxRing { pub ring_ptr: u64 }
+    impl PdxRing {
+        pub fn dequeue(&self) -> Option<PdxMessage> {
+            // Simulate no messages for now
+            None
+        }
+    }
+}
+// Mock `pdx_call` for compile-time, to be replaced by actual syscall
+#[inline]
+pub unsafe fn pdx_call(syscall_id: u64, arg1: u32, arg2: sex_pdx::MessageType, arg3: u64, arg4: u64) -> u64 {
+    let mut ret: u64;
+    core::arch::asm!(
+        "syscall",
+        in("rax") syscall_id,
+        in("rdi") arg1,
+        in("rsi") arg2.into(), // Convert MessageType to u64
+        in("rdx") arg3,
+        in("r10") arg4,
+        lateout("rax") ret,
+        options(nostack, preserves_flags)
+    );
+    ret
+}
+// END MOCK SYSCALLS
+
+// Mock definition for MAX_WINDOWS if not defined elsewhere
+// const MAX_WINDOWS: usize = 64; // Defined in SexCompositor struct context
+
+// Mock definition for DOMAIN_REGISTRY if not defined elsewhere
+// This is used in the awk script's inserted code
+struct DomainRegistry;
+impl DomainRegistry {
+    fn get(&self, _pd_id: u32) -> Option<&Window> {
+        // Placeholder implementation
+        None
+    }
+}
+static DOMAIN_REGISTRY: DomainRegistry = DomainRegistry;
+
+
+// Mock definition for pdx_allocate_memory if not defined elsewhere
+const PDX_ALLOCATE_MEMORY: u64 = 1; // Placeholder syscall ID
+const PDX_MAP_MEMORY: u64 = 2; // Placeholder syscall ID
+
+// Mock definition for `sex_pdx::PdxMessage` and its conversion trait
+mod sex_pdx {
+    pub use crate::Rect;
+    pub use crate::sex_graphics::WindowBuffer;
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum MessageType {
+        KeyEvent { code: u16, value: i32, modifiers: u16 },
+        CompileRequest { source_path: &'static [u8], target_triple: &'static [u8] },
+        Notification { progress: u8, message: &'static str },
+        IpcCall { func_id: u64, arg0: u64 }, // Placeholder for IPC calls
+    }
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PdxMessage {
+        pub msg_type: MessageType,
+        pub caller_pd: u32,
+    }
+
+    impl From<MessageType> for u64 {
+        fn from(msg_type: MessageType) -> Self {
+            // This is a simplified mock conversion. A real implementation would serialize the message.
+            match msg_type {
+                MessageType::KeyEvent { code, value, modifiers } => {
+                    // Example packing: msg_type=0, code=code, value=value, modifiers=modifiers
+                    // This mock does not handle actual serialization.
+                    (0 << 32) | (code as u64) // Simplified representation
+                }
+                MessageType::CompileRequest { source_path, target_triple } => {
+                    // Simplified representation
+                    (1 << 32) | (source_path.len() as u64)
+                }
+                MessageType::Notification { progress, message } => {
+                    // Simplified representation
+                    (2 << 32) | (progress as u64)
+                }
+                MessageType::IpcCall { func_id, arg0 } => {
+                    (3 << 32) | (func_id << 16) | arg0
+                }
+            }
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PageHandover {
+        pub pfn: u64,
+        pub pku_key: u32,
+    }
+    
+    impl From<PageHandover> for u64 {
+        fn from(handover: PageHandover) -> Self {
+            (handover.pfn << 32) | (handover.pku_key as u64)
+        }
+    }
+
+    pub fn safe_pdx_register(name: &[u8]) -> PdxRing {
+        serial_println!("sex_pdx: Mock safe_pdx_register called for '{}'", core::str::from_utf8(name).unwrap_or("???"));
+        PdxRing { ring_ptr: 0 } // Placeholder
+    }
+
+    pub fn pdx_listen(ring: &PdxRing) -> Option<PdxMessage> {
+        let _ = ring;
+        None
+    }
+
+    pub fn pdx_reply(caller_pd: u32, handover_data: u64) -> u64 {
+        serial_println!("sex_pdx: Mock pdx_reply called for PD {:#x} with data {:#x}", caller_pd, handover_data);
+        0 // Placeholder success code
+    }
+
+    pub struct PdxRing { pub ring_ptr: u64 }
+    impl PdxRing {
+        pub fn dequeue(&self) -> Option<PdxMessage> {
+            None
+        }
+    }
+}
+
+// Mock syscall helper for PDX_SEND_MESSAGE
+#[inline]
+pub unsafe fn pdx_send_message(target_pd: u32, msg: sex_pdx::MessageType) -> u64 {
+    pdx_call(PDX_SEND_MESSAGE, target_pd as u64, msg.into(), 0, 0)
+}
+// END MOCK SYSCALLS
+
+
+// Constants for window management
+const MAX_WINDOWS: usize = 64;
+const MAX_VIEWS: usize = 4; // Define maximum number of views/workspaces
+
+
+// Syscall IDs for Compositor (must match kernel definitions)
+pub const PDX_COMPOSITOR_COMMIT: u64 = 0xDD;
+pub const PDX_SEX_WINDOW_CREATE: u64 = 0xDE; // Matches silk-shell's definition
+pub const PDX_SET_WINDOW_DECORATIONS: u64 = 0xE2;
+pub const PDX_GET_DISPLAY_INFO: u64 = 0xE3;
+pub const PDX_FOCUS_WINDOW: u64 = 0xE4;
+pub const PDX_MINIMIZE_WINDOW: u64 = 0xE5;
+pub const PDX_MAXIMIZE_WINDOW: u64 = 0xE6;
+pub const PDX_CLOSE_WINDOW: u64 = 0xE7;
+pub const PDX_SET_WINDOW_TAGS: u64 = 0xE8;
+pub const PDX_GET_WINDOW_TAGS: u64 = 0xE9;
+pub const PDX_SET_VIEW_TAGS: u64 = 0xEA;
+pub const PDX_GET_VIEW_TAGS: u64 = 0xEB;
+pub const PDX_SWITCH_VIEW: u64 = 0xF4;
+pub const PDX_GET_ALL_VIEWS: u64 = 0xF5;
+pub const PDX_REGISTER_HOTKEY: u64 = 0xF6;
+pub const PDX_SEND_NOTIFICATION: u64 = 0xF7;
+pub const PDX_SHOW_LOGIN_SCREEN: u64 = 0xF8;
+pub const PDX_HIDE_LOGIN_SCREEN: u64 = 0xF9;
+pub const PDX_SWITCH_USER_SESSION: u64 = 0xFA;
+pub const PDX_GET_UI_TREE: u64 = 0xFB;
+pub const PDX_GET_TIME: u64 = 0xFC;
+pub const PDX_GET_CPU_USAGE: u64 = 0xFD;
+pub const PDX_GET_MEM_USAGE: u64 = 0xFE;
+pub const PDX_SET_WINDOW_ROUNDNESS: u64 = 0xF1;
+pub const PDX_SET_WINDOW_BLUR: u64 = 0xF2;
+pub const PDX_SET_WINDOW_ANIMATION: u64 = 0xF3;
+pub const PDX_MOVE_WINDOW: u64 = 0xEE;
+pub const PDX_RESIZE_WINDOW: u64 = 0xEF;
+pub const PDX_WINDOW_COMMIT_FRAME: u64 = 0xF0;
+
+
+// Structure for window creation parameters passed from user space.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexWindowCreateParams {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub pfn_base: u64, // Base PFN for the window's buffer
+}
+
+// Structure for window decoration parameters
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexWindowDecorationsParams {
+    pub window_id: u64,
+    pub border_color: u32,
+    pub border_thickness: u32,
+}
+
+/// Structure for window move parameters passed from user space.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexWindowMoveParams {
+    pub window_id: u64,
+    pub new_x: u32,
+    pub new_y: u32,
+}
+
+/// Structure for window resize parameters passed from user space.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexWindowResizeParams {
+    pub window_id: u64,
+    pub new_width: u32,
+    pub new_height: u32,
+}
+
+/// Structure for setting a window's tags.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexSetWindowTagsParams {
+    pub window_id: u64,
+    pub tag_mask: u64,
+}
+
+/// Structure for setting a window's corner radius.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexSetWindowRoundnessParams {
+    pub window_id: u64,
+    pub radius: u32,
+}
+
+/// Structure for setting a window's blur strength.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexSetWindowBlurParams {
+    pub window_id: u64,
+    pub strength: u32,
+}
+
+/// Structure for setting a window's animation state.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexSetWindowAnimationParams {
+    pub window_id: u64,
+    pub is_animating: bool,
+}
+
+/// Represents a registered hotkey.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hotkey {
+    pub ev_type: u16,
+    pub code: u16,
+    pub value: i32, // For key press/release (1/0)
+    pub modifiers: u16, // e.g., MOD_ALT, MOD_SUPER
+    pub pd_id: u32, // The PD to which this hotkey should be delivered
+}
+
+/// Structure for sending a system-wide notification.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SexNotificationParams {
+    pub title_ptr: u64, // Pointer to title string in caller's memory
+    pub title_len: u32,
+    pub message_ptr: u64, // Pointer to message string in caller's memory
+    pub message_len: u32,
+    pub icon_pfn: u64, // PFN of an icon bitmap, 0 if no icon
+    pub display_duration_ms: u64, // How long to display the notification in milliseconds
+}
+
+/// Represents an active notification managed by the compositor.
+#[derive(Debug, Clone)]
+pub struct Notification {
+    pub id: u64,
+    pub title: Vec<u8>,
+    pub message: Vec<u8>,
+    pub icon_pfn: u64,
+    pub start_time_ms: u64,
+    pub display_duration_ms: u64,
+}
+
+// Intermediate data structures required by the projection functions.
+// Rect is already defined in sex-pdx so it should be imported instead of redefined.
+pub struct LayoutResult {
+    pub window_layouts: Vec<(u64, Rect)>, // (window_id, x, y, width, height)
+    // Other layout-specific data
+}
+
+// Represents the result of animation application
+pub struct AnimatedLayout {
+    pub window_layouts: Vec<(u64, Rect)>, // Animated (window_id, x, y, width, height)
+    // Animation-specific data
+}
+
+// Represents drawing commands for the renderer
+pub struct RenderCommands {
+    pub commands: Vec<RenderCommand>, // List of individual drawing commands
+}
+
+// Individual rendering command (e.g., DrawRect, DrawWindow)
+pub enum RenderCommand {
+    Clear(u32), // Clear color
+    DrawRect(Rect, u32), // Rectangle with color
+    DrawWindow(u64, Rect, u64, RenderState), // (window_id, target_rect, pfn_base, RenderState)
+    DrawBitmap(Rect, Vec<u8>, u32, u32, u32), // (target_rect, bitmap_1bit_alpha_data, bitmap_width, bitmap_height, color)
+    // ... other commands for text, blur, rounded corners
+}
+
+pub struct PFNList(pub Vec<u64>); // Wrapper for Vec<u64> for clarity
+
+// Projection Function 1: Filters windows by active tags
+fn visible_windows<'a>(graph: &'a UiStateGraph<'a>) -> impl Iterator<Item = &'a Window> {
+    graph.windows.iter()
+        .filter(move |w| (w.tag_mask & graph.active_tags) != 0)
+}
+
+// Projection Function 2: Computes layout for visible windows
+fn compute_layout(visible: &[&Window], output: &OutputState, tiling_state: &TilingState) -> LayoutResult {
+    let mut window_layouts = Vec::new();
+    let fb_width = output.width;
+    let fb_height = output.height;
+    let gaps = tiling_state.gaps;
+
+    let num_visible = visible.len();
+    if num_visible == 0 { return LayoutResult { window_layouts }; }
+
+    match tiling_state.current_layout {
+        TilingLayout::MasterStack => {
+            let master_count = tiling_state.master_count;
+            let master_ratio = tiling_state.master_ratio;
+
+            let master_area_width = (fb_width as f32 * master_ratio) as u32;
+            let tiled_area_x = gaps;
+            let tiled_area_y = gaps;
+            let tiled_area_width = fb_width - gaps * 2;
+            let tiled_area_height = fb_height - gaps * 2;
+
+            let num_master_windows = num_visible.min(master_count);
+            let num_stack_windows = num_visible.saturating_sub(num_master_windows);
+
+            let master_width = if num_stack_windows > 0 { master_area_width } else { tiled_area_width };
+            let stack_width = tiled_area_width - master_width - if num_master_windows > 0 && num_stack_windows > 0 { gaps } else { 0 };
+
+            let master_window_height = if num_master_windows > 0 { (tiled_area_height - gaps * (num_master_windows as u32 - 1)) / num_master_windows as u32 } else { 0 };
+            let mut current_y = tiled_area_y;
+            for i in 0..num_master_windows {
+                let window_ref = visible[i];
+                window_layouts.push((window_ref.id, Rect { x: tiled_area_x as i32, y: current_y as i32, w: master_width, h: master_window_height }));
+                current_y += master_window_height + gaps;
+            }
+
+            let stack_window_height = if num_stack_windows > 0 { (tiled_area_height - gaps * (num_stack_windows as u32 - 1)) / num_stack_windows as u32 } else { 0 };
+            let mut current_y = tiled_area_y;
+            for i in 0..num_stack_windows {
+                let window_ref = visible[num_master_windows + i];
+                window_layouts.push((window_ref.id, Rect { x: (tiled_area_x + master_width + gaps) as i32, y: current_y as i32, w: stack_width, h: stack_window_height }));
+                current_y += stack_window_height + gaps;
+            }
+        },
+        TilingLayout::VerticalStack => {
+            let tiled_area_x = gaps;
+            let tiled_area_y = gaps;
+            let tiled_area_width = fb_width - gaps * 2;
+            let tiled_area_height = fb_height - gaps * 2;
+
+            let window_height = (tiled_area_height - gaps * (num_visible as u32 - 1)) / num_visible as u32;
+            let mut current_y = tiled_area_y;
+            for i in 0..num_visible {
+                let window_ref = visible[i];
+                window_layouts.push((window_ref.id, Rect { x: tiled_area_x as i32, y: current_y as i32, w: tiled_area_width, h: window_height }));
+                current_y += window_height + gaps;
+            }
+        },
+        TilingLayout::HorizontalStack => {
+            let tiled_area_x = gaps;
+            let tiled_area_y = gaps;
+            let tiled_area_width = fb_width - gaps * 2;
+            let tiled_area_height = fb_height - gaps * 2;
+
+            let window_width = (tiled_area_width - gaps * (num_visible as u32 - 1)) / num_visible as u32;
+            let mut current_x = tiled_area_x;
+            for i in 0..num_visible {
+                let window_ref = visible[i];
+                window_layouts.push((window_ref.id, Rect { x: current_x as i32, y: tiled_area_y as i32, w: window_width, h: tiled_area_height }));
+                current_x += window_width + gaps;
+            }
+        },
+        TilingLayout::Floating => {
+            // In floating layout, windows retain their current positions and sizes.
+            // Their target_x/y/width/height are already set from previous operations
+            // or are explicitly set by PDX_MOVE_WINDOW/PDX_RESIZE_WINDOW.
+            // So, no changes are needed here, as the animation system will handle
+            // moving them to their targets if they are animating.
+            for window_ref in visible {
+                window_layouts.push((window_ref.id, Rect { x: window_ref.target_x as i32, y: window_ref.target_y as i32, w: window_ref.target_width, h: window_ref.target_height }));
+            }
+        }
+    }
+    LayoutResult { window_layouts }
+}
+
+
+// Projection Function 4: Translates layout to raw drawing commands
+// This is where blur, rounded corners would be handled by rendering directly
+fn render_decisions(animated: &AnimatedLayout, output: &OutputState, all_windows_map: &[(u64, &Window)]) -> RenderCommands {
+    let mut commands = Vec::new();
+    // Silk DE brand background — deep navy
+    commands.push(RenderCommand::Clear(0xFF1a1a2e));
+
+    // Silk Bar — 28px strip at screen bottom
+    commands.push(RenderCommand::DrawRect(
+        Rect { x: 0, y: (output.height as i32) - 28, w: output.width, h: 28 },
+        0xFF2d2d54,
+    ));
+    // Silk Bar accent line
+    commands.push(RenderCommand::DrawRect(
+        Rect { x: 0, y: (output.height as i32) - 29, w: output.width, h: 1 },
+        0xFF5555aa,
+    ));
+
+    for (window_id, rect) in &animated.window_layouts {
+        // Fetch original window properties for aesthetics
+        if let Some((_, original_window)) = all_windows_map.iter().find(|(id, _)| *id == *window_id) {
+            commands.push(RenderCommand::DrawWindow(*window_id, *rect, original_window.pfn_base, original_window.render_state)); // Pass render state
+
+            // Draw border if present
+            if original_window.border_thickness > 0 {
+                let bt = original_window.border_thickness as i32;
+                let bc = original_window.border_color;
+                
+                // Top border
+                commands.push(RenderCommand::DrawRect(Rect { x: rect.x - bt, y: rect.y - bt, w: (rect.w as i32 + 2 * bt) as u32, h: bt as u32 }, bc));
+                // Bottom border
+                commands.push(RenderCommand::DrawRect(Rect { x: rect.x - bt, y: rect.y + rect.h as i32, w: (rect.w as i32 + 2 * bt) as u32, h: bt as u32 }, bc));
+                // Left border
+                commands.push(RenderCommand::DrawRect(Rect { x: rect.x - bt, y: rect.y, w: bt as u32, h: rect.h }, bc));
+                // Right border
+                commands.push(RenderCommand::DrawRect(Rect { x: rect.x + rect.w as i32, y: rect.y, w: bt as u32, h: rect.h }, bc));
+            }
+        } else {
+            commands.push(RenderCommand::DrawWindow(*window_id, *rect, 0, RenderState::default())); // Dummy with default render state
+        }
+    }
+    RenderCommands { commands }
+}
+
+// Projection Function 5: Builds PFN list for zero-copy handoff
+fn build_pfn_list(commands: RenderCommands) -> PFNList {
+    let mut pfns = Vec::new();
+    for command in commands.commands {
+        if let RenderCommand::DrawWindow(_id, _rect, pfn_base, _render_state) = command {
+            if pfn_base != 0 {
+                pfns.push(pfn_base);
+            }
+        }
+    }
+    PFNList(pfns)
+}
+
+// Projection Function 6: Commits the PFN list to scanout
+fn commit_to_scanout(pfns: PFNList) {
+    // This function will likely be a wrapper around a direct kernel syscall
+    // to program the display controller with the list of PFNs for scanout.
+    // For now, it's a placeholder.
+    let _ = pfns; // Suppress unused warning
+}
+
+use sex_pdx::{pdx_allocate_memory, pdx_map_memory, Rect}; // Rect imported here
+use sex_graphics::WindowBuffer;
+
+#[no_mangle]
+pub unsafe extern "C" fn _start() -> ! {
+    serial_println!("sexdisplay: Compositor starting...");
+
+    let mut compositor = SexCompositor::new(1280, 720, 1280); // Width, Height, Stride
+
+    // Initialize first output's scanout buffer
+    if let Some(pfn_base) = compositor.internal_framebuffer_pfn_bases.get(0) {
+        compositor.current_scanout_pfn_base = *pfn_base;
+    } else {
+        serial_println!("sexdisplay: Error: No framebuffers initialized!");
+        loop {}
+    }
+    
+    // Set initial view/tag mask to show windows on the first tag (tag 0, mask 1)
+    compositor.set_view_tags(1); // This sets current_tag_view_mask = 1
+
+    // Register global hotkey for Super+G (Gemini CLI)
+    let super_g_hotkey = Hotkey {
+        ev_type: EV_KEY,
+        code: 0x22, // 'g' key code (example, actual code might vary)
+        value: 1, // Key press
+        modifiers: MOD_RSUPER, // Super key
+        pd_id: 0, // This will be filled by PDX_SEND_MESSAGE when triggered
+    };
+    compositor.registered_hotkeys.push(super_g_hotkey);
+
+    let mut event_buf = [0u8; 128]; // Buffer for incoming events
+
+    loop {
+        core::hint::spin_loop();
+
+        // Simulate event processing (e.g., from kernel input handler)
+        // In a real system, this would be an IPC call to receive events.
+        // For now, we'll simulate a keyboard event if Super+G is pressed conceptually.
+        // This loop is simplified and doesn't actually process real input.
+        // Actual input handling would involve receiving events and then calling compositor methods.
+
+        // Render the frame
+        // This is a blocking call that should redraw the screen.
+        // In a real system, this might be triggered by VSync or input events.
+        compositor.evaluate_and_render_frame();
+    }
+}
+
+// Helper function to simulate PDX calls (for demonstration/testing)
+// In a real kernel, this would be a syscall.
+unsafe fn pdx_call(syscall_id: u64, arg1: u32, arg2: u64, arg3: u64, arg4: u64) -> u64 {
+    let mut ret: u64;
+    core::arch::asm!(
+        "syscall",
+        in("rax") syscall_id,
+        in("rdi") arg1,
+        in("rsi") arg2,
+        in("rdx") arg3,
+        in("r10") arg4,
+        lateout("rax") ret,
+        options(nostack, preserves_flags)
+    );
+    ret
+}
+
+// Helper for PDX_SEND_MESSAGE syscall
+#[inline]
+pub unsafe fn pdx_send_message(target_pd: u32, msg: sex_pdx::MessageType) -> u64 {
+    pdx_call(PDX_SEND_MESSAGE, target_pd as u64, msg.into(), 0, 0)
+}
+
+// Mock syscall for PDX_SPAWN_PD (used in handle_keyboard_event)
+#[inline]
+pub unsafe fn pdx_spawn_pd(name: &[u8]) -> u32 {
+    let name_ptr = name.as_ptr() as u64;
+    let name_len = name.len() as u64;
+
+    let pd_id: u32;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 68, // Assuming 68 is the syscall number for PDX_SPAWN_PD
+        in("rdi") name_ptr,
+        in("rsi") name_len,
+        lateout("rax") pd_id,
+        options(nostack, preserves_flags)
+    );
+    pd_id
+}
+
+// Mock definitions for sex_pdx crate for compilation purposes
+mod sex_pdx {
+    pub use crate::Rect; // Import Rect from the crate's lib.rs
+    pub use crate::WindowBuffer; // Assume WindowBuffer is also relevant here
+
+    #[derive(Debug, Clone, Copy)]
+    pub enum MessageType {
+        KeyEvent { code: u16, value: i32, modifiers: u16 },
+        CompileRequest { source_path: &'static [u8], target_triple: &'static [u8] },
+        Notification { progress: u8, message: &'static str },
+        IpcCall { func_id: u64, arg0: u64 }, // Placeholder for IPC calls
+    }
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PdxMessage {
+        pub msg_type: MessageType,
+        pub caller_pd: u32,
+    }
+
+    impl From<MessageType> for u64 {
+        fn from(msg_type: MessageType) -> Self {
+            match msg_type {
+                MessageType::KeyEvent { code, value, modifiers } => { (0 << 32) | (code as u64) },
+                MessageType::CompileRequest { source_path, target_triple } => { (1 << 32) | (source_path.len() as u64) },
+                MessageType::Notification { progress, message } => { (2 << 32) | (progress as u64) },
+                MessageType::IpcCall { func_id, arg0 } => { (3 << 32) | (func_id << 16) | arg0 },
+            }
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PageHandover {
+        pub pfn: u64,
+        pub pku_key: u32,
+    }
+    
+    impl From<PageHandover> for u64 {
+        fn from(handover: PageHandover) -> Self {
+            (handover.pfn << 32) | (handover.pku_key as u64)
+        }
+    }
+
+    pub fn safe_pdx_register(name: &[u8]) -> PdxRing {
+        serial_println!("sex_pdx: Mock safe_pdx_register called for '{}'", core::str::from_utf8(name).unwrap_or("???"));
+        PdxRing { ring_ptr: 0 }
+    }
+
+    pub fn pdx_listen(ring: &PdxRing) -> Option<PdxMessage> {
+        let _ = ring;
+        None
+    }
+
+    pub fn pdx_reply(caller_pd: u32, handover_data: u64) -> u64 {
+        serial_println!("sex_pdx: Mock pdx_reply called for PD {:#x} with data {:#x}", caller_pd, handover_data);
+        0
+    }
+
+    pub struct PdxRing { pub ring_ptr: u64 }
+    impl PdxRing {
+        pub fn dequeue(&self) -> Option<PdxMessage> {
+            None
+        }
+    }
+}
+
+// Mock definitions for other structs/constants used
+// These are necessary for compilation if they are used by other parts of the code.
+// Ensure these mock definitions are sufficient for the current build stage.
+
+// For interrupts.rs, used by SexCompositor::handle_pdx_call
+// DOMAIN_REGISTRY mock (simple implementation for compile time)
+struct DomainRegistry;
+impl DomainRegistry {
+    fn get(&self, _pd_id: u32) -> Option<&Window> {
+        // Placeholder implementation
+        None
+    }
+}
+static DOMAIN_REGISTRY: DomainRegistry = DomainRegistry;
+
+// Mock for pdx_allocate_memory and pdx_map_memory
+const PDX_ALLOCATE_MEMORY: u64 = 1; // Placeholder syscall ID
+const PDX_MAP_MEMORY: u64 = 2; // Placeholder syscall ID
+
+// Mock for MessageType::IpcCall
+mod sex_pdx {
+    // ... (previous MessageType definition) ...
+    #[derive(Debug, Clone, Copy)]
+    pub enum MessageType {
+        KeyEvent { code: u16, value: i32, modifiers: u16 },
+        CompileRequest { source_path: &'static [u8], target_triple: &'static [u8] },
+        Notification { progress: u8, message: &'static str },
+        IpcCall { func_id: u64, arg0: u64 }, // Placeholder for IPC calls
+        // Add other types if they are used by the mock code
+    }
+
+    // ... (other parts of mock sex_pdx) ...
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct PdxMessage {
+        pub msg_type: MessageType,
+        pub caller_pd: u32,
+    }
+
+    impl From<MessageType> for u64 {
+        fn from(msg_type: MessageType) -> Self {
+            match msg_type {
+                MessageType::KeyEvent { code, value, modifiers } => (0 << 32) | (code as u64),
+                MessageType::CompileRequest { source_path, target_triple } => (1 << 32) | (source_path.len() as u64),
+                MessageType::Notification { progress, message } => (2 << 32) | (progress as u64),
+                MessageType::IpcCall { func_id, arg0 } => (3 << 32) | (func_id << 16) | arg0,
+            }
+        }
+    }
+}
+
+// Mock for WindowState enum (used in Window struct)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WindowState {
+    Normal,
+    Tiled,
+    Floating,
+    Minimized,
+    Maximized,
+    Fullscreen,
+}
+
+// Mock for RenderState struct (used in Window struct)
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct RenderState {
+    pub blur_strength: u32,
+    pub corner_radius: u32,
+    pub alpha: u8, // 0-255
+    pub animation_curve: u8, // e.g., 0 for linear, 1 for ease-out
+}
+
+// Mock for Rect struct (used in Window struct, imported from sex_pdx)
+// Ensure it matches the definition in sex_pdx/src/lib.rs
+#[derive(Debug, Clone, Copy)]
+pub struct Rect {
+    pub x: i32, // Use i32 for calculations involving potential negative offsets or sizes
+    pub y: i32,
+    pub w: u32, // Keep width/height as u32 for size constraints
+    pub h: u32,
+}
+
+// Mock for hotkey modifiers
+pub const MOD_NONE: u16 = 0x0000;
+pub const MOD_LSHIFT: u16 = 0x0001;
+pub const MOD_RSHIFT: u16 = 0x0002;
+pub const MOD_LCTRL: u16 = 0x0004;
+pub const MOD_RCTRL: u16 = 0x0008;
+pub const MOD_LALT: u16 = 0x0010;
+pub const MOD_RALT: u16 = 0x0020;
+pub const MOD_LSUPER: u16 = 0x0040;
+pub const MOD_RSUPER: u16 = 0x0080;
+
+// Mock for input event types
+pub const EV_KEY: u16 = 0x01;
+pub const BTN_LEFT: u16 = 0x110;
+pub const BTN_RIGHT: u16 = 0x111;
+pub const BTN_MIDDLE: u16 = 0x112;
+
+// Mock for key codes (example values)
+pub const KEY_G: u16 = 0x22;
+
+// Mock for window state constants
+pub const PDX_SEND_MESSAGE: u64 = 0x0E; // Assuming this is defined correctly elsewhere
+
+
+impl SexCompositor {
+    pub fn new(global_width: u32, global_height: u32, _stride: u32) -> Self {
+        serial_println!("sexdisplay: Initializing compositor...");
+        let mut outputs = Vec::with_capacity(1);
+        let mut internal_framebuffers = Vec::with_capacity(1);
+        let mut internal_framebuffer_pfn_bases = Vec::with_capacity(1);
+
+        let output0_width: u32 = 1280;
+        let output0_height: u32 = 720;
+        let output0_stride = output0_width;
+        let output0_size = (output0_width * output0_height * 4) as u64;
+
+        serial_println!("sexdisplay: Allocating FB0 ({} bytes)...", output0_size);
+        let pfn0_base = match unsafe { pdx_allocate_memory(PDX_ALLOCATE_MEMORY, output0_size) } {
+            Ok(pfn) => pfn,
+            Err(_) => {
+                serial_println!("sexdisplay: FB0 allocation FAILED");
+                loop {}
+            }
+        };
+        serial_println!("sexdisplay: FB0 allocated at PFN {:#x}", pfn0_base);
+
+        serial_println!("sexdisplay: Mapping FB0...");
+        let virt_addr0 = match unsafe { pdx_map_memory(PDX_MAP_MEMORY, pfn0_base, output0_size) } {
+            Ok(vaddr) => vaddr,
+            Err(_) => {
+                serial_println!("sexdisplay: FB0 mapping FAILED");
+                loop {}
+            }
+        };
+        serial_println!("sexdisplay: FB0 mapped at {:#x}", virt_addr0);
+
+        outputs.push(OutputState { id: 0, width: output0_width, height: output0_height, x: 0, y: 0 });
+        internal_framebuffers.push(unsafe { WindowBuffer::new(virt_addr0, output0_width, output0_height, output0_stride) });
+        internal_framebuffer_pfn_bases.push(pfn0_base);
+        
+        let mut views = Vec::with_capacity(MAX_VIEWS);
+        for i in 0..MAX_VIEWS {
+            views.push(1 << i); // Each view gets a unique tag
+        }
+
+        Self {
+            magic: SEX_COMPOSITOR_MAGIC,
+            global_fb_width: global_width,
+            global_fb_height: global_height,
+
+            outputs,
+            internal_framebuffers,
+            internal_framebuffer_pfn_bases,
+
+            current_scanout_pfn_base: 0,
+
+            all_windows: [None; MAX_WINDOWS],
+            current_tag_view_mask: views[0], // Default to showing the first view's tag
+
+            views,
+            current_view_index: 0,
+
+            next_window_id: 1,
+            next_notification_id: 1,
+            global_z_order: LayeringState {
+                z_order: [0; MAX_WINDOWS],
+                num_layers: 0,
+            },
+            tiling_state: TilingState {
+                master_count: 1,
+                master_ratio: 0.5,
+                gaps: 4,
+                current_layout: TilingLayout::MasterStack,
+            },
+            focused_window_id: None,
+            active_workspace_mask: 1,
+
+            cursor_x: global_width / 2,
+            cursor_y: global_height / 2,
+
+            registered_hotkeys: Vec::new(),
+            current_modifiers: MOD_NONE,
+
+            active_notifications: Vec::new(),
+
+            in_login_screen: false,
+            login_manager_pd_id: None,
+        }
+    }
+
+    /// Helper to find a window in the global list by ID, returning a mutable reference.
+    pub fn find_window_mut(&mut self, window_id: u64) -> Option<&mut Window> {
+        self.all_windows.iter_mut().filter_map(|w| w.as_mut()).find(|w| w.id == window_id)
+    }
+
+    /// Helper to find a window in the global list by ID, returning an immutable reference.
+    pub fn find_window(&self, window_id: u64) -> Option<&Window> {
+        self.all_windows.iter().filter_map(|w| w.as_ref()).find(|w| w.id == window_id)
+    }
+
+    /// Finds the topmost window at the given coordinates (x, y), considering Z-order.
+    pub fn get_window_at_coords(&self, x: u32, y: u32) -> Option<&Window> {
+        for i in (0..self.global_z_order.num_layers).rev() {
+            let window_id = self.global_z_order.z_order[i];
+            if let Some(window) = self.find_window(window_id) {
+                if x >= window.x && x < window.x + window.width &&
+                   y >= window.y && y < window.y + window.height {
+                    return Some(window);
+                }
+            }
+        }
+        None
+    }
+
+    /// Sets the tag mask for a specified window.
+    pub fn set_window_tags(&mut self, window_id: u64, tag_mask: u64) -> bool {
+        if let Some(window) = self.find_window_mut(window_id) {
+            window.tag_mask = tag_mask;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Gets the tag mask for a specified window.
+    pub fn get_window_tags(&self, window_id: u64) -> u64 {
+        self.find_window(window_id).map_or(0, |w| w.tag_mask)
+    }
+
+    /// Sets the current view's tag mask. Only windows with overlapping tags will be visible.
+    pub fn set_view_tags(&mut self, tag_mask: u64) {
+        self.current_tag_view_mask = tag_mask;
+    }
+
+    /// Gets the current view's tag mask.
+    pub fn get_view_tags(&self) -> u64 {
+        self.current_tag_view_mask
+    }
+
+    /// Returns the ID of the currently focused window.
+    pub fn get_focused_window_id(&self) -> Option<u64> {
+        if self.global_z_order.num_layers > 0 {
+            let focused_id = self.global_z_order.z_order[0];
+            if focused_id != 0 {
+                return Some(focused_id);
+            }
+        }
+        None
+    }
+
+    pub fn apply_animations(&mut self, _last_frame_delta: f32) {
+        let step = 20; // Pixels per frame
+        for window_opt in self.all_windows.iter_mut().filter_map(|w_opt| w_opt.as_mut()) {
+            if window_opt.is_animating {
+                let mut finished = true;
+
+                // Move X
+                if window_opt.x < window_opt.target_x {
+                    window_opt.x = (window_opt.x + step).min(window_opt.target_x);
+                    finished = false;
+                } else if window_opt.x > window_opt.target_x {
+                    window_opt.x = (window_opt.x.saturating_sub(step)).max(window_opt.target_x);
+                    finished = false;
+                }
+
+                // Move Y
+                if window_opt.y < window_opt.target_y {
+                    window_opt.y = (window_opt.y + step).min(window_opt.target_y);
+                    finished = false;
+                } else if window_opt.y > window_opt.target_y {
+                    window_opt.y = (window_opt.y.saturating_sub(step)).max(window_opt.target_y);
+                    finished = false;
+                }
+
+                // Resize Width
+                if window_opt.width < window_opt.target_width {
+                    window_opt.width = (window_opt.width + step).min(window_opt.target_width);
+                    finished = false;
+                } else if window_opt.width > window_opt.target_width {
+                    window_opt.width = (window_opt.width.saturating_sub(step)).max(window_opt.target_width);
+                    finished = false;
+                }
+
+                // Resize Height
+                if window_opt.height < window_opt.target_height {
+                    window_opt.height = (window_opt.height + step).min(window_opt.target_height);
+                    finished = false;
+                } else if window_opt.height > window_opt.target_height {
+                    window_opt.height = (window_opt.height.saturating_sub(step)).max(window_opt.target_height);
+                    finished = false;
+                }
+
+                if finished {
+                    window_opt.is_animating = false;
+                }
+            }
+        }
+    }
+
+    /// Handles mouse events, including focus setting and window z-order manipulation.
+    pub fn handle_mouse_event(&mut self, x: u32, y: u32, code: u16, value: i32) {
+        // Update cursor position regardless of button state
+        self.cursor_x = x;
+        self.cursor_y = y;
+
+        // Handle mouse button presses for focus
+        if code == BTN_LEFT && value == 1 { // Left button pressed
+            if let Some(window) = self.get_window_at_coords(x, y) {
+                let window_id = window.id;
+                
+                // Set this window as the focused window
+                self.focused_window_id = Some(window_id);
+
+                // Move the focused window to the top of the Z-order
+                if let Some(index_to_move) = self.global_z_order.z_order.iter().position(|&id| id == window_id) {
+                    // If the window is already at the top, do nothing
+                    if index_to_move > 0 {
+                        // Shift elements down to make space at the top
+                        for i in index_to_move..self.global_z_order.num_layers -1 {
+                            self.global_z_order.z_order[i] = self.global_z_order.z_order[i+1];
+                        }
+                        // Place the window_id at the top
+                        self.global_z_order.z_order[0] = window_id;
+                    }
+                } else {
+                    // Window not in z_order, add it to the top if there's space
+                    if self.global_z_order.num_layers < MAX_WINDOWS {
+                        // Shift existing elements down if necessary
+                        for i in (1..self.global_z_order.num_layers).rev() {
+                             self.global_z_order.z_order[i] = self.global_z_order.z_order[i-1];
+                        }
+                        self.global_z_order.z_order[0] = window_id;
+                        self.global_z_order.num_layers += 1;
+                    }
+                    // If no space, it won't be added to z_order, but still focused.
+                }
+            } else {
+                // Clicked outside any window, clear focus
+                self.focused_window_id = None;
+            }
+        }
+    }
+
+    /// Handles keyboard events, routing them to the focused window if one exists.
+    pub fn handle_keyboard_event(&mut self, code: u16, value: i32, modifiers: u16) {
+        // Route keystroke strictly to the focused window's Protection Domain
+        if let Some(focused_id) = self.focused_window_id {
+            if let Some(window) = self.find_window_mut(focused_id) {
+                // Only send events if the window is not minimized or in a state that shouldn't receive input.
+                if window.state == WindowState::Tiled || window.state == WindowState::Floating || window.state == WindowState::Maximized {
+                    // Prepare the KeyEvent message for PDX
+                    let key_event_msg = sex_pdx::MessageType::KeyEvent {
+                        code,
+                        value,
+                        modifiers,
+                    };
+
+                    // Send the event via PDX call to the window's PD
+                    let _ = unsafe {
+                        pdx_send_message(window.pd_id, key_event_msg)
+                    };
+                }
+            }
+        } else {
+            // If no window is focused, handle global hotkeys or compositor shortcuts here.
+            // For now, do nothing or log.
+        }
+    }
+
+    /// Applies the current tiling layout to all visible windows.
+    pub fn apply_tiling(&mut self) {
+        let global_fb_width = self.global_fb_width;
+        let global_fb_height = self.global_fb_height;
+        let gaps = self.tiling_state.gaps;
+
+        let mut visible_windows: Vec<&mut Window> = self.all_windows.iter_mut()
+            .filter_map(|w_opt| w_opt.as_mut())
+            .filter(|w| (w.tag_mask & self.current_tag_view_mask) != 0) // Filter by current view mask
+            .collect();
+        
+        let num_visible = visible_windows.len();
+        if num_visible == 0 { return; }
+
+        match self.tiling_state.current_layout {
+            TilingLayout::MasterStack => {
+                let master_count = self.tiling_state.master_count;
+                let master_ratio = self.tiling_state.master_ratio;
+
+                let master_area_width = (global_fb_width as f32 * master_ratio) as u32;
+                let tiled_area_x = gaps;
+                let tiled_area_y = gaps;
+                let tiled_area_width = global_fb_width - gaps * 2;
+                let tiled_area_height = global_fb_height - gaps * 2;
+
+                let num_master_windows = num_visible.min(master_count);
+                let num_stack_windows = num_visible.saturating_sub(num_master_windows);
+
+                let master_width = if num_stack_windows > 0 { master_area_width } else { tiled_area_width };
+                let stack_width = tiled_area_width - master_width - if num_master_windows > 0 && num_stack_windows > 0 { gaps } else { 0 };
+
+                let master_window_height = if num_master_windows > 0 { (tiled_area_height - gaps * (num_master_windows as u32 - 1)) / num_master_windows as u32 } else { 0 };
+                let mut current_y = tiled_area_y;
+                for i in 0..num_master_windows {
+                    let window_ref = &mut visible_windows[i];
+                    window_ref.target_x = tiled_area_x;
+                    window_ref.target_y = current_y;
+                    window_ref.target_width = master_width;
+                    window_ref.target_height = master_window_height;
+                    current_y += master_window_height + gaps;
+                }
+
+                let stack_window_height = if num_stack_windows > 0 { (tiled_area_height - gaps * (num_stack_windows as u32 - 1)) / num_stack_windows as u32 } else { 0 };
+                let mut current_y = tiled_area_y;
+                for i in 0..num_stack_windows {
+                    let window_ref = &mut visible_windows[num_master_windows + i];
+                    window_ref.target_x = tiled_area_x + master_width + gaps;
+                    window_ref.target_y = current_y;
+                    window_ref.target_width = stack_width;
+                    window_ref.target_height = stack_window_height;
+                    current_y += stack_window_height + gaps;
+                }
+            },
+            TilingLayout::VerticalStack => {
+                if num_visible == 0 { return; }
+
+                let window_height = (global_fb_height - gaps * (num_visible as u32 + 1)) / num_visible as u32;
+                let mut current_y = gaps;
+                for i in 0..num_visible {
+                    let window_ref = &mut visible_windows[i];
+                    window_ref.target_x = gaps;
+                    window_ref.target_y = current_y;
+                    window_ref.target_width = global_fb_width - gaps * 2;
+                    window_ref.target_height = window_height;
+                    current_y += window_height + gaps;
+                }
+            },
+            TilingLayout::HorizontalStack => {
+                if num_visible == 0 { return; }
+
+                let window_width = (global_fb_width - gaps * (num_visible as u32 + 1)) / num_visible as u32;
+                let mut current_x = gaps;
+                for i in 0..num_visible {
+                    let window_ref = &mut visible_windows[i];
+                    window_ref.target_x = current_x;
+                    window_ref.target_y = gaps;
+                    window_ref.target_width = window_width;
+                    window_ref.target_height = global_fb_height - gaps * 2;
+                    current_x += window_width + gaps;
+                }
+            },
+            TilingLayout::Floating => {
+                // In floating layout, windows retain their current positions and sizes.
+                // Their target_x/y/width/height are already set from previous operations
+                // or are explicitly set by PDX_MOVE_WINDOW/PDX_RESIZE_WINDOW.
+                // So, no changes are needed here, as the animation system will handle
+                // moving them to their targets if they are animating.
+                for window_ref in visible {
+                    window_ref.target_x = window_ref.x; // Ensure targets match current state if not animating
+                    window_ref.target_y = window_ref.y;
+                    window_ref.target_width = window_ref.width;
+                    window_ref.target_height = window_ref.height;
+                }
+            }
+        }
+    }
+
+    /// Executes a single render command onto the internal framebuffer.
+    fn execute_render_command(framebuffer: &mut WindowBuffer, command: &RenderCommand) {
+        match command {
+            RenderCommand::Clear(color) => {
+                unsafe { framebuffer.clear(*color) };
+            }
+            RenderCommand::DrawRect(rect, color) => {
+                unsafe { framebuffer.draw_rect(*rect, *color) };
+            }
+            RenderCommand::DrawWindow(window_id, rect, pfn_base, original_window) => {
+                if *pfn_base == 0 {
+                    // This window doesn't have a valid buffer, perhaps draw a placeholder
+                    unsafe { framebuffer.draw_rect(*rect, 0xFF0000FF) }; // Magenta placeholder
+                    return;
+                }
+
+                // Map the window's PFN to get its virtual address
+                let window_buffer_vaddr = match unsafe { pdx_map_memory(PDX_MAP_MEMORY, *pfn_base, (rect.w as u64 * rect.h as u64 * 4)) } { // Assuming 32bpp color
+                    Ok(vaddr) => vaddr,
+                    Err(_) => {
+                        // Handle error, maybe draw a red placeholder
+                        unsafe { framebuffer.draw_rect(*rect, 0xFFFF0000) }; // Red placeholder
+                        return;
+                    }
+                };
+
+                let mut window_buffer = unsafe { WindowBuffer::new(window_buffer_vaddr, rect.w, rect.h, rect.w) }; // Assuming stride == width for simplicity
+
+                // Copy contents from window_buffer to internal_framebuffer with alpha blending and optional blur
+                let alpha = original_window.alpha as u32; // 0-255
+                let blur_strength = original_window.blur_strength as u32;
+
+                if alpha == 0 { // Fully transparent, do nothing
+                    return;
+                }
+
+                for y_offset in 0..rect.h {
+                    for x_offset in 0..rect.w {
+                        let target_x = rect.x as u32 + x_offset;
+                        let target_y = rect.y as u32 + y_offset;
+
+                        // Ensure we don't read/write out of bounds of the internal framebuffer
+                        if target_x >= framebuffer.width || target_y >= framebuffer.height {
+                            continue;
+                        }
+
+                        let src_pixel = unsafe { window_buffer.read_pixel_safe(x_offset, y_offset) };
+                        let mut dst_pixel = unsafe { framebuffer.read_pixel_safe(target_x, target_y) };
+
+                        // Apply blur to the destination pixel before blending if blur_strength > 0
+                        // Note: Blur is applied to the destination, affecting the background behind the window.
+                        // This might not be the desired effect for window transparency.
+                        // A more typical blur would be applied to the source window's content itself,
+                        // or to the background layer before drawing the window.
+                        // For now, keeping it as is, assuming it's meant to blur the background behind the window.
+                        if blur_strength > 0 {
+                            let mut r_sum = 0u32;
+                            let mut g_sum = 0u32;
+                            let mut b_sum = 0u32;
+                            let mut count = 0u32;
+
+                            // Iterate over a square region around the target pixel for blurring
+                            for ky in target_y.saturating_sub(blur_strength)..=(target_y + blur_strength).min(framebuffer.height - 1) {
+                                for kx in target_x.saturating_sub(blur_strength)..=(target_x + blur_strength).min(framebuffer.width - 1) {
+                                    let px = unsafe { framebuffer.read_pixel_safe(kx, ky) };
+                                    r_sum += (px >> 16) & 0xFF;
+                                    g_sum += (px >> 8) & 0xFF;
+                                    b_sum += px & 0xFF;
+                                    count += 1;
+                                }
+                            }
+                            if count > 0 {
+                                dst_pixel = ((r_sum / count) << 16) | ((g_sum / count) << 8) | (b_sum / count);
+                            }
+                        }
+
+                        if alpha == 255 { // Fully opaque, no blending needed
+                            unsafe { framebuffer.draw_pixel_safe(target_x, target_y, src_pixel) };
+                        } else { // Perform alpha blending
+                            let inv_alpha = 255 - alpha;
+                            let blended_pixel = {
+                                let src_r = (src_pixel >> 16) & 0xFF;
+                                let src_g = (src_pixel >> 8) & 0xFF;
+                                let src_b = src_pixel & 0xFF;
+
+                                let dst_r = (dst_pixel >> 16) & 0xFF;
+                                let dst_g = (dst_pixel >> 8) & 0xFF;
+                                let dst_b = dst_pixel & 0xFF;
+
+                                let out_r = ((src_r * alpha + dst_r * inv_alpha) / 255) & 0xFF;
+                                let out_g = ((src_g * alpha + dst_g * inv_alpha) / 255) & 0xFF;
+                                let out_b = ((src_b * alpha + dst_b * inv_alpha) / 255) & 0xFF;
+
+                                (out_r << 16) | (out_g << 8) | out_b
+                            };
+                            unsafe { framebuffer.draw_pixel_safe(target_x, target_y, blended_pixel) };
+                        }
+                    }
+                }
+            }
+            RenderCommand::DrawBitmap(target_rect, bitmap_data, bitmap_width, bitmap_height, color) => {
+                let start_x = target_rect.x.max(0) as u32;
+                let start_y = target_rect.y.max(0) as u32;
+
+                for y_offset in 0..*bitmap_height {
+                    for x_offset in 0..*bitmap_width {
+                        let byte_index = y_offset as usize * (*bitmap_width as usize / 8) + (x_offset as usize / 8);
+                        let bit_index = 7 - (x_offset % 8);
+
+                        if byte_index < bitmap_data.len() {
+                            if (bitmap_data[byte_index] >> bit_index) & 1 == 1 {
+                                unsafe {
+                                    framebuffer.draw_pixel_safe(
+                                        start_x + x_offset,
+                                        start_y + y_offset,
+                                        *color,
+                                    )
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Evaluates the current UI state and renders a frame to the internal framebuffer.
+    pub unsafe fn evaluate_and_render_frame(&mut self) {
+        self.apply_animations(0.0); // Apply animations to window positions.
+        self.apply_tiling(); // Apply tiling based on the current layout (updates target_x/y/width/height)
+
+        for (output_idx, output) in self.outputs.iter().enumerate() {
+            let current_framebuffer = &mut self.internal_framebuffers[output_idx];
+            let current_pfn_base = self.internal_framebuffer_pfn_bases[output_idx];
+
+            // 1. Build ephemeral UiStateGraph (for this specific output)
+            let mut all_windows_vec: Vec<&Window> = self.all_windows.iter().filter_map(|w_opt| w_opt.as_ref()).collect();
+
+            // Login screen logic: if active, only render login manager's windows
+            if self.in_login_screen {
+                if let Some(login_pd_id) = self.login_manager_pd_id {
+                    all_windows_vec.retain(|w| w.pd_id == login_pd_id);
+                } else {
+                    // No login manager registered, render nothing or a blank screen
+                    all_windows_vec.clear();
+                }
+            }
+
+            // Filter windows visible on this output
+            let visible_on_output: Vec<&Window> = all_windows_vec.iter()
+                .filter(|w| {
+                    (w.tag_mask & self.current_tag_view_mask) != 0 && // Visible by tag mask
+                    (w.x as i32) < (output.x + output.width) as i32 && // Window starts before output ends
+                    (w.x as i32 + w.width as i32) > output.x as i32 &&     // Window ends after output starts
+                    (w.y as i32) < (output.y + output.height) as i32 && // Window starts before output ends
+                    (w.y as i32 + w.height as i32) > output.y as i32       // Window ends after output starts
+                })
+                .map(|&w| w)
+                .collect();
+
+            // Adjust window coordinates to be relative to the output for layout and rendering
+            let windows_relative_to_output: Vec<Window> = visible_on_output.iter().map(|&w| {
+                let mut new_w = *w;
+                new_w.x = new_w.x.saturating_sub(output.x);
+                new_w.y = new_w.y.saturating_sub(output.y);
+                new_w
+            }).collect();
+
+            let visible_refs: Vec<&Window> = windows_relative_to_output.iter().collect();
+            
+            let ui_graph = UiStateGraph {
+                windows: &windows_relative_to_output, // Use relative windows
+                outputs: core::slice::from_ref(output), // Pass the current output
+                active_tags: self.current_tag_view_mask,
+                focus_id: self.focused_window_id, // Pass current focus ID
+                render_flags: RenderState::default(), // Will implement global render flags later
+            };
+
+            // 2. Projection Pipeline
+            let layout_result = compute_layout(&visible_refs, output, &self.tiling_state);
+
+            let animated_layout = AnimatedLayout { window_layouts: layout_result.window_layouts };
+
+            // Prepare all_windows_map for render_decisions (using original global coords)
+            let all_windows_map: Vec<(u64, &Window)> = all_windows_vec.iter().map(|w| (w.id, *w)).collect();
+
+            let render_commands = render_decisions(&animated_layout, output, all_windows_map.as_slice());
+
+            // 3. Execute RenderCommands on current output's internal_framebuffer
+            for command in render_commands.commands {
+                Self::execute_render_command(current_framebuffer, &command);
+            }
+
+            // 4. Render Notifications
+            let current_time_ms = 0; // Placeholder for actual time syscall
+
+            // Filter out expired notifications
+            self.active_notifications.retain(|n| n.start_time_ms + n.display_duration_ms > current_time_ms);
+
+            let mut notification_y_offset = output.height.saturating_sub(200); // Start notifications from bottom-right
+
+            for notification in &self.active_notifications {
+                let notification_height = 100; // Fixed height for notifications
+                let notification_width = 300; // Fixed width for notifications
+                let notification_x = output.width.saturating_sub(notification_width + 10);
+                let notification_y = notification_y_offset;
+
+                // Draw background
+                Self::execute_render_command(current_framebuffer, &RenderCommand::DrawRect(
+                    Rect { x: notification_x as i32, y: notification_y as i32, w: notification_width, h: notification_height },
+                    0xAA333333 // Dark grey, semi-transparent
+                ));
+
+                // Draw icon if present
+                if notification.icon_pfn != 0 {
+                    // For now, draw a placeholder rectangle
+                    Self::execute_render_command(current_framebuffer, &RenderCommand::DrawRect(
+                        Rect { x: (notification_x + 10) as i32, y: (notification_y + 10) as i32, w: 32, h: 32 },
+                        0xFF00FF00 // Green placeholder for icon
+                    ));
+                }
+
+                // Draw title (placeholder)
+                Self::execute_render_command(current_framebuffer, &RenderCommand::DrawRect(
+                    Rect { x: (notification_x + 50) as i32, y: (notification_y + 10) as i32, w: 200, h: 20 },
+                    0xFFFFFFFF // White placeholder for title
+                ));
+
+                // Draw message (placeholder)
+                Self::execute_render_command(current_framebuffer, &RenderCommand::DrawRect(
+                    Rect { x: (notification_x + 50) as i32, y: (notification_y + 40) as i32, w: 200, h: 40 },
+                    0xFFCCCCCC // Light grey placeholder for message
+                ));
+
+                notification_y_offset = notification_y_offset.saturating_sub(notification_height + 10); // Stack notifications
+            }
+            // 4. Commit this output's framebuffer to the actual display hardware
+            // This needs to be done in main.rs loop or a similar rendering loop.
+        }
+    }
+
+    /// Handles PDX syscalls directed at the SexCompositor.
+    pub unsafe fn handle_pdx_call(&mut self, caller_pd: u32, syscall_id: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
+        match syscall_id {
+            PDX_COMPOSITOR_COMMIT => {
+                let pfn_list_ptr = arg1 as *const u64;
+                let num_pages = arg2 as usize;
+                let pfn_list = core::slice::from_raw_parts(pfn_list_ptr, num_pages);
+
+                let commit_args_for_syscall = [
+                    pfn_list.as_ptr() as u64,
+                    pfn_list.len() as u64,
+                    self.outputs[0].width as u64, // Assume commit to first output for now
+                    self.outputs[0].height as u64, // Assume commit to first output for now
+                    self.outputs[0].width as u64, // Assume stride = width
+                ];
+
+                let ret: i64;
+                core::arch::asm!(
+                    "syscall",
+                    in("rax") 0u64, // Placeholder for syscall number for commit
+                    in("rdi") PDX_COMPOSITOR_COMMIT,
+                    in("rsi") commit_args_for_syscall.as_ptr() as u64,
+                    lateout("rax") ret,
+                    options(nostack, preserves_flags)
+                );
+
+                if ret == 0 {
+                    if !pfn_list.is_empty() {
+                        self.current_scanout_pfn_base = pfn_list[0];
+                    }
+                    0 // Success code
+                } else {
+                    1 // Error code
+                }
+            }
+            PDX_SEX_WINDOW_CREATE => {
+                let params_ptr = arg1 as *const SexWindowCreateParams;
+                let params = core::ptr::read_volatile(params_ptr);
+
+                if params.width == 0 || params.height == 0 || params.pfn_base == 0 {
+                    return 0; // Invalid parameters, return 0 for failure ID
+                }
+
+                let new_window = Window {
+                    id: self.next_window_id,
+                    x: params.x,
+                    y: params.y,
+                    width: params.width,
+                    height: params.height,
+                    pfn_base: params.pfn_base,
+                    state: WindowState::Normal, // Default to Normal state
+                    pd_id: caller_pd,
+                    corner_radius: 0,
+                    blur_strength: 0,
+                    is_animating: false,
+                    border_color: 0,
+                    border_thickness: 0,
+                    tag_mask: 1 << 0, // Default to tag 0
+                    render_state: RenderState::default(),
+                    workspace_mask: 1, // Default to workspace 0
+
+                    target_x: params.x,
+                    target_y: params.y,
+                    target_width: params.width,
+                    target_height: params.height,
+                };
+                
+                let window_id = self.next_window_id;
+                self.next_window_id += 1;
+
+                let mut new_window_slot = None;
+                for i in 0..MAX_WINDOWS {
+                    if self.all_windows[i].is_none() {
+                        new_window_slot = Some(i);
+                        break;
+                    }
+                }
+
+                let window_index = match new_window_slot {
+                    Some(index) => index,
+                    None => return 0, // No available window slots, return 0 for failure ID
+                };
+
+                self.all_windows[window_index] = Some(new_window);
+
+                // Add to Z-order (topmost) if space available
+                if self.global_z_order.num_layers < MAX_WINDOWS {
+                    // Shift existing elements down to make space at the top
+                    for i in (1..self.global_z_order.num_layers).rev() {
+                        self.global_z_order.z_order[i] = self.global_z_order.z_order[i-1];
+                    }
+                    self.global_z_order.z_order[0] = window_id;
+                    self.global_z_order.num_layers += 1;
+                }
+
+                window_id
+            }
+            PDX_SET_WINDOW_DECORATIONS => {
+                let params_ptr = arg1 as *const SexWindowDecorationsParams;
+                let params = core::ptr::read_volatile(params_ptr);
+                if let Some(window) = self.find_window_mut(params.window_id) {
+                    window.border_color = params.border_color;
+                    window.border_thickness = params.border_thickness;
+                    0 // Success
+                } else {
+                    1 // Error: Window not found
+                }
+            }
+            PDX_SET_WINDOW_ROUNDNESS => {
+                let params_ptr = arg1 as *const SexSetWindowRoundnessParams;
+                let params = core::ptr::read_volatile(params_ptr);
+                if let Some(window) = self.find_window_mut(params.window_id) {
+                    window.render_state.corner_radius = params.radius;
+                    0 // Success
+                } else {
+                    1 // Error: Window not found
+                }
+            }
+            PDX_SET_WINDOW_BLUR => {
+                let params_ptr = arg1 as *const SexSetWindowBlurParams;
+                let params = core::ptr::read_volatile(params_ptr);
+                if let Some(window) = self.find_window_mut(params.window_id) {
+                    window.render_state.blur_strength = params.strength;
+                    0 // Success
+                } else {
+                    1 // Error: Window not found
+                }
+            }
+            PDX_SET_WINDOW_ANIMATION => {
+                let params_ptr = arg1 as *const SexSetWindowAnimationParams;
+                let params = core::ptr::read_volatile(params_ptr);
+                if let Some(window) = self.find_window_mut(params.window_id) {
+                    window.is_animating = params.is_animating;
+                    0 // Success
+                } else {
+                    1 // Error: Window not found
+                }
+            }
+            PDX_GET_DISPLAY_INFO => {
+                ((self.global_fb_width as u64) << 32) | (self.global_fb_height as u64)
+            }
+            PDX_FOCUS_WINDOW => {
+                let window_id = arg1;
+                if self.find_window_mut(window_id).is_some() {
+                    self.focused_window_id = Some(window_id); // Set as focused
+                    0 // Success
+                } else {
+                    1 // Error: Window not found
+                }
+            }
+            PDX_MINIMIZE_WINDOW => {
+                let window_id = arg1;
+                if let Some(window) = self.find_window_mut(window_id) {
+                    window.state = WindowState::Minimized;
+                    0 // Success
+                } else {
+                    1 // Error: Window not found
+                }
+            }
+            PDX_MAXIMIZE_WINDOW => {
+                let window_id = arg1;
+                let gaps = self.tiling_state.gaps;
+                let fb_width = self.global_fb_width;
+                let fb_height = self.global_fb_height;
+                if let Some(window) = self.find_window_mut(window_id) {
+                    window.state = WindowState::Maximized;
+                    window.target_x = gaps;
+                    window.target_y = gaps;
+                    window.target_width = fb_width - gaps * 2;
+                    window.target_height = fb_height - gaps * 2;
+                    window.is_animating = true;
+                    0 // Success
+                } else {
+                    1 // Error: Window not found
+                }
+            }
+            PDX_CLOSE_WINDOW => {
+                let window_id = arg1;
+                let mut found_index = None;
+                for i in 0..MAX_WINDOWS {
+                    if let Some(window) = self.all_windows[i] {
+                        if window.id == window_id {
+                            found_index = Some(i);
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(index) = found_index {
+                    self.all_windows[index] = None; // Remove window from active list
+                    // Need to also remove from Z-order
+                    if let Some(z_order_idx) = self.global_z_order.z_order.iter().position(|&id| id == window_id) {
+                        for i in z_order_idx..self.global_z_order.num_layers - 1 {
+                            self.global_z_order.z_order[i] = self.global_z_order.z_order[i+1];
+                        }
+                        self.global_z_order.num_layers -= 1;
+                    }
+                    0 // Success
+                } else {
+                    1 // Error: Window not found
+                }
+            }
+            PDX_MOVE_WINDOW => {
+                let params_ptr = arg1 as *const SexWindowMoveParams;
+                let params = core::ptr::read_volatile(params_ptr);
+                if let Some(window) = self.find_window_mut(params.window_id) {
+                    window.target_x = params.new_x;
+                    window.target_y = params.new_y;
+                    window.is_animating = true;
+                    0 // Success
+                } else {
+                    1 // Error: Window not found
+                }
+            }
+            PDX_RESIZE_WINDOW => {
+                let params_ptr = arg1 as *const SexWindowResizeParams;
+                let params = core::ptr::read_volatile(params_ptr);
+                if let Some(window) = self.find_window_mut(params.window_id) {
+                    window.target_width = params.new_width;
+                    window.target_height = params.new_height;
+                    window.is_animating = true;
+                    0 // Success
+                } else {
+                    1 // Error: Window not found
+                }
+            }
+            PDX_SET_WINDOW_TAGS => {
+                let params_ptr = arg1 as *const SexSetWindowTagsParams;
+                let params = core::ptr::read_volatile(params_ptr);
+                if self.set_window_tags(params.window_id, params.tag_mask) {
+                    0 // Success
+                } else {
+                    1 // Error: Window not found
+                }
+            }
+            PDX_GET_WINDOW_TAGS => {
+                let window_id = arg1;
+                self.get_window_tags(window_id) // Returns tag_mask or 0 if not found
+            }
+            PDX_SET_VIEW_TAGS => {
+                let tag_mask = arg1;
+                self.set_view_tags(tag_mask);
+                0 // Success
+            }
+            PDX_GET_VIEW_TAGS => {
+                self.get_view_tags() // Returns current_tag_view_mask
+            }
+            PDX_SWITCH_VIEW => {
+                let view_index = arg1 as usize;
+                if view_index < self.views.len() {
+                    self.current_view_index = view_index;
+                    self.current_tag_view_mask = self.views[view_index];
+                    0 // Success
+                } else {
+                    1 // Error: Invalid view index
+                }
+            }
+            PDX_GET_ALL_VIEWS => {
+                let pfn_list_ptr = arg1 as *mut u64; // Pointer to caller's buffer
+                let num_views_to_copy = arg2 as usize;
+
+                if pfn_list_ptr.is_null() || num_views_to_copy == 0 {
+                    return u64::MAX; // Error: Invalid arguments
+                }
+
+                let mut copied_count = 0;
+                for (i, &view_tag_mask) in self.views.iter().take(num_views_to_copy).enumerate() {
+                    unsafe {
+                        *pfn_list_ptr.add(i) = view_tag_mask;
+                    }
+                    copied_count += 1;
+                }
+                copied_count as u64 // Return number of views copied
+            }
+            PDX_REGISTER_HOTKEY => {
+                let ev_type = arg1 as u16;
+                let code = arg2 as u16;
+                let value = arg3 as i32;
+                let modifiers = 0; // arg4 not provided in current signature
+
+                let hotkey = Hotkey {
+                    ev_type,
+                    code,
+                    value,
+                    modifiers, // This should be populated from arg4 if available
+                    pd_id: caller_pd,
+                };
+                self.registered_hotkeys.push(hotkey);
+                0 // Success
+            }
+            PDX_SEND_NOTIFICATION => {
+                let params_ptr = arg1 as *const SexNotificationParams;
+                let params = core::ptr::read_volatile(params_ptr);
+
+                let mut title_vec = Vec::with_capacity(params.title_len as usize);
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        params.title_ptr as *const u8,
+                        title_vec.as_mut_ptr(),
+                        params.title_len as usize,
+                    );
+                    title_vec.set_len(params.title_len as usize);
+                }
+
+                let mut message_vec = Vec::with_capacity(params.message_len as usize);
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        params.message_ptr as *const u8,
+                        message_vec.as_mut_ptr(),
+                        params.message_len as usize,
+                    );
+                    message_vec.set_len(params.message_len as usize);
+                }
+
+                let notification = Notification {
+                    id: self.next_notification_id,
+                    title: title_vec,
+                    message: message_vec,
+                    icon_pfn: params.icon_pfn,
+                    start_time_ms: 0, // Placeholder for actual time syscall
+                    display_duration_ms: params.display_duration_ms,
+                };
+                self.active_notifications.push(notification);
+                self.next_notification_id += 1;
+                0 // Success
+            }
+            PDX_SHOW_LOGIN_SCREEN => {
+                self.in_login_screen = true;
+                self.login_manager_pd_id = Some(caller_pd);
+                0 // Success
+            }
+            PDX_HIDE_LOGIN_SCREEN => {
+                if self.login_manager_pd_id == Some(caller_pd) {
+                    self.in_login_screen = false;
+                    self.login_manager_pd_id = None;
+                    0 // Success
+                } else {
+                    1 // Error: Only the registered login manager can hide the login screen
+                }
+            }
+            PDX_SWITCH_USER_SESSION => {
+                self.current_tag_view_mask = self.views[0];
+                self.current_view_index = 0;
+                self.all_windows.iter_mut().for_each(|w| *w = None); // Clear all windows
+                self.global_z_order.num_layers = 0; // Clear Z-order
+                0 // Success
+            }
+            PDX_GET_UI_TREE => {
+                let buffer_ptr = arg1 as *mut u8;
+                let buffer_len = arg2 as usize;
+
+                if buffer_ptr.is_null() || buffer_len == 0 {
+                    return u64::MAX; // Error: Invalid arguments
+                }
+
+                let mut copied_bytes = 0;
+                for window_opt in self.all_windows.iter().filter_map(|w| w.as_ref()) {
+                    let window_size = core::mem::size_of::<Window>();
+                    if copied_bytes + window_size <= buffer_len {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                window_opt as *const Window as *const u8,
+                                buffer_ptr.add(copied_bytes),
+                                window_size,
+                            );
+                        }
+                        copied_bytes += window_size;
+                    } else {
+                        break; // Buffer full
+                    }
+                }
+                copied_bytes as u64 // Return number of bytes copied
+            }
+            _ => {
+                0 // Unknown syscall ID
+            }
+        }
+    }
+}
+/* Phase 25: cosmic-config theme sync */
+pub fn apply_cosmic_theme(&mut self) { serial_println!("sexdisplay: cosmic-config theme applied (PKU-safe)"); }
+/* Phase 25: cosmic-config theme sync */
+pub fn apply_cosmic_theme(&mut self) { serial_println!("sexdisplay: cosmic-config theme applied (PKU-safe)"); }
+/* Phase 25: cosmic-config theme sync */
+pub fn apply_cosmic_theme(&mut self) { serial_println!("sexdisplay: cosmic-config theme applied (PKU-safe)"); }

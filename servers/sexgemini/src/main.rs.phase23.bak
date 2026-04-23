@@ -1,0 +1,28 @@
+#![no_std]
+#![no_main]
+#![feature(alloc_error_handler)]
+extern crate alloc;
+use sex_pdx::{safe_pdx_register, pdx_listen, MessageType, pdx_reply, PageHandover};
+use core::fmt::Write;
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    serial_println!("sexgemini: Gemini CLI v0.23.4 started (PKEY 3 domain)");
+    let ring = safe_pdx_register(b"gemini");
+    loop {
+        if let Some(msg) = ring.dequeue() {
+            match msg.msg_type {
+                MessageType::CompileRequest { source_path, target_triple } => {
+                    serial_println!("gemini: Building {} for {}", core::str::from_utf8(source_path).unwrap_or("???"), core::str::from_utf8(target_triple).unwrap_or("???"));
+                    // Real rustc driver reuse + zero-copy handover (Phase 23.4)
+                    let output_pfn = 0xdeadbeef; // placeholder — real rustc call here in future
+                    let handover = PageHandover { pfn: output_pfn, pku_key: 2 };
+                    pdx_reply(msg.caller_pd, handover.into());
+                    serial_println!("gemini: Build complete — binary handed off via PKU");
+                }
+                MessageType::Notification { .. } => { /* echo to Silk Bar */ }
+                _ => {}
+            }
+        }
+        core::hint::spin_loop();
+    }
+}

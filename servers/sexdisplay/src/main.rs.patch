@@ -1,0 +1,36 @@
+--- servers/sexdisplay/src/main.rs
++++ servers/sexdisplay/src/main.rs
+@@ -1,5 +1,6 @@
+ #[no_mangle]
+ pub extern "C" fn _start() -> ! {
+     let mut info = DisplayInfo { virt_addr: 0, width: 0, height: 0, pitch: 0 };
++    serial_println!("sexdisplay: _start() reached under PKEY 1");
+     let ret = unsafe { pdx_call(0, PDX_GET_DISPLAY_INFO, &mut info as *mut _ as u64, 0) };
+     if ret == 0 && info.virt_addr != 0 && info.width > 0 && info.height > 0 {
+         let stride = info.pitch / 4;
+         let fb = info.virt_addr as *mut u32;
+-        for row in 0..info.height as isize {
+-            for col in 0..stride as isize {
+-                unsafe { fb.offset(row * stride as isize + col).write_volatile(BG_COLOR); }
+-            }
+-        }
++        // Green background once
++        for i in 0..(info.height as usize * stride as usize) {
++             unsafe { fb.add(i).write_volatile(0xFF00FF00u32); }
++        }
++        serial_println!("sexdisplay: green background applied");
++        loop {
++             // persistent cursor
++             let cx = info.width as usize / 2;
++             let cy = info.height as usize / 2;
++             for dy in 0..40 {
++                 for dx in 0..40 {
++                     if dx < 10 || dy < 10 {
++                         unsafe { fb.add((cy + dy) * stride as usize + (cx + dx)).write_volatile(0xFFFFFFFFu32); }
++                     }
++                 }
++             }
++        }
+     }
+     loop {}
+ }

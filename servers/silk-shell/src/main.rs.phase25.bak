@@ -1,0 +1,480 @@
+use sex_pdx::{pdx_listen, pdx_reply, pdx_call, pdx_allocate_memory, pdx_map_memory, pdx_get_framebuffer_info, pdx_move_window, pdx_resize_window, pdx_spawn_pd, pdx_set_window_tags, pdx_get_window_tags, pdx_set_view_tags, pdx_get_view_tags, pdx_commit_window_frame, PDX_SEX_WINDOW_CREATE, PDX_MOVE_WINDOW, PDX_RESIZE_WINDOW, PDX_SET_WINDOW_TAGS, PDX_GET_WINDOW_TAGS, PDX_SET_VIEW_TAGS, PDX_GET_VIEW_TAGS, PDX_SET_WINDOW_ROUNDNESS, PDX_SET_WINDOW_BLUR, PDX_SET_WINDOW_ANIMATION, SexWindowCreateParams};
+use sex_graphics::{WindowBuffer, draw_str}; // Import from sex_graphics
+
+enum GestureType {
+    None,
+    OneFingerDrag,      // Standard mouse drag, used for window move/resize
+    TwoFingerSwipe,     // Example: Ctrl + Mouse Drag for workspace switch
+    ThreeFingerSwipe,   // Example: Alt + Mouse Drag for moving window to another tag
+}
+
+/// Represents the current state of the shell for managing window interactions.
+struct ShellState {
+    active_window_id: Option<u64>, // The currently managed window's ID
+    is_dragging: bool,
+    is_resizing: bool,
+    drag_start_mouse_x: i32,
+    drag_start_mouse_y: i32,
+    drag_start_window_x: u32,
+    drag_start_window_y: u32,
+    drag_start_window_width: u32,
+    drag_start_window_height: u32,
+    current_mouse_x: i32, // Accumulated absolute mouse X (relative to screen)
+    current_mouse_y: i32, // Accumulated absolute mouse Y (relative to screen)
+    selected_app_index: Option<usize>, // Index of the currently hovered app for launcher
+    current_workspace_id: u64, // The ID of the currently active workspace
+    max_workspaces: usize, // Total number of available workspaces (MAX_WORKSPACES from sexdisplay)
+    alt_pressed: bool, // State of the Alt key
+    shift_pressed: bool, // State of the Shift key
+    gesture_active: bool,
+    gesture_type: GestureType,
+    gesture_start_x: i32,
+    gesture_start_y: i32,
+    gesture_last_x: i32, // Used for calculating delta during movement
+    gesture_last_y: i32, // Used for calculating delta during movement
+    modifier_ctrl_pressed: bool,
+}
+
+impl Default for ShellState {
+    fn default() -> Self {
+        Self {
+            active_window_id: None,
+            is_dragging: false,
+            is_resizing: false,
+            drag_start_mouse_x: 0,
+            drag_start_mouse_y: 0,
+            drag_start_window_x: 0,
+            drag_start_window_y: 0,
+            drag_start_window_width: 0,
+            drag_start_window_height: 0,
+            current_mouse_x: 0,
+            current_mouse_y: 0,
+            selected_app_index: None,
+            current_workspace_id: 0, // Default to workspace 0
+            max_workspaces: 4, // Default to 4 as per MAX_WORKSPACES in sexdisplay
+            alt_pressed: false,
+            shift_pressed: false,
+            gesture_active: false,
+            gesture_type: GestureType::None,
+            gesture_start_x: 0,
+            gesture_start_y: 0,
+            gesture_last_x: 0,
+            gesture_last_y: 0,
+            modifier_ctrl_pressed: false,
+        }
+    }
+}
+
+// Hardcoded list of example applications for demonstration
+const EXAMPLE_APPS: &[&str] = &[
+    "app/hello_world", // Placeholder path
+    "app/calculator",  // Placeholder path
+    "app/editor",      // Placeholder path
+];
+
+#[no_mangle]
+pub extern "C" fn silk_shell_main() -> ! {
+    // Query framebuffer info from sexdisplay
+    let (width, height) = match sex_pdx::pdx_get_framebuffer_info() {
+        Ok((w, h)) => (w, h),
+        Err(_) => loop { /* Handle error getting FB info */ }
+    };
+    
+    let mut shell_state: ShellState = Default::default();
+    let mut current_window_x = 0u32;
+    let mut current_window_y = 0u32;
+    let mut current_window_width = width;
+    let mut current_window_height = height;
+
+    // --- Window Creation and Memory Management for Silk Shell's own window ---
+    let color_depth_bytes = 4; // ARGB
+    let buffer_size = (current_window_width * current_window_height * color_depth_bytes) as u64;
+
+    // 1. Allocate physical memory for the window buffer
+    let pfn_base = match pdx_allocate_memory(buffer_size) {
+        Ok(pfn) => pfn,
+        Err(_) => loop { /* Handle allocation error */ }
+    };
+
+    // 2. Map the physical memory into silk-shell's virtual address space
+    let virt_addr = match pdx_map_memory(pfn_base, buffer_size) {
+        Ok(vaddr) => vaddr,
+        Err(_) => loop { /* Handle mapping error */ }
+    };
+
+    // 3. Register window with SexCompositor
+    let create_params = SexWindowCreateParams {
+        x: 0, // Position on screen
+        y: 0,
+        width: current_window_width,
+        height: current_window_height,
+        pfn_base,
+    };
+
+    let window_id = unsafe { pdx_call(
+        1, // Target PD ID for sexdisplay (assuming PID 1 for now, or a known constant)
+        PDX_SEX_WINDOW_CREATE, // Use the proper syscall ID
+        &create_params as *const _ as u64, // Pass pointer to params as arg0
+        0,
+    )};
+
+    if window_id == 0 {
+        loop { /* Handle window creation error */ }
+    }
+    shell_state.active_window_id = Some(window_id);
+    current_window_x = 0; // Initial position
+    current_window_y = 0; // Initial position
+
+    // --- Drawing functions ---
+    let stride_pixels = current_window_width; // Stride in pixels, not bytes for u32 array
+    let mut window_buffer = unsafe { WindowBuffer::new(virt_addr, current_window_width, current_window_height, stride_pixels) };
+
+    // --- Main Event Loop ---
+    loop {
+        // Redraw the entire window for the launcher and current window content
+        unsafe {
+            window_buffer.clear(0xFF222222); // Dark gray background
+
+            // Draw current window content (e.g., green/red rects)
+            window_buffer.draw_rect(50, 50, 100, 100, 0xFF00FF00); // Green rectangle
+            window_buffer.draw_rect(150, 150, 100, 100, 0xFFFF0000); // Red rectangle
+
+            // Draw launcher applications
+            let mut y_offset = 50u32;
+            let text_height = 20;
+            let text_padding = 5;
+            let launcher_x = 20u32;
+            let launcher_width = 200u32;
+
+            for (i, app_name) in EXAMPLE_APPS.iter().enumerate() {
+                let y_pos = y_offset;
+                let text_color = 0xFFFFFFFF; // White text
+
+                // If this app is selected, draw a highlight rectangle
+                if shell_state.selected_app_index == Some(i) {
+                    window_buffer.draw_rect(launcher_x - 5, y_pos - 5, launcher_width + 10, (text_height + text_padding) as u32, 0xFF555555); // Highlight gray
+                }
+
+                draw_str(&mut window_buffer, launcher_x, y_pos, text_color, app_name.as_bytes());
+                y_offset += text_height as u32 + text_padding as u32;
+            }
+
+            // Draw workspace indicators
+            let ws_indicator_start_x = (current_window_width / 2) - ((shell_state.max_workspaces as u32 * 30) / 2);
+            let ws_indicator_y = 10u32;
+            for i in 0..shell_state.max_workspaces {
+                let ws_id = i as u64;
+                let x_pos = ws_indicator_start_x + (i as u32 * 30);
+                let color = if shell_state.current_workspace_id == ws_id {
+                    0xFF00FF00 // Green for active workspace
+                } else {
+                    0xFF888888 // Gray for inactive
+                };
+                window_buffer.draw_rect(x_pos, ws_indicator_y, 20, 20, color);
+                draw_str(&mut window_buffer, x_pos + 5, ws_indicator_y + 5, 0xFFFFFFFF, format!("{}", i + 1).as_bytes()); // Display 1-indexed
+            }
+
+            // Draw aesthetic controls
+            let aesthetics_x = current_window_width - 150;
+            let mut aesthetics_y = 50u32;
+            let button_width = 120u32;
+            let button_height = 30u32;
+            let button_spacing = 10u32;
+
+            // Roundness control
+            window_buffer.draw_rect(aesthetics_x, aesthetics_y, button_width, button_height, 0xFF4444FF); // Blue button
+            draw_str(&mut window_buffer, aesthetics_x + 10, aesthetics_y + 10, 0xFFFFFFFF, "Roundness".as_bytes());
+            aesthetics_y += button_height + button_spacing;
+
+            // Blur control
+            window_buffer.draw_rect(aesthetics_x, aesthetics_y, button_width, button_height, 0xFF44FF44); // Green button
+            draw_str(&mut window_buffer, aesthetics_x + 10, aesthetics_y + 10, 0xFFFFFFFF, "Blur".as_bytes());
+            aesthetics_y += button_height + button_spacing;
+
+            // Animation control
+            window_buffer.draw_rect(aesthetics_x, aesthetics_y, button_width, button_height, 0xFFFF4444); // Red button
+            draw_str(&mut window_buffer, aesthetics_x + 10, aesthetics_y + 10, 0xFFFFFFFF, "Animate".as_bytes());
+            aesthetics_y += button_height + button_spacing;
+        }
+
+
+        let request = pdx_listen(0); // Assuming flags = 0 for now
+
+        // Check if there's a valid message pointer
+        if request.arg0 != 0 {
+            // Safety: We assume arg0 is a valid pointer to a PdxMessage from the kernel.
+            // This is a trusted environment, so we proceed with caution.
+            let pdx_message_ptr = request.arg0 as *const PdxMessage;
+            let message = unsafe { &*pdx_message_ptr };
+
+            match message.msg_type {
+                MessageType::HIDEvent { ev_type, code, value } => {
+                    // Assuming EV_REL for relative mouse movement (ev_type = 2)
+                    // Assuming EV_KEY for mouse buttons/keys (ev_type = 1)
+                    // Assuming BTN_LEFT (0x110), BTN_RIGHT (0x111)
+                    // Assuming REL_X (0), REL_Y (1)
+                    // Key codes for modifiers
+                    const KEY_LEFTALT: u16 = 0x38;
+                    const KEY_LEFTSHIFT: u16 = 0x2A;
+                    const KEY_LEFTCTRL: u16 = 0x1D;
+
+                    match ev_type {
+                        1 => { // EV_KEY - Mouse buttons or Keyboard keys
+                            // Update modifier key states
+                            if code == KEY_LEFTALT {
+                                shell_state.alt_pressed = value == 1;
+                            } else if code == KEY_LEFTSHIFT {
+                                shell_state.shift_pressed = value == 1;
+                            } else if code == KEY_LEFTCTRL {
+                                shell_state.modifier_ctrl_pressed = value == 1;
+                            }
+
+                            if value == 1 { // Key/Button pressed
+                                // --- Workspace/Tag Management Keyboard Shortcuts ---
+                                if code >= 0x02 && code <= 0x0A { // Number keys 1-9 (HID codes)
+                                    let number_key_index = (code - 0x01) as u64; // Convert to 0-indexed number (0-8)
+                                    let target_tag = 1 << number_key_index; // Single tag for this number
+
+                                    if shell_state.alt_pressed && shell_state.shift_pressed {
+                                        // Shift+Alt+Number: Move active window to tag
+                                        if let Some(window_id) = shell_state.active_window_id {
+                                            let current_tags = pdx_get_window_tags(window_id).unwrap_or(0);
+                                            let new_tags = current_tags ^ target_tag; // Toggle tag
+                                            let _ = pdx_set_window_tags(window_id, new_tags);
+                                        }
+                                    } else if shell_state.alt_pressed {
+                                        // Alt+Number: Switch view to tag
+                                        let _ = pdx_set_view_tags(target_tag);
+                                        shell_state.current_workspace_id = number_key_index as u64; // Update local visual
+                                    }
+                                }
+
+                                // --- Terminal Sovereign Keybind: Ctrl+Alt+T ---
+                                if code == 0x14 { // 'T' key scancode
+                                    if shell_state.modifier_ctrl_pressed && shell_state.alt_pressed {
+                                        // Spawn ionshell
+                                        let ion_path = "/servers/sexc/bin/ionshell\0";
+                                        if let Ok(new_pd_id) = pdx_spawn_pd(ion_path.as_bytes()) {
+                                            // Successfully spawned terminal
+                                        }
+                                    }
+                                }
+
+                                // --- Mouse Button Pressed - Initiate Gesture ---
+                                if code == 0x110 { // BTN_LEFT
+                                    if let Some(window_id) = shell_state.active_window_id {
+                                        // Check if a launcher item was clicked
+                                        let mut y_check_offset = 50u32;
+                                        let text_height = 20;
+                                        let text_padding = 5;
+                                        let launcher_x = 20u32;
+                                        let launcher_width = 200u32;
+                                        let x_start = launcher_x - 5;
+                                        let x_end = x_start + launcher_width + 10;
+
+                                        let mouse_x = shell_state.current_mouse_x as u32;
+                                        let mouse_y = shell_state.current_mouse_y as u32;
+
+                                        let mut app_launched = false;
+                                        for (i, app_name) in EXAMPLE_APPS.iter().enumerate() {
+                                            let y_start = y_check_offset - 5;
+                                            let y_end = y_check_offset + (text_height + text_padding) as u32;
+
+                                            if mouse_x >= x_start && mouse_x <= x_end && mouse_y >= y_start && mouse_y <= y_end {
+                                                if let Ok(new_pd_id) = pdx_spawn_pd(app_name.as_bytes()) {
+                                                    // serial_println!("Launched {} with PD ID: {}", app_name, new_pd_id);
+                                                } else {
+                                                    // serial_println!("Failed to launch {}", app_name);
+                                                }
+                                                app_launched = true;
+                                                break;
+                                            }
+                                            y_check_offset += text_height as u32 + text_padding as u32;
+                                        }
+
+                                        // --- Aesthetic Control Button Clicks ---
+                                        let aesthetics_x = current_window_width - 150;
+                                        let mut aesthetics_check_y = 50u32;
+                                        let button_width = 120u32;
+                                        let button_height = 30u32;
+                                        let button_spacing = 10u32;
+                                        let mut aesthetic_action_taken = false;
+
+                                        // Roundness button
+                                        if mouse_x >= aesthetics_x && mouse_x <= aesthetics_x + button_width &&
+                                           mouse_y >= aesthetics_check_y && mouse_y <= aesthetics_check_y + button_height {
+                                            let _ = pdx_set_window_roundness(window_id, if rand::random() { 10 } else { 0 }); // Toggle roundness
+                                            aesthetic_action_taken = true;
+                                        }
+                                        aesthetics_check_y += button_height + button_spacing;
+
+                                        // Blur button
+                                        if !aesthetic_action_taken && mouse_x >= aesthetics_x && mouse_x <= aesthetics_x + button_width &&
+                                           mouse_y >= aesthetics_check_y && mouse_y <= aesthetics_check_y + button_height {
+                                            let _ = pdx_set_window_blur(window_id, if rand::random() { 5 } else { 0 }); // Toggle blur
+                                            aesthetic_action_taken = true;
+                                        }
+                                        aesthetics_check_y += button_height + button_spacing;
+
+                                        // Animation button
+                                        if !aesthetic_action_taken && mouse_x >= aesthetics_x && mouse_x <= aesthetics_x + button_width &&
+                                           mouse_y >= aesthetics_check_y && mouse_y <= aesthetics_check_y + button_height {
+                                            let _ = pdx_set_window_animation(window_id, rand::random()); // Toggle animation
+                                            aesthetic_action_taken = true;
+                                        }
+
+
+                                        if !app_launched && !aesthetic_action_taken { // Only start gesture if no app or aesthetic action was taken
+                                            shell_state.gesture_active = true;
+                                            shell_state.gesture_start_x = shell_state.current_mouse_x;
+                                            shell_state.gesture_start_y = shell_state.current_mouse_y;
+                                            shell_state.gesture_last_x = shell_state.current_mouse_x;
+                                            shell_state.gesture_last_y = shell_state.current_mouse_y;
+                                            shell_state.drag_start_window_x = current_window_x; // Used for OneFingerDrag
+                                            shell_state.drag_start_window_y = current_window_y; // Used for OneFingerDrag
+
+                                            if shell_state.modifier_ctrl_pressed {
+                                                shell_state.gesture_type = GestureType::TwoFingerSwipe;
+                                                // Reset dragging/resizing flags
+                                                shell_state.is_dragging = false;
+                                                shell_state.is_resizing = false;
+                                            } else if shell_state.alt_pressed {
+                                                shell_state.gesture_type = GestureType::ThreeFingerSwipe;
+                                                // Reset dragging/resizing flags
+                                                shell_state.is_dragging = false;
+                                                shell_state.is_resizing = false;
+                                            } else {
+                                                shell_state.gesture_type = GestureType::OneFingerDrag;
+                                                shell_state.is_dragging = true; // Use old flag for compatibility
+                                                shell_state.is_resizing = false;
+                                            }
+                                        }
+                                    }
+                                } else if code == 0x111 { // BTN_RIGHT (for resize)
+                                    // This is still a direct resize gesture, not affected by modifiers for now
+                                    if let Some(window_id) = shell_state.active_window_id {
+                                        shell_state.is_resizing = true;
+                                        shell_state.is_dragging = false;
+                                        shell_state.gesture_active = true; // Also consider resize a gesture
+                                        shell_state.gesture_type = GestureType::OneFingerDrag; // Treat as specialized drag
+                                        shell_state.gesture_start_x = shell_state.current_mouse_x;
+                                        shell_state.gesture_start_y = shell_state.current_mouse_y;
+                                        shell_state.gesture_last_x = shell_state.current_mouse_x;
+                                        shell_state.gesture_last_y = shell_state.current_mouse_y;
+                                        shell_state.drag_start_window_width = current_window_width;
+                                        shell_state.drag_start_window_height = current_window_height;
+                                    }
+                                }
+                            } else { // Key/Button released
+                                if code == 0x110 { // BTN_LEFT
+                                    shell_state.is_dragging = false;
+                                    shell_state.gesture_active = false;
+                                    shell_state.gesture_type = GestureType::None;
+                                } else if code == 0x111 { // BTN_RIGHT
+                                    shell_state.is_resizing = false;
+                                    shell_state.gesture_active = false;
+                                    shell_state.gesture_type = GestureType::None;
+                                }
+                            }
+                        }
+                        2 => { // EV_REL - Relative mouse movement
+                            // Update current mouse position regardless of active gesture
+                            if code == 0 { // REL_X
+                                shell_state.current_mouse_x += value as i32;
+                            } else if code == 1 { // REL_Y
+                                shell_state.current_mouse_y += value as i32;
+                            }
+
+                            if shell_state.gesture_active {
+                                let dx = shell_state.current_mouse_x - shell_state.gesture_last_x;
+                                let dy = shell_state.current_mouse_y - shell_state.gesture_last_y;
+
+                                if let Some(window_id) = shell_state.active_window_id {
+                                    match shell_state.gesture_type {
+                                        GestureType::OneFingerDrag => { // Window Move/Resize
+                                            if shell_state.is_dragging {
+                                                let new_x = shell_state.drag_start_window_x.saturating_add_signed(shell_state.current_mouse_x - shell_state.gesture_start_x);
+                                                let new_y = shell_state.drag_start_window_y.saturating_add_signed(shell_state.current_mouse_y - shell_state.gesture_start_y);
+                                                if pdx_move_window(window_id, new_x, new_y).is_ok() {
+                                                    current_window_x = new_x;
+                                                    current_window_y = new_y;
+                                                }
+                                            } else if shell_state.is_resizing {
+                                                let new_width = shell_state.drag_start_window_width.saturating_add_signed(shell_state.current_mouse_x - shell_state.gesture_start_x);
+                                                let new_height = shell_state.drag_start_window_height.saturating_add_signed(shell_state.current_mouse_y - shell_state.gesture_start_y);
+                                                if pdx_resize_window(window_id, new_width, new_height).is_ok() {
+                                                    current_window_width = new_width;
+                                                    current_window_height = new_height;
+                                                }
+                                            }
+                                        }
+                                        GestureType::TwoFingerSwipe => { // Workspace Switch (Tags)
+                                            // Horizontal swipe: dx
+                                            if dx.abs() > 20 { // Threshold for swipe
+                                                let current_tag_mask = pdx_get_view_tags().unwrap_or(1 << 0);
+                                                let current_tag_index = current_tag_mask.trailing_zeros(); // Get index of the lowest set bit
+
+                                                let mut new_tag_index = current_tag_index as i64;
+                                                if dx > 0 { // Swipe right
+                                                    new_tag_index = (new_tag_index + 1).min(shell_state.max_workspaces as i64 - 1);
+                                                } else { // Swipe left
+                                                    new_tag_index = (new_tag_index - 1).max(0);
+                                                }
+                                                let new_tag_mask = 1 << new_tag_index;
+                                                if pdx_set_view_tags(new_tag_mask).is_ok() {
+                                                    shell_state.current_workspace_id = new_tag_index as u64;
+                                                }
+                                                // Reset gesture start to prevent multiple switches on one long swipe
+                                                shell_state.gesture_start_x = shell_state.current_mouse_x;
+                                            }
+                                        }
+                                        GestureType::ThreeFingerSwipe => { // Window to Tag
+                                            // Horizontal swipe: dx
+                                            if dx.abs() > 20 { // Threshold for swipe
+                                                if let Some(active_window_id) = shell_state.active_window_id {
+                                                    let current_window_tags = pdx_get_window_tags(active_window_id).unwrap_or(1 << 0);
+                                                    let current_tag_index = current_window_tags.trailing_zeros();
+
+                                                    let mut new_tag_index = current_tag_index as i64;
+                                                    if dx > 0 { // Swipe right
+                                                        new_tag_index = (new_tag_index + 1).min(shell_state.max_workspaces as i64 - 1);
+                                                    } else { // Swipe left
+                                                        new_tag_index = (new_tag_index - 1).max(0);
+                                                    }
+                                                    let new_tag_mask = 1 << new_tag_index;
+                                                    let _ = pdx_set_window_tags(active_window_id, new_tag_mask);
+                                                }
+                                                // Reset gesture start to prevent multiple changes on one long swipe
+                                                shell_state.gesture_start_x = shell_state.current_mouse_x;
+                                            }
+                                        }
+                                        GestureType::None => { /* Should not happen if gesture_active is true */ }
+                                    }
+                                }
+                                shell_state.gesture_last_x = shell_state.current_mouse_x;
+                                shell_state.gesture_last_y = shell_state.current_mouse_y;
+                            } else {
+                                // Not in an active gesture, just update current mouse position for hover effects
+                                // This is already done at the top of EV_REL handling
+                            }
+                        }
+                        _ => {}
+                    }
+                    pdx_reply(request.caller_pd, 0); // Reply with 0 (success)
+                },
+                _ => {
+                    // Handle other MessageTypes or ignore.
+                    // Reply to prevent caller from blocking indefinitely.
+                    pdx_reply(request.caller_pd, 0);
+                }
+            }
+        } else {
+            // No valid message, perhaps a spurious wakeup or an internal kernel event.
+            // Yield or sleep to prevent busy-waiting.
+            #[cfg(target_arch = "x86_64")]
+            unsafe { core::arch::asm!("hlt") };
+            #[cfg(not(target_arch = "x86_64"))]
+            core::hint::spin_loop();
+        }
+    }
+}

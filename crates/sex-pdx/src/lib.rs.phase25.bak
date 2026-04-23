@@ -1,0 +1,68 @@
+#![no_std]
+#![no_implicit_prelude]
+#![feature(alloc_error_handler)]
+
+// Explicitly import core and alloc components that are needed
+use core::fmt::Write;
+use core::panic::PanicInfo;
+use core::alloc::Layout;
+use core::result::Result; // Import Result explicitly
+use alloc::alloc::GlobalAlloc; // Needed if we were to implement GlobalAlloc
+
+#[macro_export]
+macro_rules! serial_println {
+    ($($arg:tt)*) => {{
+        // Real serial is in kernel, but for no_std apps we stub via PDX
+        // In production this routes through kernel serial
+    }};
+}
+
+pub const PDX_SEX_WINDOW_CREATE: u64 = 0xDE;
+pub const PDX_SEND_MESSAGE: u64 = 0x0E;
+
+#[derive(Debug, Clone, Copy)]
+pub struct SexWindowCreateParams {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    pub title: &'static [u8],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Rect {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MessageType {
+    CompileRequest { source_path: &'static [u8], target_triple: &'static [u8] },
+    KeyEvent { code: u16, value: i32, modifiers: u16 },
+    Notification { progress: u8, message: &'static str },
+    // ... other variants already present ...
+}
+
+pub fn pdx_call(slot: u32, syscall: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
+    // Stub — real implementation in kernel syscall_dispatch
+    // The arguments are marked with underscores to suppress unused variable warnings.
+    let _ = (_arg0, _arg1, _arg2); // Use them to avoid warnings if they were needed
+    0
+}
+
+pub fn pdx_spawn_pd(path: &[u8]) -> Result<u32, ()> {
+    // Stub — real implementation in kernel
+    Ok(42)
+}
+
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! {
+    loop {}
+}
+
+#[alloc_error_handler]
+fn alloc_error(_layout: Layout) -> ! {
+    loop {}
+}

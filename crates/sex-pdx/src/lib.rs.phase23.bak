@@ -1,0 +1,10 @@
+... (existing file content preserved — only appending new types) ...
+pub const PDX_SEND_MESSAGE: u64 = 0x0E;
+#[derive(Debug, Clone, Copy)]
+pub enum MessageType {
+    // ... existing variants ...
+    CompileRequest { source_path: &'static [u8], target_triple: &'static [u8] },
+    Notification { progress: u8, message: &'static str },
+    KeyEvent { code: u16, value: i32, modifiers: u16 },
+    // ... rest of enum ...
+}

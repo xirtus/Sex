@@ -1,0 +1,8 @@
+# Corrected build commands for Phase 25 COSMIC apps and previous ones
+cargo build --manifest-path apps/cosmic-edit/Cargo.toml --target x86_64-sex.json --release
+cargo build --manifest-path apps/cosmic-term/Cargo.toml --target x86_64-sex.json --release
+cargo build --manifest-path apps/cosmic-settings/Cargo.toml --target x86_64-sex.json --release
+# Phase 25 COSMIC full parity apps
+cargo build --manifest-path apps/cosmic-greeter/Cargo.toml --target x86_64-sex.json --release
+cargo build --manifest-path apps/cosmic-bg/Cargo.toml --target x86_64-sex.json --release
+cargo build --manifest-path apps/cosmic-applets/Cargo.toml --target x86_64-sex.json --release
