@@ -1,86 +1,171 @@
-use crate::pd::create::create_protection_domain;
 use crate::serial_println;
-use crate::ipc::DOMAIN_REGISTRY;
-use crate::capability::{CapabilityData, IpcCapData};
 use x86_64::VirtAddr;
+use core::sync::atomic::{AtomicU8, Ordering};
+use crate::capability::ProtectionDomain;
 
 pub static mut SEXDISPLAY_PD_ID: u32 = 0;
+static NEXT_PKEY: AtomicU8 = AtomicU8::new(2); 
 
-/// init: The root initialization sequence for the microkernel.
-/// Phase 16: Official v1.0.0 Public Release.
-pub fn init() {
-    serial_println!("--------------------------------------------------");
-    serial_println!("    SexOS (Single Environment XIPC) v1.0.0       ");
-    serial_println!("  100% LOCK-FREE SASOS PRODUCTION RELEASE        ");
-    serial_println!("--------------------------------------------------");
-    serial_println!("init: Bootstrapping system Protection Domains...");
+unsafe fn grant_standard_capabilities(pd: &mut ProtectionDomain, pd_id: u32) {
+    use crate::capability::CapabilityData;
+    use sex_pdx::*;
 
-    // Phase 17: Initialize Kernel PD (ID 0) to allow early ELF Loading
-    let kernel_pd = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(crate::capability::ProtectionDomain::new(0, 0)));
-    DOMAIN_REGISTRY.insert(0, kernel_pd);
-
-    // Final Validation Suite (Superiority Assertions)
-    serial_println!("init: Self-Hosting & Lock-Free Invariants: VERIFIED.");
-
-    // 1. Spawn Core System Servers
-    let _sext = create_protection_domain("/servers/sext/bin/sext\0", None).expect("sext lost");
-    let sexc = create_protection_domain("/servers/sexc/bin/sexc\0", None).expect("sexc lost");
-    let sexfiles = create_protection_domain("/servers/sexfiles/bin/sexfiles\0", None).expect("sexfiles lost");
-    let sexdrive = create_protection_domain("/servers/sexdrive/bin/sexdrive\0", None).expect("sexdrive lost");
-    let tuxedo = create_protection_domain("/servers/tuxedo/bin/tuxedo\0", None).expect("tuxedo lost");
-    let _sexinput = create_protection_domain("/servers/sexinput/bin/sexinput\0", None).expect("sexinput lost");
-    let _sexnet = create_protection_domain("/servers/sexnet/bin/sexnet\0", None).expect("sexnet lost");
-    let sexdisplay = create_protection_domain("/servers/sexdisplay/bin/sexdisplay\0", None).expect("sexdisplay lost");
-    unsafe { SEXDISPLAY_PD_ID = sexdisplay; }
-    let sexnode = create_protection_domain("/servers/sexnode/bin/sexnode\0", None).expect("sexnode lost");
-    let sexshop = create_protection_domain("/servers/sexshop/bin/sexshop\0", None).expect("sexshop lost");
-    let sexgemini = create_protection_domain("/servers/sexgemini/bin/sexgemini\0", None).expect("sexgemini lost");
-
-    // Phase 14: Formal Verification Verification
-
-    // 2. Cross-grant IPC capabilities (Dynamic Slotting)
-    let sexfiles_pd = DOMAIN_REGISTRY.get(sexfiles).unwrap();
-    sexfiles_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdrive, entry_point: VirtAddr::new(0x_4000_0000) }));
-
-    let sexshop_pd = DOMAIN_REGISTRY.get(sexshop).unwrap();
-    sexshop_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexfiles, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 1 -> sexfiles
-
-    let sexc_pd = DOMAIN_REGISTRY.get(sexc).unwrap();
-    sexc_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexfiles, entry_point: VirtAddr::new(0x_4000_0000) }));
-    sexc_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexnode, entry_point: VirtAddr::new(0x_4000_0000) }));
-    sexc_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdisplay, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 5 -> sexdisplay
-
-    let sexdisplay_pd = DOMAIN_REGISTRY.get(sexdisplay).unwrap();
-    sexdisplay_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: tuxedo, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 10 -> tuxedo
-    sexdisplay_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdrive, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 11 -> sexdrive (GPU DMA)
-
-    let sexgemini_pd = DOMAIN_REGISTRY.get(sexgemini).unwrap();
-    sexgemini_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexfiles, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 1 -> sexfiles
-    sexgemini_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexc, entry_point: VirtAddr::new(0x_4000_0000) }));     // Slot 2 -> sexc
-    sexgemini_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdisplay, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 3 -> sexdisplay
-    sexgemini_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexshop, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 4 -> sexshop
-    sexgemini_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexnode, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 5 -> sexnode
+    // Every PD gets access to the display and shell by default in Phase 25
+    // but the actual permission is gated by PKU/PKEY in the hardware.
     
-    let sexnode_pd = DOMAIN_REGISTRY.get(sexnode).unwrap();
-    sexnode_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexshop, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 1 -> sexshop
-    sexnode_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexc, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 2 -> sexc
+    // Hardcoded PD IDs for core services (assigned during spawn)
+    // 1: sexdisplay
+    // 2: linen
+    // 3: silk-shell
 
-    // 3. Hardware Bootstrap (Registers with interrupts)
-    crate::devmgr::init(sexdrive, sexdisplay);
+    if pd_id == 1 {
+        // sexdisplay: self-listen on SLOT_DISPLAY
+        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
+    } else if pd_id == 2 {
+        // linen: access to storage and display
+        (*pd.cap_table).insert_at(SLOT_STORAGE as u32, CapabilityData::Domain(2)); // Placeholder for storage
+        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
+    } else if pd_id == 3 {
+        // silk-shell: access to display and self-listen on SLOT_SHELL
+        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
+        (*pd.cap_table).insert_at(SLOT_SHELL as u32, CapabilityData::Domain(3));
+    } else {
+        // General apps: access to storage, network, display, etc.
+        (*pd.cap_table).insert_at(SLOT_STORAGE as u32, CapabilityData::Domain(2));
+        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
+        (*pd.cap_table).insert_at(SLOT_SHELL as u32, CapabilityData::Domain(3));
+    }
+}
 
-    serial_println!("init: System services active. Phase 15 Linux Driver Translation Ready.");
-    serial_println!("init: Triggering hot-plug discovery of Linux drivers...");
+pub fn init() {
+    let mut _sexdisp_id = 0; 
 
-    // 4. Spawn User-Space Shell (Ion SexShell)
-    let ion = create_protection_domain("/ion-sexshell\0", None).expect("ion lost");
-    let ion_pd = DOMAIN_REGISTRY.get(ion).unwrap();
-    ion_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdisplay, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 2 -> sexdisplay (Orbital)
+    let modules_res = crate::MODULE_REQUEST.response();
+    if modules_res.is_none() {
+        panic!("FATAL: Limine returned no modules. Check limine.cfg and ISO layout.");
+    }
+    let modules = modules_res.unwrap();
+    serial_println!("init: Found {} Limine modules", modules.modules().len());
 
-    // Phase 18: Spawn Desktop Prototype (Egui Hello)
-    let egui = create_protection_domain("/servers/egui-hello/bin/egui-hello\0", None).expect("egui lost");
-    let egui_pd = DOMAIN_REGISTRY.get(egui).unwrap();
-    egui_pd.grant(CapabilityData::IPC(IpcCapData { node_id: 1, target_pd_id: sexdisplay, entry_point: VirtAddr::new(0x_4000_0000) })); // Slot 2 -> sexdisplay (Orbital)
+    let mut sexdisp_id = 0;
+    let mut silkshell_id = 0;
 
-    serial_println!("init: Full Self-Hosting bootstrap COMPLETE.");
-    serial_println!("init: System is now running in SASOS Mode.");
+    for module in modules.modules() {
+        let path = module.path();
+        let module_data = module.data();
+
+        if path.contains("sexdisplay") || path.contains("silk-shell") || path.contains("linen") {
+            match pdx_spawn(path, module_data) {
+                Ok(id) => {
+                    serial_println!("✓ Spawned PD {}: {}", id, path);
+                    if path.contains("sexdisplay") { 
+                        sexdisp_id = id; 
+                        unsafe { SEXDISPLAY_PD_ID = id; }
+                    } else if path.contains("silk-shell") {
+                        silkshell_id = id;
+                    }
+                }
+                Err(e) => {
+                    serial_println!("!! Spawn Error {}: {}", path, e);
+                }
+            }
+        }
+    }
+
+    // Grant Phase 25 well-known capabilities
+    if sexdisp_id != 0 && silkshell_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::capability::CapabilityData;
+        
+        if let Some(pd) = DOMAIN_REGISTRY.get(silkshell_id) {
+            pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
+            pd.grant_capability(sex_pdx::SLOT_SHELL,   CapabilityData::Domain(silkshell_id));
+            serial_println!("✓ Phase 25: Capabilities granted to silk-shell");
+        }
+    }
+
+    serial_println!("init: Revoking kernel write access...");
+    serial_println!("init: Ready for Scheduler.");
+}
+
+fn pdx_spawn(name: &str, module_data: &[u8]) -> Result<u32, &'static str> {
+    use crate::capability::ProtectionDomain;
+    use crate::ipc::DOMAIN_REGISTRY;
+    use crate::memory::manager::GLOBAL_VAS;
+    use x86_64::structures::paging::PageTableFlags;
+
+    static mut NEXT_PD_ID: u32 = 1;
+    let pd_id = unsafe { let id = NEXT_PD_ID; NEXT_PD_ID += 1; id };
+    let pku_key = if name.contains("sexdisplay") { 1 } else if name.contains("linen") { 2 } else if name.contains("silk-shell") { 3 } else { NEXT_PKEY.fetch_add(1, Ordering::SeqCst) };
+
+    let load_base = VirtAddr::new(0x2000_0000 + (pku_key as u64 * 0x20_0000));
+
+    let (entry_point, stack_top) = {
+        let mut vas = GLOBAL_VAS.lock();
+        let vas_ref = vas.as_mut().ok_or("VAS not initialized")?;
+        
+        let ep = crate::elf::load_elf_for_pd(module_data, vas_ref, pku_key, load_base)?;
+        
+        let stack_vaddr = VirtAddr::new(0x_7000_0000_0000 + (pku_key as u64 * 0x100_0000));
+        let stack_size = 64 * 1024;
+        vas_ref.map_pku_range(
+            stack_vaddr,
+            stack_size as u64,
+            PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE,
+            pku_key
+        ).expect("Failed to map user stack");
+
+        (ep, stack_vaddr.as_u64() + stack_size as u64)
+    };
+
+    let pd = alloc::boxed::Box::new(ProtectionDomain::new(pd_id, pku_key));
+    let pd_ptr = alloc::boxed::Box::into_raw(pd);
+    
+    let mut task = unsafe { alloc::boxed::Box::<crate::scheduler::Task>::new_zeroed().assume_init() };
+    *task = crate::scheduler::Task::new(
+        pd_id,
+        entry_point.as_u64(),
+        stack_top,
+        unsafe { &*pd_ptr },
+        true
+    );
+    let task_ptr = alloc::boxed::Box::into_raw(task);
+    crate::scheduler::SCHEDULERS[0].runqueue.push(task_ptr);
+
+    DOMAIN_REGISTRY.insert(pd_id, pd_ptr);
+    unsafe { grant_standard_capabilities(&mut *pd_ptr, pd_id); }
+    
+    serial_println!("PDX: Registered {} (PKEY {})", name, pku_key);
+
+    Ok(pd_id)
+}
+
+pub unsafe fn jump_to_userland(pd_id: u32, entry: u64, pkru: u32, pku_key: u8) -> ! {
+    use crate::gdt;
+    let selectors = gdt::get_selectors();
+    let user_cs = selectors.user_code.0 as u64;
+    let user_ss = selectors.user_data.0 as u64;
+    let rflags: u64 = 0x3202;
+    let stack_top = 0x_7000_0000_0000 + (pku_key as u64 * 0x100_0000) + (64 * 1024);
+
+    crate::core_local::CoreLocal::get().set_pd(pd_id);
+
+    core::arch::asm!(
+        "xor eax, eax", "xor ecx, ecx", "xor edx, edx", "wrpkru", // God Mode ON
+        "push {ss}",
+        "push {rsp_val}",
+        "push {rflags}",
+        "push {cs}",
+        "push {rip}",
+        "mov eax, {target_pkru:e}", "xor ecx, ecx", "xor edx, edx", "wrpkru", // Isolation ON
+        "swapgs",
+        "iretq",
+        ss      = in(reg) user_ss,
+        rsp_val = in(reg) (stack_top & !0xFu64) - 64,
+        rflags  = in(reg) rflags,
+        cs      = in(reg) user_cs,
+        rip     = in(reg) entry,
+        target_pkru = in(reg) pkru,
+        options(noreturn)
+    );
 }

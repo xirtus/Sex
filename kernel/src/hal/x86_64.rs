@@ -49,8 +49,12 @@ impl HardwareAbstractionLayer for X86Hal {
         }
 
         serial_println!("X86Hal: Initializing GDT/IDT...");
-        gdt::init();
+        unsafe {
+            gdt::init();
+            gdt::init_tss_descriptor();
+        }
         interrupts::init_idt();
+        serial_println!("X86Hal: GDT/IDT + TSS fully locked");
     }
 
     fn init_advanced(&self, rsdp_addr: u64, hhdm_offset: u64) {

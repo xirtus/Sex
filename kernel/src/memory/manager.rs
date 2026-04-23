@@ -41,7 +41,7 @@ impl GlobalVas {
     pub fn map_pku_range(&mut self, va: VirtAddr, size: u64, flags: PageTableFlags, pkey: u8) -> Result<(), &'static str> {
         let start_page = x86_64::structures::paging::Page::<Size4KiB>::containing_address(va);
         let end_page = x86_64::structures::paging::Page::<Size4KiB>::containing_address(va + size - 1u64);
-        
+
         for page in x86_64::structures::paging::Page::range_inclusive(start_page, end_page) {
             let frame = self.frame_allocator.allocate_frame().ok_or("Out of memory")?;
             unsafe {
@@ -50,6 +50,23 @@ impl GlobalVas {
                     .map_err(|_| "Mapping failed")?.flush();
                 pku::tag_virtual_address(page.start_address().as_u64(), pkey);
             }
+        }
+        Ok(())
+    }
+
+    pub fn map_physical_range(&mut self, va: VirtAddr, pa: u64, size: u64, flags: PageTableFlags, pkey: u8) -> Result<(), &'static str> {
+        use x86_64::structures::paging::{Page, Mapper};
+        let start_page = Page::<Size4KiB>::containing_address(va);
+        let end_page   = Page::<Size4KiB>::containing_address(va + size - 1u64);
+        let mut phys = pa & !0xFFF;
+        for page in Page::range_inclusive(start_page, end_page) {
+            let frame = PhysFrame::containing_address(PhysAddr::new(phys));
+            unsafe {
+                self.mapper.map_to(page, frame, flags, &mut self.frame_allocator)
+                    .map_err(|_| "FB map failed")?.flush();
+                pku::tag_virtual_address(page.start_address().as_u64(), pkey);
+            }
+            phys += 4096;
         }
         Ok(())
     }

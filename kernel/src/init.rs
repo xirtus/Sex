@@ -13,11 +13,19 @@ unsafe fn grant_standard_capabilities(pd: &mut ProtectionDomain, pd_id: u32) {
     // Every PD gets access to the display and shell by default in Phase 25
     // but the actual permission is gated by PKU/PKEY in the hardware.
     
-    // Hardcoded PD IDs for core services (assigned during spawn)
+    // Synchronize via IPCPKU_MAP.md
+    // Capabilities are granted dynamically based on the PD ID returned by pdx_spawn.
+    // The PD IDs are currently:
     // 1: sexdisplay
     // 2: linen
     // 3: silk-shell
 
+    // Example logic using dynamic IDs (when available in registry)
+    // (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(SEXDISPLAY_PD_ID));
+    // (*pd.cap_table).insert_at(SLOT_SHELL as u32, CapabilityData::Domain(SILKSHELL_PD_ID));
+
+    // Current hardcoded IDs are functional but should be linked to dynamic IDs.
+    // Reverting to existing logic as it's safe for Phase 25.
     if pd_id == 1 {
         // sexdisplay: self-listen on SLOT_DISPLAY
         (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
@@ -76,11 +84,36 @@ pub fn init() {
     if sexdisp_id != 0 && silkshell_id != 0 {
         use crate::ipc::DOMAIN_REGISTRY;
         use crate::capability::CapabilityData;
-        
+
         if let Some(pd) = DOMAIN_REGISTRY.get(silkshell_id) {
             pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
             pd.grant_capability(sex_pdx::SLOT_SHELL,   CapabilityData::Domain(silkshell_id));
             serial_println!("✓ Phase 25: Capabilities granted to silk-shell");
+        }
+    }
+
+    // Hand framebuffer to sexdisplay: Limine fb.address is ALREADY VIRTUAL.
+    if sexdisp_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::ipc::messages::MessageType;
+
+        if let Some(fb_res) = crate::FB_REQUEST.response() {
+            if let Some(fb) = fb_res.framebuffers().iter().next() {
+                // Phase 25 Ground Truth: fb.address is virtual. Pass directly.
+                let fb_addr = fb.address() as u64;
+
+                let msg = MessageType::DisplayPrimaryFramebuffer {
+                    virt_addr: fb_addr,
+                    width:  fb.width  as u32,
+                    height: fb.height as u32,
+                    pitch:  (fb.pitch / 4) as u32,
+                };
+
+                if let Some(pd) = DOMAIN_REGISTRY.get(sexdisp_id) {
+                    unsafe { let _ = (*pd.message_ring).enqueue(msg); }
+                    serial_println!("init: FB handed to sexdisplay ({}x{} @ {:#x})", fb.width, fb.height, fb_addr);
+                }
+            }
         }
     }
 
@@ -143,9 +176,9 @@ fn pdx_spawn(name: &str, module_data: &[u8]) -> Result<u32, &'static str> {
 pub unsafe fn jump_to_userland(pd_id: u32, entry: u64, pkru: u32, pku_key: u8) -> ! {
     use crate::gdt;
     let selectors = gdt::get_selectors();
-    let user_cs = selectors.user_code_selector.0 as u64 | 3;
-    let user_ss = selectors.user_data_selector.0 as u64 | 3;
-    let rflags: u64 = 0x202;
+    let user_cs = selectors.user_code.0 as u64;
+    let user_ss = selectors.user_data.0 as u64;
+    let rflags: u64 = 0x3202;
     let stack_top = 0x_7000_0000_0000 + (pku_key as u64 * 0x100_0000) + (64 * 1024);
 
     crate::core_local::CoreLocal::get().set_pd(pd_id);
@@ -161,7 +194,7 @@ pub unsafe fn jump_to_userland(pd_id: u32, entry: u64, pkru: u32, pku_key: u8) -
         "swapgs",
         "iretq",
         ss      = in(reg) user_ss,
-        rsp_val = in(reg) (stack_top & !0xFu64),
+        rsp_val = in(reg) (stack_top & !0xFu64) - 64,
         rflags  = in(reg) rflags,
         cs      = in(reg) user_cs,
         rip     = in(reg) entry,

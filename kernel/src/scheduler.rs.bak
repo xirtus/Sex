@@ -43,25 +43,29 @@ impl Task {
         let selectors = crate::gdt::get_selectors();
         
         let (cs, ss, rflags) = if is_user {
+            // RPL bits MUST be 3 for userland
             (selectors.user_code.0 as u64, selectors.user_data.0 as u64, 0x3202)
         } else {
             (selectors.kernel_code.0 as u64, selectors.kernel_data.0 as u64, 0x202)
         };
 
+        // Phase 25: Initialize task stack with hardware frame for switch_to
         let mut stack_ptr = stack_top as *mut u64;
         unsafe {
-            // 1. Hardware IRETQ Frame (5 values)
+            // Standard ABI: -16 for 16-byte alignment
+            stack_ptr = stack_ptr.offset(-2); 
+            
+            // 1. Hardware IRETQ Frame (SS, RSP, RFLAGS, CS, RIP)
             stack_ptr = stack_ptr.offset(-1); stack_ptr.write(ss);
-            stack_ptr = stack_ptr.offset(-1); stack_ptr.write(stack_top);
-            stack_ptr = stack_ptr.offset(-1); stack_ptr.write(0x3202); // RFLAGS (IF=1, IOPL=3)
+            stack_ptr = stack_ptr.offset(-1); stack_ptr.write(stack_top - 16); // Task's User RSP
+            stack_ptr = stack_ptr.offset(-1); stack_ptr.write(rflags);
             stack_ptr = stack_ptr.offset(-1); stack_ptr.write(cs);
             stack_ptr = stack_ptr.offset(-1); stack_ptr.write(entry_point);
 
-            // 2. Assembly Context Buffer (The Magic 15)
-            // Align with: 15 GPRs (the stub will pop these)
+            // 2. Custom Stub Frame (15 QWORDs: r15..rax)
+            // Satisfies the pop sequence in timer_interrupt_stub and switch_to
             for _ in 0..15 {
-                stack_ptr = stack_ptr.offset(-1);
-                stack_ptr.write(0);
+                stack_ptr = stack_ptr.offset(-1); stack_ptr.write(0);
             }
         }
 
@@ -117,30 +121,30 @@ impl WorkStealingQueue {
         let t = self.top.load(Ordering::Relaxed);
         if t <= b {
             let task = self.buffer[b & QUEUE_MASK].load(Ordering::Relaxed);
-            if t < b { return task; }
-            if self.top.compare_exchange(t, t + 1, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
-                self.bottom.store(t + 1, Ordering::Relaxed);
-                return task;
+            if t == b {
+                if self.top.compare_exchange(t, t + 1, Ordering::SeqCst, Ordering::Relaxed).is_err() {
+                    self.bottom.store(b + 1, Ordering::Relaxed);
+                    return ptr::null_mut();
+                }
             }
-            self.bottom.store(t + 1, Ordering::Relaxed);
-            ptr::null_mut()
+            return task;
         } else {
-            self.bottom.store(t, Ordering::Relaxed);
-            ptr::null_mut()
+            self.bottom.store(b + 1, Ordering::Relaxed);
+            return ptr::null_mut();
         }
     }
 
     pub fn steal(&self) -> *mut Task {
-        loop {
-            let t = self.top.load(Ordering::Acquire);
-            core::sync::atomic::fence(Ordering::SeqCst);
-            let b = self.bottom.load(Ordering::Acquire);
-            if t >= b { return ptr::null_mut(); }
-            let task = self.buffer[t & QUEUE_MASK].load(Ordering::Acquire);
+        let t = self.top.load(Ordering::Acquire);
+        core::sync::atomic::fence(Ordering::SeqCst);
+        let b = self.bottom.load(Ordering::Acquire);
+        if t < b {
+            let task = self.buffer[t & QUEUE_MASK].load(Ordering::Relaxed);
             if self.top.compare_exchange(t, t + 1, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
                 return task;
             }
         }
+        ptr::null_mut()
     }
 }
 
@@ -194,7 +198,7 @@ impl Scheduler {
         ptr::null_mut()
     }
 
-        #[unsafe(naked)]
+    #[unsafe(naked)]
     pub unsafe extern "C" fn switch_to(old_context: *mut TaskContext, next_context: *const TaskContext) {
         core::arch::naked_asm!(
             "xor eax, eax", "xor edx, edx", "xor ecx, ecx", "wrpkru",
@@ -205,29 +209,26 @@ impl Scheduler {
             "mov qword ptr [rdi + 0x08], r14",
             "mov qword ptr [rdi + 0x10], r13",
             "mov qword ptr [rdi + 0x18], r12",
-            "mov qword ptr [rdi + 0x68], rbx",
-            "mov qword ptr [rdi + 0x50], rbp",
+            "mov qword ptr [rdi + 0x68], rbx", // rbx offset 104 = 0x68
+            "mov qword ptr [rdi + 0x50], rbp", // rbp offset 80 = 0x50
+            "mov qword ptr [rdi + 0x98], rsp", // rsp offset 152 = 0x98
 
             "2:",
-            "mov r15, [rsi + 0x00]", "mov r14, [rsi + 0x08]",
-            "mov r13, [rsi + 0x10]", "mov r12, [rsi + 0x18]",
-            "mov rbx, [rsi + 0x68]", "mov rbp, [rsi + 0x50]",
-
+            "mov rsp, [rsi + 0x98]",
+            
             "mov eax, [rsi + 0x78]", "xor edx, edx", "xor ecx, ecx", "wrpkru",
+            
+            "pop rax", "pop rbx", "pop rcx", "pop rdx", "pop rbp", "pop rsi", "pop rdi",
+            "pop r8", "pop r9", "pop r10", "pop r11", "pop r12", "pop r13", "pop r14", "pop r15",
 
-            "push [rsi + 0xA0]",
-            "push [rsi + 0x98]",
-            "push [rsi + 0x90]",
-            "push [rsi + 0x88]",
-            "push [rsi + 0x80]",
-
-            "mov rax, [rsi + 0x88]",
+            "mov rax, [rsp + 8]", // Check CS (offset 8 in iretq frame) for Ring 3
             "test al, 3",
             "jz 3f",
             "swapgs",
             "3:",
             
-            "xor rax, rax", 
+            "xor rax, rax", "xor rdi, rdi", "xor rsi, rsi", "xor rdx, rdx", "xor rcx, rcx",
+            "xor r8, r8", "xor r9, r9", "xor r10, r10", "xor r11, r11",
             "iretq",
         );
     }
@@ -260,8 +261,5 @@ pub fn unpark_thread(task_ptr: *mut Task) {
 }
 
 pub fn yield_now() {
-    unsafe {
-        // Briefly enable interrupts so the timer can preempt us, then disable again
-        core::arch::asm!("sti; nop; cli");
-    }
+    // Phase 25: No-op. Preemption handles switching in Ring 3.
 }

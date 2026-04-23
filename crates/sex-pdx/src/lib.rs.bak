@@ -22,13 +22,12 @@ pub const SLOT_DISPLAY: u64 = 5;
 pub const SLOT_SHELL: u64   = 6;
 pub const SLOT_APP_START: u64 = 7;
 
-// === Compositor Opcodes (Slot 5) ===
+// === Legacy Opcode Aliases (for transition) ===
 pub const OP_WINDOW_CREATE: u64 = 0xDE;
-pub const OP_WINDOW_PAINT: u64  = 0xDF;
-
-// === Shell Opcodes (Slot 6) ===
-pub const OP_SET_BG: u64        = 0x100;
+pub const OP_WINDOW_DESTROY: u64 = 0xDF;
+pub const OP_WINDOW_PAINT: u64  = 0xE0;
 pub const OP_RENDER_BAR: u64    = 0x101;
+pub const OP_SET_BG: u64        = 0x100;
 
 pub const PDX_MAGIC: u32 = 0x53454C4B; // 'SELK' matching silkclient
 

@@ -40,7 +40,7 @@ lazy_static! {
         idt.breakpoint.set_handler_fn(breakpoint_handler);
         unsafe {
             idt.double_fault.set_handler_fn(double_fault_handler)
-                .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
+                .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX as u16);
             
             // critical stubs (naked)
             idt.page_fault.set_handler_addr(x86_64::VirtAddr::new(page_fault_stub as *const () as u64));
@@ -55,7 +55,7 @@ lazy_static! {
     };
 }
 
-use x86_64::registers::model_specific::{LStar, Star, SFMask, Efer, EferFlags};
+use x86_64::registers::model_specific::{LStar, SFMask, Efer, EferFlags};
 use x86_64::VirtAddr;
 
 pub fn init_idt() {
@@ -66,14 +66,27 @@ pub fn init_idt() {
     unsafe {
         serial_println!("   → Setting up LSTAR (Syscall Entry)...");
         LStar::write(VirtAddr::new(syscall_entry as *const () as u64));
-        let selectors = crate::gdt::get_selectors();
         serial_println!("   → Setting up STAR...");
+        let selectors = crate::gdt::get_selectors();
+
+        use x86_64::registers::model_specific::Star;
+
+        // Intel/AMD Contract: STAR[47:32] = SYSCALL CS/SS, STAR[63:48] = SYSRET CS/SS
+        // The x86_64 crate takes 4 arguments to perform validation:
+        // 1. cs_sysret: Target User Code Selector (Index 5, 0x28)
+        // 2. ss_sysret: Target User Data Selector (Index 4, 0x20)
+        // 3. cs_syscall: Kernel Code Selector (Index 1, 0x08)
+        // 4. ss_syscall: Kernel Data Selector (Index 2, 0x10)
+        // The crate verifies (cs_sysret - 16 == ss_sysret - 8) and writes (cs_sysret - 16) to the MSR.
         Star::write(
-            selectors.user_code_selector, 
-            selectors.user_data_selector,
-            selectors.code_selector,
-            selectors.kernel_data_selector,
-        ).unwrap();
+            selectors.user_code,
+            selectors.user_data,
+            selectors.kernel_code,
+            selectors.kernel_data,
+        ).expect("Failed to align STAR MSR offsets — check GDT indices");
+
+        serial_println!("→ STAR MSR locked (KCS=0x{:x}, UCS=0x{:x})", 
+                        selectors.kernel_code.0, selectors.user_code.0);
         SFMask::write(x86_64::registers::rflags::RFlags::INTERRUPT_FLAG);
         Efer::write(Efer::read() | EferFlags::SYSTEM_CALL_EXTENSIONS);
         serial_println!("   → Syscall setup COMPLETE");
@@ -90,44 +103,72 @@ pub struct SyscallRegs {
 pub unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
         "swapgs",
-        "mov gs:[16], rsp", 
-        "mov rsp, gs:[8]",  
-        
-        "push r11", "push rcx", // 1st Save: Return RFLAGS and RIP (needed for sysretq)
-        
-        "xor ecx, ecx", "rdpkru", "push rax", // save PKRU (needs eax, edx, ecx)
-        "xor eax, eax", "xor edx, edx", "xor ecx, ecx", "wrpkru", // God Mode (needs eax, edx, ecx)
+        "mov gs:[16], rsp", // Save User RSP
+        "mov rsp, gs:[8]",  // Load Kernel RSP
 
+        // 1. SAVE RETURN STATE IMMEDIATELY (Before PKRU clobbers rcx!)
+        "push r11",         // Save User RFLAGS
+        "push rcx",         // Save User RIP
+
+        // 2. Save original syscall number
+        "push rax",
+
+        // 3. Read and Save User PKRU
+        "xor ecx, ecx",
+        "rdpkru",
+        "push rax",         // Save PKRU mask to stack
+
+        // 4. Enter God Mode (Clobbers eax, ecx, edx safely now)
+        "xor eax, eax",
+        "xor ecx, ecx",
+        "xor edx, edx",
+        "wrpkru",
+
+        // 5. Save Callee-Saved Registers
         "push rbp", "push rbx", "push r12", "push r13", "push r14", "push r15",
         "mov rbp, rsp",
-        
-        // Push SyscallRegs layout (rax at top, r11 at bottom)
+
+        // 6. Build SyscallRegs (Volatiles + Args)
+        // Fetch original rax (syscall num) from stack for the struct.
+        // Offset is 56 bytes (6 callee-saved pushes * 8 = 48, plus PKRU mask = 56)
+        "mov rax, [rsp + 56]",
         "push r11", "push rcx", "push r9", "push r8", "push r10", "push rdx", "push rsi", "push rdi", "push rax",
-        "mov rdi, rsp", 
+
+        // Call Handler
+        "mov rdi, rsp",     // Pointer to SyscallRegs
         "call syscall_handler",
 
-        // Restore SyscallRegs (allows handler to modify rdi, rsi, rdx, etc.)
-        "pop rax", "pop rdi", "pop rsi", "pop rdx", "pop r10", "pop r8", "pop r9", "pop rcx", "pop r11",
-        
-        // Restore callee-saved registers
+        // 7. RESTORE C-ABI VOLATILES (Fixes the r9 Kernel State Leak)
+        "pop rax",          // Retrieves the syscall return value
+        "pop rdi", 
+        "pop rsi", 
+        "pop rdx", 
+        "pop r10", 
+        "pop r8", 
+        "pop r9",           // r9 safely restored to user state!
+        "pop rcx", 
+        "pop r11",
+
+        // 8. Restore Callee-Saved Registers
         "pop r15", "pop r14", "pop r13", "pop r12", "pop rbx", "pop rbp",
-        
-        // CRITICAL FIX: Pure stack-based PKRU swap (Zero Register Clobbering)
-        "mov rcx, [rsp]",  // Peek at the PKRU mask on the stack
-        "push rax",        // Safely stash the syscall result onto the stack
-        "mov rax, rcx",    // Move PKRU mask to rax (wrpkru reads eax)
-        "xor ecx, ecx",    // wrpkru requires ecx = 0
-        "xor edx, edx",    // wrpkru requires edx = 0
-        "wrpkru",          // Restore God Mode / PKU isolation
-        
-        "pop rax",         // Retrieve the syscall result back into rax for userland
-        "add rsp, 8",      // Discard the old PKRU mask from the stack
-        
-        // Restore the original return state for sysretq
-        "pop rcx",         // Restore User RIP
-        "pop r11",         // Restore User RFLAGS
-        
-        "mov rsp, gs:[16]", "swapgs", "sysretq"
+
+        // 9. Restore PKRU Mask
+        "pop rdi",          // Pop original PKRU mask into rdi
+        "push rax",         // Stash the handler's return value safely on the stack
+        "mov rax, rdi",     // Move PKRU mask to rax for wrpkru
+        "xor ecx, ecx",     // Satisfy wrpkru requirements
+        "xor edx, edx",
+        "wrpkru",           // User PKRU restored
+        "pop rax",          // Restore handler's return value back into rax
+
+        // 10. Clean up and Return
+        "add rsp, 8",       // Discard the saved original syscall number
+        "pop rcx",          // Uncorrupted User RIP restored!
+        "pop r11",          // Uncorrupted User RFLAGS restored!
+
+        "mov rsp, gs:[16]", // Restore User RSP
+        "swapgs",
+        "sysretq"
     );
 }
 
@@ -145,15 +186,27 @@ pub unsafe extern "C" fn timer_interrupt_stub() {
         "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
         "push rdi", "push rsi", "push rbp", "push rdx", "push rcx", "push rbx", "push rax",
         
-        "mov rax, [rsp + 128]", "test al, 3", "jz 1f", "swapgs", "1:",
+        // CPU Frame = 40 bytes. GPRs = 120 bytes. 
+        // RIP is at 120. CS is at 128.
+        "mov rax, [rsp + 128]", 
+        "test al, 3", 
+        "jz 1f", 
+        "swapgs", 
+        "1:",
+
         "xor eax, eax", "xor edx, edx", "xor ecx, ecx", "wrpkru",
-        
-        "sub rsp, 8", // Align stack to 16-bytes (120+8)
-        "lea rdi, [rsp + 128]", // stack_frame is now at [rsp+128]
+
+        "sub rsp, 8", // ALIGN STACK TO 16 BYTES
+        "lea rdi, [rsp + 128]", // rdi points to InterruptStackFrame (120 original RIP + 8 shift)
         "call timer_interrupt_handler",
-        "add rsp, 8",
-        
-        "mov rax, [rsp + 128]", "test al, 3", "jz 2f", "swapgs", "2:",
+        "add rsp, 8", // UNDO ALIGNMENT
+
+        "mov rax, [rsp + 128]", 
+        "test al, 3", 
+        "jz 2f", 
+        "swapgs", 
+        "2:",
+
         "pop rax", "pop rbx", "pop rcx", "pop rdx", "pop rbp", "pop rsi", "pop rdi",
         "pop r8", "pop r9", "pop r10", "pop r11", "pop r12", "pop r13", "pop r14", "pop r15",
         "iretq"
@@ -163,33 +216,70 @@ pub unsafe extern "C" fn timer_interrupt_stub() {
 #[unsafe(naked)]
 pub unsafe extern "C" fn page_fault_stub() {
     core::arch::naked_asm!(
+        // CPU already pushed Error Code (8 bytes). CPU frame = 48 bytes.
         "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
         "push rdi", "push rsi", "push rbp", "push rdx", "push rcx", "push rbx", "push rax",
-        
-        "mov rax, [rsp + 136]", "test al, 3", "jz 1f", "swapgs", "1:",
+
+        // GPRs = 120 bytes. Error Code is at 120. RIP is at 128. CS is at 136.
+        "mov rax, [rsp + 136]", 
+        "test al, 3", 
+        "jz 1f", 
+        "swapgs", 
+        "1:",
+
         "xor eax, eax", "xor edx, edx", "xor ecx, ecx", "wrpkru",
-        
-        "lea rdi, [rsp + 128]", "mov rsi, [rsp + 120]", "call page_fault_handler",
-        
-        "mov rax, [rsp + 136]", "test al, 3", "jz 2f", "swapgs", "2:",
+
+        "sub rsp, 8", // CRITICAL: Re-align stack to 16 bytes before C call!
+        "lea rdi, [rsp + 136]", // rdi points to InterruptStackFrame (128 original RIP + 8 shift)
+        "mov rsi, [rsp + 128]", // rsi contains the Error Code (120 original Error + 8 shift)
+        "call page_fault_handler",
+        "add rsp, 8", // UNDO ALIGNMENT
+
+        "mov rax, [rsp + 136]", 
+        "test al, 3", 
+        "jz 2f", 
+        "swapgs", 
+        "2:",
+
         "pop rax", "pop rbx", "pop rcx", "pop rdx", "pop rbp", "pop rsi", "pop rdi",
         "pop r8", "pop r9", "pop r10", "pop r11", "pop r12", "pop r13", "pop r14", "pop r15",
-        "add rsp, 8", "iretq"
+        "add rsp, 8", // DISCARD ERROR CODE
+        "iretq"
     );
 }
 
 #[unsafe(naked)]
 pub unsafe extern "C" fn general_protection_fault_stub() {
     core::arch::naked_asm!(
+        // CPU already pushed Error Code (8 bytes). CPU frame = 48 bytes.
         "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
         "push rdi", "push rsi", "push rbp", "push rdx", "push rcx", "push rbx", "push rax",
-        "mov rax, [rsp + 136]", "test al, 3", "jz 1f", "swapgs", "1:",
+
+        // GPRs = 120 bytes. Error Code is at 120. RIP is at 128. CS is at 136.
+        "mov rax, [rsp + 136]", 
+        "test al, 3", 
+        "jz 1f", 
+        "swapgs", 
+        "1:",
+
         "xor eax, eax", "xor edx, edx", "xor ecx, ecx", "wrpkru",
-        "lea rdi, [rsp + 128]", "mov rsi, [rsp + 120]", "call general_protection_fault_handler",
-        "mov rax, [rsp + 136]", "test al, 3", "jz 2f", "swapgs", "2:",
+
+        "sub rsp, 8", // CRITICAL: Re-align stack to 16 bytes before C call!
+        "lea rdi, [rsp + 136]", // rdi points to InterruptStackFrame (128 original RIP + 8 shift)
+        "mov rsi, [rsp + 128]", // rsi contains the Error Code (120 original Error + 8 shift)
+        "call general_protection_fault_handler",
+        "add rsp, 8", // UNDO ALIGNMENT
+
+        "mov rax, [rsp + 136]", 
+        "test al, 3", 
+        "jz 2f", 
+        "swapgs", 
+        "2:",
+
         "pop rax", "pop rbx", "pop rcx", "pop rdx", "pop rbp", "pop rsi", "pop rdi",
         "pop r8", "pop r9", "pop r10", "pop r11", "pop r12", "pop r13", "pop r14", "pop r15",
-        "add rsp, 8", "iretq"
+        "add rsp, 8", // DISCARD ERROR CODE
+        "iretq"
     );
 }
 
@@ -202,6 +292,14 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
     let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
     
     if let Some((old_ctx_ptr, next_ctx_ptr)) = sched.tick() {
+        // Phase 25: SASOS Preemption Safety
+        // Only switch tasks if we were interrupted in Ring 3.
+        // Switching in Ring 0 would abandon the kernel stack state, which is shared!
+        if (stack_frame.code_segment.0 & 3) == 0 {
+            unsafe { send_eoi(); }
+            return;
+        }
+
         let pd_id = unsafe { (*next_ctx_ptr).pd_id };
         // Bug 1 fix: update CoreLocal so current_pd_ref() returns correct PD.
         crate::core_local::CoreLocal::get().set_pd(pd_id);
@@ -211,19 +309,27 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
                 old_ctx.rip = stack_frame.instruction_pointer.as_u64();
                 old_ctx.cs = stack_frame.code_segment.0 as u64;
                 old_ctx.rflags = stack_frame.cpu_flags.bits();
-                old_ctx.rsp = stack_frame.stack_pointer.as_u64();
+                // Phase 25 Ground Truth: DO NOT overwrite old_ctx.rsp
                 old_ctx.ss = stack_frame.stack_segment.0 as u64;
-                // Bug 2 fix: user callee-saved regs are on the kernel stack, pushed by
-                // timer_interrupt_stub before the InterruptStackFrame. The stub pushed
-                // (high→low): r15,r14,r13,r12,r11,r10,r9,r8,rdi,rsi,rbp,rdx,rcx,rbx,rax
-                // stack_frame sits at [rsp+120], so base.offset(-1) = r15 at [rsp+112], etc.
+                // Registers pushed by stub (high->low):
+                // r15, r14, r13, r12, r11, r10, r9, r8, rdi, rsi, rbp, rdx, rcx, rbx, rax
+                // base points to RIP in the CPU frame. base[-1] = r15 ... base[-15] = rax.
                 let base = stack_frame as *const _ as *const u64;
                 old_ctx.r15 = *base.offset(-1);
                 old_ctx.r14 = *base.offset(-2);
                 old_ctx.r13 = *base.offset(-3);
                 old_ctx.r12 = *base.offset(-4);
+                old_ctx.r11 = *base.offset(-5);
+                old_ctx.r10 = *base.offset(-6);
+                old_ctx.r9  = *base.offset(-7);
+                old_ctx.r8  = *base.offset(-8);
+                old_ctx.rdi = *base.offset(-9);
+                old_ctx.rsi = *base.offset(-10);
                 old_ctx.rbp = *base.offset(-11);
+                old_ctx.rdx = *base.offset(-12);
+                old_ctx.rcx = *base.offset(-13);
                 old_ctx.rbx = *base.offset(-14);
+                old_ctx.rax = *base.offset(-15);
                 // switch_to reads PKRU after its own wrpkru(0), so it always saves 0.
                 // Read the correct PKRU from the domain struct instead.
                 use core::sync::atomic::Ordering;
@@ -234,7 +340,7 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
                 panic!("SCHED: null RIP for PD {}", (*next_ctx_ptr).pd_id);
             }
             send_eoi();
-            crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
+            crate::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx_ptr);
         }
     }
     unsafe { send_eoi(); }
@@ -280,7 +386,9 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
 
 #[no_mangle]
 pub extern "C" fn general_protection_fault_handler(stack_frame: &mut InterruptStackFrame, error_code: u64) {
+    let cs = stack_frame.code_segment.0;
     serial_println!("EXCEPTION: GP FAULT at {:#x}, Error: {:#x}", stack_frame.instruction_pointer.as_u64(), error_code);
+    serial_println!("DEBUG: CS Selector: {:#x}", cs);
     panic!("GENERAL PROTECTION FAULT");
 }
 
