@@ -375,7 +375,7 @@ pub extern "C" fn _start() -> ! {
         height: WIN_H,
         pfn_base: FB_PFN_BASE,
     };
-    pdx_call(0, PDX_SEX_WINDOW_CREATE, &params as *const _ as u64, 0);
+    pdx_call(0, PDX_SEX_WINDOW_CREATE, &params as *const _ as u64, 0, 0);
 
     let mut fb = unsafe {
         WindowBuffer::new((FB_PFN_BASE << 12) as u64, WIN_W, WIN_H, WIN_W)

@@ -58,7 +58,7 @@ fn route_net_call(cmd: u32, target_cap_id: u32, socket_cap_id: u32, size: u64, b
     };
 
     // 4. Dispatch via pure PDX
-    match safe_pdx_call(target_cap_id, &msg as *const _ as u64) {
+    match safe_pdx_call(target_cap_id, 0, &msg as *const _ as u64, 0, 0) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
             if let MessageType::NetReply { status, socket_cap, .. } = reply {

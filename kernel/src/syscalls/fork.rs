@@ -7,7 +7,7 @@ use crate::ipc::safe_pdx_call;
 pub fn sys_fork() -> i64 {
     let msg = MessageType::ProcCall { command: 1 /* FORK */, path_ptr: 0, arg_ptr: 0 };
     // Assuming sexc capability is always slot 3 for simplicity in the sys_fork context
-    match safe_pdx_call(3, &msg as *const _ as u64) {
+    match safe_pdx_call(3, 0, &msg as *const _ as u64, 0, 0) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
             if let MessageType::ProcReply { pd_id, .. } = reply {
@@ -22,7 +22,7 @@ pub fn sys_fork() -> i64 {
 
 pub fn sys_execve(path_ptr: u64, arg_ptr: u64) -> i64 {
     let msg = MessageType::ProcCall { command: 2 /* EXEC */, path_ptr, arg_ptr };
-    match safe_pdx_call(3, &msg as *const _ as u64) {
+    match safe_pdx_call(3, 0, &msg as *const _ as u64, 0, 0) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
             if let MessageType::ProcReply { status, .. } = reply {

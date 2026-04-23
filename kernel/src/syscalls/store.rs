@@ -35,7 +35,7 @@ pub fn sys_store_fetch(store_cap_id: u32, name_ptr: u64, buffer_vaddr: u64, size
     let msg = MessageType::StoreCall { command: 1, package_name_ptr: name_ptr, buffer_cap: buffer_cap_id };
     
     // 4. Dispatch via pure PDX
-    match safe_pdx_call(store_cap_id, &msg as *const _ as u64) {
+    match safe_pdx_call(store_cap_id, 0, &msg as *const _ as u64, 0, 0) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
             if let MessageType::StoreReply { status, size: fetched_size, .. } = reply {

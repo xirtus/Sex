@@ -1,4 +1,4 @@
-use crate::memory::GlobalVas;
+use crate::memory::manager::GlobalVas;
 use x86_64::{VirtAddr, structures::paging::PageTableFlags};
 use crate::serial_println;
 
@@ -47,7 +47,7 @@ pub const PF_X: u32 = 1;
 pub const PF_W: u32 = 2;
 pub const PF_R: u32 = 4;
 
-pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8) -> Result<VirtAddr, &'static str> {
+pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_base: VirtAddr) -> Result<VirtAddr, &'static str> {
     // 1. Validate ELF magic
     let header = unsafe { &*(elf_data.as_ptr() as *const ElfHeader) };
     if header.magic != [0x7f, b'E', b'L', b'F'] {
@@ -69,38 +69,35 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8) -> Res
         let ph = unsafe { &*ph_ptr };
 
         if ph.p_type == PT_LOAD {
+            let segment_vaddr = load_base + ph.p_vaddr;
             serial_println!("ELF: Loading segment: vaddr={:#x}, memsz={:#x} (Key: {})", 
-                ph.p_vaddr, ph.p_memsz, pku_key);
+                segment_vaddr.as_u64(), ph.p_memsz, pku_key);
 
-            // 3. Determine PageTableFlags
-            let mut flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
-            if (ph.p_flags & PF_W) != 0 {
-                flags |= PageTableFlags::WRITABLE;
-            }
-            if (ph.p_flags & PF_X) == 0 {
-                // flags |= PageTableFlags::NO_EXECUTE; 
-                // Note: On x86_64, NX bit is bit 63 of the page table entry.
-            }
+            let flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE;
+            
+            serial_println!("   → Mapping range...");
+            vas.map_pku_range(segment_vaddr, ph.p_memsz, flags, pku_key)?;
+            serial_println!("   → Mapping complete. Copying data to {:#x}...", segment_vaddr.as_u64());
 
-            // 4. Map the segment into the Global VAS with the PD's PKU key
-            let vaddr = VirtAddr::new(ph.p_vaddr);
-            vas.map_pku_range(vaddr, ph.p_memsz, flags, pku_key)?;
-
-            // 5. Copy the segment data
-            // In a SASOS, we copy directly into the virtual address.
-            let dest = vaddr.as_mut_ptr::<u8>();
+            let dest = segment_vaddr.as_mut_ptr::<u8>();
             let src_offset = ph.p_offset as usize;
             let src = &elf_data[src_offset..src_offset + ph.p_filesz as usize];
             
             unsafe {
                 core::ptr::copy_nonoverlapping(src.as_ptr(), dest, ph.p_filesz as usize);
-                // Zero out the remaining memsz (bss)
+                serial_println!("   → Copy complete.");
                 if ph.p_memsz > ph.p_filesz {
+                    serial_println!("   → Zeroing BSS...");
                     core::ptr::write_bytes(dest.add(ph.p_filesz as usize), 0, (ph.p_memsz - ph.p_filesz) as usize);
+                    serial_println!("   → BSS zeroed.");
                 }
+            }
+
+            if (ph.p_flags & PF_W) == 0 {
+                 serial_println!("   → Setting to Read-Only...");
             }
         }
     }
 
-    Ok(VirtAddr::new(header.entry))
+    Ok(load_base + header.entry)
 }

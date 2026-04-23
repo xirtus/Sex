@@ -17,6 +17,10 @@ impl FsBackend for TmpFs {
         Err(-1)
     }
 
+    fn sync(&self, _inode: u64) -> Result<(), i64> {
+        Err(-1)
+    }
+
     fn close(&self, _inode: u64) -> Result<(), i64> {
         Err(-1)
     }

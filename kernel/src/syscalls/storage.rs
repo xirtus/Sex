@@ -56,7 +56,7 @@ fn route_storage_call(cmd: u32, device_cap_id: u32, offset: u64, size: u64, buff
     };
 
     // 4. Dispatch via pure PDX
-    match safe_pdx_call(device_cap_id, &msg as *const _ as u64) {
+    match safe_pdx_call(device_cap_id, 0, &msg as *const _ as u64, 0, 0) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
             if let MessageType::DmaReply { status, .. } = reply {

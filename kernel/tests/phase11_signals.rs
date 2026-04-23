@@ -43,11 +43,12 @@ fn phase11_sigint_routes_into_user_handler() {
 
     // FIXME: This test is highly broken and needs a complete rewrite.
     // It relies on non-existent sexc server and Arc which isn't suitable here.
-    
-    let pd_ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(ProtectionDomain::new(0x1100, 3)));
+
+    let pd_ptr =
+        alloc::boxed::Box::into_raw(alloc::boxed::Box::new(ProtectionDomain::new(0x1100, 3)));
     let pd_id = unsafe { (*pd_ptr).id };
     DOMAIN_REGISTRY.insert(pd_id, pd_ptr);
-    
+
     /*
     sex_kernel::servers::sexc::init_signal_trampoline(pd_id);
 

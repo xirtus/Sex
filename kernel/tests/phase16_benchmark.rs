@@ -31,12 +31,12 @@ fn test_maturity_benchmarks() {
     let start = unsafe { core::arch::x86_64::_rdtsc() };
     for _ in 0..100 {
         // sys_getpid simulation via sexc (Cap Slot 3)
-        let _ = sex_kernel::ipc::safe_pdx_call(3, 0);
+        let _ = sex_kernel::ipc::safe_pdx_call(3, 0, 0);
     }
     let end = unsafe { core::arch::x86_64::_rdtsc() };
     let total = end - start;
-    
+
     assert!(total < 500_000, "PDX latency exceeds wait-free threshold");
-    
+
     serial_println!("test: Userspace Maturity & Benchmarking SUCCESS.");
 }

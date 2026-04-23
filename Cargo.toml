@@ -1,31 +1,13 @@
 [workspace]
 members = [
     "kernel",
-    "servers/sexc",
-    "servers/sext",
-    "servers/sex-ld",
-    "servers/sexfiles",
-    "servers/sexnode",
-    "servers/sexgemini",
-    "servers/sexnet",
-    "servers/sexstore",
-    "servers/sexshop",
-    "servers/sexinput",
     "servers/sexdisplay",
-    "servers/sexdrive",
-    "servers/tuxedo",
-    "servers/sexstore-gui",
-    "relibc",
-    "sex-rt",
-    "sex-packages/ion-sexshell", "sex-packages/sexbuild",
-    "crates/egui-hello",
+    "servers/sexshop",
+    "servers/silk-shell",
+    "servers/sexinput",
+    "apps/linen",
+    "crates/sex-pdx",
     "crates/sex-graphics",
-    "tools/sex-forge",
-    "apps/linen", "apps/sexsh", "apps/kaleidoscope", "apps/qupid", "crates/silkbar", "crates/silknet", "crates/tatami", "crates/toys", "crates/sex-pkg",
 ]
-resolver = "2"
-
 [profile.release]
-opt-level = 3
-lto = true
-panic = 'abort'
+panic = "abort"

@@ -49,7 +49,7 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::NodeProtocol::CapabilityResolve { name } => {
                     // 1. Resolve locally
                     // 2. If not found, call sexnet (Slot 4) to query cluster
-                    let res = pdx_call(4 /* sexnet */, 0x500 /* CLUSTER_RESOLVE */, name.as_ptr() as u64, 0);
+                    let res = pdx_call(4 /* sexnet */, 0x500 /* CLUSTER_RESOLVE */, name.as_ptr() as u64, 0, 0);
                     pdx_reply(req.caller_pd, res);
                 },
                 sex_pdx::NodeProtocol::Heartbeat { node_id: _, load_avg: _, best_core: _ } => {
@@ -65,12 +65,12 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::NodeProtocol::ClusterObjectMigrate { node_id, hash, page: _ } => {
                     // Notify sexshop (Slot 1) to move object to remote node
                     let store_msg = sex_pdx::StoreProtocol::ObjectMove { hash, target_node: node_id };
-                    pdx_call(1 /* sexshop */, 0, &store_msg as *const _ as u64, 0);
+                    pdx_call(1 /* sexshop */, 0, &store_msg as *const _ as u64, 0, 0);
                     pdx_reply(req.caller_pd, 0);
                 },
                 sex_pdx::NodeProtocol::ClusterSignalForward { target_node, target_pd, signal } => {
                     // Route via sexnet (Slot 4) for cross-node signal delivery
-                    pdx_call(4 /* sexnet */, 0x600 /* CLUSTER_SIGNAL_SEND */, (target_node as u64) << 32 | target_pd as u64, signal as u64);
+                    pdx_call(4 /* sexnet */, 0x600 /* CLUSTER_SIGNAL_SEND */, (target_node as u64) << 32 | target_pd as u64, signal as u64, 0);
                     pdx_reply(req.caller_pd, 0);
                 },
                 _ => pdx_reply(req.caller_pd, u64::MAX),
@@ -96,10 +96,10 @@ fn handle_translation(cmd: u32, _path_ptr: u64, code_cap: u32) -> (i64, u64) {
     match cmd {
         1 => { // TRANSLATE_ELF
             // 1. Resolve source code vaddr from kernel (Cap Slot 1)
-            let _vaddr = pdx_call(1, 14 /* RESOLVE_VADDR */, code_cap as u64, 0);
+            let _vaddr = pdx_call(1, 14 /* RESOLVE_VADDR */, code_cap as u64, 0, 0);
             
             // 2. Invoke sex-gemini toolchain via sexc (Cap Slot 2) to build native code
-            let build_res = pdx_call(2, 2 /* EXEC */, 0 /* "/bin/sex-cc" */, 0);
+            let build_res = pdx_call(2, 2 /* EXEC */, 0 /* "/bin/sex-cc" */, 0, 0);
             if build_res < 0 { return (-1, 0); }
             
             // 3. Return native entry point
@@ -113,15 +113,15 @@ fn handle_driver_load(cmd: u32, driver_name_ptr: u64) -> (i64, u32) {
     match cmd {
         1 => { // LOAD_LINUX_DRIVER
             // 1. Fetch Linux driver source from GitHub via sexstore (Cap slot 1)
-            let fetch_res = pdx_call(1, 1 /* FETCH_PACKAGE */, driver_name_ptr, 0);
+            let fetch_res = pdx_call(1, 1 /* FETCH_PACKAGE */, driver_name_ptr, 0, 0);
             if fetch_res < 0 { return (-1, 0); }
             
             // 2. Translate and compile via DDE wrapper (Slot 2)
-            let trans_res = pdx_call(2, 2 /* EXEC */, 0 /* "dde-wrap" */, 0);
+            let trans_res = pdx_call(2, 2 /* EXEC */, 0 /* "dde-wrap" */, 0, 0);
             if trans_res < 0 { return (-1, 0); }
 
             // 3. Load as isolated PD
-            let pd_id = pdx_call(2, 17 /* SPAWN_PD */, 0, 0);
+            let pd_id = pdx_call(2, 17 /* SPAWN_PD */, 0, 0, 0);
             (0, pd_id as u32)
         },
         _ => (-1, 0),

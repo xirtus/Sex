@@ -34,26 +34,26 @@ impl PdxCompositorClient {
         let params = SexWindowCreateParams { x, y, width, height, pfn_base };
         // Call PDX_SEX_WINDOW_CREATE on the display server PD.
         // arg0 is pointer to params, arg1/arg2/arg3 are unused.
-        pdx_call(self.display_server_pd_id, PDX_SEX_WINDOW_CREATE, &params as *const _ as u64, 0)
+        pdx_call(self.display_server_pd_id, PDX_SEX_WINDOW_CREATE, &params as *const _ as u64, 0, 0)
     }
 
     fn commit_frame(&mut self, window_id: u64, pfn_list_ptr: u64, num_pages: u64) -> u64 {
         // PDX_COMPOSITOR_COMMIT expects window_id, pfn_list_ptr, num_pages as args.
         // We use a custom calling convention where the actual parameters are bundled with the msg_type if needed.
         // For simplicity, directly mapping to arg0, arg1, arg2.
-        pdx_call(self.display_server_pd_id, PDX_COMPOSITOR_COMMIT, window_id, pfn_list_ptr) // arg2 for num_pages might be needed here
+        pdx_call(self.display_server_pd_id, PDX_COMPOSITOR_COMMIT, window_id, pfn_list_ptr, 0) // arg2 for num_pages might be needed here
     }
 
     fn set_window_roundness(&mut self, window_id: u64, radius: u32) -> u64 {
-        pdx_call(self.display_server_pd_id, PDX_SET_WINDOW_ROUNDNESS, window_id, radius as u64)
+        pdx_call(self.display_server_pd_id, PDX_SET_WINDOW_ROUNDNESS, window_id, radius as u64, 0)
     }
 
     fn set_window_blur(&mut self, window_id: u64, strength: u32) -> u64 {
-        pdx_call(self.display_server_pd_id, PDX_SET_WINDOW_BLUR, window_id, strength as u64)
+        pdx_call(self.display_server_pd_id, PDX_SET_WINDOW_BLUR, window_id, strength as u64, 0)
     }
 
     fn set_window_animation(&mut self, window_id: u64, animating: bool) -> u64 {
-        pdx_call(self.display_server_pd_id, PDX_SET_WINDOW_ANIMATION, window_id, animating as u64)
+        pdx_call(self.display_server_pd_id, PDX_SET_WINDOW_ANIMATION, window_id, animating as u64, 0)
     }
 }
 

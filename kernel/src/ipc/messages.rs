@@ -37,7 +37,7 @@ pub struct StorageCompletion {
 pub enum MessageType {
     Empty,
     Signal(u8),
-    IpcCall { func_id: u32, arg0: u64 },
+    IpcCall { func_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_pd: u32 },
     IpcReply(u64),
     PageFault { fault_addr: u64, error_code: u32, pd_id: u64, lent_cap: u64 },
     Spawn { path_ptr: u64 },

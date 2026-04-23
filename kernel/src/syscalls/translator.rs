@@ -43,7 +43,7 @@ pub fn sys_translate_and_exec(translator_cap_id: u32, path_ptr: u64, code_vaddr:
     };
 
     // 4. Dispatch via pure PDX
-    match safe_pdx_call(translator_cap_id, &msg as *const _ as u64) {
+    match safe_pdx_call(translator_cap_id, 0, &msg as *const _ as u64, 0, 0) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
             if let MessageType::TranslatorReply { status, translated_entry } = reply {
@@ -70,7 +70,7 @@ pub fn sys_translate_driver(translator_cap_id: u32, driver_name_ptr: u64) -> i64
     };
 
     // 2. Dispatch via pure PDX
-    match safe_pdx_call(translator_cap_id, &msg as *const _ as u64) {
+    match safe_pdx_call(translator_cap_id, 0, &msg as *const _ as u64, 0, 0) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
             if let MessageType::DriverLoadReply { status, driver_pd_id } = reply {

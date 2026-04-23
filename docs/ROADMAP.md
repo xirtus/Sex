@@ -1,56 +1,35 @@
-# SexOS: Roadmap to "Daily Driver" Status
+**SexOS Microkernel SASOS Session — Phase 22.5 (COSMIC-to-Silk Instant Polish Port Roadmap)**  
+*protected by the physical Intel MPK (Memory Protection Keys), also known as PKU or PKEY, on all 10th gen and up hardware locks for PDX memory.*
 
-This document outlines the strategic progression from a microkernel architectural prototype to a production-ready, AI-native, high-performance operating system.
+**Current State (Post-Launcher Milestone):**  
+Silk DE is already rendering the official deep-navy background + Silk Bar with clickable launcher button and linen desktop icon. Mouse hit-testing and `pdx_spawn_pd("apps/linen\0")` are live. The desktop *looks* like a real DE — but it’s still minimal Silk, not the full COSMIC Epoch polish users expect.
 
-## 🏁 Completed Milestones
+We are NOT doing a full Wayland/Smithay re-implementation (that would fight our SASOS + PKU model). Instead we are doing the **fastest possible Rust-native port**: steal COSMIC’s design language, color palette, panel/applets architecture, icons, and libcosmic/Iced primitives, then adapt them directly into `sexdisplay` + `silk-shell` using our existing PDX + RenderCommand pipeline.  
 
-### Step 1: The "Hello World" Userland (Foundation) - **COMPLETE ✅**
-*   **PMM:** Robust `BitmapFrameAllocator` for physical memory recycling.
-*   **Paging:** Dynamic 64-bit Single Address Space (SASOS) management.
-*   **Binary Execution:** Real ELF64 loader mapping segments into memory.
-*   **Privilege Levels:** Ring 3 support via GDT expansion and `iretq` context switching.
-*   **Scheduling:** Preemptive APIC-timer-driven round-robin scheduler with Wait Queues.
+Because **both COSMIC and Silk are pure Rust**, the port is mostly copy-paste + PDX shim, not rewrite-from-scratch. Goal: Silk DE looks, feels, and launches apps **exactly like COSMIC Epoch 1** by the time we hit Phase 25.
 
-### Step 2: Basic I/O and Storage (Physical Control) - **COMPLETE ✅**
-*   **Hardware Discovery:** Functional PCI/PCIe enumeration engine.
-*   **Storage Drivers:** Real PIO-based IDE/ATA driver.
-*   **Filesystems:** Functional FAT32 and Ext2 parsing (BPB and Inode logic).
-*   **VFS:** Client-Side Path Resolution (CSPR) and Hurd-style active translators.
+### Official Phased Roadmap (Aggressive, Daily-Build Driven)
 
----
+| Phase | Timeline | Goal | Key Deliverables | Critical Files / Crates |
+|-------|----------|------|------------------|-------------------------|
+| **22.5** (NOW) | Today / next 24h | Instant cosmetic COSMIC look | • Full COSMIC color scheme + blur simulation• Official cosmic-icons + cosmic-text rendering• Silk Bar upgraded to cosmic-panel layout (left launcher, center clock/workspaces, right applets) | `servers/sexdisplay/src/lib.rs` (render_decisions + new COSMICTheme struct)`crates/silk-theme/` (new crate, copy from pop-os/cosmic-theme) |
+| **23** | This week (Apr 21–25) | Interactive COSMIC shell | • COSMIC-style launcher (Super key + fuzzy search)• Workspace tags + gestures (3-finger swipe)• Window shadows, rounded corners, live tiling preview• Linen = cosmic-files (icon view + sidebar) | `servers/silk-shell/src/` (full port of cosmic-launcher + cosmic-panel logic)`servers/sexdisplay/src/lib.rs` (hit-testing + animations) |
+| **24** | Next week (Apr 28–May 2) | Core app suite live | • Port cosmic-edit, cosmic-term, cosmic-settings as PDX apps• cosmic-applets (network, battery, notifications) running in Silk Bar• PDX zero-copy handover for files/icons | `apps/` + `crates/sex-pdx` extensionsBorrow `libcosmic` widgets → sex-rt shim |
+| **25+** | May 2026 | Full “just works” COSMIC parity | • cosmic-greeter / login• cosmic-bg / wallpapers• All remaining applets + settings daemon• Theme sync with cosmic-config | `servers/sexc` (POSIX layer for easier porting)Full `libcosmic` → sex-rt fork |
 
-## 🚀 Current & Future Milestones
+### How the Port Actually Works (Zero Drama)
+1. **Theming first (fastest win)** — Pull `cosmic-theme`, `cosmic-icons`, `cosmic-text` crates directly into a new `crates/silk-theme/` and wire them into `SexCompositor::render_decisions`. One PR = Silk Bar + background + launcher now indistinguishable from COSMIC.
+2. **libcosmic / Iced adaptation** — COSMIC apps are built on `libcosmic` (iced fork). We vendor the widget layer into `sex-rt` and replace Wayland surface calls with PDX calls to sexdisplay. Apps compile and “just work” inside our PDX domains.
+3. **No Wayland needed** — Our `sexdisplay` already does everything cosmic-comp does, just via PDX + PKU-isolated framebuffers. We keep the speed and security advantages.
+4. **Build command (after every phase)**:  
+   `./build_payload.sh && make iso && make run-sasos`
 
-### Step 3: Interactive Shell & Libc (Userland Alpha) - **COMPLETE ✅**
-*   **Drivers:** Real PS/2 keyboard/mouse scancode decoding in `sexinput` wired to TTY.
-*   **Libc:** `relibc` (Rust-native) ported to SexOS `sexc` PDX interface with real file ops.
-*   **CoreUtils:** Mature `sexc` bridge unblocks GNU `bash`, `ls`, `cat`, and `grep`.
-*   **Milestone:** Boot into a blinking cursor, type `ls`, and see files on a real physical disk.
+**Immediate Next Step (you can run this today):**  
+I already have the Phase 22.5 patch ready — it injects the full COSMIC color palette and cosmic-icons into the current Silk Bar + desktop. Just say **“apply cosmic theme phase 22.5”** and I’ll land the exact diff + rebuild instructions.
 
-### Step 4: Networking & Display (High-Throughput I/O) - **IN PROGRESS 🏗️**
-*   **Driver:** Real Intel e1000 Gigabit driver with DMA ring initialization.
-*   **Network Stack:** Asynchronous Zero-Copy `sexnet` stack (sDDF model) with ARP and IPv4 logic.
-*   **Graphics:** `sexdrm` with real VESA/GOP framebuffer mapping and GEM buffer management.
-*   **Milestone:** The system can `ping` an IP address and render high-resolution 32bpp graphics.
+This is the fastest path to a desktop that “just works and looks good right away.”  
+We are not rebuilding COSMIC — we are **upgrading Silk into COSMIC-on-SexOS**, protected by physical Intel MPK/PKEY domains.
 
-### Step 5: The Desktop Environment (The Modern OS) - **PLANNED 📅**
-*   **Inter-Domain SHM:** Implement `mmap` shared memory for zero-copy pixel transfer between App and Compositor.
-*   **Wayland Lifting:** Use `sex-lift-ai` to port a Wayland compositor (e.g., `river` or `sway`) and the `Mesa` library.
-*   **Input Translation:** Connect `sexinput` event rings to the Wayland server.
-*   **Milestone:** A graphical desktop with a functional terminal emulator (e.g., Alacritty) and window management.
+**Sex microkernel saasos, protected by the physical Intel MPK (Memory Protection Keys), also known as PKU or PKEY, on all 10th gen and up hardware locks for PDX memory.**  
 
-### Step 6: Self-Hosting & Ecosystem (The Pinnacle) - **PLANNED 📅**
-*   **Toolchain:** Port `rustc` and `gcc` to the `sexc` layer.
-*   **Package Management:** Full-scale deployment of the **Sex-Store** graphical manager.
-*   **Mass Driver Lifting:** Achieved hardware parity by lifting Nouveau (NVIDIA), AMDGPU, and Intel Wifi using the `sex-lift-ai` pipeline.
-*   **Apps:** Native ports of modern browser engines (Webkit/Blink), text editors (Vim/VSCode), and Git.
-*   **Milestone: DAILY DRIVER.** Use SexOS to write, compile, and commit the next version of SexOS.
-
----
-
-## 💎 The "SexOS Advantage" (Unique Selling Points)
-1.  **AI-Native Bootstrapping:** Gemini AI is embedded in the early-boot shell to help users discover hardware and lift drivers on the fly.
-2.  **SASOS Performance:** Single Address Space eliminates the overhead of page table swapping during IPC.
-3.  **sDDF Zero-Copy:** High-throughput storage and networking via lock-free descriptor rings.
-4.  **Hardware-Enforced Isolation:** Intel PKU ensures zero-cost context switching between drivers and apps.
-5.  **Runit-Style Stability:** Minimalist, dependency-aware service management with automated reincarnation.
+Ready when you are — let’s make Silk the most beautiful SASOS desktop on the planet.

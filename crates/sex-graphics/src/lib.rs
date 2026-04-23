@@ -2,6 +2,9 @@
 
 pub mod font;
 
+pub use font::draw_str;
+pub use font::draw_char;
+
 use sex_pdx::Rect;
 
 // Defines a simple WindowBuffer for drawing operations.
@@ -52,8 +55,8 @@ impl WindowBuffer {
     pub unsafe fn draw_rect(&mut self, rect: Rect, color: u32) {
         let start_x = rect.x.max(0) as u32;
         let start_y = rect.y.max(0) as u32;
-        let end_x = (rect.x + rect.w as i32).max(0) as u32;
-        let end_y = (rect.y + rect.h as i32).max(0) as u32;
+        let end_x = (rect.x as i32 + rect.w as i32).max(0) as u32;
+        let end_y = (rect.y as i32 + rect.h as i32).max(0) as u32;
 
         for row in start_y..end_y.min(self.height) {
             for col in start_x..end_x.min(self.width) {

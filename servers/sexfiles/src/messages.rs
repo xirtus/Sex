@@ -16,4 +16,5 @@ pub enum VfsProtocol {
     HandoverWrite { page: PageHandover, offset: u64, len: u32 },
     Stats,
     PreWarmKeys { fd: u64, advice: u32 },
+    Fsync { fd: u64 },
 }

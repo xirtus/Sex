@@ -11,7 +11,7 @@ pub fn sys_pipe(pipe_fds: *mut u32) -> i64 {
         size: 0,
     };
     // Assumes slot 3 is granted to applications as their POSIX interface (sexc)
-    match safe_pdx_call(3, &msg as *const _ as u64) {
+    match safe_pdx_call(3, 0, &msg as *const _ as u64, 0, 0) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
             if let MessageType::PipeReply { pipe_cap, .. } = reply {

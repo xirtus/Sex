@@ -23,7 +23,7 @@ fn panic(info: &PanicInfo) -> ! {
 #[test_case]
 fn test_driver_end_to_end() {
     serial_println!("test: Verifying Phase 9 End-to-End Driver Polish...");
-    
+
     // 1. NVMe 4KiB Write/Read via VFS PDX path
     let buffer = sex_kernel::memory::allocator::alloc_frame().expect("Test: OOM");
     let res = sex_kernel::syscalls::fs::sys_write(1 /* simulated disk node */, buffer, 4096);

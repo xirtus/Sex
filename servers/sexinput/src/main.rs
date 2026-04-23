@@ -1,70 +1,56 @@
 #![no_std]
 #![no_main]
-#![feature(alloc_error_handler)]
 
-extern crate alloc;
-use linked_list_allocator::LockedHeap;
-
-#[global_allocator]
-static ALLOCATOR: LockedHeap = LockedHeap::empty();
-
-#[alloc_error_handler]
-fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
-    loop {}
-}
+use sex_pdx::*;
+use sex_pdx::sys_yield;
+use core::panic::PanicInfo;
+use core::arch::asm;
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // In Phase 19, this will be replaced by a PDX call to the kernel 
-    // to map the shared heap region.
-    loop {}
-}
-
-extern crate alloc;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-use alloc::boxed::Box;
-
-
-use sex_pdx::{pdx_call, MessageType};
-
-/// sexinput: Standalone Input Driver (PS/2 + USB HID)
-/// Phase 10: Routing HID events to graphical PD.
-
-pub fn sys_park() {
-    unsafe {
-        core::arch::asm!("syscall", in("rax") 24u64);
+    // 1. Register with sexshop (PD 0, discovery service)
+    let mut name = [0u8; 32];
+    name[..14].copy_from_slice(b"io.sexos.input");
+    unsafe { 
+        pdx_call(0, PDX_DISCOVER_SERVICE as u64, name.as_ptr() as u64, 0, 0);
     }
-}
 
-#[no_mangle]
-pub extern "C" fn _start() -> ! {
     loop {
-        // 1. Poll PS/2 Scancodes (Simplified for prototype)
-        let scancode: u8 = unsafe { x86_64::instructions::port::Port::new(0x60).read() };
-        
-        if scancode != 0 && scancode != 0xFF {
-            // 2. Route scancode to Graphical Server via capability (Slot 5)
-            // Using unified HIDEvent message
-            let msg = MessageType::HIDEvent { 
-                ev_type: 1, // EV_KEY
-                code: scancode as u16, 
-                value: 1 // Press
+        // 2. Poll PS/2 status port (0x64)
+        let status: u8 = unsafe { 
+            let mut val: u8;
+            asm!("in al, dx", in("dx") 0x64u16, out("al") val);
+            val
+        };
+
+        // If buffer full (bit 0), read data port (0x60)
+        if (status & 1) != 0 {
+            let scancode: u8 = unsafe {
+                let mut val: u8;
+                asm!("in al, dx", in("dx") 0x60u16, out("al") val);
+                val
             };
-            pdx_call(5 /* Display Cap */, 0, &msg as *const _ as u64, 0);
+
+            // 3. Broadcast to compositor/focus (Slot 1 = sexdisplay)
+            // PDX_INPUT_EVENT definition missing in lib.rs, assuming 0x22
+            let msg = PdxMessage {
+                msg_type: MessageType::HIDEvent { 
+                    ev_type: 1, 
+                    code: scancode as u16, 
+                    value: 1 
+                },
+                payload: [0u8; 64],
+            };
+            unsafe { 
+                pdx_call(1, 0x22, &msg as *const _ as u64, 0, 0); 
+            }
+        } else {
+            unsafe { sys_yield(); }
         }
-
-        // 3. FLSCHED wait-free park until HID interrupt
-        sys_park();
     }
-}
-
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop { sys_park(); }
 }

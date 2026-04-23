@@ -13,11 +13,6 @@ codegen-units = 1
 opt-level = "s"
 
 [dependencies]
-# Use the sex-pdx crate for PDX syscalls
 sex-pdx = { path = "../../crates/sex-pdx" }
 sex-graphics = { path = "../../crates/sex-graphics" }
-
-# Core Rust features needed for bare-metal development
-# (assuming these are needed based on sexdisplay's usage)
-x86_64 = "0.15.4" # For architecture-specific features if needed
-spin = "0.9.8"    # For synchronization primitives if needed
+linked_list_allocator = { version = "0.10.5", features = ["use_spin"] }

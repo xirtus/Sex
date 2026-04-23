@@ -52,7 +52,7 @@ impl ElfLoader {
 
         // 6. Create Stack with Guard Page
         let stack_top = 0x_7000_0000_0000u64;
-        let _stack_phys = GLOBAL_ALLOCATOR.alloc(16).ok_or("loader: stack OOM")?;
+        let _stack_phys = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(4).ok_or("loader: stack OOM")?;
         serial_println!("loader: Guard-page stack initialized at {:#x}", stack_top);
 
         Ok(entry)

@@ -13,7 +13,7 @@ pub fn forward_page_fault(fault_addr: u64, error_code: u32, pd_id: u64) -> Resul
     };
 
     // 2. Dispatch safe PDX call to sext (Slot 2 in Root PD)
-    safe_pdx_call(2, &msg as *const _ as u64)?;
+    safe_pdx_call(2, 0, &msg as *const _ as u64, 0, 0)?;
 
     Ok(())
 }

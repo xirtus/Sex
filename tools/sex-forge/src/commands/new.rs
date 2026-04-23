@@ -10,6 +10,9 @@ pub struct NewArgs {
     /// Base template to use
     #[arg(long, value_enum)]
     pub base: Option<BaseTemplate>,
+    /// Architecture template (e.g. silk-pdx)
+    #[arg(long)]
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -21,6 +24,8 @@ pub enum BaseTemplate {
     CosmicApplets,
     Servo,
     RustMedia,
+    CosmicEdit,
+    RedoxCalc,
 }
 
 const DEFAULT_MAIN_RS: &str = include_str!("../templates/default/main.rs.tpl");
@@ -28,6 +33,12 @@ const DEFAULT_CARGO_TOML: &str = include_str!("../templates/default/Cargo.toml.t
 
 const COSMIC_FILES_MAIN_RS: &str = include_str!("../templates/cosmic_files/main.rs.tpl");
 const COSMIC_FILES_CARGO_TOML: &str = include_str!("../templates/cosmic_files/Cargo.toml.tpl");
+
+const COSMIC_EDIT_MAIN_RS: &str = include_str!("../templates/cosmic_edit/main.rs.tpl");
+const COSMIC_EDIT_CARGO_TOML: &str = include_str!("../templates/cosmic_edit/Cargo.toml.tpl");
+
+const REDOX_CALC_MAIN_RS: &str = include_str!("../templates/redox_calc/main.rs.tpl");
+const REDOX_CALC_CARGO_TOML: &str = include_str!("../templates/redox_calc/Cargo.toml.tpl");
 
 const COSMIC_PANEL_MAIN_RS: &str = include_str!("../templates/cosmic_panel/main.rs.tpl");
 const COSMIC_PANEL_CARGO_TOML: &str = include_str!("../templates/cosmic_panel/Cargo.toml.tpl");
@@ -62,6 +73,8 @@ pub fn handle_new(args: NewArgs) -> Result<()> {
 
     let (main_rs, cargo_toml) = match args.base {
         Some(BaseTemplate::CosmicFiles) => (COSMIC_FILES_MAIN_RS, COSMIC_FILES_CARGO_TOML),
+        Some(BaseTemplate::CosmicEdit) => (COSMIC_EDIT_MAIN_RS, COSMIC_EDIT_CARGO_TOML),
+        Some(BaseTemplate::RedoxCalc) => (REDOX_CALC_MAIN_RS, REDOX_CALC_CARGO_TOML),
         Some(BaseTemplate::CosmicPanel) => (COSMIC_PANEL_MAIN_RS, COSMIC_PANEL_CARGO_TOML),
         Some(BaseTemplate::CosmicAppletNetwork) => (COSMIC_APPLET_NETWORK_MAIN_RS, COSMIC_APPLET_NETWORK_CARGO_TOML),
         Some(BaseTemplate::CosmicSettings) => (COSMIC_SETTINGS_MAIN_RS, COSMIC_SETTINGS_CARGO_TOML),

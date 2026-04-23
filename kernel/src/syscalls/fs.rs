@@ -46,7 +46,7 @@ fn route_vfs_call(cmd: u32, vfs_cap_id: u32, size: u64, buffer_vaddr: u64) -> i6
 
     // 3. Dispatch via pure PDX
     let msg = MessageType::VfsCall { command: cmd, offset: 0, size, buffer_cap: buffer_cap_id };
-    match safe_pdx_call(vfs_cap_id, &msg as *const _ as u64) {
+    match safe_pdx_call(vfs_cap_id, 0, &msg as *const _ as u64, 0, 0) {
         Ok(res_ptr) => {
             let reply = unsafe { *(res_ptr as *const MessageType) };
             if let MessageType::VfsReply { status, .. } = reply { status } else { -1 }

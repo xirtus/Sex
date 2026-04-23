@@ -43,6 +43,10 @@ impl FsBackend for RamFs {
         Ok(len)
     }
 
+    fn sync(&self, _inode: u64) -> Result<(), i64> {
+        Ok(())
+    }
+
     fn close(&self, _inode: u64) -> Result<(), i64> {
         Ok(())
     }

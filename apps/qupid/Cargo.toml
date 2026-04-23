@@ -13,6 +13,8 @@ symphonia-fallback = ["dep:symphonia"]
 [dependencies]
 sex-rt  = { path = "../../sex-rt" }
 sex-pdx = { path = "../../crates/sex-pdx" }
+silkclient   = { path = "../../crates/silk-client" }
+sex-graphics = { path = "../../crates/sex-graphics" }
 libc    = { version = "0.2.185" }
 
 # Raw FFI against system libav* via #[link(name = "avformat")] etc.

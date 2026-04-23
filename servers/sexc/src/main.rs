@@ -78,18 +78,18 @@ fn handle_posix_syscall(_func_id: u32, _arg0: u64) -> u64 {
 fn handle_proc_call(cmd: u32, path_ptr: u64, _arg_ptr: u64, page_handover: PageHandover) -> (i64, u32) {
     match cmd {
         1 => { // FORK
-            let res = pdx_call(1, 18, 0, 0);
+            let res = pdx_call(1, 18, 0, 0, 0);
             (0, res as u32)
         },
         2 => { // EXEC
-            let res = pdx_call(2, 1, path_ptr, 0); // TRANSLATE_ELF from path
+            let res = pdx_call(2, 1, path_ptr, 0, 0); // TRANSLATE_ELF from path
             (0, res as u32)
         },
         3 => { // EXEC_PAGE
             // Resolve sexnode via capability slot 2
             // The `pdx_call` for `sexnode` needs to be updated to take a PageHandover
             // Assuming `sexnode`'s `TRANSLATE_ELF_PAGE` is command 2
-            let res = pdx_call(2, 2, page_handover.pfn, page_handover.pku_key as u64);
+            let res = pdx_call(2, 2, page_handover.pfn, page_handover.pku_key as u64, 0);
             (0, res as u32)
         },
         _ => (-1, 0),

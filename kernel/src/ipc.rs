@@ -51,8 +51,7 @@ impl DomainRegistry {
 pub static DOMAIN_REGISTRY: DomainRegistry = DomainRegistry::new();
 
 /// The hardware-accelerated PDX primitive with explicit mask.
-pub unsafe fn pdx_call_with_mask(target_pkru: u32, entry_point: VirtAddr, arg0: u64) -> u64 {
-    let _old_pkru = Pkru::read();
+pub unsafe fn pdx_call_with_mask(target_pkru: u32, entry_point: VirtAddr, arg0: u64, arg1: u64, arg2: u64) -> u64 {
     let result: u64;
 
     core::arch::asm!(
@@ -61,6 +60,8 @@ pub unsafe fn pdx_call_with_mask(target_pkru: u32, entry_point: VirtAddr, arg0: 
         "xor edx, edx", "xor ecx, ecx",
         "wrpkru",              
         "mov rdi, {arg0_val}", 
+        "mov rsi, {arg1_val}",
+        "mov rdx, {arg2_val}",
         "call {entry_val}",    
         "mov {tmp_pkru:e}, eax",
         "xor edx, edx", "xor ecx, ecx",
@@ -68,33 +69,42 @@ pub unsafe fn pdx_call_with_mask(target_pkru: u32, entry_point: VirtAddr, arg0: 
         target_pkru_val = in(reg) target_pkru,
         entry_val = in(reg) entry_point.as_u64(),
         arg0_val = in(reg) arg0,
+        arg1_val = in(reg) arg1,
+        arg2_val = in(reg) arg2,
         tmp_pkru = out(reg) _,
         inout("rax") 0u64 => result,
-        out("rdx") _, out("rcx") _, out("rdi") _,
+        out("rdx") _, out("rcx") _, out("rdi") _, out("rsi") _,
     );
 
     result
 }
 
-pub fn safe_pdx_call(cap_id: u32, arg0: u64) -> Result<u64, &'static str> {
+pub fn safe_pdx_call(cap_id: u32, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64, &'static str> {
     let current_pd = crate::core_local::CoreLocal::get().current_pd_ref();
+    let caller_pd_id = current_pd.id;
     let cap = unsafe { (*current_pd.cap_table).find(cap_id).ok_or("IPC: Invalid cap")? };
-    
+
     match cap.data {
         CapabilityData::IPC(data) => {
             let target_pd = DOMAIN_REGISTRY.get(data.target_pd_id).ok_or("IPC: Target lost")?;
             let target_mask = target_pd.current_pkru_mask.load(Ordering::Acquire);
             unsafe {
-                Ok(pdx_call_with_mask(target_mask, data.entry_point, arg0))
+                Ok(pdx_call_with_mask(target_mask, data.entry_point, arg0, arg1, arg2))
             }
         },
         CapabilityData::Domain(target_pd_id) => {
             let target_pd = DOMAIN_REGISTRY.get(target_pd_id).ok_or("IPC: Target lost")?;
-            let target_mask = target_pd.current_pkru_mask.load(Ordering::Acquire);
-            let entry = VirtAddr::new(0x_4000_0000);
+            let msg = crate::ipc::messages::MessageType::IpcCall {
+                func_id: opcode,
+                arg0,
+                arg1,
+                arg2,
+                caller_pd: caller_pd_id,
+            };
             unsafe {
-                Ok(pdx_call_with_mask(target_mask, entry, arg0))
+                (*target_pd.message_ring).enqueue(msg).map_err(|_| "IPC: Ring full")?;
             }
+            Ok(0)
         },
         _ => Err("IPC: Not a PDX capability"),
     }

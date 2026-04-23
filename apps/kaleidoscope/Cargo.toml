@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 sex-pdx      = { path = "../../crates/sex-pdx" }
 sex-graphics = { path = "../../crates/sex-graphics" }
+silkclient   = { path = "../../crates/silk-client" }
 
 [profile.release]
 opt-level = "s"

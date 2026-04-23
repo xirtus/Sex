@@ -26,13 +26,6 @@ impl X86Hal {
     pub fn get_paging_cr3(&self) -> u64 {
         self.paging_cr3.load(Ordering::Acquire)
     }
-
-    pub fn tlb_flush_local(&self) {
-        unsafe {
-            let (p4_frame, flags) = Cr3::read();
-            Cr3::write(p4_frame, flags);
-        }
-    }
 }
 
 impl HardwareAbstractionLayer for X86Hal {
@@ -60,16 +53,33 @@ impl HardwareAbstractionLayer for X86Hal {
         interrupts::init_idt();
     }
 
+    fn init_advanced(&self, rsdp_addr: u64, hhdm_offset: u64) {
+        serial_println!("X86Hal: init_advanced(rsdp={:#x}, hhdm={:#x})", rsdp_addr, hhdm_offset);
+        if rsdp_addr != 0 {
+            serial_println!("X86Hal: Initializing APIC and Timer...");
+            crate::apic::init_apic(rsdp_addr, x86_64::VirtAddr::new(hhdm_offset));
+            crate::apic::init_timer();
+        } else {
+            serial_println!("X86Hal: WARNING - RSDP not found, skipping APIC/Timer.");
+        }
+    }
+
     fn enumerate_pci(&self) -> Vec<PciDevice> {
         crate::hal::pci::enumerate_bus()
     }
 
     fn setup_timer(&self, _hz: u64) {
-        // TODO: LAPIC Timer or PIT
-        serial_println!("X86Hal: Timer setup pending...");
+        crate::apic::init_timer();
     }
 
     fn configure_interrupts(&self) {
-        serial_println!("X86Hal: Interrupt configuration pending...");
+        // Already handled in init_advanced via init_apic
+    }
+
+    fn tlb_flush_local(&self) {
+        unsafe {
+            let (p4_frame, flags) = Cr3::read();
+            Cr3::write(p4_frame, flags);
+        }
     }
 }

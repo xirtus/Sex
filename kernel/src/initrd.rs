@@ -1,5 +1,5 @@
 use crate::serial_println;
-use crate::memory::GlobalVas;
+use crate::memory::manager::GlobalVas;
 use x86_64::VirtAddr;
 
 const MAGIC: &[u8; 8] = b"SEXPAC01";

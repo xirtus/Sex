@@ -9,49 +9,30 @@ use linked_list_allocator::LockedHeap;
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 #[alloc_error_handler]
-fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
-    loop {}
-}
+fn alloc_error(_layout: core::alloc::Layout) -> ! { loop {} }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
+fn panic(_info: &core::panic::PanicInfo) -> ! { loop {} }
+
+use sex_pdx::{safe_pdx_register, pdx_listen, MessageType, pdx_reply, PageHandover};
+use sex_pdx::serial_println;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // In Phase 19, this will be replaced by a PDX call to the kernel 
-    // to map the shared heap region.
-    loop {}
-}
-
-extern crate alloc;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-use alloc::boxed::Box;
-
-use libsys::pdx::{pdx_listen, pdx_reply, pdx_call};
-use libsys::messages::MessageType;
-use libsys::sched::park_on_ring;
-
-fn main() {}
-
-use core::alloc::{GlobalAlloc, Layout};
-struct SimpleAlloc;
-#[global_allocator]
-static ALLOCATOR: SimpleAlloc = SimpleAlloc;
-unsafe impl GlobalAlloc for SimpleAlloc {
-    unsafe fn alloc(&self, _layout: Layout) -> *mut u8 { core::ptr::null_mut() }
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
-}
-
-#[alloc_error_handler]
-fn alloc_error_handler(_layout: Layout) -> ! {
-    loop {}
-}
-
-
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {}
+    serial_println!("sexgemini: started (PKEY 3 domain)");
+    let _pd_slot = safe_pdx_register(b"gemini");
+    loop {
+        let req = pdx_listen(0);
+        let msg_ptr = req.arg0 as *const sex_pdx::PdxMessage;
+        if msg_ptr.is_null() { continue; }
+        let msg = unsafe { &*msg_ptr };
+        match msg.msg_type {
+            MessageType::CompileRequest { .. } => {
+                let handover = PageHandover { pfn: 0, pku_key: 2 };
+                pdx_reply(req.caller_pd, handover.pfn);
+            }
+            MessageType::Notification { .. } => {}
+            _ => {}
+        }
+    }
 }

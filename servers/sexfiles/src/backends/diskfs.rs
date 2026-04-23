@@ -69,6 +69,31 @@ impl FsBackend for DiskFs {
         }
     }
 
+    fn sync(&self, _inode: u64) -> Result<(), i64> {
+        let msg = MessageType::DmaCall {
+            command: 3, // SYNC
+            offset: 0,
+            size: 0,
+            buffer_cap: 0,
+            device_cap: 0,
+        };
+
+        let res_ptr = pdx_call(self.sexdrive_cap, 0, &msg as *const _ as u64, 0);
+        if res_ptr == 0 { return Err(-1); }
+
+        let reply = unsafe { *(res_ptr as *const MessageType) };
+        match reply {
+            MessageType::DmaReply { status, .. } => {
+                if status == 0 {
+                    Ok(())
+                } else {
+                    Err(status)
+                }
+            },
+            _ => Err(-1),
+        }
+    }
+
     fn close(&self, _inode: u64) -> Result<(), i64> {
         Ok(())
     }

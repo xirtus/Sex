@@ -74,6 +74,7 @@ pub struct Capability {
 }
 
 /// A Lock-Free, Wait-Free Capability Table using an Atomic Array.
+#[repr(align(4096))]
 pub struct CapabilityTable {
     pub slots: [AtomicPtr<Capability>; 1024],
     next_slot: AtomicU32,
@@ -97,6 +98,16 @@ impl CapabilityTable {
             // RCU reclamation omitted for brevity
         }
         id
+    }
+
+    pub fn insert_at(&self, id: u32, data: CapabilityData) {
+        if id == 0 || id > 1024 { return; }
+        let slot = (id - 1) as usize;
+        let cap = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Capability { id, data, cheri_meta: 0 }));
+        let old = self.slots[slot].swap(cap, Ordering::AcqRel);
+        if !old.is_null() {
+            // RCU reclamation omitted
+        }
     }
 
     pub fn find(&self, id: u32) -> Option<Capability> {
@@ -138,8 +149,13 @@ pub struct ProtectionDomain {
 impl ProtectionDomain {
     pub fn new(id: u32, pku_key: u8) -> Self {
         let mut pkru_mask: u32 = 0xFFFF_FFFF;
+        // Enable own PKEY
         let shift = pku_key * 2;
         pkru_mask &= !(0b11 << shift);
+        // Enable PKEY 0 (Default/Kernel)
+        pkru_mask &= !0b11;
+        // Enable Shared PKEY (15) for zero-copy IPC
+        pkru_mask &= !(0b11 << 30); 
         
         Self {
             id, pku_key,

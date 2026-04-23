@@ -120,6 +120,17 @@ pub fn handle_vfs_message(msg: &VfsProtocol, reply: &mut PdxReply) {
             reply.status = IPC_OPS_TOTAL.load(Ordering::Relaxed) as i64;
             reply.size = ZERO_COPY_HANDOVERS.load(Ordering::Relaxed);
         }
+        VfsProtocol::Fsync { fd } => {
+            // Mock: Map fd to inode and route to backend
+            // For now, route all sync to DISKFS if it's potentially a disk file
+            match DISKFS.sync(*fd) {
+                Ok(_) => {
+                    reply.status = 0;
+                    reply.size = 0;
+                },
+                Err(e) => reply.status = e,
+            }
+        }
         _ => {
             reply.status = -1;
             reply.size = 0;
