@@ -156,7 +156,7 @@ pub unsafe extern "C" fn timer_interrupt_stub() {
         "mov rax, [rsp + 128]", "test al, 3", "jz 2f", "swapgs", "2:",
         "pop rax", "pop rbx", "pop rcx", "pop rdx", "pop rbp", "pop rsi", "pop rdi",
         "pop r8", "pop r9", "pop r10", "pop r11", "pop r12", "pop r13", "pop r14", "pop r15",
-        "and rsp, ~0xF", "iretq"
+        "iretq"
     );
 }
 
@@ -174,7 +174,7 @@ pub unsafe extern "C" fn page_fault_stub() {
         "mov rax, [rsp + 136]", "test al, 3", "jz 2f", "swapgs", "2:",
         "pop rax", "pop rbx", "pop rcx", "pop rdx", "pop rbp", "pop rsi", "pop rdi",
         "pop r8", "pop r9", "pop r10", "pop r11", "pop r12", "pop r13", "pop r14", "pop r15",
-        "add rsp, 8", "and rsp, ~0xF", "iretq"
+        "add rsp, 8", "iretq"
     );
 }
 
@@ -189,7 +189,7 @@ pub unsafe extern "C" fn general_protection_fault_stub() {
         "mov rax, [rsp + 136]", "test al, 3", "jz 2f", "swapgs", "2:",
         "pop rax", "pop rbx", "pop rcx", "pop rdx", "pop rbp", "pop rsi", "pop rdi",
         "pop r8", "pop r9", "pop r10", "pop r11", "pop r12", "pop r13", "pop r14", "pop r15",
-        "add rsp, 8", "and rsp, ~0xF", "iretq"
+        "add rsp, 8", "iretq"
     );
 }
 
