@@ -2,7 +2,7 @@
 #![no_main]
 #![feature(asm_const, asm_experimental_arch)]
 
-use sex_pdx::{pdx_listen, PdxRequest, MessageType, HIDEvent, pdx_call}; // Only keep necessary sex_pdx imports
+use sex_pdx::{pdx_listen_raw, PdxRequest, MessageType, HIDEvent, pdx_call}; // Only keep necessary sex_pdx imports
 use core::ptr;
 use x86_64::instructions::hlt;
 
@@ -74,7 +74,7 @@ pub enum ShellEvent {
 fn get_next_event() -> ShellEvent {
     // In a real system, this would block until an event is received.
     // For this prototype, we'll poll and then process the request.
-    let request = pdx_listen(0); // Flags 0 for default listen behavior
+    let request = pdx_listen_raw(0); // Flags 0 for default listen behavior
 
     match request.num { // 'num' typically holds the message type or syscall ID
         _ if request.caller_pd == 0 => { // Kernel messages or special events

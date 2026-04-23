@@ -13,4 +13,3 @@ default = []
 serde = ["dep:serde"]
 
 [lib]
-no_std = true

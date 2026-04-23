@@ -25,6 +25,18 @@ pub struct InputEvent {
 pub const EV_KEY: u16 = 1;
 pub const EV_ABS: u16 = 3;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpcError {
+    InvalidTarget,
+    BufferFull,
+    InvalidCapability,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct IpcReply {
+    pub value: u64,
+}
+
 /// Ring buffer message for Storage Completion.
 #[repr(C)]
 pub struct StorageCompletion {
@@ -49,7 +61,7 @@ pub enum MessageType {
     DmaReply { status: i64, size: u64 },
     GpuCall { command: u32, buffer_cap: u32, width: u32, height: u32 },
     GpuReply { status: i64 },
-    HIDEvent { ev_type: u16, code: u16, value: i32 },
+    HIDEvent { ev_type: u16, code: u16, value: u16 },
     PipeCall { command: u32, pipe_cap: u32, buffer_cap: u32, size: u64 },
     PipeReply { status: i64, size: u64, pipe_cap: u32 },
     ProcCall { command: u32, path_ptr: u64, arg_ptr: u64 },
@@ -70,6 +82,18 @@ pub enum MessageType {
     DisplayCursor { x: i32, y: i32, visible: bool, buffer_id: u32 },
     DisplayGeminiRepairDisplay,
     DisplayPrimaryFramebuffer { virt_addr: u64, width: u32, height: u32, pitch: u32 },
+
+    // Phase 25: Display Opcodes as variants
+    WindowCreate,
+    CompositorCommit,
+    SetWindowRoundness,
+    SetWindowBlur,
+    SetWindowAnimation,
+    SetWindowDecorations,
+    GetDisplayInfo,
+    FocusWindow,
+    MoveWindow,
+    ResizeWindow,
 }
 
 /// Compatibility alias — the rest of the kernel (ipc.rs / core_local.rs / scheduler.rs) still references `Message`

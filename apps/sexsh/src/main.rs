@@ -22,7 +22,7 @@ fn alloc_error_handler(_layout: core::alloc::Layout) -> ! {
 }
 
 use sex_pdx::{
-    pdx_call, pdx_listen,
+    pdx_call, pdx_listen_raw,
     PDX_SEX_WINDOW_CREATE, SexWindowCreateParams,
 };
 use sex_graphics::WindowBuffer;
@@ -391,7 +391,7 @@ pub extern "C" fn _start() -> ! {
     unsafe { render(&mut vt, &mut fb); }
 
     loop {
-        let req = pdx_listen(0);
+        let req = pdx_listen_raw(0);
         // HID events: arg0=ev_type, arg1=code, arg2=value
         let ev_type = req.arg0 as u16;
         let code    = req.arg1 as u16;

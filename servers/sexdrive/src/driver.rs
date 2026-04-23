@@ -22,7 +22,7 @@ pub extern "C" fn _start() -> ! {
         // Standard FLSCHED park
         park_on_ring();
 
-        let req = pdx_listen(0);
+        let req = unsafe { pdx_listen_raw(0) };
         let msg = unsafe { *(req.arg0 as *const MessageType) };
 
         match msg {

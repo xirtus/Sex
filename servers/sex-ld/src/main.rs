@@ -33,7 +33,7 @@ mod pdx;
 
 use crate::pdx::handle_ld_message;
 use sex_pdx::ring::PdxReply;
-use libsys::pdx::{pdx_listen, pdx_reply};
+use libsys::pdx::{pdx_listen_raw, pdx_reply};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
@@ -42,7 +42,7 @@ pub extern "C" fn _start() -> ! {
     
     loop {
         // Wait for dynamic linking requests
-        let req = pdx_listen(0);
+        let req = pdx_listen_raw(0);
         
         // Safety: In this prototype, we assume the caller sent a LdProtocol message
         // In production, we'd validate the MessageType

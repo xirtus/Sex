@@ -60,7 +60,7 @@ impl SexApp for App {
     }
 
     fn run(&mut self, _pdx: Pdx) -> bool {
-        let req = sex_pdx::pdx_listen(1);
+        let req = sex_pdx::pdx_listen_raw(1);
         if req.num == 0xFF_FF { return false; }
         true
     }

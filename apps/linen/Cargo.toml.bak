@@ -1,13 +1,17 @@
 [package]
-name = "sexsh"
+name = "linen"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "sexsh"
+name = "linen"
 path = "src/main.rs"
 
 [dependencies]
 sex-pdx      = { path = "../../crates/sex-pdx" }
 sex-graphics = { path = "../../crates/sex-graphics" }
-linked_list_allocator = "0.10.6"
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"

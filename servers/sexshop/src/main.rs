@@ -19,7 +19,7 @@ pub extern "C" fn _start() -> ! {
     unsafe { pdx_call(0, PDX_DISCOVER_SERVICE as u64, name.as_ptr() as u64, 0, 0) };
 
     loop {
-        let event = unsafe { pdx_listen(0) };
+        let event = unsafe { pdx_listen_raw(0) };
 
         if event.num == 0 {
             unsafe { sys_yield(); }

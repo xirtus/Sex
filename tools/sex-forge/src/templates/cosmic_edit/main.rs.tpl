@@ -4,7 +4,7 @@
 extern crate alloc;
 
 use silkclient::{app_main, SexApp, SilkWindow};
-use sex_pdx::Pdx;
+use sex_pdx::{Pdx, pdx_listen_raw};
 use sex_graphics::{WindowBuffer, font};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -59,7 +59,7 @@ impl SexApp for App {
 
     fn run(&mut self, _pdx: Pdx) -> bool {
         // Handle events (stub)
-        let req = sex_pdx::pdx_listen(1);
+        let req = sex_pdx::pdx_listen_raw(1);
         if req.num == 0xFF_FF { // Window close
             return false;
         }

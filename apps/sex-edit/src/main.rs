@@ -59,7 +59,7 @@ impl SexApp for App {
 
     fn run(&mut self, _pdx: Pdx) -> bool {
         // Handle events (stub)
-        let req = sex_pdx::pdx_listen(1);
+        let req = sex_pdx::pdx_listen_raw(1);
         if req.num == 0xFF_FF { // Window close
             return false;
         }

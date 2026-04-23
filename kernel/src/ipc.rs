@@ -1,5 +1,4 @@
 use crate::capability::{CapabilityData, ProtectionDomain};
-use crate::pku::Pkru;
 use core::ptr;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use x86_64::VirtAddr;

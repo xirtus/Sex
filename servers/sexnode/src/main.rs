@@ -29,7 +29,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::boxed::Box;
 
-use libsys::pdx::{pdx_listen, pdx_reply, pdx_call};
+use libsys::pdx::{pdx_listen_raw, pdx_reply, pdx_call};
 use sex_pdx::MessageType;
 use libsys::sched::park_on_ring;
 
@@ -41,7 +41,7 @@ pub extern "C" fn _start() -> ! {
     loop {
         park_on_ring();
 
-        let req = pdx_listen(0);
+        let req = pdx_listen_raw(0);
         let msg = unsafe { *(req.arg0 as *const MessageType) };
 
         match msg {

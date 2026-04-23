@@ -2,7 +2,8 @@ use x86_64::VirtAddr;
 use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr};
 use crate::cheri::SexCapability;
 use core::ptr;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
+use spin::Mutex;
 
 /// Capability Types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +145,7 @@ pub struct ProtectionDomain {
     pub message_ring: *mut RingBuffer<MessageType, 256>,
     pub main_task: AtomicPtr<crate::scheduler::Task>,
     pub trampoline_task: AtomicPtr<crate::scheduler::Task>,
+    pub incoming_replies: Mutex<VecDeque<crate::ipc::messages::IpcReply>>,
 }
 
 impl ProtectionDomain {
@@ -167,11 +169,16 @@ impl ProtectionDomain {
             message_ring: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(RingBuffer::new())),
             main_task: AtomicPtr::new(ptr::null_mut()),
             trampoline_task: AtomicPtr::new(ptr::null_mut()),
+            incoming_replies: Mutex::new(VecDeque::with_capacity(1)),
         }
     }
 
     pub fn grant(&self, data: CapabilityData) -> u32 {
         unsafe { (*self.cap_table).insert(data) }
+    }
+
+    pub fn grant_capability(&self, slot: u64, data: CapabilityData) {
+        unsafe { (*self.cap_table).insert_at(slot as u32, data) }
     }
 
     /// Formal Verification Hook: Lent Memory Ownership

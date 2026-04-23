@@ -197,18 +197,12 @@ pub unsafe extern "C" fn general_protection_fault_stub() {
 
 #[no_mangle]
 pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame) {
-    unsafe {
-        use x86_64::instructions::port::Port;
-        let mut port = Port::new(0x3f8);
-        for &c in b"TICK\n" { port.write(c); }
-    }
     TICKS.fetch_add(1, Ordering::Relaxed);
     let core_id = crate::core_local::CoreLocal::get().core_id;
     let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
     
     if let Some((old_ctx_ptr, next_ctx_ptr)) = sched.tick() {
         let pd_id = unsafe { (*next_ctx_ptr).pd_id };
-        serial_println!("SCHED: Switching to PD {} at {:p}", pd_id, next_ctx_ptr);
         // Bug 1 fix: update CoreLocal so current_pd_ref() returns correct PD.
         crate::core_local::CoreLocal::get().set_pd(pd_id);
         unsafe {

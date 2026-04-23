@@ -7,7 +7,3 @@ edition = "2021"
 sex-pdx      = { path = "../sex-pdx" }
 sex-graphics = { path = "../sex-graphics" }
 
-[profile.release]
-opt-level = "s"
-lto = true
-panic = "abort"

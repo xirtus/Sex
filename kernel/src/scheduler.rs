@@ -40,7 +40,7 @@ impl Task {
         let pkru = pd.current_pkru_mask.load(Ordering::SeqCst);
         let selectors = crate::gdt::get_selectors();
         
-        let aligned_rsp = (stack_top & !0xFu64) - 8;
+        let aligned_rsp = stack_top & !0xFu64;
 
         let (cs, ss, rflags) = if is_user {
             (selectors.user_code_selector.0 as u64 | 3, selectors.user_data_selector.0 as u64 | 3, 0x3202)

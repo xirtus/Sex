@@ -29,12 +29,12 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::boxed::Box;
 
-use sex_pdx::{pdx_listen, pdx_reply, Message, MessageType};
+use sex_pdx::{pdx_listen_raw, pdx_reply, Message, MessageType};
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     loop {
-        let req = pdx_listen(0);
+        let req = pdx_listen_raw(0);
         let msg = Message::from_u64(req.arg0);
         
         // Demand paging logic (Simulation: success)

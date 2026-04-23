@@ -1,14 +1,13 @@
 [package]
-name = "tatami"
+name = "silknet"
 version = "0.1.0"
 edition = "2021"
-
-[[bin]]
-name = "tatami"
-path = "src/main.rs"
 
 [dependencies]
 sex-pdx      = { path = "../sex-pdx" }
 sex-graphics = { path = "../sex-graphics" }
-silknet      = { path = "../silknet" }
 
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"

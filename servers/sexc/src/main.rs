@@ -32,7 +32,7 @@ use alloc::boxed::Box;
 mod trampoline;
 mod pipe;
 use pipe::handle_pipe_call;
-use libsys::pdx::{pdx_listen, pdx_reply, pdx_call};
+use libsys::pdx::{pdx_listen_raw, pdx_reply, pdx_call};
 use libsys::messages::{MessageType, PageHandover};
 use libsys::sched::park_on_ring;
 
@@ -44,7 +44,7 @@ pub extern "C" fn _start() -> ! {
     loop {
         park_on_ring();
 
-        let req = pdx_listen(0);
+        let req = pdx_listen_raw(0);
         let msg_ptr = req.arg0 as *const MessageType;
         let msg = unsafe { *msg_ptr };
 

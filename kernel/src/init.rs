@@ -1,12 +1,44 @@
 use crate::serial_println;
 use x86_64::VirtAddr;
 use core::sync::atomic::{AtomicU8, Ordering};
+use crate::capability::ProtectionDomain;
 
 pub static mut SEXDISPLAY_PD_ID: u32 = 0;
 static NEXT_PKEY: AtomicU8 = AtomicU8::new(2); 
 
+unsafe fn grant_standard_capabilities(pd: &mut ProtectionDomain, pd_id: u32) {
+    use crate::capability::CapabilityData;
+    use sex_pdx::*;
+
+    // Every PD gets access to the display and shell by default in Phase 25
+    // but the actual permission is gated by PKU/PKEY in the hardware.
+    
+    // Hardcoded PD IDs for core services (assigned during spawn)
+    // 1: sexdisplay
+    // 2: linen
+    // 3: silk-shell
+
+    if pd_id == 1 {
+        // sexdisplay: self-listen on SLOT_DISPLAY
+        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
+    } else if pd_id == 2 {
+        // linen: access to storage and display
+        (*pd.cap_table).insert_at(SLOT_STORAGE as u32, CapabilityData::Domain(2)); // Placeholder for storage
+        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
+    } else if pd_id == 3 {
+        // silk-shell: access to display and self-listen on SLOT_SHELL
+        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
+        (*pd.cap_table).insert_at(SLOT_SHELL as u32, CapabilityData::Domain(3));
+    } else {
+        // General apps: access to storage, network, display, etc.
+        (*pd.cap_table).insert_at(SLOT_STORAGE as u32, CapabilityData::Domain(2));
+        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
+        (*pd.cap_table).insert_at(SLOT_SHELL as u32, CapabilityData::Domain(3));
+    }
+}
+
 pub fn init() {
-    let mut sexdisp_id = 0; 
+    let mut _sexdisp_id = 0; 
 
     let modules_res = crate::MODULE_REQUEST.response();
     if modules_res.is_none() {
@@ -14,6 +46,9 @@ pub fn init() {
     }
     let modules = modules_res.unwrap();
     serial_println!("init: Found {} Limine modules", modules.modules().len());
+
+    let mut sexdisp_id = 0;
+    let mut silkshell_id = 0;
 
     for module in modules.modules() {
         let path = module.path();
@@ -26,6 +61,8 @@ pub fn init() {
                     if path.contains("sexdisplay") { 
                         sexdisp_id = id; 
                         unsafe { SEXDISPLAY_PD_ID = id; }
+                    } else if path.contains("silk-shell") {
+                        silkshell_id = id;
                     }
                 }
                 Err(e) => {
@@ -35,22 +72,19 @@ pub fn init() {
         }
     }
 
-    unsafe {
+    // Grant Phase 25 well-known capabilities
+    if sexdisp_id != 0 && silkshell_id != 0 {
         use crate::ipc::DOMAIN_REGISTRY;
         use crate::capability::CapabilityData;
-        for i in 1..=4 {
-            if let Some(pd) = DOMAIN_REGISTRY.get(i) {
-                if sexdisp_id != 0 {
-                    (*pd.cap_table).insert_at(5, CapabilityData::Domain(sexdisp_id));
-                }
-            }
+        
+        if let Some(pd) = DOMAIN_REGISTRY.get(silkshell_id) {
+            pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
+            pd.grant_capability(sex_pdx::SLOT_SHELL,   CapabilityData::Domain(silkshell_id));
+            serial_println!("✓ Phase 25: Capabilities granted to silk-shell");
         }
     }
 
     serial_println!("init: Revoking kernel write access...");
-    // Preemption-safe: Scheduler handles PKRU switch
-    // unsafe { crate::pku::wrpkru(0b1100); } 
-
     serial_println!("init: Ready for Scheduler.");
 }
 
@@ -62,7 +96,7 @@ fn pdx_spawn(name: &str, module_data: &[u8]) -> Result<u32, &'static str> {
 
     static mut NEXT_PD_ID: u32 = 1;
     let pd_id = unsafe { let id = NEXT_PD_ID; NEXT_PD_ID += 1; id };
-    let pku_key = if name.contains("sexdisplay") { 1 } else { NEXT_PKEY.fetch_add(1, Ordering::SeqCst) };
+    let pku_key = if name.contains("sexdisplay") { 1 } else if name.contains("linen") { 2 } else if name.contains("silk-shell") { 3 } else { NEXT_PKEY.fetch_add(1, Ordering::SeqCst) };
 
     let load_base = VirtAddr::new(0x2000_0000 + (pku_key as u64 * 0x20_0000));
 
@@ -87,7 +121,6 @@ fn pdx_spawn(name: &str, module_data: &[u8]) -> Result<u32, &'static str> {
     let pd = alloc::boxed::Box::new(ProtectionDomain::new(pd_id, pku_key));
     let pd_ptr = alloc::boxed::Box::into_raw(pd);
     
-    // Register Task in Scheduler
     let mut task = unsafe { alloc::boxed::Box::<crate::scheduler::Task>::new_zeroed().assume_init() };
     *task = crate::scheduler::Task::new(
         pd_id,
@@ -100,6 +133,8 @@ fn pdx_spawn(name: &str, module_data: &[u8]) -> Result<u32, &'static str> {
     crate::scheduler::SCHEDULERS[0].runqueue.push(task_ptr);
 
     DOMAIN_REGISTRY.insert(pd_id, pd_ptr);
+    unsafe { grant_standard_capabilities(&mut *pd_ptr, pd_id); }
+    
     serial_println!("PDX: Registered {} (PKEY {})", name, pku_key);
 
     Ok(pd_id)
@@ -126,7 +161,7 @@ pub unsafe fn jump_to_userland(pd_id: u32, entry: u64, pkru: u32, pku_key: u8) -
         "swapgs",
         "iretq",
         ss      = in(reg) user_ss,
-        rsp_val = in(reg) stack_top & !0xFu64,
+        rsp_val = in(reg) (stack_top & !0xFu64),
         rflags  = in(reg) rflags,
         cs      = in(reg) user_cs,
         rip     = in(reg) entry,

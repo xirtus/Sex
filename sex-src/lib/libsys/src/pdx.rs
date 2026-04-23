@@ -3,21 +3,15 @@
 pub extern "C" fn pdx_listen(_port: u32) -> crate::pdx::PdxRequest {
     let mut req = PdxRequest { caller_pd: 0, num: 0, arg0: 0, arg1: 0, arg2: 0 };
     #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] unsafe {
+    unsafe {
         core::arch::asm!("syscall", 
             in("rax") 25, // pdx_listen syscall
             inout("rdi") req.caller_pd,
             inout("rsi") req.num,
             inout("rdx") req.arg0,
-            inout("rcx") req.arg1,
+            inout("r10") req.arg1, // ABI: 4th arg is r10
             inout("r8") req.arg2,
+            lateout("rcx") _, lateout("r11") _, // Clobbers
         );
     }
     req
@@ -26,18 +20,12 @@ pub extern "C" fn pdx_listen(_port: u32) -> crate::pdx::PdxRequest {
 #[no_mangle]
 pub extern "C" fn pdx_reply(caller_pd: u32, result: u64) {
     #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] unsafe {
+    unsafe {
         core::arch::asm!("syscall", 
             in("rax") 26, // pdx_reply syscall
             in("rdi") caller_pd,
             in("rsi") result,
+            lateout("rcx") _, lateout("r11") _, // Clobbers
         );
     }
 }
@@ -46,21 +34,15 @@ pub extern "C" fn pdx_reply(caller_pd: u32, result: u64) {
 pub extern "C" fn pdx_call(target_pd: u32, num: u64, arg0: u64, arg1: u64) -> u64 {
     let mut res: u64 = 0;
     #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] unsafe {
+    unsafe {
         core::arch::asm!("syscall",
             in("rax") 27, // pdx_call syscall
             in("rdi") target_pd,
             in("rsi") num,
             in("rdx") arg0,
-            in("rcx") arg1,
+            in("r10") arg1, // ABI: 4th arg is r10
             lateout("rax") res,
+            lateout("rcx") _, lateout("r11") _, // Clobbers
         );
     }
     res
@@ -75,19 +57,13 @@ pub enum SysError {
 pub fn safe_pdx_register(_______service_name: &str) -> Result<*mut u8, SysError> {
     let mut res: u64 = 0;
     #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")]
-    #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] #[cfg(target_arch = "x86_64")] unsafe {
+    unsafe {
         core::arch::asm!("syscall",
             in("rax") 0x10A, // SYS_PDX_REG
             in("rdi") _______service_name.as_ptr(),
             in("rsi") _______service_name.len(),
             lateout("rax") res,
+            lateout("rcx") _, lateout("r11") _, // Clobbers
         );
     }
     if res == 0 {
@@ -107,4 +83,4 @@ pub struct PdxRequest {
 }
 
 #[cfg(not(target_arch = "x86_64"))]
-#[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] #[allow(dead_code)] unsafe fn syscall_fallback() { loop {} }
+#[allow(dead_code)] unsafe fn syscall_fallback() { loop {} }

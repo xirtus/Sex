@@ -1,87 +1,52 @@
 #![no_std]
 #![no_main]
 
-use sex_pdx::{pdx_call, pdx_listen, serial_println, SLOT_DISPLAY, OP_SET_BG, OP_WINDOW_COMMIT, OP_WINDOW_CREATE, DisplayInfo, get_keystroke, sched_yield};
-use core::ptr::write_volatile;
-use core::hint::spin_loop;
+use core::panic::PanicInfo;
+use silk_shell::{ShellState, Canvas, PdxCompositorClient};
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop { spin_loop(); }
+fn panic(_info: &PanicInfo) -> ! {
+    loop { core::hint::spin_loop(); }
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    for _ in 0..2_000_000 { spin_loop(); }
+    // sexdisplay already handed off framebuffer via PDX (PKEY 1 locked)
+    let mut state = ShellState::default();
+    let compositor = PdxCompositorClient;
 
-    serial_println!("[RESTORE] silk-shell: Starting Phase 7 UI Rendering...");
+    // Create silkbar panel (top bar) + background surface
+    state.panel_window_id = compositor.create_window(0, 0, 1280, silk_shell::PANEL_HEIGHT);
+    compositor.set_bg(0xFF1E1E2E);  // SexOS signature dark
 
-    unsafe {
-        let mut fb_info = DisplayInfo::default();
-        pdx_call(0, 0x03, &mut fb_info as *mut DisplayInfo as u64, 0, 0);
-        let screen_w = if fb_info.width > 0 { fb_info.width as u64 } else { 1920 };
+    // Launcher surface (initially hidden)
+    state.launcher_window_id = compositor.create_window(0, silk_shell::PANEL_HEIGHT as i32,
+                                                       silk_shell::LAUNCHER_WIDTH, 400);
 
-        serial_println!("[DEBUG] silk-shell: OP_SET_BG -> Dark Grey");
-        pdx_call(SLOT_DISPLAY, OP_SET_BG, 0xFFA9A9A9, 0, 0);
-        loop {
-            let ev = pdx_listen(SLOT_DISPLAY);
-            if ev.arg0 == 1 || ev.num == 1 {
-                break;
-            }
-            spin_loop();
-        }
-
-        serial_println!("[DEBUG] silk-shell: Allocating Silkbar (0, 0, {}, 32)", screen_w);
-        pdx_call(SLOT_DISPLAY, OP_WINDOW_CREATE, 0, 0, (screen_w << 16) | 32);
-
-        let mut canvas_ptr: u64 = 0;
-        loop {
-            let ev = pdx_listen(SLOT_DISPLAY);
-            if ev.arg0 == 0x4000_0000 {
-                canvas_ptr = ev.arg0;
-                break;
-            }
-            spin_loop();
-        }
-        
-        let silkbar_canvas = canvas_ptr as *mut u32;
-        let silkbar_pixels = (screen_w * 32) as usize;
-        for i in 0..silkbar_pixels {
-            write_volatile(silkbar_canvas.add(i), 0xFF000000); // Pure Black
-        }
-        pdx_call(SLOT_DISPLAY, OP_WINDOW_COMMIT, 0, 0, 0);
-
-        serial_println!("[DEBUG] silk-shell: Allocating Mondrian Window (100, 100, 400, 300)");
-        pdx_call(SLOT_DISPLAY, OP_WINDOW_CREATE, 100, 100, (400 << 16) | 300);
-
-        canvas_ptr = 0;
-        loop {
-            let ev = pdx_listen(SLOT_DISPLAY);
-            if ev.arg0 == 0x4000_0000 {
-                canvas_ptr = ev.arg0;
-                break;
-            }
-            spin_loop();
-        }
-
-        let mondrian_canvas = canvas_ptr as *mut u32;
-        let mondrian_pixels = 400 * 300;
-        for i in 0..mondrian_pixels {
-            write_volatile(mondrian_canvas.add(i), 0xFFFF69B4); // Hot Pink
-        }
-        pdx_call(SLOT_DISPLAY, OP_WINDOW_COMMIT, 0, 0, 0);
-
-        serial_println!("[DEBUG] silk-shell: UI Rendering Complete.");
-    }
+    // Initial render
+    compositor.render_bar(state.panel_window_id);
 
     loop {
-        if let Some(key) = get_keystroke() {
-            serial_println!("Keystroke: {}", key as char);
-        } else {
-            let ev = unsafe { pdx_listen(SLOT_DISPLAY) };
-            if ev.num == 0 {
-                sched_yield();
+        // Block on PDX ring (slot 6 = self, but we listen for HID from sexinput via sexdisplay)
+        let event = sex_rt::pdx_listen();
+        // Simple input stub (mouse/keyboard forwarded from sexdisplay)
+        match event.1 {
+            sex_rt::MessageType::HIDEvent { code, value, .. } => {
+                if code == 1 && value == 1 { // left-click example
+                    state.is_launcher_open = !state.is_launcher_open;
+                }
             }
+            _ => {}
         }
+
+        // Safe drawing via Canvas (no raw pointer math)
+        // In real sexdisplay handoff, we'd receive framebuffer pointer via MessageType::DisplayPrimaryFramebuffer
+        // For Phase 25 stub we simulate with a placeholder address (will be replaced by real IPC)
+        let fb_placeholder = 0xFFFF_8000_0000_0000 as *mut u32; // HHDM-mapped FB (PKEY 1)
+        let mut canvas = Canvas::new(fb_placeholder, 1280, 720);
+        canvas.draw_panel(&state);
+
+        // Commit to compositor (typed PDX call under PKU lock)
+        compositor.render_bar(state.panel_window_id);
     }
 }

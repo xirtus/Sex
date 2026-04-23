@@ -25,7 +25,7 @@ pub extern "C" fn _start() -> ! {
     // Safety: trampoline_main is an infinite loop
     loop {
         unsafe {
-            core::arch::asm!("syscall", in("rax") 24); // sys_park
+            core::arch::asm!("syscall", in("rax") 24, lateout("rcx") _, lateout("r11") _); // sys_park
         }
     }
 }
@@ -34,7 +34,7 @@ pub extern "C" fn _start() -> ! {
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {
         unsafe {
-            core::arch::asm!("syscall", in("rax") 24); // sys_park
+            core::arch::asm!("syscall", in("rax") 24, lateout("rcx") _, lateout("r11") _); // sys_park
         }
     }
 }

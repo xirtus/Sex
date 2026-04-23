@@ -14,7 +14,7 @@ fn alloc_error_handler(_layout: core::alloc::Layout) -> ! {
 }
 
 use sex_pdx::{
-    pdx_listen, pdx_reply,
+    pdx_listen_raw, pdx_reply,
     SEXNET_GET_STATUS, SEXNET_SCAN_WIFI, SEXNET_CONNECT,
     SEXNET_DISCONNECT, SEXNET_VPN_UP, SEXNET_VPN_DOWN, SEXNET_GET_IP,
     SexnetApEntry,
@@ -127,8 +127,8 @@ fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     loop {
-        let req = pdx_listen(0);
-        let result = handle_call(req.num, req.arg0, req.arg1);
+        let req = unsafe { pdx_listen_raw(0) };
+        let result = handle_call(req.opcode(), req.msg_type.arg0(), req.msg_type.arg1());
         pdx_reply(req.caller_pd, result);
     }
 }
