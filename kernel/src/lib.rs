@@ -48,9 +48,9 @@ pub use crate::memory::allocator;
 pub static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 pub const HEAP_START: usize = 0x_4444_4444_0000;
-pub const HEAP_SIZE: usize = 128 * 1024 * 1024; // 128 MiB
+pub const HEAP_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
 
-use limine::{BaseRevision, RequestsStartMarker, RequestsEndMarker, request::{FramebufferRequest, HhdmRequest, MemmapRequest, ModulesRequest, RsdpRequest}};
+use limine::{BaseRevision, RequestsStartMarker, RequestsEndMarker, request::{FramebufferRequest, HhdmRequest, MemmapRequest, ModulesRequest, RsdpRequest, StackSizeRequest}};
 
 // Limine 7.x protocol: start marker, base revision, all requests, end marker — in order
 #[used]
@@ -76,6 +76,10 @@ pub static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
 #[used]
 #[link_section = ".limine_requests"]
 pub static MODULE_REQUEST: ModulesRequest = ModulesRequest::new();
+
+#[used]
+#[link_section = ".limine_requests"]
+static _STACK_SIZE: StackSizeRequest = StackSizeRequest::new(1024 * 1024); // 1 MiB
 
 #[used]
 #[link_section = ".limine_requests_end"]

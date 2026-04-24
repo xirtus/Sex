@@ -1,67 +1,78 @@
-use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
-use x86_64::VirtAddr;
-use x86_64::structures::tss::TaskStateSegment;
 use lazy_static::lazy_static;
-use crate::serial_println;
+use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
+use x86_64::structures::tss::TaskStateSegment;
+use x86_64::VirtAddr;
+use x86_64::instructions::segmentation::Segment;
 
-pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
+pub const DOUBLE_FAULT_IST_INDEX: usize = 0;
+pub static mut TSS: TaskStateSegment = TaskStateSegment::new();
 
 lazy_static! {
-    static ref TSS: TaskStateSegment = {
-        let mut tss = TaskStateSegment::new();
-        tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
-            const STACK_SIZE: usize = 4096 * 5;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-            let stack_start = VirtAddr::from_ptr(unsafe { &raw const STACK as *const u8 });
-            stack_start + (STACK_SIZE as u64)
-        };
-        tss
+    pub static ref GDT: GlobalDescriptorTable = {
+        let mut gdt = GlobalDescriptorTable::new(); // auto-null at index 0
+
+        // === EXACT SYSCALL/SYSRET LAYOUT (manual §15) ===
+        gdt.append(Descriptor::kernel_code_segment());   // index 1 → 0x08  SYSCALL CS
+        gdt.append(Descriptor::kernel_data_segment());   // index 2 → 0x10  SYSCALL SS
+        gdt.append(Descriptor::user_code_segment());     // index 3 → 0x18  compat32 pad (SYSRET base)
+        gdt.append(Descriptor::user_data_segment());     // index 4 → 0x20  SYSRET SS (user data)
+        gdt.append(Descriptor::user_code_segment());     // index 5 → 0x28  SYSRET CS (user code 64-bit)
+        // TSS takes indices 6+7 (two slots) → 0x30 / 0x38
+        gdt.append(unsafe { Descriptor::tss_segment(&TSS) });
+
+        gdt
     };
 }
 
-lazy_static! {
-    static ref GDT: (GlobalDescriptorTable, Selectors) = {
-        let mut gdt = GlobalDescriptorTable::new();
-        let kernel_cs = gdt.append(Descriptor::kernel_code_segment());
-        let kernel_ss = gdt.append(Descriptor::kernel_data_segment());
-        let _compat = gdt.append(Descriptor::user_data_segment());
-        let user_ss = gdt.append(Descriptor::user_data_segment());
-        let user_cs = gdt.append(Descriptor::user_code_segment());
-        let tss = gdt.append(Descriptor::tss_segment(&TSS));
-        (gdt, Selectors { kernel_cs, kernel_ss, user_cs, user_ss, tss })
-    };
-}
-
-pub struct Selectors {
-    pub kernel_cs: SegmentSelector,
-    pub kernel_ss: SegmentSelector,
-    pub user_cs:   SegmentSelector,
-    pub user_ss:   SegmentSelector,
-    pub tss:       SegmentSelector,
-}
-
-pub fn init() {
-    GDT.0.load();
+pub fn update_tss_rsp0(addr: VirtAddr) {
     unsafe {
-        use x86_64::registers::segmentation::{CS, Segment};
-        CS::set_reg(GDT.1.kernel_cs);
-        x86_64::instructions::tables::load_tss(GDT.1.tss);
+        TSS.privilege_stack_table[0] = addr;
     }
+}
+pub struct Selectors {
+    pub kernel_cs: SegmentSelector,  // 0x08
+    pub kernel_ss: SegmentSelector,  // 0x10
+    pub user_cs:   SegmentSelector,  // 0x28
+    pub user_ss:   SegmentSelector,  // 0x20
+    pub tss:       SegmentSelector,  // 0x30
 }
 
 pub fn get_selectors() -> Selectors {
     Selectors {
-        kernel_cs: GDT.1.kernel_cs,
-        kernel_ss: GDT.1.kernel_ss,
-        user_cs:   GDT.1.user_cs,
-        user_ss:   GDT.1.user_ss,
-        tss:       GDT.1.tss,
+        kernel_cs: SegmentSelector::new(1, x86_64::PrivilegeLevel::Ring0),
+        kernel_ss: SegmentSelector::new(2, x86_64::PrivilegeLevel::Ring0),
+        user_cs:   SegmentSelector::new(5, x86_64::PrivilegeLevel::Ring3),
+        user_ss:   SegmentSelector::new(4, x86_64::PrivilegeLevel::Ring3),
+        tss:       SegmentSelector::new(6, x86_64::PrivilegeLevel::Ring0),
     }
 }
 
-pub fn update_tss_rsp0(new_rsp0: VirtAddr) {
+pub fn init() {
+    use x86_64::instructions::segmentation::{CS, DS, ES, FS, GS, SS};
+    use x86_64::instructions::tables::load_tss;
+    use x86_64::structures::DescriptorTablePointer;
+
+    // Load GDT
     unsafe {
-        let tss_ptr = &TSS as *const _ as *mut TaskStateSegment;
-        (*tss_ptr).privilege_stack_table[0] = new_rsp0;
+        let gdt_ptr = &*GDT;
+        let gdtr = DescriptorTablePointer {
+            limit: gdt_ptr.limit(),
+            base: VirtAddr::new(gdt_ptr.entries().as_ptr() as u64),
+        };
+        x86_64::instructions::tables::lgdt(&gdtr);
+    }
+
+    // Reload segment registers
+    let selectors = get_selectors();
+    unsafe {
+        CS::set_reg(selectors.kernel_cs);
+        SS::set_reg(selectors.kernel_ss);
+        DS::set_reg(selectors.kernel_ss);
+        ES::set_reg(selectors.kernel_ss);
+        FS::set_reg(selectors.kernel_ss);
+        GS::set_reg(selectors.kernel_ss);
+
+        // Load TSS
+        load_tss(selectors.tss);
     }
 }

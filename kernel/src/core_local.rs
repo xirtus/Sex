@@ -41,12 +41,15 @@ impl CoreLocal {
             pdx_ring: crate::ipc_ring::SpscRing::new(),
         });
         
-        // Allocate 16KB kernel stack
-        let stack = alloc::vec![0u8; 16384];
-        let stack_ptr = stack.as_ptr() as u64 + 16384;
+        // Allocate 64KB kernel stack
+        let stack = alloc::vec![0u8; 65536];
+        let stack_ptr = stack.as_ptr() as u64 + 65536;
         core_local.kernel_stack = stack_ptr;
         core::mem::forget(stack); // Leak stack for simplicity
         
+        // Phase 32: Update TSS for Ring 3 -> Ring 0 transition safety
+        crate::gdt::update_tss_rsp0(VirtAddr::new(stack_ptr));
+
         let ptr = alloc::boxed::Box::into_raw(core_local);
         GsBase::write(VirtAddr::from_ptr(ptr));
         x86_64::registers::model_specific::KernelGsBase::write(VirtAddr::from_ptr(ptr));

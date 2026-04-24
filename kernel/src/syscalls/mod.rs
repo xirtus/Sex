@@ -70,7 +70,10 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             } else {
                 match crate::ipc::safe_pdx_call(slot, num, arg0, arg1, arg2) {
                     Ok(val) => val,
-                    Err(_) => u64::MAX,
+                    Err(e) => {
+                        crate::serial_println!("[pdx_call FAIL] slot={} opcode={:#x} err={}", slot, num, e);
+                        u64::MAX
+                    }
                 }
             }
         },
@@ -78,54 +81,54 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         28 => { // SYSCALL_PDX_LISTEN (Phase 25)
             let core_local = crate::core_local::CoreLocal::get();
             let current_pd = core_local.current_pd_ref();
-            
+
             // 1. Check priority reply buffer (Syscall 29 source)
             let mut replies = current_pd.incoming_replies.lock();
             if let Some(reply) = replies.pop_front() {
-                regs.rsi = 0x1; // MessageType::Response (Discriminant 1)
+                regs.rax = 0x1; // type_id = Response
+                regs.rsi = 1;   // caller_pd = kernel
                 regs.rdx = reply.value;
                 regs.r10 = 0;
-                regs.r8 = 0;
-                return 1; // Sender: 1 (Anonymous/Kernel)
+                regs.r8  = 0;
+                return 0x1;
             }
             drop(replies);
 
             // 2. Check standard message ring
+            // Register layout: rax=type_id (0=EMPTY), rsi=caller_pd, rdx=arg0, r10=arg1, r8=arg2
             unsafe {
                 if let Some(msg) = (*current_pd.message_ring).dequeue() {
                     match msg {
                         MessageType::IpcCall { func_id, arg0, arg1, arg2: _, caller_pd } => {
-                            regs.rsi = 0x10; // RawCall
-                            regs.rdx = func_id;
-                            regs.r10 = arg0;
-                            regs.r8  = arg1;
-                            // Note: arg2 and caller_pd would need more registers or a struct
-                            // For Phase 25, we prioritize func_id, arg0, arg1.
-                            caller_pd as u64
+                            regs.rsi = caller_pd as u64;
+                            regs.rdx = arg0;
+                            regs.r10 = arg1;
+                            regs.r8  = 0;
+                            func_id // rax = type_id (opcode, e.g. 0xDE)
                         }
                         MessageType::DisplayPrimaryFramebuffer { virt_addr, width, height, pitch } => {
-                            regs.rsi = 0x11;
+                            regs.rsi = 1;
                             regs.rdx = virt_addr;
                             regs.r10 = (width as u64) | ((height as u64) << 32);
                             regs.r8  = pitch as u64;
-                            1 // Sender: 1 (Kernel)
+                            0x11 // rax = type_id
                         }
                         _ => {
-                            let opcode = match msg {
-                                MessageType::WindowCreate => 0xDE,
-                                MessageType::CompositorCommit => 0xDD,
+                            let type_id: u64 = match msg {
+                                MessageType::WindowCreate       => 0xDE,
+                                MessageType::CompositorCommit   => 0xDD,
                                 MessageType::SetWindowRoundness => 0xDF,
-                                MessageType::SetWindowBlur => 0xE0,
-                                MessageType::GetDisplayInfo => 0xE3,
-                                _ => 0,
+                                MessageType::SetWindowBlur      => 0xE0,
+                                MessageType::GetDisplayInfo     => 0xE3,
+                                _                               => 0xFF,
                             };
-                            regs.rsi = opcode;
+                            regs.rsi = 1;
                             regs.rdx = 0; regs.r10 = 0; regs.r8 = 0;
-                            1 // Sender: 1
+                            type_id // rax
                         }
                     }
                 } else {
-                    0 // No message
+                    0 // rax = 0 = EMPTY
                 }
             }
         },

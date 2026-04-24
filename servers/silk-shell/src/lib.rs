@@ -4,10 +4,13 @@
 #![no_std]
 
 use core::slice;
-use sex_pdx::{SLOT_DISPLAY, OP_SET_BG, OP_RENDER_BAR, OP_WINDOW_CREATE};
+use sex_pdx::{pdx_call, SLOT_DISPLAY, OP_SET_BG, OP_RENDER_BAR, OP_WINDOW_CREATE};
 
 pub const PANEL_HEIGHT: u32 = 48;
 pub const LAUNCHER_WIDTH: u32 = 320;
+pub const SCREEN_WIDTH: u32 = 1280;
+pub const SCREEN_HEIGHT: u32 = 720;
+pub const BG_COLOR: u32 = 0xFF1E1E2E;
 
 #[derive(Default)]
 pub struct ShellState {
@@ -61,14 +64,14 @@ pub struct PdxCompositorClient;
 impl PdxCompositorClient {
     pub fn create_window(&self, x: i32, y: i32, w: u32, h: u32) -> u32 {
         // Uses sex-pdx constants — hardware PKEY 1 (sexdisplay) locked
-        unsafe { sex_rt::pdx_call(SLOT_DISPLAY as u32, OP_WINDOW_CREATE, x as u64, y as u64, w as u64, h as u64) as u32 }
+        pdx_call(SLOT_DISPLAY, OP_WINDOW_CREATE, x as u64, y as u64, w as u64) as u32
     }
 
     pub fn set_bg(&self, color: u32) {
-        unsafe { sex_rt::pdx_call(SLOT_DISPLAY as u32, OP_SET_BG, color as u64, 0, 0, 0); }
+        pdx_call(SLOT_DISPLAY, OP_SET_BG, color as u64, 0, 0);
     }
 
     pub fn render_bar(&self, window_id: u32) {
-        unsafe { sex_rt::pdx_call(SLOT_DISPLAY as u32, OP_RENDER_BAR, window_id as u64, 0, 0, 0); }
+        pdx_call(SLOT_DISPLAY, OP_RENDER_BAR, window_id as u64, 0, 0);
     }
 }

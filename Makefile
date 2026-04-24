@@ -5,4 +5,6 @@ iso:
 	  --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label \
 	  iso_root -o sexos-v1.0.0.iso
 run-sasos:
-	qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku -cdrom sexos-v1.0.0.iso -serial stdio -boot d -display gtk
+	qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku -cdrom sexos-v1.0.0.iso -serial stdio -boot d -qmp unix:qmp.sock,server,nowait
+build-tools:
+	cd tools/sex-debug && cargo build --release

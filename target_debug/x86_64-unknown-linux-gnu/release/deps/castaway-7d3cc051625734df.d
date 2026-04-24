@@ -1,0 +1,10 @@
+/home/xirtus_arch/Documents/microkernel/target_debug/x86_64-unknown-linux-gnu/release/deps/castaway-7d3cc051625734df.d: /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/lib.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/internal.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/lifetime_free.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/utils.rs
+
+/home/xirtus_arch/Documents/microkernel/target_debug/x86_64-unknown-linux-gnu/release/deps/libcastaway-7d3cc051625734df.rlib: /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/lib.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/internal.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/lifetime_free.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/utils.rs
+
+/home/xirtus_arch/Documents/microkernel/target_debug/x86_64-unknown-linux-gnu/release/deps/libcastaway-7d3cc051625734df.rmeta: /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/lib.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/internal.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/lifetime_free.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/utils.rs
+
+/home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/lib.rs:
+/home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/internal.rs:
+/home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/lifetime_free.rs:
+/home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/castaway-0.2.4/src/utils.rs:

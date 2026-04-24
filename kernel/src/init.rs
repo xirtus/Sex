@@ -4,7 +4,11 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use crate::capability::ProtectionDomain;
 
 pub static mut SEXDISPLAY_PD_ID: u32 = 0;
-static NEXT_PKEY: AtomicU8 = AtomicU8::new(2); 
+static NEXT_PKEY: AtomicU8 = AtomicU8::new(4);
+
+const SEXDISPLAY_PD_ID_CONST: u32 = 1;
+const LINEN_PD_ID_CONST:      u32 = 2;
+const SILK_SHELL_PD_ID_CONST: u32 = 3;
 
 unsafe fn grant_standard_capabilities(pd: &mut ProtectionDomain, pd_id: u32) {
     use crate::capability::CapabilityData;
@@ -26,22 +30,18 @@ unsafe fn grant_standard_capabilities(pd: &mut ProtectionDomain, pd_id: u32) {
 
     // Current hardcoded IDs are functional but should be linked to dynamic IDs.
     // Reverting to existing logic as it's safe for Phase 25.
-    if pd_id == 1 {
-        // sexdisplay: self-listen on SLOT_DISPLAY
-        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
-    } else if pd_id == 2 {
-        // linen: access to storage and display
-        (*pd.cap_table).insert_at(SLOT_STORAGE as u32, CapabilityData::Domain(2)); // Placeholder for storage
-        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
-    } else if pd_id == 3 {
-        // silk-shell: access to display and self-listen on SLOT_SHELL
-        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
-        (*pd.cap_table).insert_at(SLOT_SHELL as u32, CapabilityData::Domain(3));
+    if pd_id == SEXDISPLAY_PD_ID_CONST {
+        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(SEXDISPLAY_PD_ID_CONST));
+    } else if pd_id == LINEN_PD_ID_CONST {
+        (*pd.cap_table).insert_at(SLOT_STORAGE as u32, CapabilityData::Domain(LINEN_PD_ID_CONST));
+        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(SEXDISPLAY_PD_ID_CONST));
+    } else if pd_id == SILK_SHELL_PD_ID_CONST {
+        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(SEXDISPLAY_PD_ID_CONST));
+        (*pd.cap_table).insert_at(SLOT_SHELL as u32,   CapabilityData::Domain(SILK_SHELL_PD_ID_CONST));
     } else {
-        // General apps: access to storage, network, display, etc.
-        (*pd.cap_table).insert_at(SLOT_STORAGE as u32, CapabilityData::Domain(2));
-        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(1));
-        (*pd.cap_table).insert_at(SLOT_SHELL as u32, CapabilityData::Domain(3));
+        (*pd.cap_table).insert_at(SLOT_STORAGE as u32, CapabilityData::Domain(LINEN_PD_ID_CONST));
+        (*pd.cap_table).insert_at(SLOT_DISPLAY as u32, CapabilityData::Domain(SEXDISPLAY_PD_ID_CONST));
+        (*pd.cap_table).insert_at(SLOT_SHELL as u32,   CapabilityData::Domain(SILK_SHELL_PD_ID_CONST));
     }
 }
 
@@ -99,8 +99,38 @@ pub fn init() {
 
         if let Some(fb_res) = crate::FB_REQUEST.response() {
             if let Some(fb) = fb_res.framebuffers().iter().next() {
-                // Phase 25 Ground Truth: fb.address is virtual. Pass directly.
                 let fb_addr = fb.address() as u64;
+                let fb_size = fb.pitch * fb.height;
+
+                // Remap FB pages USER_ACCESSIBLE — Ring-3 sexdisplay can't write without this.
+                {
+                    use x86_64::structures::paging::{
+                        Mapper, Page, PageTableFlags, OffsetPageTable, PageTable, Size4KiB,
+                    };
+                    use x86_64::registers::control::Cr3;
+                    const HHDM: u64 = 0xffff800000000000;
+                    let (cr3_frame, _) = Cr3::read();
+                    let pml4 = unsafe {
+                        &mut *((cr3_frame.start_address().as_u64() + HHDM) as *mut PageTable)
+                    };
+                    let mut mapper = unsafe { OffsetPageTable::new(pml4, VirtAddr::new(HHDM)) };
+                    let flags = PageTableFlags::PRESENT
+                        | PageTableFlags::WRITABLE
+                        | PageTableFlags::USER_ACCESSIBLE;
+                    let start = Page::<Size4KiB>::containing_address(VirtAddr::new(fb_addr));
+                    let end = Page::<Size4KiB>::containing_address(
+                        VirtAddr::new(fb_addr + fb_size - 1)
+                    );
+                    for page in Page::range_inclusive(start, end) {
+                        unsafe {
+                            if let Ok(tlb) = mapper.update_flags(page, flags) {
+                                tlb.flush();
+                            }
+                        }
+                    }
+                    serial_println!("init: FB remapped USER_ACCESSIBLE ({:#x}, {} pages)",
+                        fb_addr, (fb_size as usize + 4095) / 4096);
+                }
 
                 let msg = MessageType::DisplayPrimaryFramebuffer {
                     virt_addr: fb_addr,
@@ -163,10 +193,32 @@ fn pdx_spawn(name: &str, module_data: &[u8]) -> Result<u32, &'static str> {
         true
     );
     let task_ptr = alloc::boxed::Box::into_raw(task);
+    serial_println!("[DEBUG] pdx_spawn: pushing task {} to SCHEDULERS[0] at {:p}", pd_id, &crate::scheduler::SCHEDULERS[0].runqueue);
+    serial_println!("[DEBUG] pdx_spawn: queue len before push = {}", crate::scheduler::SCHEDULERS[0].runqueue.bottom.load(core::sync::atomic::Ordering::SeqCst) - crate::scheduler::SCHEDULERS[0].runqueue.top.load(core::sync::atomic::Ordering::SeqCst));
     crate::scheduler::SCHEDULERS[0].runqueue.push(task_ptr);
+    serial_println!("[DEBUG] pdx_spawn: queue len after push = {}", crate::scheduler::SCHEDULERS[0].runqueue.bottom.load(core::sync::atomic::Ordering::SeqCst) - crate::scheduler::SCHEDULERS[0].runqueue.top.load(core::sync::atomic::Ordering::SeqCst));
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+
+    unsafe { grant_standard_capabilities(&mut *pd_ptr, pd_id); }
+
+    // Phase 25 IPCPKU_MAP.md — explicit dynamic capability grants for every spawned PD.
+    // Overwrites static constants from grant_standard_capabilities with live IDs.
+    unsafe {
+        use crate::capability::CapabilityData;
+        let disp_id = SEXDISPLAY_PD_ID; // 0 when sexdisplay itself is being spawned (harmless)
+        if disp_id != 0 {
+            (*pd_ptr).grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(disp_id));
+        }
+        (*pd_ptr).grant_capability(sex_pdx::SLOT_SHELL, CapabilityData::Domain(SILK_SHELL_PD_ID_CONST));
+    }
+
+    if name.contains("linen") {
+        serial_println!("[kernel] Linen PD{} — granted SLOT_DISPLAY={} SLOT_SHELL={}",
+                        pd_id, sex_pdx::SLOT_DISPLAY, sex_pdx::SLOT_SHELL);
+    }
+    serial_println!("[kernel] PD {} ({}) — capability graph wired under MPK lock", pd_id, name);
 
     DOMAIN_REGISTRY.insert(pd_id, pd_ptr);
-    unsafe { grant_standard_capabilities(&mut *pd_ptr, pd_id); }
     
     serial_println!("PDX: Registered {} (PKEY {})", name, pku_key);
 
@@ -176,21 +228,25 @@ fn pdx_spawn(name: &str, module_data: &[u8]) -> Result<u32, &'static str> {
 pub unsafe fn jump_to_userland(pd_id: u32, entry: u64, pkru: u32, pku_key: u8) -> ! {
     use crate::gdt;
     let selectors = gdt::get_selectors();
-    let user_cs = selectors.user_code.0 as u64;
-    let user_ss = selectors.user_data.0 as u64;
+    
+    // User Code Segment (0x28) with RPL 3 = 0x2B
+    let user_cs = (selectors.user_cs.0 | 3) as u64;
+    // User Data Segment (0x20) with RPL 3 = 0x23
+    let user_ss = (selectors.user_ss.0 | 3) as u64;
+    
     let rflags: u64 = 0x3202;
     let stack_top = 0x_7000_0000_0000 + (pku_key as u64 * 0x100_0000) + (64 * 1024);
 
     crate::core_local::CoreLocal::get().set_pd(pd_id);
 
     core::arch::asm!(
-        "xor eax, eax", "xor ecx, ecx", "xor edx, edx", "wrpkru", // God Mode ON
+        "xor eax, eax", "xor ecx, ecx", "xor edx, edx", "wrpkru", // God Mode
         "push {ss}",
         "push {rsp_val}",
         "push {rflags}",
         "push {cs}",
         "push {rip}",
-        "mov eax, {target_pkru:e}", "xor ecx, ecx", "xor edx, edx", "wrpkru", // Isolation ON
+        "mov eax, {target_pkru:e}", "xor ecx, ecx", "xor edx, edx", "wrpkru", // Isolation
         "swapgs",
         "iretq",
         ss      = in(reg) user_ss,

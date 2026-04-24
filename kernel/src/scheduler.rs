@@ -46,17 +46,27 @@ impl Task {
         let selectors = crate::gdt::get_selectors();
 
         let (cs, ss, rflags) = if is_user {
-            (selectors.user_cs.0 as u64, selectors.user_ss.0 as u64, 0x202)
+            (0x2Bu64, 0x23u64, 0x202u64)  // CS=index5|RPL3, SS=index4|RPL3 (hardware confirmed)
         } else {
-            (selectors.kernel_cs.0 as u64, selectors.kernel_ss.0 as u64, 0x202)
+            (selectors.kernel_cs.0 as u64, selectors.kernel_ss.0 as u64, 0x202u64)
         };
 
-        // Phase 32: Allocate a dedicated 64KB kernel stack for each task.
-        // This ensures that when the CPU switches from Ring 3 -> Ring 0,
-        // it lands on a clean, private stack.
         let kstack = alloc::vec![0u8; 65536];
-        let kstack_top = kstack.as_ptr() as u64 + 65536;
-        core::mem::forget(kstack); // Leak stack for simplicity in Phase 32
+        let kstack_alloc_top = kstack.as_ptr() as u64 + 65536;
+        core::mem::forget(kstack);
+
+        // Pre-seed kstack with IRETQ frame + GPR zeros. switch_to loads ksp and pops directly.
+        // Layout low→high: [r15=0..rax=0][RIP][CS][RFLAGS][RSP][SS]
+        let forged_ksp = unsafe {
+            let mut ksp = kstack_alloc_top as *mut u64;
+            ksp = ksp.sub(1); *ksp = ss;
+            ksp = ksp.sub(1); *ksp = stack_top;
+            ksp = ksp.sub(1); *ksp = rflags;
+            ksp = ksp.sub(1); *ksp = cs;
+            ksp = ksp.sub(1); *ksp = entry_point;
+            for _ in 0..15 { ksp = ksp.sub(1); *ksp = 0; } // rax..r15 zeros
+            ksp as u64
+        };
 
         let context = TaskContext {
             r15: 0, r14: 0, r13: 0, r12: 0, r11: 0, r10: 0, r9: 0, r8: 0,
@@ -70,7 +80,7 @@ impl Task {
             rsp: stack_top,
             ss,
             pd_ptr: pd as *const _,
-            kstack_top,
+            kstack_top: forged_ksp,  // active ksp; switch_to saves/loads here
         };
 
         Self {
@@ -78,7 +88,7 @@ impl Task {
             context,
             state: AtomicU32::new(TaskState::Ready as u32),
             signal_ring: pd.signal_ring,
-            kstack_top,
+            kstack_top: kstack_alloc_top,  // initial alloc top (for TSS RSP0)
         }
     }
 }
@@ -87,8 +97,8 @@ pub const QUEUE_SIZE: usize = 512;
 pub const QUEUE_MASK: usize = QUEUE_SIZE - 1;
 
 pub struct WorkStealingQueue {
-    top: AtomicUsize,
-    bottom: AtomicUsize,
+    pub top: AtomicUsize,
+    pub bottom: AtomicUsize,
     buffer: [AtomicPtr<Task>; QUEUE_SIZE],
 }
 
@@ -140,28 +150,48 @@ impl Scheduler {
     }
 
     pub fn tick(&self) -> Option<(*mut TaskContext, *const TaskContext)> {
+        crate::serial_println!("[DEBUG] TICK: runqueue len = {}", self.runqueue.bottom.load(Ordering::SeqCst) - self.runqueue.top.load(Ordering::SeqCst));
         let next_task = self.runqueue.steal();
         let next_task = if next_task.is_null() { self.attempt_steal() } else { next_task };
-        if next_task.is_null() { return None; }
-
+        
         let old_task = self.current_task.swap(next_task, Ordering::AcqRel);
 
-        if old_task.is_null() {
-            unsafe {
-                (*next_task).state.store(TaskState::Running as u32, Ordering::Release);
-                return Some((ptr::null_mut(), &(*next_task).context));
+        unsafe {
+            if !next_task.is_null() {
+                let current_pd = if old_task.is_null() { 0 } else { (*old_task).context.pd_id };
+                let next_pd = (*next_task).context.pd_id;
+                let current_ctx: *const TaskContext = if old_task.is_null() { core::ptr::null_mut() } else { &(*old_task).context as *const _ };
+                let next_ctx: *const TaskContext = &(*next_task).context as *const _;
+                crate::serial_println!("SWITCH: current={:p} next={:p}", current_ctx, next_ctx);
+                crate::serial_println!("TASKS: current_pd={} next_pd={}", current_pd, next_pd);
+            } else {
+                crate::serial_println!("SCHED: No next task found!");
             }
         }
 
-        let old_state = unsafe { (*old_task).state.load(Ordering::Acquire) };
-        if old_state == TaskState::Running as u32 {
-            unsafe { (*old_task).state.store(TaskState::Ready as u32, Ordering::Release); }
-            self.runqueue.push(old_task);
+        if next_task.is_null() { return None; }
+
+        if !old_task.is_null() {
+            let old_state = unsafe { (*old_task).state.load(Ordering::Acquire) };
+            if old_state == TaskState::Running as u32 {
+                unsafe { (*old_task).state.store(TaskState::Ready as u32, Ordering::Release); }
+                self.runqueue.push(old_task);
+            }
         }
 
         unsafe {
             (*next_task).state.store(TaskState::Running as u32, Ordering::Release);
-            Some((&mut (*old_task).context, &(*next_task).context))
+            let core = crate::core_local::CoreLocal::get();
+            core.set_pd((*next_task).context.pd_id as u32);
+            x86_64::registers::model_specific::GsBase::write(
+                x86_64::VirtAddr::new(core as *const _ as u64)
+            );
+            let old_ctx = if old_task.is_null() {
+                core::ptr::null_mut()
+            } else {
+                &mut (*old_task).context as *mut _
+            };
+            Some((old_ctx, &(*next_task).context))
         }
     }
 
@@ -177,74 +207,65 @@ impl Scheduler {
     #[unsafe(naked)]
     pub unsafe extern "C" fn switch_to(_old_context: *mut TaskContext, next_context: *const TaskContext) {
         core::arch::naked_asm!(
-            // rdi = _old_context, rsi = next_context
-            // 1. Check if _old_context is NULL (first boot)
+            // rdi = old_ctx (*mut TaskContext, NULL on first boot)
+            // rsi = next_ctx (*const TaskContext)
+            // context.kstack_top (offset 0xC0) = active ksp for this task.
+            //   New task:     pre-seeded by Task::new: [GPR zeros][IRETQ frame]
+            //   Running task: ksp saved here by previous switch_to call
+
+            // Skip save if old_ctx is NULL
             "test rdi, rdi",
             "jz 1f",
 
-            // 2. Save current state into _old_context (rdi)
-            "mov [rdi + 0x00], r15",
-            "mov [rdi + 0x08], r14",
-            "mov [rdi + 0x10], r13",
-            "mov [rdi + 0x18], r12",
-            "mov [rdi + 0x20], r11",
-            "mov [rdi + 0x28], r10",
-            "mov [rdi + 0x30], r9",
-            "mov [rdi + 0x38], r8",
-            "mov [rdi + 0x50], rbp",
-            "mov [rdi + 0x58], rdx",
-            "mov [rdi + 0x60], rcx",
-            "mov [rdi + 0x68], rbx",
-            "mov [rdi + 0x70], rax",
-
-            // Save caller's RIP and RSP securely
-            "mov rax, [rsp]",           // Caller return address
-            "mov [rdi + 0x90], rax",    // context.rip
-            "lea rax, [rsp + 8]",       // Stack pointer before call
-            "mov [rdi + 0xA8], rax",    // context.rsp
+            // Push all GPRs onto current kernel stack (rax=high addr, r15=low=new ksp)
+            "push rax",
+            "push rbx",
+            "push rcx",
+            "push rdx",
+            "push rbp",
+            "push rsi",
+            "push rdi",
+            "push r8",
+            "push r9",
+            "push r10",
+            "push r11",
+            "push r12",
+            "push r13",
+            "push r14",
+            "push r15",
+            // Save ksp to old_ctx.kstack_top (rdi register still = old_ctx after push rdi)
+            "mov [rdi + 0xC0], rsp",
 
             "1:",
-            // 3. Restore next_context (rsi)
-            "mov rdi, rsi",             // Use RDI as the struct base pointer
-
-            // Restore PKRU correctly (Requires EAX, ECX=0, EDX=0)
-            "mov rax, [rdi + 0x80]",
+            // Restore PKRU for next task (rsi register still = next_ctx)
+            "mov rax, [rsi + 0x80]",
             "xor rcx, rcx",
             "xor rdx, rdx",
             "wrpkru",
 
-            // Restore general registers
-            "mov r15, [rdi + 0x00]",
-            "mov r14, [rdi + 0x08]",
-            "mov r13, [rdi + 0x10]",
-            "mov r12, [rdi + 0x18]",
-            "mov r11, [rdi + 0x20]",
-            "mov r10, [rdi + 0x28]",
-            "mov r9, [rdi + 0x30]",
-            "mov r8, [rdi + 0x38]",
-            "mov rbp, [rdi + 0x50]",
-            "mov rdx, [rdi + 0x58]",
-            "mov rcx, [rdi + 0x60]",
-            "mov rbx, [rdi + 0x68]",
-            "mov rax, [rdi + 0x70]",
+            // Load next task's kernel stack
+            "mov rsp, [rsi + 0xC0]",
 
-            // 4. Secure the Stack & Prepare IRETQ
-            // Safely switch to the task's private kernel stack (0xC0)
-            "mov rsp, [rdi + 0xC0]",
+            // Pop GPRs (r15=low=first pop, rax=high=last; IRETQ frame sits above)
+            "pop r15",
+            "pop r14",
+            "pop r13",
+            "pop r12",
+            "pop r11",
+            "pop r10",
+            "pop r9",
+            "pop r8",
+            "pop rdi",
+            "pop rsi",
+            "pop rbp",
+            "pop rdx",
+            "pop rcx",
+            "pop rbx",
+            "pop rax",
 
-            // Push the 5-QWORD IRETQ frame onto this clean stack
-            "push qword ptr [rdi + 0xB0]", // SS
-            "push qword ptr [rdi + 0xA8]", // RSP
-            "push qword ptr [rdi + 0xA0]", // RFLAGS
-            "push qword ptr [rdi + 0x98]", // CS
-            "push qword ptr [rdi + 0x90]", // RIP
-
-            // Restore the final two scratch registers
-            "mov rsi, [rdi + 0x48]",
-            "mov rdi, [rdi + 0x40]",
-
-            // 5. Jump to Userland!
-            "iretq"
+            // IRETQ frame is next on stack (pre-seeded or interrupt-saved)
+            "swapgs",
+            "iretq",
         );
     }
 }

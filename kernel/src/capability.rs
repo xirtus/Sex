@@ -150,14 +150,7 @@ pub struct ProtectionDomain {
 
 impl ProtectionDomain {
     pub fn new(id: u32, pku_key: u8) -> Self {
-        let mut pkru_mask: u32 = 0xFFFF_FFFF;
-        // Enable own PKEY
-        let shift = pku_key * 2;
-        pkru_mask &= !(0b11 << shift);
-        // Enable PKEY 0 (Default/Kernel)
-        pkru_mask &= !0b11;
-        // Enable Shared PKEY (15) for zero-copy IPC
-        pkru_mask &= !(0b11 << 30); 
+        let pkru_mask = crate::pku::PkruValue::for_domain(pku_key);
         
         Self {
             id, pku_key,

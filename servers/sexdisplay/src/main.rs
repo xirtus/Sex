@@ -1,38 +1,43 @@
 #![no_std]
 #![no_main]
 
-use sex_pdx::{pdx_listen, pdx_reply, sys_yield, MessageType};
+use sex_pdx::{pdx_listen, pdx_reply, sys_yield, serial_println};
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // Wait for the Kernel to hand over the hardware framebuffer PKEY 1 capability
-    let (_kernel_pd, msg) = pdx_listen();
+    serial_println!("[sexdisplay] PD1 start — waiting for FB handoff");
 
-    if let MessageType::DisplayPrimaryFramebuffer { virt_addr, width, height, .. } = msg {
-        let fb_ptr = virt_addr as *mut u32;
+    let msg = pdx_listen();
 
-        // EXECUTE: Cosmic Purple Flip (0xFF663399)
+    if msg.type_id == 0x11 {
+        let fb_ptr = msg.arg0 as *mut u32;
+        let width  = (msg.arg1 & 0xFFFF_FFFF) as u32;
+        let height = (msg.arg1 >> 32) as u32;
+        serial_println!("[sexdisplay] FB received {}x{} @ {:#x}", width, height, msg.arg0);
+
+        // Red probe: confirms PKEY 1 framebuffer write path
         unsafe {
             for i in 0..(width * height) as usize {
-                fb_ptr.add(i).write_volatile(0xFF663399);
+                fb_ptr.add(i).write_volatile(0xFFFF0000);
             }
         }
+        serial_println!("[sexdisplay] Red fill complete — PKEY 1 write OK");
 
-        // Enter high-frequency blit loop
         loop {
-            let (caller_pd, cmd) = pdx_listen();
-            match cmd {
-                MessageType::WindowCreate => {
-                    // Hazard 2 Fix: Return the SAS-safe Shared Canvas address
-                    pdx_reply(caller_pd);
+            let cmd = pdx_listen();
+            serial_println!("[sexdisplay] msg type_id={:#x} from PD {}", cmd.type_id, cmd.caller_pd);
+            match cmd.type_id {
+                0xDE => { // OP_WINDOW_CREATE
+                    serial_println!("[sexdisplay] OP_WINDOW_CREATE -> ack PD {}", cmd.caller_pd);
+                    pdx_reply(cmd.caller_pd as u64);
                 }
-                MessageType::CompositorCommit => {
-                    // Blit Shared Canvas -> Hardware FB (Phase 26)
+                0xDD => { // OP_COMPOSITOR_COMMIT
                 }
                 _ => sys_yield(),
             }
         }
     }
+    serial_println!("[sexdisplay] ERROR: no FB message (type_id={:#x})", msg.type_id);
     loop { sys_yield(); }
 }
 

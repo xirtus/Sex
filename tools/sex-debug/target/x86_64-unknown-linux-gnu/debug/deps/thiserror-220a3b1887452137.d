@@ -1,0 +1,13 @@
+/home/xirtus_arch/Documents/microkernel/tools/sex-debug/target/x86_64-unknown-linux-gnu/debug/deps/thiserror-220a3b1887452137.d: /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/provide.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/xirtus_arch/Documents/microkernel/tools/sex-debug/target/x86_64-unknown-linux-gnu/debug/build/thiserror-e485272a8a857e53/out/private.rs
+
+/home/xirtus_arch/Documents/microkernel/tools/sex-debug/target/x86_64-unknown-linux-gnu/debug/deps/libthiserror-220a3b1887452137.rmeta: /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/provide.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/xirtus_arch/Documents/microkernel/tools/sex-debug/target/x86_64-unknown-linux-gnu/debug/build/thiserror-e485272a8a857e53/out/private.rs
+
+/home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs:
+/home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs:
+/home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs:
+/home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/provide.rs:
+/home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs:
+/home/xirtus_arch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs:
+/home/xirtus_arch/Documents/microkernel/tools/sex-debug/target/x86_64-unknown-linux-gnu/debug/build/thiserror-e485272a8a857e53/out/private.rs:
+
+# env-dep:OUT_DIR=/home/xirtus_arch/Documents/microkernel/tools/sex-debug/target/x86_64-unknown-linux-gnu/debug/build/thiserror-e485272a8a857e53/out

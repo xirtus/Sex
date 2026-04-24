@@ -88,27 +88,59 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
             loop { core::hint::spin_loop(); }
         });
 
+    // Determine total physical pages from memmap to size the metadata array
+    let mut max_phys_addr = 0u64;
+    for entry in memmap.entries().iter() {
+        let end = entry.base + entry.length;
+        if end > max_phys_addr {
+            max_phys_addr = end;
+        }
+    }
+    let total_pages = (max_phys_addr + 4095) / 4096;
+    let metadata_bytes = total_pages * core::mem::size_of::<crate::memory::allocator::PageMetadata>() as u64;
+    let metadata_pages = (metadata_bytes + 4095) / 4096;
+
     // Seed GLOBAL_ALLOCATOR (LockFreeBuddyAllocator) with remaining usable physical regions.
     // The bump allocator consumed heap_pages frames sequentially from usable regions.
     // Track how many frames were consumed and skip them when feeding the buddy allocator
     // so physical frames used for the heap aren't double-allocated.
     let heap_pages = (crate::HEAP_SIZE as u64) / 4096;
     let mut consumed = 0u64;
+    let mut metadata_allocated = false;
+
     for entry in memmap.entries().iter().filter(|e| e.type_ == 0) {
         let region_pages = entry.length / 4096;
-        if consumed >= heap_pages {
-            // All heap pages already skipped; add this full region.
-            unsafe { crate::memory::allocator::GLOBAL_ALLOCATOR.add_memory_region(entry.base, entry.length) };
-        } else if consumed + region_pages > heap_pages {
-            // Partial overlap: skip the consumed portion, add the rest.
-            let skip_pages = heap_pages - consumed;
-            let base = entry.base + skip_pages * 4096;
-            let len  = entry.length - skip_pages * 4096;
-            unsafe { crate::memory::allocator::GLOBAL_ALLOCATOR.add_memory_region(base, len) };
-            consumed = heap_pages; // saturate
-        } else {
-            // Entire region consumed by heap mapping.
-            consumed += region_pages;
+        let mut region_base = entry.base;
+        let mut region_len = entry.length;
+
+        if consumed < heap_pages {
+            if consumed + region_pages <= heap_pages {
+                // Entire region consumed by heap mapping.
+                consumed += region_pages;
+                continue;
+            } else {
+                // Partial overlap: skip the consumed portion.
+                let skip_pages = heap_pages - consumed;
+                region_base += skip_pages * 4096;
+                region_len -= skip_pages * 4096;
+                consumed = heap_pages; // saturate
+            }
+        }
+
+        // Carve metadata array from the first available usable region after heap
+        if !metadata_allocated && region_len >= metadata_pages * 4096 {
+            let metadata_phys = region_base;
+            let metadata_vaddr = hhdm_offset + metadata_phys;
+            unsafe {
+                crate::memory::allocator::GLOBAL_ALLOCATOR.init_metadata(metadata_vaddr, total_pages);
+            }
+            region_base += metadata_pages * 4096;
+            region_len -= metadata_pages * 4096;
+            metadata_allocated = true;
+        }
+
+        if region_len > 0 {
+            unsafe { crate::memory::allocator::GLOBAL_ALLOCATOR.add_memory_region(region_base, region_len) };
         }
     }
 

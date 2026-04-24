@@ -54,17 +54,29 @@ pub unsafe fn pdx_call_with_mask(target_pkru: u32, entry_point: VirtAddr, arg0: 
     let result: u64;
 
     core::arch::asm!(
-        "mov {tmp_pkru:e}, eax", 
+        // 1. Save current PKRU
+        "xor ecx, ecx",
+        "rdpkru",
+        "mov {tmp_pkru:e}, eax",
+        
+        // 2. Load Target PKRU
         "mov eax, {target_pkru_val:e}",
-        "xor edx, edx", "xor ecx, ecx",
+        "xor edx, edx",
+        "xor ecx, ecx",
         "wrpkru",              
+        
+        // 3. Perform Call
         "mov rdi, {arg0_val}", 
         "mov rsi, {arg1_val}",
         "mov rdx, {arg2_val}",
         "call {entry_val}",    
-        "mov {tmp_pkru:e}, eax",
-        "xor edx, edx", "xor ecx, ecx",
+        
+        // 4. Restore Previous PKRU
+        "mov eax, {tmp_pkru:e}",
+        "xor edx, edx",
+        "xor ecx, ecx",
         "wrpkru",              
+        
         target_pkru_val = in(reg) target_pkru,
         entry_val = in(reg) entry_point.as_u64(),
         arg0_val = in(reg) arg0,

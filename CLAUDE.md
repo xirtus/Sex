@@ -22,14 +22,19 @@ The `x86_64` crate has a strict 8-slot GDT limit. A Task State Segment (TSS) in 
 **2. SYSRET Mathematical Offsets**
 The `syscall` instruction strictly calculates segments. `x86_64::registers::model_specific::Star::write` will throw a `SysretOffset` panic if indices violate this math:
 * Kernel SS Index MUST be `Kernel CS + 1` (Index 2 = 1 + 1).
-* User CS Index MUST be `User SS + 1` (Index 6 = 5 + 1).
+* User CS Index MUST be `User SS + 1` (Index 5 = 4 + 1 — hardware confirmed).
 * *Never* pass `user_data_selector` as the Kernel SS parameter.
 
 **3. Ring-3 Context Switch (IRETQ)**
 * **The RPL Drop:** When forging the interrupt stack frame in `Task::new()`, user selectors MUST explicitly be bitwise-OR'd with the Ring Privilege Level 3 (`| 3`). 
-    * `User CS` must evaluate to `0x33`. 
-    * `User SS` must evaluate to `0x2B`. 
-    * Failure to add the RPL causes an instant `#GP(0x30)`.
+    * `User CS` must evaluate to `0x2B` (GDT index 5 | RPL3). **NOT 0x33** — index 6 is TSS → `#GP(0x30)`.
+    * `User SS` must evaluate to `0x23` (GDT index 4 | RPL3).
+    * Confirmed by hardware: CS=0x33 → `#GP Error: 0x30` → CPU saw TSS at index 6, not code segment.
+* **Actual GDT user segment layout (hardware-confirmed):**
+    * Index 4: User Data (SS) → selector `0x20`, with RPL3 = `0x23`
+    * Index 5: User Code (CS) → selector `0x28`, with RPL3 = `0x2B`
+    * Index 6-7: TSS (system segment, 2 slots)
+    * SYSRET math: User CS Index (5) = User SS Index (4) + 1 ✓
 * **The Stack Bomb:** If using a custom stub (e.g., `timer_interrupt_stub`) before `iretq`, `Task::new()` must push exactly 15 dummy zeros onto the task stack *on top* of the hardware frame. Otherwise, the stub's `pop r15 ... pop rdi` sequence will literally eat the `iretq` frame, misaligning the stack.
 
 *** ### Why this works for LLMs:
@@ -215,13 +220,14 @@ Cap table is accessed via raw pointer in `init.rs` — `unsafe` is intentional.
 
 ---
 
-## Scheduler — CONFIRMED BUGS (2026-04-23)
+## Scheduler — BUG HISTORY & ACTIVE STALL
 
 - Round-robin via `WorkStealingQueue`. Uses `steal()` on local queue (should be
   `pop()` but functionally identical on single core).
 - Timer IRQ fires → `timer_interrupt_stub` → `timer_interrupt_handler`.
+- **"Fresh Frame" model enforced (Phase 28):** `switch_to` loads `kstack_top` as clean slate, pushes IRETQ frame manually. `add rsp, 8` removed. `TaskContext` offsets 0x90-0x98.
 
-### BUG 1 (CRITICAL — causes kernel panic on any pdx_listen/safe_pdx_call):
+### BUG 1 (FIXED 2026-04-23 — was: kernel panic on any pdx_listen/safe_pdx_call):
 **`current_pd_id` is NEVER updated by the scheduler.**
 `set_pd()` is only called from `jump_to_userland()` which is NEVER called (dead code).
 `current_pd_id` stays 0 forever. Any call path that hits `CoreLocal::current_pd_ref()`
@@ -234,7 +240,7 @@ DOMAIN_REGISTRY.get(0)  // domains[0] is null — PDs start at ID 1
 add `crate::core_local::CoreLocal::get().set_pd(unsafe { (*next_ctx_ptr).pd_id });`
 before calling `switch_to`.
 
-### BUG 2 (CRITICAL — corrupts callee-saved registers on context restore):
+### BUG 2 (FIXED 2026-04-23 — was: corrupts callee-saved registers on context restore):
 **`switch_to` saves KERNEL callee-saved registers into old task context, not user's.**
 When timer fires from userland, `timer_interrupt_stub` pushes user registers to kernel
 stack but DOES NOT restore them to the CPU register file before calling
@@ -249,7 +255,7 @@ callee-saved registers from the kernel stack frame (they were pushed by the stub
 known offsets relative to `stack_frame`) and write them into `old_ctx.r15` etc.
 OR: have the stub pass a pointer to the pushed regs as a second argument.
 
-### BUG 3 (CRITICAL — pdx_call always returns wrong value):
+### BUG 3 (FIXED 2026-04-23 — was: pdx_call always returns wrong value):
 **`syscall_entry` discards `dispatch()` return value.** `pop rax` after
 `call syscall_handler` restores the PUSHED original rax (= syscall number),
 NOT the Rust function's return value. Dispatch must write `regs.rax = result`
@@ -263,6 +269,15 @@ OR restructure syscall_entry to use the function return value.
 **`TaskContext` lacks `#[repr(C)]`** but `switch_to` uses hardcoded offsets.
 Works in practice (Rust preserves order when no alignment benefit from reordering)
 but is fragile. Add `#[repr(C)]` to `TaskContext`.
+
+### BUG 5 (ACTIVE — Phase 28 stall — scheduler returns None every tick):
+**`Scheduler::tick()` never finds a task to switch to.** `steal()` returns `None`
+for all cores despite `pdx_spawn` logging successful task registration.
+`SWITCH` log lines never appear. `timer_tick` spam continues indefinitely.
+Diagnosis: runqueue push and steal/pop operate on different state, or tasks
+are registered after scheduler init but before runqueue is live.
+**Next:** Instrument `WorkStealingQueue::push()`, `steal()`, `attempt_steal()` —
+verify tasks actually land in the queue and are visible to the scheduler's steal path.
 
 ### Known panic pattern:
 `KERNEL PANIC: Userland Null Pointer Jump at RIP: 0x0` — page fault at address 0
@@ -336,14 +351,19 @@ When the screen is black:
 
 ---
 
-## Current Status (last updated 2026-04-23)
+## Current Status (last updated 2026-04-24)
 
-- Phase 25 — PDX ABI standardized, capability table documented
+- Phase 28 — IRETQ Contract Enforcement
 - Kernel boots, GDT/IDT/PKU/Syscalls all initialize correctly
-- Scheduler runs round-robin over 3 PDs (sexdisplay=PD1, silk-shell=PD2, linen=PD3)
-- **3 critical bugs FIXED (2026-04-23):**
+- **Bugs FIXED (2026-04-23, Phase 25):**
   1. `current_pd_id` never set — fixed: `timer_interrupt_handler` now calls `set_pd(pd_id)` before `switch_to`
-  2. `switch_to` saved kernel r15-rbp — fixed: r15-rbp now extracted from stub's kernel stack frame in `timer_interrupt_handler`; `switch_to` only saves PKRU
-  3. `dispatch()` return discarded — fixed: `dispatch()` now writes `regs.rax = result` so `pop rax` loads correct value
-- **Expected next issue:** sexdisplay may now reach pdx_listen loop and wait for IPC. Silk-shell sends OP_SET_BG + OP_WINDOW_COMMIT after 2M spin iterations. Linen sends OP_WINDOW_CREATE. These go through `safe_pdx_call` → `CapabilityData::Domain(sexdisp_id)` → enqueues to sexdisplay's message_ring.
-- **Goal:** Verify red screen appears (sexdisplay proof-of-life), then get silk-shell IPC flowing
+  2. `switch_to` saved kernel r15-rbp — fixed: r15-rbp extracted from stub's kernel stack frame; `switch_to` only saves PKRU
+  3. `dispatch()` return discarded — fixed: `dispatch()` now writes `regs.rax = result`
+- **Bugs FIXED (Phase 28):**
+  4. Stack model mismatch (`switch_to` vs `timer_interrupt_stub`) — fixed: enforced "Fresh Frame" model (Case B); `switch_to` treats `kstack_top` as clean slate
+  5. `TaskContext` offsets standardized to 0x90-0x98 to match exact IRETQ frame layout
+  6. Removed legacy `add rsp, 8` (conflicts with explicit stack switching to `kstack_top`)
+  7. Added `SWITCH`/`TASKS` logging to `Scheduler::tick()`
+- **ACTIVE STALL (Phase 28):** `Scheduler::tick()` returns `None` on every call. `SWITCH` log lines never appear. `timer_tick` spam continues. `pdx_spawn` reports task registration but `steal()` returns `None` for all cores.
+- **Root cause suspected:** Runqueue initialization failure. Tasks registered but invisible to `steal()` / `attempt_steal()`.
+- **Next action:** Instrument `runqueue.steal()` and `attempt_steal()` to find why tasks not found. Check `WorkStealingQueue` push vs pop/steal path for init-order bug.

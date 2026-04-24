@@ -1,0 +1,2 @@
+qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku -cdrom sexos-v1.0.0.iso -serial stdio -boot d -display none -qmp unix:qmp.sock,server,nowait
+make: *** [Makefile:8: run-sasos] Terminated

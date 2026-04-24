@@ -55,18 +55,23 @@ pub extern "C" fn _start() -> ! {
         core::hint::spin_loop();
     }
 
+    // PHASE 32: WARDEN STRESS TEST
+    // Violation: Read from PKEY 1 (sexdisplay) from current domain (linen, PKEY 3)
     unsafe {
-        pdx_call(SLOT_DISPLAY as u32, OP_WINDOW_CREATE, 0, 0, 0, 0);
+        let sexdisplay_base = 0x2020_0000 as *const u64;
+        let _val = core::ptr::read_volatile(sexdisplay_base);
+    }
+
+    unsafe {
+        pdx_call(SLOT_DISPLAY, OP_WINDOW_CREATE, 0, 0, 0);
 
         loop {
-            let ev = pdx_listen();
-            if ev.0 != 0 { 
-                break;
-            }
+            let msg = pdx_listen();
+            if msg.type_id != 0 { break; }
             core::hint::spin_loop();
         }
 
-        pdx_call(SLOT_DISPLAY as u32, OP_WINDOW_PAINT, 0, 0, 0, 0);
+        pdx_call(SLOT_DISPLAY, OP_WINDOW_PAINT, 0, 0, 0);
     }
 
     loop { core::hint::spin_loop(); }

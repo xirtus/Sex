@@ -49,12 +49,10 @@ impl HardwareAbstractionLayer for X86Hal {
         }
 
         serial_println!("X86Hal: Initializing GDT/IDT...");
-        unsafe {
-            gdt::init();
-            gdt::init_tss_descriptor();
-        }
+        gdt::init();
+
         interrupts::init_idt();
-        serial_println!("X86Hal: GDT/IDT + TSS fully locked");
+        serial_println!("[HAL] GDT/TSS + Star MSR locked under Intel MPK/PKEY isolation (10th-gen+ hardware enforced)");
     }
 
     fn init_advanced(&self, rsdp_addr: u64, hhdm_offset: u64) {
