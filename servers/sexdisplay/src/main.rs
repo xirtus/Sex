@@ -24,7 +24,7 @@ pub extern "C" fn _start() -> ! {
             match cmd {
                 MessageType::WindowCreate => {
                     // Hazard 2 Fix: Return the SAS-safe Shared Canvas address
-                    pdx_reply(caller_pd, 0x4000_0000);
+                    pdx_reply(caller_pd);
                 }
                 MessageType::CompositorCommit => {
                     // Blit Shared Canvas -> Hardware FB (Phase 26)

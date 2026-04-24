@@ -10,10 +10,12 @@ pub struct TaskContext {
     pub r11: u64, pub r10: u64, pub r9: u64, pub r8: u64,
     pub rdi: u64, pub rsi: u64, pub rbp: u64, pub rdx: u64,
     pub rcx: u64, pub rbx: u64, pub rax: u64,
-    pub pkru: u32,
-    pub pd_id: u32,
+    pub dummy_error_code: u64,
+    pub pkru: u64,
+    pub pd_id: u64,
     pub rip: u64, pub cs: u64, pub rflags: u64, pub rsp: u64, pub ss: u64,
     pub pd_ptr: *const ProtectionDomain,
+    pub kstack_top: u64,
 }
 
 #[repr(u32)]
@@ -35,47 +37,48 @@ pub struct Task {
     pub context: TaskContext,
     pub state: AtomicU32,
     pub signal_ring: *mut RingBuffer<u8, 32>,
+    pub kstack_top: u64,
 }
 
 impl Task {
     pub fn new(id: u32, entry_point: u64, stack_top: u64, pd: &ProtectionDomain, is_user: bool) -> Self {
         let pkru = pd.current_pkru_mask.load(Ordering::SeqCst);
         let selectors = crate::gdt::get_selectors();
-        
+
         let (cs, ss, rflags) = if is_user {
-            (selectors.user_code.0 as u64, selectors.user_data.0 as u64, 0x3202)
+            (selectors.user_cs.0 as u64, selectors.user_ss.0 as u64, 0x202)
         } else {
-            (selectors.kernel_code.0 as u64, selectors.kernel_data.0 as u64, 0x202)
+            (selectors.kernel_cs.0 as u64, selectors.kernel_ss.0 as u64, 0x202)
         };
 
-        let mut stack_ptr = stack_top as *mut u64;
-        unsafe {
-            // 1. Hardware IRETQ Frame (5 values)
-            stack_ptr = stack_ptr.offset(-1); stack_ptr.write(ss);
-            stack_ptr = stack_ptr.offset(-1); stack_ptr.write(stack_top);
-            stack_ptr = stack_ptr.offset(-1); stack_ptr.write(0x3202); // RFLAGS (IF=1, IOPL=3)
-            stack_ptr = stack_ptr.offset(-1); stack_ptr.write(cs);
-            stack_ptr = stack_ptr.offset(-1); stack_ptr.write(entry_point);
+        // Phase 32: Allocate a dedicated 64KB kernel stack for each task.
+        // This ensures that when the CPU switches from Ring 3 -> Ring 0,
+        // it lands on a clean, private stack.
+        let kstack = alloc::vec![0u8; 65536];
+        let kstack_top = kstack.as_ptr() as u64 + 65536;
+        core::mem::forget(kstack); // Leak stack for simplicity in Phase 32
 
-            // 2. Assembly Context Buffer (The Magic 15)
-            // Align with: 15 GPRs (the stub will pop these)
-            for _ in 0..15 {
-                stack_ptr = stack_ptr.offset(-1);
-                stack_ptr.write(0);
-            }
-        }
+        let context = TaskContext {
+            r15: 0, r14: 0, r13: 0, r12: 0, r11: 0, r10: 0, r9: 0, r8: 0,
+            rdi: 0, rsi: 0, rbp: 0, rdx: 0, rcx: 0, rbx: 0, rax: 0,
+            dummy_error_code: 0,
+            pkru: pkru as u64,
+            pd_id: pd.id as u64,
+            rip: entry_point,
+            cs,
+            rflags,
+            rsp: stack_top,
+            ss,
+            pd_ptr: pd as *const _,
+            kstack_top,
+        };
 
         Self {
             id,
-            context: TaskContext {
-                r15: 0, r14: 0, r13: 0, r12: 0, r11: 0, r10: 0, r9: 0, r8: 0,
-                rdi: 0, rsi: 0, rbp: 0, rdx: 0, rcx: 0, rbx: 0, rax: 0,
-                pkru, pd_id: pd.id,
-                rip: entry_point, cs, rflags, rsp: stack_ptr as u64, ss,
-                pd_ptr: pd as *const _,
-            },
+            context,
             state: AtomicU32::new(TaskState::Ready as u32),
             signal_ring: pd.signal_ring,
+            kstack_top,
         }
     }
 }
@@ -102,44 +105,21 @@ impl WorkStealingQueue {
     pub fn push(&self, task: *mut Task) {
         let b = self.bottom.load(Ordering::Relaxed);
         let t = self.top.load(Ordering::Acquire);
-        if b.wrapping_sub(t) >= QUEUE_SIZE { return; }
-        self.buffer[b & QUEUE_MASK].store(task, Ordering::Relaxed);
-        core::sync::atomic::compiler_fence(Ordering::Release);
-        self.bottom.store(b.wrapping_add(1), Ordering::Release);
-    }
-
-    pub fn pop(&self) -> *mut Task {
-        let b = self.bottom.load(Ordering::Relaxed);
-        if b == 0 { return ptr::null_mut(); }
-        let b = b.wrapping_sub(1);
-        self.bottom.store(b, Ordering::Relaxed);
-        core::sync::atomic::fence(Ordering::SeqCst);
-        let t = self.top.load(Ordering::Relaxed);
-        if t <= b {
-            let task = self.buffer[b & QUEUE_MASK].load(Ordering::Relaxed);
-            if t < b { return task; }
-            if self.top.compare_exchange(t, t + 1, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
-                self.bottom.store(t + 1, Ordering::Relaxed);
-                return task;
-            }
-            self.bottom.store(t + 1, Ordering::Relaxed);
-            ptr::null_mut()
-        } else {
-            self.bottom.store(t, Ordering::Relaxed);
-            ptr::null_mut()
+        if b.wrapping_sub(t) < QUEUE_SIZE {
+            self.buffer[b & QUEUE_MASK].store(task, Ordering::Release);
+            self.bottom.store(b.wrapping_add(1), Ordering::Release);
         }
     }
 
     pub fn steal(&self) -> *mut Task {
-        loop {
-            let t = self.top.load(Ordering::Acquire);
-            core::sync::atomic::fence(Ordering::SeqCst);
-            let b = self.bottom.load(Ordering::Acquire);
-            if t >= b { return ptr::null_mut(); }
-            let task = self.buffer[t & QUEUE_MASK].load(Ordering::Acquire);
-            if self.top.compare_exchange(t, t + 1, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
-                return task;
-            }
+        let t = self.top.load(Ordering::Acquire);
+        let b = self.bottom.load(Ordering::Acquire);
+        if t == b { return ptr::null_mut(); }
+        let task = self.buffer[t & QUEUE_MASK].load(Ordering::Acquire);
+        if self.top.compare_exchange(t, t.wrapping_add(1), Ordering::SeqCst, Ordering::Relaxed).is_ok() {
+            task
+        } else {
+            ptr::null_mut()
         }
     }
 }
@@ -165,7 +145,7 @@ impl Scheduler {
         if next_task.is_null() { return None; }
 
         let old_task = self.current_task.swap(next_task, Ordering::AcqRel);
-        
+
         if old_task.is_null() {
             unsafe {
                 (*next_task).state.store(TaskState::Running as u32, Ordering::Release);
@@ -194,41 +174,77 @@ impl Scheduler {
         ptr::null_mut()
     }
 
-        #[unsafe(naked)]
-    pub unsafe extern "C" fn switch_to(old_context: *mut TaskContext, next_context: *const TaskContext) {
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn switch_to(_old_context: *mut TaskContext, next_context: *const TaskContext) {
         core::arch::naked_asm!(
-            "xor eax, eax", "xor edx, edx", "xor ecx, ecx", "wrpkru",
-
+            // rdi = _old_context, rsi = next_context
+            // 1. Check if _old_context is NULL (first boot)
             "test rdi, rdi",
-            "jz 2f", 
-            "mov qword ptr [rdi + 0x00], r15",
-            "mov qword ptr [rdi + 0x08], r14",
-            "mov qword ptr [rdi + 0x10], r13",
-            "mov qword ptr [rdi + 0x18], r12",
-            "mov qword ptr [rdi + 0x68], rbx",
-            "mov qword ptr [rdi + 0x50], rbp",
+            "jz 1f",
 
-            "2:",
-            "mov r15, [rsi + 0x00]", "mov r14, [rsi + 0x08]",
-            "mov r13, [rsi + 0x10]", "mov r12, [rsi + 0x18]",
-            "mov rbx, [rsi + 0x68]", "mov rbp, [rsi + 0x50]",
+            // 2. Save current state into _old_context (rdi)
+            "mov [rdi + 0x00], r15",
+            "mov [rdi + 0x08], r14",
+            "mov [rdi + 0x10], r13",
+            "mov [rdi + 0x18], r12",
+            "mov [rdi + 0x20], r11",
+            "mov [rdi + 0x28], r10",
+            "mov [rdi + 0x30], r9",
+            "mov [rdi + 0x38], r8",
+            "mov [rdi + 0x50], rbp",
+            "mov [rdi + 0x58], rdx",
+            "mov [rdi + 0x60], rcx",
+            "mov [rdi + 0x68], rbx",
+            "mov [rdi + 0x70], rax",
 
-            "mov eax, [rsi + 0x78]", "xor edx, edx", "xor ecx, ecx", "wrpkru",
+            // Save caller's RIP and RSP securely
+            "mov rax, [rsp]",           // Caller return address
+            "mov [rdi + 0x90], rax",    // context.rip
+            "lea rax, [rsp + 8]",       // Stack pointer before call
+            "mov [rdi + 0xA8], rax",    // context.rsp
 
-            "push [rsi + 0xA0]",
-            "push [rsi + 0x98]",
-            "push [rsi + 0x90]",
-            "push [rsi + 0x88]",
-            "push [rsi + 0x80]",
+            "1:",
+            // 3. Restore next_context (rsi)
+            "mov rdi, rsi",             // Use RDI as the struct base pointer
 
-            "mov rax, [rsi + 0x88]",
-            "test al, 3",
-            "jz 3f",
-            "swapgs",
-            "3:",
-            
-            "xor rax, rax", 
-            "iretq",
+            // Restore PKRU correctly (Requires EAX, ECX=0, EDX=0)
+            "mov rax, [rdi + 0x80]",
+            "xor rcx, rcx",
+            "xor rdx, rdx",
+            "wrpkru",
+
+            // Restore general registers
+            "mov r15, [rdi + 0x00]",
+            "mov r14, [rdi + 0x08]",
+            "mov r13, [rdi + 0x10]",
+            "mov r12, [rdi + 0x18]",
+            "mov r11, [rdi + 0x20]",
+            "mov r10, [rdi + 0x28]",
+            "mov r9, [rdi + 0x30]",
+            "mov r8, [rdi + 0x38]",
+            "mov rbp, [rdi + 0x50]",
+            "mov rdx, [rdi + 0x58]",
+            "mov rcx, [rdi + 0x60]",
+            "mov rbx, [rdi + 0x68]",
+            "mov rax, [rdi + 0x70]",
+
+            // 4. Secure the Stack & Prepare IRETQ
+            // Safely switch to the task's private kernel stack (0xC0)
+            "mov rsp, [rdi + 0xC0]",
+
+            // Push the 5-QWORD IRETQ frame onto this clean stack
+            "push qword ptr [rdi + 0xB0]", // SS
+            "push qword ptr [rdi + 0xA8]", // RSP
+            "push qword ptr [rdi + 0xA0]", // RFLAGS
+            "push qword ptr [rdi + 0x98]", // CS
+            "push qword ptr [rdi + 0x90]", // RIP
+
+            // Restore the final two scratch registers
+            "mov rsi, [rdi + 0x48]",
+            "mov rdi, [rdi + 0x40]",
+
+            // 5. Jump to Userland!
+            "iretq"
         );
     }
 }
@@ -255,13 +271,8 @@ pub fn park_current_thread() {
 
 pub fn unpark_thread(task_ptr: *mut Task) {
     unsafe { (*task_ptr).state.store(TaskState::Ready as u32, Ordering::Release); }
-    let core_id = crate::core_local::CoreLocal::get().core_id;
-    SCHEDULERS[core_id as usize].runqueue.push(task_ptr);
 }
 
 pub fn yield_now() {
-    unsafe {
-        // Briefly enable interrupts so the timer can preempt us, then disable again
-        core::arch::asm!("sti; nop; cli");
-    }
+    // Phase 25: No-op. Preemption handles switching in Ring 3.
 }
