@@ -67,19 +67,24 @@ pub struct Rect {
     pub height: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct WindowDescriptor {
+    pub window_id: u64,
+    pub buffer_handle: u64, // Opaque capability handle
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub z_index: u32,
+    pub focus_state: u32,
+}
+
 #[repr(C, u64)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MessageType {
     Ping = 0,
     Yield = 1,
-    DisplayPrimaryFramebuffer { 
-        virt_addr: u64, 
-        width: u32, 
-        height: u32 
-    } = 0x103,
-    CompositorCommit = 0x100,
-    CompositorCreateWin = 0x101,
-    WindowCreate = 0x104,
     HIDEvent {
         code: u64,
         value: u64,
@@ -88,9 +93,8 @@ pub enum MessageType {
 
 pub struct PdxEvent; // Stub
 
-/// Spin-receive: returns next message with type_id != 0.
-/// type_id == 0x00 is reserved as EMPTY and never returned.
-pub fn pdx_listen() -> PdxMessage {
+/// Spin-receive from a specific capability slot.
+pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
     loop {
         let type_id: u64;
         let caller_pd: u64;
@@ -101,6 +105,7 @@ pub fn pdx_listen() -> PdxMessage {
             core::arch::asm!(
                 "syscall",
                 in("rax") 28u64,
+                in("rdi") slot,
                 in("r9")  0u64,            // no result struct — kernel skips PdxListenResult write
                 lateout("rax") type_id,    // 0 = EMPTY, non-zero = valid
                 lateout("rsi") caller_pd,
@@ -126,6 +131,11 @@ pub fn pdx_listen() -> PdxMessage {
     }
 }
 
+/// Spin-receive from default message ring (Slot 0).
+pub fn pdx_listen() -> PdxMessage {
+    pdx_listen_raw(0)
+}
+
 /// Non-blocking receive. Kernel writes PdxListenResult via r9 pointer.
 /// Sentinel logic stays in kernel — userspace checks has_message, never type_id.
 #[repr(C)]
@@ -147,6 +157,7 @@ pub fn pdx_try_listen() -> Option<PdxMessage> {
         core::arch::asm!(
             "syscall",
             in("rax") 28u64,
+            in("rdi") 0u64,                // Default to Slot 0
             in("r9")  &mut result as *mut PdxListenResult as u64,
             out("rcx") _,
             out("r11") _,
@@ -219,22 +230,6 @@ pub const SLOT_INPUT:   u64 = 3; // HID input
 pub const SLOT_AUDIO:   u64 = 4; // audio server
 pub const SLOT_DISPLAY: u64 = 5; // SexDisplay compositor
 pub const SLOT_SHELL:   u64 = 6; // silk-shell orchestration entry
-
-// sexdisplay (SLOT_DISPLAY) opcodes
-pub const OP_WINDOW_CREATE: u64 = 0xE4;
-pub const OP_WINDOW_SUBMIT: u64 = 0xE5;
-pub const OP_WINDOW_VBLANK: u64 = 0xE6;
-pub const OP_WINDOW_MAP:    u64 = 0xE7;
-pub const OP_WINDOW_WRITE:  u64 = 0xE8;
-
-pub const OP_WINDOW_PAINT:   u64 = 0xDF;
-pub const OP_WINDOW_DESTROY: u64 = 0xE0;
-pub const OP_MOVE_WINDOW:    u64 = 0xEE;
-pub const OP_RESIZE_WINDOW:  u64 = 0xEF;
-
-// silk-shell (SLOT_SHELL) opcodes
-pub const OP_SET_BG:      u64 = 0x100;
-pub const OP_RENDER_BAR:  u64 = 0x101;
 
 // Capability invocation trap numbers (ring-3 → ring-0 transition only).
 // These are sex-pdx implementation details, NOT POSIX-style syscall numbers.
