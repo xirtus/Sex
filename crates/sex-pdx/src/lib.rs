@@ -251,15 +251,17 @@ pub const SYS_SET_STATE: u64      = 42;
 
 pub const SVC_STATE_LISTENING: u64 = 1;
 
-pub unsafe fn sys_set_state(state: u64) {
+pub unsafe fn sys_set_state(state: u64) -> u64 {
+    let ret: u64;
     core::arch::asm!(
         "syscall",
-        in("rax") SYS_SET_STATE,
-        in("rdx") state,
+        inlateout("rax") SYS_SET_STATE => ret,
+        in("rdi") state,
         out("rcx") _,
         out("r11") _,
         options(nostack),
     );
+    ret
 }
 
 // Capability slots — single source of truth for all protection domains.
