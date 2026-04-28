@@ -1,0 +1,172 @@
+1. TITLE
+SexOS switch_to iretq failure review bundle
+
+2. SUMMARY
+- First userland transfer fails
+- iretq does not consume intended frame
+- intended frame valid
+- actual q0..q4 garbage before iretq
+- first dispatch occurs
+- scheduler runs
+- likely bug in switch_to assembly boundary
+
+3. CURRENT EVIDENCE
+INTENDED FRAME:
+RIP=0x40001640
+CS=0x2b
+RFLAGS=0x202
+RSP=0x700000100000
+SS=0x23
+
+ACTUAL FRAME before iretq:
+q0=garbage
+q1=garbage
+q2=garbage
+q3=garbage
+q4=garbage
+
+Observed:
+- user _start never executes
+- first transfer dies at iretq boundary
+
+4. RUST SIGNATURE
+File: kernel/src/scheduler.rs
+```rust
+#[unsafe(naked)]
+pub unsafe extern "C" fn switch_to(_old_context: *mut TaskContext, next_context: *const TaskContext)
+```
+
+5. CALLER CODE
+File: kernel/src/lib.rs (BSP bootstrap path)
+```rust
+                serial_println!("context_switch.begin");
+                crate::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx_ptr);
+```
+
+File: kernel/src/interrupts.rs (Timer tick path)
+```rust
+        serial_println!("context_switch.begin");
+        send_eoi();
+        crate::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx_ptr);
+        serial_println!("context_switch.end");
+```
+
+6. FULL ASM BLOCK
+File: kernel/src/scheduler.rs
+```rust
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn switch_to(_old_context: *mut TaskContext, next_context: *const TaskContext) {
+        core::arch::naked_asm!(
+            // rdi = old_ctx (*mut TaskContext, NULL on first boot)
+            // rsi = next_ctx (*const TaskContext)
+            // context.kstack_top (offset 0xC8) = active ksp for this task.
+            //   New task:     pre-seeded by Task::new: [GPR zeros][IRETQ frame]
+            //   Running task: ksp saved here by previous switch_to call
+
+            // Preserve next_ctx across old-context save path.
+            "mov rdx, rsi",
+
+            // Skip save if old_ctx is NULL
+            "test rdi, rdi",
+            "jz 1f",
+
+            // Push all GPRs onto current kernel stack (rax=high addr, r15=low=new ksp)
+            "push rax",
+            "push rbx",
+            "push rcx",
+            "push rdx",
+            "push rbp",
+            "push rsi",
+            "push rdi",
+            "push r8",
+            "push r9",
+            "push r10",
+            "push r11",
+            "push r12",
+            "push r13",
+            "push r14",
+            "push r15",
+            // Save ksp to old_ctx.kstack_top
+            // rdi has been pushed as a GPR value, so use a scratch copy of old_ctx.
+            "mov rax, rdi",
+            "mov [rax + 0xC8], rsp",
+
+            "1:",
+            // Restore next_ctx pointer and pivot directly to RIP slot.
+            "mov rsi, rdx",
+            "mov [rip + {next_ctx_ptr}], rsi",
+            "mov rsp, [rsi + 0xC8]",
+            "add rsp, 120",
+
+            // IRETQ frame is guaranteed at [rsp + 0..32].
+            "mov [rip + {actual_iret_rsp}], rsp",
+            "mov r11, [rsp + 0x00]",
+            "mov [rip + {actual_q0}], r11",
+            "mov r11, [rsp + 0x08]",
+            "mov [rip + {actual_q1}], r11",
+            "mov r11, [rsp + 0x10]",
+            "mov [rip + {actual_q2}], r11",
+            "mov r11, [rsp + 0x18]",
+            "mov [rip + {actual_q3}], r11",
+            "mov r11, [rsp + 0x20]",
+            "mov [rip + {actual_q4}], r11",
+            "swapgs",
+            "iretq",
+            actual_iret_rsp = sym ACTUAL_IRET_RSP,
+            actual_q0 = sym ACTUAL_IRET_Q0_RIP,
+            actual_q1 = sym ACTUAL_IRET_Q1_CS,
+            actual_q2 = sym ACTUAL_IRET_Q2_RFLAGS,
+            actual_q3 = sym ACTUAL_IRET_Q3_RSP,
+            actual_q4 = sym ACTUAL_IRET_Q4_SS,
+            next_ctx_ptr = sym SWITCH_NEXT_CTX_PTR,
+        );
+    }
+```
+
+7. RELATED STRUCTS / OFFSETS
+File: kernel/src/scheduler.rs
+```rust
+#[repr(C)]
+pub struct TaskContext {
+    pub r15: u64, pub r14: u64, pub r13: u64, pub r12: u64,
+    pub r11: u64, pub r10: u64, pub r9: u64, pub r8: u64,
+    pub rdi: u64, pub rsi: u64, pub rbp: u64, pub rdx: u64,
+    pub rcx: u64, pub rbx: u64, pub rax: u64,
+    pub dummy_error_code: u64,
+    pub pkru: u64,
+    pub pd_id: u64,
+    pub rip: u64, pub cs: u64, pub rflags: u64, pub rsp: u64, pub ss: u64,
+    pub pd_ptr: *const ProtectionDomain,
+    pub kstack_top: u64, // OFFSET 0xC8
+}
+
+pub struct Task {
+    pub id: u32,
+    pub context: TaskContext,
+    pub state: AtomicU32,
+    pub signal_ring: *mut RingBuffer<u8, 32>,
+    pub kstack_top: u64,
+    pub(crate) ext_init: Option<InitArg>,
+}
+```
+
+Task::new logic:
+```rust
+        // Pre-seed kstack with IRETQ frame + GPR zeros. switch_to loads ksp and pops directly.
+        // Layout low→high: [r15=0..rax=0][RIP][CS][RFLAGS][RSP][SS]
+        let forged_ksp = unsafe {
+            let mut ksp = kstack_alloc_top as *mut u64;
+            ksp = ksp.sub(1); *ksp = ss;
+            ksp = ksp.sub(1); *ksp = stack_top;
+            ksp = ksp.sub(1); *ksp = rflags;
+            ksp = ksp.sub(1); *ksp = cs;
+            ksp = ksp.sub(1); *ksp = entry_point;
+            for _ in 0..15 { ksp = ksp.sub(1); *ksp = 0; } // rax..r15 zeros
+            ksp as u64
+        };
+```
+
+8. NOTES
+- build path is ./scripts/entrypoint_build.sh
+- boot path is qemu-system-x86_64 ... -serial stdio -display none
+- this is x86_64 SysV ABI

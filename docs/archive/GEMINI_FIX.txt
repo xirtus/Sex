@@ -1,0 +1,28 @@
+FIX STRICTNESS (DO NOT ADD COMPLEXITY):
+
+1. KEEP /dev/dri/card0 ONLY
+2. KEEP simple selection:
+   - first Connected connector with modes
+   - current_encoder() or encoders()[0]
+
+3. FIX CRTC SELECTION (CRITICAL):
+   Replace unsafe fallback:
+     res.crtcs()[0]
+
+   WITH:
+     ONLY select encoder.crtc()
+     IF None → select FIRST crtc in res.crtcs()
+     THAT EXISTS in encoder.possible_crtcs()
+
+   NO bitmask loops
+   NO scoring
+   NO multi-device logic
+
+4. KEEP:
+   - dumb buffer
+   - XRGB8888 write
+   - set_crtc
+   - page_flip loop
+
+GOAL:
+Minimal deterministic but VALID KMS scanout (Milestone 1 safe)

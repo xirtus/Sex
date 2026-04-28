@@ -1,0 +1,39 @@
+# SexOS ABI Contract (minimal lock file)
+# Canonical runtime contract for kernel <-> sex-pdx IPC.
+
+[contract]
+name = "sexos-ipc-abi"
+version = "1.0.0"
+date = "2026-04-28"
+
+[ipc]
+transport = "register-only"
+legacy_struct_return = false
+legacy_r9_path = false
+
+[ipc.pdx_call]
+syscall = 0
+status_reg = "rax"
+value_reg = "rsi"
+
+[ipc.pdx_listen]
+syscall = 28
+type_id_reg = "rax"
+caller_pd_reg = "rsi"
+arg0_reg = "rdx"
+arg1_reg = "r10"
+arg2_reg = "r8"
+empty_type_id = 0
+
+[slots]
+storage = 1
+sext = 2
+input = 3
+audio = 4
+display = 5
+shell = 6
+
+[pkru]
+mismatch_type_id = 255
+error_symbol = "ERROR_PKRU_MISMATCH"
+policy = "explicit-ipc-error-return"
