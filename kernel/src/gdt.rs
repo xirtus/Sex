@@ -1,4 +1,5 @@
 use lazy_static::lazy_static;
+use crate::serial_println;
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
@@ -27,6 +28,9 @@ lazy_static! {
 pub fn update_tss_rsp0(addr: VirtAddr) {
     unsafe {
         TSS.privilege_stack_table[0] = addr;
+        if crate::core_local::INITIALIZED.load(core::sync::atomic::Ordering::Acquire) {
+            crate::core_local::CoreLocal::get_mut().kernel_stack = addr.as_u64();
+        }
     }
 }
 pub struct Selectors {
@@ -45,6 +49,19 @@ pub fn get_selectors() -> Selectors {
         user_ss:   SegmentSelector::new(4, x86_64::PrivilegeLevel::Ring3),
         tss:       SegmentSelector::new(6, x86_64::PrivilegeLevel::Ring0),
     }
+}
+
+pub fn debug_dump_user_selectors() {
+    let gdt = unsafe { &*GDT };
+    let entries = gdt.entries();
+    let user_data = entries.get(4).map(|e| e.raw()).unwrap_or(0);
+    let user_code = entries.get(5).map(|e| e.raw()).unwrap_or(0);
+    serial_println!("gdt.user.sel ss=0x23 raw={:#018x}", user_data);
+    serial_println!("gdt.user.sel cs=0x2b raw={:#018x}", user_code);
+}
+
+pub fn debug_tss_rsp0() -> u64 {
+    unsafe { TSS.privilege_stack_table[0].as_u64() }
 }
 
 pub fn init() {

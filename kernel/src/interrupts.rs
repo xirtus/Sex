@@ -146,20 +146,7 @@ pub unsafe extern "C" fn syscall_entry() {
         "push r8",          // Save Arg 4 (r8)
         "push r9",          // Save Arg 5 (r9)
 
-        // 2. NOW LOG (Manual loop clobbers rax, rsi, rcx, rdx - but we saved them)
-        "mov dx, 0x3f8",
-        "lea rsi, [rip + {enter_msg}]",
-        "mov ecx, {enter_len}",
-        "cld",
-        "1:",
-        "lodsb",
-        "out dx, al",
-        "loop 1b",
-
-        "call syscall_stub_after_swapgs",
-        "call syscall_stub_after_kstack_switch",
-
-        // 3. Read and Save User PKRU (or synthetic 0 when PKU unsupported)
+        // 2. Read and Save User PKRU (or synthetic 0 when PKU unsupported)
         "cmp byte ptr [rip + {pku_enabled}], 0",
         "je 90f",
         "xor ecx, ecx",
@@ -185,32 +172,37 @@ pub unsafe extern "C" fn syscall_entry() {
 
         // 6. Build SyscallRegs (Volatiles + Args)
         // Stack at this point (top down):
-        // [rsp+0..47]: r15-rbp (48)
-        // [rsp+48]: PKRU mask (8)
-        // [rsp+56]: r9 (8)
-        // [rsp+64]: r8 (8)
-        // [rsp+72]: r10 (8)
-        // [rsp+80]: rdx (8)
-        // [rsp+88]: rsi (8)
-        // [rsp+96]: rdi (8)
-        // [rsp+104]: rax (8)
-        // [rsp+112]: rcx (8) - RIP
-        // [rsp+120]: r11 (8) - RFLAGS
+        // [rbp+0..47]: r15-rbp (48)
+        // [rbp+48]: PKRU mask (8)
+        // [rbp+56]: r9 (8)
+        // [rbp+64]: r8 (8)
+        // [rbp+72]: r10 (8)
+        // [rbp+80]: rdx (8)
+        // [rbp+88]: rsi (8)
+        // [rbp+96]: rdi (8)
+        // [rbp+104]: rax (8)
+        // [rbp+112]: rcx (8) - RIP
+        // [rbp+120]: r11 (8) - RFLAGS
 
-        "push [rsp + 120]", // r11
-        "push [rsp + 120]", // rcx (offset 112 + 8)
-        "push [rsp + 72]",  // r9 (offset 56 + 16)
-        "push [rsp + 80]",  // r8 (offset 64 + 16)
-        "push [rsp + 88]",  // r10 (offset 72 + 16)
-        "push [rsp + 96]",  // rdx (offset 80 + 16)
-        "push [rsp + 104]", // rsi (offset 88 + 16)
-        "push [rsp + 112]", // rdi (offset 96 + 16)
-        "push [rsp + 120]", // rax (offset 104 + 16)
+        "push qword ptr [rbp + 120]", // r11
+        "push qword ptr [rbp + 112]", // rcx
+        "push qword ptr [rbp + 56]",  // r9
+        "push qword ptr [rbp + 64]",  // r8
+        "push qword ptr [rbp + 72]",  // r10
+        "push qword ptr [rbp + 80]",  // rdx
+        "push qword ptr [rbp + 88]",  // rsi
+        "push qword ptr [rbp + 96]",  // rdi
+        "push qword ptr [rbp + 104]", // rax
 
         // Call Handler
-        "call syscall_stub_before_dispatch",
         "mov rdi, rsp",     // Pointer to SyscallRegs
         "call syscall_handler",
+
+        // 6.5 Propagate modified regs.rsi back to original saved slot.
+        // dispatch may set regs.rsi = value (e.g. PDX_CALL return).
+        // Restore path pops RSI from [rbp+88]; copy SyscallRegs.rsi there.
+        "mov rcx, [rsp + 16]", // SyscallRegs.rsi (offset 16 in struct)
+        "mov [rbp + 88], rcx", // original saved RSI slot
 
         // 7. RESTORE C-ABI VOLATILES
         "add rsp, 72",      // Discard SyscallRegs
@@ -239,8 +231,6 @@ pub unsafe extern "C" fn syscall_entry() {
         "mov rsp, gs:[24]", // Restore User RSP
         "swapgs",
         "sysretq",
-        enter_msg = sym SYSCALL_STUB_ENTER_RAW,
-        enter_len = const SYSCALL_STUB_ENTER_RAW.len(),
         pku_enabled = sym crate::pku::PKU_ENABLED,
     );
 }

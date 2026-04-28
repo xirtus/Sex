@@ -8,6 +8,7 @@ pub use font::draw_char;
 use sex_pdx::Rect;
 
 // Defines a simple WindowBuffer for drawing operations.
+#[derive(Clone, Copy)]
 pub struct WindowBuffer {
     pub virtual_address: *mut u32,
     pub width: u32,

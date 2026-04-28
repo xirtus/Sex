@@ -1,11 +1,14 @@
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicPtr, AtomicBool, Ordering};
 use x86_64::registers::model_specific::GsBase;
 use x86_64::VirtAddr;
+
+pub static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Per-core local data for SexOS.
 #[repr(C)]
 pub struct CoreLocal {
-    pub current_pd_id: AtomicU32,
+    pub current_pd_ptr: AtomicPtr<crate::capability::ProtectionDomain>,
+    pub current_pd_id: AtomicU32, // Retained for debug/metadata where ID is strictly needed, but NOT for execution gating
     pub core_id: u32,
     pub kernel_stack: u64,
     pub user_stack: u64,
@@ -33,6 +36,7 @@ impl CoreLocal {
         }
 
         let mut core_local = alloc::boxed::Box::new(CoreLocal {
+            current_pd_ptr: AtomicPtr::new(core::ptr::null_mut()),
             current_pd_id: AtomicU32::new(0),
             core_id,
             kernel_stack: 0,
@@ -55,22 +59,55 @@ impl CoreLocal {
         x86_64::registers::model_specific::KernelGsBase::write(VirtAddr::from_ptr(ptr));
     }
 
+    pub fn init_first_core(pd_ptr: *mut crate::capability::ProtectionDomain) {
+        let core = Self::get();
+        core.current_pd_ptr.store(pd_ptr, Ordering::Release);
+        unsafe {
+            core.current_pd_id.store((*pd_ptr).id, Ordering::Release);
+        }
+        INITIALIZED.store(true, Ordering::Release);
+    }
+
     pub fn get() -> &'static CoreLocal {
         unsafe {
             &*(GsBase::read().as_ptr() as *const CoreLocal)
         }
     }
 
-    pub fn current_pd(&self) -> u32 {
-        self.current_pd_id.load(Ordering::SeqCst)
+    pub fn get_mut() -> &'static mut CoreLocal {
+        unsafe {
+            &mut *(GsBase::read().as_u64() as *mut CoreLocal)
+        }
     }
 
-    pub fn set_pd(&self, id: u32) {
-        self.current_pd_id.store(id, Ordering::SeqCst);
+    pub fn current_pd(&self) -> u32 {
+        self.current_pd_id.load(Ordering::Acquire)
+    }
+
+    pub fn set_pd(&self, pd_ptr: *mut crate::capability::ProtectionDomain) {
+        self.current_pd_ptr.store(pd_ptr, Ordering::Release);
+        unsafe {
+            self.current_pd_id.store((*pd_ptr).id, Ordering::Release);
+        }
     }
 
     pub fn current_pd_ref(&self) -> &'static crate::capability::ProtectionDomain {
-        let id = self.current_pd();
-        crate::ipc::DOMAIN_REGISTRY.get(id).expect("CoreLocal: Current PD lost")
+        let ptr = self.current_pd_ptr.load(Ordering::Acquire);
+        if ptr.is_null() {
+            return crate::ipc::DOMAIN_REGISTRY.get(0).expect("KERNEL PD MISSING");
+        }
+        unsafe { &*ptr }
     }
+}
+
+pub fn get_pd() -> u32 {
+    crate::core_local::CoreLocal::get().current_pd()
+}
+
+pub fn validate_core_state() {
+    let core = crate::core_local::CoreLocal::get();
+    let ptr = core.current_pd_ptr.load(Ordering::Acquire);
+    assert!(!ptr.is_null(), "CORELOCAL_PTR_NULL");
+    let expected_pkru = unsafe { (*ptr).current_pkru_mask.load(Ordering::Acquire) };
+    assert_eq!(expected_pkru, unsafe { crate::pku::rdpkru() }, "CORELOCAL_PKU_DESYNC");
 }

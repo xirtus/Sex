@@ -1,5 +1,9 @@
 # Sex Project Mandates (GEMINI.md)
 
+Canonical cross-agent policy is now in [CREW.md](/home/xirtus_arch/Documents/microkernel/CREW.md).
+Use this file as Gemini bootstrap/context, but keep shared execution rules aligned to CREW.
+Build path is sealed to `scripts/entrypoint_build.sh` with spec authority in `sexos_build_spec.toml`.
+
 ## 🌌 Project Vision
 
 Sex is a **Single Address Space Operating System (Sex)** microkernel designed for maximum performance and security on modern hardware.
@@ -69,6 +73,10 @@ Sex is a **Single Address Space Operating System (Sex)** microkernel designed fo
 - **caveman-commit:** Ultra-compressed Conventional Commits message generator.
 - **compress:** Compress memory files into caveman format.
 - **skill-creator:** Guide for creating effective skills.
+
+**Caveman Rules:**
+- Always activate Caveman `/caveman ultra` mode at session start. Default intensity: ultra.
+- Follow the Caveman SKILL.md rules for all coding, reviewing, commits, compression, and planning unless explicitly told otherwise.
 
 ---
 

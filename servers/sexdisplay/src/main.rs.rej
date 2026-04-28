@@ -1,9 +1,0 @@
---- servers/sexdisplay/src/main.rs
-+++ servers/sexdisplay/src/main.rs
-@@ -1,5 +1,6 @@
- #[no_mangle]
- pub extern "C" fn _start() -> ! {
-     let mut info = DisplayInfo { virt_addr: 0, width: 0, height: 0, pitch: 0 };
-+    serial_println!("sexdisplay: _start() reached under PKEY 1");
-     let ret = unsafe { pdx_call(0, PDX_GET_DISPLAY_INFO, &mut info as *mut _ as u64, 0) };
-     if ret == 0 && info.virt_addr != 0 && info.width > 0 && info.height > 0 {

@@ -1,0 +1,95 @@
+[spec]
+version = "1.0.0"
+abi_version_hash = "2636dfe005ca064aa0ca222aeaee73a775c17ca29c1e6c2e427cd950e9eaddb7"
+contract_sha256 = "38b8af8c5c837952abab12659c66f0d3bfd31db36c1c5cc6c0a55474b7a372d1"
+target = "/home/xirtus_arch/x86_64-sex.json"
+
+[forbidden_env]
+vars = [
+  "SEXOS_BUILD_MODE",
+  "SEXOS_BUILD_PROFILE",
+  "SEXOS_DISABLE_ABI_GUARD",
+  "SEXOS_SKIP_CONTRACT",
+  "CARGO_FEATURES",
+  "CARGO_BUILD_TARGET",
+  "RUSTC_BOOTSTRAP"
+]
+prefixes = ["CARGO_FEATURE_"]
+
+[allowed]
+crates = [
+  "sex-kernel",
+  "servers/sexdisplay/Cargo.toml",
+  "apps/sexdrive/Cargo.toml",
+  "servers/silk-shell/Cargo.toml",
+  "servers/sexinput/Cargo.toml",
+  "purple-scanout/Cargo.toml"
+]
+
+[[stage]]
+id = "prep_iso_root"
+action = "prep_iso_root"
+artifacts = ["iso_root"]
+
+[[stage]]
+id = "copy_limine"
+action = "copy_limine"
+artifacts = [
+  "iso_root/boot/limine/limine-bios-cd.bin",
+  "iso_root/boot/limine/limine-uefi-cd.bin",
+  "iso_root/boot/limine/limine-bios.sys"
+]
+
+[[stage]]
+id = "build_kernel"
+action = "cargo_pkg"
+package = "sex-kernel"
+source_artifact = "target/x86_64-sex/release/sex-kernel"
+dest_artifact = "iso_root/sexos-kernel"
+
+[[stage]]
+id = "build_sexdisplay"
+action = "cargo_manifest"
+manifest = "servers/sexdisplay/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sexdisplay"
+dest_artifact = "iso_root/servers/sexdisplay"
+
+[[stage]]
+id = "build_sexdrive"
+action = "cargo_manifest"
+manifest = "apps/sexdrive/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sexdrive"
+dest_artifact = "iso_root/apps/sexdrive"
+
+[[stage]]
+id = "build_silk_shell"
+action = "cargo_manifest"
+manifest = "servers/silk-shell/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/silk-shell"
+dest_artifact = "iso_root/servers/silk-shell"
+
+[[stage]]
+id = "build_sexinput"
+action = "cargo_manifest"
+manifest = "servers/sexinput/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sexinput"
+dest_artifact = "iso_root/servers/sexinput"
+
+[[stage]]
+id = "build_purple_scanout"
+action = "cargo_manifest"
+manifest = "purple-scanout/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/purple-scanout"
+dest_artifact = "iso_root/apps/purple-scanout"
+
+[[stage]]
+id = "copy_limine_cfg"
+action = "copy_file"
+src = "limine.cfg"
+dst = "iso_root/limine.cfg"
+artifacts = ["iso_root/limine.cfg"]
+
+[[stage]]
+id = "package_iso"
+action = "package_iso"
+artifacts = ["sexos-v1.0.0.iso"]

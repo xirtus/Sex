@@ -17,6 +17,34 @@ impl PciDevice {
     }
 }
 
+pub fn enumerate_display_devices() -> alloc::vec::Vec<PciDevice> {
+    let mut devices = alloc::vec::Vec::new();
+    for bus in 0..8 {
+        for dev in 0..32 {
+            let d = PciDevice { bus, dev, func: 0, vendor_id: 0, device_id: 0, class_id: 0, subclass_id: 0 };
+            let config0 = d.read_u32(0);
+            let vendor = (config0 & 0xFFFF) as u16;
+            if vendor == 0xFFFF { continue; }
+
+            let config8 = d.read_u32(0x08);
+            let class = (config8 >> 24) as u8;
+            let subclass = (config8 >> 16) as u8;
+            let device_id = (config0 >> 16) as u16;
+
+            if class == 0x03 { // Display Controller
+                devices.push(PciDevice {
+                    bus, dev, func: 0,
+                    vendor_id: vendor,
+                    device_id,
+                    class_id: class,
+                    subclass_id: subclass
+                });
+            }
+        }
+    }
+    devices
+}
+
 pub fn bootstrap_drivers(sexdrive_pd_id: u32, sexdisplay_pd_id: u32) {
     serial_println!("pci: Starting hardware enumeration...");
     for bus in 0..8 {

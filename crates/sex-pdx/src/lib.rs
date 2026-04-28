@@ -1,11 +1,37 @@
+//! sex-pdx — Runtime Capability Authority Layer (ARCHITECTURE.md §1.1)
+//!
+//! Implements the authority layer of the SexOS memory model (ARCHITECTURE.md §0).
+//! Single runtime enforcement point. No inter-domain interaction bypasses this crate.
+//! Capability slots are the only sanctioned access paths.
+
 #![no_std]
+
+/// Opaque protection domain identifier. All inter-domain references use this type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DomainId(pub u32);
+
+/// SexOS authority layer tags. Canonical definition: ARCHITECTURE.md §0.
+///
+/// These layers are ORTHOGONAL authority domains, NOT a linear ordering.
+/// No comparison or ordering between variants is implied or valid.
+/// Use as categorical tags for enforcement routing decisions only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AuthLayer {
+    /// Capability genesis domain. Static, boot-time only. Immutable after lock.
+    BootDag = 0,
+    /// Runtime authority domain. All runtime access decisions. Never bypassed.
+    SexPdx  = 1,
+    /// Enforcement acceleration domain. Hardware accel only. Non-authoritative.
+    Pku     = 2,
+}
 
 /// Userland serial writer — calls kernel raw_print (syscall 0, opcode 69).
 pub struct SerialWriter;
 
 impl core::fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        pdx_call(0, 69, s.as_ptr() as u64, s.len() as u64, 0);
+        let _ = pdx_call(0, 69, s.as_ptr() as u64, s.len() as u64, 0);
         Ok(())
     }
 }
@@ -34,6 +60,85 @@ pub struct PdxMessage {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct Window {
+    pub id: u32,
+    pub pid: u32,
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    pub layer: u8,
+    pub buffer_cap: u64, // Slot
+}
+
+#[repr(C, u64)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum WindowOp {
+    Move(u32, i32, i32),
+    Resize(u32, u32, u32),
+    Focus(u32),
+    Destroy(u32),
+    Create(u32, u32, i32, i32, u32, u32, u64),
+}
+
+// Legacy window operation constants (used by sexdisplay)
+pub const OP_WINDOW_CREATE: u64 = 0xE4;
+pub const OP_WINDOW_SUBMIT: u64 = 0xE5;
+pub const OP_WINDOW_VBLANK: u64 = 0xE6;
+pub const OP_WINDOW_MAP:    u64 = 0xE7;
+pub const OP_WINDOW_WRITE:  u64 = 0xE8;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct ShellEvent {
+    pub op: WindowOp,
+}
+
+/// Normalized input event. Single source of truth for all input in silk-shell FSM.
+///
+/// IPC encoding (type_id=0x202 from sexinput):
+///   arg2=1 (EV_KEY):  arg0=scancode, arg1=1(dn)/0(up)
+///   arg2=3 (EV_ABS):  arg0=abs_x,   arg1=abs_y  (mouse position, absolute)
+///   arg2=4 (EV_BTN):  arg0=button,  arg1=1(dn)/0(up)
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum InputEvent {
+    KeyDown(u8),
+    KeyUp(u8),
+    MouseMove(i32, i32),
+    MouseDown(u8),
+    MouseUp(u8),
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct Layer {
+    pub win_id: u32,
+    pub rect: [i32; 4], // [x, y, w, h]
+    pub buf_ptr: u64,
+    pub stride: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct FrameContext {
+    pub tick: u64,
+    pub snapshot_version: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct SceneSnapshot {
+    pub layers_ptr: u64,
+    pub layers_len: u32,
+    pub cursor_x: i32,
+    pub cursor_y: i32,
+    pub is_incremental: u32,
+    pub damage_rects_ptr: u64,
+    pub damage_rects_len: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Rect {
     pub x: u32,
     pub y: u32,
@@ -41,19 +146,24 @@ pub struct Rect {
     pub height: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct WindowDescriptor {
+    pub window_id: u64,
+    pub buffer_handle: u64, // Opaque capability handle
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub z_index: u32,
+    pub focus_state: u32,
+}
+
 #[repr(C, u64)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MessageType {
     Ping = 0,
     Yield = 1,
-    DisplayPrimaryFramebuffer { 
-        virt_addr: u64, 
-        width: u32, 
-        height: u32 
-    } = 0x103,
-    CompositorCommit = 0x100,
-    CompositorCreateWin = 0x101,
-    WindowCreate = 0x104,
     HIDEvent {
         code: u64,
         value: u64,
@@ -62,9 +172,8 @@ pub enum MessageType {
 
 pub struct PdxEvent; // Stub
 
-/// Spin-receive: returns next message with type_id != 0.
-/// type_id == 0x00 is reserved as EMPTY and never returned.
-pub fn pdx_listen() -> PdxMessage {
+/// Spin-receive from a specific capability slot.
+pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
     loop {
         let type_id: u64;
         let caller_pd: u64;
@@ -75,6 +184,7 @@ pub fn pdx_listen() -> PdxMessage {
             core::arch::asm!(
                 "syscall",
                 in("rax") 28u64,
+                in("rdi") slot,
                 lateout("rax") type_id,    // 0 = EMPTY, non-zero = valid
                 lateout("rsi") caller_pd,
                 lateout("rdx") arg0,
@@ -85,7 +195,7 @@ pub fn pdx_listen() -> PdxMessage {
             );
         }
         if type_id == 0 {
-            core::hint::spin_loop();
+            sys_yield();
             continue;
         }
         return PdxMessage {
@@ -97,6 +207,15 @@ pub fn pdx_listen() -> PdxMessage {
             _pad: 0,
         };
     }
+}
+
+/// Spin-receive from default message ring (Slot 0).
+pub fn pdx_listen() -> PdxMessage {
+    pdx_listen_raw(0)
+}
+
+pub fn pdx_try_listen() -> Option<PdxMessage> {
+    None
 }
 
 #[inline(always)]
@@ -111,49 +230,100 @@ pub fn pdx_reply(target_pd: u64) {
 }
 
 pub fn sys_yield() {
-    // Stub
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") 32u64,
+            out("rcx") _,
+            out("r11") _,
+        );
+    }
 }
 
 pub fn sched_yield() {
     sys_yield();
 }
 
-pub fn pdx_call(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
-    let res: u64;
+pub const SYSCALL_PDX_CALL: u64   = 0;
+pub const SYSCALL_PDX_LISTEN: u64 = 2;
+pub const SYSCALL_YIELD: u64      = 32;
+pub const SYS_SET_STATE: u64      = 42;
+
+pub const SVC_STATE_LISTENING: u64 = 1;
+
+pub unsafe fn sys_set_state(state: u64) -> u64 {
+    let ret: u64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") SYS_SET_STATE => ret,
+        in("rdi") state,
+        out("rcx") _,
+        out("r11") _,
+        options(nostack),
+    );
+    ret
+}
+
+// Capability slots — single source of truth for all protection domains.
+// These are capability graph edges, NOT service ports.
+pub const SLOT_STORAGE: u64 = 1; // sexfiles VFS
+pub const SLOT_SEXT:    u64 = 2; // sext demand pager (fault resolver)
+pub const SLOT_INPUT:   u64 = 3; // HID input
+pub const SLOT_AUDIO:   u64 = 4; // audio server
+pub const SLOT_DISPLAY: u64 = 5; // SexDisplay compositor
+pub const SLOT_SHELL:   u64 = 6; // silk-shell orchestration entry
+
+// Capability invocation trap numbers (ring-3 → ring-0 transition only).
+// These are sex-pdx implementation details, NOT POSIX-style syscall numbers.
+pub const SYSCALL_PDX_REPLY: u64 = 1;
+
+// Capability error sentinels — must match kernel/src/ipc.rs exactly.
+// Returned when sex-pdx rejects an invocation.
+pub const ERR_SERVICE_NOT_READY: u64 = 0xFFFF_FFFF_FFFF_FFFE;
+pub const ERR_CAP_INVALID:       u64 = 0xFFFF_FFFF_FFFF_FFFC;
+
+pub fn pdx_call(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> (u64, u64) {
+    let status: u64;
+    let value: u64;
     unsafe {
         core::arch::asm!(
             "syscall",
-            in("rax") 0, 
+            in("rax") 0u64,
             in("rdi") slot,
             in("rsi") opcode,
             in("rdx") arg0,
             in("r10") arg1,
             in("r8")  arg2,
-            lateout("rax") res,
+            lateout("rax") status,
+            lateout("rsi") value,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
         );
     }
-    res
+    (status, value)
 }
 
-pub const SYSCALL_PDX_CALL: u64 = 0;
-pub const SYSCALL_PDX_LISTEN: u64 = 2;
-pub const SYSCALL_YIELD: u64 = 1;
+#[inline]
+pub fn pdx_call_checked(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64, u64> {
+    let (status, value) = pdx_call(slot, opcode, arg0, arg1, arg2);
+    if status == 0 {
+        Ok(value)
+    } else {
+        Err(status)
+    }
+}
 
-// Capability slots — single source of truth for all PDs
-pub const SLOT_STORAGE: u64 = 1;
-pub const SLOT_NETWORK: u64 = 2;
-pub const SLOT_INPUT:   u64 = 3;
-pub const SLOT_AUDIO:   u64 = 4;
-pub const SLOT_DISPLAY: u64 = 5;
-pub const SLOT_SHELL:   u64 = 6;
-
-// sexdisplay (SLOT_DISPLAY) opcodes
-pub const OP_WINDOW_CREATE:  u64 = 0xDE;
-pub const OP_WINDOW_PAINT:   u64 = 0xDF;
-pub const OP_WINDOW_DESTROY: u64 = 0xE0;
-pub const OP_MOVE_WINDOW:    u64 = 0xEE;
-pub const OP_RESIZE_WINDOW:  u64 = 0xEF;
-
-// silk-shell (SLOT_SHELL) opcodes
-pub const OP_SET_BG:      u64 = 0x100;
-pub const OP_RENDER_BAR:  u64 = 0x101;
+/// Spawn a new protection domain from an ELF image.
+///
+/// BOOT_DAG-gated: only domains with an explicit spawn capability granted by
+/// BOOT_DAG at boot time may call this. Without the capability → ERR_CAP_INVALID.
+/// Calling before BOOT_DAG lock is undefined behavior in the capability model.
+pub fn pdx_spawn_pd(elf_addr: u64, elf_len: u64) -> Result<DomainId, u64> {
+    let (status, value) = pdx_call(0, 0x10, elf_addr, elf_len, 0);
+    if status == 0 {
+        Ok(DomainId(value as u32))
+    } else {
+        Err(status)
+    }
+}

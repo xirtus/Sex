@@ -6,7 +6,8 @@ members = [
     "servers/sexshop",
     "servers/silk-shell",
     "servers/sexinput",
-    "apps/linen",
+    "apps/sexdrive",
+    "purple-scanout",
     "crates/sex-pdx",
     "crates/sex-graphics",
 ]

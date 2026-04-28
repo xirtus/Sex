@@ -11,6 +11,7 @@ pub mod pku;
 pub mod slab;
 pub mod cheri;
 pub mod capability;
+pub mod ucgm;
 pub mod ipc;
 pub mod ipc_ring;
 pub mod gdt;
@@ -124,8 +125,62 @@ pub fn kernel_init() {
     init::init();
 
     // 5. Start Scheduler (Phase 21: Preemptive Multi-tasking)
+    serial_println!("scheduler.bind.before");
+    let bind_id = unsafe { crate::init::SEXDISPLAY_PD_ID };
+    serial_println!("scheduler.bind.target_pd_id={}", bind_id);
+    unsafe {
+        let first_pd = crate::ipc::DOMAIN_REGISTRY.get(crate::init::SEXDISPLAY_PD_ID).expect("BSP Bind: sexdisplay missing");
+        crate::core_local::CoreLocal::init_first_core(first_pd as *const _ as *mut _);
+    }
+    serial_println!("scheduler.bind.after");
+    serial_println!(
+        "interrupts.enable.before if={}",
+        x86_64::instructions::interrupts::are_enabled()
+    );
+    // Temporary debug fallback: prove scheduler/context-switch path even if timer IRQ never fires.
+    // Remove after timer delivery is verified.
+    {
+        let core_id = crate::core_local::CoreLocal::get().core_id as usize;
+        let sched = &crate::scheduler::SCHEDULERS[core_id];
+        if let Some((_old_ctx_ptr, next_ctx_ptr)) = sched.tick() {
+            unsafe {
+                let kstack_top = (*next_ctx_ptr).kstack_top;
+                crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top));
+                crate::scheduler::log_first_scheduled_pd((*next_ctx_ptr).pd_id);
+                serial_println!(
+                    "context_switch.before_switch_to rip={:#x} rsp={:#x} rflags={:#x} cs={:#x} ss={:#x} pd_id={}",
+                    (*next_ctx_ptr).rip,
+                    (*next_ctx_ptr).rsp,
+                    (*next_ctx_ptr).rflags,
+                    (*next_ctx_ptr).cs,
+                    (*next_ctx_ptr).ss,
+                    (*next_ctx_ptr).pd_id
+                );
+                serial_println!(
+                    "switch.frame rip={:#x} cs={:#x} ss={:#x} rsp={:#x} rflags={:#x}",
+                    (*next_ctx_ptr).rip,
+                    (*next_ctx_ptr).cs,
+                    (*next_ctx_ptr).ss,
+                    (*next_ctx_ptr).rsp,
+                    (*next_ctx_ptr).rflags
+                );
+                crate::scheduler::debug_dump_iret_frame(next_ctx_ptr);
+                crate::scheduler::debug_dump_user_entry_bytes(next_ctx_ptr);
+                crate::gdt::debug_dump_user_selectors();
+                serial_println!("tss.rsp0={:#x}", crate::gdt::debug_tss_rsp0());
+                serial_println!("context_switch.begin");
+                crate::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx_ptr);
+            }
+        } else {
+            serial_println!("scheduler.debug_kick: no runnable task");
+        }
+    }
     serial_println!("kernel: Enabling interrupts and entering scheduler loop...");
     x86_64::instructions::interrupts::enable();
+    serial_println!(
+        "interrupts.enable.after if={}",
+        x86_64::instructions::interrupts::are_enabled()
+    );
 
     // Infinite spin loop. The timer interrupt will trigger sched.tick()
     // which will perform the first switch_to() to a userland task.

@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 sex-pdx = { path = "../../crates/sex-pdx", default-features = false }
 sex-graphics = { path = "../../crates/sex-graphics", default-features = false }
+sex-rt = { path = "../../sex-rt" }
 
 [features]
 default = ["no_std"]

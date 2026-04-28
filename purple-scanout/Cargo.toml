@@ -1,0 +1,11 @@
+[package]
+name = "purple-scanout"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "purple-scanout"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx = { path = "../crates/sex-pdx" }

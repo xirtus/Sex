@@ -1,10 +1,36 @@
+ENTRYPOINT := ./scripts/entrypoint_build.sh
+
+full:
+	@$(ENTRYPOINT)
+
+payload:
+	@$(ENTRYPOINT)
+
+ci:
+	@$(ENTRYPOINT)
+
+# Legacy targets retained only as explicit hard-fail stubs.
 iso:
-	rm -f sexos-v1.0.0.iso
-	xorriso -as mkisofs -R -r -J \
-	  -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table \
-	  --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label \
-	  iso_root -o sexos-v1.0.0.iso
+	@echo "[FAIL] direct iso target disabled. build is sealed to trace executor."
+	@exit 1
+
 run-sasos:
-	qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku -cdrom sexos-v1.0.0.iso -serial stdio -boot d -qmp unix:qmp.sock,server,nowait
+	@echo "[FAIL] direct run target disabled. build is sealed to trace executor."
+	@exit 1
+
 build-tools:
-	cd tools/sex-debug && cargo build --release
+	@echo "[FAIL] direct tools target disabled. build is sealed to trace executor."
+	@exit 1
+
+# Legacy internal targets retained as hard-fail stubs.
+iso-internal:
+	@echo "[FAIL] legacy internal target disabled. use sealed trace executor."
+	@exit 1
+
+run-sasos-internal:
+	@echo "[FAIL] legacy internal target disabled. use sealed trace executor."
+	@exit 1
+
+build-tools-internal:
+	@echo "[FAIL] legacy internal target disabled. use sealed trace executor."
+	@exit 1

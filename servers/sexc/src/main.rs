@@ -38,10 +38,19 @@ use libsys::sched::park_on_ring;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // Phase 24: start the lock-free signal trampoline
-    trampoline::start_signal_trampoline();
+    // Add to syscall handlers or init flow
+const SYS_CREATE_ROOT_WINDOW: u64 = 0x50;
 
-    loop {
+fn create_root_window() -> i64 {
+    // Phase 2: Allocate single root framebuffer
+    // PDX call to kernel capability table (Slot 6: Display Manager)
+    let fb_cap = pdx_call(6, SYS_CREATE_ROOT_WINDOW, 0, 0, 0);
+    if fb_cap == 0 { return -1; }
+
+    // Bind window capability to local surface
+    serial_println!("[sexc] Root window bound. FB_CAP: {}", fb_cap);
+    0
+}
         park_on_ring();
 
         let req = pdx_listen_raw(0);
