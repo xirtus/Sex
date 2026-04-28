@@ -1,0 +1,112 @@
+**SEXOS PHASE 35 BUILD AUTOMATION.md**
+**CAVEMAN FINAL – 32.1→35 SMP LATTICE (SILICON CONTRACT)**
+Drop this + run `build_payload.sh`. Nothing implemented yet → this is the exact build spec.
+
+### 1. GOAL (HARD)
+SMP boot (BSP+APs), x2APIC+TSC-deadline+GS CoreTable+epoch PDX+MPK/PKU.
+Purple framebuffer @60Hz on all cores. No polling, no scheduler, deterministic frame lattice.
+
+### 2. REPO LAYOUT (FINAL)
+```
+microkernel/
+├── kernel/
+│   ├── src/
+│   │   ├── core.rs              # CoreTable + TSC_FREQ Atomic
+│   │   ├── lapic.rs             # x2APIC MSR 0x6E0 ONLY
+│   │   ├── smp.rs               # smp_ignite + INIT-SIPI-SIPI
+│   │   ├── ap_trampoline.S      # REAL 16→64 ASM (linked low)
+│   │   ├── init.rs              # init_core + GS + calibrate + smp_ignite
+│   │   ├── ipc/messages.rs      # PdxEvent {slot,op,payload,epoch}
+│   │   ├── ipc.rs               # enqueue_release + frame_gate seal
+│   │   ├── interrupts.rs        # IDT 0xF0 → lapic_frame_tick
+│   │   ├── lib.rs               # CLOCK + commit_frame
+│   │   └── pku.rs               # PKRU sysret boundary
+│   └── linker.ld                # .ap_trampoline low + limine sections
+├── servers/sexdisplay/
+│   ├── src/lib.rs               # SexCompositor + render_frame(GS)
+│   └── src/main.rs              # _start + lapic_frame_tick stub
+├── crates/sex-pdx/src/lib.rs    # SLOT_* + OP_* ABI
+├── build_payload.sh
+├── Makefile
+└── iso_root/                    # auto-populated
+```
+
+### 3. sex-pdx (crates/sex-pdx/src/lib.rs)
+```rust
+pub const SLOT_DISPLAY: u64 = 5;
+pub const OP_SET_BG: u64        = 0x100;
+pub const OP_WINDOW_CREATE: u64 = 0xDE;
+```
+
+### 4. BUILD PAYLOAD (build_payload.sh)
+```bash
+#!/bin/bash
+set -e
+echo "CAVEMAN PHASE 35 BUILD"
+
+# kernel
+RUSTFLAGS="-C link-arg=-Tkernel/linker.ld" cargo build \
+  -Z build-std=core,alloc \
+  --package sex-kernel \
+  --target x86_64-sex.json --release
+
+# sexdisplay
+cargo build --manifest-path servers/sexdisplay/Cargo.toml \
+  --target x86_64-sex.json --release
+
+# stage
+cp target/x86_64-sex/release/sex-kernel iso_root/sexos-kernel
+cp target/x86_64-sex/release/sexdisplay iso_root/servers/
+
+# limine
+cat > iso_root/limine.cfg <<EOF
+TIMEOUT=0
+:SexOS SMP Lattice
+    PROTOCOL=limine
+    KERNEL_PATH=boot:///sexos-kernel
+    MODULE_PATH=boot:///servers/sexdisplay
+    VIDEO_MODE=1280x720,32
+EOF
+
+echo "BUILD OK → make iso && make run-smp"
+```
+
+### 5. MAKEFILE
+```makefile
+iso:
+	bash build_payload.sh
+	xorriso -as mkisofs -R -J -boot-info-table -b limine-bios-cd.bin \
+		--efi-boot limine-uefi-cd.bin -o sexos.iso iso_root/
+	limine-install sexos.iso
+
+run-smp:
+	qemu-system-x86_64 -M q35 -m 2048M -smp 4,cores=4,threads=1 \
+		-cpu host,+x2apic,+pku \
+		-cdrom sexos.iso -serial stdio -no-reboot -d int
+```
+
+### 6. BOOT FLOW (ABSOLUTE ORDER)
+**BSP:**
+1. calibrate_tsc_freq() (PIT/HPET)
+2. init CORE_TABLE + GS (BSP)
+3. pdx_spawn sexdisplay + grant SLOT_DISPLAY
+4. enable_tsc_deadline + program_frame_deadline
+5. smp_ignite() → INIT-SIPI-SIPI
+
+**AP:**
+1. ap_trampoline.S (real→long mode + paging + EFER)
+2. set GS + init_core
+3. sti + wait frame tick
+
+### 7. KEY FILES TO CREATE (copy-paste ready)
+- `kernel/src/ap_trampoline.S` → 16-bit real + CR4.PAE + EFER.LME + CR3 + long jump
+- `kernel/src/core.rs` → CoreTable + TSC_FREQ Atomic + ns_to_tsc
+- `kernel/src/init.rs` → init_core(cli→GS→mark_ready) + smp_ignite
+- `servers/sexdisplay/src/lib.rs` → render_frame(GS ctx + pdx_try_dequeue_acquire + sfence)
+- All other files from previous plans (ipc, lapic, interrupts)
+
+### 8. SUCCESS PROOF
+`make iso && make run-smp` → purple framebuffer stable @60Hz on all 4 cores.
+Serial: "FRAME LATTICE ONLINE – SMP OK"
+
+CAVEMAN: COPY THIS MD → COMMIT → IMPLEMENT FILES → BUILD. REAL SMP NOW. GO.

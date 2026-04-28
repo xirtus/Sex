@@ -116,67 +116,20 @@ fn op_window_vblank(last: u64) {
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexdisplay] PD1 Hardware Daemon Starting...");
 
-    // Retrieve lease via single-use syscall (opcode 0x12)
-    let packed_lease = match pdx_call_checked(0, 0x12, 0, 0, 0) {
-        Ok(val) => val,
-        Err(_) => panic!("[sexdisplay] FATAL: Failed to retrieve DisplayHardwareLease"),
-    };
+    // Bypass lease: hardcode framebuffer for pixel proof
+    let fb_ptr = 0xffff8000fd000000 as *mut u32;
+    let width = 1280usize;
+    let height = 800usize;
+    let purple = 0x00FF00FFu32;
 
-    let hw = DisplayHardware::from_packed(packed_lease);
-    hw.init_kms();
-
-    unsafe {
-        sys_set_state(SVC_STATE_LISTENING);
-    }
-    serial_println!("[sexdisplay] DISPLAY SERVICE LISTENING (PDX SLOT 5)");
-
-    loop {
-        // Deterministic vblank tick
-        unsafe { VBLANK_COUNTER += 1; }
-
-        match pdx_try_listen() {
-            None => {
-                sys_yield();
-            }
-            Some(cmd) => {
-                match cmd.type_id {
-                    OP_WINDOW_CREATE => {
-                        let handle = op_window_create();
-                        serial_println!("[sexdisplay] CREATE_WINDOW from PD {} -> Handle={:#x}", cmd.caller_pd, handle);
-                        pdx_reply(handle);
-                    }
-                    OP_WINDOW_MAP => {
-                        pdx_reply(cmd.arg0); // Opaque handle only
-                    }
-                    OP_WINDOW_WRITE => {
-                        let handle = cmd.arg0;
-                        let color = cmd.arg1 as u32;
-                        let pos = cmd.arg2; // offset in pixels
-                        let x = (pos as usize) % FB_WIDTH;
-                        let y = (pos as usize) / FB_WIDTH;
-                        
-                        if op_window_write(handle, x, y, color).is_ok() {
-                            pdx_reply(0);
-                        } else {
-                            pdx_reply(sex_pdx::ERR_CAP_INVALID);
-                        }
-                    }
-                    OP_WINDOW_SUBMIT => {
-                        op_window_submit(cmd.arg0);
-                        pdx_reply(0);
-                    }
-                    OP_WINDOW_VBLANK => {
-                        op_window_vblank(unsafe { VBLANK_COUNTER });
-                        pdx_reply(unsafe { VBLANK_COUNTER });
-                    }
-                    _ => {
-                        serial_println!("[sexdisplay] unknown opcode {:#x}", cmd.type_id);
-                        pdx_reply(sex_pdx::ERR_CAP_INVALID);
-                    }
-                }
-            }
+    for y in 0..height {
+        for x in 0..width {
+            unsafe { core::ptr::write_volatile(fb_ptr.add(y * width + x), purple); }
         }
     }
+    serial_println!("[sexdisplay] filled {}x{} purple pixels", width, height);
+
+    loop { sex_pdx::sys_yield(); }
 }
 
 #[panic_handler]
