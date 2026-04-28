@@ -11,6 +11,8 @@ use crate::interrupts::SyscallRegs;
 use crate::ipc::messages::MessageType;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::sync::atomic::AtomicU64;
+use x86_64::structures::paging::PageTableFlags;
+use x86_64::VirtAddr;
 
 const SNAPSHOT_MAX: usize = 64;
 
@@ -57,6 +59,15 @@ pub struct DisplayInfo {
     pub width:     u32,
     pub height:    u32,
     pub pitch:     u32, // Pixels per row
+}
+
+fn size_to_order(size: usize) -> usize {
+    let pages = (size + 4095) / 4096;
+    let mut order = 0;
+    while order < crate::memory::allocator::MAX_ORDER && (1 << order) < pages {
+        order += 1;
+    }
+    order
 }
 
 pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
@@ -223,6 +234,37 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let target_pd_id = rdi as u32;
             let val = rsi;
             if crate::ipc::router::send_reply(target_pd_id, val).is_ok() { 0 } else { 1 }
+        },
+
+        30 => { // MAP_MEMORY
+            let pa = rdi;
+            let size = rsi;
+            if let Some(va) = crate::memory::va_allocator::allocate_va(size as usize) {
+                let mut gvas_lock = crate::memory::manager::GLOBAL_VAS.lock();
+                if let Some(ref mut gvas) = *gvas_lock {
+                    let flags = PageTableFlags::PRESENT 
+                              | PageTableFlags::WRITABLE 
+                              | PageTableFlags::USER_ACCESSIBLE;
+                    if gvas.map_physical_range(VirtAddr::new(va), pa, size, flags, 0).is_ok() {
+                        va
+                    } else {
+                        u64::MAX
+                    }
+                } else {
+                    u64::MAX
+                }
+            } else {
+                u64::MAX
+            }
+        },
+
+        31 => { // ALLOCATE_MEMORY
+            let size = rdi as usize;
+            let order = size_to_order(size);
+            match crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(order) {
+                Some(phys) => phys,
+                None => u64::MAX,
+            }
         },
 
         32 => { // SYSCALL_YIELD
