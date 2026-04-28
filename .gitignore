@@ -58,3 +58,8 @@ target_debug/
 .sexos_snapshot/
 sexos/
 milestone1/
+limine_bin/
+upstream-linux/
+upstream-mesa/
+upstream-wlroots/
+sex-packages/sexbuild/recipes/redox-os/
