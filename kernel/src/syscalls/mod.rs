@@ -87,10 +87,6 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                             } else { (sex_pdx::ERR_CAP_INVALID, 0) }
                         } else { (sex_pdx::ERR_CAP_INVALID, 0) }
                     }
-                    0xBB => { // Phase 2: FRAME_PRESENT debug hook
-                        crate::serial_println!("PD1: FRAME_PRESENT event");
-                        (0u64, 0u64)
-                    }
                     _ => (sex_pdx::ERR_CAP_INVALID, 0),
                 }
             } else {
