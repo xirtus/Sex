@@ -110,70 +110,43 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         },
 
         28 => { // SYSCALL_PDX_LISTEN (Phase 25)
-            let slot = rdi as u32;
             let resp_ptr = r9 as *mut sex_pdx::PdxListenResult;
             let core_local = crate::core_local::CoreLocal::get();
             let current_pd = core_local.current_pd_ref();
 
             let (type_id, s_caller_pd, s_arg0, s_arg1, s_arg2): (u64, u64, u64, u64, u64) = {
                 // 1. Check priority reply buffer (Syscall 29 source)
-                // Replies always come from Slot 0 (Self) logic conceptually
                 let mut replies = current_pd.incoming_replies.lock();
-                if slot == 0 && !replies.is_empty() {
-                    if let Some(reply) = replies.pop_front() {
-                        drop(replies);
-                        (0x1, 1, reply.value, 0, 0)
-                    } else {
-                        drop(replies);
-                        (0, 0, 0, 0, 0)
-                    }
+                if let Some(reply) = replies.pop_front() {
+                    drop(replies);
+                    (0x1, 1, reply.value, 0, 0)
                 } else {
                     drop(replies);
-                    
-                    // 2. Resolve Slot to Capability
-                    use crate::capability::CapabilityData;
-                    let cap = current_pd.find_capability(slot);
-                    
-                    match cap.map(|c| c.data) {
-                        Some(CapabilityData::InputRing) => {
-                            if let Some(scancode) = crate::interrupts::INPUT_RING.dequeue() {
-                                (0x201, 1, scancode as u64, 0, 0)
-                            } else {
-                                (0, 0, 0, 0, 0)
-                            }
-                        }
-                        Some(CapabilityData::MessageQueue) => {
-                            // Slot 0 (MessageQueue) or any other explicitly bound queue
-                            unsafe {
-                                if let Some(msg) = (*current_pd.message_ring).dequeue() {
-                                    match msg {
-                                        MessageType::IpcCall { func_id, arg0, arg1, arg2: _, caller_pd } => {
-                                            (func_id, caller_pd as u64, arg0, arg1, 0)
-                                        }
-                                        MessageType::DisplayPrimaryFramebuffer { virt_addr, width, height, pitch } => {
-                                            (0x11, 1, virt_addr, (width as u64) | ((height as u64) << 32), pitch as u64)
-                                        }
-                                        MessageType::RawInput(scancode) => {
-                                            (0x201, 1, scancode as u64, 0, 0)
-                                        }
-                                        _ => {
-                                            let tid: u64 = match msg {
-                                                MessageType::WindowCreate       => 0xDE,
-                                                MessageType::CompositorCommit   => 0xDD,
-                                                MessageType::SetWindowRoundness => 0xDF,
-                                                MessageType::SetWindowBlur      => 0xE0,
-                                                MessageType::GetDisplayInfo     => 0xE3,
-                                                _                               => 0xFF,
-                                            };
-                                            (tid, 1, 0, 0, 0)
-                                        }
-                                    }
-                                } else {
-                                    (0, 0, 0, 0, 0) // EMPTY
+                    // 2. Check standard message ring
+                    unsafe {
+                        if let Some(msg) = (*current_pd.message_ring).dequeue() {
+                            match msg {
+                                MessageType::IpcCall { func_id, arg0, arg1, arg2: _, caller_pd } => {
+                                    (func_id, caller_pd as u64, arg0, arg1, 0)
+                                }
+                                MessageType::DisplayPrimaryFramebuffer { virt_addr, width, height, pitch } => {
+                                    (0x11, 1, virt_addr, (width as u64) | ((height as u64) << 32), pitch as u64)
+                                }
+                                _ => {
+                                    let tid: u64 = match msg {
+                                        MessageType::WindowCreate       => 0xDE,
+                                        MessageType::CompositorCommit   => 0xDD,
+                                        MessageType::SetWindowRoundness => 0xDF,
+                                        MessageType::SetWindowBlur      => 0xE0,
+                                        MessageType::GetDisplayInfo     => 0xE3,
+                                        _                               => 0xFF,
+                                    };
+                                    (tid, 1, 0, 0, 0)
                                 }
                             }
+                        } else {
+                            (0, 0, 0, 0, 0) // EMPTY
                         }
-                        _ => (0, 0, 0, 0, 0), // Unknown/None -> Empty
                     }
                 }
             };
@@ -220,22 +193,6 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                 crate::ipc::state::set_service_listening(pd_id);
             }
             0
-        },
-
-        40 => { // SYSCALL_ALLOC_SHARED_BUFFER
-            let size = rdi as usize;
-            let consumer_id = rsi as u8;
-            let current_pd = crate::core_local::CoreLocal::get().current_pd() as u8;
-            
-            // Validation: current_pd != consumer_id
-            if current_pd == consumer_id {
-                0
-            } else {
-                match crate::ipc::buffer::IPC_BUFFER_MANAGER.allocate_shared_buffer(size, current_pd, consumer_id) {
-                    Ok(va) => va,
-                    Err(_) => 0,
-                }
-            }
         },
 
         _ => u64::MAX,

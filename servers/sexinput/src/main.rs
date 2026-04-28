@@ -2,37 +2,55 @@
 #![no_main]
 
 use sex_pdx::*;
+use sex_pdx::sys_yield;
 use core::panic::PanicInfo;
+use core::arch::asm;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    loop { sys_yield(); }
+    loop {}
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    sex_rt::heap_init();
-    serial_println!("[sexinput] Normalizer Starting...");
-
-    unsafe {
-        sys_set_state(SVC_STATE_LISTENING);
+    // 1. Register with sexshop (PD 0, discovery service)
+    let mut name = [0u8; 32];
+    name[..14].copy_from_slice(b"io.sexos.input");
+    unsafe { 
+        pdx_call(0, PDX_DISCOVER_SERVICE as u64, name.as_ptr() as u64, 0, 0);
     }
 
     loop {
-        // 1. Listen for raw scancodes from kernel (SLOT_INPUT = 3)
-        let req = pdx_listen_raw(SLOT_INPUT);
+        // 2. Poll PS/2 status port (0x64)
+        let status: u8 = unsafe { 
+            let mut val: u8;
+            asm!("in al, dx", in("dx") 0x64u16, out("al") val);
+            val
+        };
 
-        // Kernel RawInput is type 0x201, arg0 = scancode
-        if req.type_id == 0x201 {
-            let scancode = req.arg0;
-            // serial_println!("[sexinput] Raw scancode: {:#x}", scancode);
+        // If buffer full (bit 0), read data port (0x60)
+        if (status & 1) != 0 {
+            let scancode: u8 = unsafe {
+                let mut val: u8;
+                asm!("in al, dx", in("dx") 0x60u16, out("al") val);
+                val
+            };
 
-            // 2. Normalize and forward to silk-shell (SLOT_SHELL = 6)
-            // Use HIDEvent opcode (0x202)
-            // arg0: code, arg1: value (1 = pressed), arg2: type (1 = EV_KEY)
-            pdx_call(SLOT_SHELL, 0x202, scancode, 1, 1);
+            // 3. Broadcast to compositor/focus (Slot 1 = sexdisplay)
+            // PDX_INPUT_EVENT definition missing in lib.rs, assuming 0x22
+            let msg = PdxMessage {
+                msg_type: MessageType::HIDEvent { 
+                    ev_type: 1, 
+                    code: scancode as u16, 
+                    value: 1 
+                },
+                payload: [0u8; 64],
+            };
+            unsafe { 
+                pdx_call(1, 0x22, &msg as *const _ as u64, 0, 0); 
+            }
         } else {
-            sys_yield();
+            unsafe { sys_yield(); }
         }
     }
 }
