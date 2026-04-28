@@ -46,15 +46,6 @@ unsafe fn grant_standard_capabilities(pd: &mut ProtectionDomain, pd_id: u32) {
 }
 
 pub fn init() {
-    // Phase 1.5: Populate PRIMARY_GPU_LEASE exactly once
-    {
-        use crate::graphics::gpu_lease::{select_primary_gpu, PRIMARY_GPU_LEASE};
-        if let Some(lease) = select_primary_gpu() {
-            *PRIMARY_GPU_LEASE.lock() = Some(lease);
-            serial_println!("init: PRIMARY_GPU_LEASE populated");
-        }
-    }
-
     let mut _sexdisp_id = 0; 
 
     let modules_res = crate::MODULE_REQUEST.response();
@@ -78,18 +69,6 @@ pub fn init() {
                     if path.contains("sexdisplay") { 
                         sexdisp_id = id; 
                         unsafe { SEXDISPLAY_PD_ID = id; }
-                        
-                        // Phase 1: GPU Lease assignment
-                        use crate::graphics::gpu_lease::claim_primary_for_pd1;
-                        let lease = claim_primary_for_pd1();
-                        
-                        use crate::ipc::DOMAIN_REGISTRY;
-                        let pd_ptr = DOMAIN_REGISTRY.get(id).expect("PD1 not in registry");
-                        let main_task_ptr = (*pd_ptr).main_task.load(core::sync::atomic::Ordering::Acquire);
-                        if !main_task_ptr.is_null() {
-                            let main_task = unsafe { &mut *main_task_ptr };
-                            main_task.ext_init = Some(crate::scheduler::InitArg { display_lease: lease });
-                        }
                     } else if path.contains("silk-shell") {
                         silkshell_id = id;
                     }
