@@ -9,6 +9,7 @@ use spin::Mutex;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityKind {
     Memory, DMA, IPC, Interrupt, Domain, Node, Spawn, Pci, Network, Socket, MemLend, RemoteProxy, VfsNode,
+    InputRing, MessageQueue,
 }
 
 #[repr(C, align(64))]
@@ -46,6 +47,25 @@ pub struct SpawnCapData { pub max_pds: u32, pub allowed_pku_keys: u32 }
 #[derive(Debug, Clone, Copy)]
 pub struct PciCapData { pub bus: u8, pub dev: u8, pub func: u8, pub vendor_id: u16, pub device_id: u16 }
 
+pub struct DisplayHardwareLease {
+    pub domain: u16,
+    pub bus: u8,
+    pub dev: u8,
+    pub func: u8,
+    pub vendor_id: u16,
+    pub device_id: u16,
+}
+
+impl core::fmt::Debug for DisplayHardwareLease {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DisplayHardwareLease")
+            .field("bus", &self.bus)
+            .field("dev", &self.dev)
+            .field("vendor", &self.vendor_id)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct NetworkCapData { pub interface_id: u32, pub mac_address: [u8; 6] }
 
@@ -64,6 +84,7 @@ pub enum CapabilityData {
     Domain(u32), Node(NodeCapData), Spawn(SpawnCapData), Pci(PciCapData),
     Network(NetworkCapData), Socket(SocketCapData), MemLend(MemLendCapData), RemoteProxy(GlobalCapId),
     VfsNode(VfsNodeCapData),
+    InputRing, MessageQueue,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -134,6 +155,55 @@ impl CapabilityTable {
 use crate::ipc_ring::RingBuffer;
 use crate::ipc::messages::MessageType;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum PkruValue {
+    /// God Mode: All PKEYs accessible (Access and Write).
+    GodMode = 0x0000_0000,
+    /// Secure Default: All PKEYs blocked except PKEY 0 (Kernel).
+    SecureDefault = 0xFFFF_FFFC,
+}
+
+impl PkruValue {
+    /// Computes the standard PKRU mask for a Protection Domain.
+    /// Opens PKEY 0 (Kernel) and the target pkey.
+    /// Shared memory (PKEY 14) is mapped statically:
+    /// - Domain 2 (SexDrive/Producer): RW
+    /// - Domain 1 (SexDisplay/Consumer): RO
+    /// - Others: No Access
+    pub fn for_domain(pkey: u8) -> u32 {
+        let mut mask: u32 = 0xFFFF_FFFF;
+        // Open PKEY 0 (Default/Kernel)
+        mask &= !0b11;
+        
+        // Open target PKEY (Self) as RW
+        if pkey < 16 {
+            mask &= !(0b11 << (pkey * 2));
+        }
+
+        // Handle PKEY 14 (SHARED) via Hard-coded Identity Assertions
+        let shared_pkey = 14;
+        let shift = shared_pkey * 2;
+        mask &= !(0b11 << shift); // Clear bits first
+
+        if pkey == 2 {
+            // Producer (SexDrive): RW (0b00)
+            mask |= 0b00 << shift;
+            debug_assert!((mask >> shift) & 0b11 == 0b00);
+        } else if pkey == 1 {
+            // Consumer (SexDisplay): RO (0b10)
+            mask |= 0b10 << shift;
+            debug_assert!((mask >> shift) & 0b11 == 0b10);
+        } else {
+            // Others: No Access (0b11)
+            mask |= 0b11 << shift;
+            debug_assert!((mask >> shift) & 0b11 == 0b11);
+        }
+
+        mask
+    }
+}
+
 pub struct ProtectionDomain {
     pub id: u32,
     pub pku_key: u8,
@@ -150,9 +220,9 @@ pub struct ProtectionDomain {
 
 impl ProtectionDomain {
     pub fn new(id: u32, pku_key: u8) -> Self {
-        let pkru_mask = crate::pku::PkruValue::for_domain(pku_key);
+        let pkru_mask = PkruValue::for_domain(pku_key);
         
-        Self {
+        let pd = Self {
             id, pku_key,
             base_pkru_mask: pkru_mask,
             current_pkru_mask: AtomicU32::new(pkru_mask),
@@ -163,7 +233,11 @@ impl ProtectionDomain {
             main_task: AtomicPtr::new(ptr::null_mut()),
             trampoline_task: AtomicPtr::new(ptr::null_mut()),
             incoming_replies: Mutex::new(VecDeque::with_capacity(1)),
-        }
+        };
+
+        // Static Binding: Slot 0 is ALWAYS the PD's own message ring.
+        pd.grant_capability(0, CapabilityData::MessageQueue);
+        pd
     }
 
     pub fn grant(&self, data: CapabilityData) -> u32 {
@@ -172,6 +246,10 @@ impl ProtectionDomain {
 
     pub fn grant_capability(&self, slot: u64, data: CapabilityData) {
         unsafe { (*self.cap_table).insert_at(slot as u32, data) }
+    }
+
+    pub fn find_capability(&self, id: u32) -> Option<Capability> {
+        unsafe { (*self.cap_table).find(id) }
     }
 
     /// Formal Verification Hook: Lent Memory Ownership
