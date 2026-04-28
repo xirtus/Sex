@@ -133,3 +133,15 @@ Use this block format at the end of each work session:
   - the raw serial marker must be interpreted carefully; an earlier version accidentally printed slice metadata bytes instead of the literal marker
 - Next step:
   - have Gemini inspect `kernel/src/interrupts.rs` and decide whether the issue is a bad syscall-entry path, a GS/kernel-stack dependency, or a userland transition that never reaches the `syscall` instruction.
+
+### Session 2026-04-28 18:00 (Agent: aider-build-fixer)
+- Objective: verify build after no-code-change request.
+- Files changed: none (build already succeeded).
+- Commands run: `./scripts/entrypoint_build.sh` (full pipeline).
+- Result:
+  - full build succeeded (kernel, sexdisplay, sexdrive, silk-shell, sexinput, purple-scanout).
+  - `cargo check -p sex-pdx` host warning is expected for `x86_64-sex` target (not installed on host; actual build uses `-Zbuild-std`).
+  - Playwright dependency install failed because host is not Ubuntu/apt (non‑blocking).
+  - rust docs URL fetch failed from malformed trailing `>` (non‑blocking).
+- Regressions/risks: none.
+- Next step: continue runtime validation per previous session.
