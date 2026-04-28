@@ -185,27 +185,27 @@ pub unsafe extern "C" fn syscall_entry() {
 
         // 6. Build SyscallRegs (Volatiles + Args)
         // Stack at this point (top down):
-        // [rsp+0..47]: r15-rbp (48)
-        // [rsp+48]: PKRU mask (8)
-        // [rsp+56]: r9 (8)
-        // [rsp+64]: r8 (8)
-        // [rsp+72]: r10 (8)
-        // [rsp+80]: rdx (8)
-        // [rsp+88]: rsi (8)
-        // [rsp+96]: rdi (8)
-        // [rsp+104]: rax (8)
-        // [rsp+112]: rcx (8) - RIP
-        // [rsp+120]: r11 (8) - RFLAGS
+        // [rbp+0..47]: r15-rbp (48)
+        // [rbp+48]: PKRU mask (8)
+        // [rbp+56]: r9 (8)
+        // [rbp+64]: r8 (8)
+        // [rbp+72]: r10 (8)
+        // [rbp+80]: rdx (8)
+        // [rbp+88]: rsi (8)
+        // [rbp+96]: rdi (8)
+        // [rbp+104]: rax (8)
+        // [rbp+112]: rcx (8) - RIP
+        // [rbp+120]: r11 (8) - RFLAGS
 
-        "push [rsp + 120]", // r11
-        "push [rsp + 120]", // rcx (offset 112 + 8)
-        "push [rsp + 72]",  // r9 (offset 56 + 16)
-        "push [rsp + 80]",  // r8 (offset 64 + 16)
-        "push [rsp + 88]",  // r10 (offset 72 + 16)
-        "push [rsp + 96]",  // rdx (offset 80 + 16)
-        "push [rsp + 104]", // rsi (offset 88 + 16)
-        "push [rsp + 112]", // rdi (offset 96 + 16)
-        "push [rsp + 120]", // rax (offset 104 + 16)
+        "push qword ptr [rbp + 120]", // r11
+        "push qword ptr [rbp + 112]", // rcx
+        "push qword ptr [rbp + 56]",  // r9
+        "push qword ptr [rbp + 64]",  // r8
+        "push qword ptr [rbp + 72]",  // r10
+        "push qword ptr [rbp + 80]",  // rdx
+        "push qword ptr [rbp + 88]",  // rsi
+        "push qword ptr [rbp + 96]",  // rdi
+        "push qword ptr [rbp + 104]", // rax
 
         // Call Handler
         "call syscall_stub_before_dispatch",

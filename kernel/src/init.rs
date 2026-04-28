@@ -4,6 +4,9 @@ use x86_64::VirtAddr;
 pub static mut SEXDISPLAY_PD_ID: u32 = 0;
 
 pub fn init() {
+    // Advance boot phase to allow registry insertion
+    unsafe { crate::ipc::BOOT_CONTROLLER.advance(crate::ipc::BootPhase::RegistryBuild); }
+
     // Phase 1.5: Populate PRIMARY_GPU_LEASE exactly once
     {
         use crate::graphics::gpu_lease::{select_primary_gpu, PRIMARY_GPU_LEASE};
@@ -141,6 +144,25 @@ pub fn init() {
     }
 
     serial_println!("init: Revoking kernel write access...");
+
+    // Enqueue all registered PD tasks onto scheduler runqueue
+    for pd_id in 1..crate::ipc::MAX_DOMAINS as u32 {
+        if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(pd_id) {
+            let task_ptr = pd.main_task.load(core::sync::atomic::Ordering::Acquire);
+            if !task_ptr.is_null() {
+                unsafe { (*task_ptr).state.store(crate::scheduler::STATE_READY, core::sync::atomic::Ordering::Release); }
+                crate::scheduler::SCHEDULERS[0].runqueue.push(task_ptr);
+                serial_println!("scheduler.enqueue pd_id={}", pd_id);
+            }
+        }
+    }
+
+    unsafe {
+        crate::ipc::BOOT_CONTROLLER.advance(crate::ipc::BootPhase::RegistryFrozen);
+        crate::ipc::BOOT_CONTROLLER.advance(crate::ipc::BootPhase::SchedulerArmed);
+        crate::ipc::BOOT_CONTROLLER.advance(crate::ipc::BootPhase::SchedulerRunning);
+    }
+
     serial_println!("init: Ready for Scheduler.");
 }
 
@@ -161,7 +183,7 @@ pub unsafe fn jump_to_userland(pd_id: u32, entry: u64, pkru: u32, pku_key: u8) -
     let rflags: u64 = 0x3202;
     let stack_top = 0x_7000_0000_0000 + (pku_key as u64 * 0x100_0000) + (64 * 1024);
 
-    crate::core_local::CoreLocal::get().set_pd(pd_id);
+    // crate::core_local::CoreLocal::get().set_pd(pd_id); // Deprecated, jump_to_userland is dead code
 
     core::arch::asm!(
         "xor eax, eax", "xor ecx, ecx", "xor edx, edx", "wrpkru", // God Mode

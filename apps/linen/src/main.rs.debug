@@ -1,2 +1,0 @@
-// linen main.rs alive check
-serial_println!("Linen: Alive (Phase 24)");

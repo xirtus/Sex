@@ -1,5 +1,5 @@
 use x86_64::VirtAddr;
-use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr};
+use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr, AtomicBool};
 use crate::cheri::SexCapability;
 use core::ptr;
 use alloc::collections::{BTreeMap, VecDeque};
@@ -100,6 +100,7 @@ pub struct Capability {
 pub struct CapabilityTable {
     pub slots: [AtomicPtr<Capability>; 1024],
     next_slot: AtomicU32,
+    sealed: AtomicBool,
 }
 
 impl CapabilityTable {
@@ -108,10 +109,18 @@ impl CapabilityTable {
         Self {
             slots: [INIT; 1024],
             next_slot: AtomicU32::new(0),
+            sealed: AtomicBool::new(false),
         }
     }
 
+    pub fn seal(&self) {
+        self.sealed.store(true, Ordering::SeqCst);
+    }
+
     pub fn insert(&self, data: CapabilityData) -> u32 {
+        if self.sealed.load(Ordering::Acquire) {
+            panic!("UCGM: Attempted to insert capability into sealed table");
+        }
         let slot = self.next_slot.fetch_add(1, Ordering::SeqCst) % 1024;
         let id = slot + 1;
         let cap = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Capability { id, data, cheri_meta: 0 }));
@@ -123,6 +132,9 @@ impl CapabilityTable {
     }
 
     pub fn insert_at(&self, id: u32, data: CapabilityData) {
+        if self.sealed.load(Ordering::Acquire) {
+            panic!("UCGM: Attempted to insert_at into sealed table");
+        }
         if id == 0 || id > 1024 { return; }
         let slot = (id - 1) as usize;
         let cap = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Capability { id, data, cheri_meta: 0 }));

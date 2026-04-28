@@ -1,4 +1,5 @@
 pub mod handoff;
+pub mod gpu_lease;
 
 use limine::framebuffer::Framebuffer;
 use crate::memory::manager::update_page_pkey;

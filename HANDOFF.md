@@ -1,31 +1,58 @@
-# Hand-off: IRETQ Contract Enforcement (Phase 28)
+# HANDOFF.md — Phase 35/80 (Deterministic SMP Lattice)
 
-## Problem
-Scheduler loop stalled. `timer_tick` spams, but context switch never completes.
+## Current Runtime Handoff: Syscall Entry Probe
 
-## Diagnosis
-8-byte stack misalignment detected.
-`timer_interrupt_stub` pushes `dummy_error_code` (8 bytes) onto the *interrupted task's stack*.
-`switch_to` manually loads `rsp` to `kstack_top` (switching to a *fresh* kernel stack) and then pushes a new IRETQ frame.
+This supersedes the older phase guidance for the current debug thread.
 
-The 8-byte misalignment was a red herring. The real issue is the **Stack Model Mismatch**:
-- `switch_to` expects a pristine `kstack_top`.
-- The logic remains hybrid/impure because of how we build `TaskContext` vs how `switch_to` consumes it.
+### Verified So Far
+- The `iretq` blocker is fixed.
+- Final user iret frame is correct:
+  - `rip=0x40001640`
+  - `cs=0x2b`
+  - `rsp=0x700000100000`
+  - `ss=0x23`
+- The user entrypoints in `sexdisplay` and `purple-scanout` are real `.text` code.
+- Both user `_start` paths now begin with a minimal syscall probe that avoids user pointers.
 
-## Findings
-- `add rsp, 8` blindly is dangerous. It works if reusing the interrupt stack, but fails if we've already switched to `kstack_top`.
-- `switch_to` (current implementation) switches to `kstack_top` *before* handling the IRETQ frame.
-- The `TaskContext` layout and the manual `push` operations in `switch_to` were relying on different stack assumptions.
+### Current Probe State
+- `kernel/src/interrupts.rs` now contains a raw, no-stack COM1 marker at the top of `syscall_entry` before `swapgs`.
+- The intended boundary markers are:
+  - `syscall.stub.enter.raw`
+  - `syscall.stub.after.kstack.switch`
+  - `syscall.stub.before.dispatch`
+  - `syscall.enter`
+  - `syscall.magic.hit`
+- `./scripts/entrypoint_build.sh` succeeds.
+- Boot output still does not show any of the syscall boundary markers in the serial grep path.
 
-## Resolution
-- Enforced "Fresh Frame" model (Case B): `switch_to` now treats the kernel stack as a clean slate.
-- Standardized `TaskContext` offsets (0x90-0x98) to reflect the exact IRETQ frame layout.
-- Removed legacy `add rsp, 8` logic, as it conflicts with explicit stack switching.
-- **Instrumentation:** Added `SWITCH` and `TASKS` logging in `Scheduler::tick()` to verify runqueue state.
+### What Gemini Should Check Next
+1. Inspect `kernel/src/interrupts.rs` `syscall_entry` for any GS/stack dependency that can prevent the raw serial loop from reaching COM1.
+2. Verify whether the `syscall` instruction is being reached but failing before the first kernel-side log.
+3. If the raw pre-`swapgs` marker is present but hidden from grep, inspect the serial byte stream directly.
+4. If none of the syscall markers appear, the userland transition is still failing before the `syscall` instruction despite the correct iret frame and valid entrypoint bytes.
 
-## Status
-- **Stall:** Persists.
-- **Observation:** `SWITCH` logs are completely absent from output. `timer_tick` spam continues.
-- **Inference:** `Scheduler::tick()` is returning `None` consistently. The scheduler is not successfully stealing tasks or even finding tasks to switch to, despite `pdx_spawn` reporting registration.
-- **Next Root Cause Investigation:** Scheduler state/runqueue initialization failure. Why is `steal()` returning `None` for all cores?
-- **Action:** Instrument `runqueue.steal()` and `attempt_steal()` to debug why tasks remain invisible to the scheduler.
+## Current Status
+We have permanently abandoned legacy scheduler stall debugging (Phase 28). The system is now a **closed deterministic SMP execution lattice**.
+
+Our immediate goal is **Milestone 1 (Minimal Silicon Bootstrap)**: Achieving a stable purple framebuffer at 60Hz across multiple cores with zero scheduling, zero locks, and perfect determinism.
+
+## Execution Protocol: The Formalized Emergence Loop
+We are executing a strict, manual emergence loop to prevent silent drift and ensure zero Undefined Behavior (UB):
+
+**ARCH → (Gemini prove) → CODE → (Gemini verify) → RUN → REPEAT**
+
+### Roles:
+- **Gemini CLI (Local Agent):** Verifier, invariant checker, and architecture validator. Not the primary code generator.
+- **Claude (External Agent):** Code generator and workspace scaffold creator. Not the architect.
+
+### The Loop:
+1. **ARCH (Completed):** `ARCHITECTURE.md` is the single source of truth.
+2. **Gemini Prove (Step C):** Gemini validates the spec sanity (acyclic DAG, single-writer IPC, no shared mutable state, valid PKU).
+3. **CODE (Step D):** Claude generates the Rust code against strict constraints (no Vec, no Box, no Mutex, no threads, no async).
+4. **Gemini Verify (Step E):** Gemini analyzes the Claude-generated crates for hardware limits, memory violations, and UB using specific agents (`ast-unsafe-tracker`, `sasos-memory-violator`, `pkru-timeline-reconstructor`).
+5. **RUN:** `make iso && make run-smp`.
+
+## Immediate Next Step (Handoff)
+- The current task is not the old Milestone 1 pre-pass. It is the syscall-entry boundary probe after the iretq fix.
+- Continue from `kernel/src/interrupts.rs`, `kernel/src/syscalls/mod.rs`, `servers/sexdisplay/src/main.rs`, and `purple-scanout/src/main.rs`.
+- The next concrete question is whether the user reaches `syscall_entry` at all, or whether the failure happens before the syscall instruction.

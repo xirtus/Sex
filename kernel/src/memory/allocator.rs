@@ -235,6 +235,30 @@ pub static GLOBAL_ALLOCATOR: LockFreeBuddyAllocator = LockFreeBuddyAllocator::ne
 pub fn alloc_frame() -> Option<u64> { GLOBAL_ALLOCATOR.alloc(0) }
 pub fn free_pages(phys: u64, order: usize) { GLOBAL_ALLOCATOR.free(phys, order) }
 
+/// Debug helper used during early boot bring-up.
+pub fn debug_global_free_frames() -> u64 {
+    let mut total_frames = 0u64;
+    let meta_base = GLOBAL_ALLOCATOR.metadata_base.load(Ordering::Acquire);
+    if meta_base == 0 {
+        return 0;
+    }
+
+    for order in 0..=MAX_ORDER {
+        let mut cur = GLOBAL_ALLOCATOR.global_free_lists[order].load(Ordering::Acquire);
+        let mut seen = 0usize;
+        while cur != 0 && seen < 1_000_000 {
+            total_frames = total_frames.saturating_add(1u64 << order);
+            let meta = GLOBAL_ALLOCATOR.get_metadata(cur);
+            if meta.is_null() {
+                break;
+            }
+            cur = unsafe { (*meta).next.load(Ordering::Acquire) };
+            seen += 1;
+        }
+    }
+    total_frames
+}
+
 pub fn init_heap(
     mapper: &mut impl x86_64::structures::paging::Mapper<x86_64::structures::paging::Size4KiB>,
     frame_allocator: &mut impl x86_64::structures::paging::FrameAllocator<x86_64::structures::paging::Size4KiB>,

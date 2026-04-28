@@ -47,3 +47,9 @@ sexos-x17r1-bundle.tar.gz
 sex-packages/sexbuild/build_dir/**
 sexos-x17r1-bundle.tar.gz
 *.tar.gz
+target/
+target_debug/
+**/target/
+*.rlib
+*.rmeta
+*.log

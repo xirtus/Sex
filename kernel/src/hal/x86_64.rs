@@ -46,6 +46,10 @@ impl HardwareAbstractionLayer for X86Hal {
 
         if crate::pku::is_pku_supported() {
             unsafe { crate::pku::enable_pku(); }
+            crate::pku::set_pku_enabled(true);
+        } else {
+            crate::pku::set_pku_enabled(false);
+            serial_println!("PKU: unsupported on this CPU/QEMU path; PKRU ops gated off");
         }
 
         serial_println!("X86Hal: Initializing GDT/IDT...");
@@ -68,6 +72,20 @@ impl HardwareAbstractionLayer for X86Hal {
 
     fn enumerate_pci(&self) -> Vec<PciDevice> {
         crate::hal::pci::enumerate_bus()
+    }
+
+    fn get_framebuffer(&self) -> Option<crate::hal::Framebuffer> {
+        if let Some(fb_res) = crate::FB_REQUEST.response() {
+            if let Some(fb) = fb_res.framebuffers().iter().next() {
+                return Some(crate::hal::Framebuffer {
+                    address: fb.address() as u64,
+                    width: fb.width as u32,
+                    height: fb.height as u32,
+                    pitch: (fb.pitch / 4) as u32,
+                });
+            }
+        }
+        None
     }
 
     fn setup_timer(&self, _hz: u64) {

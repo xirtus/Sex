@@ -15,12 +15,5 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    
-    - name: Install Rust nightly
-      uses: dtolnay/rust-toolchain@nightly
-      with:
-        targets: x86_64-unknown-none
-
-    - name: Check compilation
-      run: cargo check
-      working-directory: ./kernel
+    - name: Build via single entrypoint (mandatory)
+      run: bash scripts/entrypoint_build.sh

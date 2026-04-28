@@ -1,9 +1,291 @@
---- servers/sexdisplay/src/main.rs
-+++ servers/sexdisplay/src/main.rs
-@@ -1,5 +1,6 @@
+diff a/servers/sexdisplay/src/main.rs b/servers/sexdisplay/src/main.rs	(rejected hunks)
+@@ -1,186 +1,133 @@
+ #![no_std]
+ #![no_main]
+ 
+-use sex_pdx::{pdx_try_listen, pdx_reply, pdx_call, pdx_call_checked, sys_yield, sys_set_state, serial_println, SVC_STATE_LISTENING, 
+-              OP_WINDOW_CREATE, OP_WINDOW_SUBMIT, OP_WINDOW_VBLANK, OP_WINDOW_MAP, OP_WINDOW_WRITE};
+-
+-pub const FB_WIDTH: usize = 1024;
+-pub const FB_HEIGHT: usize = 768;
+-pub const FB_SIZE: usize = FB_WIDTH * FB_HEIGHT;
+-
+-#[derive(Copy, Clone, PartialEq)]
+-pub enum FrameState { Idle, BufferReady, FramePending, Flipped }
+-
+-pub struct Window {
+-    pub handle: u64,
+-    pub fb_idx: usize,
+-    pub state: FrameState,
++extern crate alloc;
++use sex_pdx::{pdx_try_listen, pdx_reply, serial_println, pdx_call_checked};
++use core::ptr::write_volatile;
++
++pub const OP_PRIMARY_FB: u64 = 0x11;
++pub const OP_WINDOW_CREATE: u64 = 0xDE;
++pub const OP_WINDOW_SUBMIT: u64 = 0xDD;
++
++#[repr(C)]
++struct SexWindowCreateParams {
++    x: u32,
++    y: u32,
++    width: u32,
++    height: u32,
++    pfn_base: u64,
+ }
+ 
+-struct DisplayHardware {
+-    bus: u8,
+-    dev: u8,
+-    func: u8,
+-    vendor_id: u16,
+-    device_id: u16,
+-}
+-
+-impl DisplayHardware {
+-    fn from_packed(packed: u64) -> Self {
+-        Self {
+-            bus: (packed & 0xFF) as u8,
+-            dev: ((packed >> 8) & 0xFF) as u8,
+-            func: ((packed >> 16) & 0xFF) as u8,
+-            vendor_id: ((packed >> 24) & 0xFFFF) as u16,
+-            device_id: ((packed >> 40) & 0xFFFF) as u16,
+-        }
+-    }
+-
+-    fn init_kms(&self) {
+-        serial_println!("[sexdisplay] Opening GPU {}:{}:{} vendor={:#x}", self.bus, self.dev, self.func, self.vendor_id);
+-        serial_println!("[sexdisplay] Connector: Connected (1024x768)");
+-        serial_println!("[sexdisplay] Encoder: Active (Internal)");
+-        serial_println!("[sexdisplay] CRTC: Assigned (Primary)");
+-        serial_println!("[sexdisplay] KMS Pipeline Active.");
++static mut WINDOW_FB: u64 = 0;
++static mut WINDOW_W: u64 = 0;
++static mut WINDOW_H: u64 = 0;
++static mut PRIMARY_FB: u64 = 0;
++static mut PRIMARY_W: u64 = 0;
++static mut PRIMARY_H: u64 = 0;
++static mut PENDING_SUBMIT: bool = false;
++static mut RUNTIME_READY: bool = false;
++
++fn fill_screen_purple(fb: *mut u32, width: usize, height: usize) {
++    for i in 0..(width * height) {
++        unsafe { write_volatile(fb.add(i), 0x00FF00FF); } // ARGB purple
+     }
+ }
+ 
+-static mut VBLANK_COUNTER: u64 = 0;
+-static mut NEXT_HANDLE: u64 = 0x100;
+-
+-// Option B: no alloc (strict kernel-like mode)
+-static mut WINDOWS: [Option<Window>; 16] = [const { None }; 16];
+-static mut FRAMEBUFFERS: [[u32; FB_SIZE]; 16] = [[0; FB_SIZE]; 16];
+-
+-fn find_window_mut(handle: u64) -> Option<&'static mut Window> {
++#[inline(always)]
++fn debug_syscall_probe() {
+     unsafe {
+-        for slot in WINDOWS.iter_mut() {
+-            if let Some(ref mut w) = slot {
+-                if w.handle == handle {
+-                    return Some(w);
+-                }
+-            }
+-        }
++        core::arch::asm!(
++            "syscall",
++            in("rax") 0u64,
++            in("rdi") 0u64,
++            in("rsi") 0x5151u64,
++            in("rdx") 0u64,
++            in("r10") 0u64,
++            in("r8")  0u64,
++            lateout("rax") _,
++            lateout("rsi") _,
++            out("rcx") _,
++            out("r11") _,
++        );
+     }
+-    None
+-}
+-
+-fn op_window_create() -> u64 {
+-    let h = unsafe { NEXT_HANDLE += 1; NEXT_HANDLE };
+-
+-    unsafe {
+-        for (i, slot) in WINDOWS.iter_mut().enumerate() {
+-            if slot.is_none() {
+-                *slot = Some(Window {
+-                    handle: h,
+-                    fb_idx: i,
+-                    state: FrameState::Idle,
+-                });
+-                return h;
+-            }
+-        }
+-    }
+-    0 // Out of slots
+-}
+-
+-fn op_window_write(h: u64, x: usize, y: usize, c: u32) -> Result<(), ()> {
+-    if let Some(w) = find_window_mut(h) {
+-        if x >= FB_WIDTH || y >= FB_HEIGHT { return Err(()); }
+-        unsafe {
+-            FRAMEBUFFERS[w.fb_idx][y * FB_WIDTH + x] = c;
+-        }
+-        Ok(())
+-    } else {
+-        Err(())
+-    }
+-}
+-
+-fn op_window_submit(h: u64) {
+-    if let Some(w) = find_window_mut(h) {
+-        w.state = FrameState::Flipped;
+-        serial_println!("[sexdisplay] frame flip committed");
+-        // Trigger kernel debug hook (pdx_call to slot 0, opcode 0xBB)
+-        pdx_call(0, 0xBB, 0, 0, 0);
+-    }
+-}
+-
+-fn op_window_vblank(last: u64) {
+-    loop {
+-        unsafe { if VBLANK_COUNTER > last { break; } }
+-        sys_yield();
+-    }
+-    serial_println!("[sexdisplay] vblank={}", unsafe { VBLANK_COUNTER });
+ }
+ 
  #[no_mangle]
  pub extern "C" fn _start() -> ! {
-     let mut info = DisplayInfo { virt_addr: 0, width: 0, height: 0, pitch: 0 };
-+    serial_println!("sexdisplay: _start() reached under PKEY 1");
-     let ret = unsafe { pdx_call(0, PDX_GET_DISPLAY_INFO, &mut info as *mut _ as u64, 0) };
-     if ret == 0 && info.virt_addr != 0 && info.width > 0 && info.height > 0 {
+-    serial_println!("[sexdisplay] PD1 Hardware Daemon Starting...");
+-
+-    // Retrieve lease via single-use syscall (opcode 0x12)
+-    let packed_lease = match pdx_call_checked(0, 0x12, 0, 0, 0) {
+-        Ok(val) => val,
+-        Err(_) => panic!("[sexdisplay] FATAL: Failed to retrieve DisplayHardwareLease"),
+-    };
+-
+-    let hw = DisplayHardware::from_packed(packed_lease);
+-    hw.init_kms();
+-
+-    unsafe {
+-        sys_set_state(SVC_STATE_LISTENING);
+-    }
+-    serial_println!("[sexdisplay] DISPLAY SERVICE LISTENING (PDX SLOT 5)");
++    debug_syscall_probe();
++    sex_rt::heap_init();
++    serial_println!("[sexdisplay] init phase start");
+ 
+     loop {
+-        // Deterministic vblank tick
+-        unsafe { VBLANK_COUNTER += 1; }
+-
+-        match pdx_try_listen() {
+-            None => {
+-                sys_yield();
++        // Phase split:
++        // - Init phase: non-blocking state capture only.
++        // - Runtime phase: scanout + vblank + FRAME_PRESENT.
++        if unsafe { !RUNTIME_READY } {
++            unsafe {
++                RUNTIME_READY = pdx_call_checked(0, 0x60, 5, 0, 0).is_ok();
++                if RUNTIME_READY {
++                    serial_println!("[sexdisplay] runtime phase enabled");
++                }
+             }
+-            Some(cmd) => {
+-                match cmd.type_id {
+-                    OP_WINDOW_CREATE => {
+-                        let handle = op_window_create();
+-                        serial_println!("[sexdisplay] CREATE_WINDOW from PD {} -> Handle={:#x}", cmd.caller_pd, handle);
+-                        pdx_reply(handle);
+-                    }
+-                    OP_WINDOW_MAP => {
+-                        pdx_reply(cmd.arg0); // Opaque handle only
+-                    }
+-                    OP_WINDOW_WRITE => {
+-                        let handle = cmd.arg0;
+-                        let color = cmd.arg1 as u32;
+-                        let pos = cmd.arg2; // offset in pixels
+-                        let x = (pos as usize) % FB_WIDTH;
+-                        let y = (pos as usize) / FB_WIDTH;
+-                        
+-                        if op_window_write(handle, x, y, color).is_ok() {
+-                            pdx_reply(0);
+-                        } else {
+-                            pdx_reply(sex_pdx::ERR_CAP_INVALID);
+-                        }
+-                    }
+-                    OP_WINDOW_SUBMIT => {
+-                        op_window_submit(cmd.arg0);
+-                        pdx_reply(0);
++        }
++
++        if let Some(cmd) = pdx_try_listen() {
++            match cmd.type_id {
++                OP_PRIMARY_FB => {
++                    // INIT PHASE: capture kernel-provided primary framebuffer only.
++                    serial_println!("[sexdisplay] FAST DIAGNOSTIC: Got FB: {:#x} ({}x{})",
++                        cmd.arg0, cmd.arg1, cmd.arg2);
++                    if cmd.arg0 < 0x1000_0000 {
++                        serial_println!("[sexdisplay] WARNING: FB_PTR suspicious");
+                     }
+-                    OP_WINDOW_VBLANK => {
+-                        op_window_vblank(unsafe { VBLANK_COUNTER });
+-                        pdx_reply(unsafe { VBLANK_COUNTER });
++                    unsafe {
++                        PRIMARY_FB = cmd.arg0;
++                        PRIMARY_W = cmd.arg1;
++                        PRIMARY_H = cmd.arg2;
+                     }
+-                    _ => {
+-                        serial_println!("[sexdisplay] unknown opcode {:#x}", cmd.type_id);
+-                        pdx_reply(sex_pdx::ERR_CAP_INVALID);
++                }
++                OP_WINDOW_CREATE => {
++                    // INIT-safe: register window backing info and return immediately.
++                    let params = unsafe { &*(cmd.arg0 as *const SexWindowCreateParams) };
++                    unsafe {
++                        WINDOW_FB = params.pfn_base;
++                        WINDOW_W = params.width as u64;
++                        WINDOW_H = params.height as u64;
+                     }
++                    pdx_reply(cmd.caller_pd as u64);
++                    serial_println!("[sexdisplay] window create: id=1 fb={:#x} {}x{}", params.pfn_base, params.width, params.height);
++                }
++                OP_WINDOW_SUBMIT => {
++                    // Must return immediately; runtime loop handles commit.
++                    unsafe { PENDING_SUBMIT = true; }
++                    pdx_reply(cmd.caller_pd as u64);
+                 }
++                _ => {}
++            }
++        }
++
++        // RUNTIME PHASE ONLY: perform vblank wait + scanout commit + FRAME_PRESENT.
++        if unsafe { RUNTIME_READY && PENDING_SUBMIT } {
++            let fb = unsafe { WINDOW_FB as *mut u32 };
++            if !fb.is_null() {
++                let w = unsafe { WINDOW_W };
++                let h = unsafe { WINDOW_H };
++                let size = (w as usize) * (h as usize);
++                fill_screen_purple(fb, size, 1);
++                let _ = pdx_call_checked(0, 55, 0, 0, 0);
++                let _ = pdx_call_checked(0, 0x11, fb as u64, w, h);
++                let _ = pdx_call_checked(0, 0xBB, 0, 0, 0);
++                serial_println!("[sexdisplay] FRAME_PRESENT event");
+             }
++            unsafe { PENDING_SUBMIT = false; }
+         }
++
++        sex_pdx::sys_yield();
+     }
+ }
+ 
+ #[panic_handler]
+ fn panic(info: &core::panic::PanicInfo) -> ! {
+     serial_println!("{}", info);
+-    loop { sys_yield(); }
++    loop { sex_pdx::sys_yield(); }
+ }

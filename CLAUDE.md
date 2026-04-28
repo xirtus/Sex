@@ -1,5 +1,9 @@
 # SexOS Microkernel — Claude Session Memory
 
+> Canonical team policy now lives in [CREW.md](/home/xirtus_arch/Documents/microkernel/CREW.md).
+> Keep this file for Claude-specific memory and deep invariants; do not drift from CREW policy.
+> Build authority is sealed to `scripts/entrypoint_build.sh` + `sexos_build_spec.toml`.
+
 This file is read automatically by Claude Code at session start.
 It encodes project invariants, ABI contracts, and debugging history.
 **Never delete or contradict entries here without updating the date.**
@@ -74,8 +78,8 @@ the next session starts blind and wastes tokens re-discovering the same things.
 
 ## Project Overview
 
-SexOS is a SASOS (Single Address Space OS) microkernel written in Rust targeting
-`x86_64-unknown-none`. It uses Limine as its bootloader and QEMU for development.
+SexOS is a SASOS microkernel (Rust, x86_64). Memory model: ARCHITECTURE.md §0.
+Bootloader: Limine. Dev target: QEMU.
 
 **Build pipeline:**
 ```
@@ -102,7 +106,7 @@ workspace Cargo.toml has not been updated). Do not change this without testing.
 
 ## Memory Layout (SASOS Map)
 
-All components share one PML4. Isolation is via PKU keys, not address separation.
+All components share one PML4 (GLOBAL_VAS). Authority model: ARCHITECTURE.md §0.
 
 | Component          | Virtual Address          | Notes |
 |--------------------|--------------------------|-------|
@@ -207,7 +211,7 @@ pdx_call(slot: u32, syscall: u64, arg0: u64, arg1: u64, arg2: u64) -> u64
 |------|---------|
 | 0    | Kernel direct (handled inline in dispatch, no safe_pdx_call) |
 | 1    | Primary system service (`sexfiles` VFS) |
-| 2    | Secondary (`sext` allocator or `sexnode`) |
+| 2    | sext (demand pager / fault resolver — user-space ring-3 server) |
 | 4    | Network manager (`sexnet`) |
 | 5    | Compositor / display server (`sexdisplay`) |
 

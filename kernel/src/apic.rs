@@ -209,7 +209,10 @@ pub unsafe fn broadcast_sipi(vector: u8) {
 /// Initializes the LAPIC timer for pre-emptive scheduling (Vector 0x20).
 pub fn init_timer() {
     let lapic_vaddr = LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire);
-    if lapic_vaddr == 0 { return; }
+    if lapic_vaddr == 0 {
+        serial_println!("timer.init.done lapic=missing");
+        return;
+    }
     let lapic_ptr = lapic_vaddr as *mut u32;
 
     unsafe {
@@ -218,8 +221,9 @@ pub fn init_timer() {
         // Set LVT Timer: Periodic (0x20000) + Vector 0x20
         lapic_ptr.offset(0x320 / 4).write_volatile(0x20000 | 0x20);
         // Initial Count (1ms approx at 100MHz LAPIC clock)
-        lapic_ptr.offset(0x380 / 4).write_volatile(10000);
+        lapic_ptr.offset(0x380 / 4).write_volatile(1000000); // slack: serial-heavy timer handler
 
         serial_println!("APIC: LAPIC Timer initialized at Vector 0x20.");
+        serial_println!("timer.init.done lapic={:#x} vector=0x20", lapic_vaddr);
     }
 }

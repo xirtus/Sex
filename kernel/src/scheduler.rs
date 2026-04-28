@@ -1,6 +1,7 @@
-use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr, AtomicUsize};
+use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr, AtomicUsize, AtomicU64};
 use crate::capability::ProtectionDomain;
 use crate::ipc_ring::RingBuffer;
+use crate::serial_println;
 use core::ptr;
 
 /// The execution state of a vThread (Task).
@@ -18,6 +19,8 @@ pub struct TaskContext {
     pub kstack_top: u64,
 }
 
+const _: () = assert!(core::mem::offset_of!(TaskContext, kstack_top) == 0xC0);
+
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskState {
@@ -31,6 +34,10 @@ pub const STATE_READY: u32 = 0;
 pub const STATE_RUNNING: u32 = 1;
 pub const STATE_BLOCKED: u32 = 2;
 
+pub struct InitArg {
+    pub display_lease: crate::capability::DisplayHardwareLease,
+}
+
 /// A vThread (Task) in the SASOS model.
 pub struct Task {
     pub id: u32,
@@ -38,6 +45,7 @@ pub struct Task {
     pub state: AtomicU32,
     pub signal_ring: *mut RingBuffer<u8, 32>,
     pub kstack_top: u64,
+    pub(crate) ext_init: Option<InitArg>,
 }
 
 impl Task {
@@ -46,7 +54,7 @@ impl Task {
         let selectors = crate::gdt::get_selectors();
 
         let (cs, ss, rflags) = if is_user {
-            (0x2Bu64, 0x23u64, 0x202u64)  // CS=index5|RPL3, SS=index4|RPL3 (hardware confirmed)
+            (0x2Bu64, 0x23u64, 0x202u64)  // CS=index5|RPL3, SS=index4|RPL3
         } else {
             (selectors.kernel_cs.0 as u64, selectors.kernel_ss.0 as u64, 0x202u64)
         };
@@ -89,6 +97,7 @@ impl Task {
             state: AtomicU32::new(TaskState::Ready as u32),
             signal_ring: pd.signal_ring,
             kstack_top: kstack_alloc_top,  // initial alloc top (for TSS RSP0)
+            ext_init: None,
         }
     }
 }
@@ -140,6 +149,27 @@ pub struct Scheduler {
     pub core_id: u32,
 }
 
+static SCHED_NO_RUNNABLE_LOG_BUDGET: AtomicU64 = AtomicU64::new(16);
+static FIRST_SCHEDULE_LOGGED: AtomicU64 = AtomicU64::new(0);
+static SCHED_TICK_ENTER_LOG_BUDGET: AtomicU64 = AtomicU64::new(32);
+static SCHED_PICK_NEXT_LOG_BUDGET: AtomicU64 = AtomicU64::new(32);
+static TASK_LIFECYCLE_LOG_BUDGET: AtomicU64 = AtomicU64::new(128);
+
+#[no_mangle]
+pub static mut ACTUAL_IRET_RSP: u64 = 0;
+#[no_mangle]
+pub static mut ACTUAL_IRET_Q0_RIP: u64 = 0;
+#[no_mangle]
+pub static mut ACTUAL_IRET_Q1_CS: u64 = 0;
+#[no_mangle]
+pub static mut ACTUAL_IRET_Q2_RFLAGS: u64 = 0;
+#[no_mangle]
+pub static mut ACTUAL_IRET_Q3_RSP: u64 = 0;
+#[no_mangle]
+pub static mut ACTUAL_IRET_Q4_SS: u64 = 0;
+#[no_mangle]
+pub static mut SWITCH_NEXT_CTX_PTR: u64 = 0;
+
 impl Scheduler {
     pub const fn new(core_id: u32) -> Self {
         Self {
@@ -150,50 +180,123 @@ impl Scheduler {
     }
 
     pub fn tick(&self) -> Option<(*mut TaskContext, *const TaskContext)> {
-        crate::serial_println!("[DEBUG] TICK: runqueue len = {}", self.runqueue.bottom.load(Ordering::SeqCst) - self.runqueue.top.load(Ordering::SeqCst));
+        if SCHED_TICK_ENTER_LOG_BUDGET
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
+            .is_ok()
+        {
+            let b = self.runqueue.bottom.load(Ordering::Acquire);
+            let t = self.runqueue.top.load(Ordering::Acquire);
+            serial_println!(
+                "scheduler.tick.enter core={} phase={} rq_depth={}",
+                self.core_id,
+                unsafe { crate::ipc::BOOT_CONTROLLER.phase() as u8 },
+                b.wrapping_sub(t)
+            );
+        }
+        // Enforce hard execution gate
+        assert!(
+            unsafe { crate::ipc::BOOT_CONTROLLER.phase() as u8 } >= crate::ipc::BootPhase::SchedulerRunning as u8,
+            "SCHEDULER_RUNNING_VIOLATION"
+        );
+
+        // Boot Strap Gate
+        assert!(
+            crate::core_local::INITIALIZED.load(Ordering::Acquire) == true,
+            "SCHEDULER_BOOTSTRAP_VIOLATION"
+        );
+
         let next_task = self.runqueue.steal();
         let next_task = if next_task.is_null() { self.attempt_steal() } else { next_task };
-        
         let old_task = self.current_task.swap(next_task, Ordering::AcqRel);
 
-        unsafe {
-            if !next_task.is_null() {
-                let current_pd = if old_task.is_null() { 0 } else { (*old_task).context.pd_id };
-                let next_pd = (*next_task).context.pd_id;
-                let current_ctx: *const TaskContext = if old_task.is_null() { core::ptr::null_mut() } else { &(*old_task).context as *const _ };
-                let next_ctx: *const TaskContext = &(*next_task).context as *const _;
-                crate::serial_println!("SWITCH: current={:p} next={:p}", current_ctx, next_ctx);
-                crate::serial_println!("TASKS: current_pd={} next_pd={}", current_pd, next_pd);
-            } else {
-                crate::serial_println!("SCHED: No next task found!");
+        if !next_task.is_null() {
+            unsafe {
+                (*next_task).state.store(TaskState::Running as u32, Ordering::Release);
+                if TASK_LIFECYCLE_LOG_BUDGET
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
+                    .is_ok()
+                {
+                    serial_println!(
+                        "task.running id={} pd_id={} rip={:#x} rsp={:#x}",
+                        (*next_task).id,
+                        (*next_task).context.pd_id,
+                        (*next_task).context.rip,
+                        (*next_task).context.rsp
+                    );
+                }
             }
         }
 
-        if next_task.is_null() { return None; }
+        unsafe {
+            if !next_task.is_null() {
+                let core = crate::core_local::CoreLocal::get();
+                let next_pd_ptr = (*next_task).context.pd_ptr as *mut crate::capability::ProtectionDomain;
+                serial_println!("scheduler.bind_next.begin pd_ptr={:#x}", next_pd_ptr as u64);
+
+                // Enforce strict atomic ordering: bind -> wrpkru -> switch_to
+                core.set_pd(next_pd_ptr);
+                serial_println!("scheduler.bind_next.after_set_pd");
+            }
+        }
+
+        if next_task.is_null() {
+            if SCHED_NO_RUNNABLE_LOG_BUDGET.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1)).is_ok() {
+                serial_println!(
+                    "sched.no_runnable core={} phase={} runqueue_empty=true",
+                    self.core_id,
+                    unsafe { crate::ipc::BOOT_CONTROLLER.phase() as u8 }
+                );
+            }
+            return None;
+        }
+        if SCHED_PICK_NEXT_LOG_BUDGET
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
+            .is_ok()
+        {
+            let next_pd_id = unsafe { (*next_task).context.pd_id };
+            serial_println!("scheduler.pick_next pd_id={}", next_pd_id);
+        }
 
         if !old_task.is_null() {
             let old_state = unsafe { (*old_task).state.load(Ordering::Acquire) };
             if old_state == TaskState::Running as u32 {
                 unsafe { (*old_task).state.store(TaskState::Ready as u32, Ordering::Release); }
                 self.runqueue.push(old_task);
+                if TASK_LIFECYCLE_LOG_BUDGET
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
+                    .is_ok()
+                {
+                    unsafe {
+                        serial_println!(
+                            "task.requeued id={} pd_id={}",
+                            (*old_task).id,
+                            (*old_task).context.pd_id
+                        );
+                    }
+                }
+            } else if TASK_LIFECYCLE_LOG_BUDGET
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
+                .is_ok()
+            {
+                unsafe {
+                    serial_println!(
+                        "task.not_requeued id={} pd_id={} reason_state={}",
+                        (*old_task).id,
+                        (*old_task).context.pd_id,
+                        old_state
+                    );
+                }
             }
         }
 
-        unsafe {
-            (*next_task).state.store(TaskState::Running as u32, Ordering::Release);
-            let core = crate::core_local::CoreLocal::get();
-            core.set_pd((*next_task).context.pd_id as u32);
-            x86_64::registers::model_specific::GsBase::write(
-                x86_64::VirtAddr::new(core as *const _ as u64)
-            );
-            let old_ctx = if old_task.is_null() {
-                core::ptr::null_mut()
-            } else {
-                &mut (*old_task).context as *mut _
-            };
-            Some((old_ctx, &(*next_task).context))
-        }
+        let old_ctx = if old_task.is_null() {
+            core::ptr::null_mut()
+        } else {
+            unsafe { &mut (*old_task).context as *mut _ }
+        };
+        unsafe { Some((old_ctx, &(*next_task).context)) }
     }
+
 
     fn attempt_steal(&self) -> *mut Task {
         for i in 1..128 {
@@ -212,6 +315,9 @@ impl Scheduler {
             // context.kstack_top (offset 0xC0) = active ksp for this task.
             //   New task:     pre-seeded by Task::new: [GPR zeros][IRETQ frame]
             //   Running task: ksp saved here by previous switch_to call
+
+            // Preserve next_ctx across old-context save path.
+            "mov rdx, rsi",
 
             // Skip save if old_ctx is NULL
             "test rdi, rdi",
@@ -233,39 +339,39 @@ impl Scheduler {
             "push r13",
             "push r14",
             "push r15",
-            // Save ksp to old_ctx.kstack_top (rdi register still = old_ctx after push rdi)
-            "mov [rdi + 0xC0], rsp",
+            // Save ksp to old_ctx.kstack_top
+            // rdi has been pushed as a GPR value, so use a scratch copy of old_ctx.
+            "mov rax, rdi",
+            "mov [rax + 0xC0], rsp",
 
             "1:",
-            // Restore PKRU for next task (rsi register still = next_ctx)
-            "mov rax, [rsi + 0x80]",
-            "xor rcx, rcx",
-            "xor rdx, rdx",
-            "wrpkru",
-
-            // Load next task's kernel stack
+            // Restore next_ctx pointer and pivot directly to RIP slot.
+            "mov rsi, rdx",
+            "mov [rip + {next_ctx_ptr}], rsi",
             "mov rsp, [rsi + 0xC0]",
+            "add rsp, 120",
 
-            // Pop GPRs (r15=low=first pop, rax=high=last; IRETQ frame sits above)
-            "pop r15",
-            "pop r14",
-            "pop r13",
-            "pop r12",
-            "pop r11",
-            "pop r10",
-            "pop r9",
-            "pop r8",
-            "pop rdi",
-            "pop rsi",
-            "pop rbp",
-            "pop rdx",
-            "pop rcx",
-            "pop rbx",
-            "pop rax",
-
-            // IRETQ frame is next on stack (pre-seeded or interrupt-saved)
+            // IRETQ frame is guaranteed at [rsp + 0..32].
+            "mov [rip + {actual_iret_rsp}], rsp",
+            "mov r11, [rsp + 0x00]",
+            "mov [rip + {actual_q0}], r11",
+            "mov r11, [rsp + 0x08]",
+            "mov [rip + {actual_q1}], r11",
+            "mov r11, [rsp + 0x10]",
+            "mov [rip + {actual_q2}], r11",
+            "mov r11, [rsp + 0x18]",
+            "mov [rip + {actual_q3}], r11",
+            "mov r11, [rsp + 0x20]",
+            "mov [rip + {actual_q4}], r11",
             "swapgs",
             "iretq",
+            actual_iret_rsp = sym ACTUAL_IRET_RSP,
+            actual_q0 = sym ACTUAL_IRET_Q0_RIP,
+            actual_q1 = sym ACTUAL_IRET_Q1_CS,
+            actual_q2 = sym ACTUAL_IRET_Q2_RFLAGS,
+            actual_q3 = sym ACTUAL_IRET_Q3_RSP,
+            actual_q4 = sym ACTUAL_IRET_Q4_SS,
+            next_ctx_ptr = sym SWITCH_NEXT_CTX_PTR,
         );
     }
 }
@@ -292,6 +398,92 @@ pub fn park_current_thread() {
 
 pub fn unpark_thread(task_ptr: *mut Task) {
     unsafe { (*task_ptr).state.store(TaskState::Ready as u32, Ordering::Release); }
+}
+
+pub fn bootstrap_enqueue_all_domains() -> usize {
+    serial_println!("scheduler.bootstrap_enqueue.begin");
+    let sched = &SCHEDULERS[0];
+    let mut count = 0usize;
+
+    for pd_id in 0..crate::ipc::MAX_DOMAINS as u32 {
+        if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(pd_id) {
+            let task_ptr = pd.main_task.load(Ordering::Acquire);
+            if task_ptr.is_null() {
+                continue;
+            }
+            unsafe { (*task_ptr).state.store(TaskState::Ready as u32, Ordering::Release); }
+            sched.runqueue.push(task_ptr);
+            count += 1;
+            unsafe {
+                serial_println!("scheduler.enqueue pd_id={} task={:#x}", pd.id, task_ptr as u64);
+                serial_println!(
+                    "task.created id={} pd_id={} rip={:#x} rsp={:#x}",
+                    (*task_ptr).id,
+                    (*task_ptr).context.pd_id,
+                    (*task_ptr).context.rip,
+                    (*task_ptr).context.rsp
+                );
+            }
+        }
+    }
+
+    serial_println!("scheduler.bootstrap_enqueue.done count={}", count);
+    count
+}
+
+pub fn log_first_scheduled_pd(pd_id: u64) {
+    if FIRST_SCHEDULE_LOGGED
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        serial_println!("first scheduled pd_id={}", pd_id);
+    }
+}
+
+#[inline]
+fn is_canonical(addr: u64) -> bool {
+    let sign = (addr >> 47) & 1;
+    let high = addr >> 48;
+    (sign == 0 && high == 0) || (sign == 1 && high == 0xFFFF)
+}
+
+pub unsafe fn debug_dump_iret_frame(next_ctx: *const TaskContext) {
+    // switch_to pops 15 GPR qwords, then iretq reads RIP/CS/RFLAGS/RSP/SS.
+    let iret_rsp = ((*next_ctx).kstack_top + (15 * 8)) as *const u64;
+    let rip = *iret_rsp.add(0);
+    let cs = *iret_rsp.add(1);
+    let rflags = *iret_rsp.add(2);
+    let rsp = *iret_rsp.add(3);
+    let ss = *iret_rsp.add(4);
+
+    serial_println!(
+        "iret.frame.qwords rsp={:#x} [0]={:#x} [1]={:#x} [2]={:#x} [3]={:#x} [4]={:#x}",
+        iret_rsp as u64, rip, cs, rflags, rsp, ss
+    );
+    serial_println!(
+        "iret.frame.check rip_canon={} rsp_canon={} rflags.bit1={} rflags.if={} cs={:#x} ss={:#x}",
+        is_canonical(rip),
+        is_canonical(rsp),
+        (rflags & 0x2) != 0,
+        (rflags & 0x200) != 0,
+        cs,
+        ss
+    );
+}
+
+pub unsafe fn debug_dump_user_entry_bytes(next_ctx: *const TaskContext) {
+    let rip = (*next_ctx).rip as *const u8;
+    let mut bytes = [0u8; 32];
+    core::ptr::copy_nonoverlapping(rip, bytes.as_mut_ptr(), bytes.len());
+
+    serial_println!(
+        "user.entry.bytes rip={:#x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+        rip as u64,
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22], bytes[23],
+        bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30], bytes[31]
+    );
 }
 
 pub fn yield_now() {
