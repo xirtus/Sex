@@ -60,6 +60,85 @@ pub struct PdxMessage {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct Window {
+    pub id: u32,
+    pub pid: u32,
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    pub layer: u8,
+    pub buffer_cap: u64, // Slot
+}
+
+#[repr(C, u64)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum WindowOp {
+    Move(u32, i32, i32),
+    Resize(u32, u32, u32),
+    Focus(u32),
+    Destroy(u32),
+    Create(u32, u32, i32, i32, u32, u32, u64),
+}
+
+// Legacy window operation constants (used by sexdisplay)
+pub const OP_WINDOW_CREATE: u64 = 0xE4;
+pub const OP_WINDOW_SUBMIT: u64 = 0xE5;
+pub const OP_WINDOW_VBLANK: u64 = 0xE6;
+pub const OP_WINDOW_MAP:    u64 = 0xE7;
+pub const OP_WINDOW_WRITE:  u64 = 0xE8;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct ShellEvent {
+    pub op: WindowOp,
+}
+
+/// Normalized input event. Single source of truth for all input in silk-shell FSM.
+///
+/// IPC encoding (type_id=0x202 from sexinput):
+///   arg2=1 (EV_KEY):  arg0=scancode, arg1=1(dn)/0(up)
+///   arg2=3 (EV_ABS):  arg0=abs_x,   arg1=abs_y  (mouse position, absolute)
+///   arg2=4 (EV_BTN):  arg0=button,  arg1=1(dn)/0(up)
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum InputEvent {
+    KeyDown(u8),
+    KeyUp(u8),
+    MouseMove(i32, i32),
+    MouseDown(u8),
+    MouseUp(u8),
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct Layer {
+    pub win_id: u32,
+    pub rect: [i32; 4], // [x, y, w, h]
+    pub buf_ptr: u64,
+    pub stride: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct FrameContext {
+    pub tick: u64,
+    pub snapshot_version: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct SceneSnapshot {
+    pub layers_ptr: u64,
+    pub layers_len: u32,
+    pub cursor_x: i32,
+    pub cursor_y: i32,
+    pub is_incremental: u32,
+    pub damage_rects_ptr: u64,
+    pub damage_rects_len: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Rect {
     pub x: u32,
     pub y: u32,
@@ -106,7 +185,6 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
                 "syscall",
                 in("rax") 28u64,
                 in("rdi") slot,
-                in("r9")  0u64,            // no result struct — kernel skips PdxListenResult write
                 lateout("rax") type_id,    // 0 = EMPTY, non-zero = valid
                 lateout("rsi") caller_pd,
                 lateout("rdx") arg0,
@@ -136,46 +214,8 @@ pub fn pdx_listen() -> PdxMessage {
     pdx_listen_raw(0)
 }
 
-/// Non-blocking receive. Kernel writes PdxListenResult via r9 pointer.
-/// Sentinel logic stays in kernel — userspace checks has_message, never type_id.
-#[repr(C)]
-pub struct PdxListenResult {
-    pub has_message: u64,
-    pub type_id:     u64,
-    pub caller_pd:   u64,
-    pub arg0:        u64,
-    pub arg1:        u64,
-    pub arg2:        u64,
-}
-
 pub fn pdx_try_listen() -> Option<PdxMessage> {
-    let mut result = PdxListenResult {
-        has_message: 0, type_id: 0, caller_pd: 0,
-        arg0: 0, arg1: 0, arg2: 0,
-    };
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") 28u64,
-            in("rdi") 0u64,                // Default to Slot 0
-            in("r9")  &mut result as *mut PdxListenResult as u64,
-            out("rcx") _,
-            out("r11") _,
-            options(nostack),
-        );
-    }
-    if result.has_message == 1 {
-        Some(PdxMessage {
-            type_id:   result.type_id,
-            arg0:      result.arg0,
-            arg1:      result.arg1,
-            arg2:      result.arg2,
-            caller_pd: result.caller_pd as u32,
-            _pad:      0,
-        })
-    } else {
-        None
-    }
+    None
 }
 
 #[inline(always)]
@@ -240,17 +280,9 @@ pub const SYSCALL_PDX_REPLY: u64 = 1;
 pub const ERR_SERVICE_NOT_READY: u64 = 0xFFFF_FFFF_FFFF_FFFE;
 pub const ERR_CAP_INVALID:       u64 = 0xFFFF_FFFF_FFFF_FFFC;
 
-/// Explicit return struct for pdx_call.
-/// Kernel writes both fields via the r9 pointer before sysretq.
-/// No sentinel-in-rax; status and value are fully separate.
-#[repr(C)]
-pub struct PdxResponse {
-    pub status: u64,  // 0 = Ok, ERR_* = error
-    pub value:  u64,  // meaningful when status == 0
-}
-
-pub fn pdx_call(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> PdxResponse {
-    let mut resp = PdxResponse { status: 0, value: 0 };
+pub fn pdx_call(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> (u64, u64) {
+    let status: u64;
+    let value: u64;
     unsafe {
         core::arch::asm!(
             "syscall",
@@ -260,22 +292,23 @@ pub fn pdx_call(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> PdxR
             in("rdx") arg0,
             in("r10") arg1,
             in("r8")  arg2,
-            in("r9")  &mut resp as *mut PdxResponse as u64,
+            lateout("rax") status,
+            lateout("rsi") value,
             out("rcx") _,
             out("r11") _,
             options(nostack),
         );
     }
-    resp
+    (status, value)
 }
 
 #[inline]
 pub fn pdx_call_checked(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64, u64> {
-    let resp = pdx_call(slot, opcode, arg0, arg1, arg2);
-    if resp.status == 0 {
-        Ok(resp.value)
+    let (status, value) = pdx_call(slot, opcode, arg0, arg1, arg2);
+    if status == 0 {
+        Ok(value)
     } else {
-        Err(resp.status)
+        Err(status)
     }
 }
 
@@ -285,10 +318,10 @@ pub fn pdx_call_checked(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64)
 /// BOOT_DAG at boot time may call this. Without the capability → ERR_CAP_INVALID.
 /// Calling before BOOT_DAG lock is undefined behavior in the capability model.
 pub fn pdx_spawn_pd(elf_addr: u64, elf_len: u64) -> Result<DomainId, u64> {
-    let resp = pdx_call(0, 0x10, elf_addr, elf_len, 0);
-    if resp.status == 0 {
-        Ok(DomainId(resp.value as u32))
+    let (status, value) = pdx_call(0, 0x10, elf_addr, elf_len, 0);
+    if status == 0 {
+        Ok(DomainId(value as u32))
     } else {
-        Err(resp.status)
+        Err(status)
     }
 }

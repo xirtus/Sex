@@ -9,6 +9,47 @@ pub mod store;
 
 use crate::interrupts::SyscallRegs;
 use crate::ipc::messages::MessageType;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::AtomicU64;
+
+const SNAPSHOT_MAX: usize = 64;
+
+static mut SNAP_RING: [sex_pdx::SceneSnapshot; SNAPSHOT_MAX] = [sex_pdx::SceneSnapshot {
+    layers_ptr: 0, layers_len: 0, cursor_x: 0, cursor_y: 0,
+    is_incremental: 0, damage_rects_ptr: 0, damage_rects_len: 0,
+}; SNAPSHOT_MAX];
+
+static SNAP_IDX: AtomicUsize = AtomicUsize::new(0);
+static mut SNAP_GEN: [u32; SNAPSHOT_MAX] = [0u32; SNAPSHOT_MAX];
+static SYSCALL_LOG_BUDGET: AtomicU64 = AtomicU64::new(256);
+
+// SNAPSHOT_HANDLE = (gen << 32 | idx)
+// prevents stale slot reuse attacks after ring wrap
+unsafe fn snapshot_ingest(src: *const sex_pdx::SceneSnapshot) -> Result<u64, u64> {
+    if src as usize % core::mem::align_of::<sex_pdx::SceneSnapshot>() != 0 {
+        return Err(sex_pdx::ERR_CAP_INVALID);
+    }
+    let idx = SNAP_IDX.fetch_add(1, Ordering::AcqRel) % SNAPSHOT_MAX;
+    SNAP_GEN[idx] = SNAP_GEN[idx].wrapping_add(1);
+    core::ptr::copy_nonoverlapping(src, &mut SNAP_RING[idx], 1);
+    Ok(((SNAP_GEN[idx] as u64) << 32) | (idx as u64))
+}
+
+// Single-path: validate → copy → return status. One unsafe block.
+fn snapshot_resolve(handle: u64, out_ptr: *mut sex_pdx::SceneSnapshot) -> u64 {
+    let idx = (handle & 0xFFFF_FFFF) as usize;
+    let gen = (handle >> 32) as u32;
+    if idx >= SNAPSHOT_MAX || out_ptr.is_null() {
+        return sex_pdx::ERR_CAP_INVALID;
+    }
+    unsafe {
+        if SNAP_GEN[idx] != gen {
+            return sex_pdx::ERR_CAP_INVALID;  // stale handle
+        }
+        *out_ptr = SNAP_RING[idx];
+    }
+    0u64
+}
 
 #[repr(C)]
 pub struct DisplayInfo {
@@ -25,7 +66,6 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
     let rdx = regs.rdx;
     let r10 = regs.r10;
     let r8  = regs.r8;
-    let r9  = regs.r9;
 
     let result = match rax {
         0 => { // SYSCALL_PDX_CALL
@@ -34,7 +74,6 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let arg0 = rdx;
             let arg1 = r10;
             let arg2 = r8;
-            let resp_ptr = r9 as *mut sex_pdx::PdxResponse;
 
             let (status, value) = if slot == 0 {
                 match num {
@@ -100,18 +139,12 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                 }
             };
 
-            if !resp_ptr.is_null() {
-                unsafe {
-                    (*resp_ptr).status = status;
-                    (*resp_ptr).value  = value;
-                }
-            }
+            regs.rsi = value;
             status
         },
 
         28 => { // SYSCALL_PDX_LISTEN (Phase 25)
             let slot = rdi as u32;
-            let resp_ptr = r9 as *mut sex_pdx::PdxListenResult;
             let core_local = crate::core_local::CoreLocal::get();
             let current_pd = core_local.current_pd_ref();
 
@@ -183,21 +216,6 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             regs.r10 = s_arg1;
             regs.r8  = s_arg2;
 
-            if !resp_ptr.is_null() {
-                unsafe {
-                    if type_id != 0 {
-                        (*resp_ptr).has_message = 1;
-                        (*resp_ptr).type_id    = type_id;
-                        (*resp_ptr).caller_pd  = s_caller_pd;
-                        (*resp_ptr).arg0       = s_arg0;
-                        (*resp_ptr).arg1       = s_arg1;
-                        (*resp_ptr).arg2       = s_arg2;
-                    } else {
-                        (*resp_ptr).has_message = 0;
-                    }
-                }
-            }
-
             type_id
         },
 
@@ -242,5 +260,17 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
     };
 
     regs.rax = result;
+    if SYSCALL_LOG_BUDGET
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
+        .is_ok()
+    {
+        crate::serial_println!(
+            "syscall.exit num={} pd_id={} status={:#x} val_rsi={:#x}",
+            rax,
+            crate::core_local::CoreLocal::get().current_pd(),
+            result,
+            regs.rsi
+        );
+    }
     result
 }
