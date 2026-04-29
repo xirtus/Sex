@@ -431,6 +431,32 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
 
             use core::sync::atomic::Ordering;
             old_ctx.pkru = (*old_ctx.pd_ptr).current_pkru_mask.load(Ordering::Relaxed) as u64;
+
+            // ── Write saved register state to forged kstack for later restore ──
+            // forged kstack layout (from Task::new):
+            //   [0..14]  = GPRs (rax at 0, rbx at 1, ..., r15 at 14)
+            //   [15..19] = IRETQ frame (rip, cs, rflags, rsp, ss)
+            let ks = old_ctx.kstack_top as *mut u64;
+            ks.add(0).write(old_ctx.rax);
+            ks.add(1).write(old_ctx.rbx);
+            ks.add(2).write(old_ctx.rcx);
+            ks.add(3).write(old_ctx.rdx);
+            ks.add(4).write(old_ctx.rbp);
+            ks.add(5).write(old_ctx.rsi);
+            ks.add(6).write(old_ctx.rdi);
+            ks.add(7).write(old_ctx.r8);
+            ks.add(8).write(old_ctx.r9);
+            ks.add(9).write(old_ctx.r10);
+            ks.add(10).write(old_ctx.r11);
+            ks.add(11).write(old_ctx.r12);
+            ks.add(12).write(old_ctx.r13);
+            ks.add(13).write(old_ctx.r14);
+            ks.add(14).write(old_ctx.r15);
+            ks.add(15).write(old_ctx.rip);
+            ks.add(16).write(old_ctx.cs);
+            ks.add(17).write(old_ctx.rflags);
+            ks.add(18).write(old_ctx.rsp);
+            ks.add(19).write(old_ctx.ss);
         }
         
         let next_rip = (*next_ctx_ptr).rip;

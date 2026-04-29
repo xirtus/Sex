@@ -349,7 +349,24 @@ impl Scheduler {
             "mov rsi, rdx",
             "mov [rip + {next_ctx_ptr}], rsi",
             "mov rsp, [rsi + 0xC0]",
-            "add rsp, 120",
+            // Pop 15 saved GPRs from kstack (written by timer_tick_handler)
+            // before IRETQ.  Without this, GPRs contain kernel garbage after
+            // every context switch.
+            "pop rax",
+            "pop rbx",
+            "pop rcx",
+            "pop rdx",
+            "pop rbp",
+            "pop rsi",
+            "pop rdi",
+            "pop r8",
+            "pop r9",
+            "pop r10",
+            "pop r11",
+            "pop r12",
+            "pop r13",
+            "pop r14",
+            "pop r15",
 
             // IRETQ frame is guaranteed at [rsp + 0..32].
             "mov [rip + {actual_iret_rsp}], rsp",
