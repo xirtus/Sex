@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use silkbar_model::*;
+use silkbar_model::{SilkBarUpdate, SilkBarUpdateQueue, OP_SILKBAR_UPDATE};
 
 // ── Clock Simulation State ──────────────────────────────────────────────────
 
