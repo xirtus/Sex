@@ -201,16 +201,6 @@ fn handle_primary_fb(ptr: u64, packed: u64) {
     }
 }
 
-fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) {
-    // Wire: arg0=kind, arg1=(index<<32)|a, arg2=b
-    let kind = arg0 as u32;
-    if kind == silkbar_model::UpdateKind::SetClock as u32 {
-        // SetClock: a=hour, b=minute
-        bar.clock_hh = (arg1 as u32).min(23) as u8;
-        bar.clock_mm = (arg2 as u32).min(59) as u8;
-    }
-}
-
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // SilkBar model state — initialized from DEFAULT_SILK_BAR (clock=10:42)
@@ -228,7 +218,13 @@ pub extern "C" fn _start() -> ! {
                 unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
             }
             silkbar_model::OP_SILKBAR_UPDATE => {
-                handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
+                let update = silkbar_model::SilkBarUpdate::new(
+                    msg.arg0 as u32,   // kind
+                    0,                  // index (not packed in current wire format)
+                    msg.arg1 as u32,    // a
+                    msg.arg2 as u32,    // b
+                );
+                silkbar_model::apply_update(&mut bar, update);
                 unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
             }
             _ => {}
