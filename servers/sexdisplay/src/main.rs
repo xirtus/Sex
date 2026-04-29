@@ -10,7 +10,7 @@ static mut FB_PTR: u64 = FALLBACK_PTR;
 static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
 
-struct ClockState { hh: u8, mm: u8 }
+use silkbar_model::SilkBar;
 
 fn bg(y: usize) -> u32 {
     if      y < 200 { 0x007B4FA0 }
@@ -69,9 +69,9 @@ fn render_digit(fb: *mut u32, x: usize, y: usize, digit: usize, fg: u32, stride:
     }
 }
 
-fn render_clock(fb: *mut u32, stride: usize, clock: &ClockState) {
-    let hh = clock.hh;
-    let mm = clock.mm;
+fn render_clock(fb: *mut u32, stride: usize, bar: &SilkBar) {
+    let hh = bar.clock_hh;
+    let mm = bar.clock_mm;
     let fg = 0x00F2F2F2;
     let x = 1192;
     let y = 16;
@@ -88,7 +88,7 @@ fn render_clock(fb: *mut u32, stride: usize, clock: &ClockState) {
     render_digit(fb, x + 24, y, (mm % 10) as usize, fg, stride);
 }
 
-fn render(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
+fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     for y in 0..h {
         for x in 0..w {
             let c: u32 = if y < 50 {
@@ -102,7 +102,7 @@ fn render(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
         }
     }
     // Overlay clock digits on the bar
-    render_clock(fb, w, clock);
+    render_clock(fb, w, bar);
 }
 
 fn handle_primary_fb(ptr: u64, packed: u64) {
@@ -121,24 +121,23 @@ fn handle_primary_fb(ptr: u64, packed: u64) {
     }
 }
 
-fn handle_silkbar_update(clock: &mut ClockState, arg0: u64, arg1: u64, arg2: u64) {
+fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) {
     // Wire: arg0=kind, arg1=(index<<32)|a, arg2=b
     let kind = arg0 as u32;
     if kind == silkbar_model::UpdateKind::SetClock as u32 {
         // SetClock: a=hour, b=minute
-        let hh = (arg1 as u32).min(23) as u8;
-        let mm = (arg2 as u32).min(59) as u8;
-        *clock = ClockState { hh, mm };
+        bar.clock_hh = (arg1 as u32).min(23) as u8;
+        bar.clock_mm = (arg2 as u32).min(59) as u8;
     }
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // Local clock state — initialized 10:42, mutated by OP_SILKBAR_UPDATE
-    let mut clock = ClockState { hh: 10, mm: 42 };
+    // SilkBar model state — initialized from DEFAULT_SILK_BAR (clock=10:42)
+    let mut bar = silkbar_model::DEFAULT_SILK_BAR;
 
     // 1. Render immediately with fallback — visible before any IPC
-    unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
+    unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
 
     // 2. Listen for runtime FB handoff and SilkBar updates
     loop {
@@ -146,11 +145,11 @@ pub extern "C" fn _start() -> ! {
         match msg.type_id {
             0x11 => { // OP_PRIMARY_FB
                 handle_primary_fb(msg.arg0, msg.arg1);
-                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
+                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
             }
             silkbar_model::OP_SILKBAR_UPDATE => {
-                handle_silkbar_update(&mut clock, msg.arg0, msg.arg1, msg.arg2);
-                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
+                handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
+                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
             }
             _ => {}
         }
