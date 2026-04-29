@@ -47,9 +47,13 @@ pub extern "C" fn _start() -> ! {
         loop { core::hint::spin_loop(); }
     }
 
-    // v8+: Send two burst clock updates to prove SilkBarUpdateQueue draining.
+    // v8+: Send burst updates to prove SilkBarUpdateQueue draining.
     // Wire format: arg0=kind, arg1=(index << 32)|a, arg2=b
-    // First: 10:43 (queue accumulates)
+    // Three updates queued before sexdisplay first drains:
+    //   1. SetClock 10:43
+    //   2. SetClock 10:44
+    //   3. SetChipVisible index=1 visible=false
+    // sexdisplay drains all three before render; final clock shows 10:44, middle chip gone.
     let (_s1, _v1) = sex_pdx::pdx_call(
         sex_pdx::SLOT_DISPLAY,
         OP_SILKBAR_UPDATE,
@@ -57,7 +61,6 @@ pub extern "C" fn _start() -> ! {
         (0u64 << 32) | 10,
         43,
     );
-    // Second: 10:44 (queue still has first, second stacks)
     let (_s2, _v2) = sex_pdx::pdx_call(
         sex_pdx::SLOT_DISPLAY,
         OP_SILKBAR_UPDATE,
@@ -65,7 +68,13 @@ pub extern "C" fn _start() -> ! {
         (0u64 << 32) | 10,
         44,
     );
-    // sexdisplay drains both before render; final clock shows 10:44.
+    let (_s3, _v3) = sex_pdx::pdx_call(
+        sex_pdx::SLOT_DISPLAY,
+        OP_SILKBAR_UPDATE,
+        2,
+        (1u64 << 32) | 0,  // index=1, a=0 (visible=false)
+        0,
+    );
 
     // v7: owns _queue, no PDX transport yet.
     // v8: _queue becomes mut, tick_clock_fake called periodically.

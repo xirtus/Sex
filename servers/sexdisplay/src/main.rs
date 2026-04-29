@@ -221,10 +221,10 @@ pub extern "C" fn _start() -> ! {
             }
             silkbar_model::OP_SILKBAR_UPDATE => {
                 let update = silkbar_model::SilkBarUpdate::new(
-                    msg.arg0 as u32,   // kind
-                    0,                  // index (not packed in current wire format)
-                    msg.arg1 as u32,    // a
-                    msg.arg2 as u32,    // b
+                    msg.arg0 as u32,         // kind
+                    (msg.arg1 >> 32) as u8,  // index (high 32 bits of arg1)
+                    msg.arg1 as u32,         // a (low 32 bits of arg1)
+                    msg.arg2 as u32,         // b
                 );
                 update_queue.push(update);
                 update_queue.drain_into(&mut bar);
