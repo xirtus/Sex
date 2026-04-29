@@ -12,9 +12,6 @@ static mut FB_H: u32 = FALLBACK_H;
 
 struct ClockState { hh: u8, mm: u8 }
 
-// Clock state — initialized 10:42, updated by OP_SILKBAR_UPDATE SetClock
-static mut CLOCK: ClockState = ClockState { hh: 10, mm: 42 };
-
 fn bg(y: usize) -> u32 {
     if      y < 200 { 0x007B4FA0 }
     else if y < 350 { 0x006B3FA0 }
@@ -91,7 +88,7 @@ fn render_clock(fb: *mut u32, stride: usize, clock: &ClockState) {
     render_digit(fb, x + 24, y, (mm % 10) as usize, fg, stride);
 }
 
-fn render(fb: *mut u32, w: usize, h: usize) {
+fn render(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
     for y in 0..h {
         for x in 0..w {
             let c: u32 = if y < 50 {
@@ -105,7 +102,7 @@ fn render(fb: *mut u32, w: usize, h: usize) {
         }
     }
     // Overlay clock digits on the bar
-    render_clock(fb, w, unsafe { &CLOCK });
+    render_clock(fb, w, clock);
 }
 
 fn handle_primary_fb(ptr: u64, packed: u64) {
@@ -124,23 +121,24 @@ fn handle_primary_fb(ptr: u64, packed: u64) {
     }
 }
 
-fn handle_silkbar_update(arg0: u64, arg1: u64, arg2: u64) {
+fn handle_silkbar_update(clock: &mut ClockState, arg0: u64, arg1: u64, arg2: u64) {
     // Wire: arg0=kind, arg1=(index<<32)|a, arg2=b
     let kind = arg0 as u32;
     if kind == silkbar_model::UpdateKind::SetClock as u32 {
         // SetClock: a=hour, b=minute
         let hh = (arg1 as u32).min(23) as u8;
         let mm = (arg2 as u32).min(59) as u8;
-        unsafe {
-            CLOCK = ClockState { hh, mm };
-        }
+        *clock = ClockState { hh, mm };
     }
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    // Local clock state — initialized 10:42, mutated by OP_SILKBAR_UPDATE
+    let mut clock = ClockState { hh: 10, mm: 42 };
+
     // 1. Render immediately with fallback — visible before any IPC
-    unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
+    unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
 
     // 2. Listen for runtime FB handoff and SilkBar updates
     loop {
@@ -148,16 +146,13 @@ pub extern "C" fn _start() -> ! {
         match msg.type_id {
             0x11 => { // OP_PRIMARY_FB
                 handle_primary_fb(msg.arg0, msg.arg1);
-                // Re-render with runtime values
-                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
+                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
             }
-            silkbar_model::OP_SILKBAR_UPDATE => { // OP_SILKBAR_UPDATE
-                handle_silkbar_update(msg.arg0, msg.arg1, msg.arg2);
-                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
+            silkbar_model::OP_SILKBAR_UPDATE => {
+                handle_silkbar_update(&mut clock, msg.arg0, msg.arg1, msg.arg2);
+                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
             }
-            _ => {
-                // Unknown message — ignore
-            }
+            _ => {}
         }
     }
 }
