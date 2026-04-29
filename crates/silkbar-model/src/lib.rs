@@ -23,6 +23,13 @@ pub const WS_X2: usize = 625;
 pub const WS_X3: usize = 671;
 pub const WS_X4: usize = 707;
 
+pub const WS_PILL_Y: usize = 12;
+pub const WS_PILL_W: usize = 56;
+pub const WS_PILL_H: usize = 26;
+pub const WS_PILL_X0: usize = 1040;
+pub const WS_PILL_X1: usize = 1116;
+pub const WS_PILL_X2: usize = 1192;
+
 pub const LAUNCHER_X: usize = 10;
 pub const LAUNCHER_Y: usize = 10;
 pub const LAUNCHER_W: usize = 80;

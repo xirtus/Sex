@@ -36,9 +36,9 @@ fn bar_color(x: usize, y: usize) -> u32 {
     }
 
     // Status indicators — cleaner spacing
-    if in_rect(x, y, 1040, 12, 56, 26) { return DEFAULT_THEME.urgent; } // red
-    if in_rect(x, y, 1116, 12, 56, 26) { return DEFAULT_THEME.active; } // blue
-    if in_rect(x, y, 1192, 12, 56, 26) { return DEFAULT_THEME.muted; }  // black
+    if in_rect(x, y, silkbar_model::WS_PILL_X0, silkbar_model::WS_PILL_Y, silkbar_model::WS_PILL_W, silkbar_model::WS_PILL_H) { return DEFAULT_THEME.urgent; }
+    if in_rect(x, y, silkbar_model::WS_PILL_X1, silkbar_model::WS_PILL_Y, silkbar_model::WS_PILL_W, silkbar_model::WS_PILL_H) { return DEFAULT_THEME.active; }
+    if in_rect(x, y, silkbar_model::WS_PILL_X2, silkbar_model::WS_PILL_Y, silkbar_model::WS_PILL_W, silkbar_model::WS_PILL_H) { return DEFAULT_THEME.muted; }
 
     DEFAULT_THEME.text // off-white bar default
 }
@@ -73,7 +73,7 @@ fn render_clock(fb: *mut u32, stride: usize, bar: &SilkBar) {
     let hh = bar.clock_hh;
     let mm = bar.clock_mm;
     let fg = DEFAULT_THEME.text;
-    let x = 1192;
+    let x = silkbar_model::WS_PILL_X2;
     let y = 16;
     // Hour digits
     render_digit(fb, x,      y, (hh / 10) as usize, fg, stride);
