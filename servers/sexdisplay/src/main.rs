@@ -10,7 +10,7 @@ static mut FB_PTR: u64 = FALLBACK_PTR;
 static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
 
-use silkbar_model::{SilkBar, ChipKind, DEFAULT_THEME};
+use silkbar_model::{SilkBar, ChipKind, Module, DEFAULT_THEME};
 
 const BAR_H: usize = 50;
 
@@ -97,10 +97,19 @@ fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     None
 }
 
+fn module_color(bar: &SilkBar, module: Module, x: usize, y: usize) -> Option<u32> {
+    match module {
+        Module::Launcher => launcher_color(x, y, bar),
+        Module::Workspaces(_) => workspace_color(x, y, bar),
+        Module::StatusChip(_) => chip_color(x, y, bar),
+        Module::Clock => None,
+    }
+}
+
 fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
-    if let Some(c) = launcher_color(x, y, bar) { return c; }
-    if let Some(c) = workspace_color(x, y, bar) { return c; }
-    if let Some(c) = chip_color(x, y, bar) { return c; }
+    if let Some(c) = module_color(bar, Module::Launcher, x, y) { return c; }
+    if let Some(c) = module_color(bar, Module::Workspaces(0), x, y) { return c; }
+    if let Some(c) = module_color(bar, Module::StatusChip(0), x, y) { return c; }
     DEFAULT_THEME.text
 }
 
