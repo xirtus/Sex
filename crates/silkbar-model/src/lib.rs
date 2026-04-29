@@ -43,6 +43,8 @@ pub const CHIP_X1: usize = 958;
 pub const CHIP_X2: usize = 986;
 pub const CHIP_X3: usize = 1090;
 pub const CLOCK_W: usize = 80;
+pub const CLOCK_X: usize = 1192;
+pub const CLOCK_Y: usize = 16;
 
 /// Total number of layout boxes: 1 launcher + 5 workspaces + 4 chips
 pub const LAYOUT_COUNT: usize = 10;

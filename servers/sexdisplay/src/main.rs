@@ -73,8 +73,8 @@ fn render_clock(fb: *mut u32, stride: usize, bar: &SilkBar) {
     let hh = bar.clock_hh;
     let mm = bar.clock_mm;
     let fg = DEFAULT_THEME.text;
-    let x = silkbar_model::WS_PILL_X2;
-    let y = 16;
+    let x = silkbar_model::CLOCK_X;
+    let y = silkbar_model::CLOCK_Y;
     // Hour digits
     render_digit(fb, x,      y, (hh / 10) as usize, fg, stride);
     render_digit(fb, x + 7,  y, (hh % 10) as usize, fg, stride);
