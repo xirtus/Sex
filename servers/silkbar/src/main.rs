@@ -33,11 +33,13 @@ fn send_update(update: SilkBarUpdate) {
 ///   4. SetWorkspaceActive index=4 true
 ///   5. SetWorkspaceActive index=2 false
 fn send_initial_state_snapshot() {
+    // Clock updates
     send_update(SilkBarUpdate::new(4, 0, 10, 43 << 8)); // hh=10, mm=43, ss=0
     send_update(SilkBarUpdate::new(4, 0, 10, 44 << 8)); // hh=10, mm=44, ss=0
-    send_update(SilkBarUpdate::new(2, 1, 0, 0));
-    send_update(SilkBarUpdate::new(0, 4, 1, 0));
-    send_update(SilkBarUpdate::new(0, 2, 0, 0));
+    // Chip visibility
+    send_update(SilkBarUpdate::new(2, 1, 0, 0));         // SetChipVisible index=1 visible=false
+    // Workspace state
+    WorkspaceModule::new(4).initial_updates();
 }
 
 // ── Clock Module ─────────────────────────────────────────────────────────
@@ -85,6 +87,30 @@ impl ClockModule {
             self.hh as u32,
             ((self.mm as u32) << 8) | self.ss as u32,
         ))
+    }
+}
+
+// ── Workspace Module ────────────────────────────────────────────────────
+
+/// Fake workspace module — sends initial workspace activation updates.
+/// Replaced later by a real workspace manager that listens for WM events.
+struct WorkspaceModule {
+    active: u8,
+}
+
+impl WorkspaceModule {
+    /// Create a new workspace module.
+    /// `active` is the 0-based index of the workspace to activate.
+    fn new(active: u8) -> Self {
+        WorkspaceModule { active }
+    }
+
+    /// Send the initial workspace activation updates.
+    fn initial_updates(&self) {
+        // Activate the target workspace
+        send_update(SilkBarUpdate::new(0, self.active, 1, 0));
+        // Deactivate workspace 2 (the default active one)
+        send_update(SilkBarUpdate::new(0, 2, 0, 0));
     }
 }
 
