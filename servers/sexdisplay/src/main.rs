@@ -12,6 +12,8 @@ static mut FB_H: u32 = FALLBACK_H;
 
 use silkbar_model::{SilkBar, DEFAULT_THEME};
 
+const BAR_H: usize = 50;
+
 fn bg(y: usize) -> u32 {
     if      y < 200 { DEFAULT_THEME.bg_top }
     else if y < 350 { DEFAULT_THEME.panel_glow }
@@ -25,22 +27,39 @@ fn in_rect(x: usize, y: usize, rx: usize, ry: usize, rw: usize, rh: usize) -> bo
     x >= rx && x < rx + rw && y >= ry && y < ry + rh
 }
 
-fn bar_color(x: usize, y: usize) -> u32 {
-    // Launcher button with rounded-illusion border
-    if in_rect(x, y, silkbar_model::LAUNCHER_X, silkbar_model::LAUNCHER_Y, silkbar_model::LAUNCHER_W, silkbar_model::LAUNCHER_H) {
-        // Border pixels (2px inset) — darker green to fake radius
-        if x < 12 || x >= 88 || y < 12 || y >= 38 {
-            return DEFAULT_THEME.launcher_border; // dark green edge
-        }
-        return DEFAULT_THEME.launcher_fill; // bright green center
+fn launcher_color(x: usize, y: usize) -> Option<u32> {
+    if !in_rect(x, y, silkbar_model::LAUNCHER_X, silkbar_model::LAUNCHER_Y, silkbar_model::LAUNCHER_W, silkbar_model::LAUNCHER_H) {
+        return None;
     }
+    // 2px border inset to fake rounded corners
+    let lx = silkbar_model::LAUNCHER_X;
+    let ly = silkbar_model::LAUNCHER_Y;
+    let lw = silkbar_model::LAUNCHER_W;
+    let lh = silkbar_model::LAUNCHER_H;
+    if x < lx + 2 || x >= lx + lw - 2 || y < ly + 2 || y >= ly + lh - 2 {
+        Some(DEFAULT_THEME.launcher_border)
+    } else {
+        Some(DEFAULT_THEME.launcher_fill)
+    }
+}
 
-    // Status indicators — cleaner spacing
-    if in_rect(x, y, silkbar_model::CHIP_X0, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) { return DEFAULT_THEME.urgent; }
-    if in_rect(x, y, silkbar_model::CHIP_X1, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) { return DEFAULT_THEME.active; }
-    if in_rect(x, y, silkbar_model::CHIP_X2, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) { return DEFAULT_THEME.muted; }
+fn chip_color(x: usize, y: usize) -> Option<u32> {
+    if in_rect(x, y, silkbar_model::CHIP_X0, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) {
+        return Some(DEFAULT_THEME.urgent);
+    }
+    if in_rect(x, y, silkbar_model::CHIP_X1, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) {
+        return Some(DEFAULT_THEME.active);
+    }
+    if in_rect(x, y, silkbar_model::CHIP_X2, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) {
+        return Some(DEFAULT_THEME.muted);
+    }
+    None
+}
 
-    DEFAULT_THEME.text // off-white bar default
+fn bar_color(x: usize, y: usize) -> u32 {
+    if let Some(c) = launcher_color(x, y) { return c; }
+    if let Some(c) = chip_color(x, y) { return c; }
+    DEFAULT_THEME.text
 }
 
 // 5×7 bitmap glyphs for digits 0-9 (MSB = leftmost pixel)
@@ -91,9 +110,9 @@ fn render_clock(fb: *mut u32, stride: usize, bar: &SilkBar) {
 fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     for y in 0..h {
         for x in 0..w {
-            let c: u32 = if y < 50 {
+            let c: u32 = if y < BAR_H {
                 bar_color(x, y)
-            } else if y == 50 {
+            } else if y == BAR_H {
                 0x002D1A3A // thin shadow line
             } else {
                 bg(y)
