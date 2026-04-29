@@ -125,7 +125,7 @@ fn handle_primary_fb(ptr: u64, packed: u64) {
 fn handle_silkbar_update(arg0: u64, arg1: u64, arg2: u64) {
     // Wire: arg0=kind, arg1=(index<<32)|a, arg2=b
     let kind = arg0 as u32;
-    if kind == 4 {
+    if kind == silkbar_model::UpdateKind::SetClock as u32 {
         // SetClock: a=hour, b=minute
         let hh = (arg1 as u32).min(23) as u8;
         let mm = (arg2 as u32).min(59) as u8;
@@ -150,7 +150,7 @@ pub extern "C" fn _start() -> ! {
                 // Re-render with runtime values
                 unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
             }
-            0xF2 => { // OP_SILKBAR_UPDATE
+            silkbar_model::OP_SILKBAR_UPDATE => { // OP_SILKBAR_UPDATE
                 handle_silkbar_update(msg.arg0, msg.arg1, msg.arg2);
                 unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
             }
