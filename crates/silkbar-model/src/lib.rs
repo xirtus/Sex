@@ -149,6 +149,10 @@ pub struct Theme {
     pub chip_fill: u32,
     /// Chip border / shadow
     pub chip_border: u32,
+    /// Launcher button fill
+    pub launcher_fill: u32,
+    /// Launcher button border (2px rounded-illusion edge)
+    pub launcher_border: u32,
 }
 
 // ── Color Helpers ──────────────────────────────────────────────────────────
@@ -535,6 +539,8 @@ pub const DEFAULT_THEME: Theme = Theme {
     muted:       0x004C3C88,
     active:      0x00BBAAFF,
     urgent:      0x00FF6666,
-    chip_fill:   0x009EA8FF,
-    chip_border: 0x006670AA,
+    chip_fill:    0x009EA8FF,
+    chip_border:  0x006670AA,
+    launcher_fill:   0x0000FF00,
+    launcher_border: 0x0000AA00,
 };

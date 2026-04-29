@@ -30,9 +30,9 @@ fn bar_color(x: usize, y: usize) -> u32 {
     if in_rect(x, y, silkbar_model::LAUNCHER_X, silkbar_model::LAUNCHER_Y, silkbar_model::LAUNCHER_W, silkbar_model::LAUNCHER_H) {
         // Border pixels (2px inset) — darker green to fake radius
         if x < 12 || x >= 88 || y < 12 || y >= 38 {
-            return 0x0000AA00; // dark green edge
+            return DEFAULT_THEME.launcher_border; // dark green edge
         }
-        return 0x0000FF00; // bright green center
+        return DEFAULT_THEME.launcher_fill; // bright green center
     }
 
     // Status indicators — cleaner spacing
