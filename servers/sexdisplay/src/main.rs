@@ -27,7 +27,7 @@ fn in_rect(x: usize, y: usize, rx: usize, ry: usize, rw: usize, rh: usize) -> bo
     x >= rx && x < rx + rw && y >= ry && y < ry + rh
 }
 
-fn launcher_color(x: usize, y: usize) -> Option<u32> {
+fn launcher_color(x: usize, y: usize, _bar: &SilkBar) -> Option<u32> {
     if !in_rect(x, y, silkbar_model::LAUNCHER_X, silkbar_model::LAUNCHER_Y, silkbar_model::LAUNCHER_W, silkbar_model::LAUNCHER_H) {
         return None;
     }
@@ -52,6 +52,35 @@ fn chip_kind_color(kind: ChipKind) -> u32 {
     }
 }
 
+fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+    // Workspace 0
+    let w = if bar.workspaces[0].active { silkbar_model::WS_ACTIVE_W } else { silkbar_model::WS_INACTIVE_W };
+    if in_rect(x, y, silkbar_model::WS_X0, silkbar_model::WS_Y, w, silkbar_model::WS_H) {
+        return Some(if bar.workspaces[0].urgent { DEFAULT_THEME.urgent } else if bar.workspaces[0].active { DEFAULT_THEME.active } else { DEFAULT_THEME.muted });
+    }
+    // Workspace 1
+    let w = if bar.workspaces[1].active { silkbar_model::WS_ACTIVE_W } else { silkbar_model::WS_INACTIVE_W };
+    if in_rect(x, y, silkbar_model::WS_X1, silkbar_model::WS_Y, w, silkbar_model::WS_H) {
+        return Some(if bar.workspaces[1].urgent { DEFAULT_THEME.urgent } else if bar.workspaces[1].active { DEFAULT_THEME.active } else { DEFAULT_THEME.muted });
+    }
+    // Workspace 2
+    let w = if bar.workspaces[2].active { silkbar_model::WS_ACTIVE_W } else { silkbar_model::WS_INACTIVE_W };
+    if in_rect(x, y, silkbar_model::WS_X2, silkbar_model::WS_Y, w, silkbar_model::WS_H) {
+        return Some(if bar.workspaces[2].urgent { DEFAULT_THEME.urgent } else if bar.workspaces[2].active { DEFAULT_THEME.active } else { DEFAULT_THEME.muted });
+    }
+    // Workspace 3
+    let w = if bar.workspaces[3].active { silkbar_model::WS_ACTIVE_W } else { silkbar_model::WS_INACTIVE_W };
+    if in_rect(x, y, silkbar_model::WS_X3, silkbar_model::WS_Y, w, silkbar_model::WS_H) {
+        return Some(if bar.workspaces[3].urgent { DEFAULT_THEME.urgent } else if bar.workspaces[3].active { DEFAULT_THEME.active } else { DEFAULT_THEME.muted });
+    }
+    // Workspace 4
+    let w = if bar.workspaces[4].active { silkbar_model::WS_ACTIVE_W } else { silkbar_model::WS_INACTIVE_W };
+    if in_rect(x, y, silkbar_model::WS_X4, silkbar_model::WS_Y, w, silkbar_model::WS_H) {
+        return Some(if bar.workspaces[4].urgent { DEFAULT_THEME.urgent } else if bar.workspaces[4].active { DEFAULT_THEME.active } else { DEFAULT_THEME.muted });
+    }
+    None
+}
+
 fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     // Chip 0
     if bar.chips[0].visible && in_rect(x, y, silkbar_model::CHIP_X0, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) {
@@ -69,7 +98,8 @@ fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
 }
 
 fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
-    if let Some(c) = launcher_color(x, y) { return c; }
+    if let Some(c) = launcher_color(x, y, bar) { return c; }
+    if let Some(c) = workspace_color(x, y, bar) { return c; }
     if let Some(c) = chip_color(x, y, bar) { return c; }
     DEFAULT_THEME.text
 }
