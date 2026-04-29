@@ -35,8 +35,19 @@ pub fn validate_invariants() -> bool {
     silkbar_model::validate_invariants()
 }
 
+/// Send a typed SilkBar update to sexdisplay via PDX.
+/// Encodes wire format: arg0=kind, arg1=(index << 32)|a, arg2=b.
+fn send_update(kind: UpdateKind, index: u8, a: u32, b: u32) {
+    let _ = sex_pdx::pdx_call(
+        sex_pdx::SLOT_DISPLAY,
+        OP_SILKBAR_UPDATE,
+        kind as u32 as u64,
+        ((index as u64) << 32) | a as u64,
+        b as u64,
+    );
+}
+
 /// Send boot-time demo updates to sexdisplay via PDX.
-/// Wire format: arg0=kind, arg1=(index << 32)|a, arg2=b
 /// Five updates queued before sexdisplay first drains:
 ///   1. SetClock 10:43
 ///   2. SetClock 10:44
@@ -44,41 +55,11 @@ pub fn validate_invariants() -> bool {
 ///   4. SetWorkspaceActive index=4 true
 ///   5. SetWorkspaceActive index=2 false
 fn send_boot_demo_updates() {
-    let (_s1, _v1) = sex_pdx::pdx_call(
-        sex_pdx::SLOT_DISPLAY,
-        OP_SILKBAR_UPDATE,
-        4,
-        (0u64 << 32) | 10,
-        43,
-    );
-    let (_s2, _v2) = sex_pdx::pdx_call(
-        sex_pdx::SLOT_DISPLAY,
-        OP_SILKBAR_UPDATE,
-        4,
-        (0u64 << 32) | 10,
-        44,
-    );
-    let (_s3, _v3) = sex_pdx::pdx_call(
-        sex_pdx::SLOT_DISPLAY,
-        OP_SILKBAR_UPDATE,
-        2,
-        (1u64 << 32) | 0,  // index=1, a=0 (visible=false)
-        0,
-    );
-    let (_s4, _v4) = sex_pdx::pdx_call(
-        sex_pdx::SLOT_DISPLAY,
-        OP_SILKBAR_UPDATE,
-        0,
-        (4u64 << 32) | 1,  // index=4, a=1 (active=true)
-        0,
-    );
-    let (_s5, _v5) = sex_pdx::pdx_call(
-        sex_pdx::SLOT_DISPLAY,
-        OP_SILKBAR_UPDATE,
-        0,
-        (2u64 << 32) | 0,  // index=2, a=0 (active=false)
-        0,
-    );
+    send_update(UpdateKind::SetClock, 0, 10, 43);
+    send_update(UpdateKind::SetClock, 0, 10, 44);
+    send_update(UpdateKind::SetChipVisible, 1, 0, 0);
+    send_update(UpdateKind::SetWorkspaceActive, 4, 1, 0);
+    send_update(UpdateKind::SetWorkspaceActive, 2, 0, 0);
 }
 
 // ── Entry Point ─────────────────────────────────────────────────────────────
