@@ -3,7 +3,7 @@
 
 use silkbar_model::{SilkBarUpdate, UpdateKind, OP_SILKBAR_UPDATE};
 
-fn send_update(update: &SilkBarUpdate) {
+fn send_update(update: SilkBarUpdate) {
     sex_pdx::pdx_call(
         sex_pdx::SLOT_DISPLAY,
         OP_SILKBAR_UPDATE,
@@ -20,7 +20,7 @@ pub extern "C" fn _start() -> ! {
     let mut ss: u8 = 0;
 
     // INIT: show initial time
-    send_update(&SilkBarUpdate::new(
+    send_update(SilkBarUpdate::new(
         UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
     ));
 
@@ -41,7 +41,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        send_update(&SilkBarUpdate::new(
+        send_update(SilkBarUpdate::new(
             UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
         ));
     }
