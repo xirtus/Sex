@@ -22,14 +22,17 @@ fn send_update(update: SilkBarUpdate) {
     );
 }
 
-/// Send boot-time demo updates to sexdisplay via PDX.
+/// Temporary snapshot producer — sends initial model state to sexdisplay.
+/// Replaced later by real modules (clock driver, workspace manager, etc.)
+/// that push incremental updates on state changes.
+///
 /// Five updates:
 ///   1. SetClock 10:43
 ///   2. SetClock 10:44
 ///   3. SetChipVisible index=1 visible=false
 ///   4. SetWorkspaceActive index=4 true
 ///   5. SetWorkspaceActive index=2 false
-fn send_boot_demo_updates() {
+fn send_initial_state_snapshot() {
     send_update(SilkBarUpdate::new(4, 0, 10, 43));
     send_update(SilkBarUpdate::new(4, 0, 10, 44));
     send_update(SilkBarUpdate::new(2, 1, 0, 0));
@@ -47,8 +50,9 @@ pub extern "C" fn _start() -> ! {
         loop { core::hint::spin_loop(); }
     }
 
-    // Send boot demo updates to prove typed SilkBarUpdate transport.
-    send_boot_demo_updates();
+    // Send initial state snapshot to prove typed SilkBarUpdate transport.
+    // Temporary — real modules replace this later.
+    send_initial_state_snapshot();
 
     // Future: listen for events, push updates, send to sexdisplay.
     loop {
