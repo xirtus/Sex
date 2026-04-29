@@ -47,16 +47,25 @@ pub extern "C" fn _start() -> ! {
         loop { core::hint::spin_loop(); }
     }
 
-    // v8: Send one fake clock update (SetClock 10:44) to sexdisplay via scalar PDX.
+    // v8+: Send two burst clock updates to prove SilkBarUpdateQueue draining.
     // Wire format: arg0=kind, arg1=(index << 32)|a, arg2=b
-    let (_status, _value) = sex_pdx::pdx_call(
+    // First: 10:43 (queue accumulates)
+    let (_s1, _v1) = sex_pdx::pdx_call(
         sex_pdx::SLOT_DISPLAY,
         OP_SILKBAR_UPDATE,
-        4,                         // arg0: kind = SetClock
-        (0u64 << 32) | 10,         // arg1: index=0, a=10 (hour)
-        44,                        // arg2: b=44 (minute)
+        4,
+        (0u64 << 32) | 10,
+        43,
     );
-    // If PDX fails (ERR_SERVICE_NOT_READY, ring full), no visual change — guaranteed.
+    // Second: 10:44 (queue still has first, second stacks)
+    let (_s2, _v2) = sex_pdx::pdx_call(
+        sex_pdx::SLOT_DISPLAY,
+        OP_SILKBAR_UPDATE,
+        4,
+        (0u64 << 32) | 10,
+        44,
+    );
+    // sexdisplay drains both before render; final clock shows 10:44.
 
     // v7: owns _queue, no PDX transport yet.
     // v8: _queue becomes mut, tick_clock_fake called periodically.
