@@ -10,14 +10,14 @@ static mut FB_PTR: u64 = FALLBACK_PTR;
 static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
 
-use silkbar_model::SilkBar;
+use silkbar_model::{SilkBar, DEFAULT_THEME};
 
 fn bg(y: usize) -> u32 {
-    if      y < 200 { 0x007B4FA0 }
-    else if y < 350 { 0x006B3FA0 }
-    else if y < 500 { 0x005B2F90 }
-    else if y < 650 { 0x004B1F80 }
-    else            { 0x003B0F70 }
+    if      y < 200 { DEFAULT_THEME.bg_top }
+    else if y < 350 { DEFAULT_THEME.panel_glow }
+    else if y < 500 { DEFAULT_THEME.panel_fill }
+    else if y < 650 { DEFAULT_THEME.chip_border }
+    else            { DEFAULT_THEME.bg_bottom }
 }
 
 #[inline]
@@ -36,11 +36,11 @@ fn bar_color(x: usize, y: usize) -> u32 {
     }
 
     // Status indicators — cleaner spacing
-    if in_rect(x, y, 1040, 12, 56, 26) { return 0x00FF0000; } // red
-    if in_rect(x, y, 1116, 12, 56, 26) { return 0x000000FF; } // blue
-    if in_rect(x, y, 1192, 12, 56, 26) { return 0x00000000; } // black
+    if in_rect(x, y, 1040, 12, 56, 26) { return DEFAULT_THEME.urgent; } // red
+    if in_rect(x, y, 1116, 12, 56, 26) { return DEFAULT_THEME.active; } // blue
+    if in_rect(x, y, 1192, 12, 56, 26) { return DEFAULT_THEME.muted; }  // black
 
-    0x00F2F2F2 // off-white bar default
+    DEFAULT_THEME.text // off-white bar default
 }
 
 // 5×7 bitmap glyphs for digits 0-9 (MSB = leftmost pixel)
@@ -72,7 +72,7 @@ fn render_digit(fb: *mut u32, x: usize, y: usize, digit: usize, fg: u32, stride:
 fn render_clock(fb: *mut u32, stride: usize, bar: &SilkBar) {
     let hh = bar.clock_hh;
     let mm = bar.clock_mm;
-    let fg = 0x00F2F2F2;
+    let fg = DEFAULT_THEME.text;
     let x = 1192;
     let y = 16;
     // Hour digits
