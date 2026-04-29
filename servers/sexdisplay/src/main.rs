@@ -97,16 +97,55 @@ fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     None
 }
 
+fn clock_pixel_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+    let cx = silkbar_model::CLOCK_X;
+    let cy = silkbar_model::CLOCK_Y;
+    if y < cy || y >= cy + 7 || x < cx || x >= cx + 29 {
+        return None;
+    }
+    let row = y - cy;
+    let col = x - cx;
+    let fg = DEFAULT_THEME.text;
+
+    // Colon at offset 14 (rows 1 and 5)
+    if col == 14 && (row == 1 || row == 5) {
+        return Some(fg);
+    }
+
+    // Digit regions: [0..4], [7..11], [17..21], [24..28]
+    let (di, dc) = match col {
+        0..=4  => (0, col),
+        7..=11 => (1, col - 7),
+        17..=21 => (2, col - 17),
+        24..=28 => (3, col - 24),
+        _ => return None,
+    };
+
+    let val = match di {
+        0 => (bar.clock_hh / 10) as usize,
+        1 => (bar.clock_hh % 10) as usize,
+        2 => (bar.clock_mm / 10) as usize,
+        3 => (bar.clock_mm % 10) as usize,
+        _ => return None,
+    };
+
+    if (FONT[val][row] >> (4 - dc)) & 1 != 0 { Some(fg) } else { None }
+}
+
 fn module_color(bar: &SilkBar, module: Module, x: usize, y: usize) -> Option<u32> {
     match module {
         Module::Launcher => launcher_color(x, y, bar),
         Module::Workspaces(_) => workspace_color(x, y, bar),
         Module::StatusChip(_) => chip_color(x, y, bar),
-        Module::Clock => None,
+        Module::Clock => clock_pixel_color(x, y, bar),
     }
 }
 
 fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
+    // Clock is topmost visual layer — check before layout boxes
+    if let Some(c) = clock_pixel_color(x, y, bar) {
+        return c;
+    }
     for lb in &bar.layout {
         if in_rect(x, y, lb.x, lb.y, lb.w, lb.h) {
             if let Some(c) = module_color(bar, lb.module, x, y) {
@@ -131,37 +170,6 @@ const FONT: [[u8; 7]; 10] = [
     [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
 ];
 
-fn render_digit(fb: *mut u32, x: usize, y: usize, digit: usize, fg: u32, stride: usize) {
-    let glyph = FONT[digit];
-    for row in 0..7 {
-        let bits = glyph[row];
-        for col in 0..5 {
-            if (bits >> (4 - col)) & 1 != 0 {
-                unsafe { core::ptr::write_volatile(fb.add((y + row) * stride + (x + col)), fg); }
-            }
-        }
-    }
-}
-
-fn render_clock(fb: *mut u32, stride: usize, bar: &SilkBar) {
-    let hh = bar.clock_hh;
-    let mm = bar.clock_mm;
-    let fg = DEFAULT_THEME.text;
-    let x = silkbar_model::CLOCK_X;
-    let y = silkbar_model::CLOCK_Y;
-    // Hour digits
-    render_digit(fb, x,      y, (hh / 10) as usize, fg, stride);
-    render_digit(fb, x + 7,  y, (hh % 10) as usize, fg, stride);
-    // Colon
-    unsafe {
-        core::ptr::write_volatile(fb.add((y + 1) * stride + (x + 14)), fg);
-        core::ptr::write_volatile(fb.add((y + 5) * stride + (x + 14)), fg);
-    }
-    // Minute digits
-    render_digit(fb, x + 17, y, (mm / 10) as usize, fg, stride);
-    render_digit(fb, x + 24, y, (mm % 10) as usize, fg, stride);
-}
-
 fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     for y in 0..h {
         for x in 0..w {
@@ -175,8 +183,6 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
             unsafe { core::ptr::write_volatile(fb.add(y * w + x), c); }
         }
     }
-    // Overlay clock digits on the bar
-    render_clock(fb, w, bar);
 }
 
 fn handle_primary_fb(ptr: u64, packed: u64) {
