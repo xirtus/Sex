@@ -107,9 +107,13 @@ fn module_color(bar: &SilkBar, module: Module, x: usize, y: usize) -> Option<u32
 }
 
 fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
-    if let Some(c) = module_color(bar, Module::Launcher, x, y) { return c; }
-    if let Some(c) = module_color(bar, Module::Workspaces(0), x, y) { return c; }
-    if let Some(c) = module_color(bar, Module::StatusChip(0), x, y) { return c; }
+    for lb in &bar.layout {
+        if in_rect(x, y, lb.x, lb.y, lb.w, lb.h) {
+            if let Some(c) = module_color(bar, lb.module, x, y) {
+                return c;
+            }
+        }
+    }
     DEFAULT_THEME.text
 }
 
