@@ -36,9 +36,9 @@ fn bar_color(x: usize, y: usize) -> u32 {
     }
 
     // Status indicators — cleaner spacing
-    if in_rect(x, y, silkbar_model::WS_PILL_X0, silkbar_model::WS_PILL_Y, silkbar_model::WS_PILL_W, silkbar_model::WS_PILL_H) { return DEFAULT_THEME.urgent; }
-    if in_rect(x, y, silkbar_model::WS_PILL_X1, silkbar_model::WS_PILL_Y, silkbar_model::WS_PILL_W, silkbar_model::WS_PILL_H) { return DEFAULT_THEME.active; }
-    if in_rect(x, y, silkbar_model::WS_PILL_X2, silkbar_model::WS_PILL_Y, silkbar_model::WS_PILL_W, silkbar_model::WS_PILL_H) { return DEFAULT_THEME.muted; }
+    if in_rect(x, y, silkbar_model::CHIP_X0, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) { return DEFAULT_THEME.urgent; }
+    if in_rect(x, y, silkbar_model::CHIP_X1, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) { return DEFAULT_THEME.active; }
+    if in_rect(x, y, silkbar_model::CHIP_X2, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) { return DEFAULT_THEME.muted; }
 
     DEFAULT_THEME.text // off-white bar default
 }
