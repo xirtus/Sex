@@ -54,7 +54,11 @@ pub extern "C" fn _start() -> ! {
     // Temporary — real modules replace this later.
     send_initial_state_snapshot();
 
-    // Future: listen for events, push updates, send to sexdisplay.
+    // ── Idle server loop ─────────────────────────────────────────────────────
+    // TODO: clock producer — poll RTC, push SetClock updates
+    // TODO: workspace producer — listen for WM events, push SetWorkspace*
+    // TODO: status producer — poll net/wifi/battery, push SetChip*
+    // TODO: input/action listener — receive click events, dispatch actions
     loop {
         core::hint::spin_loop();
     }
