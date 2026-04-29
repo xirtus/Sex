@@ -63,3 +63,8 @@ upstream-linux/
 upstream-mesa/
 upstream-wlroots/
 sex-packages/sexbuild/recipes/redox-os/
+
+qemu_serial.log
+an/
+sexos-visible-checkpoint.iso
+sexos-visible-checkpoint.iso.sha256
