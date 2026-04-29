@@ -35,28 +35,15 @@ pub fn validate_invariants() -> bool {
     silkbar_model::validate_invariants()
 }
 
-// ── Entry Point ─────────────────────────────────────────────────────────────
-
-#[no_mangle]
-pub extern "C" fn _start() -> ! {
-    let mut _queue = SilkBarUpdateQueue::empty();
-
-    // Validate model invariants at boot
-    if !validate_invariants() {
-        // Invariant failure - halt silently
-        loop { core::hint::spin_loop(); }
-    }
-
-    // v8+: Send burst updates to prove SilkBarUpdateQueue draining.
-    // Wire format: arg0=kind, arg1=(index << 32)|a, arg2=b
-    // Five updates queued before sexdisplay first drains:
-    //   1. SetClock 10:43
-    //   2. SetClock 10:44
-    //   3. SetChipVisible index=1 visible=false
-    //   4. SetWorkspaceActive index=4 true
-    //   5. SetWorkspaceActive index=2 false
-    // sexdisplay drains all five before render; final: clock 10:44, middle chip gone,
-    // active workspace moves from index 3 to index 5 (0-based indices).
+/// Send boot-time demo updates to sexdisplay via PDX.
+/// Wire format: arg0=kind, arg1=(index << 32)|a, arg2=b
+/// Five updates queued before sexdisplay first drains:
+///   1. SetClock 10:43
+///   2. SetClock 10:44
+///   3. SetChipVisible index=1 visible=false
+///   4. SetWorkspaceActive index=4 true
+///   5. SetWorkspaceActive index=2 false
+fn send_boot_demo_updates() {
     let (_s1, _v1) = sex_pdx::pdx_call(
         sex_pdx::SLOT_DISPLAY,
         OP_SILKBAR_UPDATE,
@@ -92,9 +79,23 @@ pub extern "C" fn _start() -> ! {
         (2u64 << 32) | 0,  // index=2, a=0 (active=false)
         0,
     );
+}
 
-    // v7: owns _queue, no PDX transport yet.
-    // v8: _queue becomes mut, tick_clock_fake called periodically.
+// ── Entry Point ─────────────────────────────────────────────────────────────
+
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    let mut _queue = SilkBarUpdateQueue::empty();
+
+    // Validate model invariants at boot
+    if !validate_invariants() {
+        // Invariant failure - halt silently
+        loop { core::hint::spin_loop(); }
+    }
+
+    // Send boot demo updates to prove SilkBarUpdateQueue draining.
+    send_boot_demo_updates();
+
     // Future: listen for events, push updates, send to sexdisplay.
     loop {
         core::hint::spin_loop();
