@@ -90,12 +90,16 @@ pub fn init() {
             }
         }
 
-        if silkbar_id != 0 {
-            if let Some(pd) = DOMAIN_REGISTRY.get(silkbar_id) {
-                // v8: SilkBar needs SLOT_DISPLAY to push updates
-                pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
-                serial_println!("✓ SilkBar v8: Capability SLOT_DISPLAY granted");
-            }
+    }
+
+    // SilkBar delivery path: grant display capability independently of silk-shell.
+    // Otherwise SilkBar updates are silently blocked whenever silk-shell is absent.
+    if sexdisp_id != 0 && silkbar_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::capability::CapabilityData;
+        if let Some(pd) = DOMAIN_REGISTRY.get(silkbar_id) {
+            pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
+            serial_println!("✓ SilkBar v8: Capability SLOT_DISPLAY granted");
         }
     }
 

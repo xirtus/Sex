@@ -10,7 +10,7 @@ static mut FB_PTR: u64 = FALLBACK_PTR;
 static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
 
-struct ClockState { hh: u8, mm: u8 }
+struct ClockState { hh: u8, mm: u8, ss: u8 }
 
 fn bg(y: usize) -> u32 {
     if      y < 200 { 0x007B4FA0 }
@@ -57,52 +57,76 @@ const FONT: [[u8; 7]; 10] = [
     [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
 ];
 
-fn render_digit(fb: *mut u32, x: usize, y: usize, digit: usize, fg: u32, stride: usize) {
-    let glyph = FONT[digit];
-    for row in 0..7 {
-        let bits = glyph[row];
-        for col in 0..5 {
-            if (bits >> (4 - col)) & 1 != 0 {
-                unsafe { core::ptr::write_volatile(fb.add((y + row) * stride + (x + col)), fg); }
-            }
-        }
-    }
-}
+/// Returns `Some(fg)` if pixel (x, y) is a clock-digit foreground pixel,
+/// or `None` if it is background/not in the clock area.
+/// This is called inline during rendering to avoid a separate overlay pass
+/// that would create a tear window between bar-fill and clock-overlay.
+fn clock_fg_at(x: usize, y: usize, clock: &ClockState) -> Option<u32> {
+    const CLOCK_FG: u32 = 0x00F2F2F2;
+    const CX: usize = 1192;
+    const CY: usize = 16;
 
-fn render_clock(fb: *mut u32, stride: usize, clock: &ClockState) {
-    let hh = clock.hh;
-    let mm = clock.mm;
-    let fg = 0x00F2F2F2;
-    let x = 1192;
-    let y = 16;
-    // Hour digits
-    render_digit(fb, x,      y, (hh / 10) as usize, fg, stride);
-    render_digit(fb, x + 7,  y, (hh % 10) as usize, fg, stride);
-    // Colon
-    unsafe {
-        core::ptr::write_volatile(fb.add((y + 1) * stride + (x + 14)), fg);
-        core::ptr::write_volatile(fb.add((y + 5) * stride + (x + 14)), fg);
+    // Quick bounding-box reject
+    if y < CY || y >= CY + 7 {
+        return None;
     }
-    // Minute digits
-    render_digit(fb, x + 17, y, (mm / 10) as usize, fg, stride);
-    render_digit(fb, x + 24, y, (mm % 10) as usize, fg, stride);
+    if x < CX || x > CX + 45 {
+        return None;
+    }
+
+    // Colon 1 at offset 14, Colon 2 at offset 31
+    if x == CX + 14 || x == CX + 31 {
+        if y == CY + 1 || y == CY + 5 {
+            return Some(CLOCK_FG);
+        }
+        return None;
+    }
+
+    // Digit offsets: 0, 7, 17, 24, 34, 41
+    const DIGITS: [usize; 6] = [0, 7, 17, 24, 34, 41];
+    for (di, &dx) in DIGITS.iter().enumerate() {
+        if x < CX + dx || x >= CX + dx + 5 {
+            continue;
+        }
+        let col = x - (CX + dx);
+        let row = y - CY;
+        let digit: usize = match di {
+            0 => (clock.hh / 10) as usize,
+            1 => (clock.hh % 10) as usize,
+            2 => (clock.mm / 10) as usize,
+            3 => (clock.mm % 10) as usize,
+            4 => (clock.ss / 10) as usize,
+            5 => (clock.ss % 10) as usize,
+            _ => return None,
+        };
+        if (FONT[digit][row] >> (4 - col)) & 1 != 0 {
+            return Some(CLOCK_FG);
+        }
+        return None; // digit background pixel
+    }
+    None
 }
 
 fn render(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
     for y in 0..h {
         for x in 0..w {
             let c: u32 = if y < 50 {
-                bar_color(x, y)
+                // Check clock pixel inline — no separate overlay pass
+                if let Some(fg) = clock_fg_at(x, y, clock) {
+                    fg
+                } else {
+                    bar_color(x, y)
+                }
             } else if y == 50 {
                 0x002D1A3A // thin shadow line
             } else {
                 bg(y)
             };
-            unsafe { core::ptr::write_volatile(fb.add(y * w + x), c); }
+            // black_box prevents LLVM from vectorizing past the fb boundary
+            let idx = y * w + x;
+            unsafe { core::ptr::write_volatile(fb.add(core::hint::black_box(idx)), c); }
         }
     }
-    // Overlay clock digits on the bar
-    render_clock(fb, w, clock);
 }
 
 fn handle_primary_fb(ptr: u64, packed: u64) {
@@ -125,17 +149,18 @@ fn handle_silkbar_update(clock: &mut ClockState, arg0: u64, arg1: u64, arg2: u64
     // Wire: arg0=kind, arg1=(index<<32)|a, arg2=b
     let kind = arg0 as u32;
     if kind == silkbar_model::UpdateKind::SetClock as u32 {
-        // SetClock: a=hour, b=minute
+        // SetClock: a=hour, b packed = (mm << 8) | ss
         let hh = (arg1 as u32).min(23) as u8;
-        let mm = (arg2 as u32).min(59) as u8;
-        *clock = ClockState { hh, mm };
+        let mm = ((arg2 >> 8) as u32).min(59) as u8;
+        let ss = (arg2 as u8).min(59) as u8;
+        *clock = ClockState { hh, mm, ss };
     }
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // Local clock state — initialized 10:42, mutated by OP_SILKBAR_UPDATE
-    let mut clock = ClockState { hh: 10, mm: 42 };
+    let mut clock = ClockState { hh: 10, mm: 42, ss: 0 };
 
     // 1. Render immediately with fallback — visible before any IPC
     unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
@@ -152,7 +177,14 @@ pub extern "C" fn _start() -> ! {
                 handle_silkbar_update(&mut clock, msg.arg0, msg.arg1, msg.arg2);
                 unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
             }
-            _ => {}
+            0 => {
+                // Empty (pdx_listen_raw should never return this)
+                sex_pdx::sys_yield();
+            }
+            _ => {
+                // Unknown type_id — yield to avoid busy-spin
+                sex_pdx::sys_yield();
+            }
         }
     }
 }

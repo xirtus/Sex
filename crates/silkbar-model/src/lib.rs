@@ -120,6 +120,7 @@ pub struct SilkBar {
     pub chips: [ChipState; MAX_CHIPS],
     pub clock_hh: u8,
     pub clock_mm: u8,
+    pub clock_ss: u8,
 }
 
 // ── Theme (v2: 10 semantic tokens) ─────────────────────────────────────────
@@ -341,11 +342,13 @@ pub fn apply_update(bar: &mut SilkBar, update: SilkBarUpdate) -> bool {
             true
         }
         4 => {
-            // SetClock: a=hh (0-23), b=mm (0-59)
+            // SetClock: a=hh (0-23), b packed = (mm << 8) | ss
             let hh = update.a.min(23) as u8;
-            let mm = update.b.min(59) as u8;
+            let mm = (update.b >> 8).min(59) as u8;
+            let ss = (update.b as u8).min(59);
             bar.clock_hh = hh;
             bar.clock_mm = mm;
+            bar.clock_ss = ss;
             true
         }
         5 => {
@@ -476,7 +479,7 @@ pub fn validate_invariants() -> bool {
 
     // 4. drain_into applies clock update
     let mut q3 = SilkBarUpdateQueue::empty();
-    let clock = SilkBarUpdate { kind: 4, index: 0, a: 15, b: 45 };
+    let clock = SilkBarUpdate { kind: 4, index: 0, a: 15, b: (45 << 8) | 30 };
     if !q3.push(clock) {
         return false;
     }
@@ -485,7 +488,7 @@ pub fn validate_invariants() -> bool {
     if count != 1 {
         return false;
     }
-    if bar.clock_hh != 15 || bar.clock_mm != 45 {
+    if bar.clock_hh != 15 || bar.clock_mm != 45 || bar.clock_ss != 30 {
         return false;
     }
 
@@ -522,6 +525,7 @@ pub const DEFAULT_SILK_BAR: SilkBar = SilkBar {
     ],
     clock_hh: 10,
     clock_mm: 42,
+    clock_ss: 0,
 };
 
 pub const DEFAULT_THEME: Theme = Theme {
