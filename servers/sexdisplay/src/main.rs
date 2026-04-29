@@ -1,8 +1,14 @@
 #![no_std]
 #![no_main]
 
-const W: usize = 1280;
-const H: usize = 800;
+const FALLBACK_PTR: u64 = 0xffff8000fd000000;
+const FALLBACK_W: u32 = 1280;
+const FALLBACK_H: u32 = 800;
+
+// Runtime FB config — starts as fallback, updated by OP_PRIMARY_FB
+static mut FB_PTR: u64 = FALLBACK_PTR;
+static mut FB_W: u32 = FALLBACK_W;
+static mut FB_H: u32 = FALLBACK_H;
 
 fn bg(y: usize) -> u32 {
     if      y < 200 { 0x007B4FA0 }
@@ -35,11 +41,9 @@ fn bar_color(x: usize, y: usize) -> u32 {
     0x00F2F2F2 // off-white bar default
 }
 
-#[no_mangle]
-pub extern "C" fn _start() -> ! {
-    let fb = 0xffff8000fd000000 as *mut u32;
-    for y in 0..H {
-        for x in 0..W {
+fn render(fb: *mut u32, w: usize, h: usize) {
+    for y in 0..h {
+        for x in 0..w {
             let c: u32 = if y < 50 {
                 bar_color(x, y)
             } else if y == 50 {
@@ -47,10 +51,49 @@ pub extern "C" fn _start() -> ! {
             } else {
                 bg(y)
             };
-            unsafe { core::ptr::write_volatile(fb.add(y * W + x), c); }
+            unsafe { core::ptr::write_volatile(fb.add(y * w + x), c); }
         }
     }
-    loop { core::hint::spin_loop(); }
+}
+
+fn handle_primary_fb(ptr: u64, packed: u64) {
+    if ptr == 0 {
+        return;
+    }
+    let w = packed as u32;
+    let h = (packed >> 32) as u32;
+    if w == 0 || h == 0 {
+        return;
+    }
+    unsafe {
+        FB_PTR = ptr;
+        FB_W = w;
+        FB_H = h;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    // 1. Render immediately with fallback — visible before any IPC
+    unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
+
+    // 2. Listen for runtime FB handoff and SilkBar updates
+    loop {
+        let msg = sex_pdx::pdx_listen_raw(0);
+        match msg.type_id {
+            0x11 => { // OP_PRIMARY_FB
+                handle_primary_fb(msg.arg0, msg.arg1);
+                // Re-render with runtime values
+                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
+            }
+            0xF2 => { // OP_SILKBAR_UPDATE — acknowledged
+                // silkbar clock/tray updates: render later when protocol settled
+            }
+            _ => {
+                // Unknown message — ignore
+            }
+        }
+    }
 }
 
 #[panic_handler]
