@@ -88,6 +88,12 @@ pub const OP_WINDOW_VBLANK: u64 = 0xE6;
 pub const OP_WINDOW_MAP:    u64 = 0xE7;
 pub const OP_WINDOW_WRITE:  u64 = 0xE8;
 
+// SilkBar protocol opcodes (reserved; server attaches in v7+)
+pub const OP_SILKBAR_PING:     u64 = 0xF0;
+pub const OP_SILKBAR_GET_ABI:  u64 = 0xF1;
+pub const OP_SILKBAR_UPDATE:   u64 = 0xF2;
+pub const SILKBAR_ABI_VERSION: u64 = 1;
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct ShellEvent {

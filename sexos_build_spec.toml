@@ -1,3 +1,11 @@
+# ── SilkBar Integration Status ──────────────────────────────────────────────────
+#
+# silkbar  → producer stub (v7). Owns SilkBarUpdateQueue, no PDX transport yet.
+#            v8+ will connect to sexdisplay via PDX for live updates.
+# sexdisplay → local model consumer. Owns mutable SilkBar + queue, drains each frame.
+#            Remains sole renderer until v8. No kernel behavior change.
+# ────────────────────────────────────────────────────────────────────────────────
+
 [spec]
 version = "1.0.0"
 abi_version_hash = "2636dfe005ca064aa0ca222aeaee73a775c17ca29c1e6c2e427cd950e9eaddb7"
@@ -23,7 +31,8 @@ crates = [
   "apps/sexdrive/Cargo.toml",
   "servers/silk-shell/Cargo.toml",
   "servers/sexinput/Cargo.toml",
-  "purple-scanout/Cargo.toml"
+  "purple-scanout/Cargo.toml",
+  "servers/silkbar/Cargo.toml"
 ]
 
 [[stage]]
@@ -81,6 +90,14 @@ action = "cargo_manifest"
 manifest = "purple-scanout/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/purple-scanout"
 dest_artifact = "iso_root/apps/purple-scanout"
+
+# silkbar: producer stub (v7). No PDX transport. sexdisplay remains local model consumer until v8.
+[[stage]]
+id = "build_silkbar"
+action = "cargo_manifest"
+manifest = "servers/silkbar/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/silkbar"
+dest_artifact = "iso_root/servers/silkbar"
 
 [[stage]]
 id = "copy_limine_cfg"

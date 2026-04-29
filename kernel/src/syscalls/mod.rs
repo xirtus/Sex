@@ -191,8 +191,8 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                             unsafe {
                                 if let Some(msg) = (*current_pd.message_ring).dequeue() {
                                     match msg {
-                                        MessageType::IpcCall { func_id, arg0, arg1, arg2: _, caller_pd } => {
-                                            (func_id, caller_pd as u64, arg0, arg1, 0)
+                                        MessageType::IpcCall { func_id, arg0, arg1, arg2, caller_pd } => {
+                                            (func_id, caller_pd as u64, arg0, arg1, arg2)
                                         }
                                         MessageType::DisplayPrimaryFramebuffer { virt_addr, width, height, pitch } => {
                                             (0x11, 1, virt_addr, (width as u64) | ((height as u64) << 32), pitch as u64)
