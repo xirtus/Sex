@@ -64,24 +64,29 @@ pub extern "C" fn _start() -> ! {
     // TODO: status producer — poll net/wifi/battery, push SetChip*
     // TODO: input/action listener — receive click events, dispatch actions
 
-    // Local clock state — starts at 10:44 (matches end of initial snapshot).
+    // Local clock state — starts at 10:44:00 (matches end of initial snapshot).
     let mut hh: u8 = 10;
     let mut mm: u8 = 44;
+    let mut ss: u8 = 0;
     let mut tick: u64 = 0;
 
     loop {
         tick += 1;
         if tick % CLOCK_TICK_INTERVAL == 0 {
-            // Advance one minute, wrapping at 23:59 → 00:00
-            mm += 1;
-            if mm >= 60 {
-                mm = 0;
-                hh += 1;
-                if hh >= 24 {
-                    hh = 0;
+            // Advance one second, rolling up through minutes and hours
+            ss += 1;
+            if ss >= 60 {
+                ss = 0;
+                mm += 1;
+                if mm >= 60 {
+                    mm = 0;
+                    hh += 1;
+                    if hh >= 24 {
+                        hh = 0;
+                    }
                 }
             }
-            send_update(SilkBarUpdate::new(4, 0, hh as u32, mm as u32));
+            send_update(SilkBarUpdate::new(4, 0, hh as u32, mm as u32 | ((ss as u32) << 8)));
         }
         core::hint::spin_loop();
     }
