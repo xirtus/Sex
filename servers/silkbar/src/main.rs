@@ -40,6 +40,11 @@ fn send_initial_state_snapshot() {
     send_update(SilkBarUpdate::new(0, 2, 0, 0));
 }
 
+// ── Clock Tick ────────────────────────────────────────────────────────────
+
+/// Clock tick interval in spin-loop iterations (~0.5–1 s on 2 GHz with `pause`).
+const CLOCK_TICK_INTERVAL: u64 = 10_000_000;
+
 // ── Entry Point ─────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -54,12 +59,30 @@ pub extern "C" fn _start() -> ! {
     // Temporary — real modules replace this later.
     send_initial_state_snapshot();
 
-    // ── Idle server loop ─────────────────────────────────────────────────────
-    // TODO: clock producer — poll RTC, push SetClock updates
+    // ── Idle server loop with fake clock tick ────────────────────────────────
     // TODO: workspace producer — listen for WM events, push SetWorkspace*
     // TODO: status producer — poll net/wifi/battery, push SetChip*
     // TODO: input/action listener — receive click events, dispatch actions
+
+    // Local clock state — starts at 10:44 (matches end of initial snapshot).
+    let mut hh: u8 = 10;
+    let mut mm: u8 = 44;
+    let mut tick: u64 = 0;
+
     loop {
+        tick += 1;
+        if tick % CLOCK_TICK_INTERVAL == 0 {
+            // Advance one minute, wrapping at 23:59 → 00:00
+            mm += 1;
+            if mm >= 60 {
+                mm = 0;
+                hh += 1;
+                if hh >= 24 {
+                    hh = 0;
+                }
+            }
+            send_update(SilkBarUpdate::new(4, 0, hh as u32, mm as u32));
+        }
         core::hint::spin_loop();
     }
 }
