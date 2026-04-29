@@ -27,7 +27,7 @@ fn in_rect(x: usize, y: usize, rx: usize, ry: usize, rw: usize, rh: usize) -> bo
 
 fn bar_color(x: usize, y: usize) -> u32 {
     // Launcher button with rounded-illusion border
-    if in_rect(x, y, 10, silkbar_model::PANEL_Y, silkbar_model::CLOCK_W, silkbar_model::WS_ACTIVE_W) {
+    if in_rect(x, y, silkbar_model::LAUNCHER_X, silkbar_model::LAUNCHER_Y, silkbar_model::LAUNCHER_W, silkbar_model::LAUNCHER_H) {
         // Border pixels (2px inset) — darker green to fake radius
         if x < 12 || x >= 88 || y < 12 || y >= 38 {
             return 0x0000AA00; // dark green edge

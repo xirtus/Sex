@@ -23,10 +23,10 @@ pub const WS_X2: usize = 625;
 pub const WS_X3: usize = 671;
 pub const WS_X4: usize = 707;
 
-pub const LAUNCHER_X: usize = 100;
-pub const LAUNCHER_Y: usize = 19;
-pub const LAUNCHER_W: usize = 20;
-pub const LAUNCHER_H: usize = 20;
+pub const LAUNCHER_X: usize = 10;
+pub const LAUNCHER_Y: usize = 10;
+pub const LAUNCHER_W: usize = 80;
+pub const LAUNCHER_H: usize = 30;
 
 pub const CHIP_Y: usize = 18;
 pub const CHIP_H: usize = 22;
