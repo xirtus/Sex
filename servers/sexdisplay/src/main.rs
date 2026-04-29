@@ -203,8 +203,9 @@ fn handle_primary_fb(ptr: u64, packed: u64) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // SilkBar model state — initialized from DEFAULT_SILK_BAR (clock=10:42)
+    // SilkBar model state + update queue
     let mut bar = silkbar_model::DEFAULT_SILK_BAR;
+    let mut update_queue = silkbar_model::SilkBarUpdateQueue::empty();
 
     // 1. Render immediately with fallback — visible before any IPC
     unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
@@ -215,6 +216,7 @@ pub extern "C" fn _start() -> ! {
         match msg.type_id {
             0x11 => { // OP_PRIMARY_FB
                 handle_primary_fb(msg.arg0, msg.arg1);
+                update_queue.drain_into(&mut bar);
                 unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
             }
             silkbar_model::OP_SILKBAR_UPDATE => {
@@ -224,7 +226,8 @@ pub extern "C" fn _start() -> ! {
                     msg.arg1 as u32,    // a
                     msg.arg2 as u32,    // b
                 );
-                silkbar_model::apply_update(&mut bar, update);
+                update_queue.push(update);
+                update_queue.drain_into(&mut bar);
                 unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
             }
             _ => {}
