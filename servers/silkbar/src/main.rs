@@ -33,17 +33,60 @@ fn send_update(update: SilkBarUpdate) {
 ///   4. SetWorkspaceActive index=4 true
 ///   5. SetWorkspaceActive index=2 false
 fn send_initial_state_snapshot() {
-    send_update(SilkBarUpdate::new(4, 0, 10, 43));
-    send_update(SilkBarUpdate::new(4, 0, 10, 44));
+    send_update(SilkBarUpdate::new(4, 0, 10, 43 << 8)); // hh=10, mm=43, ss=0
+    send_update(SilkBarUpdate::new(4, 0, 10, 44 << 8)); // hh=10, mm=44, ss=0
     send_update(SilkBarUpdate::new(2, 1, 0, 0));
     send_update(SilkBarUpdate::new(0, 4, 1, 0));
     send_update(SilkBarUpdate::new(0, 2, 0, 0));
 }
 
-// ── Clock Tick ────────────────────────────────────────────────────────────
+// ── Clock Module ─────────────────────────────────────────────────────────
+
+/// Fake clock module — produces one SetClock update per second.
+/// Replaced later by a real RTC-driven clock producer.
+struct ClockModule {
+    hh: u8,
+    mm: u8,
+    ss: u8,
+    spin: u64,
+}
 
 /// Clock tick interval in spin-loop iterations (~0.5–1 s on 2 GHz with `pause`).
 const CLOCK_TICK_INTERVAL: u64 = 10_000_000;
+
+impl ClockModule {
+    /// Create a new clock module at the given wall time.
+    fn new(hh: u8, mm: u8, ss: u8) -> Self {
+        ClockModule { hh, mm, ss, spin: 0 }
+    }
+
+    /// Advance one spin-loop iteration.
+    /// Returns `Some(SilkBarUpdate)` when the clock ticks (once per interval).
+    fn tick(&mut self) -> Option<SilkBarUpdate> {
+        self.spin += 1;
+        if self.spin % CLOCK_TICK_INTERVAL != 0 {
+            return None;
+        }
+        // Advance one second, rolling up through minutes and hours
+        self.ss += 1;
+        if self.ss >= 60 {
+            self.ss = 0;
+            self.mm += 1;
+            if self.mm >= 60 {
+                self.mm = 0;
+                self.hh += 1;
+                if self.hh >= 24 {
+                    self.hh = 0;
+                }
+            }
+        }
+        Some(SilkBarUpdate::new(
+            4, 0,
+            self.hh as u32,
+            ((self.mm as u32) << 8) | self.ss as u32,
+        ))
+    }
+}
 
 // ── Entry Point ─────────────────────────────────────────────────────────────
 
@@ -64,29 +107,12 @@ pub extern "C" fn _start() -> ! {
     // TODO: status producer — poll net/wifi/battery, push SetChip*
     // TODO: input/action listener — receive click events, dispatch actions
 
-    // Local clock state — starts at 10:44:00 (matches end of initial snapshot).
-    let mut hh: u8 = 10;
-    let mut mm: u8 = 44;
-    let mut ss: u8 = 0;
-    let mut tick: u64 = 0;
+    // Clock module starts at 10:44:00 (matches end of initial snapshot).
+    let mut clock = ClockModule::new(10, 44, 0);
 
     loop {
-        tick += 1;
-        if tick % CLOCK_TICK_INTERVAL == 0 {
-            // Advance one second, rolling up through minutes and hours
-            ss += 1;
-            if ss >= 60 {
-                ss = 0;
-                mm += 1;
-                if mm >= 60 {
-                    mm = 0;
-                    hh += 1;
-                    if hh >= 24 {
-                        hh = 0;
-                    }
-                }
-            }
-            send_update(SilkBarUpdate::new(4, 0, hh as u32, mm as u32 | ((ss as u32) << 8)));
+        if let Some(update) = clock.tick() {
+            send_update(update);
         }
         core::hint::spin_loop();
     }
