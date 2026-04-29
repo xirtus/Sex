@@ -49,11 +49,14 @@ pub extern "C" fn _start() -> ! {
 
     // v8+: Send burst updates to prove SilkBarUpdateQueue draining.
     // Wire format: arg0=kind, arg1=(index << 32)|a, arg2=b
-    // Three updates queued before sexdisplay first drains:
+    // Five updates queued before sexdisplay first drains:
     //   1. SetClock 10:43
     //   2. SetClock 10:44
     //   3. SetChipVisible index=1 visible=false
-    // sexdisplay drains all three before render; final clock shows 10:44, middle chip gone.
+    //   4. SetWorkspaceActive index=4 true
+    //   5. SetWorkspaceActive index=2 false
+    // sexdisplay drains all five before render; final: clock 10:44, middle chip gone,
+    // active workspace moves from index 3 to index 5 (0-based indices).
     let (_s1, _v1) = sex_pdx::pdx_call(
         sex_pdx::SLOT_DISPLAY,
         OP_SILKBAR_UPDATE,
@@ -73,6 +76,20 @@ pub extern "C" fn _start() -> ! {
         OP_SILKBAR_UPDATE,
         2,
         (1u64 << 32) | 0,  // index=1, a=0 (visible=false)
+        0,
+    );
+    let (_s4, _v4) = sex_pdx::pdx_call(
+        sex_pdx::SLOT_DISPLAY,
+        OP_SILKBAR_UPDATE,
+        0,
+        (4u64 << 32) | 1,  // index=4, a=1 (active=true)
+        0,
+    );
+    let (_s5, _v5) = sex_pdx::pdx_call(
+        sex_pdx::SLOT_DISPLAY,
+        OP_SILKBAR_UPDATE,
+        0,
+        (2u64 << 32) | 0,  // index=2, a=0 (active=false)
         0,
     );
 
