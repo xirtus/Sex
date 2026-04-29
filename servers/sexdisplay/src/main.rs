@@ -10,9 +10,10 @@ static mut FB_PTR: u64 = FALLBACK_PTR;
 static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
 
+struct ClockState { hh: u8, mm: u8 }
+
 // Clock state — initialized 10:42, updated by OP_SILKBAR_UPDATE SetClock
-static mut CLOCK_HH: u8 = 10;
-static mut CLOCK_MM: u8 = 42;
+static mut CLOCK: ClockState = ClockState { hh: 10, mm: 42 };
 
 fn bg(y: usize) -> u32 {
     if      y < 200 { 0x007B4FA0 }
@@ -71,8 +72,9 @@ fn render_digit(fb: *mut u32, x: usize, y: usize, digit: usize, fg: u32, stride:
     }
 }
 
-fn render_clock(fb: *mut u32, stride: usize) {
-    let (hh, mm) = unsafe { (CLOCK_HH, CLOCK_MM) };
+fn render_clock(fb: *mut u32, stride: usize, clock: &ClockState) {
+    let hh = clock.hh;
+    let mm = clock.mm;
     let fg = 0x00F2F2F2;
     let x = 1192;
     let y = 16;
@@ -103,7 +105,7 @@ fn render(fb: *mut u32, w: usize, h: usize) {
         }
     }
     // Overlay clock digits on the bar
-    render_clock(fb, w);
+    render_clock(fb, w, unsafe { &CLOCK });
 }
 
 fn handle_primary_fb(ptr: u64, packed: u64) {
@@ -130,8 +132,7 @@ fn handle_silkbar_update(arg0: u64, arg1: u64, arg2: u64) {
         let hh = (arg1 as u32).min(23) as u8;
         let mm = (arg2 as u32).min(59) as u8;
         unsafe {
-            CLOCK_HH = hh;
-            CLOCK_MM = mm;
+            CLOCK = ClockState { hh, mm };
         }
     }
 }
