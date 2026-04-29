@@ -1,58 +1,75 @@
-# HANDOFF.md — Phase 35/80 (Deterministic SMP Lattice)
+# HANDOFF.md — v8 SilkBar PDX Integration (Current Phase)
 
-## Current Runtime Handoff: Syscall Entry Probe
+## Current Runtime State ✅
 
-This supersedes the older phase guidance for the current debug thread.
+- **All 5 PDs spawn and run** (sexdisplay, sexdrive, silk-shell, sexinput, silkbar).
+- **Zero page faults, zero panics.** The `static`→`const` fix resolved the GOT relocation crash.
+- **sexdisplay receives OP_PRIMARY_FB** (syscall 28 returns status=0x11) **and OP_SILKBAR_UPDATE** (0xF2).
+- **Scheduler round-robins all 5 PDs** with no stalls.
+- **Known: screen may still appear black** — see diagnosis below.
 
-### Verified So Far
-- The `iretq` blocker is fixed.
-- Final user iret frame is correct:
-  - `rip=0x40001640`
-  - `cs=0x2b`
-  - `rsp=0x700000100000`
-  - `ss=0x23`
-- The user entrypoints in `sexdisplay` and `purple-scanout` are real `.text` code.
-- Both user `_start` paths now begin with a minimal syscall probe that avoids user pointers.
+## Two Bugs Fixed This Session
 
-### Current Probe State
-- `kernel/src/interrupts.rs` now contains a raw, no-stack COM1 marker at the top of `syscall_entry` before `swapgs`.
-- The intended boundary markers are:
-  - `syscall.stub.enter.raw`
-  - `syscall.stub.after.kstack.switch`
-  - `syscall.stub.before.dispatch`
-  - `syscall.enter`
-  - `syscall.magic.hit`
-- `./scripts/entrypoint_build.sh` succeeds.
-- Boot output still does not show any of the syscall boundary markers in the serial grep path.
+### Bug 1: Cross-crate `static` → GOT not relocated (resolved ✅)
 
-### What Gemini Should Check Next
-1. Inspect `kernel/src/interrupts.rs` `syscall_entry` for any GS/stack dependency that can prevent the raw serial loop from reaching COM1.
-2. Verify whether the `syscall` instruction is being reached but failing before the first kernel-side log.
-3. If the raw pre-`swapgs` marker is present but hidden from grep, inspect the serial byte stream directly.
-4. If none of the syscall markers appear, the userland transition is still failing before the `syscall` instruction despite the correct iret frame and valid entrypoint bytes.
+**Root cause:** Kernel ELF loader (`kernel/src/elf.rs`) copies PT_LOAD segments but does NOT process `.rela.dyn` entries. Cross-crate `pub static` items in PIC/PIE binaries produce GOT entries with unrelocated addresses. When code dereferences through the GOT, it reads a pre-relocation address → page fault in user mode.
 
-## Current Status
-We have permanently abandoned legacy scheduler stall debugging (Phase 28). The system is now a **closed deterministic SMP execution lattice**.
+**Fix:** Changed cross-crate data to `const`:
+- `crates/silkbar-model/src/lib.rs`: `pub static DEFAULT_SILK_BAR` → `pub const`, `pub static DEFAULT_THEME` → `pub const`
+- `servers/sexdisplay/src/main.rs`: `static DIGITS` → `const DIGITS`
 
-Our immediate goal is **Milestone 1 (Minimal Silicon Bootstrap)**: Achieving a stable purple framebuffer at 60Hz across multiple cores with zero scheduling, zero locks, and perfect determinism.
+**Evidence:** 5817 repeated page faults before fix → zero after fix.
 
-## Execution Protocol: The Formalized Emergence Loop
-We are executing a strict, manual emergence loop to prevent silent drift and ensure zero Undefined Behavior (UB):
+### Bug 2: Slot 0 message ring never delivered (fixed this session ✅)
 
-**ARCH → (Gemini prove) → CODE → (Gemini verify) → RUN → REPEAT**
+**Root cause:** `pdx_listen_raw(0)` calls syscall 28 with `rdi=0`. The kernel did `find_capability(0)` → `CapabilityTable::find(0)` rejects id=0 (1-indexed guard). Returns `None` → falls to `_ => (0,0,0,0,0)` = EMPTY forever.
 
-### Roles:
-- **Gemini CLI (Local Agent):** Verifier, invariant checker, and architecture validator. Not the primary code generator.
-- **Claude (External Agent):** Code generator and workspace scaffold creator. Not the architect.
+The `ProtectionDomain::new()` comment says "Slot 0 is ALWAYS the PD's own message ring" but `grant_capability(0, MessageQueue)` calls `insert_at(0, ...)` which also rejects id=0 → early return. The cap was **never inserted**.
 
-### The Loop:
-1. **ARCH (Completed):** `ARCHITECTURE.md` is the single source of truth.
-2. **Gemini Prove (Step C):** Gemini validates the spec sanity (acyclic DAG, single-writer IPC, no shared mutable state, valid PKU).
-3. **CODE (Step D):** Claude generates the Rust code against strict constraints (no Vec, no Box, no Mutex, no threads, no async).
-4. **Gemini Verify (Step E):** Gemini analyzes the Claude-generated crates for hardware limits, memory violations, and UB using specific agents (`ast-unsafe-tracker`, `sasos-memory-violator`, `pkru-timeline-reconstructor`).
-5. **RUN:** `make iso && make run-smp`.
+**Fix in `kernel/src/syscalls/mod.rs` (syscall 28 handler):**
+After checking the reply buffer for slot 0, fall through to `current_pd.message_ring->dequeue()` directly instead of going through the capability table. Non-zero slots still use capability lookup.
 
-## Immediate Next Step (Handoff)
-- The current task is not the old Milestone 1 pre-pass. It is the syscall-entry boundary probe after the iretq fix.
-- Continue from `kernel/src/interrupts.rs`, `kernel/src/syscalls/mod.rs`, `servers/sexdisplay/src/main.rs`, and `purple-scanout/src/main.rs`.
-- The next concrete question is whether the user reaches `syscall_entry` at all, or whether the failure happens before the syscall instruction.
+**File changed:** `kernel/src/syscalls/mod.rs`
+
+### Bug 3 (cosmetic): `limine.cfg` missing silkbar module (fixed this session ✅)
+
+Added `MODULE_PATH=boot:///servers/silkbar` to `limine.cfg`. Without this, Limine didn't load the silkbar ELF and PD 5 was never spawned.
+
+**File changed:** `limine.cfg`
+
+## Black Screen Diagnosis (not yet fixed)
+
+Sexdisplay DOES receive OP_PRIMARY_FB and DOES render (inline memory writes to the framebuffer). But the QEMU display remains black. Potential causes (in order of likelihood):
+
+1. **Framebuffer PKEY mismatch** — FB pages are mapped with their original PKEY (likely 0). Sexdisplay's PKRU allows PKEY 0 access, so this should be fine. But verify via page table walk / PTE dump.
+2. **Framebuffer address is in kernel higher-half (`0xffff8000...`)** — Kernel remapped with USER_ACCESSIBLE flag, but all 4 page-table levels need the User flag for ring-3 access. If upper-level entries lack User flag, ring-3 write fails silently (no #PF because PKU blocks access differently).
+3. **Render function writes wrong colors** — Very dark palette could appear black on some QEMU configurations.
+4. **QEMU display refresh** — Serial-only mode doesn't show a graphical window. The framebuffer contents are correct but not visible without `-vga std` or `-display gtk`.
+
+## Files Changed This Session
+
+| File | Change |
+|------|--------|
+| `kernel/src/syscalls/mod.rs` | Slot 0 message ring bypass in syscall 28 |
+| `limine.cfg` | Added silkbar module path |
+| `crates/silkbar-model/src/lib.rs` | `static` → `const` (previous session) |
+| `servers/sexdisplay/src/main.rs` | `static` → `const` (previous session) |
+
+## Build & Run
+
+```bash
+# Full rebuild
+./build_payload.sh
+cp target/x86_64-sex/release/sex-kernel iso_root/sexos-kernel
+rm -f sexos-v1.0.0.iso
+xorriso -as mkisofs -R -r -J \
+  -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table \
+  --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label \
+  iso_root -o sexos-v1.0.0.iso
+
+# Boot
+qemu-system-x86_64 -machine q35 -cpu max,pku=on -smp 4 -m 2G -serial file:qemu_serial.log -cdrom sexos-v1.0.0.iso -no-reboot
+
+# Check
+grep -Ei 'panic|fault|Spawned|OP_PRIMARY|FB handed' qemu_serial.log
+```

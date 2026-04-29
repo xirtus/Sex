@@ -171,13 +171,46 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                         drop(replies);
                         (0, 0, 0, 0, 0)
                     }
+                } else if slot == 0 {
+                    // Slot 0 with no pending reply → always dequeue from self message ring.
+                    // (The old cap-table path was dead because find_capability(0) is rejected
+                    //  by the 1-indexed id guard in CapabilityTable::find.)
+                    drop(replies);
+                    unsafe {
+                        if let Some(msg) = (*current_pd.message_ring).dequeue() {
+                            match msg {
+                                MessageType::IpcCall { func_id, arg0, arg1, arg2, caller_pd } => {
+                                    (func_id, caller_pd as u64, arg0, arg1, arg2)
+                                }
+                                MessageType::DisplayPrimaryFramebuffer { virt_addr, width, height, pitch } => {
+                                    (0x11, 1, virt_addr, (width as u64) | ((height as u64) << 32), pitch as u64)
+                                }
+                                MessageType::RawInput(scancode) => {
+                                    (0x201, 1, scancode as u64, 0, 0)
+                                }
+                                _ => {
+                                    let tid: u64 = match msg {
+                                        MessageType::WindowCreate       => 0xDE,
+                                        MessageType::CompositorCommit   => 0xDD,
+                                        MessageType::SetWindowRoundness => 0xDF,
+                                        MessageType::SetWindowBlur      => 0xE0,
+                                        MessageType::GetDisplayInfo     => 0xE3,
+                                        _                               => 0xFF,
+                                    };
+                                    (tid, 1, 0, 0, 0)
+                                }
+                            }
+                        } else {
+                            (0, 0, 0, 0, 0) // EMPTY
+                        }
+                    }
                 } else {
                     drop(replies);
-                    
-                    // 2. Resolve Slot to Capability
+
+                    // 2. Resolve Slot to Capability (non-zero slots only)
                     use crate::capability::CapabilityData;
                     let cap = current_pd.find_capability(slot);
-                    
+
                     match cap.map(|c| c.data) {
                         Some(CapabilityData::InputRing) => {
                             if let Some(scancode) = crate::interrupts::INPUT_RING.dequeue() {
@@ -187,7 +220,6 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                             }
                         }
                         Some(CapabilityData::MessageQueue) => {
-                            // Slot 0 (MessageQueue) or any other explicitly bound queue
                             unsafe {
                                 if let Some(msg) = (*current_pd.message_ring).dequeue() {
                                     match msg {
@@ -213,7 +245,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                                         }
                                     }
                                 } else {
-                                    (0, 0, 0, 0, 0) // EMPTY
+                                    (0, 0, 0, 0, 0)
                                 }
                             }
                         }

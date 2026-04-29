@@ -74,15 +74,12 @@ Use this block format at the end of each work session:
 
 ## 8) Immediate Next Milestone
 
-- ABI drift closure is complete for core kernel/`sex-pdx` IPC surfaces:
-  - `PdxListenResult` removed from live IPC paths
-  - `r9` listen/call side-channel removed from live IPC paths
-  - register-only IPC return contract enforced in code and guard script
-  - sealed single entrypoint + linear trace build path enabled
-- Current milestone: enforce and maintain deterministic spec-driven execution from:
-  - `sexos_build_spec.toml` (single build specification of truth)
-  - `scripts/entrypoint_build.sh` (validator/snapshot initializer)
-  - `scripts/sexos_build_trace.sh` (spec interpreter)
+- Phase 35/80 syscall entry probe and Phase 28 scheduler stall are **resolved**.
+- Scheduler works, all PDs spawn and execute.
+- Current milestone: **v8 SilkBar PDX Integration** — silkbar sends `SetClock(10,44)` via `pdx_call(SLOT_DISPLAY, OP_SILKBAR_UPDATE)`, sexdisplay renders clock on framebuffer.
+- Active sub-task: fix cross-crate `static` → GOT not relocated by kernel ELF loader.
+- Fix applied: `static` → `const` in silkbar-model crate.
+- Next step: rebuild and boot-verify.
 
 ### Session 2026-04-28 (Agent: Codex)
 - Objective: collapse hybrid IPC ABI, remove legacy return paths, and seal build flow.
@@ -145,3 +142,26 @@ Use this block format at the end of each work session:
   - rust docs URL fetch failed from malformed trailing `>` (non‑blocking).
 - Regressions/risks: none.
 - Next step: continue runtime validation per previous session.
+
+### Session 2026-04-29 (Agent: Claude Code)
+- **Objective:** Integrate silkbar → sexdisplay PDX clock update (v8 scalar protocol). Fix kernel boot panic after sexdisplay revert.
+- **Files changed:**
+  - `servers/sexdisplay/Cargo.toml` — added `silkbar-model` dependency
+  - `servers/sexdisplay/src/main.rs` — full rewrite: PDX listen loop, OP_PRIMARY_FB capture, SilkBar clock rendering with 3×5 bitmap font, no `static` items
+  - `crates/silkbar-model/src/lib.rs` — `DEFAULT_SILK_BAR`/`DEFAULT_THEME`: `pub static` → `pub const` (fix for unrelocated GOT entries)
+  - `HANDOFF.md` — updated from Phase 35/80 syscall probe to current v8 silkbar phase
+  - `CLAUDE.md` — updated current status and added ABI facts
+  - `docs/CREW.md` — added this session entry
+- **Commands run:**
+  - `qemu-system-x86_64 ... -cdrom sexos-v1.0.0.iso` — boot-verify (captured serial log)
+  - `grep -Ei 'panic|fault|silkbar|Spawning'` — analyzed boot log
+- **Result:**
+  - Kernel boots, all 5 PDs spawn and schedule (scheduler stall resolved).
+  - sexdisplay reverted to pre-v8 baseline to isolate the boot panic.
+  - PDX-aware sexdisplay written (not yet boot-verified).
+  - Active bug: page fault at 0x2001d8 (RIP=0x44002343) — cross-crate `static` GOT entries not relocated by ELF loader.
+  - Fix applied: changed `static` → `const` in silkbar-model crate.
+- **Regressions/risks:**
+  - The `const` fix is speculative — needs boot verification.
+  - If `const` doesn't inline (LLVM threshold for large values), may need full inline construction in sexdisplay.
+- **Next step:** Rebuild and boot-verify the `static`→`const` fix. Check for page faults. If clean, verify clock renders 10:42→10:44.

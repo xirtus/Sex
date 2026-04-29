@@ -1,6 +1,6 @@
 # Sex Project Mandates (GEMINI.md)
 
-Canonical cross-agent policy is now in [CREW.md](/home/xirtus_arch/Documents/microkernel/CREW.md).
+Canonical cross-agent policy is now in [CREW.md](/home/xirtus_arch/Documents/microkernel/docs/CREW.md).
 Use this file as Gemini bootstrap/context, but keep shared execution rules aligned to CREW.
 Build path is sealed to `scripts/entrypoint_build.sh` with spec authority in `sexos_build_spec.toml`.
 

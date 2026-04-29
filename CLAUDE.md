@@ -99,8 +99,7 @@ crates/
   sex-pdx/       — shared PDX calling convention crate
 ```
 
-**Cargo resolver:** workspace uses resolver = "1" (edition 2021 members exist but
-workspace Cargo.toml has not been updated). Do not change this without testing.
+**Cargo resolver:** workspace uses resolver = "2".
 
 ---
 
@@ -114,14 +113,19 @@ All components share one PML4 (GLOBAL_VAS). Authority model: ARCHITECTURE.md §0
 | Userland stubs     | `0x4000_0000`            | Mock entry point for `sex-ld` library mapping |
 | Translated native  | `0x4000_1000`            | Target entry for translated ELFs via `sexnode` |
 | System heap        | `0x4444_4444_0000`       | 128 MiB (HEAP_SIZE in lib.rs), mapped at boot |
-| sexdisplay FB      | Dynamic (passed via IPC) | Framebuffer pages tagged PKEY 1, handed over at spawn |
+| sexdisplay FB      | Dynamic (passed via IPC as OP_PRIMARY_FB) | Framebuffer pages tagged PKEY 1 |
 
 - HHDM offset: `0xffff800000000000`
 - All userland segments mapped via `GlobalVas::map_pku_range` which applies PD key
   to Level-1 page table entries
 - Page tables: `OffsetPageTable` via x86_64 crate
 - PD structs live on system heap at `0x4444_4444_0000`
-- PD load bases: `0x2000_0000 + (pku_key * 0x20_0000)` — sexdisplay at `0x2020_0000`
+- PD load bases: `0x4000_0000 + ((domain_id - 1) * 0x0100_0000)`
+  - domain 1 (sexdisplay): 0x40000000
+  - domain 2 (sexdrive):   0x41000000
+  - domain 3 (silk-shell): 0x42000000
+  - domain 4 (sexinput):   0x43000000
+  - domain 5 (silkbar):    0x44000000
 - User stacks: `0x7000_0000_0000 + (pku_key * 0x100_0000)`, 64KB each
 
 ---
@@ -210,10 +214,12 @@ pdx_call(slot: u32, syscall: u64, arg0: u64, arg1: u64, arg2: u64) -> u64
 | Slot | Service |
 |------|---------|
 | 0    | Kernel direct (handled inline in dispatch, no safe_pdx_call) |
-| 1    | Primary system service (`sexfiles` VFS) |
-| 2    | sext (demand pager / fault resolver — user-space ring-3 server) |
-| 4    | Network manager (`sexnet`) |
-| 5    | Compositor / display server (`sexdisplay`) |
+| 1    | sexfiles VFS |
+| 2    | sext (demand pager) |
+| 3    | sexinput (HID input ring) |
+| 4    | Audio server |
+| **5** | **sexdisplay (compositor)** — also silkbar's SLOT_DISPLAY target |
+| 6    | silk-shell orchestration | |
 
 ### Capability Table Structure
 
@@ -309,11 +315,23 @@ function pointer call in userland.
 ## ELF Loader Notes
 
 `kernel/src/elf.rs::load_elf_for_pd`:
-- Loads segments at `load_base + ph.p_vaddr`
-- Returns entry point as `load_base + header.entry`
-- For PIE ELFs (p_vaddr=0): correct — segments at `load_base`, entry at `load_base + elf_entry_offset`
-- For fixed-address ELFs (p_vaddr=link_addr): segments at `load_base + link_addr` which is
-  likely WRONG (double-offset). Ensure all PDX binaries are built as PIE.
+- Loads segments at `load_base + (p_vaddr - min_vaddr)` where min_vaddr is the smallest
+  vaddr across all PT_LOAD segments.
+- Returns entry point as `load_base + (header.entry - min_vaddr)`.
+- For PIE ELFs (p_vaddr=0, min_vaddr=0): segments at `load_base`, entry at `load_base + elf_entry` — correct.
+- For fixed-address ELFs (p_vaddr=0x200000, min_vaddr=0x200000): segments at `load_base`, entry at `load_base + (entry - 0x200000)` — correct.
+- **CRITICAL: Does NOT process `.rela.dyn` or `.rela.plt`.** Any absolute address reference
+  (GOT entry for cross-crate `pub static`) retains the ELF's original address. Use `const`
+  instead of `static` for shared data to force compile-time inlining.
+- **CRITICAL: Does NOT check for lower-half vaddr ranges** — the string "ELF lower half phdrs
+  are not allowed" does NOT exist in the kernel source. Segments with vaddr in the 0x0000-0x3FFF
+  range are loaded at `load_base + delta` without rejection (as of this writing).
+- **GOT relocation gap (BURNDOWN):** When sexdisplay/silkbar references `DEFAULT_SILK_BAR` (a
+  `pub static` from another crate), the compiler generates a GOT entry. At link time (PIE), the
+  GOT entry receives the ELF's pre-relocation address (e.g., 0x2001d8). The kernel loads the
+  segment at a different base (e.g., 0x44000000) but never fixes GOT entries. Result: page fault
+  at the stale lower-half address. **Fix: use `pub const` instead of `pub static`** — forces
+  compile-time inlining, no GOT entry needed.
 
 ---
 
@@ -330,8 +348,7 @@ function pointer call in userland.
 ## Workspace Cargo Warnings (expected, non-fatal)
 
 These warnings appear on every build and are harmless:
-- "profiles for the non root package will be ignored" (silk-shell, linen)
-- "virtual workspace defaulting to resolver = 1"
+- "profiles for the non root package will be ignored" (silk-shell, sexinput, silkbar)
 - `lib.no_std` unused manifest key in `sex-pdx/Cargo.toml`
 
 Do not attempt to fix these without understanding the full workspace layout.
@@ -355,19 +372,37 @@ When the screen is black:
 
 ---
 
-## Current Status (last updated 2026-04-24)
+## Current Status (last updated 2026-04-29 — v8 SilkBar PDX Integration)
 
-- Phase 28 — IRETQ Contract Enforcement
-- Kernel boots, GDT/IDT/PKU/Syscalls all initialize correctly
-- **Bugs FIXED (2026-04-23, Phase 25):**
-  1. `current_pd_id` never set — fixed: `timer_interrupt_handler` now calls `set_pd(pd_id)` before `switch_to`
-  2. `switch_to` saved kernel r15-rbp — fixed: r15-rbp extracted from stub's kernel stack frame; `switch_to` only saves PKRU
-  3. `dispatch()` return discarded — fixed: `dispatch()` now writes `regs.rax = result`
-- **Bugs FIXED (Phase 28):**
-  4. Stack model mismatch (`switch_to` vs `timer_interrupt_stub`) — fixed: enforced "Fresh Frame" model (Case B); `switch_to` treats `kstack_top` as clean slate
-  5. `TaskContext` offsets standardized to 0x90-0x98 to match exact IRETQ frame layout
-  6. Removed legacy `add rsp, 8` (conflicts with explicit stack switching to `kstack_top`)
-  7. Added `SWITCH`/`TASKS` logging to `Scheduler::tick()`
-- **ACTIVE STALL (Phase 28):** `Scheduler::tick()` returns `None` on every call. `SWITCH` log lines never appear. `timer_tick` spam continues. `pdx_spawn` reports task registration but `steal()` returns `None` for all cores.
-- **Root cause suspected:** Runqueue initialization failure. Tasks registered but invisible to `steal()` / `attempt_steal()`.
-- **Next action:** Instrument `runqueue.steal()` and `attempt_steal()` to find why tasks not found. Check `WorkStealingQueue` push vs pop/steal path for init-order bug.
+- **Scheduler stall is FIXED.** All 5 PDs spawn and schedule correctly: sexdisplay (PD1), sexdrive (PD2), silk-shell (PD3), sexinput (PD4), silkbar (PD5).
+- **Current task:** Integrate silkbar → sexdisplay PDX clock update (v8 scalar protocol).
+- **Active bug:** Cross-crate `static` references from silkbar-model crate produce unrelocated GOT entries. Kernel ELF loader doesn't do `.rela.dyn` processing.
+  - Fix: Changed `pub static` → `pub const` for `DEFAULT_SILK_BAR` and `DEFAULT_THEME` in silkbar-model.
+  - sexdisplay/main.rs rewritten as PDX-aware renderer: listens for OP_PRIMARY_FB (0x11) and OP_SILKBAR_UPDATE (0xF2).
+- **Next action:** Rebuild and boot-verify.
+
+## Critical ABI Facts (discovered this session)
+
+1. **No GOT relocation in ELF loader.** `kernel/src/elf.rs` copies segments but does NOT apply `.rela.dyn` relocations. Cross-crate `pub static` references produce stale GOT entries.
+2. **Fix: use `const` not `static`** for shared data across PDX crates. Const values are inlined, no GOT involved.
+3. **OP_PRIMARY_FB (0x11) message format:** arg0=fb_addr, arg1=(width | height<<32), arg2=pitch (pixels/row). Sent by kernel to sexdisplay's message ring before scheduler runs sexdisplay.
+4. **OP_SILKBAR_UPDATE (0xF2) message format:** arg0=kind(4=SetClock), arg1=(index<<32 | a), arg2=b.
+5. **silkbar PDX call:** `pdx_call(SLOT_DISPLAY, OP_SILKBAR_UPDATE, 4, (0<<32)|10, 44)` sends SetClock(10:44) to sexdisplay.
+6. **Pixel format:** 0x00RRGGBB (32-bit RGB, alpha ignored).
+
+## Domain/PD Layout
+
+| Domain | PD ID | Base       | Name          |
+|--------|-------|------------|---------------|
+| 1      | 1     | 0x40000000 | sexdisplay    |
+| 2      | 2     | 0x41000000 | sexdrive      |
+| 3      | 3     | 0x42000000 | silk-shell    |
+| 4      | 4     | 0x43000000 | sexinput      |
+| 5      | 5     | 0x44000000 | silkbar       |
+
+## SilkBar ABI
+
+- `SilkBarUpdate`: `#[repr(C)]` 16 bytes: kind(u32), index(u8), a(u32), b(u32)
+- Update kinds: 0=SetWorkspaceActive, 1=SetWorkspaceUrgent, 2=SetChipVisible, 3=SetChipKind, 4=SetClock, 5=SetThemeToken
+- `silkbar-model` crate provides: types, `DEFAULT_SILK_BAR` (const), `DEFAULT_THEME` (const), `apply_update()`, `SilkBarUpdateQueue`
+- sexdisplay imports `silkbar-model` for types; renders clock chip at position CHIP_X3=1090, CHIP_Y=18

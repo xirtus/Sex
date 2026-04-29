@@ -26,9 +26,10 @@ pub fn init() {
     let mut sexdisp_id = 0;
     let mut silkshell_id = 0;
     let mut sexinput_id = 0;
+    let mut silkbar_id = 0;
 
     // Fixed Spawn Order (Deterministic IDs)
-    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput"];
+    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "silkbar"];
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -55,6 +56,8 @@ pub fn init() {
                             silkshell_id = id;
                         } else if domain_id == 4 {
                             sexinput_id = id;
+                        } else if domain_id == 5 {
+                            silkbar_id = id;
                         }
                     }
                     Err(e) => {
@@ -84,6 +87,14 @@ pub fn init() {
                 // Grant access to silk-shell for event forwarding
                 pd.grant_capability(sex_pdx::SLOT_SHELL, CapabilityData::Domain(silkshell_id));
                 serial_println!("✓ Phase 25: Capabilities granted to sexinput");
+            }
+        }
+
+        if silkbar_id != 0 {
+            if let Some(pd) = DOMAIN_REGISTRY.get(silkbar_id) {
+                // v8: SilkBar needs SLOT_DISPLAY to push updates
+                pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
+                serial_println!("✓ SilkBar v8: Capability SLOT_DISPLAY granted");
             }
         }
     }

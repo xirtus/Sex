@@ -1,0 +1,10 @@
+[package]
+name = "silkbar-model"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[features]
+default = ["no_std"]
+no_std = []
