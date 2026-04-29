@@ -10,7 +10,7 @@ static mut FB_PTR: u64 = FALLBACK_PTR;
 static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
 
-use silkbar_model::{SilkBar, DEFAULT_THEME};
+use silkbar_model::{SilkBar, ChipKind, DEFAULT_THEME};
 
 const BAR_H: usize = 50;
 
@@ -43,22 +43,34 @@ fn launcher_color(x: usize, y: usize) -> Option<u32> {
     }
 }
 
-fn chip_color(x: usize, y: usize) -> Option<u32> {
-    if in_rect(x, y, silkbar_model::CHIP_X0, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) {
-        return Some(DEFAULT_THEME.urgent);
+fn chip_kind_color(kind: ChipKind) -> u32 {
+    match kind {
+        ChipKind::Net     => DEFAULT_THEME.urgent,
+        ChipKind::Wifi    => DEFAULT_THEME.active,
+        ChipKind::Battery => DEFAULT_THEME.muted,
+        ChipKind::Clock   => DEFAULT_THEME.text,
     }
-    if in_rect(x, y, silkbar_model::CHIP_X1, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) {
-        return Some(DEFAULT_THEME.active);
+}
+
+fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+    // Chip 0
+    if bar.chips[0].visible && in_rect(x, y, silkbar_model::CHIP_X0, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) {
+        return Some(chip_kind_color(bar.chips[0].kind));
     }
-    if in_rect(x, y, silkbar_model::CHIP_X2, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) {
-        return Some(DEFAULT_THEME.muted);
+    // Chip 1
+    if bar.chips[1].visible && in_rect(x, y, silkbar_model::CHIP_X1, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) {
+        return Some(chip_kind_color(bar.chips[1].kind));
+    }
+    // Chip 2
+    if bar.chips[2].visible && in_rect(x, y, silkbar_model::CHIP_X2, silkbar_model::CHIP_Y, silkbar_model::CHIP_W, silkbar_model::CHIP_H) {
+        return Some(chip_kind_color(bar.chips[2].kind));
     }
     None
 }
 
-fn bar_color(x: usize, y: usize) -> u32 {
+fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
     if let Some(c) = launcher_color(x, y) { return c; }
-    if let Some(c) = chip_color(x, y) { return c; }
+    if let Some(c) = chip_color(x, y, bar) { return c; }
     DEFAULT_THEME.text
 }
 
@@ -111,7 +123,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     for y in 0..h {
         for x in 0..w {
             let c: u32 = if y < BAR_H {
-                bar_color(x, y)
+                bar_color(x, y, bar)
             } else if y == BAR_H {
                 0x002D1A3A // thin shadow line
             } else {
