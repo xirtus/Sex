@@ -1,6 +1,13 @@
 #![no_std]
 #![no_main]
 
+use silkbar_model::{SilkBar, SilkBarUpdate, apply_update, DEFAULT_SILK_BAR,
+                    WS_X0, WS_X1, WS_X2, WS_X3, WS_X4, WS_Y, WS_H,
+                    WS_INACTIVE_W,
+                    CHIP_X0, CHIP_X1, CHIP_X2, CHIP_X3, CHIP_Y, CHIP_H, CHIP_W, CLOCK_W,
+                    LAUNCHER_X, LAUNCHER_Y, LAUNCHER_W, LAUNCHER_H,
+                    ChipKind};
+
 const FALLBACK_PTR: u64 = 0xffff8000fd000000;
 const FALLBACK_W: u32 = 1280;
 const FALLBACK_H: u32 = 800;
@@ -12,8 +19,6 @@ const MAX_FB_H: usize = 4320;
 static mut FB_PTR: u64 = FALLBACK_PTR;
 static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
-
-struct ClockState { hh: u8, mm: u8, ss: u8 }
 
 fn bg(y: usize) -> u32 {
     if      y < 200 { 0x007B4FA0 }
@@ -28,21 +33,60 @@ fn in_rect(x: usize, y: usize, rx: usize, ry: usize, rw: usize, rh: usize) -> bo
     x >= rx && x < rx + rw && y >= ry && y < ry + rh
 }
 
-fn bar_color(x: usize, y: usize) -> u32 {
-    // Launcher button with rounded-illusion border
-    if in_rect(x, y, 10, 10, 80, 30) {
-        // Border pixels (2px inset) — darker green to fake radius
-        if x < 12 || x >= 88 || y < 12 || y >= 38 {
+fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+    const WS_TABS: [(usize, usize); 5] = [
+        (WS_X0, 0), (WS_X1, 1), (WS_X2, 2), (WS_X3, 3), (WS_X4, 4),
+    ];
+    for &(wx, idx) in &WS_TABS {
+        if y >= WS_Y && y < WS_Y + WS_H && x >= wx && x < wx + WS_INACTIVE_W {
+            let ws = &bar.workspaces[idx];
+            if ws.active { return Some(0x00BBAAFF); }
+            if ws.urgent { return Some(0x00FF6666); }
+            return Some(0x004C3C88);
+        }
+    }
+    None
+}
+
+fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+    // Chips 0-2 use standard width; chip 3 (Clock) spans full clock width
+    const CHIP_POS: [(usize, usize, usize); 4] = [
+        (CHIP_X0, CHIP_W, 0),
+        (CHIP_X1, CHIP_W, 1),
+        (CHIP_X2, CHIP_W, 2),
+        (CHIP_X3, CLOCK_W, 3),
+    ];
+    for &(cx, cw, idx) in &CHIP_POS {
+        if y >= CHIP_Y && y < CHIP_Y + CHIP_H && x >= cx && x < cx + cw {
+            let chip = &bar.chips[idx];
+            if !chip.visible { return Some(0x00191433); }
+            match chip.kind {
+                ChipKind::Net     => return Some(0x009EA8FF),
+                ChipKind::Wifi    => return Some(0x00A6E3A1),
+                ChipKind::Battery => return Some(0x00FFA500),
+                ChipKind::Clock   => return Some(0x006670AA),
+            }
+        }
+    }
+    None
+}
+
+fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
+    // Workspace indicators
+    if let Some(c) = workspace_color(x, y, bar) { return c; }
+    // Status chip backgrounds
+    if let Some(c) = chip_color(x, y, bar) { return c; }
+    // Launcher button with rounded-illusion border (model position)
+    if in_rect(x, y, LAUNCHER_X, LAUNCHER_Y, LAUNCHER_W, LAUNCHER_H) {
+        let x2 = LAUNCHER_X + 2;
+        let y2 = LAUNCHER_Y + 2;
+        let xw = LAUNCHER_X + LAUNCHER_W - 2;
+        let yh = LAUNCHER_Y + LAUNCHER_H - 2;
+        if x < x2 || x >= xw || y < y2 || y >= yh {
             return 0x0000AA00; // dark green edge
         }
         return 0x0000FF00; // bright green center
     }
-
-    // Status indicators — cleaner spacing
-    if in_rect(x, y, 1040, 12, 56, 26) { return 0x00FF0000; } // red
-    if in_rect(x, y, 1116, 12, 56, 26) { return 0x000000FF; } // blue
-    if in_rect(x, y, 1192, 12, 56, 26) { return 0x00000000; } // black
-
     0x00F2F2F2 // off-white bar default
 }
 
@@ -64,10 +108,10 @@ const FONT: [[u8; 7]; 10] = [
 /// or `None` if it is background/not in the clock area.
 /// This is called inline during rendering to avoid a separate overlay pass
 /// that would create a tear window between bar-fill and clock-overlay.
-fn clock_fg_at(x: usize, y: usize, clock: &ClockState) -> Option<u32> {
+fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     const CLOCK_FG: u32 = 0x00F2F2F2;
-    const CX: usize = 1192;
-    const CY: usize = 16;
+    const CX: usize = CHIP_X3;    // model clock-area start
+    const CY: usize = CHIP_Y + 1; // slight inset into chip area
 
     // Quick bounding-box reject
     if y < CY || y >= CY + 7 {
@@ -94,12 +138,12 @@ fn clock_fg_at(x: usize, y: usize, clock: &ClockState) -> Option<u32> {
         let col = x - (CX + dx);
         let row = y - CY;
         let digit: usize = match di {
-            0 => (clock.hh / 10) as usize,
-            1 => (clock.hh % 10) as usize,
-            2 => (clock.mm / 10) as usize,
-            3 => (clock.mm % 10) as usize,
-            4 => (clock.ss / 10) as usize,
-            5 => (clock.ss % 10) as usize,
+            0 => (bar.clock_hh / 10) as usize,
+            1 => (bar.clock_hh % 10) as usize,
+            2 => (bar.clock_mm / 10) as usize,
+            3 => (bar.clock_mm % 10) as usize,
+            4 => (bar.clock_ss / 10) as usize,
+            5 => (bar.clock_ss % 10) as usize,
             _ => return None,
         };
         if (FONT[digit][row] >> (4 - col)) & 1 != 0 {
@@ -110,7 +154,7 @@ fn clock_fg_at(x: usize, y: usize, clock: &ClockState) -> Option<u32> {
     None
 }
 
-fn render(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
+fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     let fb_addr = fb as u64;
     if fb_addr < HIGH_HALF_BASE {
         return;
@@ -139,10 +183,10 @@ fn render(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
         for x in 0..w {
             let c: u32 = if y < 50 {
                 // Check clock pixel inline — no separate overlay pass
-                if let Some(fg) = clock_fg_at(x, y, clock) {
+                if let Some(fg) = clock_fg_at(x, y, bar) {
                     fg
                 } else {
-                    bar_color(x, y)
+                    bar_color(x, y, bar)
                 }
             } else if y == 50 {
                 0x002D1A3A // thin shadow line
@@ -155,7 +199,7 @@ fn render(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
     }
 }
 
-fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
+fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     let fb_addr = fb as u64;
     if fb_addr < HIGH_HALF_BASE {
         return;
@@ -169,10 +213,10 @@ fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
     for y in 0..51 {
         for x in 0..w {
             let c: u32 = if y < 50 {
-                if let Some(fg) = clock_fg_at(x, y, clock) {
+                if let Some(fg) = clock_fg_at(x, y, bar) {
                     fg
                 } else {
-                    bar_color(x, y)
+                    bar_color(x, y, bar)
                 }
             } else {
                 0x002D1A3A
@@ -207,33 +251,36 @@ fn handle_primary_fb(ptr: u64, packed: u64) {
     }
 }
 
-fn handle_silkbar_update(clock: &mut ClockState, arg1: u64, arg2: u64) {
-    // SetClock wire: a=hour (arg1), b packed = (mm << 8) | ss (arg2)
-    let hh = (arg1 as u8).min(23);
-    let mm = (((arg2 >> 8) & 0xff) as u8).min(59);
-    let ss = ((arg2 & 0xff) as u8).min(59);
-    *clock = ClockState { hh, mm, ss };
+fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) {
+    // arg0 = UpdateKind, arg1 = (index << 32) | a, arg2 = b
+    let update = SilkBarUpdate {
+        kind: arg0 as u32,
+        index: (arg1 >> 32) as u8,
+        a: arg1 as u32,
+        b: arg2 as u32,
+    };
+    apply_update(bar, update);
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // Local clock state — initialized 10:42:00, mutated by OP_SILKBAR_UPDATE
-    let mut clock = ClockState { hh: 10, mm: 42, ss: 0 };
+    // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
+    let mut bar = DEFAULT_SILK_BAR;
 
     // 1. Render immediately with fallback — visible before any IPC
-    unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
+    unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
 
     // 2. Listen for runtime FB handoff and SilkBar updates
     loop {
         let msg = sex_pdx::pdx_listen_raw(0);
         match msg.type_id {
             silkbar_model::OP_SILKBAR_UPDATE => {
-                handle_silkbar_update(&mut clock, msg.arg1, msg.arg2);
-                unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
+                handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
+                unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
             }
             0x11 => { // OP_PRIMARY_FB
                 handle_primary_fb(msg.arg0, msg.arg1);
-                unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
+                unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
             }
             0 => {
                 // pdx_listen_raw already yields internally on empty.
