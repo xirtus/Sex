@@ -319,3 +319,66 @@ Boot-verify required before committing. Target outcome: PD1–PD5 all schedule; 
   - real status sensors
   - dynamic strings
   - full-frame redraw / PKRU / huge-page cleanup
+
+## Update 2026-04-30 — UI Direction (Glass Spec First, Safe Render Now)
+
+YES, START THE FUTURISTIC APPLE-GLASS DIRECTION NOW — BUT ONLY AS A VISUAL SPEC LAYER, NOT AS A COMPOSITOR/RENDER REWRITE.
+
+RIGHT MOVE:
+- Define Silk DE visual language now.
+- Keep implementation tiny.
+- Do NOT retrofit sexdisplay/render pipeline yet.
+- Do NOT start alpha compositing/blur/full-frame effects until scheduler/yield and redraw safety are done.
+
+WHY:
+- If we wait too long, the bar model may fossilize around debug/retro widgets.
+- But if we implement glass now, we risk reopening full-frame redraw, PKRU, framebuffer, scheduler, and alpha-blend instability.
+- Best compromise: lock the aesthetic target now, fake it with safe flat primitives, then upgrade renderer later.
+
+PHASE ORDER:
+1. NOW: "Glass spec" document + constants only
+   - colors
+   - spacing
+   - radius targets
+   - typography intent
+   - chip shapes
+   - translucent/glass illusion rules
+   - what is fake now vs real later
+
+2. CURRENT SAFE UI IMPLEMENTATION:
+   - keep top-strip redraw only
+   - use flat colors that imply glass:
+     - deep translucent-looking dark/navy
+     - pale blue highlights
+     - white/ice text
+     - subtle chip contrast
+   - no true alpha
+   - no blur
+   - no shadows requiring full-frame
+   - no dynamic strings
+
+3. AFTER YIELD REPAIR:
+   - smooth animation cadence
+   - calmer updates
+   - better bar timing
+
+4. AFTER FULL-FRAME/PKRU CLEANUP:
+   - actual translucent panels
+   - blur/frosted glass
+   - shadows
+   - gradients
+   - wallpaper-aware contrast
+
+5. AFTER COMPOSITOR/SILK SHELL MATURITY:
+   - Apple-glass windows
+   - fluid workspace transitions
+   - focus rings
+   - command palette
+   - live widgets
+
+RULE:
+Design now. Fake safely now. Render honestly later.
+
+NEXT BEST TASK:
+Make a "SILK_DE_VISUAL_LANGUAGE.md" and then a tiny safe color/style pass for the bar only.
+No renderer rewrite.
