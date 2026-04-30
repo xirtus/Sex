@@ -147,38 +147,48 @@ This pattern is consistent with a **protection domain boundary issue** (PKU) rat
 
 ---
 
-## H3: Framebuffer huge-page USER_ACCESSIBLE bug (2026-04-30)
+## Arbitration Verdict: Theory B (GPR Corruption) is the Root Cause
 
-Confirmed root cause via x86_64 crate source analysis:
+### 1. Theory Likelihood
+**Theory B (GPR Corruption) is 99% likely to be the cause of the `#GP(0)` fault.**
+- **Evidence:** The fault is `#GP(0)` with `err=0` at `0x40001a00`. On x86_64, a write to a valid canonical address with insufficient permissions (PKRU or U/S bit) triggers a **Page Fault (#PF)**. A **General Protection Fault (#GP)** on a memory instruction almost always indicates a **non-canonical effective address**.
+- **Mechanism:** If `switch_to` skips GPR restoration (`add rsp, 120`), the userspace `render` function inherits garbage values in `%r15` and `%rax` from the kernel/scheduler context. The resulting effective address `r15 + rax*4 - 0x1c` becomes non-canonical, triggering `#GP(0)`.
 
-1. `init.rs:137` calls `mapper.update_flags(Page<Size4KiB>)` on framebuffer.
-2. Limine framebuffer is mapped as 2MiB huge pages (bootloader convention — avoids 512 PTEs).
-3. `MappedPageTable::update_flags` for `Size4KiB` (`x86_64-0.15.4/.../mapped_page_table.rs:431-454`) walks `p4→p3→p2→p1`. At `next_table_mut(&mut p2[page.p2_index()])`, the PDE has HUGE_PAGE/PS=1, so it returns `Err(PageAlreadyMappedToHugePage)`, propagated as `Err(FlagUpdateError::ParentEntryHugePage)`.
-4. `init.rs` swallows via `if let Ok(tlb)` — silent failure.
-5. `USER_ACCESSIBLE` never gets set on the framebuffer mapping.
-6. Ring-3 sexdisplay writes to supervisor-only pages → #GP.
+### 2. switch_to Analysis
+- **Current Bug:** The previous version of `switch_to` used `add rsp, 120` to skip the GPR block. This is functionally equivalent to register corruption for any task that was preempted or yielded.
+- **Inconsistency:** The `timer_interrupt_stub` and `Task::new` both prepare a 15-qword GPR block, but the "skipping" `switch_to` effectively ignores this state.
 
-### Why initial render with FALLBACK_PTR appears to work
+### 3. Stack Frame Shapes (Required for Parity)
+- **New Task (Task::new):**
+  - `[SS][RSP][RFLAGS][CS][RIP]` (IRET Frame: 40 bytes)
+  - `[0]` (Dummy Error: 8 bytes)
+  - `[rax..r15 = 0]` (GPRs: 120 bytes)
+  - **Total:** 168 bytes (21 qwords). `kstack_top` points to `r15`.
+- **Interrupted Task (timer_interrupt_stub):**
+  - `[IRET Frame]` (CPU Pushed)
+  - `[0]` (Dummy Error Pushed by stub)
+  - `[r15..rax]` (GPRs Pushed by stub)
+  - **Total:** 21 qwords.
 
-`FALLBACK_PTR = 0xffff8000fd000000` is a hardcoded HHDM alias for physical `0xfd000000` (VGA LFB MMIO region). The HHDM direct map has different page table entries than the separate Limine framebuffer mapping. The initial render writes to VGA LFB memory (possibly wrong pixels or silently absorbed by MMIO) and doesn't crash. After the kernel provides the real Limine framebuffer address via `DisplayPrimaryFramebuffer` message, sexdisplay tries to write to the supervisor-only Limine mapping → #GP.
+### 4. Safety of Broad Patch
+The "broad patch" (unifying `switch_to`, `Task::new`, and `RSP0` logic) is **SAFE and NECESSARY**. It establishes a single "Contract of the Stack" that all entry/exit points (Preemption, Syscall, New Task) must follow.
 
-### PKRU traced correct
+### 5. Minimal Verifiable Patch Plan
+- **`kernel/src/scheduler.rs`**:
+  - `switch_to`: Replace `add rsp, 120` with `pop r15 ... pop rax` followed by `add rsp, 8` (dummy error).
+  - `Task::new`: Ensure 15 GPR zeros + 1 Dummy Error are pushed.
+- **`kernel/src/interrupts.rs`**:
+  - `timer_interrupt_handler`: Update `TSS.RSP0` to `kstack_top + 168` (matching the 21-qword frame).
+  - `timer_interrupt_handler`: Ensure `switch_to` is called with both `old_ctx` and `next_ctx`.
 
-Full lifecycle trace: syscall entry/exit (saves/restores user PKRU), timer interrupts (enters God Mode), context switch (loads `TaskContext.pkru`), PD creation (stores `0xEFFFFFF0`). SexDisplay PKRU `0xEFFFFFF0` grants PKEY 0 = RW, matching the framebuffer PTE (PKEY=0). If USER_ACCESSIBLE were set, the write would succeed.
+### 6. Rejected Changes
+- **H1 (PKRU) Primary Fix:** While PKRU restoration is a secondary bug, it is NOT the cause of `#GP(0)`. It should be fixed separately after register stability is achieved.
+- **H3 (Huge Page) Primary Fix:** Supervisor-only pages trigger `#PF`, not `#GP`. This is a latent bug but not the current blocker.
 
-### Secondary bug: `tag_virtual_address` walks past PS bit
-
-`pku.rs:tag_virtual_address` walks to PTE level without checking PS bit on PDE/PDPTE. If called on a huge page mapping, it would corrupt arbitrary page table entries by interpreting the terminal PDE's physical address field as a page table pointer. Currently only called after `map_to` (which creates 4KiB PTEs), so latent but dangerous.
-
-### Fix strategy
-
-Replace `mapper.update_flags(Page<Size4KiB>)` with a manual page-table walk that sets `USER_ACCESSIBLE|WRITABLE|PKEY` on the terminal entry at whatever level it exists (PDPTE for 1GiB, PDE for 2MiB, PTE for 4KiB). The walk follows the same pattern as `log_page_walk` in `memory/manager.rs` and `tag_virtual_address` in `pku.rs`, but checks PS at each level and stops at the terminal entry.
-
-### Files to fix
-
-1. `kernel/src/init.rs:131-141` — replace `update_flags` loop
-2. `kernel/src/pku.rs:118-144` — add PS checks to `tag_virtual_address`
-3. New helper in `kernel/src/pku.rs` or `memory/manager.rs` — `set_user_accessible(va, pkey)` that walks page table flags and sets U/S at terminal level
+---
+VERDICT: Theory B (GPR Corruption).
+MINIMAL PATCH: Unified GPR Pop in switch_to + Dummy Error in Task::new.
+CODEX: Edit `scheduler.rs::switch_to` to pop r15-rax instead of add rsp,120.
 
 ## Update 2026-04-30T19:00:00Z
 - timestamp: 2026-04-30T19:00:00Z

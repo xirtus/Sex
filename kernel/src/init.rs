@@ -115,32 +115,18 @@ pub fn init() {
 
                 // Remap FB pages USER_ACCESSIBLE — Ring-3 sexdisplay can't write without this.
                 {
-                    use x86_64::structures::paging::{
-                        Mapper, Page, PageTableFlags, OffsetPageTable, PageTable, Size4KiB,
-                    };
-                    use x86_64::registers::control::Cr3;
-                    const HHDM: u64 = 0xffff800000000000;
-                    let (cr3_frame, _) = Cr3::read();
-                    let pml4 = unsafe {
-                        &mut *((cr3_frame.start_address().as_u64() + HHDM) as *mut PageTable)
-                    };
-                    let mut mapper = unsafe { OffsetPageTable::new(pml4, VirtAddr::new(HHDM)) };
-                    let flags = PageTableFlags::PRESENT
-                        | PageTableFlags::WRITABLE
-                        | PageTableFlags::USER_ACCESSIBLE;
-                    let start = Page::<Size4KiB>::containing_address(VirtAddr::new(fb_addr));
-                    let end = Page::<Size4KiB>::containing_address(
-                        VirtAddr::new(fb_addr + fb_size - 1)
-                    );
-                    for page in Page::range_inclusive(start, end) {
-                        unsafe {
-                            if let Ok(tlb) = mapper.update_flags(page, flags) {
-                                tlb.flush();
-                            }
-                        }
+                    // Use manual page-table walk that handles huge pages (2MiB, 1GiB).
+                    // The old mapper.update_flags(Page<Size4KiB>) silently returns
+                    // Err(ParentEntryHugePage) when the framebuffer is mapped with huge pages,
+                    // leaving USER_ACCESSIBLE unset and causing #GP from ring 3.
+                    let pkey = sexdisp_id as u8; // domain_id == pkey for sexdisplay
+                    let start = fb_addr & !0xFFF;
+                    let end = ((fb_addr + fb_size + 4095) & !0xFFF);
+                    for va in (start..end).step_by(4096) {
+                        unsafe { crate::pku::set_page_user_accessible(va, pkey); }
                     }
-                    serial_println!("init: FB remapped USER_ACCESSIBLE ({:#x}, {} pages)",
-                        fb_addr, (fb_size as usize + 4095) / 4096);
+                    serial_println!("init: FB remapped USER_ACCESSIBLE ({:#x}, {} bytes) key={}",
+                        fb_addr, fb_size, pkey);
                 }
 
                 let msg = MessageType::DisplayPrimaryFramebuffer {
