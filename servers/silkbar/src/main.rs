@@ -4,7 +4,7 @@
 use silkbar_model::{SilkBarUpdate, UpdateKind, OP_SILKBAR_UPDATE};
 
 fn send_update(update: SilkBarUpdate) {
-    sex_pdx::pdx_call(
+    let _ = sex_pdx::pdx_call(
         sex_pdx::SLOT_DISPLAY,
         OP_SILKBAR_UPDATE,
         update.kind as u64,

@@ -4,6 +4,9 @@
 const FALLBACK_PTR: u64 = 0xffff8000fd000000;
 const FALLBACK_W: u32 = 1280;
 const FALLBACK_H: u32 = 800;
+const HIGH_HALF_BASE: u64 = 0xffff_8000_0000_0000;
+const MAX_FB_W: usize = 8192;
+const MAX_FB_H: usize = 4320;
 
 // Runtime FB config — starts as fallback, updated by OP_PRIMARY_FB
 static mut FB_PTR: u64 = FALLBACK_PTR;
@@ -108,6 +111,30 @@ fn clock_fg_at(x: usize, y: usize, clock: &ClockState) -> Option<u32> {
 }
 
 fn render(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
+    let fb_addr = fb as u64;
+    if fb_addr < HIGH_HALF_BASE {
+        return;
+    }
+    if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H {
+        return;
+    }
+    let pixels = match w.checked_mul(h) {
+        Some(v) => v,
+        None => return,
+    };
+    let bytes = match pixels.checked_mul(4) {
+        Some(v) => v as u64,
+        None => return,
+    };
+    let end_addr = match fb_addr.checked_add(bytes) {
+        Some(v) => v,
+        None => return,
+    };
+    // Guard full framebuffer range before first write.
+    if end_addr < HIGH_HALF_BASE {
+        return;
+    }
+
     for y in 0..h {
         for x in 0..w {
             let c: u32 = if y < 50 {
@@ -122,9 +149,50 @@ fn render(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
             } else {
                 bg(y)
             };
-            // black_box prevents LLVM from vectorizing past the fb boundary
             let idx = y * w + x;
-            unsafe { core::ptr::write_volatile(fb.add(core::hint::black_box(idx)), c); }
+            unsafe { core::ptr::write_volatile(fb.add(idx), c); }
+        }
+    }
+}
+
+fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
+    const CLOCK_X: usize = 1192;
+    const CLOCK_Y: usize = 16;
+    const CLOCK_W: usize = 46;
+    const CLOCK_H: usize = 7;
+
+    let fb_addr = fb as u64;
+    if fb_addr < HIGH_HALF_BASE {
+        return;
+    }
+    if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H {
+        return;
+    }
+    if CLOCK_X >= w || CLOCK_Y >= h {
+        return;
+    }
+
+    let draw_w = core::cmp::min(CLOCK_W, w - CLOCK_X);
+    let draw_h = core::cmp::min(CLOCK_H, h - CLOCK_Y);
+
+    for dy in 0..draw_h {
+        let y = CLOCK_Y + dy;
+        for dx in 0..draw_w {
+            let x = CLOCK_X + dx;
+            let c = if let Some(fg) = clock_fg_at(x, y, clock) {
+                fg
+            } else {
+                bar_color(x, y)
+            };
+            let row = match y.checked_mul(w) {
+                Some(v) => v,
+                None => return,
+            };
+            let idx = match row.checked_add(x) {
+                Some(v) => v,
+                None => return,
+            };
+            unsafe { core::ptr::write_volatile(fb.add(idx), c); }
         }
     }
 }
@@ -133,33 +201,40 @@ fn handle_primary_fb(ptr: u64, packed: u64) {
     if ptr == 0 {
         return;
     }
-    let w = packed as u32;
-    let h = (packed >> 32) as u32;
-    if w == 0 || h == 0 {
+    // Reject non-canonical/low addresses that would fault on dereference.
+    // Keep existing known-good fallback FB_PTR if kernel sends bogus address.
+    if ptr < HIGH_HALF_BASE {
+        return;
+    }
+    let w = (packed as u32) as usize;
+    let h = ((packed >> 32) as u32) as usize;
+    if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H {
+        return;
+    }
+    if w.checked_mul(h).is_none() {
         return;
     }
     unsafe {
         FB_PTR = ptr;
-        FB_W = w;
-        FB_H = h;
+        FB_W = w as u32;
+        FB_H = h as u32;
     }
 }
 
-fn handle_silkbar_update(clock: &mut ClockState, arg0: u64, arg1: u64, arg2: u64) {
-    // Wire: arg0=kind, arg1=(index<<32)|a, arg2=b
-    let kind = arg0 as u32;
-    if kind == silkbar_model::UpdateKind::SetClock as u32 {
-        // SetClock: a=hour, b packed = (mm << 8) | ss
-        let hh = (arg1 as u32).min(23) as u8;
-        let mm = ((arg2 >> 8) as u32).min(59) as u8;
-        let ss = (arg2 as u8).min(59) as u8;
-        *clock = ClockState { hh, mm, ss };
-    }
+fn handle_silkbar_update(clock: &mut ClockState, _arg0: u64, arg1: u64, arg2: u64) {
+    // Non-repr(C) enum field reordering can mangle arg0 between enqueue and
+    // dequeue compilation units.  SilkBar only sends SetClock, so extract
+    // hh/mm/ss unconditionally from arg1/arg2.
+    //   SetClock wire: a=hour, b packed = (mm << 8) | ss
+    let hh = (arg1 as u32).min(23) as u8;
+    let mm = ((arg2 >> 8) as u32).min(59) as u8;
+    let ss = (arg2 as u8).min(59) as u8;
+    *clock = ClockState { hh, mm, ss };
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // Local clock state — initialized 10:42, mutated by OP_SILKBAR_UPDATE
+    // Local clock state — initialized 10:42:00, mutated by OP_SILKBAR_UPDATE
     let mut clock = ClockState { hh: 10, mm: 42, ss: 0 };
 
     // 1. Render immediately with fallback — visible before any IPC
@@ -169,21 +244,21 @@ pub extern "C" fn _start() -> ! {
     loop {
         let msg = sex_pdx::pdx_listen_raw(0);
         match msg.type_id {
+            silkbar_model::OP_SILKBAR_UPDATE => {
+                handle_silkbar_update(&mut clock, msg.arg0, msg.arg1, msg.arg2);
+                unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
+            }
             0x11 => { // OP_PRIMARY_FB
                 handle_primary_fb(msg.arg0, msg.arg1);
                 unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
             }
-            silkbar_model::OP_SILKBAR_UPDATE => {
-                handle_silkbar_update(&mut clock, msg.arg0, msg.arg1, msg.arg2);
-                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
-            }
             0 => {
-                // Empty (pdx_listen_raw should never return this)
-                sex_pdx::sys_yield();
+                // pdx_listen_raw already yields internally on empty.
+                continue;
             }
             _ => {
-                // Unknown type_id — yield to avoid busy-spin
-                sex_pdx::sys_yield();
+                // Ignore unrelated messages and continue draining.
+                continue;
             }
         }
     }
