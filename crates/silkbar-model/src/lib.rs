@@ -529,14 +529,14 @@ pub const DEFAULT_SILK_BAR: SilkBar = SilkBar {
 };
 
 pub const DEFAULT_THEME: Theme = Theme {
-    bg_top:      0x00081024,
-    bg_bottom:   0x00201830,
+    bg_top:      0x00081424,
+    bg_bottom:   0x00281848,
     panel_fill:  0x00182040,
-    panel_glow:  0x00284060,
+    panel_glow:  0x00385078,
     text:        0x00C8D8FF,
-    muted:       0x00303860,
+    muted:       0x00304068,
     active:      0x00A8A0FF,
-    urgent:      0x00FF7070,
-    chip_fill:   0x006098FF,
-    chip_border: 0x00507090,
+    urgent:      0x00FF6666,
+    chip_fill:   0x004C8DFF,
+    chip_border: 0x006F86A8,
 };

@@ -21,11 +21,11 @@ static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
 
 fn bg(y: usize) -> u32 {
-    if      y < 200 { 0x00081024 }  // deep navy
-    else if y < 350 { 0x00142038 }  // deep blue
-    else if y < 500 { 0x00182030 }  // blue-violet
-    else if y < 650 { 0x00201830 }  // warm purple
-    else            { 0x00201830 }  // warm purple
+    if      y < 200 { 0x00081424 }  // deep navy
+    else if y < 350 { 0x00102038 }  // deep blue
+    else if y < 500 { 0x00182850 }  // violet blue
+    else if y < 650 { 0x00281848 }  // warm purple
+    else            { 0x00281848 }  // warm purple
 }
 
 #[inline]
@@ -41,8 +41,8 @@ fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
         if y >= WS_Y && y < WS_Y + WS_H && x >= wx && x < wx + WS_INACTIVE_W {
             let ws = &bar.workspaces[idx];
             if ws.active { return Some(0x00A8A0FF); }
-            if ws.urgent { return Some(0x00FF7070); }
-            return Some(0x00303860);
+            if ws.urgent { return Some(0x00FF6666); }
+            return Some(0x00304068);
         }
     }
     None
@@ -59,12 +59,12 @@ fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     for &(cx, cw, idx) in &CHIP_POS {
         if y >= CHIP_Y && y < CHIP_Y + CHIP_H && x >= cx && x < cx + cw {
             let chip = &bar.chips[idx];
-            if !chip.visible { return Some(0x00142038); }
+            if !chip.visible { return Some(0x00102038); }
             match chip.kind {
-                ChipKind::Net     => return Some(0x006098FF),
-                ChipKind::Wifi    => return Some(0x004ACC88),
-                ChipKind::Battery => return Some(0x00F0A830),
-                ChipKind::Clock   => return Some(0x00507090),
+                ChipKind::Net     => return Some(0x004C8DFF),
+                ChipKind::Wifi    => return Some(0x0038D6C8),
+                ChipKind::Battery => return Some(0x00FFB84D),
+                ChipKind::Clock   => return Some(0x006F86A8),
             }
         }
     }
@@ -83,7 +83,7 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
         let xw = LAUNCHER_X + LAUNCHER_W - 2;
         let yh = LAUNCHER_Y + LAUNCHER_H - 2;
         if x < x2 || x >= xw || y < y2 || y >= yh {
-            return 0x004088AA; // subtle teal edge
+            return 0x00385078; // low-contrast glass edge
         }
         return 0x0070CCFF; // cyan launcher dot
     }
@@ -189,7 +189,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                     bar_color(x, y, bar)
                 }
             } else if y == 50 {
-                0x000A1020 // deep glass edge shadow
+                0x00385078 // low-contrast bar edge
             } else {
                 bg(y)
             };
@@ -219,7 +219,7 @@ fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                     bar_color(x, y, bar)
                 }
             } else {
-                0x000A1020
+                0x00385078
             };
             let idx = y * w + x;
             unsafe { core::ptr::write_volatile(fb.add(idx), c); }
