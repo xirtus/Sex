@@ -293,3 +293,29 @@ Boot-verify required before committing. Target outcome: PD1–PD5 all schedule; 
   - No dirty tracked files
   - Zero warnings
 - Attribution correction: the clock was not frozen by commit b939a50. The freeze came from uncommitted PACE throttle work that was discarded in the previous turn.
+
+## Update 2026-04-30 — GLOBAL_BAR Stage 2B Verified
+
+- Status: COMPLETE.
+- Commit: 2a7bcc8
+- Scope:
+  - Added `SLOT_SILKBAR = 7`.
+  - Added `OP_SILKBAR_WORKSPACE_ACTIVE = 0xF3`.
+  - Added nonblocking userspace `pdx_try_listen_raw()` wrapper over existing syscall 28 behavior.
+  - Granted silk-shell capability to call SilkBar.
+  - silk-shell sends boot workspace advertisement to SilkBar.
+  - SilkBar polls at most one upstream message per loop and translates workspace index into existing `SetWorkspaceActive` updates.
+- Verification:
+  - Build successful.
+  - PD1-PD5 spawn/schedule stable.
+  - Clock updates continue via OP_SILKBAR_UPDATE 0xF2.
+  - silk-shell -> SilkBar -> sexdisplay path verified.
+  - No GP/PF/panic.
+  - No IPC storm.
+- Deferred:
+  - scheduler/yield repair
+  - accurate time source
+  - focus/window-title producer
+  - real status sensors
+  - dynamic strings
+  - full-frame redraw / PKRU / huge-page cleanup
