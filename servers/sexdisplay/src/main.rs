@@ -155,6 +155,34 @@ fn render(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
     }
 }
 
+fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
+    let fb_addr = fb as u64;
+    if fb_addr < HIGH_HALF_BASE {
+        return;
+    }
+    if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H {
+        return;
+    }
+    if h < 51 {
+        return;
+    }
+    for y in 0..51 {
+        for x in 0..w {
+            let c: u32 = if y < 50 {
+                if let Some(fg) = clock_fg_at(x, y, clock) {
+                    fg
+                } else {
+                    bar_color(x, y)
+                }
+            } else {
+                0x002D1A3A
+            };
+            let idx = y * w + x;
+            unsafe { core::ptr::write_volatile(fb.add(idx), c); }
+        }
+    }
+}
+
 fn handle_primary_fb(ptr: u64, packed: u64) {
     if ptr == 0 {
         return;
@@ -180,11 +208,10 @@ fn handle_primary_fb(ptr: u64, packed: u64) {
 }
 
 fn handle_silkbar_update(clock: &mut ClockState, arg1: u64, arg2: u64) {
-    // SilkBar only sends SetClock.  Extract hh/mm/ss directly from arg1/arg2.
-    //   SetClock wire: a=hour (arg1), b packed = (mm << 8) | ss (arg2)
-    let hh = arg1 as u8;
-    let mm = ((arg2 >> 8) & 0xff) as u8;
-    let ss = (arg2 & 0xff) as u8;
+    // SetClock wire: a=hour (arg1), b packed = (mm << 8) | ss (arg2)
+    let hh = (arg1 as u8).min(23);
+    let mm = (((arg2 >> 8) & 0xff) as u8).min(59);
+    let ss = ((arg2 & 0xff) as u8).min(59);
     *clock = ClockState { hh, mm, ss };
 }
 
@@ -202,11 +229,11 @@ pub extern "C" fn _start() -> ! {
         match msg.type_id {
             silkbar_model::OP_SILKBAR_UPDATE => {
                 handle_silkbar_update(&mut clock, msg.arg1, msg.arg2);
-                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
+                unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
             }
             0x11 => { // OP_PRIMARY_FB
                 handle_primary_fb(msg.arg0, msg.arg1);
-                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
+                unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
             }
             0 => {
                 // pdx_listen_raw already yields internally on empty.
