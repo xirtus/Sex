@@ -21,6 +21,7 @@ pub extern "C" fn _start() -> ! {
     let mut focus_state: u8 = 0;
     let mut last_focus_state: u8 = 0xFF;
     let mut chip_phase: u8 = 0;
+    let mut chip0_net: bool = true;
 
     // INIT: full GLOBAL_BAR state — workspace activation, chip visibility, clock
     // Workspace 3 active (index 2), others inactive
@@ -91,13 +92,18 @@ pub extern "C" fn _start() -> ! {
         }
 
         // Stage 2C: bounded internal status-chip stub (no new ABI, no floods).
-        // Phases 0-2 emit one chip-kind update; phase 3 emits three.
-        if ss % 20 == 0 {
+        // Slow cadence: every 120 seconds.
+        if ss % 120 == 0 {
             match chip_phase {
                 0 => {
+                    let chip0_kind = if chip0_net { ChipKind::Net } else { ChipKind::Wifi };
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetChipKind as u32, 0, chip0_kind as u32, 0,
+                    ));
                     send_update(SilkBarUpdate::new(
                         UpdateKind::SetChipKind as u32, 1, ChipKind::Wifi as u32, 0,
                     ));
+                    chip0_net = !chip0_net;
                 }
                 1 => {
                     send_update(SilkBarUpdate::new(
@@ -110,12 +116,6 @@ pub extern "C" fn _start() -> ! {
                     ));
                 }
                 _ => {
-                    send_update(SilkBarUpdate::new(
-                        UpdateKind::SetChipKind as u32, 1, ChipKind::Net as u32, 0,
-                    ));
-                    send_update(SilkBarUpdate::new(
-                        UpdateKind::SetChipKind as u32, 2, ChipKind::Wifi as u32, 0,
-                    ));
                     send_update(SilkBarUpdate::new(
                         UpdateKind::SetChipKind as u32, 3, ChipKind::Battery as u32, 0,
                     ));
