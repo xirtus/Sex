@@ -273,3 +273,23 @@ Boot-verify required before committing. Target outcome: PD1–PD5 all schedule; 
 - **Symptom (01:00:00):** The frozen time is likely an artifact of either the ring buffer saturation or the `silkbar` task being descheduled by the timer interrupt once and never resuming in a stable state due to the GPR corruption bug (now fixed, but impacts observed before patch).
 - **Proposed Fix:** Implement actual task requeueing in `kernel/src/scheduler.rs::yield_now()` and verify `silkbar` timing loops.
 
+
+## Update 2026-04-30T20:25:02Z — GLOBAL_BAR stage status
+
+- GLOBAL_BAR_STAGE_1: COMPLETE
+- Meaning: live HH:MM:SS global bar clock is restored and boot-verified.
+- Next stage: GLOBAL_BAR_STAGE_2 = status/workspace producers.
+- Deferred explicitly: accurate time source and microsecond tick are not part of stage 1 and remain pending.
+
+## Update 2026-04-30T20:25:57Z — Build/Clean status correction
+
+- Build status baseline (clean):
+  - b939a50 feat(silkbar): send initial workspace/chip state
+  - 1d8e675 feat(sexdisplay): render SilkBar global model
+- Verified state:
+  - Old yield-loop clock tick intact
+  - Initial workspace/chip sends present
+  - No PACE counter or spin throttle
+  - No dirty tracked files
+  - Zero warnings
+- Attribution correction: the clock was not frozen by commit b939a50. The freeze came from uncommitted PACE throttle work that was discarded in the previous turn.
