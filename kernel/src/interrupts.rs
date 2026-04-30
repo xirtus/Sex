@@ -396,6 +396,42 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
     let (old_ctx_ptr, next_ctx_ptr) = result.unwrap();
 
     unsafe {
+        // Save old context from interrupt stub's GPR push level on the stack.
+        // stack_frame points to RIP.  Stub pushed [rax..r15][dummy=0] above RIP.
+        // Layout from RIP downward: [dummy][r15][r14]..[rbx][rax]
+        if !old_ctx_ptr.is_null() {
+            let old_ctx = &mut *old_ctx_ptr;
+            let base = stack_frame as *const _ as *const u64;
+            old_ctx.rip = stack_frame.instruction_pointer.as_u64();
+            old_ctx.cs = stack_frame.code_segment.0 as u64;
+            old_ctx.rflags = stack_frame.cpu_flags.bits();
+            old_ctx.rsp = stack_frame.stack_pointer.as_u64();
+            old_ctx.ss = stack_frame.stack_segment.0 as u64;
+            old_ctx.r15 = *base.offset(-2);
+            old_ctx.r14 = *base.offset(-3);
+            old_ctx.r13 = *base.offset(-4);
+            old_ctx.r12 = *base.offset(-5);
+            old_ctx.r11 = *base.offset(-6);
+            old_ctx.r10 = *base.offset(-7);
+            old_ctx.r9  = *base.offset(-8);
+            old_ctx.r8  = *base.offset(-9);
+            old_ctx.rdi = *base.offset(-10);
+            old_ctx.rsi = *base.offset(-11);
+            old_ctx.rbp = *base.offset(-12);
+            old_ctx.rdx = *base.offset(-13);
+            old_ctx.rcx = *base.offset(-14);
+            old_ctx.rbx = *base.offset(-15);
+            old_ctx.rax = *base.offset(-16);
+            // kstack_top = top of stub's GPR push (where rax sits).
+            // Both forged (Task::new) and saved stacks have 16 qwords
+            // above IRET frame (15 GPRs + 1 dummy).  switch_to loads
+            // this and does add rsp, 128 before iretq.
+            old_ctx.kstack_top = (base as u64) - 128;
+            // Read PKRU from the PD's stored mask (rdpkru would return 0
+            // in God Mode inside this handler).
+            old_ctx.pkru = (*old_ctx.pd_ptr).current_pkru_mask.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        }
+
         let kstack_top = (*next_ctx_ptr).kstack_top;
         if TIMER_TICK_LOG_BUDGET.load(Ordering::Acquire) > 0 {
             serial_println!("scheduler.restore_context pd_id={} kstack_top={:#x} rip={:#x}",

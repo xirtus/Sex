@@ -311,54 +311,48 @@ impl Scheduler {
     #[unsafe(naked)]
     pub unsafe extern "C" fn switch_to(_old_context: *mut TaskContext, next_context: *const TaskContext) {
         core::arch::naked_asm!(
-            // rdi = old_ctx (*mut TaskContext, NULL on first boot)
+            // rdi = old_ctx (*mut TaskContext) — kstack_top already set by timer_interrupt_handler
             // rsi = next_ctx (*const TaskContext)
-            // Layout: [GPRs][DummyError][IRETQ Frame]
 
-            // 1. Save Callee-Saved and Volatile Registers (Interrupt/Preemption style)
-            "push 0", // Dummy Error Code
-            "push rax", "push rbx", "push rcx", "push rdx", "push rbp", "push rsi", "push rdi",
-            "push r8", "push r9", "push r10", "push r11", "push r12", "push r13", "push r14", "push r15",
+            // old_ctx.kstack_top is set before this call in timer_interrupt_handler.
+            // Do NOT save RSP here — that would overwrite the correct stub-frame base
+            // with the kernel call-stack depth at time of switch_to entry.
 
-            // 2. Save current RSP to old_ctx.kstack_top
-            "test rdi, rdi",
-            "jz 1f",
-            "mov [rdi + 0xC0], rsp",
-
-            "1:",
-            // 3. Switch to next_ctx.kstack_top
-            "mov rdx, rsi", // rdx = next_ctx
-            "mov rsp, [rdx + 0xC0]",
-
-            // 4. Restore PKRU (God Mode -> Task Context PKRU)
+            // 1. Switch to next_ctx.kstack_top and restore PKRU
+            "mov rsp, [rsi + 0xC0]",
             "cmp byte ptr [rip + {pku_enabled}], 0",
             "je 2f",
-            "mov eax, [rdx + 0x80]", // TaskContext.pkru
+            "mov eax, [rsi + 0x80]", // TaskContext.pkru at offset 0x80
             "xor ecx, ecx",
             "xor edx, edx",
             "wrpkru",
 
             "2:",
-            // 5. Restore GPRs
-            "pop r15", "pop r14", "pop r13", "pop r12", "pop r11", "pop r10", "pop r9", "pop r8",
-            "pop rdi", "pop rsi", "pop rbp", "pop rdx", "pop rcx", "pop rbx", "pop rax",
-            "add rsp, 8", // Discard dummy error code
+            // 3. Debug-log IRET frame for GP fault logger (before pops, R11 scratch).
+            //    IRET frame is at RSP+128 (16 qwords of GPRs+dummy above RIP).
+            "lea r11, [rsp + 128]",
+            "mov [rip + {actual_iret_rsp}], r11",
+            "mov r11, [rsp + 128]", "mov [rip + {actual_q0}], r11",
+            "mov r11, [rsp + 136]", "mov [rip + {actual_q1}], r11",
+            "mov r11, [rsp + 144]", "mov [rip + {actual_q2}], r11",
+            "mov r11, [rsp + 152]", "mov [rip + {actual_q3}], r11",
+            "mov r11, [rsp + 160]", "mov [rip + {actual_q4}], r11",
 
-            // 6. Return via IRETQ
-            // Update debug symbols for GP fault logger
-            "mov [rip + {actual_iret_rsp}], rsp",
-            "mov r11, [rsp + 0x00]", "mov [rip + {actual_q0}], r11",
-            "mov r11, [rsp + 0x08]", "mov [rip + {actual_q1}], r11",
-            "mov r11, [rsp + 0x10]", "mov [rip + {actual_q2}], r11",
-            "mov r11, [rsp + 0x18]", "mov [rip + {actual_q3}], r11",
-            "mov r11, [rsp + 0x20]", "mov [rip + {actual_q4}], r11",
-
-            // Check if returning to user mode (RPL 3) to swapgs
-            "mov r11, [rsp + 8]", // CS selector in IRET frame
+            // 4. Check CS.RPL for userspace (swapgs needed before iretq).
+            "mov r11, [rsp + 136]",
             "test r11, 3",
             "jz 3f",
             "swapgs",
             "3:",
+
+            // 5. Pop GPRs in saved-stack order: [rax] at lowest address (kstack_top).
+            //    Saved (preempted) tasks have correct register values here;
+            //    forged (first-run) tasks have all zeros, so any pop order works.
+            "pop rax", "pop rbx", "pop rcx", "pop rdx",
+            "pop rbp", "pop rsi", "pop rdi",
+            "pop r8", "pop r9", "pop r10", "pop r11",
+            "pop r12", "pop r13", "pop r14", "pop r15",
+            "add rsp, 8",  // skip dummy error code
             "iretq",
 
             pku_enabled = sym crate::pku::PKU_ENABLED,
@@ -444,8 +438,8 @@ fn is_canonical(addr: u64) -> bool {
 }
 
 pub unsafe fn debug_dump_iret_frame(next_ctx: *const TaskContext) {
-    // switch_to pops 15 GPR qwords, then iretq reads RIP/CS/RFLAGS/RSP/SS.
-    let iret_rsp = ((*next_ctx).kstack_top + (15 * 8)) as *const u64;
+    // switch_to pops 15 GPR qwords + 1 dummy error, then iretq reads RIP/CS/RFLAGS/RSP/SS.
+    let iret_rsp = ((*next_ctx).kstack_top + (16 * 8)) as *const u64;
     let rip = *iret_rsp.add(0);
     let cs = *iret_rsp.add(1);
     let rflags = *iret_rsp.add(2);
