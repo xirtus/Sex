@@ -198,11 +198,17 @@ pub unsafe extern "C" fn syscall_entry() {
         "mov rdi, rsp",     // Pointer to SyscallRegs
         "call syscall_handler",
 
-        // 6.5 Propagate modified regs.rsi back to original saved slot.
-        // dispatch may set regs.rsi = value (e.g. PDX_CALL return).
-        // Restore path pops RSI from [rbp+88]; copy SyscallRegs.rsi there.
+        // 6.5 Propagate modified regs back to original saved slots.
+        // dispatch may set regs.rsi/rdx/r10/r8 (e.g. PDX_CALL/PDX_LISTEN returns).
+        // Restore path pops from [rbp+64..88]; copy SyscallRegs values there.
         "mov rcx, [rsp + 16]", // SyscallRegs.rsi (offset 16 in struct)
         "mov [rbp + 88], rcx", // original saved RSI slot
+        "mov rcx, [rsp + 24]", // SyscallRegs.rdx (offset 24)
+        "mov [rbp + 80], rcx", // original saved RDX slot
+        "mov rcx, [rsp + 32]", // SyscallRegs.r10 (offset 32)
+        "mov [rbp + 72], rcx", // original saved R10 slot
+        "mov rcx, [rsp + 40]", // SyscallRegs.r8 (offset 40)
+        "mov [rbp + 64], rcx", // original saved R8 slot
 
         // 7. RESTORE C-ABI VOLATILES
         "add rsp, 72",      // Discard SyscallRegs
