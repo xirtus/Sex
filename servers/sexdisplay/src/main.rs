@@ -155,48 +155,6 @@ fn render(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
     }
 }
 
-fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, clock: &ClockState) {
-    const CLOCK_X: usize = 1192;
-    const CLOCK_Y: usize = 16;
-    const CLOCK_W: usize = 46;
-    const CLOCK_H: usize = 7;
-
-    let fb_addr = fb as u64;
-    if fb_addr < HIGH_HALF_BASE {
-        return;
-    }
-    if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H {
-        return;
-    }
-    if CLOCK_X >= w || CLOCK_Y >= h {
-        return;
-    }
-
-    let draw_w = core::cmp::min(CLOCK_W, w - CLOCK_X);
-    let draw_h = core::cmp::min(CLOCK_H, h - CLOCK_Y);
-
-    for dy in 0..draw_h {
-        let y = CLOCK_Y + dy;
-        for dx in 0..draw_w {
-            let x = CLOCK_X + dx;
-            let c = if let Some(fg) = clock_fg_at(x, y, clock) {
-                fg
-            } else {
-                bar_color(x, y)
-            };
-            let row = match y.checked_mul(w) {
-                Some(v) => v,
-                None => return,
-            };
-            let idx = match row.checked_add(x) {
-                Some(v) => v,
-                None => return,
-            };
-            unsafe { core::ptr::write_volatile(fb.add(idx), c); }
-        }
-    }
-}
-
 fn handle_primary_fb(ptr: u64, packed: u64) {
     if ptr == 0 {
         return;
@@ -221,14 +179,12 @@ fn handle_primary_fb(ptr: u64, packed: u64) {
     }
 }
 
-fn handle_silkbar_update(clock: &mut ClockState, _arg0: u64, arg1: u64, arg2: u64) {
-    // Non-repr(C) enum field reordering can mangle arg0 between enqueue and
-    // dequeue compilation units.  SilkBar only sends SetClock, so extract
-    // hh/mm/ss unconditionally from arg1/arg2.
-    //   SetClock wire: a=hour, b packed = (mm << 8) | ss
-    let hh = (arg1 as u32).min(23) as u8;
-    let mm = ((arg2 >> 8) as u32).min(59) as u8;
-    let ss = (arg2 as u8).min(59) as u8;
+fn handle_silkbar_update(clock: &mut ClockState, arg1: u64, arg2: u64) {
+    // SilkBar only sends SetClock.  Extract hh/mm/ss directly from arg1/arg2.
+    //   SetClock wire: a=hour (arg1), b packed = (mm << 8) | ss (arg2)
+    let hh = arg1 as u8;
+    let mm = ((arg2 >> 8) & 0xff) as u8;
+    let ss = (arg2 & 0xff) as u8;
     *clock = ClockState { hh, mm, ss };
 }
 
@@ -245,8 +201,8 @@ pub extern "C" fn _start() -> ! {
         let msg = sex_pdx::pdx_listen_raw(0);
         match msg.type_id {
             silkbar_model::OP_SILKBAR_UPDATE => {
-                handle_silkbar_update(&mut clock, msg.arg0, msg.arg1, msg.arg2);
-                unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
+                handle_silkbar_update(&mut clock, msg.arg1, msg.arg2);
+                unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &clock); }
             }
             0x11 => { // OP_PRIMARY_FB
                 handle_primary_fb(msg.arg0, msg.arg1);
