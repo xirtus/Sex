@@ -51,9 +51,9 @@ fn expand_heap(needed_size: usize) -> Result<usize, ()> {
     }
     if vaddr == u64::MAX { return Err(()); }
 
-    HEAP_LIMIT.store(start_vaddr + size_aligned, Ordering::Release);
+    HEAP_LIMIT.store(vaddr as usize + size_aligned, Ordering::Release);
     if HEAP_TOP.load(Ordering::Acquire) == 0 {
-        HEAP_TOP.store(start_vaddr, Ordering::Release);
+        HEAP_TOP.store(vaddr as usize, Ordering::Release);
     }
 
     Ok(start_vaddr)

@@ -197,3 +197,13 @@ CODEX: Edit `scheduler.rs::switch_to` to pop r15-rax instead of add rsp,120.
 - build result: SUCCESS — [SEXOS ENTRYPOINT] success
 - files changed: servers/sexdisplay/src/main.rs
 - proposed next action: Boot and confirm GP absent on both OP_SILKBAR_UPDATE and OP_PRIMARY_FB paths. Then track kernel PKRU restore fix separately for full-frame redraw.
+
+---
+
+## APPROVED 2026-04-30
+
+- **Action:** Patch `kernel/src/scheduler.rs` switch_to: replace `add rsp, 128` (GPR skip → corruption on preempted tasks) with 15 register pops + `add rsp, 8` (dummy skip) + `iretq`.
+- **Pop order:** `pop rax, pop rbx, ..., pop r15` (matching saved-stack layout where `kstack_top` = `&[rax]`). Forged stacks have reversed ordering but all zeros, so any order is harmless there.
+- **Debug/swapgs moved before pops** (uses R11 as scratch before it's restored).
+- **DO NOT touch** init.rs, pku.rs, interrupts.rs, TSS, Task::new, PKRU, ABI.
+- **Verification:** `cargo build -p kernel 2>&1 | grep -E "(error|warning)"`
