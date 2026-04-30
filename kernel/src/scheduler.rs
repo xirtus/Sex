@@ -63,8 +63,8 @@ impl Task {
         let kstack_alloc_top = kstack.as_ptr() as u64 + 65536;
         core::mem::forget(kstack);
 
-        // Pre-seed kstack with IRETQ frame + GPR zeros. switch_to loads ksp and pops directly.
-        // Layout low→high: [r15=0..rax=0][RIP][CS][RFLAGS][RSP][SS]
+        // Pre-seed kstack with IRETQ frame + Dummy Error + GPR zeros.
+        // Layout low→high: [r15=0..rax=0][dummy=0][RIP][CS][RFLAGS][RSP][SS]
         let forged_ksp = unsafe {
             let mut ksp = kstack_alloc_top as *mut u64;
             ksp = ksp.sub(1); *ksp = ss;
@@ -72,6 +72,7 @@ impl Task {
             ksp = ksp.sub(1); *ksp = rflags;
             ksp = ksp.sub(1); *ksp = cs;
             ksp = ksp.sub(1); *ksp = entry_point;
+            ksp = ksp.sub(1); *ksp = 0; // dummy error code
             for _ in 0..15 { ksp = ksp.sub(1); *ksp = 0; } // rax..r15 zeros
             ksp as u64
         };
@@ -312,66 +313,61 @@ impl Scheduler {
         core::arch::naked_asm!(
             // rdi = old_ctx (*mut TaskContext, NULL on first boot)
             // rsi = next_ctx (*const TaskContext)
-            // context.kstack_top (offset 0xC0) = active ksp for this task.
-            //   New task:     pre-seeded by Task::new: [GPR zeros][IRETQ frame]
-            //   Running task: ksp saved here by previous switch_to call
+            // Layout: [GPRs][DummyError][IRETQ Frame]
 
-            // Preserve next_ctx across old-context save path.
-            "mov rdx, rsi",
+            // 1. Save Callee-Saved and Volatile Registers (Interrupt/Preemption style)
+            "push 0", // Dummy Error Code
+            "push rax", "push rbx", "push rcx", "push rdx", "push rbp", "push rsi", "push rdi",
+            "push r8", "push r9", "push r10", "push r11", "push r12", "push r13", "push r14", "push r15",
 
-            // Skip save if old_ctx is NULL
+            // 2. Save current RSP to old_ctx.kstack_top
             "test rdi, rdi",
             "jz 1f",
-
-            // Push all GPRs onto current kernel stack (rax=high addr, r15=low=new ksp)
-            "push rax",
-            "push rbx",
-            "push rcx",
-            "push rdx",
-            "push rbp",
-            "push rsi",
-            "push rdi",
-            "push r8",
-            "push r9",
-            "push r10",
-            "push r11",
-            "push r12",
-            "push r13",
-            "push r14",
-            "push r15",
-            // Save ksp to old_ctx.kstack_top
-            // rdi has been pushed as a GPR value, so use a scratch copy of old_ctx.
-            "mov rax, rdi",
-            "mov [rax + 0xC0], rsp",
+            "mov [rdi + 0xC0], rsp",
 
             "1:",
-            // Restore next_ctx pointer and pivot directly to RIP slot.
-            "mov rsi, rdx",
-            "mov [rip + {next_ctx_ptr}], rsi",
-            "mov rsp, [rsi + 0xC0]",
-            "add rsp, 120",
+            // 3. Switch to next_ctx.kstack_top
+            "mov rdx, rsi", // rdx = next_ctx
+            "mov rsp, [rdx + 0xC0]",
 
-            // IRETQ frame is guaranteed at [rsp + 0..32].
+            // 4. Restore PKRU (God Mode -> Task Context PKRU)
+            "cmp byte ptr [rip + {pku_enabled}], 0",
+            "je 2f",
+            "mov eax, [rdx + 0x80]", // TaskContext.pkru
+            "xor ecx, ecx",
+            "xor edx, edx",
+            "wrpkru",
+
+            "2:",
+            // 5. Restore GPRs
+            "pop r15", "pop r14", "pop r13", "pop r12", "pop r11", "pop r10", "pop r9", "pop r8",
+            "pop rdi", "pop rsi", "pop rbp", "pop rdx", "pop rcx", "pop rbx", "pop rax",
+            "add rsp, 8", // Discard dummy error code
+
+            // 6. Return via IRETQ
+            // Update debug symbols for GP fault logger
             "mov [rip + {actual_iret_rsp}], rsp",
-            "mov r11, [rsp + 0x00]",
-            "mov [rip + {actual_q0}], r11",
-            "mov r11, [rsp + 0x08]",
-            "mov [rip + {actual_q1}], r11",
-            "mov r11, [rsp + 0x10]",
-            "mov [rip + {actual_q2}], r11",
-            "mov r11, [rsp + 0x18]",
-            "mov [rip + {actual_q3}], r11",
-            "mov r11, [rsp + 0x20]",
-            "mov [rip + {actual_q4}], r11",
+            "mov r11, [rsp + 0x00]", "mov [rip + {actual_q0}], r11",
+            "mov r11, [rsp + 0x08]", "mov [rip + {actual_q1}], r11",
+            "mov r11, [rsp + 0x10]", "mov [rip + {actual_q2}], r11",
+            "mov r11, [rsp + 0x18]", "mov [rip + {actual_q3}], r11",
+            "mov r11, [rsp + 0x20]", "mov [rip + {actual_q4}], r11",
+
+            // Check if returning to user mode (RPL 3) to swapgs
+            "mov r11, [rsp + 8]", // CS selector in IRET frame
+            "test r11, 3",
+            "jz 3f",
             "swapgs",
+            "3:",
             "iretq",
+
+            pku_enabled = sym crate::pku::PKU_ENABLED,
             actual_iret_rsp = sym ACTUAL_IRET_RSP,
             actual_q0 = sym ACTUAL_IRET_Q0_RIP,
             actual_q1 = sym ACTUAL_IRET_Q1_CS,
             actual_q2 = sym ACTUAL_IRET_Q2_RFLAGS,
             actual_q3 = sym ACTUAL_IRET_Q3_RSP,
             actual_q4 = sym ACTUAL_IRET_Q4_SS,
-            next_ctx_ptr = sym SWITCH_NEXT_CTX_PTR,
         );
     }
 }

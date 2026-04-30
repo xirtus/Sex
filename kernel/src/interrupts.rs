@@ -395,95 +395,23 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
 
     let (old_ctx_ptr, next_ctx_ptr) = result.unwrap();
 
-    // Sanity check: Ensure CoreLocal pointer was set by tick()
-    assert!(!crate::core_local::CoreLocal::get().current_pd_ptr.load(core::sync::atomic::Ordering::Acquire).is_null());
-
     unsafe {
-        if !old_ctx_ptr.is_null() {
-            let old_ctx = &mut *old_ctx_ptr;
-            old_ctx.rip = stack_frame.instruction_pointer.as_u64();
-            old_ctx.cs = stack_frame.code_segment.0 as u64;
-            old_ctx.rflags = stack_frame.cpu_flags.bits();
-            old_ctx.ss = stack_frame.stack_segment.0 as u64;
-            
-            let base = stack_frame as *const _ as *const u64;
-            old_ctx.r15 = *base.offset(-2);
-            old_ctx.r14 = *base.offset(-3);
-            old_ctx.r13 = *base.offset(-4);
-            old_ctx.r12 = *base.offset(-5);
-            old_ctx.r11 = *base.offset(-6);
-            old_ctx.r10 = *base.offset(-7);
-            old_ctx.r9  = *base.offset(-8);
-            old_ctx.r8  = *base.offset(-9);
-            old_ctx.rdi = *base.offset(-10);
-            old_ctx.rsi = *base.offset(-11);
-            old_ctx.rbp = *base.offset(-12);
-            old_ctx.rdx = *base.offset(-13);
-            old_ctx.rcx = *base.offset(-14);
-            old_ctx.rbx = *base.offset(-15);
-            old_ctx.rax = *base.offset(-16);
-            old_ctx.rsp = stack_frame.stack_pointer.as_u64();
-
-            if TIMER_TICK_LOG_BUDGET.load(Ordering::Acquire) > 0 {
-                serial_println!("timer.save_context pd_id={} old_rip={:#x} old_rsp={:#x} kstack_top={:#x}",
-                    (*old_ctx.pd_ptr).id, old_ctx.rip, old_ctx.rsp, old_ctx.kstack_top);
-            }
-
-            use core::sync::atomic::Ordering;
-            old_ctx.pkru = (*old_ctx.pd_ptr).current_pkru_mask.load(Ordering::Relaxed) as u64;
-        }
-        
-        let next_rip = (*next_ctx_ptr).rip;
-        if next_rip == 0 {
-            let next_pd_ptr = crate::core_local::CoreLocal::get().current_pd_ptr.load(core::sync::atomic::Ordering::Acquire);
-            panic!("SCHED: null RIP for PD {}", (*next_pd_ptr).id);
-        }
-
         let kstack_top = (*next_ctx_ptr).kstack_top;
         if TIMER_TICK_LOG_BUDGET.load(Ordering::Acquire) > 0 {
             serial_println!("scheduler.restore_context pd_id={} kstack_top={:#x} rip={:#x}",
                 (*next_ctx_ptr).pd_id, kstack_top, (*next_ctx_ptr).rip);
         }
+
         // RSP0 must be empty kernel-stack top, not saved-context base.
-        // CPU pushes DOWNWARD from RSP0 on user→kernel interrupt.
-        // kstack_top = saved frame base. kstack_top + 160 = kstack_alloc_top.
-        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 160));
-        serial_println!("rsp0.programmed pd_id={} saved_kstack_top={:#x} rsp0={:#x}",
-            (*next_ctx_ptr).pd_id, kstack_top, kstack_top + 160);
+        // kstack_top is where the context (GPRs+IRET) is saved. 
+        // kstack_top + 168 (15 regs + dummy + 5 iret qwords) = kstack_alloc_top.
+        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
 
-        let next_pd_ptr = crate::core_local::CoreLocal::get().current_pd_ptr.load(core::sync::atomic::Ordering::Acquire);
-        crate::scheduler::log_first_scheduled_pd((*next_ctx_ptr).pd_id);
-        serial_println!("SCHED: Switching to PD {} (RIP={:#x}, RSP={:#x}, KSTACK={:#x})", 
-                        (*next_pd_ptr).id, (*next_ctx_ptr).rip, (*next_ctx_ptr).rsp, kstack_top);
-        serial_println!(
-            "context_switch.before_switch_to rip={:#x} rsp={:#x} rflags={:#x} cs={:#x} ss={:#x} pd_id={}",
-            (*next_ctx_ptr).rip,
-            (*next_ctx_ptr).rsp,
-            (*next_ctx_ptr).rflags,
-            (*next_ctx_ptr).cs,
-            (*next_ctx_ptr).ss,
-            (*next_ctx_ptr).pd_id
-        );
-        serial_println!(
-            "switch.frame rip={:#x} cs={:#x} ss={:#x} rsp={:#x} rflags={:#x}",
-            (*next_ctx_ptr).rip,
-            (*next_ctx_ptr).cs,
-            (*next_ctx_ptr).ss,
-            (*next_ctx_ptr).rsp,
-            (*next_ctx_ptr).rflags
-        );
-        log_exec_control_state("before_switch");
-        crate::memory::manager::log_page_walk(
-            x86_64::VirtAddr::new((*next_ctx_ptr).rip),
-            "before_switch.rip",
-        );
-
-        serial_println!("context_switch.begin");
         send_eoi();
-        crate::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx_ptr);
-        serial_println!("context_switch.end");
+        crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
     }
 }
+
 
 #[no_mangle]
 pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, error_code: u64) {
@@ -579,7 +507,10 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
 }
 
 #[no_mangle]
-pub extern "C" fn general_protection_fault_handler(stack_frame: &mut InterruptStackFrame, error_code: u64) {
+pub extern "C" fn general_protection_fault_handler(
+    stack_frame: &mut InterruptStackFrame,
+    error_code: u64,
+) {
     #[repr(C, packed)]
     struct Gdtr64 {
         limit: u16,
