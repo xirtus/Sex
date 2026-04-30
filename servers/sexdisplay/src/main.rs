@@ -312,11 +312,6 @@ pub extern "C" fn _start() -> ! {
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
 
-    // V1 hardcoded test surface — proves surface registry below bar
-    unsafe {
-        SURFACES[0] = Surface { x: 100, y: 60, w: 400, h: 280, color: 0x00303860, active: true };
-    }
-
     // 1. Render immediately with fallback — visible before any IPC
     unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
 
@@ -353,6 +348,23 @@ pub extern "C" fn _start() -> ! {
                                 active: true,
                             };
                             break;
+                        }
+                    }
+                }
+                // Inline rect present — immediately show the client surface on screen.
+                // Bounded double-loop: y >= BAR_H (50), x/w/h clamped to FB dimensions.
+                unsafe {
+                    let fb_w = FB_W as usize;
+                    let fb_h = FB_H as usize;
+                    let temp = Surface { x, y, w, h, color: 0x00303860, active: true };
+                    let (sx, sy, sw, sh) = clamp_surface(&temp, fb_w, fb_h);
+                    if sw > 0 && sh > 0 && FB_PTR >= HIGH_HALF_BASE {
+                        let fb = FB_PTR as *mut u32;
+                        for py in sy..sy+sh {
+                            let row = py * fb_w;
+                            for px in sx..sx+sw {
+                                fb.add(row + px).write_volatile(0x00303860);
+                            }
                         }
                     }
                 }
