@@ -15,13 +15,14 @@ fn send_update(update: SilkBarUpdate) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let mut hh: u8 = 10;
-    let mut mm: u8 = 44;
-    let mut ss: u8 = 0;
     let mut focus_state: u8 = 0;
     let mut last_focus_state: u8 = 0xFF;
     let mut chip_phase: u8 = 0;
     let mut chip0_net: bool = true;
+
+    /// Approximate LAPIC timer ticks per second (divide=16, init_count=1_000_000).
+    /// Not calibrated — yields monotonic uptime, not wall-clock accuracy.
+    const LAPIC_TICKS_PER_SECOND_APPROX: u64 = 62;
 
     // INIT: full GLOBAL_BAR state — workspace activation, chip visibility, clock
     // Workspace 3 active (index 2), others inactive
@@ -36,10 +37,17 @@ pub extern "C" fn _start() -> ! {
             UpdateKind::SetChipVisible as u32, chip_idx, 1, 0,
         ));
     }
-    // Initial clock
-    send_update(SilkBarUpdate::new(
-        UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
-    ));
+    // Initial clock — derived from kernel uptime
+    {
+        let ticks = sex_pdx::get_ticks();
+        let uptime_seconds = ticks / LAPIC_TICKS_PER_SECOND_APPROX;
+        let hh0 = ((uptime_seconds / 3600) % 24) as u8;
+        let mm0 = ((uptime_seconds / 60) % 60) as u8;
+        let ss0 = (uptime_seconds % 60) as u8;
+        send_update(SilkBarUpdate::new(
+            UpdateKind::SetClock as u32, 0, hh0 as u32, ((mm0 as u32) << 8) | ss0 as u32,
+        ));
+    }
 
     loop {
         // Stage 2B: poll at most one upstream message (non-blocking)
@@ -80,20 +88,16 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::sys_yield();
         }
 
-        // Advance clock
-        ss += 1;
-        if ss >= 60 {
-            ss = 0;
-            mm += 1;
-            if mm >= 60 {
-                mm = 0;
-                hh = if hh >= 23 { 0 } else { hh + 1 };
-            }
-        }
+        // Read kernel uptime ticks for clock and chip cadence
+        let ticks = sex_pdx::get_ticks();
+        let uptime_seconds = ticks / LAPIC_TICKS_PER_SECOND_APPROX;
+        let hh = ((uptime_seconds / 3600) % 24) as u8;
+        let mm = ((uptime_seconds / 60) % 60) as u8;
+        let ss = (uptime_seconds % 60) as u8;
 
         // Stage 2C: bounded internal status-chip stub (no new ABI, no floods).
         // Slow cadence: every 120 seconds.
-        if ss % 120 == 0 {
+        if uptime_seconds % 120 == 0 {
             match chip_phase {
                 0 => {
                     let chip0_kind = if chip0_net { ChipKind::Net } else { ChipKind::Wifi };

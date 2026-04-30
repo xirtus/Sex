@@ -304,6 +304,10 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             0
         },
 
+        34 => { // SYSCALL_GET_TICKS — exposes kernel TICKS counter
+            crate::interrupts::TICKS.load(core::sync::atomic::Ordering::Relaxed)
+        },
+
         42 => { // SYS_SET_STATE
             let state = rdx as u8;
             let core_local = crate::core_local::CoreLocal::get();

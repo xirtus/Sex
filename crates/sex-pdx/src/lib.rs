@@ -283,6 +283,23 @@ pub fn sys_yield() {
     }
 }
 
+pub const SYSCALL_GET_TICKS: u64 = 34;
+
+#[inline]
+pub fn get_ticks() -> u64 {
+    let ret: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") SYSCALL_GET_TICKS => ret,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    ret
+}
+
 pub fn sched_yield() {
     sys_yield();
 }
