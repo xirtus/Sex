@@ -19,7 +19,20 @@ pub extern "C" fn _start() -> ! {
     let mut mm: u8 = 44;
     let mut ss: u8 = 0;
 
-    // INIT: show initial time
+    // INIT: full GLOBAL_BAR state — workspace activation, chip visibility, clock
+    // Workspace 3 active (index 2), others inactive
+    for ws_idx in 0..5 {
+        send_update(SilkBarUpdate::new(
+            UpdateKind::SetWorkspaceActive as u32, ws_idx, if ws_idx == 2 { 1 } else { 0 }, 0,
+        ));
+    }
+    // All four status chips visible
+    for chip_idx in 0..4 {
+        send_update(SilkBarUpdate::new(
+            UpdateKind::SetChipVisible as u32, chip_idx, 1, 0,
+        ));
+    }
+    // Initial clock
     send_update(SilkBarUpdate::new(
         UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
     ));
