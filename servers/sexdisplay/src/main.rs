@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![allow(static_mut_refs)]
 
 use silkbar_model::{SilkBar, SilkBarUpdate, apply_update, DEFAULT_SILK_BAR,
                     WS_X0, WS_X1, WS_X2, WS_X3, WS_X4, WS_Y, WS_H,
@@ -19,6 +20,37 @@ const MAX_FB_H: usize = 4320;
 static mut FB_PTR: u64 = FALLBACK_PTR;
 static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
+
+// ── Surface Registry (V1: safe inline ABI, no backing buffers) ──────────────
+
+/// A compositor surface. Rendered as a solid-color filled rect below the bar.
+/// No backing buffer, no alpha, no z-ordering (insertion order only).
+struct Surface {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    color: u32,
+    active: bool,
+}
+
+const MAX_SURFACES: usize = 16;
+const SURFACE_EMPTY: Surface = Surface { x: 0, y: 0, w: 0, h: 0, color: 0, active: false };
+static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
+
+/// Clamp a surface rectangle against framebuffer dimensions.
+/// Returns `(x, y, w, h)` guaranteed to be within FB bounds and below the bar.
+/// The `y` coordinate is clamped to at least `BAR_H` to prevent covering the top strip.
+fn clamp_surface(surf: &Surface, fb_w: usize, fb_h: usize) -> (usize, usize, usize, usize) {
+    const BAR_H: usize = 50;
+    let x = (surf.x.max(0) as usize).min(fb_w.saturating_sub(1));
+    let y = (surf.y.max(BAR_H as i32) as usize).min(fb_h.saturating_sub(1));
+    let max_w = fb_w.saturating_sub(x);
+    let max_h = fb_h.saturating_sub(y);
+    let w = (surf.w as usize).min(max_w);
+    let h = (surf.h as usize).min(max_h);
+    (x, y, w, h)
+}
 
 fn bg(y: usize) -> u32 {
     if      y < 200 { 0x00081424 }  // deep navy
@@ -182,7 +214,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     for y in 0..h {
         for x in 0..w {
             let c: u32 = if y < 50 {
-                // Check clock pixel inline — no separate overlay pass
+                // SilkBar/top strip always on top (layer 3)
                 if let Some(fg) = clock_fg_at(x, y, bar) {
                     fg
                 } else {
@@ -191,7 +223,20 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
             } else if y == 50 {
                 0x00385078 // low-contrast bar edge
             } else {
-                bg(y)
+                // Background (layer 1) + surfaces (layer 2, clamped below bar)
+                let mut c = bg(y);
+                unsafe {
+                    for surf in SURFACES.iter() {
+                        if !surf.active { continue; }
+                        let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+                        if sw == 0 || sh == 0 { continue; }
+                        if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
+                            c = surf.color;
+                            break;
+                        }
+                    }
+                }
+                c
             };
             let idx = y * w + x;
             unsafe { core::ptr::write_volatile(fb.add(idx), c); }
@@ -267,6 +312,11 @@ pub extern "C" fn _start() -> ! {
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
 
+    // V1 hardcoded test surface — proves surface registry below bar
+    unsafe {
+        SURFACES[0] = Surface { x: 100, y: 60, w: 400, h: 280, color: 0x00303860, active: true };
+    }
+
     // 1. Render immediately with fallback — visible before any IPC
     unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
 
@@ -284,6 +334,32 @@ pub extern "C" fn _start() -> ! {
             }
             0 => {
                 // pdx_listen_raw already yields internally on empty.
+                continue;
+            }
+            0xE4 => {
+                // OP_WINDOW_CREATE safe inline ABI: arg0=x, arg1=y, arg2=(h<<32)|w
+                // V1: store only — no dynamic redraw. Visible on next boot render.
+                let x = msg.arg0 as i32;
+                let y = msg.arg1 as i32;
+                let w = (msg.arg2 as u32).min(MAX_FB_W as u32);
+                let h = ((msg.arg2 >> 32) as u32).min(MAX_FB_H as u32);
+                if w == 0 || h == 0 { continue; }
+                unsafe {
+                    for slot in SURFACES.iter_mut() {
+                        if !slot.active {
+                            *slot = Surface {
+                                x, y, w, h,
+                                color: 0x00303860,
+                                active: true,
+                            };
+                            break;
+                        }
+                    }
+                }
+            }
+            0xDE => {
+                // OP_WINDOW_CREATE (legacy pointer protocol) — arg0 is cross-PD pointer.
+                // Must NOT dereference. Unsupported until kernel-mediated copy exists.
                 continue;
             }
             _ => {
