@@ -477,5 +477,19 @@ pub unsafe fn debug_dump_user_entry_bytes(next_ctx: *const TaskContext) {
 }
 
 pub fn yield_now() {
-    // Phase 25: No-op. Preemption handles switching in Ring 3.
+    let core_id = crate::core_local::CoreLocal::get().core_id;
+    let sched = &SCHEDULERS[core_id as usize];
+    let current = sched.current_task.load(Ordering::Acquire);
+    if !current.is_null() {
+        unsafe {
+            let state = (*current).state.load(Ordering::Acquire);
+            if state == TaskState::Running as u32 {
+                (*current).state.store(TaskState::Ready as u32, Ordering::Release);
+                sched.runqueue.push(current);
+                // Clear current_task so tick() won't see Running and
+                // re-requeue a task already placed in the runqueue.
+                sched.current_task.store(ptr::null_mut(), Ordering::Release);
+            }
+        }
+    }
 }
