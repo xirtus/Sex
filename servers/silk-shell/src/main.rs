@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use sex_pdx::{
     pdx_call, pdx_try_listen, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
-    SLOT_DISPLAY, SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE,
+    SLOT_DISPLAY, SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
     SVC_STATE_LISTENING, ERR_CAP_INVALID,
 };
 
@@ -84,6 +84,8 @@ pub extern "C" fn _start() -> ! {
 
     // Stage 2B: advertise workspace 0 active to SilkBar
     pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, 0, 0, 0);
+    // Stage 2C: one-time focus advertisement (shell)
+    pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, 0, 0);
     serial_println!("[silk-shell] Boot workspace advertisement sent to SilkBar");
 
     loop {

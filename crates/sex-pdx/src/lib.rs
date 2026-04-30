@@ -93,6 +93,7 @@ pub const OP_SILKBAR_PING:     u64 = 0xF0;
 pub const OP_SILKBAR_GET_ABI:  u64 = 0xF1;
 pub const OP_SILKBAR_UPDATE:           u64 = 0xF2;
 pub const OP_SILKBAR_WORKSPACE_ACTIVE: u64 = 0xF3;
+pub const OP_SILKBAR_FOCUS_STATE:      u64 = 0xF4;
 pub const SILKBAR_ABI_VERSION: u64 = 1;
 
 #[repr(C)]
