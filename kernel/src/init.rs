@@ -77,6 +77,8 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(silkshell_id) {
             pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
             pd.grant_capability(sex_pdx::SLOT_SHELL,   CapabilityData::Domain(silkshell_id));
+            // Stage 2B: silk-shell can send workspace IPC to SilkBar
+            pd.grant_capability(sex_pdx::SLOT_SILKBAR, CapabilityData::Domain(silkbar_id));
             serial_println!("✓ Phase 25: Capabilities granted to silk-shell");
         }
 

@@ -6,7 +6,8 @@ use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use sex_pdx::{
     pdx_call, pdx_try_listen, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
-    SLOT_DISPLAY, SVC_STATE_LISTENING, ERR_CAP_INVALID,
+    SLOT_DISPLAY, SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE,
+    SVC_STATE_LISTENING, ERR_CAP_INVALID,
 };
 
 // Local Opcodes
@@ -80,6 +81,10 @@ pub extern "C" fn _start() -> ! {
         sys_set_state(SVC_STATE_LISTENING);
     }
     serial_println!("[silk-shell] AUTHORITATIVE WM LISTENING (PDX SLOT 6)");
+
+    // Stage 2B: advertise workspace 0 active to SilkBar
+    pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, 0, 0, 0);
+    serial_println!("[silk-shell] Boot workspace advertisement sent to SilkBar");
 
     loop {
         let mut mutated = false;

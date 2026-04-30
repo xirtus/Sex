@@ -91,7 +91,8 @@ pub const OP_WINDOW_WRITE:  u64 = 0xE8;
 // SilkBar protocol opcodes (reserved; server attaches in v7+)
 pub const OP_SILKBAR_PING:     u64 = 0xF0;
 pub const OP_SILKBAR_GET_ABI:  u64 = 0xF1;
-pub const OP_SILKBAR_UPDATE:   u64 = 0xF2;
+pub const OP_SILKBAR_UPDATE:           u64 = 0xF2;
+pub const OP_SILKBAR_WORKSPACE_ACTIVE: u64 = 0xF3;
 pub const SILKBAR_ABI_VERSION: u64 = 1;
 
 #[repr(C)]
@@ -215,13 +216,48 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
     }
 }
 
+/// Non-blocking listen — calls syscall 28 once, returns None if empty.
+pub fn pdx_try_listen_raw(slot: u64) -> Option<PdxMessage> {
+    let type_id: u64;
+    let caller_pd: u64;
+    let arg0: u64;
+    let arg1: u64;
+    let arg2: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") 28u64,
+            in("rdi") slot,
+            lateout("rax") type_id,
+            lateout("rsi") caller_pd,
+            lateout("rdx") arg0,
+            lateout("r10") arg1,
+            lateout("r8")  arg2,
+            out("rcx") _,
+            out("r11") _,
+        );
+    }
+    if type_id == 0 {
+        None
+    } else {
+        Some(PdxMessage {
+            type_id,
+            arg0,
+            arg1,
+            arg2,
+            caller_pd: caller_pd as u32,
+            _pad: 0,
+        })
+    }
+}
+
 /// Spin-receive from default message ring (Slot 0).
 pub fn pdx_listen() -> PdxMessage {
     pdx_listen_raw(0)
 }
 
 pub fn pdx_try_listen() -> Option<PdxMessage> {
-    None
+    pdx_try_listen_raw(0)
 }
 
 #[inline(always)]
@@ -278,6 +314,7 @@ pub const SLOT_INPUT:   u64 = 3; // HID input
 pub const SLOT_AUDIO:   u64 = 4; // audio server
 pub const SLOT_DISPLAY: u64 = 5; // SexDisplay compositor
 pub const SLOT_SHELL:   u64 = 6; // silk-shell orchestration entry
+pub const SLOT_SILKBAR: u64 = 7; // SilkBar model authority
 
 // Capability invocation trap numbers (ring-3 → ring-0 transition only).
 // These are sex-pdx implementation details, NOT POSIX-style syscall numbers.

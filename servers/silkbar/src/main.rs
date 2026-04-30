@@ -38,6 +38,18 @@ pub extern "C" fn _start() -> ! {
     ));
 
     loop {
+        // Stage 2B: poll at most one upstream message (non-blocking)
+        if let Some(msg) = sex_pdx::pdx_try_listen_raw(0) {
+            if msg.type_id == sex_pdx::OP_SILKBAR_WORKSPACE_ACTIVE {
+                let ws = (msg.arg0 as u8).min(4);
+                for i in 0..5 {
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetWorkspaceActive as u32, i, if i == ws { 1 } else { 0 }, 0,
+                    ));
+                }
+            }
+        }
+
         // ~1s via yield (no rdtsc — freezes under QEMU TCG)
         for _ in 0..100 {
             sex_pdx::sys_yield();
