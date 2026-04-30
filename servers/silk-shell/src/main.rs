@@ -88,6 +88,10 @@ pub extern "C" fn _start() -> ! {
     pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, 0, 0);
     serial_println!("[silk-shell] Boot workspace advertisement sent to SilkBar");
 
+    // Stage: boot-time safe inline surface create (0xE4 — proves client→display ABI)
+    pdx_call(SLOT_DISPLAY, 0xE4, 100, 100, (800u64) | (500u64 << 32));
+    serial_println!("[silk-shell] Boot 0xE4 surface create sent to sexdisplay");
+
     loop {
         let mut mutated = false;
 
