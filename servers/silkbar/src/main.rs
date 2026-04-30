@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use silkbar_model::{SilkBarUpdate, UpdateKind, OP_SILKBAR_UPDATE};
+use silkbar_model::{SilkBarUpdate, UpdateKind, ChipKind, OP_SILKBAR_UPDATE};
 
 fn send_update(update: SilkBarUpdate) {
     let _ = sex_pdx::pdx_call(
@@ -52,6 +52,25 @@ pub extern "C" fn _start() -> ! {
                 mm = 0;
                 hh = if hh >= 23 { 0 } else { hh + 1 };
             }
+        }
+
+        // Stage 2A: periodic workspace/chip state — proves live producer data
+        // cycles active workspace (0 ↔ 2) and chip 0 kind (Net ↔ Wifi)
+        // every 15 clock ticks alongside the existing clock tick.
+        // Timing is yield-loop relative, not wall-clock accurate.
+        // TODO: replace with event-driven updates in Stage 2B.
+        if ss % 15 == 0 {
+            let phase = (ss / 15) & 1;
+            let active_ws = phase * 2; // alternate between 0 and 2
+            for ws in 0..5 {
+                send_update(SilkBarUpdate::new(
+                    UpdateKind::SetWorkspaceActive as u32, ws, if ws == active_ws { 1 } else { 0 }, 0,
+                ));
+            }
+            let chip_kind = if phase == 0 { ChipKind::Net as u32 } else { ChipKind::Wifi as u32 };
+            send_update(SilkBarUpdate::new(
+                UpdateKind::SetChipKind as u32, 0, chip_kind, 0,
+            ));
         }
 
         send_update(SilkBarUpdate::new(
