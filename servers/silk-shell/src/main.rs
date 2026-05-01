@@ -163,6 +163,7 @@ static mut POINTER_X: i32 = 0;
 static mut POINTER_Y: i32 = 0;
 static mut POINTER_BUTTONS: u8 = 0; // bitmask: bit0=left, bit1=right, bit2=middle
 static mut CLICK_ACTIVE: bool = false; // edge-trigger guard: reset on left release
+static mut DRAG_ACTIVE: bool = false;  // drag in progress: set on left press over focused surface
 // Linen surface 200 position tracking (stable — linen never moves)
 static mut SURFACE_200_X: i32 = 900;
 static mut SURFACE_200_Y: i32 = 500;
@@ -246,6 +247,12 @@ fn surface_is_alive(sid: u64) -> bool {
         SURFACE_ID_LINEN  => true,  // linen never destroys its surface
         _ => false,
     }
+}
+
+/// Returns true if the surface is shell-managed (draggable in V1).
+fn is_shell_surface(sid: u64) -> bool {
+    sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
+    || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
 }
 
 #[no_mangle]
@@ -980,10 +987,43 @@ pub extern "C" fn _start() -> ! {
                             POINTER_Y = msg.arg1 as i32;
                             serial_println!("[silk-shell] Pointer ABS ({}, {})", POINTER_X, POINTER_Y);
                         } else if event_class == EV_REL {
-                            POINTER_X = POINTER_X.wrapping_add(msg.arg0 as i32);
-                            POINTER_Y = POINTER_Y.wrapping_add(msg.arg1 as i32);
+                            let dx = msg.arg0 as i32;
+                            let dy = msg.arg1 as i32;
+                            POINTER_X = POINTER_X.wrapping_add(dx);
+                            POINTER_Y = POINTER_Y.wrapping_add(dy);
+
+                            // ── Drag movement: move focused surface by delta while button held ──
+                            if DRAG_ACTIVE {
+                                let focused = FOCUSED_SURFACE_ID;
+                                if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                    WINDOWS[1].desc.x = WINDOWS[1].desc.x.wrapping_add(dx);
+                                    WINDOWS[1].desc.y = WINDOWS[1].desc.y.wrapping_add(dy);
+                                    let (cx, cy) = clamp_position(WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, SURFACE_100_H);
+                                    WINDOWS[1].desc.x = cx; WINDOWS[1].desc.y = cy;
+                                    mutated = true;
+                                } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                    SURFACE_101_X = SURFACE_101_X.wrapping_add(dx);
+                                    SURFACE_101_Y = SURFACE_101_Y.wrapping_add(dy);
+                                    let (cx, cy) = clamp_position(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H);
+                                    SURFACE_101_X = cx; SURFACE_101_Y = cy;
+                                    mutated = true;
+                                } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
+                                    SURFACE_102_X = SURFACE_102_X.wrapping_add(dx);
+                                    SURFACE_102_Y = SURFACE_102_Y.wrapping_add(dy);
+                                    let (cx, cy) = clamp_position(SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H);
+                                    SURFACE_102_X = cx; SURFACE_102_Y = cy;
+                                    mutated = true;
+                                } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
+                                    SURFACE_103_X = SURFACE_103_X.wrapping_add(dx);
+                                    SURFACE_103_Y = SURFACE_103_Y.wrapping_add(dy);
+                                    let (cx, cy) = clamp_position(SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H);
+                                    SURFACE_103_X = cx; SURFACE_103_Y = cy;
+                                    mutated = true;
+                                }
+                            }
+
                             serial_println!("[silk-shell] Pointer REL d=({},{}) pos=({},{})",
-                                msg.arg0 as i32, msg.arg1 as i32, POINTER_X, POINTER_Y);
+                                dx, dy, POINTER_X, POINTER_Y);
                         } else if event_class == EV_BTN {
                             let button = msg.arg0 as u8;
                             let pressed = msg.arg1 != 0;
@@ -1019,8 +1059,19 @@ pub extern "C" fn _start() -> ! {
                                             serial_println!("[silk-shell] Click focus surface {}", hit_id);
                                         }
                                     }
+                                    // ── Drag start: if pointer is over the now-focused shell surface ──
+                                    if is_shell_surface(FOCUSED_SURFACE_ID)
+                                        && point_in_surface(POINTER_X, POINTER_Y, FOCUSED_SURFACE_ID)
+                                    {
+                                        DRAG_ACTIVE = true;
+                                        serial_println!("[silk-shell] Drag start surface {}", FOCUSED_SURFACE_ID);
+                                    }
                                 } else if !pressed {
                                     CLICK_ACTIVE = false;
+                                    if DRAG_ACTIVE {
+                                        DRAG_ACTIVE = false;
+                                        serial_println!("[silk-shell] Drag end");
+                                    }
                                 }
                             }
                         }
