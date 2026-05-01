@@ -27,9 +27,10 @@ pub fn init() {
     let mut silkshell_id = 0;
     let mut sexinput_id = 0;
     let mut silkbar_id = 0;
+    let mut linen_id = 0;
 
     // Fixed Spawn Order (Deterministic IDs)
-    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "silkbar"];
+    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "silkbar", "linen"];
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -58,6 +59,8 @@ pub fn init() {
                             sexinput_id = id;
                         } else if domain_id == 5 {
                             silkbar_id = id;
+                        } else if domain_id == 6 {
+                            linen_id = id;
                         }
                     }
                     Err(e) => {
@@ -102,6 +105,16 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(silkbar_id) {
             pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
             serial_println!("✓ SilkBar v8: Capability SLOT_DISPLAY granted");
+        }
+    }
+
+    // Linen delivery path: grant display capability for placeholder surface.
+    if linen_id != 0 && sexdisp_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::capability::CapabilityData;
+        if let Some(pd) = DOMAIN_REGISTRY.get(linen_id) {
+            pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
+            serial_println!("✓ Phase 25: Capability SLOT_DISPLAY granted to linen");
         }
     }
 

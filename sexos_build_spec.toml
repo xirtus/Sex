@@ -32,7 +32,8 @@ crates = [
   "servers/silk-shell/Cargo.toml",
   "servers/sexinput/Cargo.toml",
   "purple-scanout/Cargo.toml",
-  "servers/silkbar/Cargo.toml"
+  "servers/silkbar/Cargo.toml",
+  "servers/linen/Cargo.toml"
 ]
 
 [[stage]]
@@ -98,6 +99,13 @@ action = "cargo_manifest"
 manifest = "servers/silkbar/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/silkbar"
 dest_artifact = "iso_root/servers/silkbar"
+
+[[stage]]
+id = "build_linen"
+action = "cargo_manifest"
+manifest = "servers/linen/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/linen"
+dest_artifact = "iso_root/servers/linen"
 
 [[stage]]
 id = "copy_limine_cfg"
