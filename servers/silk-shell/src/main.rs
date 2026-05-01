@@ -19,9 +19,81 @@ pub const SURFACE_ID_APP: u64 = 100;
 pub const SURFACE_ID_STATIC: u64 = 101;
 pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 
-// Desktop size constants
-const DESKTOP_W: i32 = 1280;
-const DESKTOP_H: i32 = 720;
+// ── Policy Model ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SurfaceAction {
+    MoveLeft, MoveRight, MoveUp, MoveDown,
+    FocusToggle,
+    Focus100, Focus101,
+    DestroyFocused,
+    RecreateFocused,
+    ResetAll,
+    SnapLeft, SnapRight, Maximize, Center,
+    ShrinkWidth, GrowWidth, ShrinkHeight, GrowHeight,
+    LegacyFocusToggle,
+}
+
+struct DesktopPolicy {
+    width: i32,
+    height: i32,
+    bar_height: i32,
+    move_step: i32,
+    resize_step: u32,
+    min_width: u32,
+    min_height: u32,
+    boot_rect_100: (i32, i32, u32, u32),
+    boot_rect_101: (i32, i32, u32, u32),
+}
+
+const P: DesktopPolicy = DesktopPolicy {
+    width: 1280,
+    height: 720,
+    bar_height: 50,
+    move_step: 10,
+    resize_step: 20,
+    min_width: 120,
+    min_height: 80,
+    boot_rect_100: (100, 100, 800, 500),
+    boot_rect_101: (180, 160, 500, 300),
+};
+
+fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
+    match scancode {
+        0x0F => Some(SurfaceAction::FocusToggle),
+        0x3C => Some(SurfaceAction::DestroyFocused),
+        0x02 => Some(SurfaceAction::Focus100),
+        0x03 => Some(SurfaceAction::Focus101),
+        0x3D => Some(SurfaceAction::RecreateFocused),
+        0x13 => Some(SurfaceAction::ResetAll),
+        0x26 => Some(SurfaceAction::SnapLeft),
+        0x27 => Some(SurfaceAction::SnapRight),
+        0x32 => Some(SurfaceAction::Maximize),
+        0x2E => Some(SurfaceAction::Center),
+        0x1A => Some(SurfaceAction::ShrinkWidth),
+        0x1B => Some(SurfaceAction::GrowWidth),
+        0x0C => Some(SurfaceAction::ShrinkHeight),
+        0x0D => Some(SurfaceAction::GrowHeight),
+        0x3B => Some(SurfaceAction::LegacyFocusToggle),
+        0x4B => Some(SurfaceAction::MoveLeft),
+        0x4D => Some(SurfaceAction::MoveRight),
+        0x48 => Some(SurfaceAction::MoveUp),
+        0x50 => Some(SurfaceAction::MoveDown),
+        _ => None,
+    }
+}
+
+fn layout_left() -> (i32, i32, u32, u32) {
+    (0, P.bar_height, (P.width as u32) / 2, (P.height - P.bar_height) as u32)
+}
+
+fn layout_right() -> (i32, i32, u32, u32) {
+    (P.width / 2, P.bar_height, (P.width as u32) / 2, (P.height - P.bar_height) as u32)
+}
+
+fn layout_maximize() -> (i32, i32, u32, u32) {
+    (0, P.bar_height, P.width as u32, (P.height - P.bar_height) as u32)
+}
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -49,9 +121,9 @@ static mut SNAPSHOT: [WindowDescriptor; 16] = [
 ];
 
 fn clamp_surface_size(x: i32, y: i32, w: u32, h: u32) -> (u32, u32) {
-    let max_w = (DESKTOP_W - x).max(120) as u32;
-    let max_h = (DESKTOP_H - y).max(80) as u32;
-    (w.min(max_w).max(120), h.min(max_h).max(80))
+    let max_w = (P.width - x).max(P.min_width as i32) as u32;
+    let max_h = (P.height - y).max(P.min_height as i32) as u32;
+    (w.min(max_w).max(P.min_width), h.min(max_h).max(P.min_height))
 }
 
 fn emit_snapshot() {
@@ -168,337 +240,348 @@ pub extern "C" fn _start() -> ! {
                     let value = msg.arg1; // 1=pressed, 0=released
 
                     unsafe {
-                        // Tab: toggle focus to alive surface (make-code only)
-                        if scancode == 0x0F && value == 1 {
-                            let current = FOCUSED_SURFACE_ID;
-                            if current == SURFACE_ID_APP && SURFACE_101_ALIVE {
-                                FOCUSED_SURFACE_ID = SURFACE_ID_STATIC;
-                                pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0);
-                                mutated = true;
-                                serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
-                            } else if current == SURFACE_ID_STATIC && SURFACE_100_ALIVE {
-                                FOCUSED_SURFACE_ID = SURFACE_ID_APP;
-                                pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
-                                mutated = true;
-                                serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
-                            }
-                        }
+                        // ── Make-code dispatch via policy lookup ──────────────
+                        if value == 1 {
+                            if let Some(action) = scancode_to_action(scancode) {
+                                match action {
+                                    SurfaceAction::FocusToggle => {
+                                        let current = FOCUSED_SURFACE_ID;
+                                        if current == SURFACE_ID_APP && SURFACE_101_ALIVE {
+                                            FOCUSED_SURFACE_ID = SURFACE_ID_STATIC;
+                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0);
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
+                                        } else if current == SURFACE_ID_STATIC && SURFACE_100_ALIVE {
+                                            FOCUSED_SURFACE_ID = SURFACE_ID_APP;
+                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
+                                        }
+                                    }
 
-                        // F2: destroy focused surface (make-code only)
-                        if scancode == 0x3C && value == 1 {
-                            let target = FOCUSED_SURFACE_ID;
-                            let mut destroyed = false;
-                            if target == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                SURFACE_100_ALIVE = false;
-                                pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
-                                destroyed = true;
-                                serial_println!("[silk-shell] Destroyed surface 100");
-                            } else if target == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                SURFACE_101_ALIVE = false;
-                                pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
-                                destroyed = true;
-                                serial_println!("[silk-shell] Destroyed surface 101");
-                            }
-                            if destroyed {
-                                // Auto-switch focus to other alive surface
-                                if target == SURFACE_ID_APP && SURFACE_101_ALIVE {
-                                    FOCUSED_SURFACE_ID = SURFACE_ID_STATIC;
-                                    pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0);
-                                    serial_println!("[silk-shell] Auto-switched focus to surface 101");
-                                } else if target == SURFACE_ID_STATIC && SURFACE_100_ALIVE {
-                                    FOCUSED_SURFACE_ID = SURFACE_ID_APP;
-                                    pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
-                                    serial_println!("[silk-shell] Auto-switched focus to surface 100");
+                                    SurfaceAction::DestroyFocused => {
+                                        let target = FOCUSED_SURFACE_ID;
+                                        let mut destroyed = false;
+                                        if target == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            SURFACE_100_ALIVE = false;
+                                            pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
+                                            destroyed = true;
+                                            serial_println!("[silk-shell] Destroyed surface 100");
+                                        } else if target == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                            SURFACE_101_ALIVE = false;
+                                            pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
+                                            destroyed = true;
+                                            serial_println!("[silk-shell] Destroyed surface 101");
+                                        }
+                                        if destroyed {
+                                            if target == SURFACE_ID_APP && SURFACE_101_ALIVE {
+                                                FOCUSED_SURFACE_ID = SURFACE_ID_STATIC;
+                                                pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0);
+                                                serial_println!("[silk-shell] Auto-switched focus to surface 101");
+                                            } else if target == SURFACE_ID_STATIC && SURFACE_100_ALIVE {
+                                                FOCUSED_SURFACE_ID = SURFACE_ID_APP;
+                                                pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+                                                serial_println!("[silk-shell] Auto-switched focus to surface 100");
+                                            }
+                                            mutated = true;
+                                        }
+                                    }
+
+                                    SurfaceAction::Focus100 => {
+                                        if SURFACE_100_ALIVE {
+                                            FOCUSED_SURFACE_ID = SURFACE_ID_APP;
+                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Focus switched to surface 100");
+                                        }
+                                    }
+
+                                    SurfaceAction::Focus101 => {
+                                        if SURFACE_101_ALIVE {
+                                            FOCUSED_SURFACE_ID = SURFACE_ID_STATIC;
+                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0);
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Focus switched to surface 101");
+                                        }
+                                    }
+
+                                    SurfaceAction::RecreateFocused => {
+                                        let (rx, ry, rw, rh) = P.boot_rect_100;
+                                        if FOCUSED_SURFACE_ID == SURFACE_ID_APP && !SURFACE_100_ALIVE {
+                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+                                            SURFACE_100_ALIVE = true;
+                                            WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
+                                            SURFACE_100_W = rw; SURFACE_100_H = rh;
+                                            WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Recreated surface 100");
+                                        } else if FOCUSED_SURFACE_ID == SURFACE_ID_STATIC && !SURFACE_101_ALIVE {
+                                            let (rx, ry, rw, rh) = P.boot_rect_101;
+                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+                                            SURFACE_101_ALIVE = true;
+                                            SURFACE_101_X = rx; SURFACE_101_Y = ry;
+                                            SURFACE_101_W = rw; SURFACE_101_H = rh;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Recreated surface 101");
+                                        }
+                                        else if FOCUSED_SURFACE_ID == 0 && !SURFACE_100_ALIVE && !SURFACE_101_ALIVE {
+                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+                                            SURFACE_100_ALIVE = true;
+                                            WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
+                                            SURFACE_100_W = rw; SURFACE_100_H = rh;
+                                            WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
+                                            FOCUSED_SURFACE_ID = SURFACE_ID_APP;
+                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Recreated surface 100 (fallback)");
+                                        }
+                                    }
+
+                                    SurfaceAction::ResetAll => {
+                                        let (rx, ry, rw, rh) = P.boot_rect_100;
+                                        SURFACE_100_ALIVE = true;
+                                        WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
+                                        SURFACE_100_W = rw; SURFACE_100_H = rh;
+                                        WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
+
+                                        let (rx2, ry2, rw2, rh2) = P.boot_rect_101;
+                                        SURFACE_101_ALIVE = true;
+                                        SURFACE_101_X = rx2; SURFACE_101_Y = ry2;
+                                        SURFACE_101_W = rw2; SURFACE_101_H = rh2;
+
+                                        FOCUSED_SURFACE_ID = SURFACE_ID_APP;
+
+                                        pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+                                        pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (ry2 as u64) << 32 | rx2 as u64, (rh2 as u64) << 32 | rw2 as u64);
+                                        pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+
+                                        mutated = true;
+                                        serial_println!("[silk-shell] Reset both surfaces to boot state");
+                                    }
+
+                                    SurfaceAction::SnapLeft => {
+                                        let (rx, ry, rw, rh) = layout_left();
+                                        let focused = FOCUSED_SURFACE_ID;
+                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+                                            WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
+                                            WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Surface 100 snapped to left half");
+                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+                                            SURFACE_101_X = rx; SURFACE_101_Y = ry;
+                                            SURFACE_101_W = rw; SURFACE_101_H = rh;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Surface 101 snapped to left half");
+                                        }
+                                    }
+
+                                    SurfaceAction::SnapRight => {
+                                        let (rx, ry, rw, rh) = layout_right();
+                                        let focused = FOCUSED_SURFACE_ID;
+                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+                                            WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
+                                            WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Surface 100 snapped to right half");
+                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+                                            SURFACE_101_X = rx; SURFACE_101_Y = ry;
+                                            SURFACE_101_W = rw; SURFACE_101_H = rh;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Surface 101 snapped to right half");
+                                        }
+                                    }
+
+                                    SurfaceAction::Maximize => {
+                                        let (rx, ry, rw, rh) = layout_maximize();
+                                        let focused = FOCUSED_SURFACE_ID;
+                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+                                            WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
+                                            WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Surface 100 maximized");
+                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+                                            SURFACE_101_X = rx; SURFACE_101_Y = ry;
+                                            SURFACE_101_W = rw; SURFACE_101_H = rh;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Surface 101 maximized");
+                                        }
+                                    }
+
+                                    SurfaceAction::Center => {
+                                        let focused = FOCUSED_SURFACE_ID;
+                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            let (rx, ry, rw, rh) = P.boot_rect_100;
+                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+                                            WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
+                                            WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Surface 100 centered");
+                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                            let (rx, ry, rw, rh) = P.boot_rect_101;
+                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+                                            SURFACE_101_X = rx; SURFACE_101_Y = ry;
+                                            SURFACE_101_W = rw; SURFACE_101_H = rh;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Surface 101 centered");
+                                        }
+                                    }
+
+                                    SurfaceAction::ShrinkWidth => {
+                                        let focused = FOCUSED_SURFACE_ID;
+                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            let new_w = SURFACE_100_W.saturating_sub(P.resize_step);
+                                            let (new_w, _) = clamp_surface_size(WINDOWS[1].desc.x, WINDOWS[1].desc.y, new_w, SURFACE_100_H);
+                                            if new_w != SURFACE_100_W {
+                                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP,
+                                                    (WINDOWS[1].desc.y as u64) << 32 | WINDOWS[1].desc.x as u64,
+                                                    (SURFACE_100_H as u64) << 32 | new_w as u64);
+                                                SURFACE_100_W = new_w;
+                                                WINDOWS[1].desc.width = new_w;
+                                                mutated = true;
+                                                serial_println!("[silk-shell] Surface 100 width shrunk to {}", new_w);
+                                            }
+                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                            let new_w = SURFACE_101_W.saturating_sub(P.resize_step);
+                                            let (new_w, _) = clamp_surface_size(SURFACE_101_X, SURFACE_101_Y, new_w, SURFACE_101_H);
+                                            if new_w != SURFACE_101_W {
+                                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC,
+                                                    (SURFACE_101_Y as u64) << 32 | SURFACE_101_X as u64,
+                                                    (SURFACE_101_H as u64) << 32 | new_w as u64);
+                                                SURFACE_101_W = new_w;
+                                                mutated = true;
+                                                serial_println!("[silk-shell] Surface 101 width shrunk to {}", new_w);
+                                            }
+                                        }
+                                    }
+
+                                    SurfaceAction::GrowWidth => {
+                                        let focused = FOCUSED_SURFACE_ID;
+                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            let new_w = SURFACE_100_W + P.resize_step;
+                                            let (new_w, _) = clamp_surface_size(WINDOWS[1].desc.x, WINDOWS[1].desc.y, new_w, SURFACE_100_H);
+                                            if new_w != SURFACE_100_W {
+                                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP,
+                                                    (WINDOWS[1].desc.y as u64) << 32 | WINDOWS[1].desc.x as u64,
+                                                    (SURFACE_100_H as u64) << 32 | new_w as u64);
+                                                SURFACE_100_W = new_w;
+                                                WINDOWS[1].desc.width = new_w;
+                                                mutated = true;
+                                                serial_println!("[silk-shell] Surface 100 width grown to {}", new_w);
+                                            }
+                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                            let new_w = SURFACE_101_W + P.resize_step;
+                                            let (new_w, _) = clamp_surface_size(SURFACE_101_X, SURFACE_101_Y, new_w, SURFACE_101_H);
+                                            if new_w != SURFACE_101_W {
+                                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC,
+                                                    (SURFACE_101_Y as u64) << 32 | SURFACE_101_X as u64,
+                                                    (SURFACE_101_H as u64) << 32 | new_w as u64);
+                                                SURFACE_101_W = new_w;
+                                                mutated = true;
+                                                serial_println!("[silk-shell] Surface 101 width grown to {}", new_w);
+                                            }
+                                        }
+                                    }
+
+                                    SurfaceAction::ShrinkHeight => {
+                                        let focused = FOCUSED_SURFACE_ID;
+                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            let new_h = SURFACE_100_H.saturating_sub(P.resize_step);
+                                            let (_, new_h) = clamp_surface_size(WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, new_h);
+                                            if new_h != SURFACE_100_H {
+                                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP,
+                                                    (WINDOWS[1].desc.y as u64) << 32 | WINDOWS[1].desc.x as u64,
+                                                    (new_h as u64) << 32 | SURFACE_100_W as u64);
+                                                SURFACE_100_H = new_h;
+                                                WINDOWS[1].desc.height = new_h;
+                                                mutated = true;
+                                                serial_println!("[silk-shell] Surface 100 height shrunk to {}", new_h);
+                                            }
+                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                            let new_h = SURFACE_101_H.saturating_sub(P.resize_step);
+                                            let (_, new_h) = clamp_surface_size(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, new_h);
+                                            if new_h != SURFACE_101_H {
+                                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC,
+                                                    (SURFACE_101_Y as u64) << 32 | SURFACE_101_X as u64,
+                                                    (new_h as u64) << 32 | SURFACE_101_W as u64);
+                                                SURFACE_101_H = new_h;
+                                                mutated = true;
+                                                serial_println!("[silk-shell] Surface 101 height shrunk to {}", new_h);
+                                            }
+                                        }
+                                    }
+
+                                    SurfaceAction::GrowHeight => {
+                                        let focused = FOCUSED_SURFACE_ID;
+                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            let new_h = SURFACE_100_H + P.resize_step;
+                                            let (_, new_h) = clamp_surface_size(WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, new_h);
+                                            if new_h != SURFACE_100_H {
+                                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP,
+                                                    (WINDOWS[1].desc.y as u64) << 32 | WINDOWS[1].desc.x as u64,
+                                                    (new_h as u64) << 32 | SURFACE_100_W as u64);
+                                                SURFACE_100_H = new_h;
+                                                WINDOWS[1].desc.height = new_h;
+                                                mutated = true;
+                                                serial_println!("[silk-shell] Surface 100 height grown to {}", new_h);
+                                            }
+                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                            let new_h = SURFACE_101_H + P.resize_step;
+                                            let (_, new_h) = clamp_surface_size(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, new_h);
+                                            if new_h != SURFACE_101_H {
+                                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC,
+                                                    (SURFACE_101_Y as u64) << 32 | SURFACE_101_X as u64,
+                                                    (new_h as u64) << 32 | SURFACE_101_W as u64);
+                                                SURFACE_101_H = new_h;
+                                                mutated = true;
+                                                serial_println!("[silk-shell] Surface 101 height grown to {}", new_h);
+                                            }
+                                        }
+                                    }
+
+                                    SurfaceAction::LegacyFocusToggle => {
+                                        FOCUS_ID = if FOCUS_ID == 2 { 1 } else { 2 };
+                                        mutated = true;
+                                        serial_println!("[silk-shell] Legacy focus switched to window {}", FOCUS_ID);
+                                    }
+
+                                    // Arrow keys: dispatched via scancode block below
+                                    // to preserve existing break-code movement behavior
+                                    SurfaceAction::MoveLeft |
+                                    SurfaceAction::MoveRight |
+                                    SurfaceAction::MoveUp |
+                                    SurfaceAction::MoveDown => {}
                                 }
-                                mutated = true;
                             }
                         }
 
-                        // Key 1: focus surface 100 if alive (make-code only)
-                        if scancode == 0x02 && value == 1 && SURFACE_100_ALIVE {
-                            FOCUSED_SURFACE_ID = SURFACE_ID_APP;
-                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
-                            mutated = true;
-                            serial_println!("[silk-shell] Focus switched to surface 100");
-                        }
-
-                        // Key 2: focus surface 101 if alive (make-code only)
-                        if scancode == 0x03 && value == 1 && SURFACE_101_ALIVE {
-                            FOCUSED_SURFACE_ID = SURFACE_ID_STATIC;
-                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0);
-                            mutated = true;
-                            serial_println!("[silk-shell] Focus switched to surface 101");
-                        }
-
-                        // F3: recreate focused surface if destroyed (make-code only)
-                        if scancode == 0x3D && value == 1 {
-                            if FOCUSED_SURFACE_ID == SURFACE_ID_APP && !SURFACE_100_ALIVE {
-                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (100u64 << 32) | 100u64, (500u64 << 32) | 800u64);
-                                SURFACE_100_ALIVE = true;
-                                WINDOWS[1].desc.x = 100; WINDOWS[1].desc.y = 100;
-                                SURFACE_100_W = 800; SURFACE_100_H = 500;
-                                WINDOWS[1].desc.width = 800; WINDOWS[1].desc.height = 500;
-                                mutated = true;
-                                serial_println!("[silk-shell] Recreated surface 100");
-                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_STATIC && !SURFACE_101_ALIVE {
-                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (160u64 << 32) | 180u64, (300u64 << 32) | 500u64);
-                                SURFACE_101_ALIVE = true;
-                                SURFACE_101_X = 180; SURFACE_101_Y = 160;
-                                SURFACE_101_W = 500; SURFACE_101_H = 300;
-                                mutated = true;
-                                serial_println!("[silk-shell] Recreated surface 101");
-                            }
-                            // Defensive: if focused_id==0 and both dead, recreate 100 + set focus
-                            else if FOCUSED_SURFACE_ID == 0 && !SURFACE_100_ALIVE && !SURFACE_101_ALIVE {
-                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (100u64 << 32) | 100u64, (500u64 << 32) | 800u64);
-                                SURFACE_100_ALIVE = true;
-                                WINDOWS[1].desc.x = 100; WINDOWS[1].desc.y = 100;
-                                SURFACE_100_W = 800; SURFACE_100_H = 500;
-                                WINDOWS[1].desc.width = 800; WINDOWS[1].desc.height = 500;
-                                FOCUSED_SURFACE_ID = SURFACE_ID_APP;
-                                pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
-                                mutated = true;
-                                serial_println!("[silk-shell] Recreated surface 100 (fallback)");
-                            }
-                        }
-
-                        // R: reset both surfaces to boot state (make-code only)
-                        if scancode == 0x13 && value == 1 {
-                            SURFACE_100_ALIVE = true;
-                            WINDOWS[1].desc.x = 100; WINDOWS[1].desc.y = 100;
-                            SURFACE_100_W = 800; SURFACE_100_H = 500;
-                            WINDOWS[1].desc.width = 800; WINDOWS[1].desc.height = 500;
-
-                            SURFACE_101_ALIVE = true;
-                            SURFACE_101_X = 180; SURFACE_101_Y = 160;
-                            SURFACE_101_W = 500; SURFACE_101_H = 300;
-
-                            FOCUSED_SURFACE_ID = SURFACE_ID_APP;
-
-                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (100u64 << 32) | 100u64, (500u64 << 32) | 800u64);
-                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (160u64 << 32) | 180u64, (300u64 << 32) | 500u64);
-                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
-
-                            mutated = true;
-                            serial_println!("[silk-shell] Reset both surfaces to boot state");
-                        }
-
-                        // L: snap focused surface to left half (make-code only)
-                        if scancode == 0x26 && value == 1 {
-                            let focused = FOCUSED_SURFACE_ID;
-                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (50u64 << 32) | 0u64, (670u64 << 32) | 640u64);
-                                WINDOWS[1].desc.x = 0; WINDOWS[1].desc.y = 50;
-                                WINDOWS[1].desc.width = 640; WINDOWS[1].desc.height = 670;
-                                mutated = true;
-                                serial_println!("[silk-shell] Surface 100 snapped to left half");
-                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (50u64 << 32) | 0u64, (670u64 << 32) | 640u64);
-                                SURFACE_101_X = 0; SURFACE_101_Y = 50;
-                                SURFACE_101_W = 640; SURFACE_101_H = 670;
-                                mutated = true;
-                                serial_println!("[silk-shell] Surface 101 snapped to left half");
-                            }
-                        }
-
-                        // ; (semicolon): snap focused surface to right half (make-code only)
-                        if scancode == 0x27 && value == 1 {
-                            let focused = FOCUSED_SURFACE_ID;
-                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (50u64 << 32) | 640u64, (670u64 << 32) | 640u64);
-                                WINDOWS[1].desc.x = 640; WINDOWS[1].desc.y = 50;
-                                WINDOWS[1].desc.width = 640; WINDOWS[1].desc.height = 670;
-                                mutated = true;
-                                serial_println!("[silk-shell] Surface 100 snapped to right half");
-                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (50u64 << 32) | 640u64, (670u64 << 32) | 640u64);
-                                SURFACE_101_X = 640; SURFACE_101_Y = 50;
-                                SURFACE_101_W = 640; SURFACE_101_H = 670;
-                                mutated = true;
-                                serial_println!("[silk-shell] Surface 101 snapped to right half");
-                            }
-                        }
-
-                        // M: maximize focused surface below top bar (make-code only)
-                        if scancode == 0x32 && value == 1 {
-                            let focused = FOCUSED_SURFACE_ID;
-                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (50u64 << 32) | 0u64, (670u64 << 32) | 1280u64);
-                                WINDOWS[1].desc.x = 0; WINDOWS[1].desc.y = 50;
-                                WINDOWS[1].desc.width = 1280; WINDOWS[1].desc.height = 670;
-                                mutated = true;
-                                serial_println!("[silk-shell] Surface 100 maximized");
-                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (50u64 << 32) | 0u64, (670u64 << 32) | 1280u64);
-                                SURFACE_101_X = 0; SURFACE_101_Y = 50;
-                                SURFACE_101_W = 1280; SURFACE_101_H = 670;
-                                mutated = true;
-                                serial_println!("[silk-shell] Surface 101 maximized");
-                            }
-                        }
-
-                        // C: center focused surface to boot position/size (make-code only)
-                        if scancode == 0x2E && value == 1 {
-                            let focused = FOCUSED_SURFACE_ID;
-                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (100u64 << 32) | 100u64, (500u64 << 32) | 800u64);
-                                WINDOWS[1].desc.x = 100; WINDOWS[1].desc.y = 100;
-                                WINDOWS[1].desc.width = 800; WINDOWS[1].desc.height = 500;
-                                mutated = true;
-                                serial_println!("[silk-shell] Surface 100 centered");
-                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (160u64 << 32) | 180u64, (300u64 << 32) | 500u64);
-                                SURFACE_101_X = 180; SURFACE_101_Y = 160;
-                                SURFACE_101_W = 500; SURFACE_101_H = 300;
-                                mutated = true;
-                                serial_println!("[silk-shell] Surface 101 centered");
-                            }
-                        }
-
-                        // [: shrink width of focused surface (make-code only)
-                        if scancode == 0x1A && value == 1 {
-                            let focused = FOCUSED_SURFACE_ID;
-                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                let new_w = SURFACE_100_W.saturating_sub(20);
-                                let (new_w, _) = clamp_surface_size(WINDOWS[1].desc.x, WINDOWS[1].desc.y, new_w, SURFACE_100_H);
-                                if new_w != SURFACE_100_W {
-                                    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP,
-                                        (WINDOWS[1].desc.y as u64) << 32 | WINDOWS[1].desc.x as u64,
-                                        (SURFACE_100_H as u64) << 32 | new_w as u64);
-                                    SURFACE_100_W = new_w;
-                                    WINDOWS[1].desc.width = new_w;
-                                    mutated = true;
-                                    serial_println!("[silk-shell] Surface 100 width shrunk to {}", new_w);
-                                }
-                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                let new_w = SURFACE_101_W.saturating_sub(20);
-                                let (new_w, _) = clamp_surface_size(SURFACE_101_X, SURFACE_101_Y, new_w, SURFACE_101_H);
-                                if new_w != SURFACE_101_W {
-                                    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC,
-                                        (SURFACE_101_Y as u64) << 32 | SURFACE_101_X as u64,
-                                        (SURFACE_101_H as u64) << 32 | new_w as u64);
-                                    SURFACE_101_W = new_w;
-                                    mutated = true;
-                                    serial_println!("[silk-shell] Surface 101 width shrunk to {}", new_w);
-                                }
-                            }
-                        }
-
-                        // ]: grow width of focused surface (make-code only)
-                        if scancode == 0x1B && value == 1 {
-                            let focused = FOCUSED_SURFACE_ID;
-                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                let new_w = SURFACE_100_W + 20;
-                                let (new_w, _) = clamp_surface_size(WINDOWS[1].desc.x, WINDOWS[1].desc.y, new_w, SURFACE_100_H);
-                                if new_w != SURFACE_100_W {
-                                    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP,
-                                        (WINDOWS[1].desc.y as u64) << 32 | WINDOWS[1].desc.x as u64,
-                                        (SURFACE_100_H as u64) << 32 | new_w as u64);
-                                    SURFACE_100_W = new_w;
-                                    WINDOWS[1].desc.width = new_w;
-                                    mutated = true;
-                                    serial_println!("[silk-shell] Surface 100 width grown to {}", new_w);
-                                }
-                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                let new_w = SURFACE_101_W + 20;
-                                let (new_w, _) = clamp_surface_size(SURFACE_101_X, SURFACE_101_Y, new_w, SURFACE_101_H);
-                                if new_w != SURFACE_101_W {
-                                    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC,
-                                        (SURFACE_101_Y as u64) << 32 | SURFACE_101_X as u64,
-                                        (SURFACE_101_H as u64) << 32 | new_w as u64);
-                                    SURFACE_101_W = new_w;
-                                    mutated = true;
-                                    serial_println!("[silk-shell] Surface 101 width grown to {}", new_w);
-                                }
-                            }
-                        }
-
-                        // -: shrink height of focused surface (make-code only)
-                        if scancode == 0x0C && value == 1 {
-                            let focused = FOCUSED_SURFACE_ID;
-                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                let new_h = SURFACE_100_H.saturating_sub(20);
-                                let (_, new_h) = clamp_surface_size(WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, new_h);
-                                if new_h != SURFACE_100_H {
-                                    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP,
-                                        (WINDOWS[1].desc.y as u64) << 32 | WINDOWS[1].desc.x as u64,
-                                        (new_h as u64) << 32 | SURFACE_100_W as u64);
-                                    SURFACE_100_H = new_h;
-                                    WINDOWS[1].desc.height = new_h;
-                                    mutated = true;
-                                    serial_println!("[silk-shell] Surface 100 height shrunk to {}", new_h);
-                                }
-                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                let new_h = SURFACE_101_H.saturating_sub(20);
-                                let (_, new_h) = clamp_surface_size(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, new_h);
-                                if new_h != SURFACE_101_H {
-                                    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC,
-                                        (SURFACE_101_Y as u64) << 32 | SURFACE_101_X as u64,
-                                        (new_h as u64) << 32 | SURFACE_101_W as u64);
-                                    SURFACE_101_H = new_h;
-                                    mutated = true;
-                                    serial_println!("[silk-shell] Surface 101 height shrunk to {}", new_h);
-                                }
-                            }
-                        }
-
-                        // =: grow height of focused surface (make-code only)
-                        if scancode == 0x0D && value == 1 {
-                            let focused = FOCUSED_SURFACE_ID;
-                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                let new_h = SURFACE_100_H + 20;
-                                let (_, new_h) = clamp_surface_size(WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, new_h);
-                                if new_h != SURFACE_100_H {
-                                    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP,
-                                        (WINDOWS[1].desc.y as u64) << 32 | WINDOWS[1].desc.x as u64,
-                                        (new_h as u64) << 32 | SURFACE_100_W as u64);
-                                    SURFACE_100_H = new_h;
-                                    WINDOWS[1].desc.height = new_h;
-                                    mutated = true;
-                                    serial_println!("[silk-shell] Surface 100 height grown to {}", new_h);
-                                }
-                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                let new_h = SURFACE_101_H + 20;
-                                let (_, new_h) = clamp_surface_size(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, new_h);
-                                if new_h != SURFACE_101_H {
-                                    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC,
-                                        (SURFACE_101_Y as u64) << 32 | SURFACE_101_X as u64,
-                                        (new_h as u64) << 32 | SURFACE_101_W as u64);
-                                    SURFACE_101_H = new_h;
-                                    mutated = true;
-                                    serial_println!("[silk-shell] Surface 101 height grown to {}", new_h);
-                                }
-                            }
-                        }
-
-                        // F1: legacy window focus (unchanged, for snapshot path)
-                        if scancode == 0x3B && value == 1 {
-                            FOCUS_ID = if FOCUS_ID == 2 { 1 } else { 2 };
-                            mutated = true;
-                            serial_println!("[silk-shell] Legacy focus switched to window {}", FOCUS_ID);
-                        }
-
-                        // Arrow keys: move the focused surface (only if alive)
+                        // ── Arrow keys (both make and break, matching existing behavior) ──
+                        let step = P.move_step;
                         let focused = FOCUSED_SURFACE_ID;
                         if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
                             let focus_id = FOCUS_ID;
                             for w in WINDOWS.iter_mut() {
                                 if w.desc.window_id == focus_id && focus_id != 1 {
                                     match scancode {
-                                        0x4B => { w.desc.x -= 10; mutated = true; } // Left
-                                        0x4D => { w.desc.x += 10; mutated = true; } // Right
-                                        0x48 => { w.desc.y -= 10; mutated = true; } // Up
-                                        0x50 => { w.desc.y += 10; mutated = true; } // Down
+                                        0x4B => { w.desc.x -= step; mutated = true; }
+                                        0x4D => { w.desc.x += step; mutated = true; }
+                                        0x48 => { w.desc.y -= step; mutated = true; }
+                                        0x50 => { w.desc.y += step; mutated = true; }
                                         _ => {}
                                     }
                                 }
                             }
                         } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
                             match scancode {
-                                0x4B => { SURFACE_101_X -= 10; mutated = true; } // Left
-                                0x4D => { SURFACE_101_X += 10; mutated = true; } // Right
-                                0x48 => { SURFACE_101_Y -= 10; mutated = true; } // Up
-                                0x50 => { SURFACE_101_Y += 10; mutated = true; } // Down
+                                0x4B => { SURFACE_101_X -= step; mutated = true; }
+                                0x4D => { SURFACE_101_X += step; mutated = true; }
+                                0x48 => { SURFACE_101_Y -= step; mutated = true; }
+                                0x50 => { SURFACE_101_Y += step; mutated = true; }
                                 _ => {}
                             }
                         }
