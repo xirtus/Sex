@@ -261,6 +261,74 @@ pub extern "C" fn _start() -> ! {
                             serial_println!("[silk-shell] Reset both surfaces to boot state");
                         }
 
+                        // L: snap focused surface to left half (make-code only)
+                        if scancode == 0x26 && value == 1 {
+                            let focused = FOCUSED_SURFACE_ID;
+                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (50u64 << 32) | 0u64, (670u64 << 32) | 640u64);
+                                WINDOWS[1].desc.x = 0; WINDOWS[1].desc.y = 50;
+                                WINDOWS[1].desc.width = 640; WINDOWS[1].desc.height = 670;
+                                mutated = true;
+                                serial_println!("[silk-shell] Surface 100 snapped to left half");
+                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (50u64 << 32) | 0u64, (670u64 << 32) | 640u64);
+                                SURFACE_101_X = 0; SURFACE_101_Y = 50;
+                                mutated = true;
+                                serial_println!("[silk-shell] Surface 101 snapped to left half");
+                            }
+                        }
+
+                        // ; (semicolon): snap focused surface to right half (make-code only)
+                        if scancode == 0x27 && value == 1 {
+                            let focused = FOCUSED_SURFACE_ID;
+                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (50u64 << 32) | 640u64, (670u64 << 32) | 640u64);
+                                WINDOWS[1].desc.x = 640; WINDOWS[1].desc.y = 50;
+                                WINDOWS[1].desc.width = 640; WINDOWS[1].desc.height = 670;
+                                mutated = true;
+                                serial_println!("[silk-shell] Surface 100 snapped to right half");
+                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (50u64 << 32) | 640u64, (670u64 << 32) | 640u64);
+                                SURFACE_101_X = 640; SURFACE_101_Y = 50;
+                                mutated = true;
+                                serial_println!("[silk-shell] Surface 101 snapped to right half");
+                            }
+                        }
+
+                        // M: maximize focused surface below top bar (make-code only)
+                        if scancode == 0x32 && value == 1 {
+                            let focused = FOCUSED_SURFACE_ID;
+                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (50u64 << 32) | 0u64, (670u64 << 32) | 1280u64);
+                                WINDOWS[1].desc.x = 0; WINDOWS[1].desc.y = 50;
+                                WINDOWS[1].desc.width = 1280; WINDOWS[1].desc.height = 670;
+                                mutated = true;
+                                serial_println!("[silk-shell] Surface 100 maximized");
+                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (50u64 << 32) | 0u64, (670u64 << 32) | 1280u64);
+                                SURFACE_101_X = 0; SURFACE_101_Y = 50;
+                                mutated = true;
+                                serial_println!("[silk-shell] Surface 101 maximized");
+                            }
+                        }
+
+                        // C: center focused surface to boot position/size (make-code only)
+                        if scancode == 0x2E && value == 1 {
+                            let focused = FOCUSED_SURFACE_ID;
+                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (100u64 << 32) | 100u64, (500u64 << 32) | 800u64);
+                                WINDOWS[1].desc.x = 100; WINDOWS[1].desc.y = 100;
+                                WINDOWS[1].desc.width = 800; WINDOWS[1].desc.height = 500;
+                                mutated = true;
+                                serial_println!("[silk-shell] Surface 100 centered");
+                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (160u64 << 32) | 180u64, (300u64 << 32) | 500u64);
+                                SURFACE_101_X = 180; SURFACE_101_Y = 160;
+                                mutated = true;
+                                serial_println!("[silk-shell] Surface 101 centered");
+                            }
+                        }
+
                         // F1: legacy window focus (unchanged, for snapshot path)
                         if scancode == 0x3B && value == 1 {
                             FOCUS_ID = if FOCUS_ID == 2 { 1 } else { 2 };
