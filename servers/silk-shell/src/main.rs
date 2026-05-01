@@ -200,6 +200,67 @@ pub extern "C" fn _start() -> ! {
                             }
                         }
 
+                        // Key 1: focus surface 100 if alive (make-code only)
+                        if scancode == 0x02 && value == 1 && SURFACE_100_ALIVE {
+                            FOCUSED_SURFACE_ID = SURFACE_ID_APP;
+                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+                            mutated = true;
+                            serial_println!("[silk-shell] Focus switched to surface 100");
+                        }
+
+                        // Key 2: focus surface 101 if alive (make-code only)
+                        if scancode == 0x03 && value == 1 && SURFACE_101_ALIVE {
+                            FOCUSED_SURFACE_ID = SURFACE_ID_STATIC;
+                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0);
+                            mutated = true;
+                            serial_println!("[silk-shell] Focus switched to surface 101");
+                        }
+
+                        // F3: recreate focused surface if destroyed (make-code only)
+                        if scancode == 0x3D && value == 1 {
+                            if FOCUSED_SURFACE_ID == SURFACE_ID_APP && !SURFACE_100_ALIVE {
+                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (100u64 << 32) | 100u64, (500u64 << 32) | 800u64);
+                                SURFACE_100_ALIVE = true;
+                                WINDOWS[1].desc.x = 100; WINDOWS[1].desc.y = 100;
+                                mutated = true;
+                                serial_println!("[silk-shell] Recreated surface 100");
+                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_STATIC && !SURFACE_101_ALIVE {
+                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (160u64 << 32) | 180u64, (300u64 << 32) | 500u64);
+                                SURFACE_101_ALIVE = true;
+                                SURFACE_101_X = 180; SURFACE_101_Y = 160;
+                                mutated = true;
+                                serial_println!("[silk-shell] Recreated surface 101");
+                            }
+                            // Defensive: if focused_id==0 and both dead, recreate 100 + set focus
+                            else if FOCUSED_SURFACE_ID == 0 && !SURFACE_100_ALIVE && !SURFACE_101_ALIVE {
+                                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (100u64 << 32) | 100u64, (500u64 << 32) | 800u64);
+                                SURFACE_100_ALIVE = true;
+                                WINDOWS[1].desc.x = 100; WINDOWS[1].desc.y = 100;
+                                FOCUSED_SURFACE_ID = SURFACE_ID_APP;
+                                pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+                                mutated = true;
+                                serial_println!("[silk-shell] Recreated surface 100 (fallback)");
+                            }
+                        }
+
+                        // R: reset both surfaces to boot state (make-code only)
+                        if scancode == 0x13 && value == 1 {
+                            SURFACE_100_ALIVE = true;
+                            WINDOWS[1].desc.x = 100; WINDOWS[1].desc.y = 100;
+
+                            SURFACE_101_ALIVE = true;
+                            SURFACE_101_X = 180; SURFACE_101_Y = 160;
+
+                            FOCUSED_SURFACE_ID = SURFACE_ID_APP;
+
+                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (100u64 << 32) | 100u64, (500u64 << 32) | 800u64);
+                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (160u64 << 32) | 180u64, (300u64 << 32) | 500u64);
+                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+
+                            mutated = true;
+                            serial_println!("[silk-shell] Reset both surfaces to boot state");
+                        }
+
                         // F1: legacy window focus (unchanged, for snapshot path)
                         if scancode == 0x3B && value == 1 {
                             FOCUS_ID = if FOCUS_ID == 2 { 1 } else { 2 };
