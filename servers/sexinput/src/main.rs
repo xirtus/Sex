@@ -28,9 +28,10 @@ pub extern "C" fn _start() -> ! {
             // serial_println!("[sexinput] Raw scancode: {:#x}", scancode);
 
             // 2. Normalize and forward to silk-shell (SLOT_SHELL = 6)
-            // Use HIDEvent opcode (0x202)
-            // arg0: code, arg1: value (1 = pressed), arg2: type (1 = EV_KEY)
-            pdx_call(SLOT_SHELL, 0x202, scancode, 1, 1);
+            // Typed event via 0x202: arg0=code(break-bit stripped), arg1=1(press)/0(release), arg2=EV_KEY
+            let value = if scancode & 0x80 == 0 { 1 } else { 0 };
+            let code = (scancode & 0x7F) as u64;
+            pdx_call(SLOT_SHELL, 0x202, code, value, EV_KEY);
         } else {
             sys_yield();
         }

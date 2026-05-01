@@ -96,6 +96,11 @@ pub const OP_SILKBAR_WORKSPACE_ACTIVE: u64 = 0xF3;
 pub const OP_SILKBAR_FOCUS_STATE:      u64 = 0xF4;
 pub const SILKBAR_ABI_VERSION: u64 = 1;
 
+// Typed input event class constants (IPC encoding for 0x202 OP_HID_EVENT)
+pub const EV_KEY: u64 = 1;
+pub const EV_ABS: u64 = 3;
+pub const EV_BTN: u64 = 4;
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct ShellEvent {
@@ -105,9 +110,9 @@ pub struct ShellEvent {
 /// Normalized input event. Single source of truth for all input in silk-shell FSM.
 ///
 /// IPC encoding (type_id=0x202 from sexinput):
-///   arg2=1 (EV_KEY):  arg0=scancode, arg1=1(dn)/0(up)
-///   arg2=3 (EV_ABS):  arg0=abs_x,   arg1=abs_y  (mouse position, absolute)
-///   arg2=4 (EV_BTN):  arg0=button,  arg1=1(dn)/0(up)
+///   arg2=EV_KEY (1): arg0=scancode, arg1=1(dn)/0(up)
+///   arg2=EV_ABS (3): arg0=abs_x,   arg1=abs_y  (mouse position, absolute)
+///   arg2=EV_BTN (4): arg0=button,  arg1=1(dn)/0(up)
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum InputEvent {
     KeyDown(u8),

@@ -882,10 +882,10 @@ pub extern "C" fn _start() -> ! {
                             }
                         }
 
-                        // ── Arrow keys (both make and break, matching existing behavior) ──
+                        // ── Arrow keys (make-code only, value == 1) ──
                         let step = P.move_step;
                         let focused = FOCUSED_SURFACE_ID;
-                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE && value == 1 {
                             let focus_id = FOCUS_ID;
                             for w in WINDOWS.iter_mut() {
                                 if w.desc.window_id == focus_id && focus_id != 1 {
@@ -901,7 +901,7 @@ pub extern "C" fn _start() -> ! {
                                     w.desc.x = cx; w.desc.y = cy;
                                 }
                             }
-                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE && value == 1 {
                             match scancode {
                                 0x4B => { SURFACE_101_X -= step; mutated = true; }
                                 0x4D => { SURFACE_101_X += step; mutated = true; }
@@ -912,7 +912,7 @@ pub extern "C" fn _start() -> ! {
                             // Clamp to content area after movement
                             let (cx, cy) = clamp_position(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H);
                             SURFACE_101_X = cx; SURFACE_101_Y = cy;
-                        } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
+                        } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE && value == 1 {
                             match scancode {
                                 0x4B => { SURFACE_102_X -= step; mutated = true; }
                                 0x4D => { SURFACE_102_X += step; mutated = true; }
@@ -922,7 +922,7 @@ pub extern "C" fn _start() -> ! {
                             }
                             let (cx, cy) = clamp_position(SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H);
                             SURFACE_102_X = cx; SURFACE_102_Y = cy;
-                        } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
+                        } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE && value == 1 {
                             match scancode {
                                 0x4B => { SURFACE_103_X -= step; mutated = true; }
                                 0x4D => { SURFACE_103_X += step; mutated = true; }
