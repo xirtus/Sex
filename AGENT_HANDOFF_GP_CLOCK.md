@@ -382,3 +382,45 @@ Design now. Fake safely now. Render honestly later.
 NEXT BEST TASK:
 Make a "SILK_DE_VISUAL_LANGUAGE.md" and then a tiny safe color/style pass for the bar only.
 No renderer rewrite.
+
+## CHECKPOINT: POINTER POLICY COMPLETE / USB TRACK NEXT
+
+### Current committed state
+- `1bb3dce` SURFACE_CLIENT_ID_AUTH_V1
+- `56ba7d6` SILK_MANAGES_LINEN_PLACEHOLDER_V1
+- `e1980b8` SURFACE_RECT_FILL_V1
+- `ca31c47` OP_HID_EVENT typed path
+- `3aab687` POINTER_EVENT_TEST_PRODUCER_V1 synthetic EV_REL/EV_BTN producer
+- `0cb8db1` HID_POINTER_REPORT_NORMALIZER_V1
+- `7902f99` consumer-side click-focus
+- `3cea607` SURFACE_DRAG_V1
+
+### Known-good surface stack
+- Shell-managed surfaces: `100-103`
+- External client surface: Linen `200`
+- Client ownership/auth boundary enforced in sexdisplay
+- Rect fill content path active
+- Click-focus active from pointer events
+- Drag movement active for shell-managed surfaces only
+
+### Known-good input stack for policy testing
+- Typed path: `OP_HID_EVENT (0x202)`
+- Event classes: `EV_KEY / EV_REL / EV_ABS / EV_BTN`
+- Synthetic pointer producer active (bounded cadence)
+- HID pointer report normalizer seam active (`parse_mouse_report()`)
+
+### Current limitation
+- No real USB pointer producer yet
+- No real trackpad producer yet
+- Pointer policy path is proven via synthetic/normalized inputs
+
+### Freeze instruction
+- Pause additional shell policy feature creep.
+- Do not add gestures, resize handles, or new shell policy layers before USB producer work starts.
+- Keep shell/display/surface protocol stable while USB input track is executed.
+
+### Next canonical USB phases
+1. `USB_HOST_DISCOVERY_V1`
+2. `USB_XHCI_MINIMAL_ENUM_V1`
+3. `USB_HID_BOOT_MOUSE_REPORT_V1`
+4. `USB_HID_POINTER_PRODUCER_V1`
