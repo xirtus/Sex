@@ -411,12 +411,14 @@ pub extern "C" fn _start() -> ! {
                 let w = (msg.arg2 as u32).min(MAX_FB_W as u32);
                 let h = ((msg.arg2 >> 32) as u32).min(MAX_FB_H as u32);
                 if w == 0 || h == 0 { continue; }
+                let color = if surface_id & 1 == 0 { 0x00303860u32 } else { 0x00704890u32 };
                 unsafe {
                     // Upsert: update existing surface or allocate new slot
                     let mut handled = false;
                     for slot in SURFACES.iter_mut() {
                         if slot.active && slot.surface_id == surface_id {
                             slot.x = x; slot.y = y; slot.w = w; slot.h = h;
+                            if slot.color != color { slot.color = color; }
                             handled = true;
                             break;
                         }
@@ -426,7 +428,7 @@ pub extern "C" fn _start() -> ! {
                             if !slot.active {
                                 *slot = Surface {
                                     surface_id, x, y, w, h,
-                                    color: 0x00303860,
+                                    color,
                                     active: true,
                                 };
                                 handled = true;
@@ -434,20 +436,9 @@ pub extern "C" fn _start() -> ! {
                             }
                         }
                     }
-                    // Present inline rect if slot allocated/updated
+                    // Composite full below-bar area to respect registry z-order
                     if handled {
-                        let fb_w = FB_W as usize;
-                        let fb_h = FB_H as usize;
-                        let temp = Surface { surface_id, x, y, w, h, color: 0x00303860, active: true };
-                        let (sx, sy, sw, sh) = clamp_surface(&temp, fb_w, fb_h);
-                        if sw > 0 && sh > 0 && FB_PTR >= HIGH_HALF_BASE {
-                            let fb = FB_PTR as *mut u32;
-                            for py in sy..sy+sh {
-                                for px in sx..sx+sw {
-                                    fb.add(py * fb_w + px).write_volatile(0x00303860);
-                                }
-                            }
-                        }
+                        redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
                     }
                 }
             }

@@ -16,6 +16,7 @@ pub const OP_SHELL_BIND_BUFFER: u64 = 0x14;
 pub const OP_HID_EVENT: u64 = 0x202;
 pub const OP_SURFACE_UPDATE: u64 = 0xEB;
 pub const SURFACE_ID_APP: u64 = 100;
+pub const SURFACE_ID_STATIC: u64 = 101;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -97,7 +98,9 @@ pub extern "C" fn _start() -> ! {
 
     // Stage: boot-time safe inline surface create (0xEC — client-supplied id)
     pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (100u64 << 32) | 100u64, (500u64 << 32) | 800u64);
-    serial_println!("[silk-shell] Boot 0xEC surface create sent to sexdisplay");
+    serial_println!("[silk-shell] Boot 0xEC surface 100 create sent to sexdisplay");
+    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (160u64 << 32) | 180u64, (300u64 << 32) | 500u64);
+    serial_println!("[silk-shell] Boot 0xEC surface 101 create sent to sexdisplay");
 
     loop {
         let mut mutated = false;
