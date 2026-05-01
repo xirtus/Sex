@@ -232,11 +232,9 @@ impl Scheduler {
             if !next_task.is_null() {
                 let core = crate::core_local::CoreLocal::get();
                 let next_pd_ptr = (*next_task).context.pd_ptr as *mut crate::capability::ProtectionDomain;
-                serial_println!("scheduler.bind_next.begin pd_ptr={:#x}", next_pd_ptr as u64);
 
                 // Enforce strict atomic ordering: bind -> wrpkru -> switch_to
                 core.set_pd(next_pd_ptr);
-                serial_println!("scheduler.bind_next.after_set_pd");
             }
         }
 

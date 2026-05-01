@@ -58,7 +58,6 @@ lazy_static! {
 }
 
 use x86_64::registers::model_specific::{LStar, SFMask, Efer, EferFlags};
-use x86_64::registers::control::{Cr0, Cr3, Cr4};
 use x86_64::VirtAddr;
 
 pub fn init_idt() {
@@ -86,23 +85,6 @@ pub fn init_idt() {
         SFMask::write(x86_64::registers::rflags::RFlags::INTERRUPT_FLAG);
         Efer::write(Efer::read() | EferFlags::SYSTEM_CALL_EXTENSIONS);
         serial_println!("   → Syscall setup COMPLETE");    }
-}
-
-fn log_exec_control_state(tag: &str) {
-    let cr0 = Cr0::read().bits();
-    let (cr3, _) = Cr3::read();
-    let cr3 = cr3.start_address().as_u64();
-    let cr4 = Cr4::read().bits();
-    let efer = Efer::read().bits();
-    let nxe = (efer & (1 << 11)) != 0;
-    let smep = (cr4 & (1 << 20)) != 0;
-    let smap = (cr4 & (1 << 21)) != 0;
-    let pke = (cr4 & (1 << 22)) != 0;
-    let pae = (cr4 & (1 << 5)) != 0;
-    serial_println!(
-        "cpu.exec {} cr0={:#x} cr3={:#x} cr4={:#x} efer={:#x} nxe={} smep={} smap={} pke={} pae={}",
-        tag, cr0, cr3, cr4, efer, nxe, smep, smap, pke, pae
-    );
 }
 
 #[repr(C)]
@@ -474,35 +456,8 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
     let fault_ss = stack_frame.stack_segment.0 as u64;
     let fault_rflags = stack_frame.cpu_flags.bits();
     let fault_cs_rpl = fault_cs & 0x3;
-    let fault_cs_kind = if fault_cs_rpl == 3 { "user" } else { "kernel" };
 
     let cur_pd = crate::core_local::CoreLocal::get().current_pd();
-    serial_println!(
-        "DEBUG: page_fault_handler entered. Addr={:#x}, RIP={:#x}, CS={:#x}({}), RFLAGS={:#x}, RSP={:#x}, SS={:#x}, Err={:#x}, PD={}",
-        fault_addr,
-        fault_rip,
-        fault_cs,
-        fault_cs_kind,
-        fault_rflags,
-        fault_rsp,
-        fault_ss,
-        error_code,
-        cur_pd
-    );
-    serial_println!(
-        "pf.frame.rip={:#x} pf.frame.cs={:#x} pf.frame.cs_kind={} pf.frame.rflags={:#x} pf.frame.rsp={:#x} pf.frame.ss={:#x} pf.cr2={:#x} pf.err={:#x} pf.pd={}",
-        fault_rip,
-        fault_cs,
-        fault_cs_kind,
-        fault_rflags,
-        fault_rsp,
-        fault_ss,
-        fault_addr,
-        error_code,
-        cur_pd
-    );
-    crate::memory::manager::log_page_walk(stack_frame.instruction_pointer, "pf.rip");
-    log_exec_control_state("page_fault");
 
     if fault_addr == 0 && fault_cs_rpl == 3 {
         serial_println!(

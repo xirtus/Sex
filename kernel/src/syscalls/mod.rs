@@ -10,7 +10,6 @@ pub mod store;
 use crate::interrupts::SyscallRegs;
 use crate::ipc::messages::MessageType;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::sync::atomic::AtomicU64;
 use x86_64::structures::paging::PageTableFlags;
 use x86_64::VirtAddr;
 
@@ -23,7 +22,6 @@ static mut SNAP_RING: [sex_pdx::SceneSnapshot; SNAPSHOT_MAX] = [sex_pdx::SceneSn
 
 static SNAP_IDX: AtomicUsize = AtomicUsize::new(0);
 static mut SNAP_GEN: [u32; SNAPSHOT_MAX] = [0u32; SNAPSHOT_MAX];
-static SYSCALL_LOG_BUDGET: AtomicU64 = AtomicU64::new(256);
 
 // SNAPSHOT_HANDLE = (gen << 32 | idx)
 // prevents stale slot reuse attacks after ring wrap
@@ -408,17 +406,5 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
     };
 
     regs.rax = result;
-    if SYSCALL_LOG_BUDGET
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
-        .is_ok()
-    {
-        crate::serial_println!(
-            "syscall.exit num={} pd_id={} status={:#x} val_rsi={:#x}",
-            rax,
-            crate::core_local::CoreLocal::get().current_pd(),
-            result,
-            regs.rsi
-        );
-    }
     result
 }

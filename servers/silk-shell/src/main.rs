@@ -272,7 +272,17 @@ pub extern "C" fn _start() -> ! {
                 z_index: 0, focus_state: 0,
             }
         });
-        FOCUS_ID = 1;
+        // Keep window-id 2 present from boot so all existing WINDOWS[1]-based
+        // surface-100 policy paths remain valid under pointer/keyboard input.
+        WINDOWS.push(WindowState {
+            desc: WindowDescriptor {
+                window_id: 2,
+                buffer_handle: 0,
+                x: 100, y: 100, width: 800, height: 500,
+                z_index: 1, focus_state: 1,
+            }
+        });
+        FOCUS_ID = 2;
 
         sys_set_state(SVC_STATE_LISTENING);
     }
@@ -996,11 +1006,13 @@ pub extern "C" fn _start() -> ! {
                             if DRAG_ACTIVE {
                                 let focused = FOCUSED_SURFACE_ID;
                                 if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                    WINDOWS[1].desc.x = WINDOWS[1].desc.x.wrapping_add(dx);
-                                    WINDOWS[1].desc.y = WINDOWS[1].desc.y.wrapping_add(dy);
-                                    let (cx, cy) = clamp_position(WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, SURFACE_100_H);
-                                    WINDOWS[1].desc.x = cx; WINDOWS[1].desc.y = cy;
-                                    mutated = true;
+                                    if let Some(w) = WINDOWS.get_mut(1) {
+                                        w.desc.x = w.desc.x.wrapping_add(dx);
+                                        w.desc.y = w.desc.y.wrapping_add(dy);
+                                        let (cx, cy) = clamp_position(w.desc.x, w.desc.y, SURFACE_100_W, SURFACE_100_H);
+                                        w.desc.x = cx; w.desc.y = cy;
+                                        mutated = true;
+                                    }
                                 } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
                                     SURFACE_101_X = SURFACE_101_X.wrapping_add(dx);
                                     SURFACE_101_Y = SURFACE_101_Y.wrapping_add(dy);

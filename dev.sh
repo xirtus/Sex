@@ -37,7 +37,6 @@ qemu-system-x86_64 \
 -smp 4 \
 -m 2G \
 -vga std \
--display gtk \
 -serial stdio \
 -boot d \
 -cdrom "$(pwd)/sexos-v1.0.0.iso"
