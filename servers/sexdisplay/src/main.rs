@@ -485,6 +485,27 @@ pub extern "C" fn _start() -> ! {
                     redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
                 }
             }
+            0xEE => {
+                // OP_SURFACE_DESTROY: arg0=surface_id. Hide/deactivate surface.
+                let target_id = msg.arg0;
+                if target_id == 0 { continue; }
+                unsafe {
+                    let mut found = false;
+                    for slot in SURFACES.iter_mut() {
+                        if slot.active && slot.surface_id == target_id {
+                            slot.active = false;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if found {
+                        if FOCUSED_SURFACE_ID == target_id {
+                            FOCUSED_SURFACE_ID = 0;
+                        }
+                        redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+                    }
+                }
+            }
             _ => {
                 // Ignore unrelated messages and continue draining.
                 continue;

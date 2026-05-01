@@ -17,6 +17,7 @@ pub const OP_HID_EVENT: u64 = 0x202;
 pub const OP_SURFACE_UPDATE: u64 = 0xEB;
 pub const SURFACE_ID_APP: u64 = 100;
 pub const SURFACE_ID_STATIC: u64 = 101;
+pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -31,6 +32,8 @@ struct WindowState {
 static mut WINDOWS: Vec<WindowState> = Vec::new();
 static mut FOCUS_ID: u64 = 0;
 static mut FOCUSED_SURFACE_ID: u64 = SURFACE_ID_APP;
+static mut SURFACE_100_ALIVE: bool = true;
+static mut SURFACE_101_ALIVE: bool = true;
 static mut SURFACE_101_X: i32 = 180;
 static mut SURFACE_101_Y: i32 = 160;
 static mut SNAPSHOT: [WindowDescriptor; 16] = [
@@ -64,11 +67,13 @@ fn emit_snapshot() {
         pdx_call(SLOT_DISPLAY, OP_DISPLAY_SET_SNAPSHOT, SNAPSHOT.as_ptr() as u64, len as u64, 0);
 
         // Surface 100 position update
-        if WINDOWS.len() > 1 {
+        if WINDOWS.len() > 1 && SURFACE_100_ALIVE {
             pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_APP, WINDOWS[1].desc.x as u64, WINDOWS[1].desc.y as u64);
         }
         // Surface 101 position update (static tracked position)
-        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_STATIC, SURFACE_101_X as u64, SURFACE_101_Y as u64);
+        if SURFACE_101_ALIVE {
+            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_STATIC, SURFACE_101_X as u64, SURFACE_101_Y as u64);
+        }
     }
 }
 
@@ -149,12 +154,50 @@ pub extern "C" fn _start() -> ! {
                     let value = msg.arg1; // 1=pressed, 0=released
 
                     unsafe {
-                        // Tab: toggle focus (make-code only)
+                        // Tab: toggle focus to alive surface (make-code only)
                         if scancode == 0x0F && value == 1 {
-                            FOCUSED_SURFACE_ID = if FOCUSED_SURFACE_ID == SURFACE_ID_APP { SURFACE_ID_STATIC } else { SURFACE_ID_APP };
-                            pdx_call(SLOT_DISPLAY, 0xED, FOCUSED_SURFACE_ID, 0, 0);
-                            mutated = true;
-                            serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
+                            let current = FOCUSED_SURFACE_ID;
+                            if current == SURFACE_ID_APP && SURFACE_101_ALIVE {
+                                FOCUSED_SURFACE_ID = SURFACE_ID_STATIC;
+                                pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0);
+                                mutated = true;
+                                serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
+                            } else if current == SURFACE_ID_STATIC && SURFACE_100_ALIVE {
+                                FOCUSED_SURFACE_ID = SURFACE_ID_APP;
+                                pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+                                mutated = true;
+                                serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
+                            }
+                        }
+
+                        // F2: destroy focused surface (make-code only)
+                        if scancode == 0x3C && value == 1 {
+                            let target = FOCUSED_SURFACE_ID;
+                            let mut destroyed = false;
+                            if target == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                SURFACE_100_ALIVE = false;
+                                pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
+                                destroyed = true;
+                                serial_println!("[silk-shell] Destroyed surface 100");
+                            } else if target == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                SURFACE_101_ALIVE = false;
+                                pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
+                                destroyed = true;
+                                serial_println!("[silk-shell] Destroyed surface 101");
+                            }
+                            if destroyed {
+                                // Auto-switch focus to other alive surface
+                                if target == SURFACE_ID_APP && SURFACE_101_ALIVE {
+                                    FOCUSED_SURFACE_ID = SURFACE_ID_STATIC;
+                                    pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0);
+                                    serial_println!("[silk-shell] Auto-switched focus to surface 101");
+                                } else if target == SURFACE_ID_STATIC && SURFACE_100_ALIVE {
+                                    FOCUSED_SURFACE_ID = SURFACE_ID_APP;
+                                    pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+                                    serial_println!("[silk-shell] Auto-switched focus to surface 100");
+                                }
+                                mutated = true;
+                            }
                         }
 
                         // F1: legacy window focus (unchanged, for snapshot path)
@@ -164,9 +207,9 @@ pub extern "C" fn _start() -> ! {
                             serial_println!("[silk-shell] Legacy focus switched to window {}", FOCUS_ID);
                         }
 
-                        // Arrow keys: move the focused surface
+                        // Arrow keys: move the focused surface (only if alive)
                         let focused = FOCUSED_SURFACE_ID;
-                        if focused == SURFACE_ID_APP {
+                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
                             let focus_id = FOCUS_ID;
                             for w in WINDOWS.iter_mut() {
                                 if w.desc.window_id == focus_id && focus_id != 1 {
@@ -179,7 +222,7 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }
                             }
-                        } else if focused == SURFACE_ID_STATIC {
+                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
                             match scancode {
                                 0x4B => { SURFACE_101_X -= 10; mutated = true; } // Left
                                 0x4D => { SURFACE_101_X += 10; mutated = true; } // Right
