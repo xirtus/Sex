@@ -38,10 +38,20 @@ struct Surface {
     h: u32,
     color: u32,
     active: bool,
+    // Per-surface fill rect (V1: single rect, last 0xEF wins)
+    fill_sx: i32,
+    fill_sy: i32,
+    fill_sw: u32,
+    fill_sh: u32,
+    fill_color: u32,
+    fill_active: bool,
 }
 
 const MAX_SURFACES: usize = 16;
-const SURFACE_EMPTY: Surface = Surface { surface_id: 0, owner_pd: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false };
+const SURFACE_EMPTY: Surface = Surface {
+    surface_id: 0, owner_pd: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false,
+    fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0, fill_color: 0, fill_active: false,
+};
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 static mut FOCUSED_SURFACE_ID: u64 = 0;
 const FOCUS_SURFACE_COLOR: u32 = 0x00A8E0FF;
@@ -75,7 +85,7 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
             let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
             if sw == 0 || sh == 0 { continue; }
             if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
-                c = surf.color;
+                c = fill_rect_color(surf, x, y, surf.color);
                 break;
             }
         }
@@ -86,13 +96,29 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                 let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
                 if sw == 0 || sh == 0 { continue; }
                 if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
-                    c = FOCUS_SURFACE_COLOR;
+                    c = fill_rect_color(surf, x, y, FOCUS_SURFACE_COLOR);
                     break;
                 }
             }
         }
     }
     c
+}
+
+/// If the global pixel (x,y) falls within the surface's active fill rect,
+/// return the fill color; otherwise return `base_color`.
+/// Used in both passes of composite_pixel to prevent logic drift.
+fn fill_rect_color(surf: &Surface, x: usize, y: usize, base_color: u32) -> u32 {
+    if !surf.fill_active { return base_color; }
+    let lx = (x as i32) - surf.x;
+    let ly = (y as i32) - surf.y;
+    if lx >= surf.fill_sx && lx < surf.fill_sx + surf.fill_sw as i32
+        && ly >= surf.fill_sy && ly < surf.fill_sy + surf.fill_sh as i32
+    {
+        surf.fill_color
+    } else {
+        base_color
+    }
 }
 
 fn bg(y: usize) -> u32 {
@@ -399,6 +425,8 @@ pub extern "C" fn _start() -> ! {
                                 x, y, w, h,
                                 color: 0x00303860,
                                 active: true,
+                                fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0,
+                                fill_color: 0, fill_active: false,
                             };
                             break;
                         }
@@ -409,7 +437,8 @@ pub extern "C" fn _start() -> ! {
                 unsafe {
                     let fb_w = FB_W as usize;
                     let fb_h = FB_H as usize;
-                    let temp = Surface { surface_id: 0, owner_pd: 0, x, y, w, h, color: 0x00303860, active: true };
+                    let temp = Surface { surface_id: 0, owner_pd: 0, x, y, w, h, color: 0x00303860, active: true,
+                        fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0, fill_color: 0, fill_active: false };
                     let (sx, sy, sw, sh) = clamp_surface(&temp, fb_w, fb_h);
                     if sw > 0 && sh > 0 && FB_PTR >= HIGH_HALF_BASE {
                         let fb = FB_PTR as *mut u32;
@@ -462,6 +491,8 @@ pub extern "C" fn _start() -> ! {
                                     surface_id, owner_pd: msg.caller_pd, x, y, w, h,
                                     color,
                                     active: true,
+                                    fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0,
+                                    fill_color: 0, fill_active: false,
                                 };
                                 handled = true;
                                 break;
@@ -542,6 +573,60 @@ pub extern "C" fn _start() -> ! {
                         }
                         redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
                     }
+                }
+            }
+            0xEF => {
+                // OP_SURFACE_FILL_RECT: arg0=surface_id, arg1=(sy<<32)|sx,
+                // arg2=(color<<32)|(sh<<16)|sw. Fill a surface-local rect.
+                let surface_id = msg.arg0;
+                if surface_id == 0 { continue; }
+                let sx = (msg.arg1 & 0xFFFFFFFF) as i32;
+                let sy = ((msg.arg1 >> 32) & 0xFFFFFFFF) as i32;
+                let mut sw = (msg.arg2 & 0xFFFF) as u32;
+                let mut sh = ((msg.arg2 >> 16) & 0xFFFF) as u32;
+                let color = (msg.arg2 >> 32) as u32;
+                if sw == 0 || sh == 0 { continue; }
+                unsafe {
+                    for slot in SURFACES.iter_mut() {
+                        if slot.active && slot.surface_id == surface_id {
+                            if slot.owner_pd != msg.caller_pd {
+                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                if n & 0x3F == 0 {
+                                    serial_println!("AUTH: 0xEF fill rejected sid={} caller={} owner={}",
+                                        surface_id, msg.caller_pd, slot.owner_pd);
+                                }
+                                break;
+                            }
+                            // 1. Clamp local rect to surface bounds
+                            sw = sw.min(slot.w);
+                            sh = sh.min(slot.h);
+                            if sw == 0 || sh == 0 { break; }
+                            let fill_sx = sx.clamp(0, (slot.w as i32).saturating_sub(sw as i32));
+                            let fill_sy = sy.clamp(0, (slot.h as i32).saturating_sub(sh as i32));
+                            // 2. Translate to global, clamp to FB, enforce bar_height
+                            let gx = slot.x + fill_sx;
+                            let gy = slot.y + fill_sy;
+                            let gx2 = gx.max(0);
+                            let gy2 = gy.max(50); // bar_height
+                            let gw = sw as i32 - (gx2 - gx);
+                            let gh = sh as i32 - (gy2 - gy);
+                            // 3. Abort if globally invisible
+                            if gw <= 0 || gh <= 0 { break; }
+                            // 4. Store (surface-local coords)
+                            slot.fill_sx = fill_sx;
+                            slot.fill_sy = fill_sy;
+                            slot.fill_sw = sw;
+                            slot.fill_sh = sh;
+                            slot.fill_color = color;
+                            slot.fill_active = true;
+                            serial_println!("[sexdisplay] Fill rect surface_id={} local=({},{},{},{}) color={:#x}",
+                                surface_id, fill_sx, fill_sy, sw, sh, color);
+                            break;
+                        }
+                    }
+                }
+                unsafe {
+                    redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
                 }
             }
             _ => {

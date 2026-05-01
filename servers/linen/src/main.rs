@@ -29,6 +29,12 @@ pub extern "C" fn _start() -> ! {
         (150u64 << 32) | 300u64); // w=300, h=150
     serial_println!("[linen] Placeholder surface 200 created via 0xEC");
 
+    // Fill rect: local (20, 20, 80, 60), coral color
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
+        (20u64 << 32) | 20u64,
+        (0x00FF6464u64 << 32) | (60u64 << 16) | 80u64);
+    serial_println!("[linen] Fill rect 0xEF sent to sexdisplay");
+
     loop {
         sys_yield();
     }
