@@ -19,6 +19,7 @@ pub const SURFACE_ID_APP: u64 = 100;
 pub const SURFACE_ID_STATIC: u64 = 101;
 pub const SURFACE_ID_TEST3: u64 = 102;
 pub const SURFACE_ID_TEST4: u64 = 103;
+pub const SURFACE_ID_LINEN: u64 = 200;
 pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 
 // ── Policy Model ──────────────────────────────────────────────────────────
@@ -27,7 +28,7 @@ pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 enum SurfaceAction {
     MoveLeft, MoveRight, MoveUp, MoveDown,
     FocusToggle,
-    Focus100, Focus101, Focus102, Focus103,
+    Focus100, Focus101, Focus102, Focus103, Focus200,
     DestroyFocused,
     RecreateFocused,
     ResetAll,
@@ -73,6 +74,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x03 => Some(SurfaceAction::Focus101),
         0x04 => Some(SurfaceAction::Focus102),
         0x05 => Some(SurfaceAction::Focus103),
+        0x06 => Some(SurfaceAction::Focus200),
         0x3D => Some(SurfaceAction::RecreateFocused),
         0x13 => Some(SurfaceAction::ResetAll),
         0x26 => Some(SurfaceAction::SnapLeft),
@@ -310,7 +312,12 @@ pub extern "C" fn _start() -> ! {
                                             pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_TEST4, 0, 0);
                                             mutated = true;
                                             serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
-                                        } else if current == SURFACE_ID_TEST4 && SURFACE_100_ALIVE {
+                                        } else if current == SURFACE_ID_TEST4 {
+                                            FOCUSED_SURFACE_ID = SURFACE_ID_LINEN;
+                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_LINEN, 0, 0);
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
+                                        } else if current == SURFACE_ID_LINEN && SURFACE_100_ALIVE {
                                             FOCUSED_SURFACE_ID = SURFACE_ID_APP;
                                             pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
                                             mutated = true;
@@ -398,6 +405,13 @@ pub extern "C" fn _start() -> ! {
                                             mutated = true;
                                             serial_println!("[silk-shell] Focus switched to surface 103");
                                         }
+                                    }
+
+                                    SurfaceAction::Focus200 => {
+                                        FOCUSED_SURFACE_ID = SURFACE_ID_LINEN;
+                                        pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_LINEN, 0, 0);
+                                        mutated = true;
+                                        serial_println!("[silk-shell] Focus switched to surface 200");
                                     }
 
                                     SurfaceAction::RecreateFocused => {
