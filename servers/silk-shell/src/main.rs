@@ -30,6 +30,9 @@ struct WindowState {
 
 static mut WINDOWS: Vec<WindowState> = Vec::new();
 static mut FOCUS_ID: u64 = 0;
+static mut FOCUSED_SURFACE_ID: u64 = SURFACE_ID_APP;
+static mut SURFACE_101_X: i32 = 180;
+static mut SURFACE_101_Y: i32 = 160;
 static mut SNAPSHOT: [WindowDescriptor; 16] = [
     WindowDescriptor { window_id: 0, buffer_handle: 0, x: 0, y: 0, width: 0, height: 0, z_index: 0, focus_state: 0 }; 16
 ];
@@ -60,10 +63,12 @@ fn emit_snapshot() {
         // Emit to sexdisplay (SLOT 5)
         pdx_call(SLOT_DISPLAY, OP_DISPLAY_SET_SNAPSHOT, SNAPSHOT.as_ptr() as u64, len as u64, 0);
 
-        // Emit surface position update (slot 0, movable window)
+        // Surface 100 position update
         if WINDOWS.len() > 1 {
             pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_APP, WINDOWS[1].desc.x as u64, WINDOWS[1].desc.y as u64);
         }
+        // Surface 101 position update (static tracked position)
+        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_STATIC, SURFACE_101_X as u64, SURFACE_101_Y as u64);
     }
 }
 
@@ -102,6 +107,10 @@ pub extern "C" fn _start() -> ! {
     pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (160u64 << 32) | 180u64, (300u64 << 32) | 500u64);
     serial_println!("[silk-shell] Boot 0xEC surface 101 create sent to sexdisplay");
 
+    // Initialize focus on surface 100 (syncs sexdisplay z-order + color)
+    pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+    serial_println!("[silk-shell] Boot focus set to surface 100");
+
     loop {
         let mut mutated = false;
 
@@ -137,25 +146,46 @@ pub extern "C" fn _start() -> ! {
                 }
                 OP_HID_EVENT => {
                     let scancode = msg.arg0 as u8;
-                    // let value = msg.arg1; // 1=pressed
-                    // let ev_type = msg.arg2; // 1=EV_KEY
-                    
+                    let value = msg.arg1; // 1=pressed, 0=released
+
                     unsafe {
-                        let focus_id = FOCUS_ID;
-                        for w in WINDOWS.iter_mut() {
-                            if w.desc.window_id == focus_id && focus_id != 1 { // Don't move background
-                                match scancode {
-                                    0x4B => { w.desc.x -= 10; mutated = true; } // Left
-                                    0x4D => { w.desc.x += 10; mutated = true; } // Right
-                                    0x48 => { w.desc.y -= 10; mutated = true; } // Up
-                                    0x50 => { w.desc.y += 10; mutated = true; } // Down
-                                    0x3B => { // F1: Switch focus
-                                        FOCUS_ID = if FOCUS_ID == 2 { 1 } else { 2 };
-                                        mutated = true;
-                                        serial_println!("[silk-shell] Focus switched to {}", FOCUS_ID);
+                        // Tab: toggle focus (make-code only)
+                        if scancode == 0x0F && value == 1 {
+                            FOCUSED_SURFACE_ID = if FOCUSED_SURFACE_ID == SURFACE_ID_APP { SURFACE_ID_STATIC } else { SURFACE_ID_APP };
+                            pdx_call(SLOT_DISPLAY, 0xED, FOCUSED_SURFACE_ID, 0, 0);
+                            mutated = true;
+                            serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
+                        }
+
+                        // F1: legacy window focus (unchanged, for snapshot path)
+                        if scancode == 0x3B && value == 1 {
+                            FOCUS_ID = if FOCUS_ID == 2 { 1 } else { 2 };
+                            mutated = true;
+                            serial_println!("[silk-shell] Legacy focus switched to window {}", FOCUS_ID);
+                        }
+
+                        // Arrow keys: move the focused surface
+                        let focused = FOCUSED_SURFACE_ID;
+                        if focused == SURFACE_ID_APP {
+                            let focus_id = FOCUS_ID;
+                            for w in WINDOWS.iter_mut() {
+                                if w.desc.window_id == focus_id && focus_id != 1 {
+                                    match scancode {
+                                        0x4B => { w.desc.x -= 10; mutated = true; } // Left
+                                        0x4D => { w.desc.x += 10; mutated = true; } // Right
+                                        0x48 => { w.desc.y -= 10; mutated = true; } // Up
+                                        0x50 => { w.desc.y += 10; mutated = true; } // Down
+                                        _ => {}
                                     }
-                                    _ => {}
                                 }
+                            }
+                        } else if focused == SURFACE_ID_STATIC {
+                            match scancode {
+                                0x4B => { SURFACE_101_X -= 10; mutated = true; } // Left
+                                0x4D => { SURFACE_101_X += 10; mutated = true; } // Right
+                                0x48 => { SURFACE_101_Y -= 10; mutated = true; } // Up
+                                0x50 => { SURFACE_101_Y += 10; mutated = true; } // Down
+                                _ => {}
                             }
                         }
                     }

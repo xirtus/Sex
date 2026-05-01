@@ -38,6 +38,8 @@ struct Surface {
 const MAX_SURFACES: usize = 16;
 const SURFACE_EMPTY: Surface = Surface { surface_id: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false };
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
+static mut FOCUSED_SURFACE_ID: u64 = 0;
+const FOCUS_SURFACE_COLOR: u32 = 0x00A8E0FF;
 
 /// Clamp a surface rectangle against framebuffer dimensions.
 /// Returns `(x, y, w, h)` guaranteed to be within FB bounds and below the bar.
@@ -51,6 +53,37 @@ fn clamp_surface(surf: &Surface, fb_w: usize, fb_h: usize) -> (usize, usize, usi
     let w = (surf.w as usize).min(max_w);
     let h = (surf.h as usize).min(max_h);
     (x, y, w, h)
+}
+
+/// Composite a single pixel: non-focused surfaces in slot order, then focused on top.
+/// Shared by render() and redraw_surface_area() to prevent drift.
+fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: u64) -> u32 {
+    let mut c = bg;
+    unsafe {
+        // Pass 1: non-focused surfaces (slot order, break on first hit)
+        for surf in SURFACES.iter() {
+            if !surf.active || surf.surface_id == focused_id { continue; }
+            let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+            if sw == 0 || sh == 0 { continue; }
+            if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
+                c = surf.color;
+                break;
+            }
+        }
+        // Pass 2: focused surface (always drawn on top)
+        if focused_id != 0 {
+            for surf in SURFACES.iter() {
+                if !surf.active || surf.surface_id != focused_id { continue; }
+                let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+                if sw == 0 || sh == 0 { continue; }
+                if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
+                    c = FOCUS_SURFACE_COLOR;
+                    break;
+                }
+            }
+        }
+    }
+    c
 }
 
 fn bg(y: usize) -> u32 {
@@ -212,6 +245,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         return;
     }
 
+    let focused_id = unsafe { FOCUSED_SURFACE_ID };
     for y in 0..h {
         for x in 0..w {
             let c: u32 = if y < 50 {
@@ -224,20 +258,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
             } else if y == 50 {
                 0x00385078 // low-contrast bar edge
             } else {
-                // Background (layer 1) + surfaces (layer 2, clamped below bar)
-                let mut c = bg(y);
-                unsafe {
-                    for surf in SURFACES.iter() {
-                        if !surf.active { continue; }
-                        let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
-                        if sw == 0 || sh == 0 { continue; }
-                        if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
-                            c = surf.color;
-                            break;
-                        }
-                    }
-                }
-                c
+                composite_pixel(x, y, w, h, bg(y), focused_id)
             };
             let idx = y * w + x;
             unsafe { core::ptr::write_volatile(fb.add(idx), c); }
@@ -280,24 +301,13 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
     if fb_addr < HIGH_HALF_BASE { return; }
     if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H { return; }
     if h < 51 { return; }
+    let focused_id = unsafe { FOCUSED_SURFACE_ID };
     for y in 50..h {
         for x in 0..w {
             let c: u32 = if y == 50 {
                 0x00385078 // low-contrast bar edge
             } else {
-                let mut c = bg(y);
-                unsafe {
-                    for surf in SURFACES.iter() {
-                        if !surf.active { continue; }
-                        let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
-                        if sw == 0 || sh == 0 { continue; }
-                        if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
-                            c = surf.color;
-                            break;
-                        }
-                    }
-                }
-                c
+                composite_pixel(x, y, w, h, bg(y), focused_id)
             };
             unsafe { core::ptr::write_volatile(fb.add(y * w + x), c); }
         }
@@ -466,6 +476,13 @@ pub extern "C" fn _start() -> ! {
                     if found {
                         redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
                     }
+                }
+            }
+            0xED => {
+                // OP_SET_FOCUS: arg0=surface_id (0 clears focus). Unknown id safe.
+                unsafe {
+                    FOCUSED_SURFACE_ID = msg.arg0;
+                    redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
                 }
             }
             _ => {
