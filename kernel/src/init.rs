@@ -24,6 +24,7 @@ pub fn init() {
     serial_println!("init: Found {} Limine modules", modules.modules().len());
 
     let mut sexdisp_id = 0;
+    let mut sexdrive_id = 0;
     let mut silkshell_id = 0;
     let mut sexinput_id = 0;
     let mut silkbar_id = 0;
@@ -53,6 +54,8 @@ pub fn init() {
                                 let main_task = unsafe { &mut *main_task_ptr };
                                 main_task.ext_init = Some(crate::scheduler::InitArg { display_lease: lease });
                             }
+                        } else if domain_id == 2 {
+                            sexdrive_id = id;
                         } else if domain_id == 3 {
                             silkshell_id = id;
                         } else if domain_id == 4 {
@@ -95,6 +98,12 @@ pub fn init() {
             }
         }
 
+    }
+
+    // Hardware discovery and driver lease routing.
+    // Includes XHCI discovery + lease to sexdrive (slot SLOT_USB_HOST) only.
+    if sexdrive_id != 0 && sexdisp_id != 0 {
+        crate::devmgr::init(sexdrive_id, sexdisp_id);
     }
 
     // SilkBar delivery path: grant display capability independently of silk-shell.

@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::alloc::{GlobalAlloc, Layout};
-use sex_pdx::{pdx_call, SLOT_SHELL};
+use sex_pdx::{pdx_call, serial_println, SLOT_SHELL, SLOT_USB_HOST};
 
 struct DummyAllocator;
 unsafe impl GlobalAlloc for DummyAllocator {
@@ -52,8 +52,44 @@ pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mu
 // Local Opcode
 pub const OP_SHELL_BIND_BUFFER: u64 = 0x14;
 
+fn xhci_probe_mmio() {
+    let map_va: u64;
+    unsafe {
+        // syscall 43 = MAP_PCI_BAR(cap_slot, bar_index, map_size)
+        core::arch::asm!(
+            "syscall",
+            in("rax") 43u64,
+            in("rdi") SLOT_USB_HOST,
+            in("rsi") 0u64,      // BAR0
+            in("rdx") 0x1000u64, // first page only
+            lateout("rax") map_va,
+            out("rcx") _,
+            out("r11") _,
+        );
+    }
+
+    if map_va == u64::MAX || map_va == 0 {
+        serial_println!("[sexdrive] XHCI probe: no BAR lease/mapping available");
+        return;
+    }
+
+    let regs = map_va as *const u32;
+    let cap0 = unsafe { core::ptr::read_volatile(regs.add(0)) };
+    let caplength = (cap0 & 0xFF) as u8;
+    let hciversion = ((cap0 >> 16) & 0xFFFF) as u16;
+    let hcsp1 = unsafe { core::ptr::read_volatile(regs.add(1)) }; // 0x04
+    let hcc1 = unsafe { core::ptr::read_volatile(regs.add(4)) };  // 0x10
+
+    serial_println!(
+        "[sexdrive] XHCI MMIO probe ok va={:#x} caplength={:#x} hciversion={:#x} hcsp1={:#x} hcc1={:#x}",
+        map_va, caplength, hciversion, hcsp1, hcc1
+    );
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    xhci_probe_mmio();
+
     // Wait for display/shell to be ready
     for _ in 0..10_000_000 {
         core::hint::spin_loop();

@@ -304,6 +304,76 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             0
         },
 
+        43 => { // MAP_PCI_BAR(cap_slot, bar_index, map_size)
+            use crate::capability::CapabilityData;
+            use crate::hal::pci::PciDevice;
+
+            let cap_slot = rdi as u32;
+            let bar_index = (rsi & 0xFF) as u8;
+            let req_size = rdx as usize;
+            let map_size = if req_size == 0 { 0x1000usize } else { req_size.min(0x1000usize) };
+
+            let core_local = crate::core_local::CoreLocal::get();
+            let current_pd = core_local.current_pd_ref();
+            let cap = current_pd.find_capability(cap_slot);
+
+            if let Some(cap) = cap {
+                if let CapabilityData::Pci(data) = cap.data {
+                    let dev = PciDevice {
+                        bus: data.bus,
+                        dev: data.dev,
+                        func: data.func,
+                        vendor_id: data.vendor_id,
+                        device_id: data.device_id,
+                        class_id: 0,
+                        subclass_id: 0,
+                        prog_if: 0,
+                    };
+
+                    let class_rev = dev.read_u32(0x08);
+                    let class_id = (class_rev >> 24) as u8;
+                    let subclass_id = (class_rev >> 16) as u8;
+                    let prog_if = (class_rev >> 8) as u8;
+
+                    // Strictly gate this syscall to XHCI-only capabilities.
+                    if class_id != 0x0c || subclass_id != 0x03 || prog_if != 0x30 {
+                        u64::MAX
+                    } else {
+                        let bar_raw = dev.read_u32(0x10 + bar_index * 4);
+                        if (bar_raw & 0x1) != 0 {
+                            // I/O BAR not allowed for this path.
+                            u64::MAX
+                        } else {
+                            let bar_pa = dev.get_bar(bar_index) & !0xFFFu64;
+                            if bar_pa == 0 {
+                                u64::MAX
+                            } else if let Some(va) = crate::memory::va_allocator::allocate_va(map_size) {
+                                let mut gvas_lock = crate::memory::manager::GLOBAL_VAS.lock();
+                                if let Some(ref mut gvas) = *gvas_lock {
+                                    let flags = PageTableFlags::PRESENT
+                                        | PageTableFlags::WRITABLE
+                                        | PageTableFlags::USER_ACCESSIBLE;
+                                    if gvas.map_physical_range(VirtAddr::new(va), bar_pa, map_size as u64, flags, 0).is_ok() {
+                                        va
+                                    } else {
+                                        u64::MAX
+                                    }
+                                } else {
+                                    u64::MAX
+                                }
+                            } else {
+                                u64::MAX
+                            }
+                        }
+                    }
+                } else {
+                    u64::MAX
+                }
+            } else {
+                u64::MAX
+            }
+        },
+
         34 => { // SYSCALL_GET_TICKS — exposes kernel TICKS counter
             crate::interrupts::TICKS.load(core::sync::atomic::Ordering::Relaxed)
         },

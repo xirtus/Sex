@@ -340,6 +340,7 @@ pub const SLOT_AUDIO:   u64 = 4; // audio server
 pub const SLOT_DISPLAY: u64 = 5; // SexDisplay compositor
 pub const SLOT_SHELL:   u64 = 6; // silk-shell orchestration entry
 pub const SLOT_SILKBAR: u64 = 7; // SilkBar model authority
+pub const SLOT_USB_HOST: u64 = 8; // USB host controller lease (XHCI probe path)
 
 // Capability invocation trap numbers (ring-3 → ring-0 transition only).
 // These are sex-pdx implementation details, NOT POSIX-style syscall numbers.

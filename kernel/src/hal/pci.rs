@@ -10,6 +10,7 @@ pub struct PciDevice {
     pub device_id: u16,
     pub class_id: u8,
     pub subclass_id: u8,
+    pub prog_if: u8,
 }
 
 impl PciDevice {
@@ -68,6 +69,7 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                     let class_rev = unsafe { pci_config_read(bus as u8, slot as u8, func as u8, 8) };
                     let class_id = (class_rev >> 24) as u8;
                     let subclass_id = (class_rev >> 16) as u8;
+                    let prog_if = (class_rev >> 8) as u8;
 
                     devices.push(PciDevice {
                         bus: bus as u8,
@@ -77,6 +79,7 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         device_id,
                         class_id,
                         subclass_id,
+                        prog_if,
                     });
                 }
             }
