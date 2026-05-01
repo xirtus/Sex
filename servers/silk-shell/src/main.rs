@@ -7,7 +7,7 @@ use core::panic::PanicInfo;
 use sex_pdx::{
     pdx_call, pdx_try_listen, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
     SLOT_DISPLAY, SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
-    SVC_STATE_LISTENING, ERR_CAP_INVALID,
+    SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
 };
 
 // Local Opcodes
@@ -158,6 +158,10 @@ static mut SURFACE_103_H: u32 = 120;
 static mut SNAPSHOT: [WindowDescriptor; 16] = [
     WindowDescriptor { window_id: 0, buffer_handle: 0, x: 0, y: 0, width: 0, height: 0, z_index: 0, focus_state: 0 }; 16
 ];
+// ── Pointer input state (updated by EV_ABS/EV_REL/EV_BTN, no compositor side effects) ──
+static mut POINTER_X: i32 = 0;
+static mut POINTER_Y: i32 = 0;
+static mut POINTER_BUTTONS: u8 = 0; // bitmask: bit0=left, bit1=right, bit2=middle
 
 fn clamp_surface_size(x: i32, y: i32, w: u32, h: u32) -> (u32, u32) {
     let max_w = (P.width - x).max(P.min_width as i32) as u32;
@@ -289,10 +293,12 @@ pub extern "C" fn _start() -> ! {
                 OP_HID_EVENT => {
                     let scancode = msg.arg0 as u8;
                     let value = msg.arg1; // 1=pressed, 0=released
+                    let event_class = msg.arg2; // EV_KEY, EV_REL, EV_ABS, EV_BTN
 
                     unsafe {
-                        // ── Make-code dispatch via policy lookup ──────────────
-                        if value == 1 {
+                        // ── Event-class dispatch ──
+                        if event_class == EV_KEY && value == 1 {
+                            // ── Make-code dispatch via policy lookup ──────────────
                             if let Some(action) = scancode_to_action(scancode) {
                                 match action {
                                     SurfaceAction::FocusToggle => {
@@ -932,6 +938,28 @@ pub extern "C" fn _start() -> ! {
                             }
                             let (cx, cy) = clamp_position(SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H);
                             SURFACE_103_X = cx; SURFACE_103_Y = cy;
+                        }
+
+                        // ── Pointer event state updates (no compositor side effects) ──
+                        if event_class == EV_ABS {
+                            POINTER_X = msg.arg0 as i32;
+                            POINTER_Y = msg.arg1 as i32;
+                            serial_println!("[silk-shell] Pointer ABS ({}, {})", POINTER_X, POINTER_Y);
+                        } else if event_class == EV_REL {
+                            POINTER_X = POINTER_X.wrapping_add(msg.arg0 as i32);
+                            POINTER_Y = POINTER_Y.wrapping_add(msg.arg1 as i32);
+                            serial_println!("[silk-shell] Pointer REL d=({},{}) pos=({},{})",
+                                msg.arg0 as i32, msg.arg1 as i32, POINTER_X, POINTER_Y);
+                        } else if event_class == EV_BTN {
+                            let button = msg.arg0 as u8;
+                            let pressed = msg.arg1 != 0;
+                            if pressed {
+                                POINTER_BUTTONS |= 1u8.checked_shl(button.saturating_sub(1) as u32).unwrap_or(0);
+                            } else {
+                                POINTER_BUTTONS &= !(1u8.checked_shl(button.saturating_sub(1) as u32).unwrap_or(0));
+                            }
+                            serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
+                                button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);
                         }
                     }
                 }
