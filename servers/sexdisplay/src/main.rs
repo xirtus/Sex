@@ -26,6 +26,7 @@ static mut FB_H: u32 = FALLBACK_H;
 /// A compositor surface. Rendered as a solid-color filled rect below the bar.
 /// No backing buffer, no alpha, no z-ordering (insertion order only).
 struct Surface {
+    surface_id: u64,
     x: i32,
     y: i32,
     w: u32,
@@ -35,7 +36,7 @@ struct Surface {
 }
 
 const MAX_SURFACES: usize = 16;
-const SURFACE_EMPTY: Surface = Surface { x: 0, y: 0, w: 0, h: 0, color: 0, active: false };
+const SURFACE_EMPTY: Surface = Surface { surface_id: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false };
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 
 /// Clamp a surface rectangle against framebuffer dimensions.
@@ -374,6 +375,7 @@ pub extern "C" fn _start() -> ! {
                     for slot in SURFACES.iter_mut() {
                         if !slot.active {
                             *slot = Surface {
+                                surface_id: 0,
                                 x, y, w, h,
                                 color: 0x00303860,
                                 active: true,
@@ -387,7 +389,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe {
                     let fb_w = FB_W as usize;
                     let fb_h = FB_H as usize;
-                    let temp = Surface { x, y, w, h, color: 0x00303860, active: true };
+                    let temp = Surface { surface_id: 0, x, y, w, h, color: 0x00303860, active: true };
                     let (sx, sy, sw, sh) = clamp_surface(&temp, fb_w, fb_h);
                     if sw > 0 && sh > 0 && FB_PTR >= HIGH_HALF_BASE {
                         let fb = FB_PTR as *mut u32;
@@ -400,24 +402,79 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             }
+            0xEC => {
+                // OP_SURFACE_CREATE_ID: arg0=surface_id(non-zero), arg1=(y<<32)|x, arg2=(h<<32)|w
+                let surface_id = msg.arg0;
+                if surface_id == 0 { continue; }
+                let x = msg.arg1 as i32;
+                let y = (msg.arg1 >> 32) as i32;
+                let w = (msg.arg2 as u32).min(MAX_FB_W as u32);
+                let h = ((msg.arg2 >> 32) as u32).min(MAX_FB_H as u32);
+                if w == 0 || h == 0 { continue; }
+                unsafe {
+                    // Upsert: update existing surface or allocate new slot
+                    let mut handled = false;
+                    for slot in SURFACES.iter_mut() {
+                        if slot.active && slot.surface_id == surface_id {
+                            slot.x = x; slot.y = y; slot.w = w; slot.h = h;
+                            handled = true;
+                            break;
+                        }
+                    }
+                    if !handled {
+                        for slot in SURFACES.iter_mut() {
+                            if !slot.active {
+                                *slot = Surface {
+                                    surface_id, x, y, w, h,
+                                    color: 0x00303860,
+                                    active: true,
+                                };
+                                handled = true;
+                                break;
+                            }
+                        }
+                    }
+                    // Present inline rect if slot allocated/updated
+                    if handled {
+                        let fb_w = FB_W as usize;
+                        let fb_h = FB_H as usize;
+                        let temp = Surface { surface_id, x, y, w, h, color: 0x00303860, active: true };
+                        let (sx, sy, sw, sh) = clamp_surface(&temp, fb_w, fb_h);
+                        if sw > 0 && sh > 0 && FB_PTR >= HIGH_HALF_BASE {
+                            let fb = FB_PTR as *mut u32;
+                            for py in sy..sy+sh {
+                                for px in sx..sx+sw {
+                                    fb.add(py * fb_w + px).write_volatile(0x00303860);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             0xDE => {
                 // OP_WINDOW_CREATE (legacy pointer protocol) — arg0 is cross-PD pointer.
                 // Must NOT dereference. Unsupported until kernel-mediated copy exists.
                 continue;
             }
             0xEB => {
-                // OP_SURFACE_UPDATE: arg0=slot, arg1=x, arg2=y
-                let slot = msg.arg0 as usize;
+                // OP_SURFACE_UPDATE: arg0=surface_id, arg1=x, arg2=y
+                let target_id = msg.arg0;
+                if target_id == 0 { continue; }
                 let new_x = msg.arg1 as i32;
                 let new_y = msg.arg2 as i32;
                 unsafe {
-                    if slot >= MAX_SURFACES { continue; }
-                    if !SURFACES[slot].active { continue; }
-                    SURFACES[slot].x = new_x;
-                    SURFACES[slot].y = new_y;
-                }
-                unsafe {
-                    redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+                    let mut found = false;
+                    for slot in SURFACES.iter_mut() {
+                        if slot.active && slot.surface_id == target_id {
+                            slot.x = new_x;
+                            slot.y = new_y;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if found {
+                        redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+                    }
                 }
             }
             _ => {

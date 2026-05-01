@@ -15,6 +15,7 @@ pub const OP_DISPLAY_SET_SNAPSHOT: u64 = 0x15;
 pub const OP_SHELL_BIND_BUFFER: u64 = 0x14;
 pub const OP_HID_EVENT: u64 = 0x202;
 pub const OP_SURFACE_UPDATE: u64 = 0xEB;
+pub const SURFACE_ID_APP: u64 = 100;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -60,7 +61,7 @@ fn emit_snapshot() {
 
         // Emit surface position update (slot 0, movable window)
         if WINDOWS.len() > 1 {
-            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, 0, WINDOWS[1].desc.x as u64, WINDOWS[1].desc.y as u64);
+            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_APP, WINDOWS[1].desc.x as u64, WINDOWS[1].desc.y as u64);
         }
     }
 }
@@ -94,9 +95,9 @@ pub extern "C" fn _start() -> ! {
     pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, 0, 0);
     serial_println!("[silk-shell] Boot workspace advertisement sent to SilkBar");
 
-    // Stage: boot-time safe inline surface create (0xE4 — proves client→display ABI)
-    pdx_call(SLOT_DISPLAY, 0xE4, 100, 100, (800u64) | (500u64 << 32));
-    serial_println!("[silk-shell] Boot 0xE4 surface create sent to sexdisplay");
+    // Stage: boot-time safe inline surface create (0xEC — client-supplied id)
+    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (100u64 << 32) | 100u64, (500u64 << 32) | 800u64);
+    serial_println!("[silk-shell] Boot 0xEC surface create sent to sexdisplay");
 
     loop {
         let mut mutated = false;
