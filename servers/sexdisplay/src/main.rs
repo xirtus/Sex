@@ -272,6 +272,37 @@ fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     }
 }
 
+/// Redraw all pixels from y=50 to bottom (background gradient + all active surfaces).
+/// Never touches y<50 (SilkBar/clock/chips). Not a full render() call.
+fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
+    let fb_addr = fb as u64;
+    if fb_addr < HIGH_HALF_BASE { return; }
+    if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H { return; }
+    if h < 51 { return; }
+    for y in 50..h {
+        for x in 0..w {
+            let c: u32 = if y == 50 {
+                0x00385078 // low-contrast bar edge
+            } else {
+                let mut c = bg(y);
+                unsafe {
+                    for surf in SURFACES.iter() {
+                        if !surf.active { continue; }
+                        let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+                        if sw == 0 || sh == 0 { continue; }
+                        if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
+                            c = surf.color;
+                            break;
+                        }
+                    }
+                }
+                c
+            };
+            unsafe { core::ptr::write_volatile(fb.add(y * w + x), c); }
+        }
+    }
+}
+
 fn handle_primary_fb(ptr: u64, packed: u64) {
     if ptr == 0 {
         return;
@@ -373,6 +404,21 @@ pub extern "C" fn _start() -> ! {
                 // OP_WINDOW_CREATE (legacy pointer protocol) — arg0 is cross-PD pointer.
                 // Must NOT dereference. Unsupported until kernel-mediated copy exists.
                 continue;
+            }
+            0xEB => {
+                // OP_SURFACE_UPDATE: arg0=slot, arg1=x, arg2=y
+                let slot = msg.arg0 as usize;
+                let new_x = msg.arg1 as i32;
+                let new_y = msg.arg2 as i32;
+                unsafe {
+                    if slot >= MAX_SURFACES { continue; }
+                    if !SURFACES[slot].active { continue; }
+                    SURFACES[slot].x = new_x;
+                    SURFACES[slot].y = new_y;
+                }
+                unsafe {
+                    redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+                }
             }
             _ => {
                 // Ignore unrelated messages and continue draining.

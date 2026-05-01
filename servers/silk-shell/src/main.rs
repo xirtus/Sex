@@ -14,6 +14,7 @@ use sex_pdx::{
 pub const OP_DISPLAY_SET_SNAPSHOT: u64 = 0x15;
 pub const OP_SHELL_BIND_BUFFER: u64 = 0x14;
 pub const OP_HID_EVENT: u64 = 0x202;
+pub const OP_SURFACE_UPDATE: u64 = 0xEB;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -56,6 +57,11 @@ fn emit_snapshot() {
 
         // Emit to sexdisplay (SLOT 5)
         pdx_call(SLOT_DISPLAY, OP_DISPLAY_SET_SNAPSHOT, SNAPSHOT.as_ptr() as u64, len as u64, 0);
+
+        // Emit surface position update (slot 0, movable window)
+        if WINDOWS.len() > 1 {
+            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, 0, WINDOWS[1].desc.x as u64, WINDOWS[1].desc.y as u64);
+        }
     }
 }
 
