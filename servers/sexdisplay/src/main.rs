@@ -2,6 +2,7 @@
 #![no_main]
 #![allow(static_mut_refs)]
 
+use sex_pdx::serial_println;
 use silkbar_model::{SilkBar, SilkBarUpdate, apply_update, DEFAULT_SILK_BAR,
                     WS_X0, WS_X1, WS_X2, WS_X3, WS_X4, WS_Y, WS_H,
                     WS_INACTIVE_W,
@@ -25,8 +26,12 @@ static mut FB_H: u32 = FALLBACK_H;
 
 /// A compositor surface. Rendered as a solid-color filled rect below the bar.
 /// No backing buffer, no alpha, no z-ordering (insertion order only).
+/// Ownership invariant: owner_pd is set on first create and never changes
+/// while active. Only the owning PD may mutate or destroy the surface.
+/// Focus (z-order/color) is compositor state — open to all callers.
 struct Surface {
     surface_id: u64,
+    owner_pd: u32,       // PD that created this surface; 0 = unbound
     x: i32,
     y: i32,
     w: u32,
@@ -36,10 +41,14 @@ struct Surface {
 }
 
 const MAX_SURFACES: usize = 16;
-const SURFACE_EMPTY: Surface = Surface { surface_id: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false };
+const SURFACE_EMPTY: Surface = Surface { surface_id: 0, owner_pd: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false };
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 static mut FOCUSED_SURFACE_ID: u64 = 0;
 const FOCUS_SURFACE_COLOR: u32 = 0x00A8E0FF;
+
+/// Rate-limited rejection counter for unauthorized surface ops.
+/// Logs at most every 64 rejections to prevent IPC/log storms.
+static REJECT_COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Clamp a surface rectangle against framebuffer dimensions.
 /// Returns `(x, y, w, h)` guaranteed to be within FB bounds and below the bar.
@@ -386,6 +395,7 @@ pub extern "C" fn _start() -> ! {
                         if !slot.active {
                             *slot = Surface {
                                 surface_id: 0,
+                                owner_pd: 0,
                                 x, y, w, h,
                                 color: 0x00303860,
                                 active: true,
@@ -399,7 +409,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe {
                     let fb_w = FB_W as usize;
                     let fb_h = FB_H as usize;
-                    let temp = Surface { surface_id: 0, x, y, w, h, color: 0x00303860, active: true };
+                    let temp = Surface { surface_id: 0, owner_pd: 0, x, y, w, h, color: 0x00303860, active: true };
                     let (sx, sy, sw, sh) = clamp_surface(&temp, fb_w, fb_h);
                     if sw > 0 && sh > 0 && FB_PTR >= HIGH_HALF_BASE {
                         let fb = FB_PTR as *mut u32;
@@ -424,20 +434,32 @@ pub extern "C" fn _start() -> ! {
                 let color = if surface_id & 1 == 0 { 0x00303860u32 } else { 0x00704890u32 };
                 unsafe {
                     // Upsert: update existing surface or allocate new slot
+                    // Ownership invariant: only the owning PD may upsert an active surface.
                     let mut handled = false;
                     for slot in SURFACES.iter_mut() {
                         if slot.active && slot.surface_id == surface_id {
+                            if slot.owner_pd != msg.caller_pd {
+                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                if n & 0x3F == 0 {
+                                    serial_println!("AUTH: 0xEC upsert rejected sid={} caller={} owner={}",
+                                        surface_id, msg.caller_pd, slot.owner_pd);
+                                }
+                                continue;
+                            }
                             slot.x = x; slot.y = y; slot.w = w; slot.h = h;
                             if slot.color != color { slot.color = color; }
                             handled = true;
                             break;
                         }
                     }
+                    // Create: bind owner_pd on first allocation of an inactive slot.
+                    // After destroy (active=false) the same or a different PD may
+                    // reclaim the slot, becoming the new owner.
                     if !handled {
                         for slot in SURFACES.iter_mut() {
                             if !slot.active {
                                 *slot = Surface {
-                                    surface_id, x, y, w, h,
+                                    surface_id, owner_pd: msg.caller_pd, x, y, w, h,
                                     color,
                                     active: true,
                                 };
@@ -467,6 +489,14 @@ pub extern "C" fn _start() -> ! {
                     let mut found = false;
                     for slot in SURFACES.iter_mut() {
                         if slot.active && slot.surface_id == target_id {
+                            if slot.owner_pd != msg.caller_pd {
+                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                if n & 0x3F == 0 {
+                                    serial_println!("AUTH: 0xEB move rejected sid={} caller={} owner={}",
+                                        target_id, msg.caller_pd, slot.owner_pd);
+                                }
+                                continue;
+                            }
                             slot.x = new_x;
                             slot.y = new_y;
                             found = true;
@@ -493,6 +523,14 @@ pub extern "C" fn _start() -> ! {
                     let mut found = false;
                     for slot in SURFACES.iter_mut() {
                         if slot.active && slot.surface_id == target_id {
+                            if slot.owner_pd != msg.caller_pd {
+                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                if n & 0x3F == 0 {
+                                    serial_println!("AUTH: 0xEE destroy rejected sid={} caller={} owner={}",
+                                        target_id, msg.caller_pd, slot.owner_pd);
+                                }
+                                continue;
+                            }
                             slot.active = false;
                             found = true;
                             break;
