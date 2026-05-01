@@ -162,6 +162,12 @@ static mut SNAPSHOT: [WindowDescriptor; 16] = [
 static mut POINTER_X: i32 = 0;
 static mut POINTER_Y: i32 = 0;
 static mut POINTER_BUTTONS: u8 = 0; // bitmask: bit0=left, bit1=right, bit2=middle
+static mut CLICK_ACTIVE: bool = false; // edge-trigger guard: reset on left release
+// Linen surface 200 position tracking (stable — linen never moves)
+static mut SURFACE_200_X: i32 = 900;
+static mut SURFACE_200_Y: i32 = 500;
+static mut SURFACE_200_W: u32 = 300;
+static mut SURFACE_200_H: u32 = 150;
 
 fn clamp_surface_size(x: i32, y: i32, w: u32, h: u32) -> (u32, u32) {
     let max_w = (P.width - x).max(P.min_width as i32) as u32;
@@ -211,6 +217,34 @@ fn emit_snapshot() {
         if SURFACE_103_ALIVE {
             pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_TEST4, SURFACE_103_X as u64, SURFACE_103_Y as u64);
         }
+    }
+}
+
+/// Returns true if (px, py) is within the given surface's bounds.
+/// Accesses surface position from static mut (caller must ensure unsafe context).
+fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
+    unsafe {
+        let (x, y, w, h) = match sid {
+            SURFACE_ID_APP    => (WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, SURFACE_100_H),
+            SURFACE_ID_STATIC => (SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H),
+            SURFACE_ID_TEST3  => (SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H),
+            SURFACE_ID_TEST4  => (SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H),
+            SURFACE_ID_LINEN  => (SURFACE_200_X, SURFACE_200_Y, SURFACE_200_W, SURFACE_200_H),
+            _ => return false,
+        };
+        px >= x && px < (x + w as i32) && py >= y && py < (y + h as i32)
+    }
+}
+
+/// Returns true if the surface is alive (not destroyed).
+fn surface_is_alive(sid: u64) -> bool {
+    match sid {
+        SURFACE_ID_APP    => unsafe { SURFACE_100_ALIVE },
+        SURFACE_ID_STATIC => unsafe { SURFACE_101_ALIVE },
+        SURFACE_ID_TEST3  => unsafe { SURFACE_102_ALIVE },
+        SURFACE_ID_TEST4  => unsafe { SURFACE_103_ALIVE },
+        SURFACE_ID_LINEN  => true,  // linen never destroys its surface
+        _ => false,
     }
 }
 
@@ -960,6 +994,35 @@ pub extern "C" fn _start() -> ! {
                             }
                             serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
                                 button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);
+
+                            // ── Click-to-focus: left-button press edge (0→1 transition only) ──
+                            if button == 1 {
+                                if pressed && !CLICK_ACTIVE {
+                                    CLICK_ACTIVE = true;
+                                    // Hit-test in visual z-order: focused first, then reverse slot order
+                                    let focused = FOCUSED_SURFACE_ID;
+                                    if !point_in_surface(POINTER_X, POINTER_Y, focused) {
+                                        let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
+                                                       SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
+                                        let mut hit_id = 0u64;
+                                        for &sid in &z_order {
+                                            if sid == focused { continue; }
+                                            if !surface_is_alive(sid) { continue; }
+                                            if point_in_surface(POINTER_X, POINTER_Y, sid) {
+                                                hit_id = sid;
+                                                break;
+                                            }
+                                        }
+                                        if hit_id != 0 {
+                                            FOCUSED_SURFACE_ID = hit_id;
+                                            pdx_call(SLOT_DISPLAY, 0xED, hit_id, 0, 0);
+                                            serial_println!("[silk-shell] Click focus surface {}", hit_id);
+                                        }
+                                    }
+                                } else if !pressed {
+                                    CLICK_ACTIVE = false;
+                                }
+                            }
                         }
                     }
                 }
