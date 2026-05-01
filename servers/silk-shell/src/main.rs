@@ -30,6 +30,7 @@ enum SurfaceAction {
     RecreateFocused,
     ResetAll,
     SnapLeft, SnapRight, Maximize, Center,
+    SnapHome, SnapEnd,
     ShrinkWidth, GrowWidth, ShrinkHeight, GrowHeight,
     LegacyFocusToggle,
 }
@@ -75,6 +76,8 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x0C => Some(SurfaceAction::ShrinkHeight),
         0x0D => Some(SurfaceAction::GrowHeight),
         0x3B => Some(SurfaceAction::LegacyFocusToggle),
+        0x47 => Some(SurfaceAction::SnapHome),
+        0x4F => Some(SurfaceAction::SnapEnd),
         0x4B => Some(SurfaceAction::MoveLeft),
         0x4D => Some(SurfaceAction::MoveRight),
         0x48 => Some(SurfaceAction::MoveUp),
@@ -93,6 +96,22 @@ fn layout_right() -> (i32, i32, u32, u32) {
 
 fn layout_maximize() -> (i32, i32, u32, u32) {
     (0, P.bar_height, P.width as u32, (P.height - P.bar_height) as u32)
+}
+
+/// Clamp surface position to stay within content area.
+/// Uses saturating arithmetic so policy drift never panics.
+fn clamp_position(x: i32, y: i32, w: u32, h: u32) -> (i32, i32) {
+    let max_x = (P.width as u32).saturating_sub(w) as i32;
+    let max_y = (P.height as u32).saturating_sub(h).max(P.bar_height as u32) as i32;
+    (x.clamp(0, max_x), y.clamp(P.bar_height, max_y))
+}
+
+/// Bottom-right edge position for SnapEnd.
+/// Uses saturating arithmetic so policy drift never panics.
+fn snap_end_pos(w: u32, h: u32) -> (i32, i32) {
+    let x = (P.width as u32).saturating_sub(w) as i32;
+    let y = (P.height as u32).saturating_sub(h) as i32;
+    (x.max(0), y.max(P.bar_height))
 }
 
 #[panic_handler]
@@ -432,6 +451,34 @@ pub extern "C" fn _start() -> ! {
                                         }
                                     }
 
+                                    SurfaceAction::SnapHome => {
+                                        let focused = FOCUSED_SURFACE_ID;
+                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            WINDOWS[1].desc.x = 0; WINDOWS[1].desc.y = P.bar_height;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Surface 100 snapped home");
+                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                            SURFACE_101_X = 0; SURFACE_101_Y = P.bar_height;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Surface 101 snapped home");
+                                        }
+                                    }
+
+                                    SurfaceAction::SnapEnd => {
+                                        let focused = FOCUSED_SURFACE_ID;
+                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            let (ex, ey) = snap_end_pos(WINDOWS[1].desc.width, WINDOWS[1].desc.height);
+                                            WINDOWS[1].desc.x = ex; WINDOWS[1].desc.y = ey;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Surface 100 snapped end");
+                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                            let (ex, ey) = snap_end_pos(SURFACE_101_W, SURFACE_101_H);
+                                            SURFACE_101_X = ex; SURFACE_101_Y = ey;
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Surface 101 snapped end");
+                                        }
+                                    }
+
                                     SurfaceAction::ShrinkWidth => {
                                         let focused = FOCUSED_SURFACE_ID;
                                         if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
@@ -574,6 +621,9 @@ pub extern "C" fn _start() -> ! {
                                         0x50 => { w.desc.y += step; mutated = true; }
                                         _ => {}
                                     }
+                                    // Clamp to content area after movement
+                                    let (cx, cy) = clamp_position(w.desc.x, w.desc.y, w.desc.width, w.desc.height);
+                                    w.desc.x = cx; w.desc.y = cy;
                                 }
                             }
                         } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
@@ -584,6 +634,9 @@ pub extern "C" fn _start() -> ! {
                                 0x50 => { SURFACE_101_Y += step; mutated = true; }
                                 _ => {}
                             }
+                            // Clamp to content area after movement
+                            let (cx, cy) = clamp_position(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H);
+                            SURFACE_101_X = cx; SURFACE_101_Y = cy;
                         }
                     }
                 }
