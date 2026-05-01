@@ -424,3 +424,41 @@ No renderer rewrite.
 2. `USB_XHCI_MINIMAL_ENUM_V1`
 3. `USB_HID_BOOT_MOUSE_REPORT_V1`
 4. `USB_HID_POINTER_PRODUCER_V1`
+
+## Fish-Safe Command Prompt Rules
+
+1. Do not put bare expected output lines in pasteable shell blocks.
+2. If showing expected output, prefix each line with `# `.
+3. Prefer commands that self-check instead of requiring visual comparison.
+4. For git staged-file checks in fish, use:
+
+```fish
+set -l staged (git diff --cached --name-only)
+printf '%s\n' $staged
+
+if test (count $staged) -ne 2
+    echo "BAD: expected exactly 2 staged files"
+    exit 1
+end
+
+if not contains -- AGENT_HANDOFF_GP_CLOCK.md $staged
+    echo "BAD: missing AGENT_HANDOFF_GP_CLOCK.md"
+    exit 1
+end
+
+if not contains -- docs/INPUT_USB_NEXT.md $staged
+    echo "BAD: missing docs/INPUT_USB_NEXT.md"
+    exit 1
+end
+```
+
+5. When including expected output in docs/prompts, write it as comments:
+
+```text
+# expected:
+# AGENT_HANDOFF_GP_CLOCK.md
+# docs/INPUT_USB_NEXT.md
+```
+
+6. Assume fish shell unless explicitly told otherwise.
+7. Avoid bash-only syntax in paste-ready commands unless explicitly wrapped, for example: `bash -lc '...'`.
