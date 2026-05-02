@@ -31,6 +31,7 @@ crates = [
   "apps/sexdrive/Cargo.toml",
   "servers/silk-shell/Cargo.toml",
   "servers/sexinput/Cargo.toml",
+  "servers/sexusb/Cargo.toml",
   "purple-scanout/Cargo.toml",
   "servers/silkbar/Cargo.toml",
   "servers/linen/Cargo.toml"
@@ -84,6 +85,13 @@ action = "cargo_manifest"
 manifest = "servers/sexinput/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexinput"
 dest_artifact = "iso_root/servers/sexinput"
+
+[[stage]]
+id = "build_sexusb"
+action = "cargo_manifest"
+manifest = "servers/sexusb/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sexusb"
+dest_artifact = "iso_root/servers/sexusb"
 
 [[stage]]
 id = "build_purple_scanout"

@@ -6,6 +6,7 @@ members = [
     "servers/sexshop",
     "servers/silk-shell",
     "servers/sexinput",
+    "servers/sexusb",
     "servers/silkbar",
     "servers/linen",
     "apps/sexdrive",
@@ -14,5 +15,8 @@ members = [
     "crates/sex-graphics",
     "crates/silkbar-model",
 ]
+[workspace.package]
+license = "GPL-3.0-only"
+
 [profile.release]
 panic = "abort"

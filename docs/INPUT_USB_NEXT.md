@@ -75,3 +75,8 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 - `sex-pdx` and `silk-shell` were inspect-only; no ABI or policy edits.
 - POINTER_DRAG_PROOF_V1 note: in headless/CI hosts, `./dev.sh run` may fail with `SDL(No available video device)` and `run-nographic` may fail with `-serial stdio` multi-device conflict; treat as environment runtime blocker, not pointer-path regression.
 - SILK_DE_BAR_CONTRACT_LOCK_V1 complete: shared bar contract constants are now locked in `silkbar-model`, and both `silkbar` producer + `sexdisplay` renderer perform startup contract validation with bounded `*.ok/*.bad` markers. Build passed; GUI runtime still blocked in this host by SDL no-video device.
+- RULE: sexdisplay startup validation must fail-open. Never halt/spin/yield before OP_PRIMARY_FB/main render loop. Contract validation may log bad state but must keep renderer alive; bad validation degrades to default SilkBar state, not black-screen.
+- SEXUSB_SERVER_SKELETON_XHCI_PROBE_V1 complete: added `sexusb` server PD boot path and routed existing XHCI PCI/IRQ lease to `sexusb` (fallback to `sexdrive` if `sexusb` absent).
+- `sexusb` now probes XHCI BAR0 via existing syscall 43 (`MAP_PCI_BAR`) and logs CAPLENGTH/HCIVERSION/HCSP1/HCC1 markers only; no reset/run/TRB/DMA/enum yet.
+- Build gate passed: `./scripts/entrypoint_build.sh`.
+- Runtime host blocker persists: `./dev.sh run` failed with `Could not initialize SDL(No available video device)`.

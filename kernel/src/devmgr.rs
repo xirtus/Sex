@@ -3,7 +3,7 @@ use crate::serial_println;
 use crate::ipc::DOMAIN_REGISTRY;
 use crate::capability::{CapabilityData, PciCapData, InterruptCapData};
 
-pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32) {
+pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32) {
     serial_println!("DevMgr: Starting hardware discovery...");
     
     let devices = HAL.enumerate_pci();
@@ -45,7 +45,8 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32) {
                     "DevMgr: Discovered USB XHCI ({:02x}:{:02x}.{}) vendor={:04x} device={:04x} bar0={:#x} irq_line={:#x}",
                     dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, bar0, irq_line
                 );
-                if let Some(pd) = DOMAIN_REGISTRY.get(sexdrive_pd_id) {
+                let usb_owner_pd_id = if sexusb_pd_id != 0 { sexusb_pd_id } else { sexdrive_pd_id };
+                if let Some(pd) = DOMAIN_REGISTRY.get(usb_owner_pd_id) {
                     // Strict lease boundary: one XHCI PCI capability to one driver PD slot.
                     pd.grant_capability(sex_pdx::SLOT_USB_HOST, CapabilityData::Pci(PciCapData {
                         bus: dev.bus,
@@ -56,8 +57,8 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32) {
                     }));
                     pd.grant(CapabilityData::Interrupt(InterruptCapData { irq: irq_line }));
                     serial_println!(
-                        "DevMgr: Leased XHCI to sexdrive pd={} slot={}",
-                        sexdrive_pd_id,
+                        "DevMgr: Leased XHCI to pd={} slot={}",
+                        usb_owner_pd_id,
                         sex_pdx::SLOT_USB_HOST
                     );
                 }

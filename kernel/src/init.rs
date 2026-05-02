@@ -27,11 +27,12 @@ pub fn init() {
     let mut sexdrive_id = 0;
     let mut silkshell_id = 0;
     let mut sexinput_id = 0;
+    let mut sexusb_id = 0;
     let mut silkbar_id = 0;
     let mut linen_id = 0;
 
     // Fixed Spawn Order (Deterministic IDs)
-    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "silkbar", "linen"];
+    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen"];
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -61,8 +62,10 @@ pub fn init() {
                         } else if domain_id == 4 {
                             sexinput_id = id;
                         } else if domain_id == 5 {
-                            silkbar_id = id;
+                            sexusb_id = id;
                         } else if domain_id == 6 {
+                            silkbar_id = id;
+                        } else if domain_id == 7 {
                             linen_id = id;
                         }
                     }
@@ -101,9 +104,9 @@ pub fn init() {
     }
 
     // Hardware discovery and driver lease routing.
-    // Includes XHCI discovery + lease to sexdrive (slot SLOT_USB_HOST) only.
+    // Includes XHCI discovery + lease to sexusb (slot SLOT_USB_HOST) when present.
     if sexdrive_id != 0 && sexdisp_id != 0 {
-        crate::devmgr::init(sexdrive_id, sexdisp_id);
+        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id);
     }
 
     // SilkBar delivery path: grant display capability independently of silk-shell.
