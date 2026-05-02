@@ -863,11 +863,33 @@ No `[sexusb.xhci.eval_ctx.verify.bad]`.
   `[sexusb.xhci.set_config.complete.ok]`.
 - QEMU/xHCI quirk captured: no-data control transfer status stage uses `DIR=IN`.
 
+### USB_XHCI_INTERRUPT_IN_POLL_PROOF_V1
+- Implemented in `servers/sexusb/src/main.rs` after `SET_CONFIGURATION`.
+- Uses config-walk captured endpoint tuple:
+  `addr=0x81`, `dci=3`, `mps=4`, `interval=7`.
+- Sends HID class `SET_IDLE` (`duration=1`, `report_id=0`) before poll arm
+  to force periodic interrupt-IN reports on otherwise idle virtual mouse models.
+- Allocates/maps:
+  one interrupt-IN transfer ring and one bounded report buffer.
+- Configures EP1 IN only via Input Context + Configure Endpoint command:
+  ICC Add flags include Slot bit `0` and endpoint context bit `3`.
+- Endpoint context values used:
+  `EP Type=Interrupt IN`, `CErr=3`, `Max Packet Size=4`,
+  `TR Dequeue=intr_ring_phys|DCS=1`, `Avg TRB Len=4`,
+  `Max ESIT Payload=4`.
+- Queues one Normal TRB (`len=4`, IOC=1), rings DB target `3`,
+  bounded-polls one Transfer Event, logs raw 4-byte report only.
+- Added markers:
+  `[sexusb.xhci.intr_in.config_ep.start]`,
+  `[sexusb.xhci.intr_in.config_ep.ok]`,
+  `[sexusb.xhci.intr_in.poll.start]`,
+  `[sexusb.xhci.intr_in.event.ok] actual=N residue=N`,
+  `[sexusb.xhci.intr_in.report.bytes]`,
+  `[sexusb.xhci.intr_in.poll.complete.ok]`.
+
 ### Non-goals preserved
-- No Configure Endpoint command
-- No interrupt transfers
 - No sexinput routing
 - No IRQ handler (stay with polling)
 
 ### Next
-- `USB_XHCI_INTERRUPT_IN_POLL_PROOF_V1`
+- Promote from one-shot poll proof to stable repeated polling policy (still no IRQ path).

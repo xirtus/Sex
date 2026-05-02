@@ -144,6 +144,7 @@ pub extern "C" fn _start() -> ! {
     //   Noop Command     = 23
     const TRB_TYPE_ENABLE_SLOT_CMD: u32 = 9;
     const TRB_TYPE_ADDRESS_DEVICE_CMD: u32 = 11;
+    const TRB_TYPE_CONFIGURE_ENDPOINT_CMD: u32 = 12;
     const TRB_TYPE_NOOP_CMD: u32 = 23;
     const TRB_TYPE_EVALUATE_CONTEXT_CMD: u32 = 13;
     const TRB_TYPE_CMD_COMPLETION_EVENT: u32 = 33;
@@ -151,6 +152,7 @@ pub extern "C" fn _start() -> ! {
     const TRB_TYPE_SETUP_STAGE: u32 = 2;
     const TRB_TYPE_DATA_STAGE: u32 = 3;
     const TRB_TYPE_STATUS_STAGE: u32 = 4;
+    const TRB_TYPE_NORMAL: u32 = 1;
     const TRB_CC_SUCCESS: u32 = 1;
 
     serial_println!("[sexusb.boot]");
@@ -1895,10 +1897,6 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
-    // Suppress unused warnings: these variables are informational captures
-    // for future phases (HID report fetch, interrupt transfer setup).
-    let _ = (hid_interface_number, intr_ep_addr, intr_ep_mps, intr_ep_interval);
-
     if !found_hid_mouse {
         serial_println!("[sexusb.xhci.config.no_hid.park]");
         loop { sys_yield(); }
@@ -2161,6 +2159,280 @@ pub extern "C" fn _start() -> ! {
 
     serial_println!("[sexusb.xhci.set_config.event.ok] actual=0 residue=0");
     serial_println!("[sexusb.xhci.set_config.complete.ok]");
+
+    // Request periodic HID input reports even without movement:
+    // SET_IDLE(duration=1*4ms, report_id=0) to interface hid_interface_number.
+    let setidle_deq_dw2 = unsafe { core::ptr::read_volatile(cfg_deq_ep0_base.add(2)) };
+    let setidle_deq_dw3 = unsafe { core::ptr::read_volatile(cfg_deq_ep0_base.add(3)) };
+    let setidle_deq_ptr = ((setidle_deq_dw3 as u64) << 32) | (setidle_deq_dw2 as u64);
+    let setidle_deq_phys = setidle_deq_ptr & !0xFu64;
+    let setidle_deq_dcs = setidle_deq_ptr & 1;
+    let setidle_deq_index = (setidle_deq_phys.wrapping_sub(ep0_ring_phys)) / 16;
+    if setidle_deq_dcs != 1
+        || setidle_deq_phys < ep0_ring_phys
+        || setidle_deq_phys >= ep0_ring_phys.wrapping_add(PAGE_SIZE)
+        || setidle_deq_phys % 16 != 0
+        || setidle_deq_index + 2 >= PAGE_SIZE / TRB_SIZE
+    {
+        serial_println!("[sexusb.xhci.hid.set_idle.deq.bad]");
+        loop { sys_yield(); }
+    }
+
+    let setidle_setup_d3 = (TRB_TYPE_SETUP_STAGE << 10)
+        | (0u32 << 16)
+        | (1u32 << 6)
+        | ep0_cycle;
+    trb_write_volatile(
+        ep0_ring_va,
+        setidle_deq_index,
+        0x0100_0A21u32, // bmReqType=0x21, bReq=0x0A, wValue=0x0100
+        hid_interface_number as u32, // wIndex=interface, wLength=0
+        8u32,
+        setidle_setup_d3,
+    );
+    let setidle_status_d3 = (TRB_TYPE_STATUS_STAGE << 10)
+        | (1u32 << 16)
+        | (1u32 << 5)
+        | ep0_cycle;
+    trb_write_volatile(ep0_ring_va, setidle_deq_index + 1, 0, 0, 0, setidle_status_d3);
+    trb_write_volatile(ep0_ring_va, setidle_deq_index + 2, 0, 0, 0, ep0_cycle ^ 1);
+    ep0_idx = setidle_deq_index + 3;
+    let _ = (ep0_idx,);
+    mmio_write32(db_base, en_slot_id as u64 * 4, 1u32);
+
+    let mut setidle_ok = false;
+    for _ in 0..POLL_BUDGET {
+        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        if (ev_d3 & 1) == (ev_dcs as u32) {
+            let ev_type = (ev_d3 >> 10) & 0x3F;
+            if ev_type == TRB_TYPE_TRANSFER_EVENT {
+                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                let cc = (ev_d2 >> 24) & 0xFF;
+                let residue = ev_d2 & 0xFFFFFF;
+                let slot = (ev_d3 >> 24) & 0xFF;
+                let ep = (ev_d3 >> 16) & 0x1F;
+                if cc == TRB_CC_SUCCESS && slot == en_slot_id && ep == 1 && residue == 0 {
+                    setidle_ok = true;
+                }
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS {
+                    ev_idx = 0;
+                    ev_dcs ^= 1;
+                }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+            }
+            break;
+        }
+        sys_yield();
+    }
+    if !setidle_ok {
+        serial_println!("[sexusb.xhci.hid.set_idle.timeout.bad]");
+        loop { sys_yield(); }
+    }
+
+    // ===== Configure Endpoint + Interrupt-IN Poll =====
+    // Phase: USB_XHCI_INTERRUPT_IN_POLL_PROOF_V1
+    if intr_ep_addr == 0 || (intr_ep_addr & 0x80) == 0 || intr_ep_mps == 0 || intr_ep_mps > 4 {
+        serial_println!(
+            "[sexusb.xhci.intr_in.config.bad] addr={:#x} mps={} interval={}",
+            intr_ep_addr,
+            intr_ep_mps,
+            intr_ep_interval
+        );
+        loop { sys_yield(); }
+    }
+
+    const INTR_DCI: u32 = 3; // EP1 IN endpoint context index
+    const EP_TYPE_INTERRUPT_IN: u32 = 7;
+    const INTR_REPORT_LEN: u32 = 4;
+
+    let intr_ring_phys = sys_alloc_phys(PAGE_SIZE);
+    let intr_report_phys = sys_alloc_phys(PAGE_SIZE);
+    if intr_ring_phys == 0 || intr_ring_phys == u64::MAX
+        || intr_report_phys == 0 || intr_report_phys == u64::MAX
+    {
+        serial_println!("[sexusb.xhci.intr_in.alloc.bad]");
+        loop { sys_yield(); }
+    }
+    let intr_ring_va = sys_map_phys(intr_ring_phys, PAGE_SIZE);
+    let intr_report_va = sys_map_phys(intr_report_phys, PAGE_SIZE);
+    if intr_ring_va == 0 || intr_ring_va == u64::MAX
+        || intr_report_va == 0 || intr_report_va == u64::MAX
+    {
+        serial_println!("[sexusb.xhci.intr_in.map.bad]");
+        loop { sys_yield(); }
+    }
+    if (intr_ring_phys % 64) != 0 || (intr_ring_va % PAGE_SIZE) != 0 {
+        serial_println!("[sexusb.xhci.intr_in.align.bad] ring_phys={:#x} ring_va={:#x}", intr_ring_phys, intr_ring_va);
+        loop { sys_yield(); }
+    }
+    unsafe {
+        core::ptr::write_bytes(intr_ring_va as *mut u8, 0, PAGE_SIZE as usize);
+        core::ptr::write_bytes(intr_report_va as *mut u8, 0, INTR_REPORT_LEN as usize);
+        core::ptr::write_bytes(input_ctx_va as *mut u8, 0, PAGE_SIZE as usize);
+    }
+
+    serial_println!("[sexusb.xhci.intr_in.config_ep.start]");
+
+    // ICC: add Slot Context (bit 0) + Endpoint Context index 3 (bit 3).
+    unsafe {
+        core::ptr::write_volatile(input_ctx_va as *mut u32, 0u32);            // Drop flags
+        core::ptr::write_volatile((input_ctx_va + 4) as *mut u32, 0x9u32);    // Add flags
+    }
+
+    // Copy Slot Context from output device context.
+    let out_slot_base = device_ctx_va as *const u32;
+    let in_slot_base = (input_ctx_va + ctx_stride) as *mut u32;
+    for i in 0..8u64 {
+        let v = unsafe { core::ptr::read_volatile(out_slot_base.add(i as usize)) };
+        unsafe { core::ptr::write_volatile(in_slot_base.add(i as usize), v); }
+    }
+    // Context Entries (Slot Context DW0 bits 31:27) must cover the highest added DCI.
+    let slot_dw0 = unsafe { core::ptr::read_volatile(in_slot_base.add(0)) };
+    let slot_dw0_new = (slot_dw0 & !(0x1Fu32 << 27)) | ((INTR_DCI & 0x1F) << 27);
+    unsafe { core::ptr::write_volatile(in_slot_base.add(0), slot_dw0_new); }
+
+    // Build EP1 IN endpoint context at DCI=3.
+    let in_ep_base = (input_ctx_va + ctx_stride * (1 + INTR_DCI as u64)) as *mut u32;
+    let ep_dw0 = ((intr_ep_interval as u32) << 16); // Interval in bits 23:16
+    let ep_dw1 = (CERR_DEFAULT & 0x3)
+        | (EP_TYPE_INTERRUPT_IN << 3)
+        | ((intr_ep_mps as u32) << 16);
+    let ep_deq = intr_ring_phys | 1u64; // DCS=1
+    let ep_dw2 = (ep_deq & 0xFFFF_FFFF) as u32;
+    let ep_dw3 = (ep_deq >> 32) as u32;
+    let ep_dw4 = INTR_REPORT_LEN | (INTR_REPORT_LEN << 16); // avg TRB len + max ESIT payload
+    unsafe {
+        core::ptr::write_volatile(in_ep_base.add(0), ep_dw0);
+        core::ptr::write_volatile(in_ep_base.add(1), ep_dw1);
+        core::ptr::write_volatile(in_ep_base.add(2), ep_dw2);
+        core::ptr::write_volatile(in_ep_base.add(3), ep_dw3);
+        core::ptr::write_volatile(in_ep_base.add(4), ep_dw4);
+    }
+
+    // Configure Endpoint command.
+    let cfg_ep_d0 = (input_ctx_phys & 0xFFFF_FFFF) as u32;
+    let cfg_ep_d1 = (input_ctx_phys >> 32) as u32;
+    let cfg_ep_d3 = (en_slot_id << 24) | (TRB_TYPE_CONFIGURE_ENDPOINT_CMD << 10) | cmd_cycle;
+    trb_write_volatile(cmd_ring_va, cmd_idx, cfg_ep_d0, cfg_ep_d1, 0u32, cfg_ep_d3);
+    trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle ^ 1);
+    mmio_write32(db_base, 0, 0u32);
+
+    let mut cfg_ep_ok = false;
+    for _ in 0..POLL_BUDGET {
+        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        if (ev_d3 & 1) == (ev_dcs as u32) {
+            let ev_type = (ev_d3 >> 10) & 0x3F;
+            if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
+                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                let cc = (ev_d2 >> 24) & 0xFF;
+                let slot = (ev_d3 >> 24) & 0xFF;
+                if cc == TRB_CC_SUCCESS && slot == en_slot_id {
+                    cfg_ep_ok = true;
+                } else {
+                    serial_println!("[sexusb.xhci.intr_in.config_ep.event.bad] cc={} slot={}", cc, slot);
+                }
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS {
+                    ev_idx = 0;
+                    ev_dcs ^= 1;
+                }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+            }
+            break;
+        }
+        sys_yield();
+    }
+    if !cfg_ep_ok {
+        serial_println!("[sexusb.xhci.intr_in.config_ep.timeout.bad]");
+        loop { sys_yield(); }
+    }
+    cmd_idx += 1;
+    serial_println!("[sexusb.xhci.intr_in.config_ep.ok]");
+
+    // Queue one interrupt-IN Normal TRB and poll for one transfer event.
+    trb_write_volatile(
+        intr_ring_va,
+        0,
+        (intr_report_phys & 0xFFFF_FFFF) as u32,
+        (intr_report_phys >> 32) as u32,
+        INTR_REPORT_LEN,
+        (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | 1u32, // IOC + cycle=1
+    );
+    trb_write_volatile(intr_ring_va, 1, 0, 0, 0, 0u32); // cycle stop
+
+    serial_println!("[sexusb.xhci.intr_in.poll.start]");
+    mmio_write32(db_base, en_slot_id as u64 * 4, INTR_DCI);
+
+    let mut intr_ok = false;
+    let mut intr_residue: u32 = 0;
+    for _ in 0..POLL_BUDGET {
+        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        if (ev_d3 & 1) != (ev_dcs as u32) {
+            sys_yield();
+            continue;
+        }
+        let ev_type = (ev_d3 >> 10) & 0x3F;
+        if ev_type == TRB_TYPE_TRANSFER_EVENT {
+            let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+            let cc = (ev_d2 >> 24) & 0xFF;
+            intr_residue = ev_d2 & 0xFFFFFF;
+            let slot = (ev_d3 >> 24) & 0xFF;
+            let ep = (ev_d3 >> 16) & 0x1F;
+            if cc == TRB_CC_SUCCESS && slot == en_slot_id && ep == INTR_DCI {
+                intr_ok = true;
+            } else {
+                serial_println!("[sexusb.xhci.intr_in.event.bad] cc={} slot={} ep={}", cc, slot, ep);
+            }
+            trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+            ev_idx += 1;
+            if ev_idx >= EVENT_RING_TRBS {
+                ev_idx = 0;
+                ev_dcs ^= 1;
+            }
+            let new_erdp = event_ring_phys + ev_idx * 16;
+            mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+            mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+            break;
+        }
+
+        // Consume unrelated owned events and continue waiting for the transfer event.
+        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+        ev_idx += 1;
+        if ev_idx >= EVENT_RING_TRBS {
+            ev_idx = 0;
+            ev_dcs ^= 1;
+        }
+        let new_erdp = event_ring_phys + ev_idx * 16;
+        mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+        mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+    }
+    if !intr_ok {
+        serial_println!("[sexusb.xhci.intr_in.poll.timeout.bad]");
+        loop { sys_yield(); }
+    }
+    if intr_residue > INTR_REPORT_LEN {
+        serial_println!("[sexusb.xhci.intr_in.residue.bad] residue={}", intr_residue);
+        loop { sys_yield(); }
+    }
+    let intr_actual = INTR_REPORT_LEN - intr_residue;
+    serial_println!("[sexusb.xhci.intr_in.event.ok] actual={} residue={}", intr_actual, intr_residue);
+    let report_ptr = intr_report_va as *const u8;
+    let rb0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
+    let rb1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
+    let rb2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
+    let rb3 = unsafe { core::ptr::read_volatile(report_ptr.add(3)) };
+    serial_println!(
+        "[sexusb.xhci.intr_in.report.bytes] bytes=[{:#x},{:#x},{:#x},{:#x}]",
+        rb0, rb1, rb2, rb3
+    );
+    serial_println!("[sexusb.xhci.intr_in.poll.complete.ok]");
     serial_println!("[sexusb.xhci.config.complete.ok]");
 
     loop { sys_yield(); }
