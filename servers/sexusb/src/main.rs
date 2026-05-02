@@ -1797,6 +1797,7 @@ pub extern "C" fn _start() -> ! {
     let mut inside_hid_mouse: bool = false;
     let mut found_hid_mouse: bool = false;
     let mut hid_interface_number: u8 = 0;
+    let mut hid_report_desc_len: u16 = 0;
     let mut intr_ep_addr: u8 = 0;
     let mut intr_ep_mps: u16 = 0;
     let mut intr_ep_interval: u8 = 0;
@@ -1848,8 +1849,8 @@ pub extern "C" fn _start() -> ! {
                     }
                     let rpt_len_lo = unsafe { core::ptr::read_volatile(walk_buf.add(walk_off as usize + 7)) };
                     let rpt_len_hi = unsafe { core::ptr::read_volatile(walk_buf.add(walk_off as usize + 8)) };
-                    let report_len = ((rpt_len_hi as u16) << 8) | (rpt_len_lo as u16);
-                    serial_println!("[sexusb.xhci.config.hid_desc.ok] off={} report_len={}", walk_off, report_len);
+                    hid_report_desc_len = ((rpt_len_hi as u16) << 8) | (rpt_len_lo as u16);
+                    serial_println!("[sexusb.xhci.config.hid_desc.ok] off={} report_len={}", walk_off, hid_report_desc_len);
                 }
             }
             5 => { // ENDPOINT descriptor
@@ -1897,6 +1898,169 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
+    // ===== GET_DESCRIPTOR(HID REPORT) =====
+    // Phase: USB_XHCI_HID_REPORT_DESCRIPTOR_PROOF_V1
+    let report_len = hid_report_desc_len as u32;
+    if report_len == 0 || report_len > 256 {
+        serial_println!(
+            "[sexusb.xhci.hid.report_desc.len.bad] len={} intf={}",
+            report_len,
+            hid_interface_number
+        );
+        loop { sys_yield(); }
+    }
+
+    serial_println!(
+        "[sexusb.xhci.hid.report_desc.start] intf={} len={}",
+        hid_interface_number,
+        report_len
+    );
+
+    let hid_deq_dw2 = unsafe { core::ptr::read_volatile(cfg_deq_ep0_base.add(2)) };
+    let hid_deq_dw3 = unsafe { core::ptr::read_volatile(cfg_deq_ep0_base.add(3)) };
+    let hid_deq_ptr = ((hid_deq_dw3 as u64) << 32) | (hid_deq_dw2 as u64);
+    let hid_deq_dcs = hid_deq_ptr & 1;
+    let hid_deq_phys = hid_deq_ptr & !0xFu64;
+    let hid_deq_index = (hid_deq_phys.wrapping_sub(ep0_ring_phys)) / 16;
+
+    if hid_deq_dcs != 1
+        || hid_deq_phys < ep0_ring_phys
+        || hid_deq_phys >= ep0_ring_phys.wrapping_add(PAGE_SIZE)
+        || hid_deq_phys % 16 != 0
+    {
+        serial_println!("[sexusb.xhci.hid.report_desc.deq.bad] ptr={:#x} dcs={}", hid_deq_ptr, hid_deq_dcs);
+        loop { sys_yield(); }
+    }
+    if hid_deq_index + 3 >= PAGE_SIZE / TRB_SIZE {
+        serial_println!("[sexusb.xhci.hid.report_desc.deq.ring.bad] idx={}", hid_deq_index);
+        loop { sys_yield(); }
+    }
+
+    unsafe { core::ptr::write_bytes(desc_data_va as *mut u8, 0, report_len as usize); }
+
+    // SETUP: bmReqType=0x81, bReq=0x06, wValue=0x2200, wIndex=intf, wLength=report_len
+    let hid_setup_d3 = (TRB_TYPE_SETUP_STAGE << 10)
+        | (2u32 << 16)
+        | (1u32 << 6)
+        | ep0_cycle;
+    trb_write_volatile(
+        ep0_ring_va,
+        hid_deq_index,
+        0x2200_0681u32,
+        ((report_len as u32) << 16) | (hid_interface_number as u32),
+        8u32,
+        hid_setup_d3,
+    );
+
+    let hid_data_d3 = (TRB_TYPE_DATA_STAGE << 10) | (1u32 << 16) | ep0_cycle;
+    trb_write_volatile(
+        ep0_ring_va,
+        hid_deq_index + 1,
+        (desc_data_phys & 0xFFFF_FFFF) as u32,
+        (desc_data_phys >> 32) as u32,
+        report_len | (1u32 << 18),
+        hid_data_d3,
+    );
+
+    let hid_status_d3 = (TRB_TYPE_STATUS_STAGE << 10)
+        | (0u32 << 16)
+        | (1u32 << 5)
+        | ep0_cycle;
+    trb_write_volatile(ep0_ring_va, hid_deq_index + 2, 0, 0, 0, hid_status_d3);
+    trb_write_volatile(ep0_ring_va, hid_deq_index + 3, 0, 0, 0, ep0_cycle ^ 1);
+
+    ep0_idx = hid_deq_index + 4;
+    let _ = (ep0_idx,);
+
+    mmio_write32(db_base, en_slot_id as u64 * 4, 1u32);
+
+    let mut hid_ok = false;
+    let mut hid_residue: u32 = 0;
+    for _ in 0..POLL_BUDGET {
+        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        if (ev_d3 & 1) == (ev_dcs as u32) {
+            let ev_type = (ev_d3 >> 10) & 0x3F;
+            if ev_type == TRB_TYPE_TRANSFER_EVENT {
+                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                let cc = (ev_d2 >> 24) & 0xFF;
+                hid_residue = ev_d2 & 0xFFFFFF;
+                let slot = (ev_d3 >> 24) & 0xFF;
+                let ep = (ev_d3 >> 16) & 0x1F;
+                if cc == TRB_CC_SUCCESS && slot == en_slot_id && ep == 1 {
+                    hid_ok = true;
+                } else {
+                    serial_println!("[sexusb.xhci.hid.report_desc.event.bad] cc={} slot={} ep={}", cc, slot, ep);
+                }
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS {
+                    ev_idx = 0;
+                    ev_dcs ^= 1;
+                }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+            }
+            break;
+        }
+        sys_yield();
+    }
+
+    if !hid_ok {
+        serial_println!("[sexusb.xhci.hid.report_desc.timeout.bad]");
+        loop { sys_yield(); }
+    }
+    if hid_residue > report_len {
+        serial_println!("[sexusb.xhci.hid.report_desc.residue.bad] residue={} len={}", hid_residue, report_len);
+        loop { sys_yield(); }
+    }
+
+    let hid_actual_len = report_len - hid_residue;
+    serial_println!(
+        "[sexusb.xhci.hid.report_desc.event.ok] actual={} residue={}",
+        hid_actual_len,
+        hid_residue
+    );
+
+    let dump_len = if hid_actual_len > 64 { 64 } else { hid_actual_len };
+    let hid_buf = desc_data_va as *const u8;
+    let mut bi: u32 = 0;
+    while bi < dump_len {
+        let bv = unsafe { core::ptr::read_volatile(hid_buf.add(bi as usize)) };
+        serial_println!("[sexusb.xhci.hid.report_desc.bytes] i={} b={:#x}", bi, bv);
+        bi += 1;
+    }
+
+    let mut has_usage_page_gd = false;
+    let mut has_usage_mouse = false;
+    let mut has_collection_app = false;
+    let mut has_usage_x = false;
+    let mut has_usage_y = false;
+    let mut si: u32 = 0;
+    while si + 1 < hid_actual_len {
+        let b0 = unsafe { core::ptr::read_volatile(hid_buf.add(si as usize)) };
+        let b1 = unsafe { core::ptr::read_volatile(hid_buf.add(si as usize + 1)) };
+        if b0 == 0x05 && b1 == 0x01 {
+            has_usage_page_gd = true;
+        } else if b0 == 0x09 && b1 == 0x02 {
+            has_usage_mouse = true;
+        } else if b0 == 0xA1 && b1 == 0x01 {
+            has_collection_app = true;
+        } else if b0 == 0x09 && b1 == 0x30 {
+            has_usage_x = true;
+        } else if b0 == 0x09 && b1 == 0x31 {
+            has_usage_y = true;
+        }
+        si += 1;
+    }
+
+    if has_usage_page_gd && has_usage_mouse && has_collection_app && has_usage_x && has_usage_y {
+        serial_println!("[sexusb.xhci.hid.report_desc.mouse_shape.ok]");
+    } else {
+        serial_println!("[sexusb.xhci.hid.report_desc.mouse_shape.warn]");
+    }
+
+    serial_println!("[sexusb.xhci.hid.report_desc.complete.ok] len={}", hid_actual_len);
     serial_println!("[sexusb.xhci.config.complete.ok]");
 
     loop { sys_yield(); }

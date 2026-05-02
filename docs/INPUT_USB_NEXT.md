@@ -831,8 +831,24 @@ Expected markers:
 ```
 No `[sexusb.xhci.eval_ctx.verify.bad]`.
 
+### USB_XHCI_HID_REPORT_DESCRIPTOR_PROOF_V1
+- Implemented in `servers/sexusb/src/main.rs` after config walk:
+  captures `hid_interface_number` + HID `wDescriptorLength`, bounds report
+  length to `1..=256`, issues EP0 `GET_DESCRIPTOR(HID_REPORT)` with
+  `bmRequestType=0x81`, `bRequest=0x06`, `wValue=0x2200`,
+  `wIndex=hid_interface_number`, `wLength=hid_report_desc_len`.
+- Preserved transfer invariants:
+  status IOC at DW3 bit5 and SETUP DW3 bit6 inline marker retained.
+- Added markers:
+  `[sexusb.xhci.hid.report_desc.start]`,
+  `[sexusb.xhci.hid.report_desc.event.ok]`,
+  `[sexusb.xhci.hid.report_desc.bytes]` (first 64 bytes max),
+  `[sexusb.xhci.hid.report_desc.complete.ok]`,
+  plus mouse-shape scan result marker.
+- Minimal bounded shape scan only (no full HID parser): detects
+  `05 01`, `09 02`, `A1 01`, `09 30`, `09 31`.
+
 ### Non-goals preserved
-- No HID report descriptor fetch
 - No SET_CONFIGURATION
 - No Configure Endpoint command
 - No interrupt transfers
@@ -840,6 +856,5 @@ No `[sexusb.xhci.eval_ctx.verify.bad]`.
 - No IRQ handler (stay with polling)
 
 ### Next
-- `USB_XHCI_HID_REPORT_DESCRIPTOR_PROOF_V1`: fetch HID report descriptor via
-  GET_DESCRIPTOR(HID Report) to determine report size. MPS resolved to 512 for
-  SS ports, which will be the MPS for interrupt transfers.
+- `USB_XHCI_SET_CONFIGURATION_PROOF_V1`
+- `USB_XHCI_INTERRUPT_IN_POLL_PROOF_V1`
