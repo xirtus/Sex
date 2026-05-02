@@ -511,6 +511,14 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
     }
 }
 
+/// Kernel-mode halt loop. Redirect faulted user tasks here so IRETQ
+/// never returns to the faulting RIP (which causes immediate re-fault).
+#[no_mangle]
+pub extern "C" fn faulted_task_halt() -> ! {
+    loop {
+        x86_64::instructions::hlt();
+    }
+}
 #[no_mangle]
 pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, error_code: u64) {
     use x86_64::registers::control::Cr2;
@@ -518,41 +526,10 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
     let fault_rip = stack_frame.instruction_pointer.as_u64();
     let fault_rsp = stack_frame.stack_pointer.as_u64();
     let fault_cs = stack_frame.code_segment.0 as u64;
-    let fault_ss = stack_frame.stack_segment.0 as u64;
     let fault_rflags = stack_frame.cpu_flags.bits();
     let fault_cs_rpl = fault_cs & 0x3;
-    let fault_cs_kind = if fault_cs_rpl == 3 { "user" } else { "kernel" };
-
-    let cur_pd = crate::core_local::CoreLocal::get().current_pd();
-    serial_println!(
-        "DEBUG: page_fault_handler entered. Addr={:#x}, RIP={:#x}, CS={:#x}({}), RFLAGS={:#x}, RSP={:#x}, SS={:#x}, Err={:#x}, PD={}",
-        fault_addr,
-        fault_rip,
-        fault_cs,
-        fault_cs_kind,
-        fault_rflags,
-        fault_rsp,
-        fault_ss,
-        error_code,
-        cur_pd
-    );
-    serial_println!(
-        "pf.frame.rip={:#x} pf.frame.cs={:#x} pf.frame.cs_kind={} pf.frame.rflags={:#x} pf.frame.rsp={:#x} pf.frame.ss={:#x} pf.cr2={:#x} pf.err={:#x} pf.pd={}",
-        fault_rip,
-        fault_cs,
-        fault_cs_kind,
-        fault_rflags,
-        fault_rsp,
-        fault_ss,
-        fault_addr,
-        error_code,
-        cur_pd
-    );
-    crate::memory::manager::log_page_walk(stack_frame.instruction_pointer, "pf.rip");
-    log_exec_control_state("page_fault");
-
-    if fault_addr == 0 {
-        panic!("Userland Null Pointer Jump at RIP: {:#x}", fault_rip);
+    if fault_addr == 0 && fault_cs_rpl != 3 {
+        panic!("Kernel Null Pointer Jump at RIP: {:#x}", fault_rip);
     }
 
     // Phase 31: PKU Warden Trigger
@@ -579,7 +556,10 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
             task.context.rip = fault_rip;
             task.context.rsp = fault_rsp;
             task.context.rflags = fault_rflags;
-            task.state.store(crate::scheduler::STATE_BLOCKED, Ordering::Release);
+            task.state.store(
+                if fault_addr == 0 && fault_cs_rpl == 3 { 3u32 } else { crate::scheduler::STATE_BLOCKED },
+                Ordering::Release
+            );
             serial_println!(
                 "task.faulted id={} pd_id={} frame_rip={:#x} frame_cs={:#x} frame_rsp={:#x} frame_rflags={:#x} err={:#x}",
                 task.id,
@@ -600,8 +580,78 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
         }
     }
 
-    sched.tick();
-    unsafe { send_eoi(); }
+    let result = sched.tick();
+    if result.is_none() {
+        unsafe { send_eoi(); }
+        
+        let current_ptr = sched.current_task.load(Ordering::Acquire);
+        if !current_ptr.is_null() {
+            unsafe {
+                let state = (*current_ptr).state.load(Ordering::Acquire);
+                if state == 3u32 {
+                    // Task was killed (Exited) — rewrite the raw IRET frame on the
+                    // kernel stack so iretq returns to a kernel halt loop instead of
+                    // the faulting RIP (which was 0x0).  Direct pointer arithmetic
+                    // bypasses any field-access restrictions on InterruptStackFrame.
+                    //
+                    // IRET frame layout relative to stack_frame (after stub's sub rsp,8):
+                    //   [0] = RIP, [1] = CS, [2] = RFLAGS, [3] = RSP, [4] = SS
+                    let halt_addr = &faulted_task_halt as *const _ as u64;
+                    let iret = stack_frame as *const _ as *mut u64;
+                    core::ptr::write(iret,           halt_addr);  // RIP  → kernel halt loop
+                    core::ptr::write(iret.add(1),    0x08u64);    // CS   → kernel code segment
+                    core::ptr::write(iret.add(2),    0x202u64);   // RFLAGS → IF=1, IOPL=0
+                    let cur_rsp: u64;
+                    core::arch::asm!("mov {}, rsp", out(reg) cur_rsp);
+                    core::ptr::write(iret.add(3),    cur_rsp);    // RSP  → current kernel stack
+                    core::ptr::write(iret.add(4),    0x10u64);    // SS   → kernel data segment
+                } else if state != crate::scheduler::STATE_RUNNING {
+                    x86_64::instructions::interrupts::enable();
+                    while (*current_ptr).state.load(Ordering::Acquire) != crate::scheduler::STATE_RUNNING {
+                        x86_64::instructions::hlt();
+                    }
+                    x86_64::instructions::interrupts::disable();
+                }
+            }
+        }
+        return;
+    }
+
+    let (old_ctx_ptr, next_ctx_ptr) = result.unwrap();
+
+    unsafe {
+        if !old_ctx_ptr.is_null() {
+            let old_ctx = &mut *old_ctx_ptr;
+            let base = stack_frame as *const _ as *const u64;
+            old_ctx.rip = stack_frame.instruction_pointer.as_u64();
+            old_ctx.cs = stack_frame.code_segment.0 as u64;
+            old_ctx.rflags = stack_frame.cpu_flags.bits();
+            old_ctx.rsp = stack_frame.stack_pointer.as_u64();
+            old_ctx.ss = stack_frame.stack_segment.0 as u64;
+            old_ctx.r15 = *base.offset(-2);
+            old_ctx.r14 = *base.offset(-3);
+            old_ctx.r13 = *base.offset(-4);
+            old_ctx.r12 = *base.offset(-5);
+            old_ctx.r11 = *base.offset(-6);
+            old_ctx.r10 = *base.offset(-7);
+            old_ctx.r9  = *base.offset(-8);
+            old_ctx.r8  = *base.offset(-9);
+            old_ctx.rdi = *base.offset(-10);
+            old_ctx.rsi = *base.offset(-11);
+            old_ctx.rbp = *base.offset(-12);
+            old_ctx.rdx = *base.offset(-13);
+            old_ctx.rcx = *base.offset(-14);
+            old_ctx.rbx = *base.offset(-15);
+            old_ctx.rax = *base.offset(-16);
+            old_ctx.kstack_top = (base as u64) - 128;
+            old_ctx.pkru = (*old_ctx.pd_ptr).current_pkru_mask.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        }
+
+        let kstack_top = (*next_ctx_ptr).kstack_top;
+        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
+        send_eoi();
+        crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
+    }
 }
 
 #[no_mangle]
