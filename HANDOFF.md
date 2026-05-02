@@ -43,11 +43,11 @@ Use these files in this order to avoid roadmap drift:
 ## Current Runtime State ✅
 
 - **All 6 PDs spawn and run** (sexdisplay, sexdrive, silk-shell, sexinput, silkbar, linen).
-- **Zero page faults, zero panics** after fix (was infinite RIP=0x0 loop).
-- **Scheduler round-robins all 6 PDs** with no stalls.
-- **Clock counts in SilkBar** (no freeze after PD fault).
-- **QEMU window appears** (removed `-display gtk` override).
-- **Known: screen may still appear black** — see diagnosis below.
+- **GUI visible, clock counting continuously** (tested past 15s+).
+- **PD3 silk-shell null-jump is contained** (kernel kills PD3, other PDs continue).
+- **Scheduler round-robins remaining PDs** with no stalls.
+- **Clock bounds-check fix applied** — framebuffer writes guarded against OOB access.
+- **QEMU display:** Use `-display sdl` (not `-display gtk`). Default `dev.sh run` works.
 
 ---
 
@@ -87,6 +87,102 @@ enabled, allowing the scheduler to continue other PDs.
 
 ---
 
+## Bug 5: Clock freeze after ~2s (FIXED ✅)
+
+**Symptom:** Clock advances briefly (2-3 seconds), then freezes. GUI may
+remain visible but clock stops updating. No `fault.kill` in serial log.
+
+**Root cause:** `sexdisplay` (PD1) hits a user-mode page fault while writing
+framebuffer pixels. The framebuffer physical range is valid but the computed
+write index exceeds the framebuffer pixel count, causing an out-of-bounds access
+that faults. Once PD1 is killed, clock updates from silkbar stop rendering.
+
+**Fix (servers/sexdisplay/src/main.rs):**
+- Add `let total_pixels = pixels` in `render()`, compute `total_pixels` via
+  `w.checked_mul(h)` in `redraw_clock_only()` and `redraw_surface_area()`.
+- Every `write_volatile` call is wrapped in `if idx < total_pixels { ... }`.
+- This prevents OOB framebuffer writes that would otherwise fault PD1.
+
+**Key invariant:** Every framebuffer write path must validate the pixel index
+against total pixel count before `write_volatile`. No exceptions.
+
+**Files changed:**
+| File | Change |
+|------|--------|
+| `servers/sexdisplay/src/main.rs` | Added `total_pixels` + `idx < total_pixels` guards in all 3 render functions |
+
+---
+
+## Black Screen Diagnosis (UPDATED 2026-05-02)
+
+**Confirmed root causes of black screen:**
+
+1. **Stale golden digest in `validate_deterministic_vectors()`** — On master,
+   `crates/silkbar-model/src/lib.rs` has a `validate_deterministic_vectors()` check
+   at the start of sexdisplay `_start()`. If the golden digest doesn't match the
+   actual computed digest, sexdisplay hangs in a spin loop and never renders.
+   **Fix:** Either update the golden digest, or remove the fatal check (as done
+   in `test/silkbar-delivery` branch).
+
+2. **Framebuffer PKEY mismatch** — FB pages mapped with PKEY 0. Sexdisplay PKRU
+   should allow it.
+
+3. **Framebuffer in kernel higher-half** — All 4 page-table levels need
+   `USER_ACCESSIBLE`.
+
+4. **Render writes wrong colors** — Dark palette (0x00102038, 0x00303860) appears
+   black on some QEMU display backends. Try `-display sdl` instead of
+   `-display gtk`.
+
+5. **Clock freeze (now fixed)** — See Bug 5 above.
+
+**Diagnostic procedure if screen is black:**
+- Check serial log for `fault.kill` lines → PD1/PD5 may have been killed.
+- Check for missing `validate_deterministic_vectors` pass → sexdisplay hung.
+- Try `dev.sh run` (uses `-display sdl`) not raw QEMU with `-display gtk`.
+- If clock freezes after 2s, check for missing `idx < total_pixels` bounds guards.
+
+---
+
+## Interrupts & Debug Quick Reference
+
+### Key interrupt locations in `kernel/src/interrupts.rs`
+
+| Range  | What | Debug tip |
+|--------|------|-----------|
+| ~48-49 | IDT handler registration | Verify page_fault, GPF, timer vectors are registered |
+| ~131-293 | syscall_entry (naked asm) | Stack layout critical; avoid modifying |
+| ~295-336 | page_fault_stub (naked asm) | Must preserve 8 extra qwords on stack |
+| ~337-360 | general_protection_fault_stub | Similar stack discipline as #PF |
+| ~361-450 | timer_interrupt_stub + handler | `timer.tick.enter` → `sched.tick()` → switch |
+| ~450-455 | faulted_task_halt | Kernel halt loop for killed user tasks |
+| ~456-610 | page_fault_handler | Check `fault.kill` → user_null_jump logic |
+| ~610-720 | general_protection_fault_handler | GPF containment (similar to #PF kill path) |
+
+### Common debug patterns:
+```bash
+# Find null-jump kills
+rg "fault.kill user_null_jump" serial.log
+
+# Check which PDs are alive
+rg "task.running id=" serial.log | tail -20
+
+# Find the timer tick handler entry
+rg "timer.tick.enter" serial.log | wc -l
+
+# Trace sexdisplay lifecycle
+rg "sexdisplay|pd=1|PD 1" serial.log
+```
+
+### Known noisy serial prints (remove if present):
+```bash
+# Check for leftover debug prints in interrupts.rs
+rg "DEBUG.*timer_tick" kernel/src/interrupts.rs
+# Remove lines ~373-376 if found (every 100 ticks serial spam)
+```
+
+---
+
 ## Agent Infrastructure (Committed)
 
 ### CLAUDE.md — Interrupts Reading Discipline
@@ -100,17 +196,6 @@ Added explicit "Interrupts Discipline" section with landmark table and `rg` chea
 
 ### docs/manual_sex.md
 USER_FAULT_CONTAINMENT_V1 section added with root cause, fix, and invariant.
-
----
-
-## Black Screen Diagnosis (not yet fixed)
-
-Sexdisplay DOES receive OP_PRIMARY_FB and DOES render. QEMU window appears but may be black.
-
-1. **Framebuffer PKEY mismatch** — FB pages mapped with PKEY 0. Sexdisplay PKRU should allow it.
-2. **Framebuffer in kernel higher-half** — All 4 page-table levels need USER_ACCESSIBLE.
-3. **Render writes wrong colors** — Dark palette appears black on some QEMU configs.
-4. **CLOCK STILL FREEZES after 4s** — If clock freezes, check `fault.kill` in serial log. If RIP=0x0, containment fired. If no faults, investigate sexdisplay render loop.
 
 ---
 
