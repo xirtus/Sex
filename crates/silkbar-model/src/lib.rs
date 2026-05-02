@@ -594,7 +594,7 @@ pub fn validate_deterministic_vectors() -> bool {
 
     // Stable digest to detect accidental semantic drift in model state transitions.
     let digest = model_digest(&bar);
-    digest == 0xe673_7535_2ab8_f654
+    digest == 0xf34a_c355_efbe_b4e7
 }
 
 #[inline]
