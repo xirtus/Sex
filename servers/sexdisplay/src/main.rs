@@ -416,9 +416,9 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> 
 pub extern "C" fn _start() -> ! {
     if !validate_contract() || !validate_deterministic_vectors() {
         serial_println!("[sexdisplay.silkbar.contract.v1.bad]");
-        loop { sex_pdx::sys_yield(); }
+    } else {
+        serial_println!("[sexdisplay.silkbar.contract.v1.ok]");
     }
-    serial_println!("[sexdisplay.silkbar.contract.v1.ok]");
 
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
