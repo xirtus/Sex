@@ -126,21 +126,115 @@ pub unsafe fn tag_virtual_address(va: u64, pkey: u8) {
     let pd_idx   = (va >> 21) & 0x1FF;
     let pt_idx   = (va >> 12) & 0x1FF;
 
-    let pdpt_entry = *pml4_virt.add(pml4_idx as usize);
-    let pdpt_virt = ((pdpt_entry & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *const u64;
+    let pml4e = *pml4_virt.add(pml4_idx as usize);
+    if (pml4e & 1) == 0 { return; }
+    let pdpt_virt = ((pml4e & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *const u64;
 
-    let pd_entry = *pdpt_virt.add(pdpt_idx as usize);
-    let pd_virt = ((pd_entry & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *const u64;
+    // Read PDPTE
+    let pdpte = *pdpt_virt.add(pdpt_idx as usize);
+    if (pdpte & 1) == 0 { return; }
 
-    let pt_entry = *pd_virt.add(pd_idx as usize);
-    let pt_virt = ((pt_entry & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *mut u64;
+    // Check for 1GiB huge page (PS bit in PDPTE)
+    if (pdpte & (1 << 7)) != 0 {
+        let entry = pdpt_virt.add(pdpt_idx as usize) as *mut u64;
+        let mut val = *entry;
+        val &= !(0xF << 59);
+        val |= (pkey as u64 & 0xF) << 59;
+        *entry = val;
+        core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
+        return;
+    }
+
+    // Read PDE
+    let pde = *pdpt_virt.add(pdpt_idx as usize);
+    if (pde & 1) == 0 { return; }
+    let pd_virt = ((pde & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *const u64;
+
+    // Check for 2MiB huge page (PS bit in PDE)
+    if (pde & (1 << 7)) != 0 {
+        let entry = pd_virt.add(pd_idx as usize) as *mut u64;
+        let mut val = *entry;
+        val &= !(0xF << 59);
+        val |= (pkey as u64 & 0xF) << 59;
+        *entry = val;
+        core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
+        return;
+    }
+
+    // Read PTE (4KiB page)
+    let pte_ptr = *pd_virt.add(pd_idx as usize);
+    if (pte_ptr & 1) == 0 { return; }
+    let pt_virt = ((pte_ptr & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *mut u64;
 
     let mut pte = *pt_virt.add(pt_idx as usize);
-    pte &= !(0xF << 59); 
-    pte |= (pkey as u64 & 0xF) << 59; 
+    pte &= !(0xF << 59);
+    pte |= (pkey as u64 & 0xF) << 59;
     *pt_virt.add(pt_idx as usize) = pte;
 
     core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
+}
+
+/// Set USER_ACCESSIBLE, WRITABLE, and PKEY on the terminal page table entry
+/// for the given virtual address. Handles 4KiB, 2MiB, and 1GiB pages correctly.
+/// Must be called from ring 0 (kernel context).
+pub unsafe fn set_page_user_accessible(va: u64, pkey: u8) {
+    use x86_64::registers::control::Cr3;
+    let hhdm_offset = crate::HHDM_REQUEST.response().unwrap().offset;
+    let (pml4_phys, _) = Cr3::read();
+    let pml4_virt = (pml4_phys.start_address().as_u64() + hhdm_offset) as *mut u64;
+
+    let pml4_idx = ((va >> 39) & 0x1FF) as usize;
+    let pdpt_idx = ((va >> 30) & 0x1FF) as usize;
+    let pd_idx   = ((va >> 21) & 0x1FF) as usize;
+    let pt_idx   = ((va >> 12) & 0x1FF) as usize;
+
+    // PML4 — skip if not present
+    let pml4e = *pml4_virt.add(pml4_idx);
+    if (pml4e & 1) == 0 { return; }
+
+    // PDPT
+    let pdpt_virt = ((pml4e & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *mut u64;
+    let pdpte = *pdpt_virt.add(pdpt_idx);
+    if (pdpte & 1) == 0 { return; }
+
+    // 1GiB huge page — set flags and PKEY on PDPTE
+    if (pdpte & (1 << 7)) != 0 {
+        let mut entry = pdpte;
+        entry |= 0x6;            // USER_ACCESSIBLE(bit2) | WRITABLE(bit1)
+        entry &= !(0xF << 59);   // clear old PKEY
+        entry |= (pkey as u64 & 0xF) << 59; // set new PKEY
+        *pdpt_virt.add(pdpt_idx) = entry;
+        core::arch::asm!("invlpg [{0}]", in(reg) va, options(nostack, preserves_flags));
+        return;
+    }
+
+    // PD
+    let pd_virt = ((pdpte & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *mut u64;
+    let pde = *pd_virt.add(pd_idx);
+    if (pde & 1) == 0 { return; }
+
+    // 2MiB huge page — set flags and PKEY on PDE
+    if (pde & (1 << 7)) != 0 {
+        let mut entry = pde;
+        entry |= 0x6;
+        entry &= !(0xF << 59);
+        entry |= (pkey as u64 & 0xF) << 59;
+        *pd_virt.add(pd_idx) = entry;
+        core::arch::asm!("invlpg [{0}]", in(reg) va, options(nostack, preserves_flags));
+        return;
+    }
+
+    // PT (4KiB page)
+    let pt_virt = ((pde & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *mut u64;
+    let pte = *pt_virt.add(pt_idx);
+    if (pte & 1) == 0 { return; }
+
+    let mut entry = pte;
+    entry |= 0x6;                // USER_ACCESSIBLE | WRITABLE
+    entry &= !(0xF << 59);
+    entry |= (pkey as u64 & 0xF) << 59;
+    *pt_virt.add(pt_idx) = entry;
+    core::arch::asm!("invlpg [{0}]", in(reg) va, options(nostack, preserves_flags));
 }
 
 pub fn rdseed_u64() -> Option<u64> {

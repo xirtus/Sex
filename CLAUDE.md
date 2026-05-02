@@ -400,6 +400,34 @@ When the screen is black:
 | 4      | 4     | 0x43000000 | sexinput      |
 | 5      | 5     | 0x44000000 | silkbar       |
 
+## Interrupts Reading Discipline
+
+**Do not read all of `kernel/src/interrupts.rs`.** It is large (~740 lines)
+and every agent that opens it wastes context budget. Instead:
+
+1. Use `rg` to find the symbol you need:
+   ```
+   rg "page_fault_handler|timer_interrupt|switch_to|faulted_task_halt" kernel/src/interrupts.rs -n
+   ```
+2. Open only ±80 lines around the match:
+   ```
+   sed -n '460,540p' kernel/src/interrupts.rs
+   ```
+3. See `docs/INTERRUPTS_QUICKMAP.md` for the full section index with line
+   ranges, critical invariants, and rg patterns for common debug entry points.
+
+Key landmarks in interrupts.rs:
+
+| Lines  | What |
+|--------|------|
+| 48-49  | IDT handler registration (page_fault, GPF, timer) |
+| 131-293| `syscall_entry` naked asm |
+| 295-336| `page_fault_stub` naked asm (stack layout) |
+| 361-456| `timer_interrupt_stub` + `timer_interrupt_handler` |
+| 458-465| `faulted_task_halt()` kernel halt trampoline |
+| 466-618| `page_fault_handler` (#PF dispatch) |
+| 620-725| `general_protection_fault_handler` |
+
 ## SilkBar ABI
 
 - `SilkBarUpdate`: `#[repr(C)]` 16 bytes: kind(u32), index(u8), a(u32), b(u32)

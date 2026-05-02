@@ -209,6 +209,36 @@ Think of it like a human reviewing their journal and updating their mental model
 
 The goal: Be helpful without being annoying. Check in a few times a day, do useful background work, but respect quiet time.
 
+## Interrupts Discipline
+
+**Do not read all of `kernel/src/interrupts.rs`.** It is large and every agent
+that opens it wastes context budget. Instead:
+
+```bash
+rg "page_fault_handler|timer_interrupt|switch_to|faulted_task_halt|page_fault_stub|general_protection|send_eoi" kernel/src/interrupts.rs -n
+```
+
+Then open only the line ranges you need:
+
+```rust
+let range = sed -n 'N,Mp' kernel/src/interrupts.rs  # N..M from rg output
+```
+
+**Key landmarks** (see `docs/INTERRUPTS_QUICKMAP.md` for full map):
+
+| Range | What |
+|-------|------|
+| 48–49 | IDT handler registration (page_fault, GPF, timer) |
+| 131–293 | syscall_entry (naked asm) |
+| 295–336 | page_fault_stub (naked asm — stack layout) |
+| 337–360 | general_protection_fault_stub |
+| 361–456 | timer_interrupt_stub + handler |
+| 458–465 | faulted_task_halt |
+| 466–618 | page_fault_handler |
+| 620–725 | general_protection_fault_handler |
+
+Do not paste or summarize the full file. Use targeted search only.
+
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.

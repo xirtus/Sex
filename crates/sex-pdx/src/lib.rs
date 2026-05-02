@@ -91,8 +91,16 @@ pub const OP_WINDOW_WRITE:  u64 = 0xE8;
 // SilkBar protocol opcodes (reserved; server attaches in v7+)
 pub const OP_SILKBAR_PING:     u64 = 0xF0;
 pub const OP_SILKBAR_GET_ABI:  u64 = 0xF1;
-pub const OP_SILKBAR_UPDATE:   u64 = 0xF2;
+pub const OP_SILKBAR_UPDATE:           u64 = 0xF2;
+pub const OP_SILKBAR_WORKSPACE_ACTIVE: u64 = 0xF3;
+pub const OP_SILKBAR_FOCUS_STATE:      u64 = 0xF4;
 pub const SILKBAR_ABI_VERSION: u64 = 1;
+
+// Typed input event class constants (IPC encoding for 0x202 OP_HID_EVENT)
+pub const EV_KEY: u64 = 1;
+pub const EV_REL: u64 = 2;
+pub const EV_ABS: u64 = 3;
+pub const EV_BTN: u64 = 4;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -103,9 +111,10 @@ pub struct ShellEvent {
 /// Normalized input event. Single source of truth for all input in silk-shell FSM.
 ///
 /// IPC encoding (type_id=0x202 from sexinput):
-///   arg2=1 (EV_KEY):  arg0=scancode, arg1=1(dn)/0(up)
-///   arg2=3 (EV_ABS):  arg0=abs_x,   arg1=abs_y  (mouse position, absolute)
-///   arg2=4 (EV_BTN):  arg0=button,  arg1=1(dn)/0(up)
+///   arg2=EV_KEY (1): arg0=scancode, arg1=1(dn)/0(up)
+///   arg2=EV_REL (2): arg0=dx(i32),   arg1=dy(i32)   (relative delta)
+///   arg2=EV_ABS (3): arg0=abs_x,   arg1=abs_y  (mouse position, absolute)
+///   arg2=EV_BTN (4): arg0=button,  arg1=1(dn)/0(up)
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum InputEvent {
     KeyDown(u8),
@@ -215,13 +224,48 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
     }
 }
 
+/// Non-blocking listen — calls syscall 28 once, returns None if empty.
+pub fn pdx_try_listen_raw(slot: u64) -> Option<PdxMessage> {
+    let type_id: u64;
+    let caller_pd: u64;
+    let arg0: u64;
+    let arg1: u64;
+    let arg2: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") 28u64,
+            in("rdi") slot,
+            lateout("rax") type_id,
+            lateout("rsi") caller_pd,
+            lateout("rdx") arg0,
+            lateout("r10") arg1,
+            lateout("r8")  arg2,
+            out("rcx") _,
+            out("r11") _,
+        );
+    }
+    if type_id == 0 {
+        None
+    } else {
+        Some(PdxMessage {
+            type_id,
+            arg0,
+            arg1,
+            arg2,
+            caller_pd: caller_pd as u32,
+            _pad: 0,
+        })
+    }
+}
+
 /// Spin-receive from default message ring (Slot 0).
 pub fn pdx_listen() -> PdxMessage {
     pdx_listen_raw(0)
 }
 
 pub fn pdx_try_listen() -> Option<PdxMessage> {
-    None
+    pdx_try_listen_raw(0)
 }
 
 #[inline(always)]
@@ -244,6 +288,23 @@ pub fn sys_yield() {
             out("r11") _,
         );
     }
+}
+
+pub const SYSCALL_GET_TICKS: u64 = 34;
+
+#[inline]
+pub fn get_ticks() -> u64 {
+    let ret: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") SYSCALL_GET_TICKS => ret,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    ret
 }
 
 pub fn sched_yield() {
@@ -278,6 +339,8 @@ pub const SLOT_INPUT:   u64 = 3; // HID input
 pub const SLOT_AUDIO:   u64 = 4; // audio server
 pub const SLOT_DISPLAY: u64 = 5; // SexDisplay compositor
 pub const SLOT_SHELL:   u64 = 6; // silk-shell orchestration entry
+pub const SLOT_SILKBAR: u64 = 7; // SilkBar model authority
+pub const SLOT_USB_HOST: u64 = 8; // USB host controller lease (XHCI probe path)
 
 // Capability invocation trap numbers (ring-3 → ring-0 transition only).
 // These are sex-pdx implementation details, NOT POSIX-style syscall numbers.

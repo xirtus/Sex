@@ -24,12 +24,14 @@ pub fn init() {
     serial_println!("init: Found {} Limine modules", modules.modules().len());
 
     let mut sexdisp_id = 0;
+    let mut sexdrive_id = 0;
     let mut silkshell_id = 0;
     let mut sexinput_id = 0;
     let mut silkbar_id = 0;
+    let mut linen_id = 0;
 
     // Fixed Spawn Order (Deterministic IDs)
-    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "silkbar"];
+    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "silkbar", "linen"];
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -52,12 +54,16 @@ pub fn init() {
                                 let main_task = unsafe { &mut *main_task_ptr };
                                 main_task.ext_init = Some(crate::scheduler::InitArg { display_lease: lease });
                             }
+                        } else if domain_id == 2 {
+                            sexdrive_id = id;
                         } else if domain_id == 3 {
                             silkshell_id = id;
                         } else if domain_id == 4 {
                             sexinput_id = id;
                         } else if domain_id == 5 {
                             silkbar_id = id;
+                        } else if domain_id == 6 {
+                            linen_id = id;
                         }
                     }
                     Err(e) => {
@@ -77,6 +83,8 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(silkshell_id) {
             pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
             pd.grant_capability(sex_pdx::SLOT_SHELL,   CapabilityData::Domain(silkshell_id));
+            // Stage 2B: silk-shell can send workspace IPC to SilkBar
+            pd.grant_capability(sex_pdx::SLOT_SILKBAR, CapabilityData::Domain(silkbar_id));
             serial_println!("✓ Phase 25: Capabilities granted to silk-shell");
         }
 
@@ -90,12 +98,32 @@ pub fn init() {
             }
         }
 
-        if silkbar_id != 0 {
-            if let Some(pd) = DOMAIN_REGISTRY.get(silkbar_id) {
-                // v8: SilkBar needs SLOT_DISPLAY to push updates
-                pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
-                serial_println!("✓ SilkBar v8: Capability SLOT_DISPLAY granted");
-            }
+    }
+
+    // Hardware discovery and driver lease routing.
+    // Includes XHCI discovery + lease to sexdrive (slot SLOT_USB_HOST) only.
+    if sexdrive_id != 0 && sexdisp_id != 0 {
+        crate::devmgr::init(sexdrive_id, sexdisp_id);
+    }
+
+    // SilkBar delivery path: grant display capability independently of silk-shell.
+    // Otherwise SilkBar updates are silently blocked whenever silk-shell is absent.
+    if sexdisp_id != 0 && silkbar_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::capability::CapabilityData;
+        if let Some(pd) = DOMAIN_REGISTRY.get(silkbar_id) {
+            pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
+            serial_println!("✓ SilkBar v8: Capability SLOT_DISPLAY granted");
+        }
+    }
+
+    // Linen delivery path: grant display capability for placeholder surface.
+    if linen_id != 0 && sexdisp_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::capability::CapabilityData;
+        if let Some(pd) = DOMAIN_REGISTRY.get(linen_id) {
+            pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
+            serial_println!("✓ Phase 25: Capability SLOT_DISPLAY granted to linen");
         }
     }
 
@@ -111,32 +139,18 @@ pub fn init() {
 
                 // Remap FB pages USER_ACCESSIBLE — Ring-3 sexdisplay can't write without this.
                 {
-                    use x86_64::structures::paging::{
-                        Mapper, Page, PageTableFlags, OffsetPageTable, PageTable, Size4KiB,
-                    };
-                    use x86_64::registers::control::Cr3;
-                    const HHDM: u64 = 0xffff800000000000;
-                    let (cr3_frame, _) = Cr3::read();
-                    let pml4 = unsafe {
-                        &mut *((cr3_frame.start_address().as_u64() + HHDM) as *mut PageTable)
-                    };
-                    let mut mapper = unsafe { OffsetPageTable::new(pml4, VirtAddr::new(HHDM)) };
-                    let flags = PageTableFlags::PRESENT
-                        | PageTableFlags::WRITABLE
-                        | PageTableFlags::USER_ACCESSIBLE;
-                    let start = Page::<Size4KiB>::containing_address(VirtAddr::new(fb_addr));
-                    let end = Page::<Size4KiB>::containing_address(
-                        VirtAddr::new(fb_addr + fb_size - 1)
-                    );
-                    for page in Page::range_inclusive(start, end) {
-                        unsafe {
-                            if let Ok(tlb) = mapper.update_flags(page, flags) {
-                                tlb.flush();
-                            }
-                        }
+                    // Use manual page-table walk that handles huge pages (2MiB, 1GiB).
+                    // The old mapper.update_flags(Page<Size4KiB>) silently returns
+                    // Err(ParentEntryHugePage) when the framebuffer is mapped with huge pages,
+                    // leaving USER_ACCESSIBLE unset and causing #GP from ring 3.
+                    let pkey = sexdisp_id as u8; // domain_id == pkey for sexdisplay
+                    let start = fb_addr & !0xFFF;
+                    let end = ((fb_addr + fb_size + 4095) & !0xFFF);
+                    for va in (start..end).step_by(4096) {
+                        unsafe { crate::pku::set_page_user_accessible(va, pkey); }
                     }
-                    serial_println!("init: FB remapped USER_ACCESSIBLE ({:#x}, {} pages)",
-                        fb_addr, (fb_size as usize + 4095) / 4096);
+                    serial_println!("init: FB remapped USER_ACCESSIBLE ({:#x}, {} bytes) key={}",
+                        fb_addr, fb_size, pkey);
                 }
 
                 let msg = MessageType::DisplayPrimaryFramebuffer {

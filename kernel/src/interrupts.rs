@@ -58,7 +58,6 @@ lazy_static! {
 }
 
 use x86_64::registers::model_specific::{LStar, SFMask, Efer, EferFlags};
-use x86_64::registers::control::{Cr0, Cr3, Cr4};
 use x86_64::VirtAddr;
 
 pub fn init_idt() {
@@ -86,23 +85,6 @@ pub fn init_idt() {
         SFMask::write(x86_64::registers::rflags::RFlags::INTERRUPT_FLAG);
         Efer::write(Efer::read() | EferFlags::SYSTEM_CALL_EXTENSIONS);
         serial_println!("   → Syscall setup COMPLETE");    }
-}
-
-fn log_exec_control_state(tag: &str) {
-    let cr0 = Cr0::read().bits();
-    let (cr3, _) = Cr3::read();
-    let cr3 = cr3.start_address().as_u64();
-    let cr4 = Cr4::read().bits();
-    let efer = Efer::read().bits();
-    let nxe = (efer & (1 << 11)) != 0;
-    let smep = (cr4 & (1 << 20)) != 0;
-    let smap = (cr4 & (1 << 21)) != 0;
-    let pke = (cr4 & (1 << 22)) != 0;
-    let pae = (cr4 & (1 << 5)) != 0;
-    serial_println!(
-        "cpu.exec {} cr0={:#x} cr3={:#x} cr4={:#x} efer={:#x} nxe={} smep={} smap={} pke={} pae={}",
-        tag, cr0, cr3, cr4, efer, nxe, smep, smap, pke, pae
-    );
 }
 
 #[repr(C)]
@@ -198,11 +180,17 @@ pub unsafe extern "C" fn syscall_entry() {
         "mov rdi, rsp",     // Pointer to SyscallRegs
         "call syscall_handler",
 
-        // 6.5 Propagate modified regs.rsi back to original saved slot.
-        // dispatch may set regs.rsi = value (e.g. PDX_CALL return).
-        // Restore path pops RSI from [rbp+88]; copy SyscallRegs.rsi there.
+        // 6.5 Propagate modified regs back to original saved slots.
+        // dispatch may set regs.rsi/rdx/r10/r8 (e.g. PDX_CALL/PDX_LISTEN returns).
+        // Restore path pops from [rbp+64..88]; copy SyscallRegs values there.
         "mov rcx, [rsp + 16]", // SyscallRegs.rsi (offset 16 in struct)
         "mov [rbp + 88], rcx", // original saved RSI slot
+        "mov rcx, [rsp + 24]", // SyscallRegs.rdx (offset 24)
+        "mov [rbp + 80], rcx", // original saved RDX slot
+        "mov rcx, [rsp + 32]", // SyscallRegs.r10 (offset 32)
+        "mov [rbp + 72], rcx", // original saved R10 slot
+        "mov rcx, [rsp + 40]", // SyscallRegs.r8 (offset 40)
+        "mov [rbp + 64], rcx", // original saved R8 slot
 
         // 7. RESTORE C-ABI VOLATILES
         "add rsp, 72",      // Discard SyscallRegs
@@ -395,18 +383,18 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
 
     let (old_ctx_ptr, next_ctx_ptr) = result.unwrap();
 
-    // Sanity check: Ensure CoreLocal pointer was set by tick()
-    assert!(!crate::core_local::CoreLocal::get().current_pd_ptr.load(core::sync::atomic::Ordering::Acquire).is_null());
-
     unsafe {
+        // Save old context from interrupt stub's GPR push level on the stack.
+        // stack_frame points to RIP.  Stub pushed [rax..r15][dummy=0] above RIP.
+        // Layout from RIP downward: [dummy][r15][r14]..[rbx][rax]
         if !old_ctx_ptr.is_null() {
             let old_ctx = &mut *old_ctx_ptr;
+            let base = stack_frame as *const _ as *const u64;
             old_ctx.rip = stack_frame.instruction_pointer.as_u64();
             old_ctx.cs = stack_frame.code_segment.0 as u64;
             old_ctx.rflags = stack_frame.cpu_flags.bits();
+            old_ctx.rsp = stack_frame.stack_pointer.as_u64();
             old_ctx.ss = stack_frame.stack_segment.0 as u64;
-            
-            let base = stack_frame as *const _ as *const u64;
             old_ctx.r15 = *base.offset(-2);
             old_ctx.r14 = *base.offset(-3);
             old_ctx.r13 = *base.offset(-4);
@@ -422,47 +410,14 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
             old_ctx.rcx = *base.offset(-14);
             old_ctx.rbx = *base.offset(-15);
             old_ctx.rax = *base.offset(-16);
-            old_ctx.rsp = stack_frame.stack_pointer.as_u64();
-
-            if TIMER_TICK_LOG_BUDGET.load(Ordering::Acquire) > 0 {
-                serial_println!("timer.save_context pd_id={} old_rip={:#x} old_rsp={:#x} kstack_top={:#x}",
-                    (*old_ctx.pd_ptr).id, old_ctx.rip, old_ctx.rsp, old_ctx.kstack_top);
-            }
-
-            use core::sync::atomic::Ordering;
-            old_ctx.pkru = (*old_ctx.pd_ptr).current_pkru_mask.load(Ordering::Relaxed) as u64;
-
-            // ── Write saved register state to forged kstack for later restore ──
-            // forged kstack layout (from Task::new):
-            //   [0..14]  = GPRs (rax at 0, rbx at 1, ..., r15 at 14)
-            //   [15..19] = IRETQ frame (rip, cs, rflags, rsp, ss)
-            let ks = old_ctx.kstack_top as *mut u64;
-            ks.add(0).write(old_ctx.rax);
-            ks.add(1).write(old_ctx.rbx);
-            ks.add(2).write(old_ctx.rcx);
-            ks.add(3).write(old_ctx.rdx);
-            ks.add(4).write(old_ctx.rbp);
-            ks.add(5).write(old_ctx.rsi);
-            ks.add(6).write(old_ctx.rdi);
-            ks.add(7).write(old_ctx.r8);
-            ks.add(8).write(old_ctx.r9);
-            ks.add(9).write(old_ctx.r10);
-            ks.add(10).write(old_ctx.r11);
-            ks.add(11).write(old_ctx.r12);
-            ks.add(12).write(old_ctx.r13);
-            ks.add(13).write(old_ctx.r14);
-            ks.add(14).write(old_ctx.r15);
-            ks.add(15).write(old_ctx.rip);
-            ks.add(16).write(old_ctx.cs);
-            ks.add(17).write(old_ctx.rflags);
-            ks.add(18).write(old_ctx.rsp);
-            ks.add(19).write(old_ctx.ss);
-        }
-        
-        let next_rip = (*next_ctx_ptr).rip;
-        if next_rip == 0 {
-            let next_pd_ptr = crate::core_local::CoreLocal::get().current_pd_ptr.load(core::sync::atomic::Ordering::Acquire);
-            panic!("SCHED: null RIP for PD {}", (*next_pd_ptr).id);
+            // kstack_top = top of stub's GPR push (where rax sits).
+            // Both forged (Task::new) and saved stacks have 16 qwords
+            // above IRET frame (15 GPRs + 1 dummy).  switch_to loads
+            // this and does add rsp, 128 before iretq.
+            old_ctx.kstack_top = (base as u64) - 128;
+            // Read PKRU from the PD's stored mask (rdpkru would return 0
+            // in God Mode inside this handler).
+            old_ctx.pkru = (*old_ctx.pd_ptr).current_pkru_mask.load(core::sync::atomic::Ordering::Relaxed) as u64;
         }
 
         let kstack_top = (*next_ctx_ptr).kstack_top;
@@ -470,46 +425,17 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
             serial_println!("scheduler.restore_context pd_id={} kstack_top={:#x} rip={:#x}",
                 (*next_ctx_ptr).pd_id, kstack_top, (*next_ctx_ptr).rip);
         }
+
         // RSP0 must be empty kernel-stack top, not saved-context base.
-        // CPU pushes DOWNWARD from RSP0 on user→kernel interrupt.
-        // kstack_top = saved frame base. kstack_top + 160 = kstack_alloc_top.
-        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 160));
-        serial_println!("rsp0.programmed pd_id={} saved_kstack_top={:#x} rsp0={:#x}",
-            (*next_ctx_ptr).pd_id, kstack_top, kstack_top + 160);
+        // kstack_top is where the context (GPRs+IRET) is saved. 
+        // kstack_top + 168 (15 regs + dummy + 5 iret qwords) = kstack_alloc_top.
+        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
 
-        let next_pd_ptr = crate::core_local::CoreLocal::get().current_pd_ptr.load(core::sync::atomic::Ordering::Acquire);
-        crate::scheduler::log_first_scheduled_pd((*next_ctx_ptr).pd_id);
-        serial_println!("SCHED: Switching to PD {} (RIP={:#x}, RSP={:#x}, KSTACK={:#x})", 
-                        (*next_pd_ptr).id, (*next_ctx_ptr).rip, (*next_ctx_ptr).rsp, kstack_top);
-        serial_println!(
-            "context_switch.before_switch_to rip={:#x} rsp={:#x} rflags={:#x} cs={:#x} ss={:#x} pd_id={}",
-            (*next_ctx_ptr).rip,
-            (*next_ctx_ptr).rsp,
-            (*next_ctx_ptr).rflags,
-            (*next_ctx_ptr).cs,
-            (*next_ctx_ptr).ss,
-            (*next_ctx_ptr).pd_id
-        );
-        serial_println!(
-            "switch.frame rip={:#x} cs={:#x} ss={:#x} rsp={:#x} rflags={:#x}",
-            (*next_ctx_ptr).rip,
-            (*next_ctx_ptr).cs,
-            (*next_ctx_ptr).ss,
-            (*next_ctx_ptr).rsp,
-            (*next_ctx_ptr).rflags
-        );
-        log_exec_control_state("before_switch");
-        crate::memory::manager::log_page_walk(
-            x86_64::VirtAddr::new((*next_ctx_ptr).rip),
-            "before_switch.rip",
-        );
-
-        serial_println!("context_switch.begin");
         send_eoi();
-        crate::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx_ptr);
-        serial_println!("context_switch.end");
+        crate::scheduler::Scheduler::switch_to(old_ctx_ptr, next_ctx_ptr);
     }
 }
+
 
 /// Kernel-mode halt loop. Redirect faulted user tasks here so IRETQ
 /// never returns to the faulting RIP (which causes immediate re-fault).
@@ -519,6 +445,7 @@ pub extern "C" fn faulted_task_halt() -> ! {
         x86_64::instructions::hlt();
     }
 }
+
 #[no_mangle]
 pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, error_code: u64) {
     use x86_64::registers::control::Cr2;
@@ -526,9 +453,18 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
     let fault_rip = stack_frame.instruction_pointer.as_u64();
     let fault_rsp = stack_frame.stack_pointer.as_u64();
     let fault_cs = stack_frame.code_segment.0 as u64;
+    let fault_ss = stack_frame.stack_segment.0 as u64;
     let fault_rflags = stack_frame.cpu_flags.bits();
     let fault_cs_rpl = fault_cs & 0x3;
-    if fault_addr == 0 && fault_cs_rpl != 3 {
+
+    let cur_pd = crate::core_local::CoreLocal::get().current_pd();
+
+    if fault_addr == 0 && fault_cs_rpl == 3 {
+        serial_println!(
+            "fault.kill user_null_jump pd={} rip={:#x} rsp={:#x} err={:#x}",
+            cur_pd, fault_rip, fault_rsp, error_code
+        );
+    } else if fault_addr == 0 {
         panic!("Kernel Null Pointer Jump at RIP: {:#x}", fault_rip);
     }
 
@@ -605,6 +541,10 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
                     core::arch::asm!("mov {}, rsp", out(reg) cur_rsp);
                     core::ptr::write(iret.add(3),    cur_rsp);    // RSP  → current kernel stack
                     core::ptr::write(iret.add(4),    0x10u64);    // SS   → kernel data segment
+                    serial_println!(
+                        "fault.kill iret_redirect pd={} halt_addr={:#x}",
+                        cur_pd, halt_addr
+                    );
                 } else if state != crate::scheduler::STATE_RUNNING {
                     x86_64::instructions::interrupts::enable();
                     while (*current_ptr).state.load(Ordering::Acquire) != crate::scheduler::STATE_RUNNING {
@@ -655,7 +595,10 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
 }
 
 #[no_mangle]
-pub extern "C" fn general_protection_fault_handler(stack_frame: &mut InterruptStackFrame, error_code: u64) {
+pub extern "C" fn general_protection_fault_handler(
+    stack_frame: &mut InterruptStackFrame,
+    error_code: u64,
+) {
     #[repr(C, packed)]
     struct Gdtr64 {
         limit: u16,

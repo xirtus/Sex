@@ -63,8 +63,8 @@ impl Task {
         let kstack_alloc_top = kstack.as_ptr() as u64 + 65536;
         core::mem::forget(kstack);
 
-        // Pre-seed kstack with IRETQ frame + GPR zeros. switch_to loads ksp and pops directly.
-        // Layout low→high: [r15=0..rax=0][RIP][CS][RFLAGS][RSP][SS]
+        // Pre-seed kstack with IRETQ frame + Dummy Error + GPR zeros.
+        // Layout low→high: [r15=0..rax=0][dummy=0][RIP][CS][RFLAGS][RSP][SS]
         let forged_ksp = unsafe {
             let mut ksp = kstack_alloc_top as *mut u64;
             ksp = ksp.sub(1); *ksp = ss;
@@ -72,6 +72,7 @@ impl Task {
             ksp = ksp.sub(1); *ksp = rflags;
             ksp = ksp.sub(1); *ksp = cs;
             ksp = ksp.sub(1); *ksp = entry_point;
+            ksp = ksp.sub(1); *ksp = 0; // dummy error code
             for _ in 0..15 { ksp = ksp.sub(1); *ksp = 0; } // rax..r15 zeros
             ksp as u64
         };
@@ -231,11 +232,9 @@ impl Scheduler {
             if !next_task.is_null() {
                 let core = crate::core_local::CoreLocal::get();
                 let next_pd_ptr = (*next_task).context.pd_ptr as *mut crate::capability::ProtectionDomain;
-                serial_println!("scheduler.bind_next.begin pd_ptr={:#x}", next_pd_ptr as u64);
 
                 // Enforce strict atomic ordering: bind -> wrpkru -> switch_to
                 core.set_pd(next_pd_ptr);
-                serial_println!("scheduler.bind_next.after_set_pd");
             }
         }
 
@@ -310,85 +309,57 @@ impl Scheduler {
     #[unsafe(naked)]
     pub unsafe extern "C" fn switch_to(_old_context: *mut TaskContext, next_context: *const TaskContext) {
         core::arch::naked_asm!(
-            // rdi = old_ctx (*mut TaskContext, NULL on first boot)
+            // rdi = old_ctx (*mut TaskContext) — kstack_top already set by timer_interrupt_handler
             // rsi = next_ctx (*const TaskContext)
-            // context.kstack_top (offset 0xC0) = active ksp for this task.
-            //   New task:     pre-seeded by Task::new: [GPR zeros][IRETQ frame]
-            //   Running task: ksp saved here by previous switch_to call
 
-            // Preserve next_ctx across old-context save path.
-            "mov rdx, rsi",
+            // old_ctx.kstack_top is set before this call in timer_interrupt_handler.
+            // Do NOT save RSP here — that would overwrite the correct stub-frame base
+            // with the kernel call-stack depth at time of switch_to entry.
 
-            // Skip save if old_ctx is NULL
-            "test rdi, rdi",
-            "jz 1f",
-
-            // Push all GPRs onto current kernel stack (rax=high addr, r15=low=new ksp)
-            "push rax",
-            "push rbx",
-            "push rcx",
-            "push rdx",
-            "push rbp",
-            "push rsi",
-            "push rdi",
-            "push r8",
-            "push r9",
-            "push r10",
-            "push r11",
-            "push r12",
-            "push r13",
-            "push r14",
-            "push r15",
-            // Save ksp to old_ctx.kstack_top
-            // rdi has been pushed as a GPR value, so use a scratch copy of old_ctx.
-            "mov rax, rdi",
-            "mov [rax + 0xC0], rsp",
-
-            "1:",
-            // Restore next_ctx pointer and pivot directly to RIP slot.
-            "mov rsi, rdx",
-            "mov [rip + {next_ctx_ptr}], rsi",
+            // 1. Switch to next_ctx.kstack_top and restore PKRU
             "mov rsp, [rsi + 0xC0]",
-            // Pop 15 saved GPRs from kstack (written by timer_tick_handler)
-            // before IRETQ.  Without this, GPRs contain kernel garbage after
-            // every context switch.
-            "pop rax",
-            "pop rbx",
-            "pop rcx",
-            "pop rdx",
-            "pop rbp",
-            "pop rsi",
-            "pop rdi",
-            "pop r8",
-            "pop r9",
-            "pop r10",
-            "pop r11",
-            "pop r12",
-            "pop r13",
-            "pop r14",
-            "pop r15",
+            "cmp byte ptr [rip + {pku_enabled}], 0",
+            "je 2f",
+            "mov eax, [rsi + 0x80]", // TaskContext.pkru at offset 0x80
+            "xor ecx, ecx",
+            "xor edx, edx",
+            "wrpkru",
 
-            // IRETQ frame is guaranteed at [rsp + 0..32].
-            "mov [rip + {actual_iret_rsp}], rsp",
-            "mov r11, [rsp + 0x00]",
-            "mov [rip + {actual_q0}], r11",
-            "mov r11, [rsp + 0x08]",
-            "mov [rip + {actual_q1}], r11",
-            "mov r11, [rsp + 0x10]",
-            "mov [rip + {actual_q2}], r11",
-            "mov r11, [rsp + 0x18]",
-            "mov [rip + {actual_q3}], r11",
-            "mov r11, [rsp + 0x20]",
-            "mov [rip + {actual_q4}], r11",
+            "2:",
+            // 3. Debug-log IRET frame for GP fault logger (before pops, R11 scratch).
+            //    IRET frame is at RSP+128 (16 qwords of GPRs+dummy above RIP).
+            "lea r11, [rsp + 128]",
+            "mov [rip + {actual_iret_rsp}], r11",
+            "mov r11, [rsp + 128]", "mov [rip + {actual_q0}], r11",
+            "mov r11, [rsp + 136]", "mov [rip + {actual_q1}], r11",
+            "mov r11, [rsp + 144]", "mov [rip + {actual_q2}], r11",
+            "mov r11, [rsp + 152]", "mov [rip + {actual_q3}], r11",
+            "mov r11, [rsp + 160]", "mov [rip + {actual_q4}], r11",
+
+            // 4. Check CS.RPL for userspace (swapgs needed before iretq).
+            "mov r11, [rsp + 136]",
+            "test r11, 3",
+            "jz 3f",
             "swapgs",
+            "3:",
+
+            // 5. Pop GPRs in saved-stack order: [rax] at lowest address (kstack_top).
+            //    Saved (preempted) tasks have correct register values here;
+            //    forged (first-run) tasks have all zeros, so any pop order works.
+            "pop rax", "pop rbx", "pop rcx", "pop rdx",
+            "pop rbp", "pop rsi", "pop rdi",
+            "pop r8", "pop r9", "pop r10", "pop r11",
+            "pop r12", "pop r13", "pop r14", "pop r15",
+            "add rsp, 8",  // skip dummy error code
             "iretq",
+
+            pku_enabled = sym crate::pku::PKU_ENABLED,
             actual_iret_rsp = sym ACTUAL_IRET_RSP,
             actual_q0 = sym ACTUAL_IRET_Q0_RIP,
             actual_q1 = sym ACTUAL_IRET_Q1_CS,
             actual_q2 = sym ACTUAL_IRET_Q2_RFLAGS,
             actual_q3 = sym ACTUAL_IRET_Q3_RSP,
             actual_q4 = sym ACTUAL_IRET_Q4_SS,
-            next_ctx_ptr = sym SWITCH_NEXT_CTX_PTR,
         );
     }
 }
@@ -465,8 +436,8 @@ fn is_canonical(addr: u64) -> bool {
 }
 
 pub unsafe fn debug_dump_iret_frame(next_ctx: *const TaskContext) {
-    // switch_to pops 15 GPR qwords, then iretq reads RIP/CS/RFLAGS/RSP/SS.
-    let iret_rsp = ((*next_ctx).kstack_top + (15 * 8)) as *const u64;
+    // switch_to pops 15 GPR qwords + 1 dummy error, then iretq reads RIP/CS/RFLAGS/RSP/SS.
+    let iret_rsp = ((*next_ctx).kstack_top + (16 * 8)) as *const u64;
     let rip = *iret_rsp.add(0);
     let cs = *iret_rsp.add(1);
     let rflags = *iret_rsp.add(2);
@@ -504,5 +475,19 @@ pub unsafe fn debug_dump_user_entry_bytes(next_ctx: *const TaskContext) {
 }
 
 pub fn yield_now() {
-    // Phase 25: No-op. Preemption handles switching in Ring 3.
+    let core_id = crate::core_local::CoreLocal::get().core_id;
+    let sched = &SCHEDULERS[core_id as usize];
+    let current = sched.current_task.load(Ordering::Acquire);
+    if !current.is_null() {
+        unsafe {
+            let state = (*current).state.load(Ordering::Acquire);
+            if state == TaskState::Running as u32 {
+                (*current).state.store(TaskState::Ready as u32, Ordering::Release);
+                sched.runqueue.push(current);
+                // Clear current_task so tick() won't see Running and
+                // re-requeue a task already placed in the runqueue.
+                sched.current_task.store(ptr::null_mut(), Ordering::Release);
+            }
+        }
+    }
 }

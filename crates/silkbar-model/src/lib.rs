@@ -23,21 +23,19 @@ pub const WS_X2: usize = 625;
 pub const WS_X3: usize = 671;
 pub const WS_X4: usize = 707;
 
-pub const LAUNCHER_X: usize = 10;
-pub const LAUNCHER_Y: usize = 10;
-pub const LAUNCHER_W: usize = 80;
-pub const LAUNCHER_H: usize = 30;
+pub const LAUNCHER_X: usize = 100;
+pub const LAUNCHER_Y: usize = 19;
+pub const LAUNCHER_W: usize = 20;
+pub const LAUNCHER_H: usize = 20;
 
-pub const CHIP_Y: usize = 12;
-pub const CHIP_H: usize = 26;
-pub const CHIP_W: usize = 56;
-pub const CHIP_X0: usize = 1040;
-pub const CHIP_X1: usize = 1116;
-pub const CHIP_X2: usize = 1192;
+pub const CHIP_Y: usize = 18;
+pub const CHIP_H: usize = 22;
+pub const CHIP_W: usize = 18;
+pub const CHIP_X0: usize = 930;
+pub const CHIP_X1: usize = 958;
+pub const CHIP_X2: usize = 986;
 pub const CHIP_X3: usize = 1090;
 pub const CLOCK_W: usize = 80;
-pub const CLOCK_X: usize = 1192;
-pub const CLOCK_Y: usize = 16;
 
 /// Total number of layout boxes: 1 launcher + 5 workspaces + 4 chips
 pub const LAYOUT_COUNT: usize = 10;
@@ -122,6 +120,7 @@ pub struct SilkBar {
     pub chips: [ChipState; MAX_CHIPS],
     pub clock_hh: u8,
     pub clock_mm: u8,
+    pub clock_ss: u8,
 }
 
 // ── Theme (v2: 10 semantic tokens) ─────────────────────────────────────────
@@ -149,10 +148,6 @@ pub struct Theme {
     pub chip_fill: u32,
     /// Chip border / shadow
     pub chip_border: u32,
-    /// Launcher button fill
-    pub launcher_fill: u32,
-    /// Launcher button border (2px rounded-illusion edge)
-    pub launcher_border: u32,
 }
 
 // ── Color Helpers ──────────────────────────────────────────────────────────
@@ -347,11 +342,13 @@ pub fn apply_update(bar: &mut SilkBar, update: SilkBarUpdate) -> bool {
             true
         }
         4 => {
-            // SetClock: a=hh (0-23), b=mm (0-59)
+            // SetClock: a=hh (0-23), b packed = (mm << 8) | ss
             let hh = update.a.min(23) as u8;
-            let mm = update.b.min(59) as u8;
+            let mm = (update.b >> 8).min(59) as u8;
+            let ss = (update.b as u8).min(59);
             bar.clock_hh = hh;
             bar.clock_mm = mm;
+            bar.clock_ss = ss;
             true
         }
         5 => {
@@ -482,7 +479,7 @@ pub fn validate_invariants() -> bool {
 
     // 4. drain_into applies clock update
     let mut q3 = SilkBarUpdateQueue::empty();
-    let clock = SilkBarUpdate { kind: 4, index: 0, a: 15, b: 45 };
+    let clock = SilkBarUpdate { kind: 4, index: 0, a: 15, b: (45 << 8) | 30 };
     if !q3.push(clock) {
         return false;
     }
@@ -491,7 +488,7 @@ pub fn validate_invariants() -> bool {
     if count != 1 {
         return false;
     }
-    if bar.clock_hh != 15 || bar.clock_mm != 45 {
+    if bar.clock_hh != 15 || bar.clock_mm != 45 || bar.clock_ss != 30 {
         return false;
     }
 
@@ -528,19 +525,18 @@ pub const DEFAULT_SILK_BAR: SilkBar = SilkBar {
     ],
     clock_hh: 10,
     clock_mm: 42,
+    clock_ss: 0,
 };
 
 pub const DEFAULT_THEME: Theme = Theme {
-    bg_top:      0x000A1C1C,
-    bg_bottom:   0x00163434,
-    panel_fill:  0x00191433,
-    panel_glow:  0x00302855,
-    text:        0x00FFFFFF,
-    muted:       0x004C3C88,
-    active:      0x00BBAAFF,
+    bg_top:      0x00081424,
+    bg_bottom:   0x00281848,
+    panel_fill:  0x00182040,
+    panel_glow:  0x00385078,
+    text:        0x00C8D8FF,
+    muted:       0x00304068,
+    active:      0x00A8A0FF,
     urgent:      0x00FF6666,
-    chip_fill:    0x009EA8FF,
-    chip_border:  0x006670AA,
-    launcher_fill:   0x0000FF00,
-    launcher_border: 0x0000AA00,
+    chip_fill:   0x004C8DFF,
+    chip_border: 0x006F86A8,
 };

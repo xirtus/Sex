@@ -1,17 +1,8 @@
 #![no_std]
 #![no_main]
 
-use silkbar_model::*;
+use silkbar_model::{SilkBarUpdate, UpdateKind, ChipKind, OP_SILKBAR_UPDATE};
 
-// ── Public API ──────────────────────────────────────────────────────────────
-
-/// Run all queue invariant tests from the model crate.
-pub fn validate_invariants() -> bool {
-    silkbar_model::validate_invariants()
-}
-
-/// Send a typed `SilkBarUpdate` to sexdisplay via PDX.
-/// Wire format: arg0=kind, arg1=(index << 32)|a, arg2=b
 fn send_update(update: SilkBarUpdate) {
     let _ = sex_pdx::pdx_call(
         sex_pdx::SLOT_DISPLAY,
@@ -22,125 +13,124 @@ fn send_update(update: SilkBarUpdate) {
     );
 }
 
-/// Temporary snapshot producer — sends initial model state to sexdisplay.
-/// Replaced later by real modules (clock driver, workspace manager, etc.)
-/// that push incremental updates on state changes.
-///
-/// Five updates:
-///   1. SetClock 10:43
-///   2. SetClock 10:44
-///   3. SetChipVisible index=1 visible=false
-///   4. SetWorkspaceActive index=4 true
-///   5. SetWorkspaceActive index=2 false
-fn send_initial_state_snapshot() {
-    // Clock updates
-    send_update(SilkBarUpdate::new(4, 0, 10, 43 << 8)); // hh=10, mm=43, ss=0
-    send_update(SilkBarUpdate::new(4, 0, 10, 44 << 8)); // hh=10, mm=44, ss=0
-    // Chip visibility
-    send_update(SilkBarUpdate::new(2, 1, 0, 0));         // SetChipVisible index=1 visible=false
-    // Workspace state
-    WorkspaceModule::new(4).initial_updates();
-}
-
-// ── Clock Module ─────────────────────────────────────────────────────────
-
-/// Fake clock module — produces one SetClock update per second.
-/// Replaced later by a real RTC-driven clock producer.
-struct ClockModule {
-    hh: u8,
-    mm: u8,
-    ss: u8,
-    spin: u64,
-}
-
-/// Clock tick interval in spin-loop iterations (~0.5–1 s on 2 GHz with `pause`).
-const CLOCK_TICK_INTERVAL: u64 = 10_000_000;
-
-impl ClockModule {
-    /// Create a new clock module at the given wall time.
-    fn new(hh: u8, mm: u8, ss: u8) -> Self {
-        ClockModule { hh, mm, ss, spin: 0 }
-    }
-
-    /// Advance one spin-loop iteration.
-    /// Returns `Some(SilkBarUpdate)` when the clock ticks (once per interval).
-    fn tick(&mut self) -> Option<SilkBarUpdate> {
-        self.spin += 1;
-        if self.spin % CLOCK_TICK_INTERVAL != 0 {
-            return None;
-        }
-        // Advance one second, rolling up through minutes and hours
-        self.ss += 1;
-        if self.ss >= 60 {
-            self.ss = 0;
-            self.mm += 1;
-            if self.mm >= 60 {
-                self.mm = 0;
-                self.hh += 1;
-                if self.hh >= 24 {
-                    self.hh = 0;
-                }
-            }
-        }
-        Some(SilkBarUpdate::new(
-            4, 0,
-            self.hh as u32,
-            ((self.mm as u32) << 8) | self.ss as u32,
-        ))
-    }
-}
-
-// ── Workspace Module ────────────────────────────────────────────────────
-
-/// Fake workspace module — sends initial workspace activation updates.
-/// Replaced later by a real workspace manager that listens for WM events.
-struct WorkspaceModule {
-    active: u8,
-}
-
-impl WorkspaceModule {
-    /// Create a new workspace module.
-    /// `active` is the 0-based index of the workspace to activate.
-    fn new(active: u8) -> Self {
-        WorkspaceModule { active }
-    }
-
-    /// Send the initial workspace activation updates.
-    fn initial_updates(&self) {
-        // Activate the target workspace
-        send_update(SilkBarUpdate::new(0, self.active, 1, 0));
-        // Deactivate workspace 2 (the default active one)
-        send_update(SilkBarUpdate::new(0, 2, 0, 0));
-    }
-}
-
-// ── Entry Point ─────────────────────────────────────────────────────────────
-
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // Validate model invariants at boot
-    if !validate_invariants() {
-        // Invariant failure - halt silently
-        loop { core::hint::spin_loop(); }
+    let mut focus_state: u8 = 0;
+    let mut last_focus_state: u8 = 0xFF;
+    let mut chip_phase: u8 = 0;
+    let mut chip0_net: bool = true;
+
+    /// Approximate LAPIC timer ticks per second (divide=16, init_count=1_000_000).
+    /// Not calibrated — yields monotonic uptime, not wall-clock accuracy.
+    const LAPIC_TICKS_PER_SECOND_APPROX: u64 = 62;
+
+    // INIT: full GLOBAL_BAR state — workspace activation, chip visibility, clock
+    // Workspace 3 active (index 2), others inactive
+    for ws_idx in 0..5 {
+        send_update(SilkBarUpdate::new(
+            UpdateKind::SetWorkspaceActive as u32, ws_idx, if ws_idx == 2 { 1 } else { 0 }, 0,
+        ));
+    }
+    // All four status chips visible
+    for chip_idx in 0..4 {
+        send_update(SilkBarUpdate::new(
+            UpdateKind::SetChipVisible as u32, chip_idx, 1, 0,
+        ));
+    }
+    // Initial clock — derived from kernel uptime
+    {
+        let ticks = sex_pdx::get_ticks();
+        let uptime_seconds = ticks / LAPIC_TICKS_PER_SECOND_APPROX;
+        let hh0 = ((uptime_seconds / 3600) % 24) as u8;
+        let mm0 = ((uptime_seconds / 60) % 60) as u8;
+        let ss0 = (uptime_seconds % 60) as u8;
+        send_update(SilkBarUpdate::new(
+            UpdateKind::SetClock as u32, 0, hh0 as u32, ((mm0 as u32) << 8) | ss0 as u32,
+        ));
     }
 
-    // Send initial state snapshot to prove typed SilkBarUpdate transport.
-    // Temporary — real modules replace this later.
-    send_initial_state_snapshot();
-
-    // ── Idle server loop with fake clock tick ────────────────────────────────
-    // TODO: workspace producer — listen for WM events, push SetWorkspace*
-    // TODO: status producer — poll net/wifi/battery, push SetChip*
-    // TODO: input/action listener — receive click events, dispatch actions
-
-    // Clock module starts at 10:44:00 (matches end of initial snapshot).
-    let mut clock = ClockModule::new(10, 44, 0);
-
     loop {
-        if let Some(update) = clock.tick() {
-            send_update(update);
+        // Stage 2B: poll at most one upstream message (non-blocking)
+        if let Some(msg) = sex_pdx::pdx_try_listen_raw(0) {
+            if msg.type_id == sex_pdx::OP_SILKBAR_WORKSPACE_ACTIVE {
+                let ws = (msg.arg0 as u8).min(4);
+                for i in 0..5 {
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetWorkspaceActive as u32, i, if i == ws { 1 } else { 0 }, 0,
+                    ));
+                }
+            } else if msg.type_id == sex_pdx::OP_SILKBAR_FOCUS_STATE {
+                // Clamp invalid producer values to debug(3) to keep update space bounded.
+                focus_state = (msg.arg0 as u8).min(3);
+            }
         }
-        core::hint::spin_loop();
+
+        if focus_state != last_focus_state {
+            // Temporary Stage 2C focus->urgent visual stub.
+            // none: clear all; shell/app/debug => ws0/ws1/ws2 urgent respectively.
+            let urgent_ws = match focus_state {
+                1 => Some(0u8),
+                2 => Some(1u8),
+                3 => Some(2u8),
+                _ => None,
+            };
+            for ws in 0..5u8 {
+                let urgent = if Some(ws) == urgent_ws { 1 } else { 0 };
+                send_update(SilkBarUpdate::new(
+                    UpdateKind::SetWorkspaceUrgent as u32, ws, urgent, 0,
+                ));
+            }
+            last_focus_state = focus_state;
+        }
+
+        // ~1s via yield (no rdtsc — freezes under QEMU TCG)
+        for _ in 0..100 {
+            sex_pdx::sys_yield();
+        }
+
+        // Read kernel uptime ticks for clock and chip cadence
+        let ticks = sex_pdx::get_ticks();
+        let uptime_seconds = ticks / LAPIC_TICKS_PER_SECOND_APPROX;
+        let hh = ((uptime_seconds / 3600) % 24) as u8;
+        let mm = ((uptime_seconds / 60) % 60) as u8;
+        let ss = (uptime_seconds % 60) as u8;
+
+        // Stage 2C: bounded internal status-chip stub (no new ABI, no floods).
+        // Slow cadence: every 120 seconds.
+        if uptime_seconds % 120 == 0 {
+            match chip_phase {
+                0 => {
+                    let chip0_kind = if chip0_net { ChipKind::Net } else { ChipKind::Wifi };
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetChipKind as u32, 0, chip0_kind as u32, 0,
+                    ));
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetChipKind as u32, 1, ChipKind::Wifi as u32, 0,
+                    ));
+                    chip0_net = !chip0_net;
+                }
+                1 => {
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetChipKind as u32, 2, ChipKind::Battery as u32, 0,
+                    ));
+                }
+                2 => {
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetChipKind as u32, 3, ChipKind::Net as u32, 0,
+                    ));
+                }
+                _ => {
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetChipKind as u32, 3, ChipKind::Battery as u32, 0,
+                    ));
+                }
+            }
+            chip_phase = (chip_phase + 1) & 0x3;
+        }
+
+        send_update(SilkBarUpdate::new(
+            UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
+        ));
     }
 }
 

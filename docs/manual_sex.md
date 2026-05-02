@@ -795,6 +795,36 @@ Add `-display gtk` or `-display sdl` to see the framebuffer. The ISO boots to a 
 | Scheduler + task switching | ⏳ Phase 22+ |
 | SYSCALL-based IPC from ring-3 | ⏳ Phase 22+ — blocked on GDT restructure |
 
+### USER_FAULT_CONTAINMENT_V1 (2026-05-01)
+
+**Fixed**: User null-jump (RIP=0x0) no longer freezes the scheduler.
+
+**Root cause**: When a user task faulted at RIP=0x0, the page fault handler
+set the task to STATE_BLOCKED and returned via iretq — which loaded the
+unchanged poisoned IRET frame (RIP=0x0), causing an immediate re-fault.
+Interrupts are disabled during exception handling (IF cleared by #PF), so
+the timer could never fire to preempt the loop. The system appeared frozen.
+
+**Fix** (`kernel/src/interrupts.rs`):
+- User null-jump tasks are set to Exited (3) instead of BLOCKED
+- When tick() returns None and the task is Exited, the raw IRET frame is
+  rewritten to return to a kernel-mode halt loop (`faulted_task_halt`)
+  with IF=1 (interrupts enabled)
+- The timer interrupt fires in the halt loop, scheduler picks remaining
+  tasks, system continues
+
+**Invariant**: User exception handlers must never return to an unchanged
+poisoned user IRET frame. A fatal user fault transitions the task to
+Exited and redirects execution to a kernel-safe halt path with interrupts
+enabled, allowing the scheduler to continue other PDs.
+
+**Files changed**:
+- `kernel/src/interrupts.rs` — +`faulted_task_halt()`, Exited state,
+  IRET redirect on kill
+- `kernel/src/scheduler.rs` — removed gratuitous bind_next traces
+- `kernel/src/syscalls/mod.rs` — removed gratuitous syscall.exit trace
+- `servers/silk-shell/src/main.rs` — WINDOWS[1] get_mut hardening
+
 ### GDT Restructure (Required for SYSCALL)
 
 The GDT must be restructured to have a kernel data segment for `Star::write()` to succeed:
