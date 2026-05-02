@@ -369,6 +369,48 @@ Event[2]: type=33, cc=1, slot_id=en_slot_id → success
 - `USB_XHCI_EP0_MPS_EVALUATE_CONTEXT_PLAN_V1`: plan only — design Evaluate
   Context command to update EP0 MPS from bMaxPacketSize0. No implementation, no HID.
 
+## USB_XHCI_EP0_MPS_EVALUATE_CONTEXT_PROOF_V1
+
+### Changes
+- Added constant: `TRB_TYPE_EVALUATE_CONTEXT_CMD: u32 = 14`.
+- After GET_DESCRIPTOR(8) completes, reads bMaxPacketSize0 and validates:
+  - `actual_mps` must be in `{8,16,32,64,512}` (valid EP0 MPS values per USB spec).
+  - If `actual_mps == max_packet_size` (boot-guess from port speed): skip, park.
+  - If `actual_mps != max_packet_size` and valid: run Evaluate Context command.
+- Reuses existing `input_ctx_va`/`input_ctx_phys` page (controller done reading
+  after Address Device). Zeroes ICC area.
+- ICC: Drop=0, Add=bit 1 (EP0 only, context index 1). Slot context not evaluated.
+- Copies EP0 context from output Device Context (`device_ctx_va + ctx_stride`) into
+  Input Context (`input_ctx_va + ctx_stride * 2`), then patches only DW0 bits 31:16
+  with `actual_mps`. Required by XHCI spec 6.2.3: fields not intended to be changed
+  must be copied from current Device Context (preserves controller-updated TR
+  Dequeue Pointer, DCS, etc.).
+- Submits Evaluate Context Command TRB (type=14): d0/d1=input_context_phys, d2=0,
+  d3=(slot_id<<24)|(14<<10)|cmd_cycle. Stop marker opposite cycle. DB[0]=0.
+- Polls Command Completion Event (type=33) at current ev_idx. Validates cc==Success,
+  slot_id matches. Consumes event, advances ev_idx, updates ERDP.
+- Verifies output Device Context EP0 DW0 bits 31:16 reflect updated MPS. Logs
+  verify ok/bad.
+- Skip path is terminal for this proof phase only; future full18 phase continues
+  from either skip-ok or eval-ok.
+
+### Non-goals preserved
+- No GET_DESCRIPTOR(18) full fetch
+- No new EP0 transfer TRBs
+- No HID parsing or routing
+- No IRQ handler
+- No kernel/ABI edits
+- No sexinput/silk-shell/sexdisplay edits
+- No sexlink
+
+### Build
+- Build gate passed: `./scripts/entrypoint_build.sh`.
+- Zero warnings for sexusb.
+
+### Next
+- `USB_XHCI_GET_DESCRIPTOR_FULL_18_PLAN_V1`: plan only — design full 18-byte
+  device descriptor fetch after MPS is validated/updated. No implementation, no HID.
+
 ## CORRECTED XHCI SPEC FACTS (post-Audit V1)
 
 **Context stride**: XHCI context array element stride = 32 bytes if CSZ=0, 64 bytes if CSZ=1 (HCCPARAMS1 bit 2). NOT 16/32. Slot/EP0 context fields occupy the first 16 bytes of each stride; remaining bytes are reserved.

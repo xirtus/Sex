@@ -138,6 +138,7 @@ pub extern "C" fn _start() -> ! {
     const TRB_TYPE_SETUP_STAGE: u32 = 2;
     const TRB_TYPE_DATA_STAGE: u32 = 3;
     const TRB_TYPE_STATUS_STAGE: u32 = 4;
+    const TRB_TYPE_EVALUATE_CONTEXT_CMD: u32 = 14;
     const TRB_CC_SUCCESS: u32 = 1;
 
     serial_println!("[sexusb.boot]");
@@ -838,6 +839,123 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.xhci.desc8.mps.ok] mps={}", mps);
 
     serial_println!("[sexusb.xhci.desc8.complete.ok]");
+
+    // ===== Evaluate Context: update EP0 MPS from bMaxPacketSize0 =====
+    // Phase: USB_XHCI_EP0_MPS_EVALUATE_CONTEXT_PROOF_V1
+    // If actual_mps matches current boot-guess max_packet_size, skip.
+    // Otherwise copy EP0 from Device Context, patch MPS, submit command.
+    serial_println!("[sexusb.xhci.eval_ctx.start]");
+
+    let actual_mps = mps as u32;
+    // Valid EP0 MPS values: 8, 16, 32, 64, 512 per USB spec.
+    let mps_valid = match actual_mps { 8 | 16 | 32 | 64 | 512 => true, _ => false };
+    if !mps_valid {
+        serial_println!("[sexusb.xhci.eval_ctx.mps.invalid.bad] mps={}", actual_mps);
+        loop { sys_yield(); }
+    }
+
+    if actual_mps == max_packet_size {
+        serial_println!("[sexusb.xhci.eval_ctx.skip] mps={}", actual_mps);
+        // Skip path is terminal for this proof phase. Future phase
+        // (USB_XHCI_GET_DESCRIPTOR_FULL_18_V1) continues from skip-ok.
+        loop { sys_yield(); }
+    }
+
+    // Reuse input context page (controller done reading after Address Device).
+    unsafe { core::ptr::write_bytes(input_ctx_va as *mut u8, 0, PAGE_SIZE as usize); }
+
+    // ICC: Drop=0, Add=EP0 only (bit 1 = context index 1).
+    // Slot context not evaluated (not in Add). Per XHCI spec 6.2.2.
+    unsafe {
+        core::ptr::write_volatile(input_ctx_va as *mut u32, 0u32);        // DW0: Drop none
+        core::ptr::write_volatile((input_ctx_va + 4) as *mut u32, 2u32);  // DW1: Add EP0 only
+    }
+
+    // Copy EP0 context from output Device Context, patch only MPS.
+    // Required by XHCI spec 6.2.3: "Input Endpoint Context for an Evaluate
+    // Context command must have the exact same values for fields not intended
+    // to be changed." Controller may have updated fields (TR Dequeue Pointer,
+    // DCS) during GET_DESCRIPTOR(8) control transfer.
+    let dev_ep0_base = (device_ctx_va + ctx_stride) as *const u32;
+    let inp_ep0_base = (input_ctx_va + ctx_stride * 2) as *mut u32;
+    let ep0_dw0 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(0)) };
+    let ep0_dw1 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(1)) };
+    let ep0_dw2 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(2)) };
+    let ep0_dw3 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(3)) };
+    let ep0_dw0_new = (ep0_dw0 & 0x0000_FFFF) | (actual_mps << 16);
+    unsafe {
+        core::ptr::write_volatile(inp_ep0_base.add(0), ep0_dw0_new);
+        core::ptr::write_volatile(inp_ep0_base.add(1), ep0_dw1);
+        core::ptr::write_volatile(inp_ep0_base.add(2), ep0_dw2);
+        core::ptr::write_volatile(inp_ep0_base.add(3), ep0_dw3);
+    }
+
+    // Submit Evaluate Context Command TRB (type=14).
+    // d0/d1 = input_context_phys, d2 = 0 (no flags), d3 = slot_id|type|cycle.
+    let eval_d0 = (input_ctx_phys & 0xFFFF_FFFF) as u32;
+    let eval_d1 = (input_ctx_phys >> 32) as u32;
+    let eval_d3 = (en_slot_id << 24)
+        | (TRB_TYPE_EVALUATE_CONTEXT_CMD << 10)
+        | cmd_cycle;
+    trb_write_volatile(cmd_ring_va, cmd_idx, eval_d0, eval_d1, 0u32, eval_d3);
+    // Cycle-stop at cmd_idx+1 with opposite cycle.
+    trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle ^ 1);
+    serial_println!("[sexusb.xhci.eval_ctx.trb.ok]");
+
+    // Doorbell 0 (command ring).
+    mmio_write32(db_base, 0, 0u32);
+    serial_println!("[sexusb.xhci.eval_ctx.doorbell.ok]");
+
+    // Consume Command Completion Event (type=33) at current ev_idx.
+    let mut eval_ok = false;
+    for _ in 0..POLL_BUDGET {
+        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        if (ev_d3 & 1) == (ev_dcs as u32) {
+            let ev_type = (ev_d3 >> 10) & 0x3F;
+            if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
+                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                let cc = (ev_d2 >> 24) & 0xFF;
+                let slot = (ev_d3 >> 24) & 0xFF;
+                if cc == TRB_CC_SUCCESS && slot == en_slot_id {
+                    eval_ok = true;
+                    serial_println!("[sexusb.xhci.eval_ctx.event.ok]");
+                } else {
+                    serial_println!("[sexusb.xhci.eval_ctx.event.bad] cc={} slot={}", cc, slot);
+                }
+                // Clear consumed event cycle bit (spec 4.11.4)
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // Advance event dequeue pointer and update ERDP.
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS {
+                    ev_idx = 0;
+                    ev_dcs ^= 1;
+                }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write64(intr0_base, XHCI_INTR_ERDP, new_erdp | ev_dcs);
+            }
+            break;
+        }
+        sys_yield();
+    }
+
+    if !eval_ok {
+        serial_println!("[sexusb.xhci.eval_ctx.timeout.bad]");
+        loop { sys_yield(); }
+    }
+
+    // Advance command ring producer index (cycle stable until segment wrap).
+    cmd_idx += 1;
+    let _ = (cmd_idx,);
+
+    // Verify MPS was updated in output Device Context EP0 DW0 bits 31:16.
+    let verify_dw0 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(0)) };
+    let verify_mps = (verify_dw0 >> 16) & 0xFFFF;
+    if verify_mps == actual_mps {
+        serial_println!("[sexusb.xhci.eval_ctx.mps.verify] expected={} got={}", actual_mps, verify_mps);
+        serial_println!("[sexusb.xhci.eval_ctx.complete.ok]");
+    } else {
+        serial_println!("[sexusb.xhci.eval_ctx.verify.bad] expected={} got={}", actual_mps, verify_mps);
+    }
 
     loop { sys_yield(); }
 }
