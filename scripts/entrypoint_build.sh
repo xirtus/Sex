@@ -29,6 +29,15 @@ validate_contract() {
   rg -n "value_reg\s*=\s*\"rsi\"" "$contract" >/dev/null || fail "pdx_call value_reg must be rsi"
 }
 
+validate_silk_de_gates() {
+  rg -n "pub fn validate_deterministic_vectors\\(" crates/silkbar-model/src/lib.rs >/dev/null \
+    || fail "silkbar-model missing validate_deterministic_vectors"
+  rg -n "validate_deterministic_vectors\\(\\)" servers/silkbar/src/main.rs >/dev/null \
+    || fail "silkbar startup must enforce deterministic vectors gate"
+  rg -n "validate_deterministic_vectors\\(\\)" servers/sexdisplay/src/main.rs >/dev/null \
+    || fail "sexdisplay startup must enforce deterministic vectors gate"
+}
+
 spec_get() {
   local key="$1"
   rg -n "^${key}\\s*=\\s*\"[^\"]+\"" "$SPEC_PATH" | head -n1 | sed -E 's/.*=\s*"([^"]+)".*/\1/'
@@ -42,6 +51,7 @@ echo "[SEXOS ENTRYPOINT] BUILD_ROOT=$BUILD_ROOT"
 
 # 2) Contract validation before any compile/package/run step, then freeze snapshot.
 validate_contract
+validate_silk_de_gates
 
 expected_contract_hash="$(spec_get contract_sha256)"
 actual_contract_hash="$(sha256sum sexos_contract.toml | awk '{print $1}')"

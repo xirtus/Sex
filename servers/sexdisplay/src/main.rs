@@ -4,7 +4,7 @@
 
 use sex_pdx::serial_println;
 use silkbar_model::{SilkBar, SilkBarUpdate, apply_update, DEFAULT_SILK_BAR,
-                    ChipKind, ModuleSlot, validate_contract};
+                    ChipKind, ModuleSlot, validate_contract, validate_deterministic_vectors};
 
 const FALLBACK_PTR: u64 = 0xffff8000fd000000;
 const FALLBACK_W: u32 = 1280;
@@ -411,7 +411,7 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    if !validate_contract() {
+    if !validate_contract() || !validate_deterministic_vectors() {
         loop { core::hint::spin_loop(); }
     }
 
