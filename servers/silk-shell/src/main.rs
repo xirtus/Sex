@@ -405,6 +405,39 @@ pub extern "C" fn _start() -> ! {
                                 dy
                             );
                         }
+                        // Left-button down edge → click-to-focus hit-test.
+                        let left_held = (buttons & 0x01) != 0;
+                        if left_held && !CLICK_ACTIVE {
+                            CLICK_ACTIVE = true;
+                            serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", POINTER_X, POINTER_Y, buttons);
+                            let focused = FOCUSED_SURFACE_ID;
+                            if !point_in_surface(POINTER_X, POINTER_Y, focused) {
+                                let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
+                                               SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
+                                let mut hit_id = 0u64;
+                                for &sid in z_order.iter() {
+                                    if sid == focused { continue; }
+                                    if !surface_is_alive(sid) { continue; }
+                                    if point_in_surface(POINTER_X, POINTER_Y, sid) {
+                                        hit_id = sid;
+                                        break;
+                                    }
+                                }
+                                if hit_id != 0 {
+                                    serial_println!("[shell.click_focus.hit] id={}", hit_id);
+                                    serial_println!("[shell.click_focus.send.start] id={}", hit_id);
+                                    FOCUSED_SURFACE_ID = hit_id;
+                                    pdx_call(SLOT_DISPLAY, 0xED, hit_id, 0, 0);
+                                    serial_println!("[shell.click_focus.send.ok] id={}", hit_id);
+                                } else {
+                                    serial_println!("[shell.click_focus.miss]");
+                                }
+                            } else {
+                                serial_println!("[shell.click_focus.hit] id={}", focused);
+                            }
+                        } else if !left_held {
+                            CLICK_ACTIVE = false;
+                        }
                         // Move cursor surface to updated pointer position.
                         serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
                         pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
