@@ -4,11 +4,7 @@
 
 use sex_pdx::serial_println;
 use silkbar_model::{SilkBar, SilkBarUpdate, apply_update, DEFAULT_SILK_BAR,
-                    WS_X0, WS_X1, WS_X2, WS_X3, WS_X4, WS_Y, WS_H,
-                    WS_INACTIVE_W,
-                    CHIP_X0, CHIP_X1, CHIP_X2, CHIP_X3, CHIP_Y, CHIP_H, CHIP_W, CLOCK_W,
-                    LAUNCHER_X, LAUNCHER_Y, LAUNCHER_W, LAUNCHER_H,
-                    ChipKind, validate_contract};
+                    ChipKind, ModuleSlot, validate_contract};
 
 const FALLBACK_PTR: u64 = 0xffff8000fd000000;
 const FALLBACK_W: u32 = 1280;
@@ -134,12 +130,23 @@ fn in_rect(x: usize, y: usize, rx: usize, ry: usize, rw: usize, rh: usize) -> bo
     x >= rx && x < rx + rw && y >= ry && y < ry + rh
 }
 
+#[inline]
+fn module_rect(bar: &SilkBar, slot: ModuleSlot) -> (usize, usize, usize, usize) {
+    let lb = &bar.layout[slot as usize];
+    (lb.x, lb.y, lb.w, lb.h)
+}
+
 fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
-    const WS_TABS: [(usize, usize); 5] = [
-        (WS_X0, 0), (WS_X1, 1), (WS_X2, 2), (WS_X3, 3), (WS_X4, 4),
+    const WS_SLOTS: [ModuleSlot; 5] = [
+        ModuleSlot::Workspace0,
+        ModuleSlot::Workspace1,
+        ModuleSlot::Workspace2,
+        ModuleSlot::Workspace3,
+        ModuleSlot::Workspace4,
     ];
-    for &(wx, idx) in &WS_TABS {
-        if y >= WS_Y && y < WS_Y + WS_H && x >= wx && x < wx + WS_INACTIVE_W {
+    for (idx, slot) in WS_SLOTS.iter().enumerate() {
+        let (wx, wy, ww, wh) = module_rect(bar, *slot);
+        if in_rect(x, y, wx, wy, ww, wh) {
             let ws = &bar.workspaces[idx];
             if ws.active { return Some(0x00A8A0FF); }
             if ws.urgent { return Some(0x00FF6666); }
@@ -150,15 +157,15 @@ fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
 }
 
 fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
-    // Chips 0-2 use standard width; chip 3 (Clock) spans full clock width
-    const CHIP_POS: [(usize, usize, usize); 4] = [
-        (CHIP_X0, CHIP_W, 0),
-        (CHIP_X1, CHIP_W, 1),
-        (CHIP_X2, CHIP_W, 2),
-        (CHIP_X3, CLOCK_W, 3),
+    const CHIP_SLOTS: [ModuleSlot; 4] = [
+        ModuleSlot::Chip0,
+        ModuleSlot::Chip1,
+        ModuleSlot::Chip2,
+        ModuleSlot::Clock,
     ];
-    for &(cx, cw, idx) in &CHIP_POS {
-        if y >= CHIP_Y && y < CHIP_Y + CHIP_H && x >= cx && x < cx + cw {
+    for (idx, slot) in CHIP_SLOTS.iter().enumerate() {
+        let (cx, cy, cw, ch) = module_rect(bar, *slot);
+        if in_rect(x, y, cx, cy, cw, ch) {
             let chip = &bar.chips[idx];
             if !chip.visible { return Some(0x00102038); }
             match chip.kind {
@@ -178,11 +185,12 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
     // Status chip backgrounds
     if let Some(c) = chip_color(x, y, bar) { return c; }
     // Launcher button with rounded-illusion border (model position)
-    if in_rect(x, y, LAUNCHER_X, LAUNCHER_Y, LAUNCHER_W, LAUNCHER_H) {
-        let x2 = LAUNCHER_X + 2;
-        let y2 = LAUNCHER_Y + 2;
-        let xw = LAUNCHER_X + LAUNCHER_W - 2;
-        let yh = LAUNCHER_Y + LAUNCHER_H - 2;
+    let (lx, ly, lw, lh) = module_rect(bar, ModuleSlot::Launcher);
+    if in_rect(x, y, lx, ly, lw, lh) {
+        let x2 = lx + 2;
+        let y2 = ly + 2;
+        let xw = lx + lw - 2;
+        let yh = ly + lh - 2;
         if x < x2 || x >= xw || y < y2 || y >= yh {
             return 0x00385078; // low-contrast glass edge
         }
@@ -211,20 +219,21 @@ const FONT: [[u8; 7]; 10] = [
 /// that would create a tear window between bar-fill and clock-overlay.
 fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     const CLOCK_FG: u32 = 0x00C8D8FF;
-    const CX: usize = CHIP_X3;    // model clock-area start
-    const CY: usize = CHIP_Y + 1; // slight inset into chip area
+    let (cx, cy, _, _) = module_rect(bar, ModuleSlot::Clock);
+    let cx = cx;
+    let cy = cy + 1; // slight inset into chip area
 
     // Quick bounding-box reject
-    if y < CY || y >= CY + 7 {
+    if y < cy || y >= cy + 7 {
         return None;
     }
-    if x < CX || x > CX + 45 {
+    if x < cx || x > cx + 45 {
         return None;
     }
 
     // Colon 1 at offset 14, Colon 2 at offset 31
-    if x == CX + 14 || x == CX + 31 {
-        if y == CY + 1 || y == CY + 5 {
+    if x == cx + 14 || x == cx + 31 {
+        if y == cy + 1 || y == cy + 5 {
             return Some(CLOCK_FG);
         }
         return None;
@@ -233,11 +242,11 @@ fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     // Digit offsets: 0, 7, 17, 24, 34, 41
     const DIGITS: [usize; 6] = [0, 7, 17, 24, 34, 41];
     for (di, &dx) in DIGITS.iter().enumerate() {
-        if x < CX + dx || x >= CX + dx + 5 {
+        if x < cx + dx || x >= cx + dx + 5 {
             continue;
         }
-        let col = x - (CX + dx);
-        let row = y - CY;
+        let col = x - (cx + dx);
+        let row = y - cy;
         let digit: usize = match di {
             0 => (bar.clock_hh / 10) as usize,
             1 => (bar.clock_hh % 10) as usize,
