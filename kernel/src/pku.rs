@@ -189,13 +189,17 @@ pub unsafe fn set_page_user_accessible(va: u64, pkey: u8) {
     let pt_idx   = ((va >> 12) & 0x1FF) as usize;
 
     // PML4 — skip if not present
-    let pml4e = *pml4_virt.add(pml4_idx);
+    let mut pml4e = *pml4_virt.add(pml4_idx);
     if (pml4e & 1) == 0 { return; }
+    pml4e |= 0x6;
+    *pml4_virt.add(pml4_idx) = pml4e;
 
     // PDPT
     let pdpt_virt = ((pml4e & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *mut u64;
-    let pdpte = *pdpt_virt.add(pdpt_idx);
+    let mut pdpte = *pdpt_virt.add(pdpt_idx);
     if (pdpte & 1) == 0 { return; }
+    pdpte |= 0x6;
+    *pdpt_virt.add(pdpt_idx) = pdpte;
 
     // 1GiB huge page — set flags and PKEY on PDPTE
     if (pdpte & (1 << 7)) != 0 {
@@ -210,8 +214,10 @@ pub unsafe fn set_page_user_accessible(va: u64, pkey: u8) {
 
     // PD
     let pd_virt = ((pdpte & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *mut u64;
-    let pde = *pd_virt.add(pd_idx);
+    let mut pde = *pd_virt.add(pd_idx);
     if (pde & 1) == 0 { return; }
+    pde |= 0x6;
+    *pd_virt.add(pd_idx) = pde;
 
     // 2MiB huge page — set flags and PKEY on PDE
     if (pde & (1 << 7)) != 0 {

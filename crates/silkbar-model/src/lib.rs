@@ -547,6 +547,87 @@ pub fn validate_contract() -> bool {
     true
 }
 
+/// Deterministic vector validation for Silk DE top-strip model behavior.
+/// This is a headless gate for update semantics before renderer/runtime boot.
+pub fn validate_deterministic_vectors() -> bool {
+    let mut bar = DEFAULT_SILK_BAR;
+    let mut q = SilkBarUpdateQueue::empty();
+
+    let vectors = [
+        // Workspace transitions
+        SilkBarUpdate::new(UpdateKind::SetWorkspaceActive as u32, 0, 1, 0),
+        SilkBarUpdate::new(UpdateKind::SetWorkspaceActive as u32, 2, 0, 0),
+        SilkBarUpdate::new(UpdateKind::SetWorkspaceUrgent as u32, 1, 1, 0),
+        // Chip transitions
+        SilkBarUpdate::new(UpdateKind::SetChipVisible as u32, 2, 0, 0),
+        SilkBarUpdate::new(UpdateKind::SetChipKind as u32, 1, ChipKind::Battery as u32, 0),
+        // Clock transition (rollover edge sample)
+        SilkBarUpdate::new(UpdateKind::SetClock as u32, 0, 23, (59u32 << 8) | 58u32),
+    ];
+
+    for update in vectors {
+        if !q.push(update) {
+            return false;
+        }
+    }
+
+    let applied = q.drain_into(&mut bar);
+    if applied != 6 {
+        return false;
+    }
+
+    if !bar.workspaces[0].active || bar.workspaces[2].active {
+        return false;
+    }
+    if !bar.workspaces[1].urgent {
+        return false;
+    }
+    if bar.chips[2].visible {
+        return false;
+    }
+    if bar.chips[1].kind != ChipKind::Battery {
+        return false;
+    }
+    if bar.clock_hh != 23 || bar.clock_mm != 59 || bar.clock_ss != 58 {
+        return false;
+    }
+
+    // Stable digest to detect accidental semantic drift in model state transitions.
+    let digest = model_digest(&bar);
+    digest == 0xe673_7535_2ab8_f654
+}
+
+#[inline]
+fn digest_mix(mut h: u64, v: u64) -> u64 {
+    h ^= v;
+    h = h.wrapping_mul(0x100000001b3);
+    h ^= h >> 32;
+    h
+}
+
+fn model_digest(bar: &SilkBar) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for ws in bar.workspaces {
+        h = digest_mix(h, ws.index as u64);
+        h = digest_mix(h, ws.active as u64);
+        h = digest_mix(h, ws.urgent as u64);
+    }
+    for chip in bar.chips {
+        let kind = match chip.kind {
+            ChipKind::Net => 0u64,
+            ChipKind::Wifi => 1u64,
+            ChipKind::Battery => 2u64,
+            ChipKind::Clock => 3u64,
+        };
+        h = digest_mix(h, kind);
+        h = digest_mix(h, chip.visible as u64);
+    }
+    h = digest_mix(h, bar.clock_hh as u64);
+    h = digest_mix(h, bar.clock_mm as u64);
+    h = digest_mix(h, bar.clock_ss as u64);
+    h
+}
+
 // ── Default Instances ───────────────────────────────────────────────────────
 
 pub const DEFAULT_SILK_BAR: SilkBar = SilkBar {
