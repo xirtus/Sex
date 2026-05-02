@@ -380,23 +380,54 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
     draw_cursor_z_top(fb, w, h, total_pixels);
 }
 
+// Classic NW arrow, 8 wide × 16 tall.
+// Each u8 row: bit 7 = leftmost pixel. Set bit = draw CURSOR_ARROW_COLOR; clear = transparent.
+const CURSOR_ARROW_W: usize = 8;
+const CURSOR_ARROW_H: usize = 16;
+const CURSOR_ARROW_COLOR: u32 = 0x00FFFFFF; // white
+const CURSOR_ARROW_BITMAP: [u8; 16] = [
+    0b10000000, //  *
+    0b11000000, //  **
+    0b11100000, //  ***
+    0b11110000, //  ****
+    0b11111000, //  *****
+    0b11111100, //  ******
+    0b11111110, //  *******
+    0b11111100, //  ******   (start contracting)
+    0b11011000, //  ** **    (waist split)
+    0b10001100, //  *   **
+    0b00001100, //      **
+    0b00000110, //       **
+    0b00000110, //       **
+    0b00000011, //        **
+    0b00000011, //        **
+    0b00000001, //         *
+];
+
 /// Pass 3: draw cursor surface (CURSOR_SURFACE_ID) unconditionally on top of all other surfaces.
+/// Renders an arrow bitmap instead of a solid rect; transparent pixels are not written.
 /// Called at the end of both render() and redraw_surface_area().
 fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
     unsafe {
         for surf in SURFACES.iter() {
             if !surf.active || surf.surface_id != CURSOR_SURFACE_ID { continue; }
-            let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
-            if sw == 0 || sh == 0 { break; }
+            let ox = surf.x.max(0) as usize; // origin x (not clamped — arrow clips naturally)
+            let oy = surf.y.max(0) as usize; // origin y
             if !CURSOR_Z_TOP_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
                 serial_println!("[sexdisplay.cursor_surface.z_top.ok] id={:#x}", CURSOR_SURFACE_ID);
+                serial_println!("[sexdisplay.cursor_shape.arrow.ok] id={:#x}", CURSOR_SURFACE_ID);
             }
-            let color = surf.color;
-            for cy in sy..sy + sh {
-                for cx in sx..sx + sw {
-                    let idx = cy * w + cx;
+            for row in 0..CURSOR_ARROW_H {
+                let py = oy + row;
+                if py >= h { break; }
+                let bits = CURSOR_ARROW_BITMAP[row];
+                for col in 0..CURSOR_ARROW_W {
+                    if bits & (0x80u8 >> col) == 0 { continue; }
+                    let px = ox + col;
+                    if px >= w { continue; }
+                    let idx = py * w + px;
                     if idx < total_pixels {
-                        core::ptr::write_volatile(fb.add(idx), color);
+                        core::ptr::write_volatile(fb.add(idx), CURSOR_ARROW_COLOR);
                     }
                 }
             }
