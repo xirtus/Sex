@@ -902,6 +902,20 @@ No `[sexusb.xhci.eval_ctx.verify.bad]`.
   `[sexusb.hid.mouse.decode.zero.ok]`,
   `[sexusb.hid.mouse.decode.bad]`.
 
+### USB_SEXUSB_TO_SEXINPUT_CAP_ROUTE_V1
+- Minimal capability route enabled in `kernel/src/init.rs`:
+  grant `sexusb -> sexinput` one domain capability at slot `9`.
+- `sexusb` sends one decoded boot-mouse report via PDX:
+  `type_id/op=0x260`, `arg1=buttons`, `arg2=packed(dx,dy,wheel)`.
+- `sexinput` receives on domain listen path (`slot 0`) and logs decode proof only.
+- No cross-PD pointers; integer packing only.
+- Markers:
+  `sexusb`: `[sexusb.hid.mouse.pdx_send.start]`,
+  `[sexusb.hid.mouse.pdx_send.ok]`,
+  `[sexusb.hid.mouse.pdx_send.fail]`.
+  `sexinput`: `[sexinput.usb_mouse.recv]`,
+  `[sexinput.usb_mouse.decode.ok]`.
+
 ### Non-goals preserved
 - No sexinput routing
 - No IRQ handler (stay with polling)

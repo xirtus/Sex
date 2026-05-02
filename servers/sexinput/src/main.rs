@@ -12,6 +12,7 @@ fn panic(_info: &PanicInfo) -> ! {
 // ── Pointer state for HID report normalizer ──
 static mut LAST_BUTTONS: u8 = 0;
 const OP_HID_EVENT: u64 = 0x202;
+const OP_USB_MOUSE_REPORT: u64 = 0x260;
 
 #[derive(Copy, Clone)]
 struct HidPointerRawReport {
@@ -76,6 +77,25 @@ pub extern "C" fn _start() -> ! {
     let mut drag_proof_stage: u8 = 0;
 
     loop {
+        // 0. Local USB->sexinput PDX proof path (no shell routing in this phase).
+        if let Some(req) = pdx_try_listen_raw(0) {
+            serial_println!("[sexinput.usb_mouse.recv] type={:#x}", req.type_id);
+            if req.type_id == OP_USB_MOUSE_REPORT {
+                let buttons = req.arg1 as u8;
+                let packed = req.arg2;
+                let dx = (packed as u8) as i8;
+                let dy = ((packed >> 8) as u8) as i8;
+                let wheel = ((packed >> 16) as u8) as i8;
+                serial_println!(
+                    "[sexinput.usb_mouse.decode.ok] buttons={:#x} dx={} dy={} wheel={}",
+                    buttons,
+                    dx,
+                    dy,
+                    wheel
+                );
+            }
+        }
+
         // 1. Non-blocking poll for raw scancodes from kernel (SLOT_INPUT = 3)
         //    Non-blocking allows synthetic producer to run on idle ticks.
         if let Some(req) = pdx_try_listen_raw(SLOT_INPUT) {

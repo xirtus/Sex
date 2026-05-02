@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use sex_pdx::{serial_println, sys_yield, SLOT_USB_HOST};
+use sex_pdx::{serial_println, sys_yield, SLOT_USB_HOST, pdx_call_checked};
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -124,6 +124,9 @@ fn decode_boot_mouse_report(buf: &[u8], len: usize) -> Option<BootMouseReport> {
         wheel,
     })
 }
+
+const SLOT_USB_SEXINPUT: u64 = 9;
+const OP_USB_MOUSE_REPORT: u64 = 0x260;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -2462,6 +2465,20 @@ pub extern "C" fn _start() -> ! {
             decoded.dy,
             decoded.wheel
         );
+        serial_println!("[sexusb.hid.mouse.pdx_send.start]");
+        let packed_axes = (decoded.dx as u8 as u64)
+            | ((decoded.dy as u8 as u64) << 8)
+            | ((decoded.wheel as u8 as u64) << 16);
+        match pdx_call_checked(
+            SLOT_USB_SEXINPUT,
+            OP_USB_MOUSE_REPORT,
+            0,
+            decoded.buttons as u64,
+            packed_axes,
+        ) {
+            Ok(_) => serial_println!("[sexusb.hid.mouse.pdx_send.ok]"),
+            Err(err) => serial_println!("[sexusb.hid.mouse.pdx_send.fail] err={}", err),
+        }
         if decoded.buttons == 0 && decoded.dx == 0 && decoded.dy == 0 && decoded.wheel == 0 {
             serial_println!("[sexusb.hid.mouse.decode.zero.ok]");
         }

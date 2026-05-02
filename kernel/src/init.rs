@@ -2,6 +2,7 @@ use crate::serial_println;
 use x86_64::VirtAddr;
 
 pub static mut SEXDISPLAY_PD_ID: u32 = 0;
+const SLOT_USB_SEXINPUT: u64 = 9;
 
 pub fn init() {
     // Advance boot phase to allow registry insertion
@@ -98,6 +99,15 @@ pub fn init() {
                 // Grant access to silk-shell for event forwarding
                 pd.grant_capability(sex_pdx::SLOT_SHELL, CapabilityData::Domain(silkshell_id));
                 serial_println!("✓ Phase 25: Capabilities granted to sexinput");
+            }
+        }
+
+        // Minimal USB input route: allow sexusb to send decoded mouse reports
+        // directly to sexinput over one dedicated domain slot.
+        if sexusb_id != 0 && sexinput_id != 0 {
+            if let Some(pd) = DOMAIN_REGISTRY.get(sexusb_id) {
+                pd.grant_capability(SLOT_USB_SEXINPUT, CapabilityData::Domain(sexinput_id));
+                serial_println!("✓ cap.route: sexusb->sexinput slot {}", SLOT_USB_SEXINPUT);
             }
         }
 
