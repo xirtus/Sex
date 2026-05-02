@@ -75,6 +75,23 @@ fn mmio_write64(base: u64, offset: u64, value: u64) {
     mmio_write32(base, offset + 4, (value >> 32) as u32);
 }
 
+#[inline(always)]
+fn trb_write_volatile(base_va: u64, index: u64, d0: u32, d1: u32, d2: u32, d3: u32) {
+    let p = (base_va + index * 16) as *mut u32;
+    unsafe {
+        core::ptr::write_volatile(p.add(0), d0);
+        core::ptr::write_volatile(p.add(1), d1);
+        core::ptr::write_volatile(p.add(2), d2);
+        core::ptr::write_volatile(p.add(3), d3);
+    }
+}
+
+#[inline(always)]
+fn trb_read_dword(base_va: u64, index: u64, word: usize) -> u32 {
+    let p = (base_va + index * 16) as *const u32;
+    unsafe { core::ptr::read_volatile(p.add(word)) }
+}
+
 fn wait_until(base: u64, offset: u64, mask: u32, expect_set: bool, spins: usize) -> bool {
     for _ in 0..spins {
         let v = mmio_read32(base, offset);
@@ -106,12 +123,16 @@ pub extern "C" fn _start() -> ! {
     const POLL_BUDGET: usize = 100_000;
     const XHCI_CRCR: u64 = 0x18;
     const XHCI_DCBAAP: u64 = 0x30;
+    const XHCI_CAP_DBOFF: u64 = 0x14;
     const XHCI_CAP_RTSOFF: u64 = 0x18;
     const XHCI_CAP_HCCPARAMS1: u64 = 0x10;
     const XHCI_INTR0_BASE: u64 = 0x20;
     const XHCI_INTR_ERSTSZ: u64 = 0x08;
     const XHCI_INTR_ERSTBA: u64 = 0x10;
     const XHCI_INTR_ERDP: u64 = 0x18;
+    const TRB_TYPE_NOOP_CMD: u32 = 23;
+    const TRB_TYPE_CMD_COMPLETION_EVENT: u32 = 33;
+    const TRB_CC_SUCCESS: u32 = 1;
 
     serial_println!("[sexusb.boot]");
 
@@ -269,6 +290,52 @@ pub extern "C" fn _start() -> ! {
     mmio_write64(intr0_base, XHCI_INTR_ERDP, event_ring_phys);
     serial_println!("[sexusb.xhci.erdp.write.ok]");
     serial_println!("[sexusb.xhci.ring.proof.ok]");
+
+    serial_println!("[sexusb.xhci.cmd.noop.start]");
+    // Command NOOP TRB at index 0. d3: type in [15:10], cycle in bit0.
+    let noop_d3 = (TRB_TYPE_NOOP_CMD << 10) | 1u32;
+    trb_write_volatile(cmd_ring_va, 0, 0, 0, 0, noop_d3);
+    serial_println!("[sexusb.xhci.cmd.noop.trb.ok]");
+
+    let dboff_raw = mmio_read32(cap_base, XHCI_CAP_DBOFF);
+    let db_base = map_va.wrapping_add((dboff_raw & !0x3u32) as u64);
+    if db_base.wrapping_add(4) > map_va.wrapping_add(MAP_BYTES) {
+        serial_println!("[sexusb.xhci.ring.ptrs.write.bad]");
+        loop { sys_yield(); }
+    }
+    mmio_write32(db_base, 0, 0u32); // Doorbell 0, target 0 (command ring)
+    serial_println!("[sexusb.xhci.cmd.noop.doorbell.ok]");
+
+    let mut seen_completion = false;
+    let mut completion_ok = false;
+    for _ in 0..POLL_BUDGET {
+        let ev_d3 = trb_read_dword(event_ring_va, 0, 3);
+        let ev_cycle = ev_d3 & 1;
+        if ev_cycle == 1 {
+            let ev_type = (ev_d3 >> 10) & 0x3F;
+            if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
+                seen_completion = true;
+                serial_println!("[sexusb.xhci.cmd.noop.event.seen]");
+                let ev_d2 = trb_read_dword(event_ring_va, 0, 2);
+                let cc = (ev_d2 >> 24) & 0xFF;
+                completion_ok = cc == TRB_CC_SUCCESS;
+                break;
+            } else {
+                // Event seen but not command completion.
+                seen_completion = true;
+                break;
+            }
+        }
+        sys_yield();
+    }
+
+    if !seen_completion {
+        serial_println!("[sexusb.xhci.cmd.noop.timeout.bad]");
+    } else if completion_ok {
+        serial_println!("[sexusb.xhci.cmd.noop.complete.ok]");
+    } else {
+        serial_println!("[sexusb.xhci.cmd.noop.complete.bad]");
+    }
 
     loop { sys_yield(); }
 }

@@ -91,3 +91,8 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 - No kernel/ABI/allocator edits; no IRQ handling, no doorbells, no enum/HID/TRB processing.
 - Build gate passed: `./scripts/entrypoint_build.sh`.
 - Runtime host blocker persists: `./dev.sh run` failed with `Could not initialize SDL(No available video device)`.
+- USB_XHCI_COMMAND_RING_NOOP_PROOF_V1 complete in `servers/sexusb/src/main.rs`: writes one Command Noop TRB (`type=23`, cycle=1), rings doorbell 0 via `DBOFF`, then bounded-polls event ring index 0 for Command Completion Event (`type=33`).
+- Completion status decode uses Completion Code from event TRB status dword (`cc = d2[31:24]`), with success marker on `cc==1` and bounded timeout/failure markers otherwise.
+- Non-goals preserved: no Enable Slot/Address Device, no enum, no HID, no IRQ path, no kernel/ABI edits.
+- Build gate passed: `./scripts/entrypoint_build.sh`.
+- Runtime host blocker persists: `./dev.sh run` failed with `Could not initialize SDL(No available video device)`.
