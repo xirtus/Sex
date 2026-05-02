@@ -208,9 +208,68 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
   cmd_cycle for the next segment).
 
 ### Next
-- `USB_XHCI_ADDRESS_DEVICE_CONTEXT_LAYOUT_PROOF_V1`: allocate Input Context, Device Context,
-  EP0 transfer ring pages. Write/validate layouts with correct XHCI stride (CSZ=0 → 32 bytes).
-  No doorbell.
+- `USB_XHCI_ADDRESS_DEVICE_PROOF_V1`: submit Address Device TRB with correctly
+  formatted input context. Route real port/speed, EP0 ring, and DCBAA entry.
+  No descriptor parsing, no HID, no transfers.
+
+## USB_XHCI_ADDRESS_DEVICE_CONTEXT_LAYOUT_PROOF_V1
+
+### Changes
+- Added context stride computation from HCCPARAMS1 CSZ (bit 2): 32 bytes if CSZ=0,
+  64 bytes if CSZ=1. Verified against XHCI spec 5.3.2.
+- Added PORTSC scan: reads `max_ports` from HCSPARAMS1 bits 23:16, iterates PORTSC
+  registers at `op_base + 0x400 + n*0x10`, finds first connected port (CCS bit 0),
+  logs port number and speed ID (bits 13:10). Parks if no port connected.
+- Allocated three pages via syscalls 31+30:
+  - input context (1 page)
+  - device context (1 page)
+  - EP0 transfer ring (1 page)
+- Validated all phys/va for non-zero, page alignment, 64-byte alignment.
+- Zeroed all three pages.
+- Input Context layout (one page):
+  - offset 0: Input Control Context (full ctx_stride bytes)
+  - offset ctx_stride: Slot Context
+  - offset ctx_stride * 2: EP0 Context
+- Device Context layout (one page):
+  - offset 0: Slot Context
+  - offset ctx_stride: EP0 Context
+- Wrote ICC: Drop=0, Add=bit0(Slot)|bit1(EP0)
+- Wrote Slot Context:
+  - DW0: Context Entries=1 (bits 31:27), Speed=port_speed (bits 23:20),
+    Route String=0 (bits 19:0)
+  - DW1: Root Hub Port Number in bits 31:24
+  - Written to both input context and device context
+- Wrote EP0 Context:
+  - DW0: Max Packet Size (bits 31:16): 8 for FS/LS, 64 for HS, 512 for SS
+  - DW1: CErr=3 (bits 3:0), EP Type=Control=010b (bits 5:3, shift=3)
+  - DW2+DW3: TR Dequeue Pointer = EP0 ring phys | DCS(1)
+  - Written to both input context and device context
+- DCBAA: validated slot_id < max_slots (HCSPARAMS1 bits 31:24), then
+  volatile-wrote dcbaa[slot_id] = device_context_phys
+
+### Port speed mapping
+- Speed ID 0 = Full Speed (12 Mbps) → MPS 8
+- Speed ID 1 = Low Speed (1.5 Mbps) → MPS 8
+- Speed ID 2 = High Speed (480 Mbps) → MPS 64
+- Speed ID 3 = Super Speed (5 Gbps) → MPS 512
+- Unknown speed (≥4) → log bad + park
+
+### Non-goals preserved
+- No Address Device TRB (no doorbell)
+- No descriptor parsing
+- No HID/input/shell/display edits
+- No kernel/ABI edits
+- No sexlink
+- No interrupt-driven event handling
+
+### Build
+- Build gate passed: `./scripts/entrypoint_build.sh`.
+- Zero warnings for sexusb.
+
+### Next
+- `USB_XHCI_ADDRESS_DEVICE_PROOF_V1`: submit Address Device TRB with the
+  prepared input context. Must succeed within bounded polls.
+  After: device is in Addressed state, ready for descriptor fetch.
 
 ## RULE: BootInfoFrameAllocator metadata overlap (GP at LockFreeBuddyAllocator::alloc)
 

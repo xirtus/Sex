@@ -422,5 +422,195 @@ pub extern "C" fn _start() -> ! {
     cmd_idx += 1;
     let _ = (cmd_idx,);
 
+    // ===== Context Layout Proof =====
+    serial_println!("[sexusb.xhci.addr_ctx.layout.start]");
+
+    // Compute XHCI context stride from HCCPARAMS1 CSZ bit (bit 2).
+    // CSZ=0 -> 32 bytes, CSZ=1 -> 64 bytes. See XHCI spec 5.3.2.
+    let ctx_stride: u64 = if (hcc1 & (1u32 << 2)) != 0 { 64 } else { 32 };
+    serial_println!("[sexusb.xhci.addr_ctx.stride.ok] {}", ctx_stride);
+
+    // Read MaxPorts from HCSPARAMS1 bits 23:16.
+    let max_ports: u64 = ((hcsp1 >> 16) & 0xFF) as u64;
+    serial_println!("[sexusb.xhci.addr_ctx.ports] {}", max_ports);
+
+    // Scan PORTSC for first connected, enabled port. Get port number and speed.
+    const PORTSC_BASE: u64 = 0x400;
+    const PORTSC_STRIDE: u64 = 0x10;
+    const PORTSC_CCS: u32 = 1u32 << 0;
+    let mut target_port: u64 = 0;
+    let mut port_speed: u32 = 0;
+    for port in 1..=max_ports {
+        let portsc_off = PORTSC_BASE + (port - 1) * PORTSC_STRIDE;
+        let portsc = mmio_read32(op_base, portsc_off);
+        if (portsc & PORTSC_CCS) != 0 {
+            target_port = port;
+            port_speed = (portsc >> 10) & 0xF;
+            serial_println!("[sexusb.xhci.addr_ctx.port.connected] port={} speed={}", port, port_speed);
+            break;
+        }
+    }
+    if target_port == 0 {
+        serial_println!("[sexusb.xhci.addr_ctx.port.none.bad]");
+        loop { sys_yield(); }
+    }
+
+    // Allocate input context, device context, EP0 transfer ring pages.
+    let input_ctx_phys = sys_alloc_phys(PAGE_SIZE);
+    let device_ctx_phys = sys_alloc_phys(PAGE_SIZE);
+    let ep0_ring_phys = sys_alloc_phys(PAGE_SIZE);
+
+    if input_ctx_phys == 0 || input_ctx_phys == u64::MAX
+        || device_ctx_phys == 0 || device_ctx_phys == u64::MAX
+        || ep0_ring_phys == 0 || ep0_ring_phys == u64::MAX
+    {
+        serial_println!("[sexusb.xhci.addr_ctx.alloc.bad]");
+        loop { sys_yield(); }
+    }
+
+    let input_ctx_va = sys_map_phys(input_ctx_phys, PAGE_SIZE);
+    let device_ctx_va = sys_map_phys(device_ctx_phys, PAGE_SIZE);
+    let ep0_ring_va = sys_map_phys(ep0_ring_phys, PAGE_SIZE);
+
+    if input_ctx_va == 0 || input_ctx_va == u64::MAX
+        || device_ctx_va == 0 || device_ctx_va == u64::MAX
+        || ep0_ring_va == 0 || ep0_ring_va == u64::MAX
+    {
+        serial_println!("[sexusb.xhci.addr_ctx.map.bad]");
+        loop { sys_yield(); }
+    }
+
+    // Context pages must be 64-byte aligned for XHCI context/ring requirements.
+    let ctx_align_ok = (input_ctx_phys % 64 == 0)
+        && (device_ctx_phys % 64 == 0)
+        && (ep0_ring_phys % 64 == 0)
+        && (input_ctx_va % PAGE_SIZE == 0)
+        && (device_ctx_va % PAGE_SIZE == 0)
+        && (ep0_ring_va % PAGE_SIZE == 0);
+    if !ctx_align_ok {
+        serial_println!("[sexusb.xhci.addr_ctx.align.bad]");
+        loop { sys_yield(); }
+    }
+
+    serial_println!("[sexusb.xhci.addr_ctx.input.ok]");
+    serial_println!("[sexusb.xhci.addr_ctx.device.ok]");
+    serial_println!("[sexusb.xhci.addr_ctx.ep0_ring.ok]");
+
+    // Zero all three pages.
+    unsafe {
+        core::ptr::write_bytes(input_ctx_va as *mut u8, 0, PAGE_SIZE as usize);
+        core::ptr::write_bytes(device_ctx_va as *mut u8, 0, PAGE_SIZE as usize);
+        core::ptr::write_bytes(ep0_ring_va as *mut u8, 0, PAGE_SIZE as usize);
+    }
+
+    // Input Context layout (one page):
+    //   offset 0:          Input Control Context (full ctx_stride bytes)
+    //   offset ctx_stride: Slot Context
+    //   offset ctx_stride*2: EP0 Context
+    // Device Context layout (one page):
+    //   offset 0:          Slot Context
+    //   offset ctx_stride: EP0 Context
+
+    // --- ICC: Input Control Context ---
+    // DW0: Drop Context flags (bit per context index)
+    // DW1: Add Context flags (bit per context index)
+    // bit 0 = Slot, bit 1 = EP0, bits 2..30 = EP1..EP29
+    const ICC_DROP_NONE: u32 = 0;
+    const ICC_ADD_SLOT_EP0: u32 = (1u32 << 0) | (1u32 << 1);
+    unsafe {
+        let icc_ptr = input_ctx_va as *mut u32;
+        core::ptr::write_volatile(icc_ptr.add(0), ICC_DROP_NONE);
+        core::ptr::write_volatile(icc_ptr.add(1), ICC_ADD_SLOT_EP0);
+    }
+    serial_println!("[sexusb.xhci.addr_ctx.icc.ok]");
+
+    // --- Slot Context ---
+    // DW0: bits 31:27 = Context Entries, bits 23:20 = Speed, bits 19:0 = Route String
+    // DW1: bits 31:24 = Root Hub Port Number
+    const SLOT_CTX_ENTRIES_SHIFT: u32 = 27;
+    const SLOT_SPEED_SHIFT: u32 = 20;
+    let context_entries: u32 = 1;  // EP0 is endpoint context index 1
+    let slot_dw0 = (context_entries << SLOT_CTX_ENTRIES_SHIFT)
+        | (port_speed << SLOT_SPEED_SHIFT)
+        | 0u32;  // route_string = 0 (root hub, no hub routing)
+    let slot_dw1: u32 = (target_port as u32) << 24;  // root hub port number in bits 31:24
+
+    // Write to Input Context Slot Context at offset ctx_stride.
+    let input_slot_base = (input_ctx_va + ctx_stride) as *mut u32;
+    unsafe {
+        core::ptr::write_volatile(input_slot_base.add(0), slot_dw0);
+        core::ptr::write_volatile(input_slot_base.add(1), slot_dw1);
+    }
+    // Write to Device Context Slot Context at offset 0.
+    let dev_slot_base = device_ctx_va as *mut u32;
+    unsafe {
+        core::ptr::write_volatile(dev_slot_base.add(0), slot_dw0);
+        core::ptr::write_volatile(dev_slot_base.add(1), slot_dw1);
+    }
+    serial_println!("[sexusb.xhci.addr_ctx.slot.ok]");
+
+    // --- EP0 Context ---
+    // DW0: bits 31:16 = Max Packet Size
+    // DW1: bits 3:0 = CErr (3), bits 5:3 = EP Type (010b=2 for Control)
+    // DW2: TR Dequeue Pointer Low bits 31:4 + DCS bit 0
+    // DW3: TR Dequeue Pointer High bits 31:0
+    const CERR_DEFAULT: u32 = 3;
+    const EP_TYPE_CTRL_SHIFT: u32 = 3;
+    const EP_TYPE_CTRL_VAL: u32 = 2;  // 010b = Control (XHCI spec 6.2.3)
+    const DCS_INITIAL: u64 = 1;
+
+    // Max Packet Size per port speed (pre-descriptor boot values).
+    // LS=8, FS=8, HS=64, SS=512. Unknown speed => log bad + park.
+    let max_packet_size: u32 = match port_speed {
+        0 => 8,     // Full Speed  (12 Mbps, pre-descriptor MPS=8)
+        1 => 8,     // Low Speed   (1.5 Mbps)
+        2 => 64,    // High Speed  (480 Mbps)
+        3 => 512,   // Super Speed (5 Gbps)
+        _ => {
+            serial_println!("[sexusb.xhci.addr_ctx.ep0.speed.unknown.bad] port_speed={}", port_speed);
+            loop { sys_yield(); }
+        }
+    };
+
+    let ep0_dw0 = max_packet_size << 16;
+    let ep0_dw1 = (EP_TYPE_CTRL_VAL << EP_TYPE_CTRL_SHIFT) | CERR_DEFAULT;
+    let ep0_tr_dequeue = ep0_ring_phys | DCS_INITIAL;
+    let ep0_dw2 = (ep0_tr_dequeue & 0xFFFF_FFFF) as u32;
+    let ep0_dw3 = (ep0_tr_dequeue >> 32) as u32;
+
+    // Write to Input Context EP0 Context at offset ctx_stride * 2.
+    let input_ep0_base = (input_ctx_va + ctx_stride * 2) as *mut u32;
+    unsafe {
+        core::ptr::write_volatile(input_ep0_base.add(0), ep0_dw0);
+        core::ptr::write_volatile(input_ep0_base.add(1), ep0_dw1);
+        core::ptr::write_volatile(input_ep0_base.add(2), ep0_dw2);
+        core::ptr::write_volatile(input_ep0_base.add(3), ep0_dw3);
+    }
+    // Write to Device Context EP0 Context at offset ctx_stride.
+    let dev_ep0_base = (device_ctx_va + ctx_stride) as *mut u32;
+    unsafe {
+        core::ptr::write_volatile(dev_ep0_base.add(0), ep0_dw0);
+        core::ptr::write_volatile(dev_ep0_base.add(1), ep0_dw1);
+        core::ptr::write_volatile(dev_ep0_base.add(2), ep0_dw2);
+        core::ptr::write_volatile(dev_ep0_base.add(3), ep0_dw3);
+    }
+    serial_println!("[sexusb.xhci.addr_ctx.ep0.ok]");
+
+    // --- DCBAA ---
+    // Validate slot_id < max_slots from HCSPARAMS1 bits 31:24.
+    let max_slots: u32 = (hcsp1 >> 24) & 0xFF;
+    if en_slot_id == 0 || en_slot_id >= max_slots {
+        serial_println!("[sexusb.xhci.addr_ctx.dcbaa.slot.bad] slot={} max_slots={}", en_slot_id, max_slots);
+        loop { sys_yield(); }
+    }
+    // slot_id is 1-indexed. DCBAA entries are 8 bytes each.
+    let dcbaa_entry_ptr = (dcbaa_va + (en_slot_id as u64) * 8) as *mut u64;
+    unsafe {
+        core::ptr::write_volatile(dcbaa_entry_ptr, device_ctx_phys);
+    }
+    serial_println!("[sexusb.xhci.addr_ctx.dcbaa.ok]");
+
+    serial_println!("[sexusb.xhci.addr_ctx.layout.ok]");
+
     loop { sys_yield(); }
 }
