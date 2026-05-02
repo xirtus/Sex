@@ -5,7 +5,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use sex_pdx::{
-    pdx_call, pdx_try_listen, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
+    pdx_call, pdx_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
     SLOT_DISPLAY, SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
     SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
 };
@@ -309,10 +309,14 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk-shell] Boot focus set to surface 100");
 
     loop {
+        // Runtime containment: park without syscall while null-jump root cause is isolated.
+        core::hint::spin_loop();
+        continue;
+
         let mut mutated = false;
 
-        while let Some(msg) = pdx_try_listen() {
-            match msg.type_id {
+        let msg = pdx_listen_raw(0);
+        match msg.type_id {
                 OP_SHELL_BIND_BUFFER => {
                     let buffer_handle = msg.arg0;
                     serial_println!("[silk-shell] Binding buffer {:#x} to sexdrive window", buffer_handle);
@@ -1089,9 +1093,8 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
-                _ => {
-                    // pdx_reply(ERR_CAP_INVALID); // Only reply if it was a call
-                }
+            _ => {
+                // pdx_reply(ERR_CAP_INVALID); // Only reply if it was a call
             }
         }
 
