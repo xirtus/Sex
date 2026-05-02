@@ -1035,3 +1035,60 @@ SEXOS_QEMU_DISPLAY=gtk-grab SEXUSB_QEMU_DEVICE=mouse ./dev.sh run
 - No Rust/kernel/ABI/cap changes.
 - No changes to `run-nographic`, build, or ISO generation.
 - `SEXUSB_QEMU_DEVICE` selector is independent (unchanged).
+
+## QEMU_MOUSE_INPUT_INJECTION_PROOF_V1
+
+### Problem
+Human SDL/GTK input is unreliable/idle-only in current environment.
+usb-mouse path delivers repeated reports but all show `buttons=0x0 dx=0 dy=0`.
+Need deterministic mouse movement/click proof before changing OS HID code.
+
+### Solution
+Added QMP monitor socket + Python injection script (dev infra only).
+No Rust/kernel/ABI/cap changes.
+
+### Changes
+- **`dev.sh`**: When `SEXOS_QEMU_INPUT_INJECT=1` is set, adds
+  `-qmp unix:/tmp/sexos-qmp.sock,server=on,wait=off` to the QEMU command line.
+  Default behavior (unset) is unchanged.
+- **`scripts/qemu_mouse_inject.py`**: Python script that connects to the QMP
+  socket and sends HMP `mouse_move`/`mouse_button` commands. Supports:
+  - `--proof` (default): standard proof sequence (move, click, move)
+  - `--move DX DY`, `--click`, `--btn-down`, `--btn-up` for custom sequences
+
+### Mechanism
+QEMP QMP `human-monitor-command` wraps HMP `mouse_move` and `mouse_button`,
+which inject events into the QEMU input hub. These events propagate to all
+registered input handlers, including `usb-mouse`. The usb-mouse handler
+generates HID reports delivered via the interrupt-IN endpoint, which sexusb
+polls and forwards through sexinput to silk-shell.
+
+### Usage
+```bash
+# Terminal 1: start QEMU with QMP socket
+SEXOS_QEMU_INPUT_INJECT=1 SEXOS_QEMU_DISPLAY=sdl SEXUSB_QEMU_DEVICE=mouse \
+  SEXUSB_XHCI_TRACE=1 ./dev.sh run 2>/tmp/inject.trace | tee /tmp/inject.log
+
+# Terminal 2: after desktop appears, inject proof sequence
+python3 scripts/qemu_mouse_inject.py --proof
+
+# Verify:
+grep -aE "nonzero|buttons=0x[0-9a-f][1-9a-f]|dx=-|dx=[1-9]|dy=-|dy=[1-9]" \
+  /tmp/inject.log | head -60
+```
+
+### Pass Criteria
+- Injected `dx`/`dy` values reach sexusb HID mouse decode.
+- Shell pointer state reflects movement.
+- `click_focus.down` / `click_focus.hit.send` markers appear if click lands
+  on a surface.
+
+### Failure Mode
+- QMP injected events only affect PS/2/display layer and do not reach usb-mouse.
+- If this occurs: document failure and recommend `USB_TABLET_HID_PROBE_V1`.
+
+### Scope
+- Dev infra only: `dev.sh` + `scripts/qemu_mouse_inject.py` + this doc.
+- No Rust, no kernel/ABI/cap edits.
+- No sexusb/silk-shell/sexdisplay logic changes.
+- No change to default `./dev.sh run` behavior.

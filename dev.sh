@@ -32,6 +32,13 @@ case "$DISPLAY_MODE" in
 esac
 echo "QEMU display mode: $DISPLAY_MODE"
 
+# QMP monitor socket for deterministic input injection (dev infra only).
+QMP_ARG=""
+if [ -n "$SEXOS_QEMU_INPUT_INJECT" ]; then
+    QMP_ARG="-qmp unix:/tmp/sexos-qmp.sock,server=on,wait=off"
+    echo "QMP monitor: /tmp/sexos-qmp.sock"
+fi
+
 case "$CMD" in
   run)
     qemu-system-x86_64 \
@@ -43,7 +50,8 @@ case "$CMD" in
       $USB_DEVICE_ARG \
       $TRACE_ARGS \
       -serial stdio \
-      $DISPLAY_ARG
+      $DISPLAY_ARG \
+      $QMP_ARG
     ;;
   run-nographic)
     qemu-system-x86_64 \
