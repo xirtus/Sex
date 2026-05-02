@@ -74,3 +74,4 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 - Runtime `run-nographic` blocked by qemu stdio multi-device conflict, not by build.
 - `sex-pdx` and `silk-shell` were inspect-only; no ABI or policy edits.
 - POINTER_DRAG_PROOF_V1 note: in headless/CI hosts, `./dev.sh run` may fail with `SDL(No available video device)` and `run-nographic` may fail with `-serial stdio` multi-device conflict; treat as environment runtime blocker, not pointer-path regression.
+- SILK_DE_BAR_CONTRACT_LOCK_V1 complete: shared bar contract constants are now locked in `silkbar-model`, and both `silkbar` producer + `sexdisplay` renderer perform startup contract validation with bounded `*.ok/*.bad` markers. Build passed; GUI runtime still blocked in this host by SDL no-video device.
