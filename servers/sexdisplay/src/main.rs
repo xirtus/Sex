@@ -399,11 +399,8 @@ fn handle_primary_fb(ptr: u64, packed: u64) -> bool {
     true
 }
 
-fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) {
-    // Clock is driven locally in sexdisplay during stabilization.
-    if arg0 as u32 == UpdateKind::SetClock as u32 {
-        return;
-    }
+fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> bool {
+    let clock_update = arg0 as u32 == UpdateKind::SetClock as u32;
     // arg0 = UpdateKind, arg1 = (index << 32) | a, arg2 = b
     let update = SilkBarUpdate {
         kind: arg0 as u32,
@@ -412,6 +409,7 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) {
         b: arg2 as u32,
     };
     apply_update(bar, update);
+    clock_update
 }
 
 #[no_mangle]
@@ -422,6 +420,7 @@ pub extern "C" fn _start() -> ! {
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
     let mut last_clock_second = sex_pdx::get_ticks() / 62;
+    let mut clock_from_silkbar = false;
     let mut fb_live = false;
 
     // 1. Render immediately with fallback — visible before any IPC
@@ -430,7 +429,7 @@ pub extern "C" fn _start() -> ! {
     // 2. Listen for runtime FB handoff and SilkBar updates
     loop {
         let sec_now = sex_pdx::get_ticks() / 62;
-        if sec_now > last_clock_second {
+        if !clock_from_silkbar && sec_now > last_clock_second {
             last_clock_second = sec_now;
             bar.clock_hh = ((sec_now / 3600) % 24) as u8;
             bar.clock_mm = ((sec_now / 60) % 60) as u8;
@@ -446,9 +445,12 @@ pub extern "C" fn _start() -> ! {
         };
         match msg.type_id {
             silkbar_model::OP_SILKBAR_UPDATE => {
-                handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
-                // Keep clock repaint cadence strictly on second ticks to avoid
-                // startup flicker from bursty non-clock silkbar updates.
+                if handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2) {
+                    clock_from_silkbar = true;
+                    if fb_live {
+                        unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+                    }
+                }
             }
             0x11 => { // OP_PRIMARY_FB
                 if handle_primary_fb(msg.arg0, msg.arg1) {
