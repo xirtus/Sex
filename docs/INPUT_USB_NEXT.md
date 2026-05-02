@@ -848,13 +848,26 @@ No `[sexusb.xhci.eval_ctx.verify.bad]`.
 - Minimal bounded shape scan only (no full HID parser): detects
   `05 01`, `09 02`, `A1 01`, `09 30`, `09 31`.
 
+### USB_XHCI_SET_CONFIGURATION_PROOF_V1
+- Implemented in `servers/sexusb/src/main.rs` directly after HID report proof.
+- Uses `bConfigurationValue` read from config descriptor offset `5`.
+- Issues EP0 `SET_CONFIGURATION` request with:
+  `bmRequestType=0x00`, `bRequest=0x09`, `wValue=bConfigurationValue`,
+  `wIndex=0`, `wLength=0`.
+- Transfer shape is setup+status only (no data stage), preserving:
+  SETUP DW3 bit6 inline marker and STATUS DW3 bit5 IOC.
+- Bounded transfer-event wait and strict residue check (`residue==0` required).
+- Added markers:
+  `[sexusb.xhci.set_config.start]`,
+  `[sexusb.xhci.set_config.event.ok] actual=0 residue=0`,
+  `[sexusb.xhci.set_config.complete.ok]`.
+- QEMU/xHCI quirk captured: no-data control transfer status stage uses `DIR=IN`.
+
 ### Non-goals preserved
-- No SET_CONFIGURATION
 - No Configure Endpoint command
 - No interrupt transfers
 - No sexinput routing
 - No IRQ handler (stay with polling)
 
 ### Next
-- `USB_XHCI_SET_CONFIGURATION_PROOF_V1`
 - `USB_XHCI_INTERRUPT_IN_POLL_PROOF_V1`

@@ -1889,6 +1889,12 @@ pub extern "C" fn _start() -> ! {
 
     serial_println!("[sexusb.xhci.config.walk.done]");
 
+    let cfg_value = unsafe { core::ptr::read_volatile(walk_buf.add(5)) };
+    if cfg_value == 0 {
+        serial_println!("[sexusb.xhci.config.value.bad] value=0");
+        loop { sys_yield(); }
+    }
+
     // Suppress unused warnings: these variables are informational captures
     // for future phases (HID report fetch, interrupt transfer setup).
     let _ = (hid_interface_number, intr_ep_addr, intr_ep_mps, intr_ep_interval);
@@ -2061,6 +2067,100 @@ pub extern "C" fn _start() -> ! {
     }
 
     serial_println!("[sexusb.xhci.hid.report_desc.complete.ok] len={}", hid_actual_len);
+
+    // ===== SET_CONFIGURATION =====
+    // Phase: USB_XHCI_SET_CONFIGURATION_PROOF_V1
+    serial_println!("[sexusb.xhci.set_config.start] value={}", cfg_value);
+
+    let setcfg_deq_dw2 = unsafe { core::ptr::read_volatile(cfg_deq_ep0_base.add(2)) };
+    let setcfg_deq_dw3 = unsafe { core::ptr::read_volatile(cfg_deq_ep0_base.add(3)) };
+    let setcfg_deq_ptr = ((setcfg_deq_dw3 as u64) << 32) | (setcfg_deq_dw2 as u64);
+    let setcfg_deq_dcs = setcfg_deq_ptr & 1;
+    let setcfg_deq_phys = setcfg_deq_ptr & !0xFu64;
+    let setcfg_deq_index = (setcfg_deq_phys.wrapping_sub(ep0_ring_phys)) / 16;
+
+    if setcfg_deq_dcs != 1
+        || setcfg_deq_phys < ep0_ring_phys
+        || setcfg_deq_phys >= ep0_ring_phys.wrapping_add(PAGE_SIZE)
+        || setcfg_deq_phys % 16 != 0
+    {
+        serial_println!("[sexusb.xhci.set_config.deq.bad] ptr={:#x} dcs={}", setcfg_deq_ptr, setcfg_deq_dcs);
+        loop { sys_yield(); }
+    }
+    if setcfg_deq_index + 2 >= PAGE_SIZE / TRB_SIZE {
+        serial_println!("[sexusb.xhci.set_config.deq.ring.bad] idx={}", setcfg_deq_index);
+        loop { sys_yield(); }
+    }
+
+    // SETUP: bmReqType=0x00, bReq=0x09, wValue=bConfigurationValue, wIndex=0, wLength=0
+    let setcfg_setup_d3 = (TRB_TYPE_SETUP_STAGE << 10)
+        | (0u32 << 16)  // TRT=NO DATA
+        | (1u32 << 6)   // QEMU nec-xhci inline setup marker
+        | ep0_cycle;
+    trb_write_volatile(
+        ep0_ring_va,
+        setcfg_deq_index,
+        ((cfg_value as u32) << 16) | 0x0900u32,
+        0u32,
+        8u32,
+        setcfg_setup_d3,
+    );
+
+    let setcfg_status_d3 = (TRB_TYPE_STATUS_STAGE << 10)
+        | (1u32 << 16)  // DIR=IN for no-data control transfer status
+        | (1u32 << 5)   // IOC=1
+        | ep0_cycle;
+    trb_write_volatile(ep0_ring_va, setcfg_deq_index + 1, 0, 0, 0, setcfg_status_d3);
+    trb_write_volatile(ep0_ring_va, setcfg_deq_index + 2, 0, 0, 0, ep0_cycle ^ 1);
+
+    ep0_idx = setcfg_deq_index + 3;
+    let _ = (ep0_idx,);
+
+    mmio_write32(db_base, en_slot_id as u64 * 4, 1u32);
+
+    let mut setcfg_ok = false;
+    let mut setcfg_residue: u32 = 0;
+    for _ in 0..POLL_BUDGET {
+        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        if (ev_d3 & 1) == (ev_dcs as u32) {
+            let ev_type = (ev_d3 >> 10) & 0x3F;
+            if ev_type == TRB_TYPE_TRANSFER_EVENT {
+                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                let cc = (ev_d2 >> 24) & 0xFF;
+                setcfg_residue = ev_d2 & 0xFFFFFF;
+                let slot = (ev_d3 >> 24) & 0xFF;
+                let ep = (ev_d3 >> 16) & 0x1F;
+                if cc == TRB_CC_SUCCESS && slot == en_slot_id && ep == 1 {
+                    setcfg_ok = true;
+                } else {
+                    serial_println!("[sexusb.xhci.set_config.event.bad] cc={} slot={} ep={}", cc, slot, ep);
+                }
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS {
+                    ev_idx = 0;
+                    ev_dcs ^= 1;
+                }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+            }
+            break;
+        }
+        sys_yield();
+    }
+
+    if !setcfg_ok {
+        serial_println!("[sexusb.xhci.set_config.timeout.bad]");
+        loop { sys_yield(); }
+    }
+    if setcfg_residue != 0 {
+        serial_println!("[sexusb.xhci.set_config.residue.bad] residue={}", setcfg_residue);
+        loop { sys_yield(); }
+    }
+
+    serial_println!("[sexusb.xhci.set_config.event.ok] actual=0 residue=0");
+    serial_println!("[sexusb.xhci.set_config.complete.ok]");
     serial_println!("[sexusb.xhci.config.complete.ok]");
 
     loop { sys_yield(); }
