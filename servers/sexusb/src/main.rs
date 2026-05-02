@@ -105,6 +105,26 @@ fn wait_until(base: u64, offset: u64, mask: u32, expect_set: bool, spins: usize)
     false
 }
 
+struct BootMouseReport {
+    buttons: u8,
+    dx: i8,
+    dy: i8,
+    wheel: i8,
+}
+
+fn decode_boot_mouse_report(buf: &[u8], len: usize) -> Option<BootMouseReport> {
+    if len < 3 {
+        return None;
+    }
+    let wheel = if len >= 4 { buf[3] as i8 } else { 0 };
+    Some(BootMouseReport {
+        buttons: buf[0],
+        dx: buf[1] as i8,
+        dy: buf[2] as i8,
+        wheel,
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     const PAGE_SIZE: u64 = 4096;
@@ -2432,6 +2452,22 @@ pub extern "C" fn _start() -> ! {
         "[sexusb.xhci.intr_in.report.bytes] bytes=[{:#x},{:#x},{:#x},{:#x}]",
         rb0, rb1, rb2, rb3
     );
+    serial_println!("[sexusb.hid.mouse.decode.start] len={}", intr_actual);
+    let report_bytes = [rb0, rb1, rb2, rb3];
+    if let Some(decoded) = decode_boot_mouse_report(&report_bytes, intr_actual as usize) {
+        serial_println!(
+            "[sexusb.hid.mouse.decode.ok] buttons={:#x} dx={} dy={} wheel={}",
+            decoded.buttons,
+            decoded.dx,
+            decoded.dy,
+            decoded.wheel
+        );
+        if decoded.buttons == 0 && decoded.dx == 0 && decoded.dy == 0 && decoded.wheel == 0 {
+            serial_println!("[sexusb.hid.mouse.decode.zero.ok]");
+        }
+    } else {
+        serial_println!("[sexusb.hid.mouse.decode.bad] len={}", intr_actual);
+    }
     serial_println!("[sexusb.xhci.intr_in.poll.complete.ok]");
     serial_println!("[sexusb.xhci.config.complete.ok]");
 

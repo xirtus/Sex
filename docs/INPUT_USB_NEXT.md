@@ -887,6 +887,21 @@ No `[sexusb.xhci.eval_ctx.verify.bad]`.
   `[sexusb.xhci.intr_in.report.bytes]`,
   `[sexusb.xhci.intr_in.poll.complete.ok]`.
 
+### USB_HID_MOUSE_LOCAL_DECODE_PROOF_V1
+- Local-only decode in `servers/sexusb/src/main.rs`; no PDX send.
+- Added bounded helper:
+  `decode_boot_mouse_report(buf: &[u8], len: usize) -> Option<BootMouseReport>`.
+- Decode contract:
+  `buttons=byte0`, `dx=byte1 as i8`, `dy=byte2 as i8`,
+  `wheel=byte3 as i8 when len>=4 else 0`.
+- Validation:
+  reject `len < 3`, accept `len >= 3`, no allocation.
+- Added markers:
+  `[sexusb.hid.mouse.decode.start]`,
+  `[sexusb.hid.mouse.decode.ok]`,
+  `[sexusb.hid.mouse.decode.zero.ok]`,
+  `[sexusb.hid.mouse.decode.bad]`.
+
 ### Non-goals preserved
 - No sexinput routing
 - No IRQ handler (stay with polling)
