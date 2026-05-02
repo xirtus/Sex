@@ -157,6 +157,46 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 - Build gate passed: `./scripts/entrypoint_build.sh`.
 - Runtime host blocker persists: `./dev.sh run` failed with `Could not initialize SDL(No available video device)`.
 
+## USB_XHCI_RING_STATE_MACHINE_CLEANUP_V1
+
+### Changes
+- Replaced hardcoded TRB indices (0 for NOOP, 1 for Enable Slot) with explicit state machine:
+  - `cmd_idx: u64` — next command ring slot to write
+  - `cmd_cycle: u32` — producer cycle bit (matches CRCR RCS, starts 1, toggles per command)
+  - `ev_idx: u64` — next event ring slot to consume
+  - `ev_dcs: u64` — event ring dequeue cycle state (starts 1 per spec 5.5.2.3.2)
+- Fixed ERDP initialization: added `| 1u64` for DCS=1 (was 0, violating spec)
+- Fixed cycle-stop marker bit: now uses `cmd_cycle` (same as command TRB), not the opposite bit.
+  Correctness trace: command at cmd_idx with cycle=cmd_cycle → CRCS toggles to !cmd_cycle after
+  consumption → stop marker at cmd_idx+1 with cycle=cmd_cycle causes cycle stop (cycle != CRCS).
+- Added ERDP advance after each consumed event:
+  `mmio_write64(intr0_base, XHCI_INTR_ERDP, event_ring_phys + ev_idx * 16 | ev_dcs)`
+- Added consumed event cycle-bit clear per XHCI spec 4.11.4
+- Added event ring segment wrap handling (ev_idx >= EVENT_RING_TRBS → wrap to 0, toggle DCS)
+- Added `cmd_idx += 1; cmd_cycle ^= 1;` after each command batch (NOOP and Enable Slot)
+- Removed stale event clear (`trb_write_volatile(event_ring_va, 0, 0, 0, 0, 0)`) — no longer needed
+  since event indices are tracked and advanced, not reused.
+- Removed non-completion event branch (else-case) — only poll for CMD_COMPLETION_EVENT; any other
+  event type at the tracked ev_idx is unexpected and should timeout.
+
+### Non-goals preserved
+- No Address Device
+- No HID parsing or routing
+- No IRQ handler
+- No kernel/ABI edits
+- No sexinput routing
+- No sexlink
+
+### Build
+- Build gate passed: `./scripts/entrypoint_build.sh`.
+- Two expected warnings: `cmd_idx`/`cmd_cycle` assigned but never read on final advance (values
+  tracked correctly for the phase but no further commands submitted after Enable Slot).
+
+### Next
+- `USB_XHCI_ADDRESS_DEVICE_CONTEXT_LAYOUT_PROOF_V1`: allocate Input Context, Device Context,
+  EP0 transfer ring pages. Write/validate layouts with correct XHCI stride (CSZ=0 → 32 bytes).
+  No doorbell.
+
 ## RULE: BootInfoFrameAllocator metadata overlap (GP at LockFreeBuddyAllocator::alloc)
 
 **Symptom**: QEMU black screen, EXCEPTION: GP FAULT at RIP 0xffffffff80203bdb in kernel allocator. Crash PD is *not* sexusb but a different PD later in scheduler rotation (e.g., sexinput). Triggered by sexusb binary growing past a page boundary (extra ELF segment page triggers a page-table allocation from the conflicting frame pool).
@@ -165,4 +205,20 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 
 **Fix**: Advance frame_allocator.allocate_frame() by metadata_pages after seeding the buddy allocator (see kernel/src/memory/manager.rs init()).
 
-**XHCI CRCS rule**: After each Command TRB is consumed, XHCI toggles Command Ring Cycle State (CRCS). Always write a cycle-stop marker (TRB with cycle=opposite of current CRCS) after the last valid TRB in a batch. Second-batch commands use cycle=0 (matching CRCS after first TRB consumed).
+**XHCI CRCS rule**: After each Command TRB is consumed, XHCI toggles Command Ring Cycle State (CRCS). Write a cycle-stop marker at cmd_idx+1 with the SAME cycle as the command TRB (cmd_cycle). After the controller consumes the command TRB, CRCS toggles to !cmd_cycle, making the stop marker's cycle=cmd_cycle cause a cycle stop (cycle != CRCS). Do NOT write the stop marker with the opposite cycle — that would match the toggled CRCS and be consumed as a Reserved TRB.
+
+## CORRECTED XHCI SPEC FACTS (post-Audit V1)
+
+**Context stride**: XHCI context array element stride = 32 bytes if CSZ=0, 64 bytes if CSZ=1 (HCCPARAMS1 bit 2). NOT 16/32. Slot/EP0 context fields occupy the first 16 bytes of each stride; remaining bytes are reserved.
+
+**Input Control Context**: One full context-sized block (32 or 64 bytes), not 8 bytes. Only DW0 (Drop) and DW1 (Add) are meaningful; rest reserved. Slot Context starts at ICC stride end, not offset 8.
+
+**EP0 TR Dequeue Pointer**: MUST point to a valid EP0 transfer ring (allocated page, zeroed, 64-byte aligned). Zero is illegal. DCS bit must match cycle state. Allocate ring before Address Device even though no transfers are submitted yet.
+
+**EP Type for Control**: XHCI spec 6.2.3: EP Type bits 15:14 = 00 (Control, bidirectional). Verify against current spec before writing.
+
+**Context Entries**: Number of endpoint contexts following slot context. For Slot+EP0, set to 1 (EP0 is context index 1). The controller checks this to determine how many contexts to validate.
+
+**Event ring consumption**: Each consumed event MUST advance ERDP. After consuming index N, write ERDP = event_ring_phys + (N+1)*16. On wrap past segment end, toggle DCS in the ERDP write. Otherwise controller won't write new events.
+
+**Command ring**: Track cmd_enqueue_index and cmd_producer_cycle explicitly. Write cycle-stop marker after each doorbell batch. Do not hardcode indices across phases.

@@ -288,19 +288,28 @@ pub extern "C" fn _start() -> ! {
     mmio_write32(intr0_base, XHCI_INTR_ERSTSZ, ERST_ENTRIES as u32);
     mmio_write64(intr0_base, XHCI_INTR_ERSTBA, erst_phys);
     serial_println!("[sexusb.xhci.erst.write.ok]");
-    mmio_write64(intr0_base, XHCI_INTR_ERDP, event_ring_phys);
+    mmio_write64(intr0_base, XHCI_INTR_ERDP, event_ring_phys | 1u64); // DCS=1
     serial_println!("[sexusb.xhci.erdp.write.ok]");
     serial_println!("[sexusb.xhci.ring.proof.ok]");
 
-    serial_println!("[sexusb.xhci.cmd.noop.start]");
-    // Command NOOP TRB at index 0. d3: type in [15:10], cycle in bit0.
-    let noop_d3 = (TRB_TYPE_NOOP_CMD << 10) | 1u32;
-    trb_write_volatile(cmd_ring_va, 0, 0, 0, 0, noop_d3);
+    // Command/event ring state machine: explicit tracked indices and cycle bits.
+    // No hardcoded TRB indices. cmd_cycle matches CRCR RCS (starts 1).
+    // ev_idx tracks next event slot to consume; ev_dcs matches ERDP DCS (starts 1).
+    let mut cmd_idx: u64 = 0;
+    let mut cmd_cycle: u32 = 1;
+    let mut ev_idx: u64 = 0;
+    let mut ev_dcs: u64 = 1;
 
-    // CRCS starts at 1 (set by CRCR RCS=1). After Noop consumed, CRCS toggles to 0.
-    // Write a cycle-stop marker at index 1 (just cycle=1, rest zero). After CRCS→0,
-    // controller sees cycle(1) != CRCS(0) and stops — avoids processing zeroed TRBs.
-    trb_write_volatile(cmd_ring_va, 1, 0, 0, 0, 1u32);
+    // ===== NOOP =====
+    serial_println!("[sexusb.xhci.cmd.noop.start]");
+
+    // Write NOOP TRB at cmd_idx with cmd_cycle.
+    let noop_d3 = (TRB_TYPE_NOOP_CMD << 10) | cmd_cycle;
+    trb_write_volatile(cmd_ring_va, cmd_idx, 0, 0, 0, noop_d3);
+    // Cycle-stop at cmd_idx+1 with cmd_cycle (same as command). After the controller
+    // consumes the command TRB, CRCS toggles to !cmd_cycle, making TRB at cmd_idx+1
+    // with cycle=cmd_cycle cause a cycle stop (cycle != CRCS).
+    trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle);
     serial_println!("[sexusb.xhci.cmd.noop.trb.ok]");
 
     let dboff_raw = mmio_read32(cap_base, XHCI_CAP_DBOFF);
@@ -312,87 +321,96 @@ pub extern "C" fn _start() -> ! {
     mmio_write32(db_base, 0, 0u32); // Doorbell 0, target 0 (command ring)
     serial_println!("[sexusb.xhci.cmd.noop.doorbell.ok]");
 
-    let mut seen_completion = false;
-    let mut completion_ok = false;
+    // Consume command completion event at ev_idx.
+    let mut noop_ok = false;
     for _ in 0..POLL_BUDGET {
-        let ev_d3 = trb_read_dword(event_ring_va, 0, 3);
-        let ev_cycle = ev_d3 & 1;
-        if ev_cycle == 1 {
+        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        if (ev_d3 & 1) == (ev_dcs as u32) {
             let ev_type = (ev_d3 >> 10) & 0x3F;
             if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
-                seen_completion = true;
-                serial_println!("[sexusb.xhci.cmd.noop.event.seen]");
-                let ev_d2 = trb_read_dword(event_ring_va, 0, 2);
+                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
                 let cc = (ev_d2 >> 24) & 0xFF;
-                completion_ok = cc == TRB_CC_SUCCESS;
-                break;
-            } else {
-                // Event seen but not command completion.
-                seen_completion = true;
-                break;
+                noop_ok = cc == TRB_CC_SUCCESS;
+                serial_println!("[sexusb.xhci.cmd.noop.event.seen]");
+                // Clear consumed event cycle bit (spec 4.11.4)
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // Advance event dequeue pointer and update ERDP.
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS {
+                    ev_idx = 0;
+                    ev_dcs ^= 1; // toggle DCS on segment wrap
+                }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write64(intr0_base, XHCI_INTR_ERDP, new_erdp | ev_dcs);
             }
+            break;
         }
         sys_yield();
     }
 
-    if !seen_completion {
-        serial_println!("[sexusb.xhci.cmd.noop.timeout.bad]");
-    } else if completion_ok {
+    if noop_ok {
         serial_println!("[sexusb.xhci.cmd.noop.complete.ok]");
     } else {
         serial_println!("[sexusb.xhci.cmd.noop.complete.bad]");
+        loop { sys_yield(); }
     }
 
-    serial_println!("[sexusb.xhci.enable_slot.start]");
-    // Clear event slot to avoid stale completion decode on reused index 0 polling.
-    trb_write_volatile(event_ring_va, 0, 0, 0, 0, 0);
+    // Advance command ring producer state after TRB consumed.
+    cmd_idx += 1;
+    cmd_cycle ^= 1;
 
-    // Enable Slot at index 1. CRCS is now 0 (toggled after Noop consumed),
-    // so use cycle=0 to match. After Enable Slot is consumed, CRCS toggles
-    // back to 1, and index 2 (still zeroed, cycle=0) becomes the stop.
-    let enable_slot_d3 = (TRB_TYPE_ENABLE_SLOT_CMD << 10) | 0u32;
-    trb_write_volatile(cmd_ring_va, 1, 0, 0, 0, enable_slot_d3);
+    // ===== Enable Slot =====
+    serial_println!("[sexusb.xhci.enable_slot.start]");
+
+    // Write Enable Slot TRB at cmd_idx with cmd_cycle.
+    let enable_slot_d3 = (TRB_TYPE_ENABLE_SLOT_CMD << 10) | cmd_cycle;
+    trb_write_volatile(cmd_ring_va, cmd_idx, 0, 0, 0, enable_slot_d3);
+    // Cycle-stop at cmd_idx+1 with cmd_cycle.
+    trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle);
     serial_println!("[sexusb.xhci.enable_slot.trb.ok]");
 
     mmio_write32(db_base, 0, 0u32); // Doorbell 0, target 0 (command ring)
     serial_println!("[sexusb.xhci.enable_slot.doorbell.ok]");
 
-    let mut en_seen_completion = false;
-    let mut en_completion_ok = false;
+    // Consume command completion event at ev_idx.
+    let mut en_ok = false;
     let mut en_slot_id: u32 = 0;
     for _ in 0..POLL_BUDGET {
-        let ev_d3 = trb_read_dword(event_ring_va, 0, 3);
-        let ev_cycle = ev_d3 & 1;
-        if ev_cycle == 1 {
+        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        if (ev_d3 & 1) == (ev_dcs as u32) {
             let ev_type = (ev_d3 >> 10) & 0x3F;
             if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
-                en_seen_completion = true;
-                serial_println!("[sexusb.xhci.enable_slot.event.seen]");
-                let ev_d2 = trb_read_dword(event_ring_va, 0, 2);
+                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
                 let cc = (ev_d2 >> 24) & 0xFF;
-                en_completion_ok = cc == TRB_CC_SUCCESS;
+                en_ok = cc == TRB_CC_SUCCESS;
                 en_slot_id = (ev_d3 >> 24) & 0xFF;
-                break;
-            } else {
-                en_seen_completion = true;
-                break;
+                serial_println!("[sexusb.xhci.enable_slot.event.seen]");
+                // Clear consumed event cycle bit (spec 4.11.4)
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // Advance event dequeue pointer and update ERDP.
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS {
+                    ev_idx = 0;
+                    ev_dcs ^= 1; // toggle DCS on segment wrap
+                }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write64(intr0_base, XHCI_INTR_ERDP, new_erdp | ev_dcs);
             }
+            break;
         }
         sys_yield();
     }
 
-    if !en_seen_completion {
-        serial_println!("[sexusb.xhci.enable_slot.timeout.bad]");
-    } else if en_completion_ok {
+    if en_ok && en_slot_id != 0 {
         serial_println!("[sexusb.xhci.enable_slot.complete.ok]");
-        if en_slot_id != 0 {
-            serial_println!("[sexusb.xhci.enable_slot.slot.ok] {}", en_slot_id);
-        } else {
-            serial_println!("[sexusb.xhci.enable_slot.complete.bad]");
-        }
+        serial_println!("[sexusb.xhci.enable_slot.slot.ok] {}", en_slot_id);
     } else {
         serial_println!("[sexusb.xhci.enable_slot.complete.bad]");
     }
+
+    // Advance command ring producer state after TRB consumed.
+    cmd_idx += 1;
+    cmd_cycle ^= 1;
 
     loop { sys_yield(); }
 }
