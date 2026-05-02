@@ -1755,6 +1755,7 @@ pub extern "C" fn _start() -> ! {
     let mut walk_off: u64 = 0;
     let mut inside_hid_mouse: bool = false;
     let mut found_hid_mouse: bool = false;
+    let mut hid_interface_number: u8 = 0;
     let mut intr_ep_addr: u8 = 0;
     let mut intr_ep_mps: u16 = 0;
     let mut intr_ep_interval: u8 = 0;
@@ -1778,14 +1779,16 @@ pub extern "C" fn _start() -> ! {
         match b_type {
             4 => { // INTERFACE descriptor
                 if b_len >= 8 {
+                    let b_intf_num = unsafe { core::ptr::read_volatile(walk_buf.add(walk_off as usize + 2)) };
                     let b_class    = unsafe { core::ptr::read_volatile(walk_buf.add(walk_off as usize + 5)) };
                     let b_subclass = unsafe { core::ptr::read_volatile(walk_buf.add(walk_off as usize + 6)) };
                     let b_protocol = unsafe { core::ptr::read_volatile(walk_buf.add(walk_off as usize + 7)) };
                     inside_hid_mouse = (b_class == 0x03) && (b_subclass == 0x01) && (b_protocol == 0x02);
                     if inside_hid_mouse {
                         found_hid_mouse = true;
-                        serial_println!("[sexusb.xhci.config.hid_intf] off={} class=3 subclass=1 proto=2",
-                            walk_off);
+                        hid_interface_number = b_intf_num;
+                        serial_println!("[sexusb.xhci.config.hid_boot_mouse.found] intf={} off={}",
+                            b_intf_num, walk_off);
                     }
                 } else {
                     inside_hid_mouse = false;
@@ -1846,7 +1849,7 @@ pub extern "C" fn _start() -> ! {
 
     // Suppress unused warnings: these variables are informational captures
     // for future phases (HID report fetch, interrupt transfer setup).
-    let _ = (intr_ep_addr, intr_ep_mps, intr_ep_interval);
+    let _ = (hid_interface_number, intr_ep_addr, intr_ep_mps, intr_ep_interval);
 
     if !found_hid_mouse {
         serial_println!("[sexusb.xhci.config.no_hid.park]");
