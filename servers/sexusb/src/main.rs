@@ -957,5 +957,206 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[sexusb.xhci.eval_ctx.verify.bad] expected={} got={}", actual_mps, verify_mps);
     }
 
+    // ===== GET_DESCRIPTOR(DEVICE, 0, 0, 18) =====
+    // Phase: USB_XHCI_GET_DESCRIPTOR_FULL_18_PROOF_V1
+    // Fetch full 18-byte device descriptor using the correct EP0 MPS.
+    serial_println!("[sexusb.xhci.full18.start]");
+
+    // Read EP0 TR Dequeue Pointer from Device Context output.
+    // This tells us where the controller's dequeue pointer is after the
+    // first TD (GET_DESCRIPTOR(8)). Expected: index 3 (old stop marker).
+    // DO NOT hardcode index 3 — verify at runtime.
+    let deq_dev_ep0_base = (device_ctx_va + ctx_stride) as *const u32;
+    let deq_dw2 = unsafe { core::ptr::read_volatile(deq_dev_ep0_base.add(2)) };
+    let deq_dw3 = unsafe { core::ptr::read_volatile(deq_dev_ep0_base.add(3)) };
+    let deq_ptr = ((deq_dw3 as u64) << 32) | (deq_dw2 as u64);
+    let deq_dcs = deq_ptr & 1;
+    let deq_phys = deq_ptr & !0xFu64;
+    let deq_index = (deq_phys.wrapping_sub(ep0_ring_phys)) / 16;
+
+    if deq_dcs != 1
+        || deq_phys < ep0_ring_phys
+        || deq_phys >= ep0_ring_phys.wrapping_add(PAGE_SIZE)
+        || deq_phys % 16 != 0
+    {
+        serial_println!("[sexusb.xhci.full18.ep0_deq.bad] ptr={:#x} dcs={}", deq_ptr, deq_dcs);
+        loop { sys_yield(); }
+    }
+    // Bounds check: TD (3 TRBs + stop marker) must fit within 256-entry ring.
+    if deq_index + 3 >= PAGE_SIZE / TRB_SIZE {
+        serial_println!("[sexusb.xhci.full18.ep0_deq.bad] idx={} exceeds ring", deq_index);
+        loop { sys_yield(); }
+    }
+    serial_println!("[sexusb.xhci.full18.ep0_deq.ok] idx={} dcs={}", deq_index, deq_dcs);
+
+    // Zero descriptor buffer to prevent stale data from first fetch
+    // masquerading as valid bytes in case of short/residual.
+    unsafe { core::ptr::write_bytes(desc_data_va as *mut u8, 0, 18); }
+    serial_println!("[sexusb.xhci.full18.zero.ok]");
+
+    // Write 3-TRB chain at verified deq_index.
+    // GET_DESCRIPTOR(DEVICE, 0, 0, wLength=18):
+    //   [0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x12, 0x00]
+    // d0 = 0x0100_0680, d1 = 0x0012_0000
+
+    // Setup Stage (type=2): IDT=1, CH=1, TRT=IN, TRB Transfer Length=18.
+    let full_setup_d3 = (TRB_TYPE_SETUP_STAGE << 10)
+        | (1u32 << 16)                           // TRT=IN
+        | ep0_cycle;
+    trb_write_volatile(ep0_ring_va, deq_index,
+        0x0100_0680u32,                          // d0: bmReqType=0x80,bReq=0x06,wVal=0x0100
+        0x0012_0000u32,                          // d1: wIdx=0,wLen=18
+        (18u32 << 0)                             // TRB Transfer Length = 18 (wLength)
+            | (1u32 << 17)                       // IDT=1
+            | (1u32 << 18),                      // CH=1
+        full_setup_d3);
+
+    // Data Stage (type=3): DIR=IN, CH=1, TRB Transfer Length=18.
+    let full_data_d3 = (TRB_TYPE_DATA_STAGE << 10)
+        | (1u32 << 16)                           // DIR=IN
+        | ep0_cycle;
+    trb_write_volatile(ep0_ring_va, deq_index + 1,
+        (desc_data_phys & 0xFFFF_FFFF) as u32,
+        (desc_data_phys >> 32) as u32,
+        (18u32 << 0)                             // TRB Transfer Length = 18
+            | (1u32 << 18),                      // CH=1 (IDT=0, IOC=0, ISP=0)
+        full_data_d3);
+
+    // Status Stage (type=4): DIR=OUT, CH=0, IOC=1.
+    let full_status_d3 = (TRB_TYPE_STATUS_STAGE << 10)
+        | (0u32 << 16)                           // DIR=OUT (for control read status)
+        | ep0_cycle;
+    trb_write_volatile(ep0_ring_va, deq_index + 2,
+        0, 0,
+        1u32 << 22,                              // IOC=1
+        full_status_d3);
+
+    // Cycle-stop marker at deq_index+3 with opposite cycle.
+    trb_write_volatile(ep0_ring_va, deq_index + 3, 0, 0, 0, ep0_cycle ^ 1);
+    serial_println!("[sexusb.xhci.full18.trbs.ok]");
+
+    // Advance EP0 ring producer index past this TD.
+    ep0_idx = deq_index + 4;
+    let _ = (ep0_idx,);
+
+    // Doorbell: EP0 on slot_id. DB Target = 1 (EP0 endpoint ID).
+    mmio_write32(db_base, en_slot_id as u64 * 4, 1u32);
+    serial_println!("[sexusb.xhci.full18.doorbell.ok]");
+
+    // Consume Transfer Event (type=32) at current ev_idx.
+    let mut full_ok = false;
+    let mut full_residue: u32 = 0;
+    for _ in 0..POLL_BUDGET {
+        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        if (ev_d3 & 1) == (ev_dcs as u32) {
+            let ev_type = (ev_d3 >> 10) & 0x3F;
+            if ev_type == TRB_TYPE_TRANSFER_EVENT {
+                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                let cc = (ev_d2 >> 24) & 0xFF;
+                full_residue = ev_d2 & 0xFFFFFF;   // bits 23:0 = residual length
+                let slot = (ev_d3 >> 24) & 0xFF;
+                let ep   = (ev_d3 >> 16) & 0x1F;
+                if cc == TRB_CC_SUCCESS && slot == en_slot_id && ep == 1 {
+                    full_ok = true;
+                    serial_println!("[sexusb.xhci.full18.event.ok]");
+                } else {
+                    serial_println!("[sexusb.xhci.full18.event.bad] cc={} slot={} ep={}", cc, slot, ep);
+                }
+                // Clear consumed event cycle bit (spec 4.11.4)
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // Advance event dequeue pointer and update ERDP.
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS {
+                    ev_idx = 0;
+                    ev_dcs ^= 1;
+                }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write64(intr0_base, XHCI_INTR_ERDP, new_erdp | ev_dcs);
+            }
+            break;
+        }
+        sys_yield();
+    }
+
+    if !full_ok {
+        serial_println!("[sexusb.xhci.full18.timeout.bad]");
+        loop { sys_yield(); }
+    }
+
+    if full_residue >= 18 {
+        serial_println!("[sexusb.xhci.full18.residue.full.bad] residue={}", full_residue);
+        loop { sys_yield(); }
+    }
+
+    if full_residue > 0 {
+        serial_println!("[sexusb.xhci.full18.residue.warn] residue={}", full_residue);
+    }
+
+    // Log raw 18 bytes from descriptor data buffer.
+    let full_buf = desc_data_va as *const u8;
+    let fb0  = unsafe { core::ptr::read_volatile(full_buf.add(0)) };
+    let fb1  = unsafe { core::ptr::read_volatile(full_buf.add(1)) };
+    let fb2  = unsafe { core::ptr::read_volatile(full_buf.add(2)) };
+    let fb3  = unsafe { core::ptr::read_volatile(full_buf.add(3)) };
+    let fb4  = unsafe { core::ptr::read_volatile(full_buf.add(4)) };
+    let fb5  = unsafe { core::ptr::read_volatile(full_buf.add(5)) };
+    let fb6  = unsafe { core::ptr::read_volatile(full_buf.add(6)) };
+    let fb7  = unsafe { core::ptr::read_volatile(full_buf.add(7)) };
+    let fb8  = unsafe { core::ptr::read_volatile(full_buf.add(8)) };
+    let fb9  = unsafe { core::ptr::read_volatile(full_buf.add(9)) };
+    let fb10 = unsafe { core::ptr::read_volatile(full_buf.add(10)) };
+    let fb11 = unsafe { core::ptr::read_volatile(full_buf.add(11)) };
+    let fb12 = unsafe { core::ptr::read_volatile(full_buf.add(12)) };
+    let fb13 = unsafe { core::ptr::read_volatile(full_buf.add(13)) };
+    let fb14 = unsafe { core::ptr::read_volatile(full_buf.add(14)) };
+    let fb15 = unsafe { core::ptr::read_volatile(full_buf.add(15)) };
+    let fb16 = unsafe { core::ptr::read_volatile(full_buf.add(16)) };
+    let fb17 = unsafe { core::ptr::read_volatile(full_buf.add(17)) };
+    serial_println!(
+        "[sexusb.xhci.full18.bytes.ok] bytes=[{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x}]",
+        fb0, fb1, fb2, fb3, fb4, fb5, fb6, fb7, fb8, fb9, fb10, fb11, fb12, fb13, fb14, fb15, fb16, fb17
+    );
+
+    // Log informational fields (no routing/parsing).
+    let full_len = fb0;
+    let full_type = fb1;
+    let full_usb = ((fb3 as u16) << 8) | (fb2 as u16);
+    let full_class = fb4;
+    let full_subclass = fb5;
+    let full_proto = fb6;
+    let full_mps = fb7;
+    let full_vendor = ((fb9 as u16) << 8) | (fb8 as u16);
+    let full_product = ((fb11 as u16) << 8) | (fb10 as u16);
+    let full_device = ((fb13 as u16) << 8) | (fb12 as u16);
+    let full_configs = fb17;
+
+    serial_println!("[sexusb.xhci.full18.len] len={}", full_len);
+    serial_println!("[sexusb.xhci.full18.type] type={}", full_type);
+    serial_println!("[sexusb.xhci.full18.usb] usb={:#x}", full_usb);
+    serial_println!("[sexusb.xhci.full18.class] class={} subclass={} protocol={}", full_class, full_subclass, full_proto);
+    serial_println!("[sexusb.xhci.full18.vendor] vendor={:#x}", full_vendor);
+    serial_println!("[sexusb.xhci.full18.product] product={:#x}", full_product);
+    serial_println!("[sexusb.xhci.full18.device] device={:#x}", full_device);
+    serial_println!("[sexusb.xhci.full18.configs] configs={}", full_configs);
+    serial_println!("[sexusb.xhci.full18.mps_check] mps={}", full_mps);
+
+    // MPS consistency check: bMaxPacketSize0 should match earlier fetch.
+    if u32::from(full_mps) != actual_mps {
+        serial_println!("[sexusb.xhci.full18.mps.mismatch.bad] expected={} got={}", actual_mps, full_mps);
+        loop { sys_yield(); }
+    }
+
+    // Descriptor sanity warnings (non-fatal).
+    if full_len != 18 {
+        serial_println!("[sexusb.xhci.full18.desc_len.warn] len={}", full_len);
+    }
+    if full_type != 1 {
+        serial_println!("[sexusb.xhci.full18.desc_type.warn] type={}", full_type);
+    }
+
+    if full_residue == 0 {
+        serial_println!("[sexusb.xhci.full18.complete.ok]");
+    }
+
     loop { sys_yield(); }
 }

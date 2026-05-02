@@ -411,6 +411,52 @@ Event[2]: type=33, cc=1, slot_id=en_slot_id → success
 - `USB_XHCI_GET_DESCRIPTOR_FULL_18_PLAN_V1`: plan only — design full 18-byte
   device descriptor fetch after MPS is validated/updated. No implementation, no HID.
 
+## USB_XHCI_GET_DESCRIPTOR_FULL_18_PROOF_V1
+
+### Changes
+- Reads EP0 TR Dequeue Pointer from Device Context output at runtime
+  (`device_ctx_va + ctx_stride`, DW2+DW3). Validates deq_dcs==1, phys within
+  ring page, 16-byte alignment. Computes `deq_index = (phys - ep0_ring_phys)/16`.
+  No hardcoded index. Bounds check: deq_index+3 < 256.
+- Zeros descriptor data buffer (first 18 bytes) before TD, preventing stale
+  8-byte data from masquerading as valid descriptor bytes on short/residual.
+- Writes 3-TRB chain at verified `deq_index`:
+  - Setup Stage (type=2): IDT=1, CH=1, TRT=IN, wLength=18,
+    TRB Transfer Length=18 (verified per spec Table 6-34).
+  - Data Stage (type=3): DIR=IN, CH=1, TRB Transfer Length=18.
+  - Status Stage (type=4): DIR=OUT, CH=0, IOC=1.
+  - Stop marker at deq_index+3 with `ep0_cycle ^ 1` (opposite cycle).
+- Doorbell DB[slot_id] target=1 (EP0).
+- Consumes Transfer Event (type=32) at current ev_idx. Validates cc==Success,
+  slot_id matches, endpoint_id==1. Reads residual from d2[23:0].
+- Residual policy: residue==0 → complete.ok; residue>0 → residue.warn + park
+  (no complete.ok); residue>=18 → residue.full.bad + park.
+- Logs raw 18 bytes + informational fields: bLength, bDescriptorType, bcdUSB,
+  class/subclass/protocol, bMaxPacketSize0, idVendor, idProduct, bcdDevice,
+  iManufacturer/iProduct/iSerial, bNumConfigurations. No routing/parsing.
+- MPS consistency check: full18 bMaxPacketSize0 must match earlier 8-byte fetch;
+  mismatch logs bad + park.
+- Descriptor sanity warnings (non-fatal): bLength != 18, bDescriptorType != 1.
+
+### Non-goals preserved
+- No SET_CONFIGURATION
+- No Configure Endpoint
+- No config descriptor fetch
+- No HID routing/parsing
+- No sexinput routing
+- No IRQ handler
+- No kernel/ABI edits
+- No sexlink
+
+### Build
+- Build gate passed: `./scripts/entrypoint_build.sh`.
+- Zero warnings for sexusb.
+
+### Next
+- `USB_HID_BOOT_MOUSE_REPORT_PLAN_V1`: plan only — design HID boot protocol
+  mouse report fetch via EP0 control transfer (GET_DESCRIPTOR(HID report)).
+  No implementation, no HID routing to sexinput.
+
 ## CORRECTED XHCI SPEC FACTS (post-Audit V1)
 
 **Context stride**: XHCI context array element stride = 32 bytes if CSZ=0, 64 bytes if CSZ=1 (HCCPARAMS1 bit 2). NOT 16/32. Slot/EP0 context fields occupy the first 16 bytes of each stride; remaining bytes are reserved.
