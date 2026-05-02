@@ -947,6 +947,15 @@ pub extern "C" fn _start() -> ! {
     let slot_state = (dev_slot_dw3 >> 27) & 0x1F;
     serial_println!("[sexusb.xhci.address_device.state.ok] slot_state={}", slot_state);
 
+    // EP0 output dequeue pointer from Device Context after Address Device.
+    let ep0_deq_dw2 = unsafe { core::ptr::read_volatile((device_ctx_va + ctx_stride + 8) as *const u32) };
+    let ep0_deq_dw3 = unsafe { core::ptr::read_volatile((device_ctx_va + ctx_stride + 12) as *const u32) };
+    let ep0_deq_raw = ((ep0_deq_dw3 as u64) << 32) | (ep0_deq_dw2 as u64);
+    let ep0_deq_ptr = ep0_deq_raw & !0xf;
+    let ep0_deq_dcs = ep0_deq_dw2 & 1;
+    serial_println!("[sexusb.xhci.desc8.ep0_deq] dw2={:#x} dw3={:#x} ptr={:#x} dcs={}",
+        ep0_deq_dw2, ep0_deq_dw3, ep0_deq_ptr, ep0_deq_dcs);
+
     // ===== GET_DESCRIPTOR(DEVICE, 0, 0, 8) =====
     // Phase: USB_XHCI_GET_DEVICE_DESCRIPTOR_8_PROOF_V1
     // Scope: exactly one EP0 control transfer, 8 bytes, no Evaluate Context,
@@ -984,17 +993,18 @@ pub extern "C" fn _start() -> ! {
     //   [0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x08, 0x00] (LE bytes)
     // d0 = 0x0100_0680, d1 = 0x0008_0000
 
-    // Setup Stage TRB (type=2): IDT=1 (immediate data), CH=1 (chain),
-    // TRT=IN(1) in d3[17:16], TRB Transfer Length=8.
+    // Setup Stage TRB (type=2): QEMU nec-xhci requires DW3 bit6 = 1 to treat the
+    // TRB parameter field as inline setup packet data (the xHCI spec default).
+    // Without bit6, QEMU interprets the parameter as a DMA pointer (BIOS has it:
+    // c=0x30841 → bit6=1). TRT=IN(2) for control read (device-to-host Data Stage).
     let setup_d3 = (TRB_TYPE_SETUP_STAGE << 10)  // type=2 in bits 15:10
-        | (1u32 << 16)                           // TRT=IN (0b01) in bits 17:16
+        | (2u32 << 16)                           // TRT=IN (0b10) in bits 17:16
+        | (1u32 << 6)                            // QEMU nec-xhci: inline setup packet marker
         | ep0_cycle;
     trb_write_volatile(ep0_ring_va, ep0_idx,
         0x0100_0680u32,  // d0: bmReqType=0x80,bReq=0x06,wVal_lo=0x00,wVal_hi=0x01
         0x0008_0000u32,  // d1: wIdx_lo=0x00,wIdx_hi=0x00,wLen_lo=0x08,wLen_hi=0x00
-        (8u32 << 0)      // TRB Transfer Length = 8
-            | (1u32 << 17)  // IDT=1
-            | (1u32 << 18), // CH=1
+        (8u32 << 0),      // TRB Transfer Length = 8 (bits 0:13, no reserved bits set)
         setup_d3);
 
     // Data Stage TRB (type=3): DIR=IN (1), CH=1 (chain to Status),
@@ -1010,13 +1020,14 @@ pub extern "C" fn _start() -> ! {
         data_d3);
 
     // Status Stage TRB (type=4): DIR=OUT (0 for control read status),
-    // CH=0 (end of TD), IOC=1 (generate Transfer Event).
+    // CH=0 (end of TD), IOC=1 in DW3 bit 5 (Status Stage encoding, xHCI 1.2 §4.11.2.3).
     let status_d3 = (TRB_TYPE_STATUS_STAGE << 10) // type=4 in bits 15:10
         | (0u32 << 16)                            // DIR=OUT (0)
+        | (1u32 << 5)                             // IOC=1 (Interrupt On Complete, bit 5)
         | ep0_cycle;
     trb_write_volatile(ep0_ring_va, ep0_idx + 2,
         0, 0,
-        1u32 << 22,  // IOC=1 in bit 22
+        0u32,  // DW2: all zero (no IOC, no CH, no ISP for Status Stage)
         status_d3);
 
     // Cycle-stop marker at ep0_idx+3 with opposite cycle (ep0_cycle ^ 1).
@@ -1030,6 +1041,16 @@ pub extern "C" fn _start() -> ! {
     ep0_idx += 4;
     let _ = (ep0_idx,);
 
+    // Dump EP0 ring TRBs and doorbell state before ringing.
+    serial_println!("[sexusb.xhci.desc8.ep0_ring] phys={:#x} idx={} cycle={}", ep0_ring_phys, ep0_idx, ep0_cycle);
+    for ti in 0u64..4u64 {
+        let td0 = trb_read_dword(ep0_ring_va, ti, 0);
+        let td1 = trb_read_dword(ep0_ring_va, ti, 1);
+        let td2 = trb_read_dword(ep0_ring_va, ti, 2);
+        let td3 = trb_read_dword(ep0_ring_va, ti, 3);
+        serial_println!("[sexusb.xhci.desc8.trb{}] d0={:#x} d1={:#x} d2={:#x} d3={:#x}", ti, td0, td1, td2, td3);
+    }
+
     // Doorbell: EP0 on slot_id. DB Target = 1 (EP0 endpoint ID).
     // DB index = en_slot_id (1-based slot from Enable Slot).
     if db_base.wrapping_add(en_slot_id as u64 * 4 + 4) > map_va.wrapping_add(MAP_BYTES) {
@@ -1037,10 +1058,17 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
     mmio_write32(db_base, en_slot_id as u64 * 4, 1u32);  // target=1 (EP0)
+    serial_println!("[sexusb.xhci.desc8.db] base={:#x} off=+{} val=1", db_base, en_slot_id as u64 * 4);
     serial_println!("[sexusb.xhci.desc8.doorbell.ok]");
 
     // Consume Transfer Event (type=32) at current ev_idx.
     // Validate: cc==Success, slot_id matches, endpoint_id==1 (EP0).
+    let iman_before = mmio_read32(intr_base, 0);
+    let erdp_lo_rb = mmio_read32(intr_base, XHCI_INTR_ERDP);
+    let erdp_hi_rb = mmio_read32(intr_base, XHCI_INTR_ERDP + 4);
+    let erdp_val = (erdp_lo_rb as u64) | ((erdp_hi_rb as u64) << 32);
+    serial_println!("[sexusb.xhci.desc8.wait_state] ev_idx={} ev_dcs={} iman={:#x} erdp={:#x}",
+        ev_idx, ev_dcs, iman_before, erdp_val);
     let mut desc_ok = false;
     for _ in 0..POLL_BUDGET {
         let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
@@ -1076,7 +1104,15 @@ pub extern "C" fn _start() -> ! {
     }
 
     if !desc_ok {
+        let usbsts = mmio_read32(op_base, XHCI_USBSTS);
+        let iman_timo = mmio_read32(intr_base, 0);
+        let erdp_lo_timo = mmio_read32(intr_base, XHCI_INTR_ERDP);
+        let erdp_hi_timo = mmio_read32(intr_base, XHCI_INTR_ERDP + 4);
+        let erdp_timo = (erdp_lo_timo as u64) | ((erdp_hi_timo as u64) << 32);
         serial_println!("[sexusb.xhci.desc8.timeout.bad]");
+        serial_println!("[sexusb.xhci.desc8.timeout.diag] usbsts={:#x} iman={:#x} erdp={:#x} hce={} eint={} pcd={}",
+            usbsts, iman_timo, erdp_timo,
+            (usbsts >> 0) & 1, (usbsts >> 3) & 1, (usbsts >> 4) & 1);
         loop { sys_yield(); }
     }
 
@@ -1260,16 +1296,20 @@ pub extern "C" fn _start() -> ! {
     //   [0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x12, 0x00]
     // d0 = 0x0100_0680, d1 = 0x0012_0000
 
-    // Setup Stage (type=2): IDT=1, CH=1, TRT=IN, TRB Transfer Length=18.
+    // Setup Stage (type=2): TRB Transfer Length = 8 (fix, NOT wLength).
+    // Per xHCI spec §6.4.1.2.1, Table 6-17: SETUP Stage DW2 bits 0:13
+    // shall always be 8 (the USB setup packet size). The wLength goes in
+    // the setup packet payload (DW0/DW1), NOT in this field.
+    // IDT and CH bits ARE defined for SETUP Stage DW2 but cause issues
+    // with QEMU nec-xhci; omit them for compatibility.
     let full_setup_d3 = (TRB_TYPE_SETUP_STAGE << 10)
-        | (1u32 << 16)                           // TRT=IN
+        | (2u32 << 16)                           // TRT=IN (0b10) for control read
+        | (1u32 << 6)                            // QEMU nec-xhci: inline setup packet marker
         | ep0_cycle;
     trb_write_volatile(ep0_ring_va, deq_index,
         0x0100_0680u32,                          // d0: bmReqType=0x80,bReq=0x06,wVal=0x0100
         0x0012_0000u32,                          // d1: wIdx=0,wLen=18
-        (18u32 << 0)                             // TRB Transfer Length = 18 (wLength)
-            | (1u32 << 17)                       // IDT=1
-            | (1u32 << 18),                      // CH=1
+        (8u32 << 0),                              // TRB Transfer Length = 8 (setup packet size)
         full_setup_d3);
 
     // Data Stage (type=3): DIR=IN, CH=1, TRB Transfer Length=18.
@@ -1283,13 +1323,14 @@ pub extern "C" fn _start() -> ! {
             | (1u32 << 18),                      // CH=1 (IDT=0, IOC=0, ISP=0)
         full_data_d3);
 
-    // Status Stage (type=4): DIR=OUT, CH=0, IOC=1.
+    // Status Stage (type=4): DIR=OUT, CH=0, IOC=1 in DW3 bit 5.
     let full_status_d3 = (TRB_TYPE_STATUS_STAGE << 10)
         | (0u32 << 16)                           // DIR=OUT (for control read status)
+        | (1u32 << 5)                            // IOC=1 (bit 5, Status Stage encoding)
         | ep0_cycle;
     trb_write_volatile(ep0_ring_va, deq_index + 2,
         0, 0,
-        1u32 << 22,                              // IOC=1
+        0u32,
         full_status_d3);
 
     // Cycle-stop marker at deq_index+3 with opposite cycle.
@@ -1459,16 +1500,17 @@ pub extern "C" fn _start() -> ! {
     //   [0x80, 0x06, 0x00, 0x02, 0x00, 0x00, 0x09, 0x00]
     // d0 = 0x0200_0680, d1 = 0x0009_0000
 
-    // Setup Stage (type=2): IDT=1, CH=1, TRT=IN, TRB Transfer Length=9.
+    // Setup Stage (type=2): TRB Transfer Length = 8 (fixed setup packet size,
+    // NOT wLength=9). SETUP Stage DW2 bits 0:13 shall always be 8 per xHCI
+    // spec §6.4.1.2.1. The wLength goes in DW0/DW1 (setup packet payload).
     let cfg_hdr_setup_d3 = (TRB_TYPE_SETUP_STAGE << 10)
-        | (1u32 << 16)                           // TRT=IN
+        | (2u32 << 16)                           // TRT=IN (0b10) for control read
+        | (1u32 << 6)                            // QEMU nec-xhci: inline setup packet marker
         | ep0_cycle;
     trb_write_volatile(ep0_ring_va, cfg_deq_index,
         0x0200_0680u32,                          // d0: bmReqType=0x80,bReq=0x06,wVal=0x0200
         0x0009_0000u32,                          // d1: wIdx=0,wLen=9
-        (9u32 << 0)                              // TRB Transfer Length = 9
-            | (1u32 << 17)                       // IDT=1
-            | (1u32 << 18),                      // CH=1
+        (8u32 << 0),                              // TRB Transfer Length = 8 (setup packet size)
         cfg_hdr_setup_d3);
 
     // Data Stage (type=3): DIR=IN, CH=1, TRB Transfer Length=9.
@@ -1488,8 +1530,8 @@ pub extern "C" fn _start() -> ! {
         | ep0_cycle;
     trb_write_volatile(ep0_ring_va, cfg_deq_index + 2,
         0, 0,
-        1u32 << 22,                              // IOC=1
-        cfg_hdr_status_d3);
+        0u32,                                      // DW2: all zero
+        cfg_hdr_status_d3 | (1u32 << 5));          // IOC=1 (bit 5, Status Stage encoding)
 
     // Cycle-stop marker at cfg_deq_index+3 with opposite cycle.
     trb_write_volatile(ep0_ring_va, cfg_deq_index + 3, 0, 0, 0, ep0_cycle ^ 1);
@@ -1604,16 +1646,15 @@ pub extern "C" fn _start() -> ! {
     //   [0x80, 0x06, 0x00, 0x02, 0x00, 0x00, wLen_lo, wLen_hi]
     // d0 = 0x0200_0680, d1 = (wTotalLength as u32) << 16
 
-    // Setup Stage (type=2): IDT=1, CH=1, TRT=IN, TRB Transfer Length = wTotalLength.
+    // Setup Stage (type=2): IDT=1 in DW2, CH=1 in DW2, TRT=IN, DW3 bit6 for QEMU inline.
     let cfg_full_setup_d3 = (TRB_TYPE_SETUP_STAGE << 10)
-        | (1u32 << 16)                           // TRT=IN
+        | (2u32 << 16)                           // TRT=IN (0b10) for control read
+        | (1u32 << 6)                            // QEMU nec-xhci: inline setup packet marker
         | ep0_cycle;
     trb_write_volatile(ep0_ring_va, cfg2_deq_index,
         0x0200_0680u32,                          // d0: bmReqType=0x80,bReq=0x06,wVal=0x0200
         (w_total_length as u32) << 16,            // d1: wIdx=0,wLen=wTotalLength
-        (w_total_length as u32)                   // TRB Transfer Length = wTotalLength
-            | (1u32 << 17)                       // IDT=1
-            | (1u32 << 18),                      // CH=1
+        (8u32 << 0),                              // TRB Transfer Length = 8 (setup packet size, NOT wTotalLength)
         cfg_full_setup_d3);
 
     // Data Stage (type=3): DIR=IN, CH=1, TRB Transfer Length = wTotalLength.
@@ -1633,8 +1674,8 @@ pub extern "C" fn _start() -> ! {
         | ep0_cycle;
     trb_write_volatile(ep0_ring_va, cfg2_deq_index + 2,
         0, 0,
-        1u32 << 22,                               // IOC=1
-        cfg_full_status_d3);
+        0u32,                                      // DW2: all zero
+        cfg_full_status_d3 | (1u32 << 5));         // IOC=1 (bit 5, Status Stage encoding)
 
     // Cycle-stop marker at cfg2_deq_index+3 with opposite cycle.
     trb_write_volatile(ep0_ring_va, cfg2_deq_index + 3, 0, 0, 0, ep0_cycle ^ 1);
