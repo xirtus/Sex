@@ -14,6 +14,8 @@ use sex_pdx::{
 pub const OP_DISPLAY_SET_SNAPSHOT: u64 = 0x15;
 pub const OP_SHELL_BIND_BUFFER: u64 = 0x14;
 pub const OP_HID_EVENT: u64 = 0x202;
+pub const OP_USB_MOUSE_REPORT: u64 = 0x260;
+const SHELL_USB_MOUSE_RECEIVE_UNPARK_PROOF_V1: bool = true;
 pub const OP_SURFACE_UPDATE: u64 = 0xEB;
 pub const SURFACE_ID_APP: u64 = 100;
 pub const SURFACE_ID_STATIC: u64 = 101;
@@ -310,8 +312,10 @@ pub extern "C" fn _start() -> ! {
 
     loop {
         // Runtime containment: park without syscall while null-jump root cause is isolated.
-        core::hint::spin_loop();
-        continue;
+        if !SHELL_USB_MOUSE_RECEIVE_UNPARK_PROOF_V1 {
+            core::hint::spin_loop();
+            continue;
+        }
 
         let mut mutated = false;
 
@@ -343,6 +347,22 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                     mutated = true;
+                    pdx_reply(0);
+                }
+                OP_USB_MOUSE_REPORT => {
+                    let buttons = msg.arg1 as u8;
+                    let packed = msg.arg2;
+                    let dx = (packed as u8) as i8;
+                    let dy = ((packed >> 8) as u8) as i8;
+                    let wheel = ((packed >> 16) as u8) as i8;
+                    serial_println!("[shell.recv.usb_mouse]");
+                    serial_println!(
+                        "[shell.recv.usb_mouse.decode.ok] buttons={:#x} dx={} dy={} wheel={}",
+                        buttons,
+                        dx,
+                        dy,
+                        wheel
+                    );
                     pdx_reply(0);
                 }
                 OP_HID_EVENT => {

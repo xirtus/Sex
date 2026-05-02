@@ -93,6 +93,49 @@ pub extern "C" fn _start() -> ! {
                     dy,
                     wheel
                 );
+
+                serial_println!("[sexinput.usb_mouse.normalize.start]");
+                let report = HidPointerRawReport {
+                    dx: dx as i16,
+                    dy: dy as i16,
+                    buttons,
+                    wheel,
+                };
+                let mut normalized_events: [(u64, u64, u64); 4] = [(0, 0, 0); 4];
+                let mut norm_count: usize = 0;
+                normalize_pointer_report_v1(
+                    report,
+                    unsafe { &mut *core::ptr::addr_of_mut!(LAST_BUTTONS) },
+                    |arg0, arg1, arg2| {
+                        if norm_count < normalized_events.len() {
+                            normalized_events[norm_count] = (arg0, arg1, arg2);
+                            norm_count += 1;
+                        }
+                    },
+                );
+                serial_println!("[sexinput.usb_mouse.normalize.ok]");
+
+                serial_println!("[sexinput.usb_mouse.shell_send.start]");
+                // Proof tap for shell-side decode logging.
+                let proof_send = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, buttons as u64, packed);
+                let mut send_err: u64 = match proof_send {
+                    Ok(_) => 0,
+                    Err(err) => err,
+                };
+
+                for i in 0..norm_count {
+                    let (arg0, arg1, arg2) = normalized_events[i];
+                    if let Err(err) = pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2) {
+                        if send_err == 0 {
+                            send_err = err;
+                        }
+                    }
+                }
+                if send_err == 0 {
+                    serial_println!("[sexinput.usb_mouse.shell_send.ok]");
+                } else {
+                    serial_println!("[sexinput.usb_mouse.shell_send.fail] err={}", send_err);
+                }
             }
         }
 

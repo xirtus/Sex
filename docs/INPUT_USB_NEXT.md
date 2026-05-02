@@ -916,6 +916,28 @@ No `[sexusb.xhci.eval_ctx.verify.bad]`.
   `sexinput`: `[sexinput.usb_mouse.recv]`,
   `[sexinput.usb_mouse.decode.ok]`.
 
+### SEXINPUT_USB_MOUSE_NORMALIZER_TO_SHELL_PROOF_V1
+- `sexinput` now converts received USB mouse report to existing normalized HID
+  event shape using `normalize_pointer_report_v1`.
+- `sexinput` emits proof markers for normalize/send stages:
+  `[sexinput.usb_mouse.normalize.start]`,
+  `[sexinput.usb_mouse.normalize.ok]`,
+  `[sexinput.usb_mouse.shell_send.start]`,
+  `[sexinput.usb_mouse.shell_send.ok]`,
+  `[sexinput.usb_mouse.shell_send.fail] err=N`.
+- `sexinput` forwards normalized events over the existing shell PDX path and
+  adds a proof tap (`op=0x260`) for shell-side decode logging.
+- `silk-shell` logs receive/decode markers:
+  `[shell.recv.usb_mouse]`,
+  `[shell.recv.usb_mouse.decode.ok]`.
+
+### SILK_SHELL_USB_MOUSE_RECEIVE_UNPARK_PROOF_V1
+- Shell receive-path block was from intentional containment park before
+  `pdx_listen_raw(0)` (`spin_loop(); continue;`).
+- Added a minimal local gate in `silk-shell` to keep park logic available while
+  allowing proof-mode receive loop execution.
+- No kernel/ABI/capability/display/policy changes in this step.
+
 ### Non-goals preserved
 - No sexinput routing
 - No IRQ handler (stay with polling)
