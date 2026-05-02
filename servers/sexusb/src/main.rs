@@ -2297,6 +2297,18 @@ pub extern "C" fn _start() -> ! {
         core::ptr::write_bytes(intr_report_va as *mut u8, 0, INTR_REPORT_LEN as usize);
         core::ptr::write_bytes(input_ctx_va as *mut u8, 0, PAGE_SIZE as usize);
     }
+    // Circular interrupt Transfer Ring: 15 Normal slots + Link TRB at slot 15.
+    // Link TRB wraps ring back to slot 0 with TC=1 (toggles xHCI consumer cycle).
+    const TRB_TYPE_LINK: u32 = 6;
+    const INTR_TR_RING_SIZE: u64 = 16;
+    trb_write_volatile(
+        intr_ring_va,
+        INTR_TR_RING_SIZE - 1,
+        (intr_ring_phys & 0xFFFF_FFFF) as u32,
+        (intr_ring_phys >> 32) as u32,
+        0u32,
+        (TRB_TYPE_LINK << 10) | (1u32 << 1) | 1u32, // TC=1, cycle=1
+    );
 
     serial_println!("[sexusb.xhci.intr_in.config_ep.start]");
 
@@ -2383,10 +2395,12 @@ pub extern "C" fn _start() -> ! {
     // Inner loop waits indefinitely (no POLL_BUDGET timeout) — safe because the
     // xHCI completes (or NAKs-then-completes) the single enqueued TRB before we
     // re-arm. No second TRB is ever enqueued while one is outstanding.
-    const CONTINUOUS_POLL_ATTEMPTS: u32 = 512;
-    serial_println!("[sexusb.hid.mouse.continuous.start] attempts={}", CONTINUOUS_POLL_ATTEMPTS);
+    serial_println!("[sexusb.hid.mouse.continuous.start] attempts=unbounded");
     let mut saw_nonzero = false;
-    for i in 0..CONTINUOUS_POLL_ATTEMPTS {
+    let mut i: u32 = 0;
+    let mut intr_prod: u64 = 0;
+    let mut intr_pcs: u32 = 1;
+    loop {
         // Clear report buffer before each transfer.
         unsafe {
             core::ptr::write_volatile(intr_report_va as *mut u8, 0);
@@ -2395,16 +2409,17 @@ pub extern "C" fn _start() -> ! {
             core::ptr::write_volatile((intr_report_va + 3) as *mut u8, 0);
         }
 
-        // Queue exactly one interrupt-IN Normal TRB; cycle-stop halts ring after it.
+        // Queue one interrupt-IN Normal TRB at current ring producer slot.
+        // Circular ring (Link TRB at slot INTR_TR_RING_SIZE-1) keeps xHCI dequeue
+        // advancing correctly across iterations — no stuck-at-slot-1 stall.
         trb_write_volatile(
             intr_ring_va,
-            0,
+            intr_prod,
             (intr_report_phys & 0xFFFF_FFFF) as u32,
             (intr_report_phys >> 32) as u32,
             INTR_REPORT_LEN,
-            (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | 1u32, // IOC + cycle=1
+            (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs, // IOC + current cycle
         );
-        trb_write_volatile(intr_ring_va, 1, 0, 0, 0, 0u32); // cycle stop
 
         mmio_write32(db_base, en_slot_id as u64 * 4, INTR_DCI);
 
@@ -2499,13 +2514,24 @@ pub extern "C" fn _start() -> ! {
         } else {
             serial_println!("[sexusb.hid.mouse.decode.bad] len={}", intr_actual);
         }
-    }
-    serial_println!(
-        "[sexusb.hid.mouse.continuous.done] attempts={} nonzero_seen={}",
-        CONTINUOUS_POLL_ATTEMPTS, saw_nonzero as u32
-    );
-    if !saw_nonzero {
-        serial_println!("[sexusb.hid.mouse.nonzero.miss] count={}", CONTINUOUS_POLL_ATTEMPTS);
+        // Advance circular ring producer: skip over Link TRB at INTR_TR_RING_SIZE-1.
+        intr_prod += 1;
+        if intr_prod >= INTR_TR_RING_SIZE - 1 {
+            // Wrap: toggle PCS and update Link TRB cycle bit to match new PCS
+            // so xHCI follows it correctly on the next wrap-around.
+            intr_pcs ^= 1;
+            trb_write_volatile(
+                intr_ring_va,
+                INTR_TR_RING_SIZE - 1,
+                (intr_ring_phys & 0xFFFF_FFFF) as u32,
+                (intr_ring_phys >> 32) as u32,
+                0u32,
+                (TRB_TYPE_LINK << 10) | (1u32 << 1) | intr_pcs,
+            );
+            intr_prod = 0;
+        }
+        serial_println!("[sexusb.xhci.intr_ring.advance] next={} cycle={}", intr_prod, intr_pcs);
+        i = i.wrapping_add(1);
     }
     loop { sys_yield(); }
 }
