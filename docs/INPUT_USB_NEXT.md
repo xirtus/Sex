@@ -80,3 +80,8 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 - `sexusb` now probes XHCI BAR0 via existing syscall 43 (`MAP_PCI_BAR`) and logs CAPLENGTH/HCIVERSION/HCSP1/HCC1 markers only; no reset/run/TRB/DMA/enum yet.
 - Build gate passed: `./scripts/entrypoint_build.sh`.
 - Runtime host blocker persists: `./dev.sh run` failed with `Could not initialize SDL(No available video device)`.
+- USB_XHCI_RESET_RUN_PROOF_V1 complete in `servers/sexusb/src/main.rs`: bounded reset/run MMIO proof added using USBCMD/USBSTS polling with yield-based timeouts (no infinite waits).
+- Added markers: `[sexusb.xhci.reset.start]`, `[sexusb.xhci.halted.ok|bad]`, `[sexusb.xhci.reset.ok|bad]`, `[sexusb.xhci.run.ok|bad]`.
+- Non-goals preserved: no enum, no TRB/event rings, no DMA buffers, no HID routing, no kernel/ABI edits.
+- Build gate passed: `./scripts/entrypoint_build.sh`.
+- Runtime host blocker persists: `./dev.sh run` failed with `Could not initialize SDL(No available video device)`.
