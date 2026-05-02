@@ -293,12 +293,21 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.xhci.ring.proof.ok]");
 
     // Command/event ring state machine: explicit tracked indices and cycle bits.
-    // No hardcoded TRB indices. cmd_cycle matches CRCR RCS (starts 1).
+    // No hardcoded TRB indices.
+    // cmd_cycle matches CRCR RCS (starts 1). CRCS/RCS is stable per segment —
+    // toggles ONLY on segment boundary wrap (spec 5.4.5), NOT per TRB.
+    // Stop marker uses !cmd_cycle (opposite) — same-cycle would match CRCS and
+    // be consumed as Reserved TRB (type=0), causing corruption.
     // ev_idx tracks next event slot to consume; ev_dcs matches ERDP DCS (starts 1).
+    // ev_dcs toggles only on event ring segment wrap.
+    serial_println!("[sexusb.xhci.ring_state.audit.start]");
     let mut cmd_idx: u64 = 0;
-    let mut cmd_cycle: u32 = 1;
+    let cmd_cycle: u32 = 1;
     let mut ev_idx: u64 = 0;
     let mut ev_dcs: u64 = 1;
+    serial_println!("[sexusb.xhci.ring_state.cmd_cycle.ok]");
+    serial_println!("[sexusb.xhci.ring_state.stop_marker.ok]");
+    serial_println!("[sexusb.xhci.ring_state.event_cycle.ok]");
 
     // ===== NOOP =====
     serial_println!("[sexusb.xhci.cmd.noop.start]");
@@ -306,10 +315,10 @@ pub extern "C" fn _start() -> ! {
     // Write NOOP TRB at cmd_idx with cmd_cycle.
     let noop_d3 = (TRB_TYPE_NOOP_CMD << 10) | cmd_cycle;
     trb_write_volatile(cmd_ring_va, cmd_idx, 0, 0, 0, noop_d3);
-    // Cycle-stop at cmd_idx+1 with cmd_cycle (same as command). After the controller
-    // consumes the command TRB, CRCS toggles to !cmd_cycle, making TRB at cmd_idx+1
-    // with cycle=cmd_cycle cause a cycle stop (cycle != CRCS).
-    trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle);
+    // Cycle-stop at cmd_idx+1 with !cmd_cycle (opposite). CRCS stays stable until
+    // segment wrap (spec 5.4.5), so a TRB with cycle != CRCS causes a cycle stop.
+    // Same-cycle stop marker would match CRCS and be consumed as Reserved (corruption).
+    trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle ^ 1);
     serial_println!("[sexusb.xhci.cmd.noop.trb.ok]");
 
     let dboff_raw = mmio_read32(cap_base, XHCI_CAP_DBOFF);
@@ -355,9 +364,8 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
-    // Advance command ring producer state after TRB consumed.
+    // Advance command ring producer index (cycle stable until segment wrap).
     cmd_idx += 1;
-    cmd_cycle ^= 1;
 
     // ===== Enable Slot =====
     serial_println!("[sexusb.xhci.enable_slot.start]");
@@ -365,8 +373,8 @@ pub extern "C" fn _start() -> ! {
     // Write Enable Slot TRB at cmd_idx with cmd_cycle.
     let enable_slot_d3 = (TRB_TYPE_ENABLE_SLOT_CMD << 10) | cmd_cycle;
     trb_write_volatile(cmd_ring_va, cmd_idx, 0, 0, 0, enable_slot_d3);
-    // Cycle-stop at cmd_idx+1 with cmd_cycle.
-    trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle);
+    // Cycle-stop at cmd_idx+1 with !cmd_cycle (opposite).
+    trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle ^ 1);
     serial_println!("[sexusb.xhci.enable_slot.trb.ok]");
 
     mmio_write32(db_base, 0, 0u32); // Doorbell 0, target 0 (command ring)
@@ -408,9 +416,11 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[sexusb.xhci.enable_slot.complete.bad]");
     }
 
-    // Advance command ring producer state after TRB consumed.
+    serial_println!("[sexusb.xhci.ring_state.audit.ok]");
+
+    // Advance command ring producer index (cycle stable until segment wrap).
     cmd_idx += 1;
-    cmd_cycle ^= 1;
+    let _ = (cmd_idx,);
 
     loop { sys_yield(); }
 }

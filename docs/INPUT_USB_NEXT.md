@@ -162,22 +162,29 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 ### Changes
 - Replaced hardcoded TRB indices (0 for NOOP, 1 for Enable Slot) with explicit state machine:
   - `cmd_idx: u64` — next command ring slot to write
-  - `cmd_cycle: u32` — producer cycle bit (matches CRCR RCS, starts 1, toggles per command)
+  - `cmd_cycle: u32` — producer cycle bit (matches CRCR RCS, starts 1; **stable until segment wrap**)
   - `ev_idx: u64` — next event ring slot to consume
   - `ev_dcs: u64` — event ring dequeue cycle state (starts 1 per spec 5.5.2.3.2)
 - Fixed ERDP initialization: added `| 1u64` for DCS=1 (was 0, violating spec)
-- Fixed cycle-stop marker bit: now uses `cmd_cycle` (same as command TRB), not the opposite bit.
-  Correctness trace: command at cmd_idx with cycle=cmd_cycle → CRCS toggles to !cmd_cycle after
-  consumption → stop marker at cmd_idx+1 with cycle=cmd_cycle causes cycle stop (cycle != CRCS).
+- Fixed cycle-stop marker bit: uses `cmd_cycle ^ 1` (opposite cycle). CRCS stays stable
+  (spec 5.4.5: toggles only on segment boundary wrap, not per TRB). Same-cycle Reserved
+  TRB would match CRCS and be consumed as a valid command → silent corruption.
+  Correct trace:
+  ```
+  CRCS=1 (stable)
+  TRB[0]: cmd_cycle=1 → match → processed. CRCS still 1.
+  TRB[1]: !cmd_cycle=0 → STOP (0 != 1). ✓
+  ```
 - Added ERDP advance after each consumed event:
   `mmio_write64(intr0_base, XHCI_INTR_ERDP, event_ring_phys + ev_idx * 16 | ev_dcs)`
 - Added consumed event cycle-bit clear per XHCI spec 4.11.4
 - Added event ring segment wrap handling (ev_idx >= EVENT_RING_TRBS → wrap to 0, toggle DCS)
-- Added `cmd_idx += 1; cmd_cycle ^= 1;` after each command batch (NOOP and Enable Slot)
-- Removed stale event clear (`trb_write_volatile(event_ring_va, 0, 0, 0, 0, 0)`) — no longer needed
-  since event indices are tracked and advanced, not reused.
-- Removed non-completion event branch (else-case) — only poll for CMD_COMPLETION_EVENT; any other
-  event type at the tracked ev_idx is unexpected and should timeout.
+- Added `cmd_idx += 1;` after each command batch (NOOP and Enable Slot). No cycle toggle
+  — cmd_cycle stays stable until segment wrap (only cmd_idx advances).
+- Removed stale event clear (`trb_write_volatile(event_ring_va, 0, 0, 0, 0, 0)`) — no longer
+  needed since event indices are tracked and advanced, not reused.
+- Removed non-completion event branch (else-case) — only poll for CMD_COMPLETION_EVENT; any
+  other event type at the tracked ev_idx is unexpected and should timeout.
 
 ### Non-goals preserved
 - No Address Device
@@ -189,8 +196,16 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 
 ### Build
 - Build gate passed: `./scripts/entrypoint_build.sh`.
-- Two expected warnings: `cmd_idx`/`cmd_cycle` assigned but never read on final advance (values
-  tracked correctly for the phase but no further commands submitted after Enable Slot).
+- One expected warning: `cmd_idx` assigned but never read on final advance (value valid
+  but no further commands submitted after Enable Slot).
+
+### XHCI Command Ring Cycle Rule (verified V1)
+- CRCR.RCS (spec 5.4.5) toggles ONLY on segment boundary wrap, NOT per TRB fetch.
+- All valid commands within a segment share the same cycle bit (= CRCS = CRCR.RCS).
+- Stop marker MUST use opposite cycle (`!cmd_cycle`). Same-cycle Reserved TRB (type=0)
+  matches CRCS and is consumed as a valid command → undefined behavior / corruption.
+- cmd_cycle advances only on segment wrap (when cmd_idx wraps past ring size, toggle
+  cmd_cycle for the next segment).
 
 ### Next
 - `USB_XHCI_ADDRESS_DEVICE_CONTEXT_LAYOUT_PROOF_V1`: allocate Input Context, Device Context,
@@ -205,7 +220,7 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 
 **Fix**: Advance frame_allocator.allocate_frame() by metadata_pages after seeding the buddy allocator (see kernel/src/memory/manager.rs init()).
 
-**XHCI CRCS rule**: After each Command TRB is consumed, XHCI toggles Command Ring Cycle State (CRCS). Write a cycle-stop marker at cmd_idx+1 with the SAME cycle as the command TRB (cmd_cycle). After the controller consumes the command TRB, CRCS toggles to !cmd_cycle, making the stop marker's cycle=cmd_cycle cause a cycle stop (cycle != CRCS). Do NOT write the stop marker with the opposite cycle — that would match the toggled CRCS and be consumed as a Reserved TRB.
+**XHCI CRCS rule**: XHCI command ring cycle (CRCR.RCS per spec 5.4.5) toggles ONLY on segment boundary wrap, NOT per TRB fetch. All valid commands within a segment share the same cycle bit. Stop marker MUST use opposite cycle (`!cmd_cycle`). A same-cycle Reserved TRB (type=0) matches CRCS and is consumed as a valid command → undefined behavior / silent corruption.
 
 ## CORRECTED XHCI SPEC FACTS (post-Audit V1)
 
