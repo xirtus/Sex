@@ -993,6 +993,7 @@ Status: instrumentation added for bounded nonzero movement proof (no display cur
 
 Implementation:
 - `sexusb` now runs a bounded interrupt-IN poll loop (`count=32`) after endpoint setup.
+  Updated capture window to `count=128` for stronger nonzero movement chance.
 - Per-report markers:
   - `[sexusb.hid.mouse.poll_loop.report] i=N buttons=0x.. dx=N dy=N wheel=N`
 - Nonzero detector markers:
@@ -1002,3 +1003,5 @@ Implementation:
 - `silk-shell` adds:
   - `[shell.pointer.usb_state.nonzero.ok] x=N y=N buttons=0x.. wheel=N dx=N dy=N`
     when incoming USB report is nonzero.
+- `sexinput` synthetic drag proof loop is gated off during USB physical proof
+  mode to prevent `[sexinput.drag_proof.*]` noise from masking real USB motion.

@@ -13,6 +13,9 @@ fn panic(_info: &PanicInfo) -> ! {
 static mut LAST_BUTTONS: u8 = 0;
 const OP_HID_EVENT: u64 = 0x202;
 const OP_USB_MOUSE_REPORT: u64 = 0x260;
+// USB physical capture mode: keep synthetic drag proof code available, but
+// disable repeated injection so physical USB movement logs are not polluted.
+const USB_PROOF_DISABLE_SYNTH_DRAG: bool = true;
 
 #[derive(Copy, Clone)]
 struct HidPointerRawReport {
@@ -158,7 +161,7 @@ pub extern "C" fn _start() -> ! {
         // 3. Deterministic synthetic drag proof (bounded):
         //    EV_ABS anchor, then BTN down -> REL move -> BTN up via normalizer.
         tick = tick.wrapping_add(1);
-        if tick % 120 == 0 {
+        if !USB_PROOF_DISABLE_SYNTH_DRAG && tick % 120 == 0 {
             let report = match drag_proof_stage {
                 0 => {
                     pdx_call(SLOT_SHELL, OP_HID_EVENT, 200, 200, EV_ABS);

@@ -2379,7 +2379,7 @@ pub extern "C" fn _start() -> ! {
     cmd_idx += 1;
     serial_println!("[sexusb.xhci.intr_in.config_ep.ok]");
 
-    const INTR_POLL_COUNT: u32 = 32;
+    const INTR_POLL_COUNT: u32 = 128;
     serial_println!("[sexusb.hid.mouse.poll_loop.start] count={}", INTR_POLL_COUNT);
     let mut saw_nonzero = false;
     for i in 0..INTR_POLL_COUNT {
