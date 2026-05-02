@@ -29,6 +29,17 @@
 4. Runtime-first gate before M2/M3: all 6 PDs run, PD1 survives, no fault.kill/#PF/#GP/panic, clock >4s, visible non-black GUI.
 5. If runtime breaks: immediately branch/save broken state and return to the `WORKING-BOOT` base.
 
+## PD3 Containment Status
+
+- Verified checkpoint: GUI visible, SilkBar clock working, and no PD3 `rip=0x0` fault after containment.
+- Current silk-shell change is temporary containment, not final root-cause repair.
+- Containment debt: isolate the exact runtime-loop null-jump trigger in a separate branch and replace containment with a real safe loop.
+- Next safe branch rule:
+  1. replace containment with real loop fix, or
+  2. do M2 color tokenization only if containment is explicitly accepted as checkpoint baseline.
+- Invariant: no_std user PD entrypoints/loops must never fall through or call null handlers; idle path must park via safe spin/yield behavior.
+- Recovery: if breakage returns, snapshot broken state and return to `backup/WORKING-GUI-CLOCK-PD3-CONTAINED-*` or this containment checkpoint commit.
+
 ---
 
 ## USER_FAULT_CONTAINMENT_V1
