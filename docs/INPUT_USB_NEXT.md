@@ -156,3 +156,13 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 - Non-goals preserved: no Address Device, no descriptors, no HID, no IRQ handler path, no sexinput routing, no kernel/ABI edits.
 - Build gate passed: `./scripts/entrypoint_build.sh`.
 - Runtime host blocker persists: `./dev.sh run` failed with `Could not initialize SDL(No available video device)`.
+
+## RULE: BootInfoFrameAllocator metadata overlap (GP at LockFreeBuddyAllocator::alloc)
+
+**Symptom**: QEMU black screen, EXCEPTION: GP FAULT at RIP 0xffffffff80203bdb in kernel allocator. Crash PD is *not* sexusb but a different PD later in scheduler rotation (e.g., sexinput). Triggered by sexusb binary growing past a page boundary (extra ELF segment page triggers a page-table allocation from the conflicting frame pool).
+
+**Root cause**: kernel/src/memory/manager.rs carves PageMetadata array from first usable memory region, but BootInfoFrameAllocator (in GLOBAL_VAS) was NOT advanced past the metadata pages. Page-table allocation from frame allocator returned a metadata frame; writing PTE entries overwrote PageMetadata.next pointers, corrupting the buddy allocator free list -> GP fault.
+
+**Fix**: Advance frame_allocator.allocate_frame() by metadata_pages after seeding the buddy allocator (see kernel/src/memory/manager.rs init()).
+
+**XHCI CRCS rule**: After each Command TRB is consumed, XHCI toggles Command Ring Cycle State (CRCS). Always write a cycle-stop marker (TRB with cycle=opposite of current CRCS) after the last valid TRB in a batch. Second-batch commands use cycle=0 (matching CRCS after first TRB consumed).
