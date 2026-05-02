@@ -414,8 +414,9 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> 
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let _ = validate_contract();
-    let _ = validate_deterministic_vectors();
+    if !validate_contract() || !validate_deterministic_vectors() {
+        loop { core::hint::spin_loop(); }
+    }
 
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
