@@ -7,6 +7,24 @@ Use these files in this order to avoid roadmap drift:
 2. `docs/SILK_DE_EXECUTION_PLAN.md` — execution detail and external-agent prompts.
 3. `HANDOFF.md` — runtime status, regressions, and immediate operational notes.
 
+## Known-Good Forward Base
+
+- **Confirmed working base commit:** `897ad23` (`fix(kernel): set user bits on upper page-walk levels for FB user access`).
+- **Forward rule:** make tiny reversible branches from this base only.
+- **Rollback rule:** if runtime breaks, immediately branch/save broken state, then return to the `WORKING-BOOT` base before further work.
+
+## PD3 Containment Checkpoint
+
+- Runtime checkpoint verified: visible non-black GUI, SilkBar clock running, PD3 `rip=0x0` null-jump not observed after containment.
+- Current PD3 change is **temporary containment**, not final root cause fix.
+- Containment behavior: silk-shell runtime loop path is bypassed/contained to keep PD3 alive while preventing null-jump recurrence.
+- Root-fix debt: isolate the exact loop-path null target in a dedicated branch and replace containment with a real safe event loop fix.
+- Safe-forward rule: next code branch must either:
+  1. replace PD3 containment with a real loop fix, or
+  2. proceed only with M2 color tokenization if containment is explicitly accepted as the checkpoint baseline.
+- Invariant: no_std user PD entrypoints/loops must never fall through or call null handlers; idle paths must park via safe spin/yield behavior.
+- Recovery: if breakage returns, branch/save current broken state, then checkout `backup/WORKING-GUI-CLOCK-PD3-CONTAINED-*` (or this checkpoint commit) before further changes.
+
 ## 2026-05-02 Clock Freeze Regression (FIXED ✅)
 
 **Symptom:** Clock advanced briefly (~2 seconds) then froze after merging `debug/silkbar-delivery` into `master`.

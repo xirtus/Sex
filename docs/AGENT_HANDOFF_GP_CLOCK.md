@@ -1,6 +1,6 @@
 # AGENT_HANDOFF_GP_CLOCK.md — Master Baseline Handoff Ledger
 
-> **Status**: Current as of master `9da9897`.
+> **Status**: Current working baseline confirmed at `897ad23`.
 > **Policy**: Read this first in every session. It is the canonical handoff.
 
 ---
@@ -8,8 +8,8 @@
 ## Current Master Baseline
 
 **Branch:** `master` → `origin/master`
-**Tip commit:** `9da9897` — `build(gate): remove stale apps/quil workspace member and sync abi_version_hash`
-**Parent:** `d497c76` — `fix(kernel): contain user null-jump faults`
+**Tip commit:** `897ad23` — `fix(kernel): set user bits on upper page-walk levels for FB user access`
+**Parent:** `94beca1` — `docs(silk-de): sync roadmap and handoff source-of-truth`
 
 **Working tree:** Clean (only untracked `an/` — ignore unless asked).
 
@@ -20,6 +20,25 @@
 - QEMU window appears (no `-display gtk` override)
 
 **Known: screen may appear black** — see Black Screen Diagnosis in `HANDOFF.md`.
+
+## Safe Forward Rule
+
+1. Never patch from a broken runtime branch.
+2. Use one tiny branch per task.
+3. Build + boot after each task.
+4. Runtime-first gate before M2/M3: all 6 PDs run, PD1 survives, no fault.kill/#PF/#GP/panic, clock >4s, visible non-black GUI.
+5. If runtime breaks: immediately branch/save broken state and return to the `WORKING-BOOT` base.
+
+## PD3 Containment Status
+
+- Verified checkpoint: GUI visible, SilkBar clock working, and no PD3 `rip=0x0` fault after containment.
+- Current silk-shell change is temporary containment, not final root-cause repair.
+- Containment debt: isolate the exact runtime-loop null-jump trigger in a separate branch and replace containment with a real safe loop.
+- Next safe branch rule:
+  1. replace containment with real loop fix, or
+  2. do M2 color tokenization only if containment is explicitly accepted as checkpoint baseline.
+- Invariant: no_std user PD entrypoints/loops must never fall through or call null handlers; idle path must park via safe spin/yield behavior.
+- Recovery: if breakage returns, snapshot broken state and return to `backup/WORKING-GUI-CLOCK-PD3-CONTAINED-*` or this containment checkpoint commit.
 
 ---
 
