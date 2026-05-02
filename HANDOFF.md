@@ -7,6 +7,12 @@ Use these files in this order to avoid roadmap drift:
 2. `docs/SILK_DE_EXECUTION_PLAN.md` — execution detail and external-agent prompts.
 3. `HANDOFF.md` — runtime status, regressions, and immediate operational notes.
 
+## Known-Good Forward Base
+
+- **Confirmed working base commit:** `897ad23` (`fix(kernel): set user bits on upper page-walk levels for FB user access`).
+- **Forward rule:** make tiny reversible branches from this base only.
+- **Rollback rule:** if runtime breaks, immediately branch/save broken state, then return to the `WORKING-BOOT` base before further work.
+
 ## 2026-05-02 Clock Freeze Regression (FIXED ✅)
 
 **Symptom:** Clock advanced briefly (~2 seconds) then froze after merging `debug/silkbar-delivery` into `master`.
