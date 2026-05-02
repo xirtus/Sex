@@ -96,3 +96,63 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 - Non-goals preserved: no Enable Slot/Address Device, no enum, no HID, no IRQ path, no kernel/ABI edits.
 - Build gate passed: `./scripts/entrypoint_build.sh`.
 - Runtime host blocker persists: `./dev.sh run` failed with `Could not initialize SDL(No available video device)`.
+
+## USB_HANDOFF_AFTER_NOOP
+
+### Commits
+- `68ab83b` feat(sexusb): add XHCI BAR probe server
+- `2e2970e` feat(sexusb): add bounded XHCI reset-run proof
+- `ef05f27` feat(sexusb): add XHCI static ring memory proof
+- `efe3adb` feat(sexusb): prove XHCI command ring noop
+
+### sexusb Boundary
+- server name: `sexusb`
+- path: `servers/sexusb`
+- `sexusb` is USB-only bus/host server
+- not `sexusb-server`, not `SexUSB_Server`, not `sexlink`
+- `sexinput` owns input meaning/normalizer
+- `sexlink` is future UI/control-plane only, not hardware
+
+### Current Proven
+- sexusb boots as PD
+- maps XHCI BAR0 via syscall `43` (`MAP_PCI_BAR`) and `SLOT_USB_HOST`
+- reads `CAPLENGTH`/`HCIVERSION`/`HCSP1`/`HCC1`
+- bounded stop/reset/CNR/run proof
+- alloc/maps command ring, event ring, ERST, DCBAA via syscall `31` phys + syscall `30` VA
+- writes `DCBAAP`, `CRCR`, `ERSTSZ`, `ERSTBA`, `ERDP`
+- submits one Command Noop TRB `type=23`
+- rings `DB[0]` value `0`
+- polls event ring bounded and recognizes Command Completion Event `type=33`
+- build passes
+
+### Current Not Implemented
+- no Enable Slot
+- no Address Device
+- no device enumeration
+- no HID parsing
+- no interrupt-driven event handling
+- no sexinput routing
+- no storage/audio/network routing
+- no kernel/ABI edits after sexusb spawn/lease work
+- no sexlink
+
+### Runtime
+- `./dev.sh run` blocked by host SDL/no-video in this environment.
+- Treat as environment blocker, not patch failure.
+
+### Next
+- Claude audit first: `USB_XHCI_COMMAND_RING_AUDIT_V1`
+- then only if audit passes: `USB_XHCI_ENABLE_SLOT_PROOF_V1`
+
+### Rules
+- Do not jump to HID.
+- Do not touch sexinput until USB HID report bytes exist.
+- Do not create sexlink.
+- Keep all waits bounded.
+- Any validation failure must log bad and park/yield, not panic.
+- Save recurring issue fixes in docs.
+- USB_XHCI_ENABLE_SLOT_PROOF_V1 complete in `servers/sexusb/src/main.rs`: after NOOP proof, writes one Enable Slot Command TRB (`type=9`, cycle=1) at command ring index 1, rings doorbell 0, then bounded-polls event ring for Command Completion Event (`type=33`).
+- Event decode: completion code from status dword (`cc = d2[31:24]`), slot id extracted from control dword (`slot_id = d3[31:24]`), with success marker only when `cc==1` and `slot_id!=0`.
+- Non-goals preserved: no Address Device, no descriptors, no HID, no IRQ handler path, no sexinput routing, no kernel/ABI edits.
+- Build gate passed: `./scripts/entrypoint_build.sh`.
+- Runtime host blocker persists: `./dev.sh run` failed with `Could not initialize SDL(No available video device)`.

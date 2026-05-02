@@ -130,6 +130,7 @@ pub extern "C" fn _start() -> ! {
     const XHCI_INTR_ERSTSZ: u64 = 0x08;
     const XHCI_INTR_ERSTBA: u64 = 0x10;
     const XHCI_INTR_ERDP: u64 = 0x18;
+    const TRB_TYPE_ENABLE_SLOT_CMD: u32 = 9;
     const TRB_TYPE_NOOP_CMD: u32 = 23;
     const TRB_TYPE_CMD_COMPLETION_EVENT: u32 = 33;
     const TRB_CC_SUCCESS: u32 = 1;
@@ -335,6 +336,55 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[sexusb.xhci.cmd.noop.complete.ok]");
     } else {
         serial_println!("[sexusb.xhci.cmd.noop.complete.bad]");
+    }
+
+    serial_println!("[sexusb.xhci.enable_slot.start]");
+    // Clear event slot to avoid stale completion decode on reused index 0 polling.
+    trb_write_volatile(event_ring_va, 0, 0, 0, 0, 0);
+
+    // Enable Slot command at command ring index 1, producer cycle=1.
+    let enable_slot_d3 = (TRB_TYPE_ENABLE_SLOT_CMD << 10) | 1u32;
+    trb_write_volatile(cmd_ring_va, 1, 0, 0, 0, enable_slot_d3);
+    serial_println!("[sexusb.xhci.enable_slot.trb.ok]");
+
+    mmio_write32(db_base, 0, 0u32); // Doorbell 0, target 0 (command ring)
+    serial_println!("[sexusb.xhci.enable_slot.doorbell.ok]");
+
+    let mut en_seen_completion = false;
+    let mut en_completion_ok = false;
+    let mut en_slot_id: u32 = 0;
+    for _ in 0..POLL_BUDGET {
+        let ev_d3 = trb_read_dword(event_ring_va, 0, 3);
+        let ev_cycle = ev_d3 & 1;
+        if ev_cycle == 1 {
+            let ev_type = (ev_d3 >> 10) & 0x3F;
+            if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
+                en_seen_completion = true;
+                serial_println!("[sexusb.xhci.enable_slot.event.seen]");
+                let ev_d2 = trb_read_dword(event_ring_va, 0, 2);
+                let cc = (ev_d2 >> 24) & 0xFF;
+                en_completion_ok = cc == TRB_CC_SUCCESS;
+                en_slot_id = (ev_d3 >> 24) & 0xFF;
+                break;
+            } else {
+                en_seen_completion = true;
+                break;
+            }
+        }
+        sys_yield();
+    }
+
+    if !en_seen_completion {
+        serial_println!("[sexusb.xhci.enable_slot.timeout.bad]");
+    } else if en_completion_ok {
+        serial_println!("[sexusb.xhci.enable_slot.complete.ok]");
+        if en_slot_id != 0 {
+            serial_println!("[sexusb.xhci.enable_slot.slot.ok] {}", en_slot_id);
+        } else {
+            serial_println!("[sexusb.xhci.enable_slot.complete.bad]");
+        }
+    } else {
+        serial_println!("[sexusb.xhci.enable_slot.complete.bad]");
     }
 
     loop { sys_yield(); }
