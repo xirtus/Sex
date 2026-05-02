@@ -1,5 +1,12 @@
 # HANDOFF.md — v8+ USER_FAULT_CONTAINMENT_V1
 
+## Documentation Source Of Truth
+
+Use these files in this order to avoid roadmap drift:
+1. `docs/ROADMAP.md` — current milestone sequence and delegation timing.
+2. `docs/SILK_DE_EXECUTION_PLAN.md` — execution detail and external-agent prompts.
+3. `HANDOFF.md` — runtime status, regressions, and immediate operational notes.
+
 ## 2026-05-02 Clock Freeze Regression (FIXED ✅)
 
 **Symptom:** Clock advanced briefly (~2 seconds) then froze after merging `debug/silkbar-delivery` into `master`.
