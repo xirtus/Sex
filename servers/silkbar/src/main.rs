@@ -33,6 +33,7 @@ pub extern "C" fn _start() -> ! {
     let mut last_focus_state: u8 = 0xFF;
     let mut chip_phase: u8 = 0;
     let mut chip0_net: bool = true;
+    let mut last_uptime_seconds: u64 = u64::MAX;
 
     /// Approximate LAPIC timer ticks per second (divide=16, init_count=1_000_000).
     /// Not calibrated — yields monotonic uptime, not wall-clock accuracy.
@@ -105,6 +106,10 @@ pub extern "C" fn _start() -> ! {
         // Read kernel uptime ticks for clock and chip cadence
         let ticks = sex_pdx::get_ticks();
         let uptime_seconds = ticks / LAPIC_TICKS_PER_SECOND_APPROX;
+        if uptime_seconds == last_uptime_seconds {
+            continue;
+        }
+        last_uptime_seconds = uptime_seconds;
         let hh = ((uptime_seconds / 3600) % 24) as u8;
         let mm = ((uptime_seconds / 60) % 60) as u8;
         let ss = (uptime_seconds % 60) as u8;
