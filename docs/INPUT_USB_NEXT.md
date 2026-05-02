@@ -986,3 +986,19 @@ Next safe design:
 - sexdisplay must remain sole framebuffer writer.
 - Preserve framebuffer bounds checks.
 - No shared-memory/backing-buffer redesign.
+
+## USB_MOUSE_MOVEMENT_NONZERO_PROOF_V1
+
+Status: instrumentation added for bounded nonzero movement proof (no display cursor path).
+
+Implementation:
+- `sexusb` now runs a bounded interrupt-IN poll loop (`count=32`) after endpoint setup.
+- Per-report markers:
+  - `[sexusb.hid.mouse.poll_loop.report] i=N buttons=0x.. dx=N dy=N wheel=N`
+- Nonzero detector markers:
+  - `[sexusb.hid.mouse.nonzero.ok] i=N ...` on first nonzero report
+  - `[sexusb.hid.mouse.nonzero.miss] count=N` if no movement captured
+- Existing `sexusb -> sexinput -> silk-shell` path unchanged.
+- `silk-shell` adds:
+  - `[shell.pointer.usb_state.nonzero.ok] x=N y=N buttons=0x.. wheel=N dx=N dy=N`
+    when incoming USB report is nonzero.

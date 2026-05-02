@@ -2379,40 +2379,65 @@ pub extern "C" fn _start() -> ! {
     cmd_idx += 1;
     serial_println!("[sexusb.xhci.intr_in.config_ep.ok]");
 
-    // Queue one interrupt-IN Normal TRB and poll for one transfer event.
-    trb_write_volatile(
-        intr_ring_va,
-        0,
-        (intr_report_phys & 0xFFFF_FFFF) as u32,
-        (intr_report_phys >> 32) as u32,
-        INTR_REPORT_LEN,
-        (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | 1u32, // IOC + cycle=1
-    );
-    trb_write_volatile(intr_ring_va, 1, 0, 0, 0, 0u32); // cycle stop
-
-    serial_println!("[sexusb.xhci.intr_in.poll.start]");
-    mmio_write32(db_base, en_slot_id as u64 * 4, INTR_DCI);
-
-    let mut intr_ok = false;
-    let mut intr_residue: u32 = 0;
-    for _ in 0..POLL_BUDGET {
-        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
-        if (ev_d3 & 1) != (ev_dcs as u32) {
-            sys_yield();
-            continue;
+    const INTR_POLL_COUNT: u32 = 32;
+    serial_println!("[sexusb.hid.mouse.poll_loop.start] count={}", INTR_POLL_COUNT);
+    let mut saw_nonzero = false;
+    for i in 0..INTR_POLL_COUNT {
+        // Clear report buffer before each transfer.
+        unsafe {
+            core::ptr::write_volatile(intr_report_va as *mut u8, 0);
+            core::ptr::write_volatile((intr_report_va + 1) as *mut u8, 0);
+            core::ptr::write_volatile((intr_report_va + 2) as *mut u8, 0);
+            core::ptr::write_volatile((intr_report_va + 3) as *mut u8, 0);
         }
-        let ev_type = (ev_d3 >> 10) & 0x3F;
-        if ev_type == TRB_TYPE_TRANSFER_EVENT {
-            let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
-            let cc = (ev_d2 >> 24) & 0xFF;
-            intr_residue = ev_d2 & 0xFFFFFF;
-            let slot = (ev_d3 >> 24) & 0xFF;
-            let ep = (ev_d3 >> 16) & 0x1F;
-            if cc == TRB_CC_SUCCESS && slot == en_slot_id && ep == INTR_DCI {
-                intr_ok = true;
-            } else {
-                serial_println!("[sexusb.xhci.intr_in.event.bad] cc={} slot={} ep={}", cc, slot, ep);
+
+        // Queue one interrupt-IN Normal TRB and poll for one transfer event.
+        trb_write_volatile(
+            intr_ring_va,
+            0,
+            (intr_report_phys & 0xFFFF_FFFF) as u32,
+            (intr_report_phys >> 32) as u32,
+            INTR_REPORT_LEN,
+            (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | 1u32, // IOC + cycle=1
+        );
+        trb_write_volatile(intr_ring_va, 1, 0, 0, 0, 0u32); // cycle stop
+
+        serial_println!("[sexusb.xhci.intr_in.poll.start]");
+        mmio_write32(db_base, en_slot_id as u64 * 4, INTR_DCI);
+
+        let mut intr_ok = false;
+        let mut intr_residue: u32 = 0;
+        for _ in 0..POLL_BUDGET {
+            let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+            if (ev_d3 & 1) != (ev_dcs as u32) {
+                sys_yield();
+                continue;
             }
+            let ev_type = (ev_d3 >> 10) & 0x3F;
+            if ev_type == TRB_TYPE_TRANSFER_EVENT {
+                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                let cc = (ev_d2 >> 24) & 0xFF;
+                intr_residue = ev_d2 & 0xFFFFFF;
+                let slot = (ev_d3 >> 24) & 0xFF;
+                let ep = (ev_d3 >> 16) & 0x1F;
+                if cc == TRB_CC_SUCCESS && slot == en_slot_id && ep == INTR_DCI {
+                    intr_ok = true;
+                } else {
+                    serial_println!("[sexusb.xhci.intr_in.event.bad] cc={} slot={} ep={}", cc, slot, ep);
+                }
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS {
+                    ev_idx = 0;
+                    ev_dcs ^= 1;
+                }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            }
+
+            // Consume unrelated owned events and continue waiting for the transfer event.
             trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
             ev_idx += 1;
             if ev_idx >= EVENT_RING_TRBS {
@@ -2422,68 +2447,77 @@ pub extern "C" fn _start() -> ! {
             let new_erdp = event_ring_phys + ev_idx * 16;
             mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
             mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+        }
+        if !intr_ok {
+            serial_println!("[sexusb.xhci.intr_in.poll.timeout.bad]");
             break;
         }
-
-        // Consume unrelated owned events and continue waiting for the transfer event.
-        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
-        ev_idx += 1;
-        if ev_idx >= EVENT_RING_TRBS {
-            ev_idx = 0;
-            ev_dcs ^= 1;
+        if intr_residue > INTR_REPORT_LEN {
+            serial_println!("[sexusb.xhci.intr_in.residue.bad] residue={}", intr_residue);
+            break;
         }
-        let new_erdp = event_ring_phys + ev_idx * 16;
-        mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
-        mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
-    }
-    if !intr_ok {
-        serial_println!("[sexusb.xhci.intr_in.poll.timeout.bad]");
-        loop { sys_yield(); }
-    }
-    if intr_residue > INTR_REPORT_LEN {
-        serial_println!("[sexusb.xhci.intr_in.residue.bad] residue={}", intr_residue);
-        loop { sys_yield(); }
-    }
-    let intr_actual = INTR_REPORT_LEN - intr_residue;
-    serial_println!("[sexusb.xhci.intr_in.event.ok] actual={} residue={}", intr_actual, intr_residue);
-    let report_ptr = intr_report_va as *const u8;
-    let rb0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
-    let rb1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
-    let rb2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
-    let rb3 = unsafe { core::ptr::read_volatile(report_ptr.add(3)) };
-    serial_println!(
-        "[sexusb.xhci.intr_in.report.bytes] bytes=[{:#x},{:#x},{:#x},{:#x}]",
-        rb0, rb1, rb2, rb3
-    );
-    serial_println!("[sexusb.hid.mouse.decode.start] len={}", intr_actual);
-    let report_bytes = [rb0, rb1, rb2, rb3];
-    if let Some(decoded) = decode_boot_mouse_report(&report_bytes, intr_actual as usize) {
+        let intr_actual = INTR_REPORT_LEN - intr_residue;
+        serial_println!("[sexusb.xhci.intr_in.event.ok] actual={} residue={}", intr_actual, intr_residue);
+        let report_ptr = intr_report_va as *const u8;
+        let rb0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
+        let rb1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
+        let rb2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
+        let rb3 = unsafe { core::ptr::read_volatile(report_ptr.add(3)) };
         serial_println!(
-            "[sexusb.hid.mouse.decode.ok] buttons={:#x} dx={} dy={} wheel={}",
-            decoded.buttons,
-            decoded.dx,
-            decoded.dy,
-            decoded.wheel
+            "[sexusb.xhci.intr_in.report.bytes] bytes=[{:#x},{:#x},{:#x},{:#x}]",
+            rb0, rb1, rb2, rb3
         );
-        serial_println!("[sexusb.hid.mouse.pdx_send.start]");
-        let packed_axes = (decoded.dx as u8 as u64)
-            | ((decoded.dy as u8 as u64) << 8)
-            | ((decoded.wheel as u8 as u64) << 16);
-        match pdx_call_checked(
-            SLOT_USB_SEXINPUT,
-            OP_USB_MOUSE_REPORT,
-            0,
-            decoded.buttons as u64,
-            packed_axes,
-        ) {
-            Ok(_) => serial_println!("[sexusb.hid.mouse.pdx_send.ok]"),
-            Err(err) => serial_println!("[sexusb.hid.mouse.pdx_send.fail] err={}", err),
+        serial_println!("[sexusb.hid.mouse.decode.start] len={}", intr_actual);
+        let report_bytes = [rb0, rb1, rb2, rb3];
+        if let Some(decoded) = decode_boot_mouse_report(&report_bytes, intr_actual as usize) {
+            serial_println!(
+                "[sexusb.hid.mouse.decode.ok] buttons={:#x} dx={} dy={} wheel={}",
+                decoded.buttons,
+                decoded.dx,
+                decoded.dy,
+                decoded.wheel
+            );
+            serial_println!(
+                "[sexusb.hid.mouse.poll_loop.report] i={} buttons={:#x} dx={} dy={} wheel={}",
+                i,
+                decoded.buttons,
+                decoded.dx,
+                decoded.dy,
+                decoded.wheel
+            );
+            serial_println!("[sexusb.hid.mouse.pdx_send.start]");
+            let packed_axes = (decoded.dx as u8 as u64)
+                | ((decoded.dy as u8 as u64) << 8)
+                | ((decoded.wheel as u8 as u64) << 16);
+            match pdx_call_checked(
+                SLOT_USB_SEXINPUT,
+                OP_USB_MOUSE_REPORT,
+                0,
+                decoded.buttons as u64,
+                packed_axes,
+            ) {
+                Ok(_) => serial_println!("[sexusb.hid.mouse.pdx_send.ok]"),
+                Err(err) => serial_println!("[sexusb.hid.mouse.pdx_send.fail] err={}", err),
+            }
+            if decoded.buttons == 0 && decoded.dx == 0 && decoded.dy == 0 && decoded.wheel == 0 {
+                serial_println!("[sexusb.hid.mouse.decode.zero.ok]");
+            } else if !saw_nonzero {
+                saw_nonzero = true;
+                serial_println!(
+                    "[sexusb.hid.mouse.nonzero.ok] i={} buttons={:#x} dx={} dy={} wheel={}",
+                    i,
+                    decoded.buttons,
+                    decoded.dx,
+                    decoded.dy,
+                    decoded.wheel
+                );
+            }
+        } else {
+            serial_println!("[sexusb.hid.mouse.decode.bad] len={}", intr_actual);
         }
-        if decoded.buttons == 0 && decoded.dx == 0 && decoded.dy == 0 && decoded.wheel == 0 {
-            serial_println!("[sexusb.hid.mouse.decode.zero.ok]");
-        }
-    } else {
-        serial_println!("[sexusb.hid.mouse.decode.bad] len={}", intr_actual);
+    }
+    if !saw_nonzero {
+        serial_println!("[sexusb.hid.mouse.nonzero.miss] count={}", INTR_POLL_COUNT);
     }
     serial_println!("[sexusb.xhci.intr_in.poll.complete.ok]");
     serial_println!("[sexusb.xhci.config.complete.ok]");

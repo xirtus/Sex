@@ -385,6 +385,17 @@ pub extern "C" fn _start() -> ! {
                             POINTER_BUTTONS,
                             POINTER_WHEEL_ACCUM
                         );
+                        if dx != 0 || dy != 0 || buttons != 0 || wheel != 0 {
+                            serial_println!(
+                                "[shell.pointer.usb_state.nonzero.ok] x={} y={} buttons={:#x} wheel={} dx={} dy={}",
+                                POINTER_X,
+                                POINTER_Y,
+                                POINTER_BUTTONS,
+                                POINTER_WHEEL_ACCUM,
+                                dx,
+                                dy
+                            );
+                        }
                     }
                     pdx_reply(0);
                 }
