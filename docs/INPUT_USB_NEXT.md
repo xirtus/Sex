@@ -73,3 +73,4 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
   `./scripts/entrypoint_build.sh`.
 - Runtime `run-nographic` blocked by qemu stdio multi-device conflict, not by build.
 - `sex-pdx` and `silk-shell` were inspect-only; no ABI or policy edits.
+- POINTER_DRAG_PROOF_V1 note: in headless/CI hosts, `./dev.sh run` may fail with `SDL(No available video device)` and `run-nographic` may fail with `-serial stdio` multi-device conflict; treat as environment runtime blocker, not pointer-path regression.

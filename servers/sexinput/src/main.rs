@@ -73,6 +73,7 @@ pub extern "C" fn _start() -> ! {
     }
 
     let mut tick: u64 = 0;
+    let mut drag_proof_stage: u8 = 0;
 
     loop {
         // 1. Non-blocking poll for raw scancodes from kernel (SLOT_INPUT = 3)
@@ -91,21 +92,32 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        // 3. Synthetic pointer event producer (transport proof, not product)
-        //    Emits bounded EV_REL + occasional EV_BTN to validate the typed event path
-        //    through silk-shell's existing POINTER_EVENT_NORMALIZATION_V1 consumer.
-        //    Cadence cap: 1 burst per 120 ticks. Routes through normalize_pointer_report_v1()
-        //    normalizer to prove transport-agnostic contract.
+        // 3. Deterministic synthetic drag proof (bounded):
+        //    EV_ABS anchor, then BTN down -> REL move -> BTN up via normalizer.
         tick = tick.wrapping_add(1);
         if tick % 120 == 0 {
-            let buttons = if tick % 480 == 0 { 0x01 } else { 0x00 };
-            let report = HidPointerRawReport { dx: 5, dy: 3, buttons, wheel: 0 };
+            let report = match drag_proof_stage {
+                0 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 200, 200, EV_ABS);
+                    serial_println!("[sexinput.drag_proof.start]");
+                    HidPointerRawReport { dx: 0, dy: 0, buttons: 0x01, wheel: 0 } // left down edge
+                }
+                1 => HidPointerRawReport { dx: 6, dy: 4, buttons: 0x01, wheel: 0 }, // drag move
+                _ => HidPointerRawReport { dx: 0, dy: 0, buttons: 0x00, wheel: 0 }, // left up edge
+            };
+
             normalize_pointer_report_v1(report, unsafe { &mut *core::ptr::addr_of_mut!(LAST_BUTTONS) }, |arg0, arg1, arg2| {
                 pdx_call(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2);
-                if arg2 == EV_BTN && arg1 == 1 {
-                    serial_println!("[sexinput] Synthetic pointer click press");
+                if arg2 == EV_BTN && arg0 == 1 && arg1 == 1 {
+                    serial_println!("[sexinput.drag_proof.down]");
+                } else if arg2 == EV_REL {
+                    serial_println!("[sexinput.drag_proof.move]");
+                } else if arg2 == EV_BTN && arg0 == 1 && arg1 == 0 {
+                    serial_println!("[sexinput.drag_proof.up]");
                 }
             });
+
+            drag_proof_stage = (drag_proof_stage + 1) % 3;
         }
 
         sys_yield();
