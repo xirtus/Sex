@@ -64,8 +64,20 @@ pub extern "C" fn _start() -> ! {
     }
 
     loop {
-        // Stabilization: keep silkbar on deterministic local cadence only.
-        // This avoids the current listen-path null-jump in PD5.
+        // Process at most one upstream message per loop (non-blocking).
+        if let Some(msg) = sex_pdx::pdx_try_listen_raw(0) {
+            if msg.type_id == sex_pdx::OP_SILKBAR_WORKSPACE_ACTIVE {
+                let ws = (msg.arg0 as u8).min(4);
+                for i in 0..5 {
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetWorkspaceActive as u32, i, if i == ws { 1 } else { 0 }, 0,
+                    ));
+                }
+            } else if msg.type_id == sex_pdx::OP_SILKBAR_FOCUS_STATE {
+                // Clamp invalid producer values to debug(3) to keep update space bounded.
+                focus_state = (msg.arg0 as u8).min(3);
+            }
+        }
 
         if focus_state != last_focus_state {
             // Temporary Stage 2C focus->urgent visual stub.
