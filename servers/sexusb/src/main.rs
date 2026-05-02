@@ -1142,6 +1142,31 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.xhci.eval_ctx.start]");
 
     let actual_mps = mps as u32;
+
+    // Report-only MPS audit before any modification.
+    // Dump output device context EP0 state (what controller actually set).
+    let dev_ep0_base = (device_ctx_va + ctx_stride) as *const u32;
+    let dev_dw0 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(0)) };
+    let dev_dw1 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(1)) };
+    let dev_dw2 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(2)) };
+    let dev_dw3 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(3)) };
+    let dev_ep0_mps = (dev_dw0 >> 16) & 0xFFFF;
+    serial_println!("[sexusb.xhci.mps.audit] port_speed={}", port_speed);
+    serial_println!("[sexusb.xhci.mps.audit] device_desc_bMaxPacketSize0={}", actual_mps);
+    serial_println!("[sexusb.xhci.mps.audit] max_packet_size_speed_guess={}", max_packet_size);
+    serial_println!("[sexusb.xhci.mps.audit] output_ep0_dw0={:#x}", dev_dw0);
+    serial_println!("[sexusb.xhci.mps.audit] output_ep0_dw1={:#x}", dev_dw1);
+    serial_println!("[sexusb.xhci.mps.audit] output_ep0_dw2={:#x}", dev_dw2);
+    serial_println!("[sexusb.xhci.mps.audit] output_ep0_dw3={:#x}", dev_dw3);
+    serial_println!("[sexusb.xhci.mps.audit] output_ep0_mps_before={}", dev_ep0_mps);
+    // Speed-based expected MPS per USB 2.0 spec:
+    //   LS (speed 1) -> 8, FS (speed 0) -> 8/16/32/64
+    //   HS (speed 2) -> 64, SS (speed 3) -> 512
+    serial_println!("[sexusb.xhci.mps.audit] expected_rule=speed_based port_speed={} guess={}",
+        port_speed, max_packet_size);
+    // Descriptor MPS source: bMaxPacketSize0 from 8-byte GET_DESCRIPTOR(DEVICE).
+    serial_println!("[sexusb.xhci.mps.audit] got_rule_source=descriptor_bMaxPacketSize0 value={}",
+        actual_mps);
     // Valid EP0 MPS values: 8, 16, 32, 64, 512 per USB spec.
     let mps_valid = match actual_mps { 8 | 16 | 32 | 64 | 512 => true, _ => false };
     if !mps_valid {
@@ -1247,9 +1272,25 @@ pub extern "C" fn _start() -> ! {
     // Verify MPS was updated in output Device Context EP0 DW0 bits 31:16.
     let verify_dw0 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(0)) };
     let verify_mps = (verify_dw0 >> 16) & 0xFFFF;
+    // Post-eval EP0 context dump for audit.
+    let post_dw1 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(1)) };
+    let post_dw2 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(2)) };
+    let post_dw3 = unsafe { core::ptr::read_volatile(dev_ep0_base.add(3)) };
+    serial_println!("[sexusb.xhci.mps.audit] post_eval_ep0_dw0={:#x}", verify_dw0);
+    serial_println!("[sexusb.xhci.mps.audit] post_eval_ep0_dw1={:#x}", post_dw1);
+    serial_println!("[sexusb.xhci.mps.audit] post_eval_ep0_dw2={:#x}", post_dw2);
+    serial_println!("[sexusb.xhci.mps.audit] post_eval_ep0_dw3={:#x}", post_dw3);
+    serial_println!("[sexusb.xhci.mps.audit] output_ep0_mps_after={}", verify_mps);
+    serial_println!("[sexusb.xhci.mps.audit] actual_mps_target={}", actual_mps);
     if verify_mps == actual_mps {
         serial_println!("[sexusb.xhci.eval_ctx.mps.verify] expected={} got={}", actual_mps, verify_mps);
         serial_println!("[sexusb.xhci.eval_ctx.complete.ok]");
+    } else if port_speed == 3 && verify_mps == 512 {
+        // SuperSpeed (speed=3) EP0 MPS is fixed at 512 per USB 3.0 spec
+        // (§9.6.1: bMaxPacketSize0 encoding differs for SS). Controller
+        // correctly ignores Evaluate Context MPS update for SS ports.
+        serial_println!("[sexusb.xhci.eval_ctx.ss_mps_512.ok] port_speed=3 ss_mps=512 descriptor_bMaxPacketSize0={}",
+            actual_mps);
     } else {
         serial_println!("[sexusb.xhci.eval_ctx.verify.bad] expected={} got={}", actual_mps, verify_mps);
     }
