@@ -135,15 +135,22 @@ pub extern "C" fn _start() -> ! {
     // The runtime space begins with MFINDEX at offset 0x00 (32-bit, read-only).
     // Interrupter register sets start at offset 0x20, each 32 bytes.
     const XHCI_INTR_BASE: u64 = 0x20;
+    // xHCI command TRB type values per command-ring encoding (xHCI 1.2 §4.11.3).
+    // Do NOT use transfer-ring TRB type values for command TRBs — the type number
+    // namespace is shared but context-specific per ring type.
+    //   Enable Slot      = 9  (not transfer-ring value 1)
+    //   Address Device   = 11 (not transfer-ring value 8)
+    //   Evaluate Context = 13 (not transfer-ring value 10)
+    //   Noop Command     = 23
     const TRB_TYPE_ENABLE_SLOT_CMD: u32 = 9;
-    const TRB_TYPE_ADDRESS_DEVICE_CMD: u32 = 8;
+    const TRB_TYPE_ADDRESS_DEVICE_CMD: u32 = 11;
     const TRB_TYPE_NOOP_CMD: u32 = 23;
+    const TRB_TYPE_EVALUATE_CONTEXT_CMD: u32 = 13;
     const TRB_TYPE_CMD_COMPLETION_EVENT: u32 = 33;
     const TRB_TYPE_TRANSFER_EVENT: u32 = 32;
     const TRB_TYPE_SETUP_STAGE: u32 = 2;
     const TRB_TYPE_DATA_STAGE: u32 = 3;
     const TRB_TYPE_STATUS_STAGE: u32 = 4;
-    const TRB_TYPE_EVALUATE_CONTEXT_CMD: u32 = 14;
     const TRB_CC_SUCCESS: u32 = 1;
 
     serial_println!("[sexusb.boot]");
@@ -318,6 +325,16 @@ pub extern "C" fn _start() -> ! {
     mmio_write32(intr_base, XHCI_INTR_ERDP, event_ring_phys as u32);
     mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (event_ring_phys >> 32) as u32);
     serial_println!("[sexusb.xhci.erdp.write.ok]");
+
+    // ── CONFIG: MaxSlotsEnabled (spec 5.4.7, spec 4.6.6 step 4) ──
+    let max_slots = (hcsp1 & 0xFF) as u32;
+    if max_slots == 0 {
+        serial_println!("[sexusb.xhci.config.max_slots.zero.bad]");
+        loop { sys_yield(); }
+    }
+    mmio_write32(op_base, XHCI_OP_CONFIG, max_slots);
+    serial_println!("[sexusb.xhci.config.ok] max_slots={}", max_slots);
+
     serial_println!("[sexusb.xhci.ring.proof.ok]");
 
     // ── Phase 4: Run/Stop after rings are programmed (spec 4.6.6) ──
@@ -458,10 +475,13 @@ pub extern "C" fn _start() -> ! {
         if (ev_d3 & 1) == (ev_dcs as u32) {
             let ev_type = (ev_d3 >> 10) & 0x3F;
             if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
+                let ev_d0 = trb_read_dword(event_ring_va, ev_idx, 0);
+                let ev_d1 = trb_read_dword(event_ring_va, ev_idx, 1);
                 let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
                 let cc = (ev_d2 >> 24) & 0xFF;
                 noop_ok = cc == TRB_CC_SUCCESS;
-                serial_println!("[sexusb.xhci.cmd.noop.event.seen]");
+                serial_println!("[sexusb.xhci.cmd.noop.event.raw] d0={:#x} d1={:#x} d2={:#x} d3={:#x} type={} cc={}",
+                    ev_d0, ev_d1, ev_d2, ev_d3, ev_type, cc);
                 // Clear consumed event cycle bit (spec 4.11.4)
                 trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
                 // Advance event dequeue pointer and update ERDP.
@@ -525,9 +545,13 @@ pub extern "C" fn _start() -> ! {
             if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
                 let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
                 let cc = (ev_d2 >> 24) & 0xFF;
+                // Dump full event TRB for Enable Slot diagnosis
+                let ev_d0 = trb_read_dword(event_ring_va, ev_idx, 0);
+                let ev_d1 = trb_read_dword(event_ring_va, ev_idx, 1);
+                serial_println!("[sexusb.xhci.enable_slot.event.raw] d0={:#x} d1={:#x} d2={:#x} d3={:#x}",
+                    ev_d0, ev_d1, ev_d2, ev_d3);
                 en_ok = cc == TRB_CC_SUCCESS;
                 en_slot_id = (ev_d3 >> 24) & 0xFF;
-                serial_println!("[sexusb.xhci.enable_slot.event.seen]");
                 // Clear consumed event cycle bit (spec 4.11.4)
                 trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
                 // Advance event dequeue pointer and update ERDP.
@@ -567,8 +591,10 @@ pub extern "C" fn _start() -> ! {
     let ctx_stride: u64 = if (hcc1 & (1u32 << 2)) != 0 { 64 } else { 32 };
     serial_println!("[sexusb.xhci.addr_ctx.stride.ok] {}", ctx_stride);
 
-    // Read MaxPorts from HCSPARAMS1 bits 23:16.
-    let max_ports: u64 = ((hcsp1 >> 16) & 0xFF) as u64;
+    // Read MaxPorts from HCSPARAMS1 bits 31:24.
+    // XHCI 1.1+ shifts MaxPorts to bits 31:24 (MaxIntrs expands to bits 18:8).
+    // QEMU nec-xhci uses 1.1+ layout even with HCIVERSION=0x100.
+    let max_ports: u64 = ((hcsp1 >> 24) & 0xFF) as u64;
     serial_println!("[sexusb.xhci.addr_ctx.ports] {}", max_ports);
 
     // Scan PORTSC for first connected, enabled port. Get port number and speed.
@@ -670,7 +696,11 @@ pub extern "C" fn _start() -> ! {
     let slot_dw0 = (context_entries << SLOT_CTX_ENTRIES_SHIFT)
         | (port_speed << SLOT_SPEED_SHIFT)
         | 0u32;  // route_string = 0 (root hub, no hub routing)
-    let slot_dw1: u32 = (target_port as u32) << 24;  // root hub port number in bits 31:24
+    // Slot Context DW1: bits 23:16 = Root Hub Port Number
+    // bits 31:24 = Number of Ports, must remain 0 for non-hub device.
+    // xHCI spec places Root Hub Port Number at DW1[31:24] for usb3,
+    // but QEMU nec-xhci reads it from DW1[23:16].
+    let slot_dw1 = (target_port as u32) << 16;
 
     // Write to Input Context Slot Context at offset ctx_stride.
     let input_slot_base = (input_ctx_va + ctx_stride) as *mut u32;
@@ -745,7 +775,10 @@ pub extern "C" fn _start() -> ! {
     unsafe {
         core::ptr::write_volatile(dcbaa_entry_ptr, device_ctx_phys);
     }
-    serial_println!("[sexusb.xhci.addr_ctx.dcbaa.ok]");
+    // Read back DCBAA entry to verify write visibility.
+    let dcbaa_ent_readback = unsafe { core::ptr::read_volatile(dcbaa_entry_ptr) };
+    serial_println!("[sexusb.xhci.addr_ctx.dcbaa.ok] wrote={:#x} readback={:#x}",
+        device_ctx_phys, dcbaa_ent_readback);
 
     serial_println!("[sexusb.xhci.addr_ctx.layout.ok]");
 
@@ -761,16 +794,104 @@ pub extern "C" fn _start() -> ! {
         | (TRB_TYPE_ADDRESS_DEVICE_CMD << 10)
         | cmd_cycle;
     trb_write_volatile(cmd_ring_va, cmd_idx, addr_dev_d0, addr_dev_d1, 0u32, addr_dev_d3);
+    // Dump Address Device TRB for diagnostics
+    let trb_d0 = trb_read_dword(cmd_ring_va, cmd_idx, 0);
+    let trb_d1 = trb_read_dword(cmd_ring_va, cmd_idx, 1);
+    let trb_d2 = trb_read_dword(cmd_ring_va, cmd_idx, 2);
+    let trb_d3 = trb_read_dword(cmd_ring_va, cmd_idx, 3);
+    serial_println!("[sexusb.xhci.address_device.trb.dump] d0={:#x} d1={:#x} d2={:#x} d3={:#x}",
+        trb_d0, trb_d1, trb_d2, trb_d3);
+    // Dump Input Context (ICC + Slot + EP0)
+    let icc_d0 = unsafe { core::ptr::read_volatile(input_ctx_va as *const u32) };
+    let icc_d1 = unsafe { core::ptr::read_volatile((input_ctx_va + 4) as *const u32) };
+    let in_slot_d0 = unsafe { core::ptr::read_volatile((input_ctx_va + ctx_stride) as *const u32) };
+    let in_slot_d1 = unsafe { core::ptr::read_volatile((input_ctx_va + ctx_stride + 4) as *const u32) };
+    let in_slot_d2 = unsafe { core::ptr::read_volatile((input_ctx_va + ctx_stride + 8) as *const u32) };
+    let in_slot_d3 = unsafe { core::ptr::read_volatile((input_ctx_va + ctx_stride + 12) as *const u32) };
+    let in_ep0_d0 = unsafe { core::ptr::read_volatile((input_ctx_va + ctx_stride * 2) as *const u32) };
+    let in_ep0_d1 = unsafe { core::ptr::read_volatile((input_ctx_va + ctx_stride * 2 + 4) as *const u32) };
+    let in_ep0_d2 = unsafe { core::ptr::read_volatile((input_ctx_va + ctx_stride * 2 + 8) as *const u32) };
+    let in_ep0_d3 = unsafe { core::ptr::read_volatile((input_ctx_va + ctx_stride * 2 + 12) as *const u32) };
+    serial_println!("[sexusb.xhci.input_ctx.dump] icc=({:#x},{:#x}) slot=({:#x},{:#x},{:#x},{:#x}) ep0=({:#x},{:#x},{:#x},{:#x})",
+        icc_d0, icc_d1,
+        in_slot_d0, in_slot_d1, in_slot_d2, in_slot_d3,
+        in_ep0_d0, in_ep0_d1, in_ep0_d2, in_ep0_d3);
     serial_println!("[sexusb.xhci.address_device.trb.ok]");
 
     // Cycle-stop at cmd_idx+1 with opposite cycle.
     trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle ^ 1);
+
+    // Dump Device Context as read by controller via DCBAA.
+    let dev_slot_d0 = unsafe { core::ptr::read_volatile(device_ctx_va as *const u32) };
+    let dev_slot_d1 = unsafe { core::ptr::read_volatile((device_ctx_va + 4) as *const u32) };
+    let dev_slot_d2 = unsafe { core::ptr::read_volatile((device_ctx_va + 8) as *const u32) };
+    let dev_slot_d3 = unsafe { core::ptr::read_volatile((device_ctx_va + 12) as *const u32) };
+    let dev_ep0_d0 = unsafe { core::ptr::read_volatile((device_ctx_va + ctx_stride) as *const u32) };
+    let dev_ep0_d1 = unsafe { core::ptr::read_volatile((device_ctx_va + ctx_stride + 4) as *const u32) };
+    let dev_ep0_d2 = unsafe { core::ptr::read_volatile((device_ctx_va + ctx_stride + 8) as *const u32) };
+    let dev_ep0_d3 = unsafe { core::ptr::read_volatile((device_ctx_va + ctx_stride + 12) as *const u32) };
+    serial_println!("[sexusb.xhci.dev_ctx.dump] slot=({:#x},{:#x},{:#x},{:#x}) ep0=({:#x},{:#x},{:#x},{:#x})",
+        dev_slot_d0, dev_slot_d1, dev_slot_d2, dev_slot_d3,
+        dev_ep0_d0, dev_ep0_d1, dev_ep0_d2, dev_ep0_d3);
+
+    // ── XHCI_ADDRESS_DEVICE_ICC_QEMU_LAYOUT_AUDIT_V1 ──
+    serial_println!("[sexusb.xhci.addr_ctx.audit.start]");
+    serial_println!("[sexusb.xhci.icc_audit.target_port] port={}", target_port);
+    let target_portsc = mmio_read32(op_base, PORTSC_BASE + (target_port - 1) * PORTSC_STRIDE);
+    serial_println!("[sexusb.xhci.icc_audit.portsc_raw] raw={:#x}", target_portsc);
+    let ccs_port = target_portsc & PORTSC_CCS;
+    serial_println!("[sexusb.xhci.icc_audit.port_ccs] ccs={}", ccs_port);
+    serial_println!("[sexusb.xhci.icc_audit.slot_id] id={}", en_slot_id);
+    serial_println!("[sexusb.xhci.icc_audit.ctx_stride] stride={}", ctx_stride);
+    serial_println!("[sexusb.xhci.icc_audit.input_ctx_phys] phys={:#x}", input_ctx_phys);
+    serial_println!("[sexusb.xhci.icc_audit.device_ctx_phys] phys={:#x}", device_ctx_phys);
+    // Raw hex dump of first 64 bytes at input_ctx (16 dwords)
+    for i in 0u64..16u64 {
+        let word = unsafe { core::ptr::read_volatile((input_ctx_va + i * 4) as *const u32) };
+        serial_println!("[sexusb.xhci.icc_audit.raw32] i={} off={:#x} val={:#010x}",
+            i, i * 4, word);
+    }
+    // QEMU-style ICC read: pos=0, offset 0x00..0x1f (ctxsize=32 bytes)
+    let qemu_icc0 = unsafe { core::ptr::read_volatile((input_ctx_va + 0x00) as *const u32) };
+    let qemu_icc1 = unsafe { core::ptr::read_volatile((input_ctx_va + 0x04) as *const u32) };
+    serial_println!("[sexusb.xhci.icc_audit.qemu_icc] icc0={:#x} icc1={:#x} icc0_exp=0 icc1_exp=3 icc0_ok={} icc1_ok={}",
+        qemu_icc0, qemu_icc1,
+        qemu_icc0 == 0, qemu_icc1 == 3);
+    // QEMU-style Slot Context read: pos=1, offset=ctx_stride
+    let slot_off = ctx_stride;
+    let qemu_slot_dw0 = unsafe { core::ptr::read_volatile((input_ctx_va + slot_off + 0x00) as *const u32) };
+    let qemu_slot_dw1 = unsafe { core::ptr::read_volatile((input_ctx_va + slot_off + 0x04) as *const u32) };
+    let qemu_slot_dw2 = unsafe { core::ptr::read_volatile((input_ctx_va + slot_off + 0x08) as *const u32) };
+    let qemu_slot_dw3 = unsafe { core::ptr::read_volatile((input_ctx_va + slot_off + 0x0c) as *const u32) };
+    let qemu_port = (qemu_slot_dw1 >> 16) & 0xFF;
+    let spec_port = (qemu_slot_dw1 >> 24) & 0xFF;
+    serial_println!("[sexusb.xhci.icc_audit.qemu_slot] dw0={:#x} dw1={:#x} dw2={:#x} dw3={:#x}",
+        qemu_slot_dw0, qemu_slot_dw1, qemu_slot_dw2, qemu_slot_dw3);
+    serial_println!("[sexusb.xhci.icc_audit.slot_ports] spec_port={} qemu_port={} target_port={}",
+        spec_port, qemu_port, target_port as u32);
+    // QEMU-style EP0 Context read: pos=2, offset=ctx_stride*2
+    let ep0_off = ctx_stride * 2;
+    let qemu_ep0_dw0 = unsafe { core::ptr::read_volatile((input_ctx_va + ep0_off + 0x00) as *const u32) };
+    let qemu_ep0_dw1 = unsafe { core::ptr::read_volatile((input_ctx_va + ep0_off + 0x04) as *const u32) };
+    let qemu_ep0_dw2 = unsafe { core::ptr::read_volatile((input_ctx_va + ep0_off + 0x08) as *const u32) };
+    let qemu_ep0_dw3 = unsafe { core::ptr::read_volatile((input_ctx_va + ep0_off + 0x0c) as *const u32) };
+    serial_println!("[sexusb.xhci.icc_audit.qemu_ep0] dw0={:#x} dw1={:#x} dw2={:#x} dw3={:#x}",
+        qemu_ep0_dw0, qemu_ep0_dw1, qemu_ep0_dw2, qemu_ep0_dw3);
+    // Address Device TRB fields
+    serial_println!("[sexusb.xhci.icc_audit.addr_trb] d0={:#x} d1={:#x} d2=0 d3={:#x}",
+        addr_dev_d0, addr_dev_d1, addr_dev_d3);
+    let trb_ptr = ((addr_dev_d1 as u64) << 32) | (addr_dev_d0 as u64);
+    serial_println!("[sexusb.xhci.icc_audit.trb_ptr_match] ptr={:#x} match={}", trb_ptr, trb_ptr == input_ctx_phys);
+    let bsr = (addr_dev_d3 >> 9) & 1;
+    serial_println!("[sexusb.xhci.icc_audit.bsr_zero] bsr={}", bsr);
+    // ── END ICC AUDIT ──
 
     // Doorbell 0 (command ring).
     mmio_write32(db_base, 0, 0u32);
     serial_println!("[sexusb.xhci.address_device.doorbell.ok]");
 
     // Consume command completion event at ev_idx.
+    serial_println!("[sexusb.xhci.address_device.poll.enter] ev_idx={} ev_dcs={}", ev_idx, ev_dcs);
     let mut addr_dev_ok = false;
     for _ in 0..POLL_BUDGET {
         let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
@@ -780,9 +901,12 @@ pub extern "C" fn _start() -> ! {
                 let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
                 let ev_cc = (ev_d2 >> 24) & 0xFF;
                 let ev_slot_id = (ev_d3 >> 24) & 0xFF;
+                let ev_d0_evt = trb_read_dword(event_ring_va, ev_idx, 0);
+                let ev_d1_evt = trb_read_dword(event_ring_va, ev_idx, 1);
+                serial_println!("[sexusb.xhci.address_device.event.dump] d0={:#x} d1={:#x} d2={:#x} d3={:#x} type={} cc={} slot={}",
+                    ev_d0_evt, ev_d1_evt, ev_d2, ev_d3, ev_type, ev_cc, ev_slot_id);
                 if ev_cc == TRB_CC_SUCCESS && ev_slot_id == en_slot_id {
                     addr_dev_ok = true;
-                    serial_println!("[sexusb.xhci.address_device.event.seen]");
                     serial_println!("[sexusb.xhci.address_device.complete.ok]");
                     serial_println!("[sexusb.xhci.address_device.slot.ok]");
                 } else {

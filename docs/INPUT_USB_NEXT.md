@@ -649,3 +649,99 @@ For GET_DESCRIPTOR(CONFIGURATION) setup packet:
 - ERDP advance after event consumption also uses lower-dword-first.
 
 **BAR size cap**: QEMU nec-usb-xhci BAR0 spans 64KB (0x10000). Kernel MAP_PCI_BAR must not clamp to 4KB or runtime/operational registers past offset 0x1000 will alias or read back zero.
+
+## XHCI_SLOT_CONTEXT_DW1_ROOT_PORT_FIX_V1
+
+### Problem
+Address Device command fails with QEMU CC_TRB_ERROR (cc=5). Prior "mirror bits 31:24 and 23:16" compat patch wrote `slot_dw1 = (target_port << 24) | (target_port << 16) = 0x05050000`, but bits 31:24 is Number of Ports (not alternative root port).
+
+### Diagnosis
+xHCI spec Slot Context DW1:
+- bits 23:16 = Root Hub Port Number
+- bits 31:24 = Number of Ports (must remain 0 for non-hub device)
+
+Setting Number of Ports=5 (non-zero for non-hub) causes QEMU to reject Address Device.
+
+### Fix
+Change slot_dw1 to `let slot_dw1 = (target_port as u32) << 16;` → 0x00050000.
+
+### Verification
+- Slot DW1 serial print shows 0x00050000
+
+## XHCI_COMMAND_TRB_TYPE_FIX_V1
+
+### Problem
+Address Device command returns CC_TRB_ERROR (5) despite correct input context and slot context. QEMU trace shows our TRB displayed as "TR_NOOP" instead of "CR_ADDRESS_DEVICE".
+
+### Diagnosis
+xHCI spec defines COMMAND TRB type values that differ from transfer-ring types in the shared 6-bit type field (xHCI 1.2 §4.11.3). The old constants used transfer-ring names/values:
+- `TRB_TYPE_ADDRESS_DEVICE_CMD = 8` — this is TRANSFER NO-OP (type 8), not Address Device Command (type 11)
+- `TRB_TYPE_EVALUATE_CONTEXT_CMD = 14` — this is Reset Endpoint Command (type 14), not Evaluate Context (type 13)
+
+Correct command TRB type values per command-ring encoding:
+- Enable Slot = 9 (not transfer value 1)
+- Address Device = 11 (not transfer value 8)
+- Evaluate Context = 13 (not transfer value 10)
+- Noop Command = 23
+
+### Fix
+Change `TRB_TYPE_ADDRESS_DEVICE_CMD` from 8 → 11, `TRB_TYPE_EVALUATE_CONTEXT_CMD` from 14 → 13. Add comment explaining command-ring vs transfer-ring namespace.
+
+### Verification
+- QEMU trace shows `CR_ADDRESS_DEVICE` (not `TR_NOOP`) for our Address Device TRB
+- `usb_xhci_slot_address` trace fires for our TRB
+- `[sexusb.xhci.address_device.complete.ok]` with cc=1 slot=1
+
+### Remaining (desc8 timeout)
+GET_DESCRIPTOR(Device) transfer on EP0 ring times out. TRBs are fetched (SETUP/DATA/STATUS visible in QEMU trace) but no Transfer Event arrives. Doorbell or cycle bit issue on transfer ring.
+- QEMU trace `usb_xhci_slot_address` fires for our TRB (was previously absent)
+- `[sexusb.xhci.address_device.complete.ok]` appears with cc=1
+
+## XHCI_ADDRESS_DEVICE_CC5_CONTEXT_AUDIT_V1
+
+### Problem
+Address Device command fails with QEMU CC_TRB_ERROR (cc=5). CONFIG.MaxSlotsEnabled write applied but did not fix. QEMU compat root port fix (bits 23:16 + 31:24) applied but did not fix.
+
+### Diagnosis
+QEMU nec-xhci uses shifted completion codes: CC_SUCCESS=1, CC_TRB_ERROR=5, CC_SLOT_NOT_ENABLED_ERROR=11. So cc=5 is NOT "Slot Not Enabled Error" but generic CC_TRB_ERROR.
+
+QEMU source indicates `xhci_address_slot` returns CC_TRB_ERROR at:
+1. ICC check: ictl_ctx[0] != 0x0 || ictl_ctx[1] != 0x3
+2. Port lookup: uport == NULL
+3. Duplicate port check: xhci->slots[i].uport == uport for i != slotid-1
+4. Device context pointer validation in DCBAA
+
+### Changes
+- Added `[sexusb.xhci.addr_ctx.audit.start]` section before Address Device doorbell with full context dump:
+  - target_port, portsc_raw, port_ccs, slot_id, ctx_stride
+  - input_ctx_phys, device_ctx_phys, dcbaa_slot_value, dcbaa_match
+  - ICC dwords 0..1, Slot DW0..DW3, EP0 DW0..DW3
+  - Address TRB d0..d3, trb_ptr_match, bsr_zero, spec_port, qemu_port
+- Full event TRB dump on Address Device completion (d0..d3, type, cc, slot)
+- Removed generic 4-entry event ring dump on timeout
+- Added env-gated QEMU trace support: `SEXUSB_XHCI_TRACE=1 ./dev.sh run-nographic`
+- QEMU traces: `usb_xhci_slot_address`, `usb_xhci_queue_event`, `usb_xhci_fetch_trb`
+
+### Verification
+```
+./scripts/entrypoint_build.sh
+SEXUSB_XHCI_TRACE=1 ./dev.sh run-nographic > /tmp/sexusb-addr-cc5-serial.log 2> /tmp/sexusb-addr-cc5-trace.log
+grep -E "addr_ctx.audit|cc=5|complete|slot.ok|dcbaa_match|trb_ptr_match|bsr|spec_port|qemu_port|event.dump" /tmp/sexusb-addr-cc5-serial.log
+grep -E "usb_xhci_slot_address|usb_xhci_queue_event|usb_xhci_fetch_trb" /tmp/sexusb-addr-cc5-trace.log
+```
+
+### Required answers
+1. QEMU slot_address trace: which port number?
+2. All audit invariants pass? (dcbaa_match=true, trb_ptr_match=true, bsr=0, spec/qemu port match target, port CCS=1)
+3. Event dump: full dwords, type, cc, slot
+4. Does completion still cc=5 or did something change?
+
+### Non-goals preserved
+- No 64-entry event ring dump
+- No random port swapping
+- No QEMU auto-slot theory chase
+- No vendor op+0x38 writes
+- No ERSTSZ experiment
+- No doorbell value changes
+- No HID/config descriptor changes
+- No kernel/ABI edits
