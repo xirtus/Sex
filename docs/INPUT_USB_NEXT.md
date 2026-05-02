@@ -955,3 +955,34 @@ No `[sexusb.xhci.eval_ctx.verify.bad]`.
 
 ### Next
 - Promote from one-shot poll proof to stable repeated polling policy (still no IRQ path).
+
+## CURSOR_DISPLAY_TRANSPORT_BLOCKED_V1
+
+Status: blocked / do not retry by opcode guessing.
+
+Proven:
+- Physical USB mouse reaches silk-shell pointer state:
+  - [shell.pointer.usb_state.ok] x=640 y=360 buttons=0x0 wheel=0
+- silk-shell never writes framebuffer.
+- sexdisplay remains sole framebuffer writer.
+
+Failed attempts:
+- New cursor op 0xEA: shell send returned ok, sexdisplay never observed it.
+- New cursor op 0xF0: shell send returned ok, sexdisplay never observed it.
+- Existing delivered 0xEB sentinel carrier:
+  - shell sent op=0xeb arg0=0xffffffffffffffff arg1=x arg2=y|buttons<<32
+  - pdx_call returned status=0 value=0
+  - sexdisplay continued receiving normal 0xEB surface IDs 0x64..0x67
+  - sentinel message never appeared.
+
+Conclusion:
+- Failure is not sexdisplay handler order or cursor rendering.
+- Current shell->display transport likely filters/coalesces/drops messages outside normal surface model before sexdisplay queue visibility.
+- Do not continue opcode probing.
+
+Next safe design:
+- Add a dedicated, documented display-control cursor protocol path, or extend existing display message model intentionally.
+- STOP FIRST before kernel/ABI/cap/display-router edits.
+- sexdisplay must remain sole framebuffer writer.
+- Preserve framebuffer bounds checks.
+- No shared-memory/backing-buffer redesign.
