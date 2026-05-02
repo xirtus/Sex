@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """
-Inject deterministic mouse events into QEMU via QMP for usb-mouse proof.
+QEMU QMP mouse injection script (dev infra only).
 
-Connects to /tmp/sexos-qmp.sock, sends a sequence of mouse movements
-and button clicks via HMP (human-monitor-command over QMP).
+Connects to /tmp/sexos-qmp.sock and sends mouse events via QMP
+input-send-event (broadcast) or HMP human-monitor-command.
+
+KNOWN LIMITATION (QEMU 11.0, usb-mouse device):
+QMP input-send-event returns success but events do NOT reach the
+emulated usb-mouse device. They are consumed by the PS/2 display layer.
+No device name was found that routes to usb-mouse (all common names fail).
+This means mouse injection cannot replace real mouse input for this setup.
+Use usb-tablet (absolute HID) instead.
 
 Usage:
     # Start QEMU with injection enabled:
@@ -11,9 +18,6 @@ Usage:
 
     # In another terminal after desktop appears:
     python3 scripts/qemu_mouse_inject.py
-
-    # Or custom sequence:
-    python3 scripts/qemu_mouse_inject.py --move 20 10 --click --move -10 5
 
 NO Rust/kernel/ABI/cap changes. Dev infra only.
 """
@@ -34,71 +38,89 @@ class QMPClient:
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.settimeout(10.0)
         self.sock.connect(sockpath)
+        self.fp = self.sock.makefile("rw", buffering=1)
         # Consume QMP greeting
         self._read_response()
-        # Capabilities handshake
-        self._cmd({"execute": "qmp_capabilities"})
-        resp = self._read_response()
+        # Capabilities handshake (_cmd sends + reads response)
+        resp = self._cmd({"execute": "qmp_capabilities"})
         if "error" in resp:
             print(f"QMP capabilities error: {resp}", file=sys.stderr)
             sys.exit(1)
 
     def _read_response(self) -> dict:
         """Read one JSON object from QMP socket (newline-delimited)."""
-        buf = b""
-        while True:
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise ConnectionError("QMP socket closed")
-            buf += chunk
-            try:
-                obj, _ = json.JSONDecoder().raw_decode(buf.decode())
-                return obj
-            except json.JSONDecodeError:
-                # Wait for more data
-                continue
+        line = self.fp.readline()
+        if not line:
+            raise ConnectionError("QMP socket closed")
+        return json.loads(line.strip())
 
     def _cmd(self, cmd: dict) -> dict:
         """Send a QMP command and return the response."""
-        payload = json.dumps(cmd).encode() + b"\n"
-        self.sock.sendall(payload)
+        self.fp.write(json.dumps(cmd) + "\n")
+        self.fp.flush()
         return self._read_response()
 
-    def hmp(self, cmdline: str) -> dict:
-        """Execute an HMP command via QMP human-monitor-command."""
+    def send_events(self, events: list, device: str = ""):
+        """
+        Send input events via QMP input-send-event.
+        If device is empty string, broadcasts to all input handlers.
+        """
+        args = {"events": events}
+        if device:
+            args["device"] = device
         return self._cmd({
-            "execute": "human-monitor-command",
-            "arguments": {"command-line": cmdline}
+            "execute": "input-send-event",
+            "arguments": args
         })
 
-    def mouse_move_rel(self, dx: int, dy: int):
-        """Relative mouse movement via HMP."""
-        result = self.hmp(f"mouse_move {dx} {dy}")
-        print(f"  mouse_move({dx}, {dy}) -> {result.get('return', 'ok')}", file=sys.stderr)
+    def mouse_move_rel(self, dx: int, dy: int, device: str = ""):
+        """Send relative mouse movement."""
+        ev = [
+            {"type": "rel", "data": {"axis": "x", "value": dx}},
+            {"type": "rel", "data": {"axis": "y", "value": dy}},
+        ]
+        result = self.send_events(ev, device)
+        status = "ok" if "return" in result else str(result.get("error", ""))
+        print(f"  mouse_move({dx}, {dy}) -> {status}", file=sys.stderr)
+        return result
 
-    def mouse_button(self, state: int):
-        """Set mouse button state (1=left, 2=right, 4=middle)."""
-        result = self.hmp(f"mouse_button {state}")
-        print(f"  mouse_button({state}) -> {result.get('return', 'ok')}", file=sys.stderr)
+    def mouse_click(self, button: str = "left", device: str = ""):
+        """Send a button down+up click."""
+        down = self.send_events(
+            [{"type": "btn", "data": {"down": True, "button": button}}],
+            device
+        )
+        time.sleep(0.05)
+        up = self.send_events(
+            [{"type": "btn", "data": {"down": False, "button": button}}],
+            device
+        )
+        d_status = "ok" if "return" in down else str(down.get("error", ""))
+        u_status = "ok" if "return" in up else str(up.get("error", ""))
+        print(f"  mouse_click({button}) -> {d_status}/{u_status}", file=sys.stderr)
 
     def close(self):
         self.sock.close()
 
 
-def run_sequence(client: QMPClient, sequence: list):
+def run_sequence(client: QMPClient, sequence: list, device: str = ""):
     """Run a sequence of (action, *args) tuples."""
     for item in sequence:
         action = item[0]
         if action == "move":
-            client.mouse_move_rel(item[1], item[2])
+            client.mouse_move_rel(item[1], item[2], device)
         elif action == "click":
-            client.mouse_button(1)   # down
-            time.sleep(0.05)
-            client.mouse_button(0)   # up
+            client.mouse_click("left", device)
         elif action == "btn-down":
-            client.mouse_button(1)
+            client.send_events(
+                [{"type": "btn", "data": {"down": True, "button": "left"}}],
+                device
+            )
         elif action == "btn-up":
-            client.mouse_button(0)
+            client.send_events(
+                [{"type": "btn", "data": {"down": False, "button": "left"}}],
+                device
+            )
         elif action == "sleep":
             time.sleep(item[1])
         else:
@@ -120,6 +142,8 @@ def main():
                         help="Left button up")
     parser.add_argument("--proof", action="store_true",
                         help="Run standard proof sequence")
+    parser.add_argument("--device", default="",
+                        help="Input device name (default: broadcast to all)")
     parser.add_argument("--socket", default=QMP_SOCKET,
                         help=f"QMP socket path (default: {QMP_SOCKET})")
     args = parser.parse_args()
@@ -140,6 +164,8 @@ def main():
 
     print("Connected.", file=sys.stderr)
 
+    dev = args.device
+
     if args.proof:
         # Standard proof sequence: move, click, move again
         print("Running proof sequence:", file=sys.stderr)
@@ -153,7 +179,7 @@ def main():
             ("move", 0, -8),
             ("sleep", 0.2),
             ("click",),
-        ])
+        ], dev)
     else:
         sequence = []
         if args.move:
@@ -166,7 +192,7 @@ def main():
             sequence.append(("click",))
         if sequence:
             print("Running custom sequence:", file=sys.stderr)
-            run_sequence(client, sequence)
+            run_sequence(client, sequence, dev)
 
     client.close()
     print("Injection complete.", file=sys.stderr)

@@ -1092,3 +1092,24 @@ grep -aE "nonzero|buttons=0x[0-9a-f][1-9a-f]|dx=-|dx=[1-9]|dy=-|dy=[1-9]" \
 - No Rust, no kernel/ABI/cap edits.
 - No sexusb/silk-shell/sexdisplay logic changes.
 - No change to default `./dev.sh run` behavior.
+
+### Test Result (2026-05-02)
+**FAILURE**: QMP `input-send-event` (broadcast) and HMP `mouse_move`/`mouse_button`
+both return success but do NOT reach usb-mouse.
+
+Evidence:
+- All `[sexusb.hid.mouse.continuous.report]` show `dx=0 dy=0 buttons=0x0`
+- Shell pointer stays at `x=640 y=360` (center) throughout injection
+- No `[sexusb.hid.mouse.nonzero.ok]` or `[shell.pointer.usb_state.nonzero.ok]`
+- No `click_focus` markers
+- QEMU version: 11.0.0 (`nec-usb-xhci` controller, `usb-mouse` device)
+- No valid `device` name found for `input-send-event` (all common names fail)
+- Broadcast mode (`device` omitted) returns `{"return": {}}` but events are
+  silently consumed by the PS/2 display layer
+
+Root cause: QEMU's QMP/HMP injection targets the default PS/2 mouse input hub.
+The `usb-mouse` handler does not receive events from this path in QEMU 11.0.
+The input subsystem routes events only to the active pointer device
+(auto-selected by QEMU based on display backend), not to all registered handlers.
+
+**Decision**: Stop QMP injection path. Proceed to `USB_TABLET_HID_PROBE_V1`.
