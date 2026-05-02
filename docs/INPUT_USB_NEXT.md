@@ -64,3 +64,12 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 - click-focus and drag remain shell-only policy.
 - no #GP/#PF/panic.
 - no IPC storm.
+
+## HID_POINTER_REPORT_NORMALIZER_V1 status
+- HID_POINTER_REPORT_NORMALIZER_V1 complete.
+- Synthetic pointer now routes:
+  `HidPointerRawReport -> normalize_pointer_report_v1 -> OP_HID_EVENT -> silk-shell`.
+- Build gate passed:
+  `./scripts/entrypoint_build.sh`.
+- Runtime `run-nographic` blocked by qemu stdio multi-device conflict, not by build.
+- `sex-pdx` and `silk-shell` were inspect-only; no ABI or policy edits.
