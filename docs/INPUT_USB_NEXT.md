@@ -85,3 +85,9 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 - Non-goals preserved: no enum, no TRB/event rings, no DMA buffers, no HID routing, no kernel/ABI edits.
 - Build gate passed: `./scripts/entrypoint_build.sh`.
 - Runtime host blocker persists: `./dev.sh run` failed with `Could not initialize SDL(No available video device)`.
+- USB_XHCI_STATIC_RING_PROOF_V1 complete in `servers/sexusb/src/main.rs` using existing syscalls only: `31` (alloc phys) + `30` (map phys->VA).
+- Ring memory proof allocates/maps command ring, event ring, ERST, and DCBAA pages from kernel allocator authority (no Rust static DMA buffers).
+- Added bounded proof markers for alloc/alignment/pointer-register writes, including DCBAAP/CRCR/ERSTSZ+ERSTBA/ERDP writes.
+- No kernel/ABI/allocator edits; no IRQ handling, no doorbells, no enum/HID/TRB processing.
+- Build gate passed: `./scripts/entrypoint_build.sh`.
+- Runtime host blocker persists: `./dev.sh run` failed with `Could not initialize SDL(No available video device)`.

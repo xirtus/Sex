@@ -26,6 +26,37 @@ fn map_xhci_bar0() -> u64 {
     map_va
 }
 
+fn sys_alloc_phys(size: u64) -> u64 {
+    let phys: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") 31u64,
+            in("rdi") size,
+            lateout("rax") phys,
+            out("rcx") _,
+            out("r11") _,
+        );
+    }
+    phys
+}
+
+fn sys_map_phys(phys: u64, size: u64) -> u64 {
+    let va: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") 30u64,
+            in("rdi") phys,
+            in("rsi") size,
+            lateout("rax") va,
+            out("rcx") _,
+            out("r11") _,
+        );
+    }
+    va
+}
+
 #[inline(always)]
 fn mmio_read32(base: u64, offset: u64) -> u32 {
     let ptr = (base + offset) as *const u32;
@@ -36,6 +67,12 @@ fn mmio_read32(base: u64, offset: u64) -> u32 {
 fn mmio_write32(base: u64, offset: u64, value: u32) {
     let ptr = (base + offset) as *mut u32;
     unsafe { core::ptr::write_volatile(ptr, value); }
+}
+
+#[inline(always)]
+fn mmio_write64(base: u64, offset: u64, value: u64) {
+    mmio_write32(base, offset, (value & 0xFFFF_FFFF) as u32);
+    mmio_write32(base, offset + 4, (value >> 32) as u32);
 }
 
 fn wait_until(base: u64, offset: u64, mask: u32, expect_set: bool, spins: usize) -> bool {
@@ -52,6 +89,14 @@ fn wait_until(base: u64, offset: u64, mask: u32, expect_set: bool, spins: usize)
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    const PAGE_SIZE: u64 = 4096;
+    const TRB_SIZE: u64 = 16;
+    const CMD_RING_TRBS: u64 = 64;
+    const EVENT_RING_TRBS: u64 = 64;
+    const ERST_ENTRIES: u64 = 1;
+    const DCBAA_BYTES: u64 = PAGE_SIZE;
+    const MAP_BYTES: u64 = 0x1000;
+
     const XHCI_USBCMD: u64 = 0x00;
     const XHCI_USBSTS: u64 = 0x04;
     const USBCMD_RUN_STOP: u32 = 1 << 0;
@@ -59,6 +104,14 @@ pub extern "C" fn _start() -> ! {
     const USBSTS_HCHALTED: u32 = 1 << 0;
     const USBSTS_CNR: u32 = 1 << 11;
     const POLL_BUDGET: usize = 100_000;
+    const XHCI_CRCR: u64 = 0x18;
+    const XHCI_DCBAAP: u64 = 0x30;
+    const XHCI_CAP_RTSOFF: u64 = 0x18;
+    const XHCI_CAP_HCCPARAMS1: u64 = 0x10;
+    const XHCI_INTR0_BASE: u64 = 0x20;
+    const XHCI_INTR_ERSTSZ: u64 = 0x08;
+    const XHCI_INTR_ERSTBA: u64 = 0x10;
+    const XHCI_INTR_ERDP: u64 = 0x18;
 
     serial_println!("[sexusb.boot]");
 
@@ -116,6 +169,106 @@ pub extern "C" fn _start() -> ! {
     } else {
         serial_println!("[sexusb.xhci.run.bad]");
     }
+
+    serial_println!("[sexusb.xhci.ring.alloc.start]");
+    let cmd_ring_bytes = CMD_RING_TRBS * TRB_SIZE;
+    let event_ring_bytes = EVENT_RING_TRBS * TRB_SIZE;
+    let erst_bytes = PAGE_SIZE;
+
+    let cmd_ring_phys = sys_alloc_phys(PAGE_SIZE);
+    let event_ring_phys = sys_alloc_phys(PAGE_SIZE);
+    let erst_phys = sys_alloc_phys(erst_bytes);
+    let dcbaa_phys = sys_alloc_phys(DCBAA_BYTES);
+
+    if cmd_ring_phys == 0 || cmd_ring_phys == u64::MAX
+        || event_ring_phys == 0 || event_ring_phys == u64::MAX
+        || erst_phys == 0 || erst_phys == u64::MAX
+        || dcbaa_phys == 0 || dcbaa_phys == u64::MAX
+    {
+        serial_println!("[sexusb.xhci.ring.alloc.bad]");
+        loop { sys_yield(); }
+    }
+
+    let cmd_ring_va = sys_map_phys(cmd_ring_phys, PAGE_SIZE);
+    let event_ring_va = sys_map_phys(event_ring_phys, PAGE_SIZE);
+    let erst_va = sys_map_phys(erst_phys, erst_bytes);
+    let dcbaa_va = sys_map_phys(dcbaa_phys, DCBAA_BYTES);
+
+    if cmd_ring_va == 0 || cmd_ring_va == u64::MAX
+        || event_ring_va == 0 || event_ring_va == u64::MAX
+        || erst_va == 0 || erst_va == u64::MAX
+        || dcbaa_va == 0 || dcbaa_va == u64::MAX
+    {
+        serial_println!("[sexusb.xhci.ring.alloc.bad]");
+        loop { sys_yield(); }
+    }
+
+    let aligned_ok = (cmd_ring_phys % PAGE_SIZE == 0)
+        && (event_ring_phys % PAGE_SIZE == 0)
+        && (erst_phys % PAGE_SIZE == 0)
+        && (dcbaa_phys % PAGE_SIZE == 0)
+        && (cmd_ring_phys % 64 == 0)
+        && (event_ring_phys % 64 == 0)
+        && (erst_phys % 64 == 0)
+        && (dcbaa_phys % 64 == 0)
+        && (cmd_ring_va % PAGE_SIZE == 0)
+        && (event_ring_va % PAGE_SIZE == 0)
+        && (erst_va % PAGE_SIZE == 0)
+        && (dcbaa_va % PAGE_SIZE == 0);
+    if !aligned_ok {
+        serial_println!("[sexusb.xhci.ring.align.bad]");
+        loop { sys_yield(); }
+    }
+
+    unsafe {
+        core::ptr::write_bytes(cmd_ring_va as *mut u8, 0, PAGE_SIZE as usize);
+        core::ptr::write_bytes(event_ring_va as *mut u8, 0, PAGE_SIZE as usize);
+        core::ptr::write_bytes(erst_va as *mut u8, 0, erst_bytes as usize);
+        core::ptr::write_bytes(dcbaa_va as *mut u8, 0, DCBAA_BYTES as usize);
+    }
+    serial_println!("[sexusb.xhci.cmd_ring.ok]");
+    serial_println!("[sexusb.xhci.event_ring.ok]");
+    serial_println!("[sexusb.xhci.dcbaa.ok]");
+
+    // ERST[0] = { ring_segment_base, ring_segment_size, reserved }
+    unsafe {
+        core::ptr::write_volatile(erst_va as *mut u64, event_ring_phys);
+        core::ptr::write_volatile((erst_va + 8) as *mut u32, EVENT_RING_TRBS as u32);
+        core::ptr::write_volatile((erst_va + 12) as *mut u32, 0u32);
+    }
+    let _ = cmd_ring_bytes;
+    let _ = event_ring_bytes;
+    let _ = ERST_ENTRIES;
+    serial_println!("[sexusb.xhci.erst.ok]");
+
+    serial_println!("[sexusb.xhci.ring.ptrs.write.start]");
+    let cap_base = map_va;
+    let rtsoff_raw = mmio_read32(cap_base, XHCI_CAP_RTSOFF);
+    let rtsoff = (rtsoff_raw & !0x1Fu32) as u64;
+    let hcc1_local = mmio_read32(cap_base, XHCI_CAP_HCCPARAMS1);
+    let _ = hcc1_local;
+    let runtime_base = map_va.wrapping_add(rtsoff);
+    let intr0_base = runtime_base.wrapping_add(XHCI_INTR0_BASE);
+
+    // Bounds checks against the mapped BAR slice.
+    let op_need_end = op_base.wrapping_add(XHCI_DCBAAP + 8);
+    let rt_need_end = intr0_base.wrapping_add(XHCI_INTR_ERDP + 8);
+    if op_need_end > map_va.wrapping_add(MAP_BYTES) || rt_need_end > map_va.wrapping_add(MAP_BYTES) {
+        serial_println!("[sexusb.xhci.ring.ptrs.write.bad]");
+        loop { sys_yield(); }
+    }
+
+    mmio_write64(op_base, XHCI_DCBAAP, dcbaa_phys);
+    serial_println!("[sexusb.xhci.dcbaap.write.ok]");
+    mmio_write64(op_base, XHCI_CRCR, cmd_ring_phys | 1u64); // RCS=1
+    serial_println!("[sexusb.xhci.crcr.write.ok]");
+
+    mmio_write32(intr0_base, XHCI_INTR_ERSTSZ, ERST_ENTRIES as u32);
+    mmio_write64(intr0_base, XHCI_INTR_ERSTBA, erst_phys);
+    serial_println!("[sexusb.xhci.erst.write.ok]");
+    mmio_write64(intr0_base, XHCI_INTR_ERDP, event_ring_phys);
+    serial_println!("[sexusb.xhci.erdp.write.ok]");
+    serial_println!("[sexusb.xhci.ring.proof.ok]");
 
     loop { sys_yield(); }
 }
