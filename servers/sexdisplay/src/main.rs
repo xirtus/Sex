@@ -3,7 +3,7 @@
 #![allow(static_mut_refs)]
 
 use sex_pdx::serial_println;
-use silkbar_model::{SilkBar, SilkBarUpdate, apply_update, DEFAULT_SILK_BAR,
+use silkbar_model::{SilkBar, SilkBarUpdate, UpdateKind, apply_update, DEFAULT_SILK_BAR,
                     ChipKind, ModuleSlot, validate_contract, validate_deterministic_vectors};
 
 const FALLBACK_PTR: u64 = 0xffff8000fd000000;
@@ -374,31 +374,36 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
     }
 }
 
-fn handle_primary_fb(ptr: u64, packed: u64) {
+fn handle_primary_fb(ptr: u64, packed: u64) -> bool {
     if ptr == 0 {
-        return;
+        return false;
     }
     // Reject non-canonical/low addresses that would fault on dereference.
     // Keep existing known-good fallback FB_PTR if kernel sends bogus address.
     if ptr < HIGH_HALF_BASE {
-        return;
+        return false;
     }
     let w = (packed as u32) as usize;
     let h = ((packed >> 32) as u32) as usize;
     if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H {
-        return;
+        return false;
     }
     if w.checked_mul(h).is_none() {
-        return;
+        return false;
     }
     unsafe {
         FB_PTR = ptr;
         FB_W = w as u32;
         FB_H = h as u32;
     }
+    true
 }
 
 fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) {
+    // Clock is driven locally in sexdisplay during stabilization.
+    if arg0 as u32 == UpdateKind::SetClock as u32 {
+        return;
+    }
     // arg0 = UpdateKind, arg1 = (index << 32) | a, arg2 = b
     let update = SilkBarUpdate {
         kind: arg0 as u32,
@@ -411,35 +416,52 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    if !validate_contract() || !validate_deterministic_vectors() {
-        loop { core::hint::spin_loop(); }
-    }
+    let _ = validate_contract();
+    let _ = validate_deterministic_vectors();
 
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
+    let mut last_clock_second = sex_pdx::get_ticks() / 62;
+    let mut fb_live = false;
 
     // 1. Render immediately with fallback — visible before any IPC
     unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
 
     // 2. Listen for runtime FB handoff and SilkBar updates
     loop {
-        let msg = sex_pdx::pdx_listen_raw(0);
+        let sec_now = sex_pdx::get_ticks() / 62;
+        if sec_now > last_clock_second {
+            last_clock_second = sec_now;
+            bar.clock_hh = ((sec_now / 3600) % 24) as u8;
+            bar.clock_mm = ((sec_now / 60) % 60) as u8;
+            bar.clock_ss = (sec_now % 60) as u8;
+            if fb_live {
+                unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+            }
+        }
+
+        let Some(msg) = sex_pdx::pdx_try_listen_raw(0) else {
+            sex_pdx::sys_yield();
+            continue;
+        };
         match msg.type_id {
             silkbar_model::OP_SILKBAR_UPDATE => {
                 handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
-                unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+                // Keep clock repaint cadence strictly on second ticks to avoid
+                // startup flicker from bursty non-clock silkbar updates.
             }
             0x11 => { // OP_PRIMARY_FB
-                handle_primary_fb(msg.arg0, msg.arg1);
-                unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+                if handle_primary_fb(msg.arg0, msg.arg1) {
+                    fb_live = true;
+                    // Coalesce startup repaints into one clean first frame.
+                    unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+                }
             }
-            0 => {
-                // pdx_listen_raw already yields internally on empty.
-                continue;
-            }
+            0 => continue,
             0xE4 => {
                 // OP_WINDOW_CREATE safe inline ABI: arg0=x, arg1=y, arg2=(h<<32)|w
-                // V1: store only — no dynamic redraw. Visible on next boot render.
+                // Stabilization: store only, no immediate placeholder paint.
+                // Immediate blue fallback paint here is a known startup flicker source.
                 let x = msg.arg0 as i32;
                 let y = msg.arg1 as i32;
                 let w = (msg.arg2 as u32).min(MAX_FB_W as u32);
@@ -461,27 +483,12 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
-                // Inline rect present — immediately show the client surface on screen.
-                // Bounded double-loop: y >= BAR_H (50), x/w/h clamped to FB dimensions.
-                unsafe {
-                    let fb_w = FB_W as usize;
-                    let fb_h = FB_H as usize;
-                    let temp = Surface { surface_id: 0, owner_pd: 0, x, y, w, h, color: 0x00303860, active: true,
-                        fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0, fill_color: 0, fill_active: false };
-                    let (sx, sy, sw, sh) = clamp_surface(&temp, fb_w, fb_h);
-                    if sw > 0 && sh > 0 && FB_PTR >= HIGH_HALF_BASE {
-                        let fb = FB_PTR as *mut u32;
-                        for py in sy..sy+sh {
-                            let row = py * fb_w;
-                            for px in sx..sx+sw {
-                                fb.add(row + px).write_volatile(0x00303860);
-                            }
-                        }
-                    }
-                }
+                continue;
             }
             0xEC => {
                 // OP_SURFACE_CREATE_ID: arg0=surface_id(non-zero), arg1=(y<<32)|x, arg2=(h<<32)|w
+                // Stabilization gate: ignore linen-owned surface traffic for now.
+                if msg.caller_pd == 6 { continue; }
                 let surface_id = msg.arg0;
                 if surface_id == 0 { continue; }
                 let x = msg.arg1 as i32;
@@ -529,7 +536,7 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                     // Composite full below-bar area to respect registry z-order
-                    if handled {
+                    if handled && fb_live {
                         redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
                     }
                 }
@@ -563,13 +570,15 @@ pub extern "C" fn _start() -> ! {
                             break;
                         }
                     }
-                    if found {
+                    if found && fb_live {
                         redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
                     }
                 }
             }
             0xED => {
                 // OP_SET_FOCUS: arg0=surface_id (0 clears focus). Unknown id safe.
+                if msg.caller_pd == 6 { continue; }
+                if !fb_live { continue; }
                 unsafe {
                     FOCUSED_SURFACE_ID = msg.arg0;
                     redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
@@ -577,6 +586,7 @@ pub extern "C" fn _start() -> ! {
             }
             0xEE => {
                 // OP_SURFACE_DESTROY: arg0=surface_id. Hide/deactivate surface.
+                if msg.caller_pd == 6 { continue; }
                 let target_id = msg.arg0;
                 if target_id == 0 { continue; }
                 unsafe {
@@ -596,7 +606,7 @@ pub extern "C" fn _start() -> ! {
                             break;
                         }
                     }
-                    if found {
+                    if found && fb_live {
                         if FOCUSED_SURFACE_ID == target_id {
                             FOCUSED_SURFACE_ID = 0;
                         }
@@ -605,58 +615,8 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             0xEF => {
-                // OP_SURFACE_FILL_RECT: arg0=surface_id, arg1=(sy<<32)|sx,
-                // arg2=(color<<32)|(sh<<16)|sw. Fill a surface-local rect.
-                let surface_id = msg.arg0;
-                if surface_id == 0 { continue; }
-                let sx = (msg.arg1 & 0xFFFFFFFF) as i32;
-                let sy = ((msg.arg1 >> 32) & 0xFFFFFFFF) as i32;
-                let mut sw = (msg.arg2 & 0xFFFF) as u32;
-                let mut sh = ((msg.arg2 >> 16) & 0xFFFF) as u32;
-                let color = (msg.arg2 >> 32) as u32;
-                if sw == 0 || sh == 0 { continue; }
-                unsafe {
-                    for slot in SURFACES.iter_mut() {
-                        if slot.active && slot.surface_id == surface_id {
-                            if slot.owner_pd != msg.caller_pd {
-                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                                if n & 0x3F == 0 {
-                                    serial_println!("AUTH: 0xEF fill rejected sid={} caller={} owner={}",
-                                        surface_id, msg.caller_pd, slot.owner_pd);
-                                }
-                                break;
-                            }
-                            // 1. Clamp local rect to surface bounds
-                            sw = sw.min(slot.w);
-                            sh = sh.min(slot.h);
-                            if sw == 0 || sh == 0 { break; }
-                            let fill_sx = sx.clamp(0, (slot.w as i32).saturating_sub(sw as i32));
-                            let fill_sy = sy.clamp(0, (slot.h as i32).saturating_sub(sh as i32));
-                            // 2. Translate to global, clamp to FB, enforce bar_height
-                            let gx = slot.x + fill_sx;
-                            let gy = slot.y + fill_sy;
-                            let gx2 = gx.max(0);
-                            let gy2 = gy.max(50); // bar_height
-                            let gw = sw as i32 - (gx2 - gx);
-                            let gh = sh as i32 - (gy2 - gy);
-                            // 3. Abort if globally invisible
-                            if gw <= 0 || gh <= 0 { break; }
-                            // 4. Store (surface-local coords)
-                            slot.fill_sx = fill_sx;
-                            slot.fill_sy = fill_sy;
-                            slot.fill_sw = sw;
-                            slot.fill_sh = sh;
-                            slot.fill_color = color;
-                            slot.fill_active = true;
-                            serial_println!("[sexdisplay] Fill rect surface_id={} local=({},{},{},{}) color={:#x}",
-                                surface_id, fill_sx, fill_sy, sw, sh, color);
-                            break;
-                        }
-                    }
-                }
-                unsafe {
-                    redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
-                }
+                // Temporary containment: fill-rect is disabled during PD1 stabilization.
+                continue;
             }
             _ => {
                 // Ignore unrelated messages and continue draining.

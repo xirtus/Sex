@@ -14,18 +14,11 @@ fn send_update(update: SilkBarUpdate) {
         (update.index as u64) << 32 | update.a as u64,
         update.b as u64,
     );
-    if let Err(status) = result {
-        // Rate-limited: log roughly every 64th failure
+    if result.is_err() {
+        // Stabilization: avoid formatting/log work on hot error path.
         unsafe {
             static mut DROP_COUNTER: u64 = 0;
-            let count = DROP_COUNTER.wrapping_add(1);
-            DROP_COUNTER = count;
-            if count & 0x3F == 0 {
-                sex_pdx::serial_println!(
-                    "[silkbar] drop: kind={} idx={} status={} count={}",
-                    update.kind, update.index, status, count,
-                );
-            }
+            DROP_COUNTER = DROP_COUNTER.wrapping_add(1);
         }
     }
 }
@@ -71,20 +64,8 @@ pub extern "C" fn _start() -> ! {
     }
 
     loop {
-        // Stage 2B: poll at most one upstream message (non-blocking)
-        if let Some(msg) = sex_pdx::pdx_try_listen_raw(0) {
-            if msg.type_id == sex_pdx::OP_SILKBAR_WORKSPACE_ACTIVE {
-                let ws = (msg.arg0 as u8).min(4);
-                for i in 0..5 {
-                    send_update(SilkBarUpdate::new(
-                        UpdateKind::SetWorkspaceActive as u32, i, if i == ws { 1 } else { 0 }, 0,
-                    ));
-                }
-            } else if msg.type_id == sex_pdx::OP_SILKBAR_FOCUS_STATE {
-                // Clamp invalid producer values to debug(3) to keep update space bounded.
-                focus_state = (msg.arg0 as u8).min(3);
-            }
-        }
+        // Stabilization: keep silkbar on deterministic local cadence only.
+        // This avoids the current listen-path null-jump in PD5.
 
         if focus_state != last_focus_state {
             // Temporary Stage 2C focus->urgent visual stub.
