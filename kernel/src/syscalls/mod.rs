@@ -309,7 +309,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let cap_slot = rdi as u32;
             let bar_index = (rsi & 0xFF) as u8;
             let req_size = rdx as usize;
-            let map_size = if req_size == 0 { 0x1000usize } else { req_size.min(0x1000usize) };
+            let map_size = if req_size == 0 { 0x1000usize } else { req_size.min(0x10000usize) };
 
             let core_local = crate::core_local::CoreLocal::get();
             let current_pd = core_local.current_pd_ref();
@@ -350,7 +350,11 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                                 if let Some(ref mut gvas) = *gvas_lock {
                                     let flags = PageTableFlags::PRESENT
                                         | PageTableFlags::WRITABLE
-                                        | PageTableFlags::USER_ACCESSIBLE;
+                                        | PageTableFlags::USER_ACCESSIBLE
+                                        // MMIO requires UC (Uncacheable) to prevent CPU caching.
+                                        // PCD=1 + PWT=1 selects UC in the default PAT.
+                                        | PageTableFlags::NO_CACHE
+                                        | PageTableFlags::WRITE_THROUGH;
                                     if gvas.map_physical_range(VirtAddr::new(va), bar_pa, map_size as u64, flags, 0).is_ok() {
                                         va
                                     } else {

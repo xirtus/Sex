@@ -43,9 +43,41 @@ pub struct ProgramHeader {
 }
 
 pub const PT_LOAD: u32 = 1;
+pub const PT_DYNAMIC: u32 = 2;
 pub const PF_X: u32 = 1;
 pub const PF_W: u32 = 2;
 pub const PF_R: u32 = 4;
+
+/// ELF64 Dynamic Entry structure.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct DynamicEntry {
+    pub d_tag: u64,
+    pub d_val: u64,
+}
+
+// Dynamic tags relevant to relocation
+const DT_NULL: u64 = 0;
+const DT_RELA: u64 = 7;
+const DT_RELASZ: u64 = 8;
+const DT_RELAENT: u64 = 9;
+const DT_RELACOUNT: u64 = 0x6ffffff9;
+
+/// ELF64 RELA relocation entry.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RelaEntry {
+    pub r_offset: u64,   // Location to apply relocation (virtual address)
+    pub r_info: u64,     // Type and symbol index
+    pub r_addend: i64,   // Constant addend
+}
+
+const R_X86_64_RELATIVE: u64 = 8;
+
+/// Get the type from a rela info field (lower 32 bits on x86_64)
+fn rela_type(info: u64) -> u64 {
+    info & 0xffffffff
+}
 
 fn load_bias(elf_data: &[u8]) -> Result<u64, &'static str> {
     let header = unsafe { &*(elf_data.as_ptr() as *const ElfHeader) };
@@ -185,6 +217,114 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
                     }
                 }
             }
+        }
+    }
+
+    // 3. Apply R_X86_64_RELATIVE relocations from PT_DYNAMIC.
+    //    PIE binaries store function pointers and data addresses in GOT/data sections
+    //    that must be rebased to the runtime load_base. Without this, any call through
+    //    an unrelocated GOT entry (vtable, trait method, etc.) jumps to a wrong address.
+    //    The rela offset field is the virtual address (pre-relocation) of the 8-byte
+    //    slot to patch; each slot receives load_base + addend.
+    //    Offsets in BSS (beyond p_filesz) are zeroed during load and must be set here.
+    for i in 0..ph_count {
+        let ph_ptr = unsafe {
+            let offset = ph_start + (i * ph_size);
+            elf_data.as_ptr().add(offset) as *const ProgramHeader
+        };
+        let ph = unsafe { &*ph_ptr };
+        if ph.p_type == PT_DYNAMIC {
+            let dyn_vaddr = ph.p_vaddr;
+            let dyn_size = ph.p_memsz;
+            let mut rel_offset: u64 = 0;
+            let mut rel_size: u64 = 0;
+            let mut rel_ent: u64 = 24; // default RELA entry size
+            let mut rel_count: u64 = 0;
+
+            // Parse dynamic entries to find relocation metadata.
+            let dyn_base = elf_data.as_ptr();
+            let dyn_file_off = ph.p_offset as usize;
+            let num_dyn = dyn_size / 16;
+            for j in 0..num_dyn {
+                let entry_ptr = unsafe {
+                    dyn_base.add(dyn_file_off + (j * 16) as usize) as *const DynamicEntry
+                };
+                let entry = unsafe { &*entry_ptr };
+                match entry.d_tag {
+                    DT_RELA => {
+                        rel_offset = entry.d_val; // virtual address of RELA table
+                    }
+                    DT_RELASZ => {
+                        rel_size = entry.d_val;
+                    }
+                    DT_RELAENT => {
+                        rel_ent = entry.d_val;
+                    }
+                    DT_RELACOUNT => {
+                        rel_count = entry.d_val;
+                    }
+                    DT_NULL => {
+                        break; // end of dynamic entries
+                    }
+                    _ => {}
+                }
+            }
+
+            if rel_count > 0 && rel_size > 0 && rel_ent > 0 {
+                // Convert RELA table virtual address to file offset within the ELF.
+                // The RELA table is in a non-load segment (read-only), so we access
+                // it directly from elf_data using the section offset embedded in the
+                // virtual address.
+                // For PIE binaries: rela_vaddr (file-relative) = DT_RELA value.
+                // We need to find the program header that covers this vaddr to compute
+                // the file offset, or compute it as: file_offset = DT_RELA value
+                // because ELF files typically have the RELA table in the first LOAD
+                // segment with a matching offset.
+                //
+                // More robust: iterate LOAD segments to find which one covers rel_offset.
+                let mut rela_file_off: u64 = 0;
+                for k in 0..ph_count {
+                    let ph2_ptr = unsafe {
+                        let off = ph_start + (k * ph_size);
+                        elf_data.as_ptr().add(off) as *const ProgramHeader
+                    };
+                    let ph2 = unsafe { &*ph2_ptr };
+                    if ph2.p_type == PT_LOAD {
+                        let lo = ph2.p_vaddr;
+                        let hi = ph2.p_vaddr + ph2.p_filesz;
+                        if rel_offset >= lo && rel_offset < hi {
+                            rela_file_off = ph2.p_offset + (rel_offset - lo);
+                            break;
+                        }
+                    }
+                }
+
+                if rela_file_off > 0 && rela_file_off as usize + (rel_count * rel_ent) as usize <= elf_data.len() {
+                    let mut applied: u64 = 0;
+                    for k in 0..rel_count {
+                        let rela_ptr = unsafe {
+                            elf_data.as_ptr().add(rela_file_off as usize + (k * rel_ent) as usize) as *const RelaEntry
+                        };
+                        let rela = unsafe { &*rela_ptr };
+                        if rela_type(rela.r_info) == R_X86_64_RELATIVE {
+                            // Compute target address in loaded image.
+                            let target_vaddr = load_base.as_u64() + rela.r_offset.saturating_sub(min_vaddr);
+                            let write_val = load_base.as_u64() + rela.r_addend as u64;
+                            unsafe {
+                                core::ptr::write_volatile(
+                                    target_vaddr as *mut u64,
+                                    write_val,
+                                );
+                            }
+                            applied += 1;
+                        }
+                    }
+                    serial_println!("ELF: applied {} R_X86_64_RELATIVE relocations", applied);
+                } else {
+                    serial_println!("ELF: R_X86_64_RELATIVE table not in LOAD segment, skipping");
+                }
+            }
+            break; // only one PT_DYNAMIC
         }
     }
 
