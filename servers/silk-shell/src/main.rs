@@ -22,6 +22,7 @@ pub const SURFACE_ID_STATIC: u64 = 101;
 pub const SURFACE_ID_TEST3: u64 = 102;
 pub const SURFACE_ID_TEST4: u64 = 103;
 pub const SURFACE_ID_LINEN: u64 = 200;
+pub const SURFACE_ID_CURSOR: u64 = 0x90; // 144 — OS-owned cursor, no collision with app IDs
 pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 
 // ── Policy Model ──────────────────────────────────────────────────────────
@@ -298,6 +299,14 @@ pub extern "C" fn _start() -> ! {
     pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, 0, 0);
     serial_println!("[silk-shell] Boot workspace advertisement sent to SilkBar");
 
+    // Stage: cursor surface — created first so it occupies SURFACES slot 0,
+    // winning composite Pass 1 over all other non-focused surfaces.
+    serial_println!("[shell.cursor_surface.create.start] id={:#x}", SURFACE_ID_CURSOR);
+    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_CURSOR,
+        ((P.height / 2) as u64) << 32 | (P.width / 2) as u64,
+        (18u64 << 32) | 12u64);
+    serial_println!("[shell.cursor_surface.create.ok]");
+
     // Stage: boot-time safe inline surface create (0xEC — client-supplied id)
     pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (100u64 << 32) | 100u64, (500u64 << 32) | 800u64);
     serial_println!("[silk-shell] Boot 0xEC surface 100 create sent to sexdisplay");
@@ -396,6 +405,10 @@ pub extern "C" fn _start() -> ! {
                                 dy
                             );
                         }
+                        // Move cursor surface to updated pointer position.
+                        serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
+                        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                        serial_println!("[shell.cursor_surface.move.ok]");
                     }
                     pdx_reply(0);
                 }
