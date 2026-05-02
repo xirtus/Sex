@@ -2379,10 +2379,14 @@ pub extern "C" fn _start() -> ! {
     cmd_idx += 1;
     serial_println!("[sexusb.xhci.intr_in.config_ep.ok]");
 
-    const INTR_POLL_COUNT: u32 = 128;
-    serial_println!("[sexusb.hid.mouse.poll_loop.start] count={}", INTR_POLL_COUNT);
+    // Continuous bounded poll: one TRB in-flight at a time.
+    // Inner loop waits indefinitely (no POLL_BUDGET timeout) — safe because the
+    // xHCI completes (or NAKs-then-completes) the single enqueued TRB before we
+    // re-arm. No second TRB is ever enqueued while one is outstanding.
+    const CONTINUOUS_POLL_ATTEMPTS: u32 = 512;
+    serial_println!("[sexusb.hid.mouse.continuous.start] attempts={}", CONTINUOUS_POLL_ATTEMPTS);
     let mut saw_nonzero = false;
-    for i in 0..INTR_POLL_COUNT {
+    for i in 0..CONTINUOUS_POLL_ATTEMPTS {
         // Clear report buffer before each transfer.
         unsafe {
             core::ptr::write_volatile(intr_report_va as *mut u8, 0);
@@ -2391,7 +2395,7 @@ pub extern "C" fn _start() -> ! {
             core::ptr::write_volatile((intr_report_va + 3) as *mut u8, 0);
         }
 
-        // Queue one interrupt-IN Normal TRB and poll for one transfer event.
+        // Queue exactly one interrupt-IN Normal TRB; cycle-stop halts ring after it.
         trb_write_volatile(
             intr_ring_va,
             0,
@@ -2402,12 +2406,12 @@ pub extern "C" fn _start() -> ! {
         );
         trb_write_volatile(intr_ring_va, 1, 0, 0, 0, 0u32); // cycle stop
 
-        serial_println!("[sexusb.xhci.intr_in.poll.start]");
         mmio_write32(db_base, en_slot_id as u64 * 4, INTR_DCI);
 
+        // Wait indefinitely: xHCI retries interrupt-IN until device sends data.
         let mut intr_ok = false;
         let mut intr_residue: u32 = 0;
-        for _ in 0..POLL_BUDGET {
+        loop {
             let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
             if (ev_d3 & 1) != (ev_dcs as u32) {
                 sys_yield();
@@ -2427,65 +2431,36 @@ pub extern "C" fn _start() -> ! {
                 }
                 trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
                 ev_idx += 1;
-                if ev_idx >= EVENT_RING_TRBS {
-                    ev_idx = 0;
-                    ev_dcs ^= 1;
-                }
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
                 break;
             }
-
-            // Consume unrelated owned events and continue waiting for the transfer event.
+            // Consume unrelated owned events and continue waiting.
             trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
             ev_idx += 1;
-            if ev_idx >= EVENT_RING_TRBS {
-                ev_idx = 0;
-                ev_dcs ^= 1;
-            }
+            if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
             let new_erdp = event_ring_phys + ev_idx * 16;
             mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
             mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
         }
         if !intr_ok {
-            serial_println!("[sexusb.xhci.intr_in.poll.timeout.bad]");
-            break;
+            // Wrong slot/endpoint on this event — skip report, re-arm.
+            continue;
         }
         if intr_residue > INTR_REPORT_LEN {
             serial_println!("[sexusb.xhci.intr_in.residue.bad] residue={}", intr_residue);
             break;
         }
         let intr_actual = INTR_REPORT_LEN - intr_residue;
-        serial_println!("[sexusb.xhci.intr_in.event.ok] actual={} residue={}", intr_actual, intr_residue);
         let report_ptr = intr_report_va as *const u8;
         let rb0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
         let rb1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
         let rb2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
         let rb3 = unsafe { core::ptr::read_volatile(report_ptr.add(3)) };
-        serial_println!(
-            "[sexusb.xhci.intr_in.report.bytes] bytes=[{:#x},{:#x},{:#x},{:#x}]",
-            rb0, rb1, rb2, rb3
-        );
-        serial_println!("[sexusb.hid.mouse.decode.start] len={}", intr_actual);
         let report_bytes = [rb0, rb1, rb2, rb3];
         if let Some(decoded) = decode_boot_mouse_report(&report_bytes, intr_actual as usize) {
-            serial_println!(
-                "[sexusb.hid.mouse.decode.ok] buttons={:#x} dx={} dy={} wheel={}",
-                decoded.buttons,
-                decoded.dx,
-                decoded.dy,
-                decoded.wheel
-            );
-            serial_println!(
-                "[sexusb.hid.mouse.poll_loop.report] i={} buttons={:#x} dx={} dy={} wheel={}",
-                i,
-                decoded.buttons,
-                decoded.dx,
-                decoded.dy,
-                decoded.wheel
-            );
-            serial_println!("[sexusb.hid.mouse.pdx_send.start]");
             let packed_axes = (decoded.dx as u8 as u64)
                 | ((decoded.dy as u8 as u64) << 8)
                 | ((decoded.wheel as u8 as u64) << 16);
@@ -2496,31 +2471,41 @@ pub extern "C" fn _start() -> ! {
                 decoded.buttons as u64,
                 packed_axes,
             ) {
-                Ok(_) => serial_println!("[sexusb.hid.mouse.pdx_send.ok]"),
+                Ok(_) => {}
                 Err(err) => serial_println!("[sexusb.hid.mouse.pdx_send.fail] err={}", err),
             }
             if decoded.buttons == 0 && decoded.dx == 0 && decoded.dy == 0 && decoded.wheel == 0 {
-                serial_println!("[sexusb.hid.mouse.decode.zero.ok]");
-            } else if !saw_nonzero {
-                saw_nonzero = true;
+                // Rate-limit idle log: first 8, then every 64.
+                if i < 8 || i % 64 == 0 {
+                    serial_println!("[sexusb.hid.mouse.continuous.idle] i={}", i);
+                }
+            } else {
                 serial_println!(
-                    "[sexusb.hid.mouse.nonzero.ok] i={} buttons={:#x} dx={} dy={} wheel={}",
-                    i,
-                    decoded.buttons,
-                    decoded.dx,
-                    decoded.dy,
-                    decoded.wheel
+                    "[sexusb.hid.mouse.continuous.report] i={} buttons={:#x} dx={} dy={} wheel={}",
+                    i, decoded.buttons, decoded.dx, decoded.dy, decoded.wheel
                 );
+                if !saw_nonzero {
+                    saw_nonzero = true;
+                    serial_println!(
+                        "[sexusb.hid.mouse.continuous.nonzero.ok] i={} buttons={:#x} dx={} dy={} wheel={}",
+                        i, decoded.buttons, decoded.dx, decoded.dy, decoded.wheel
+                    );
+                    serial_println!(
+                        "[sexusb.hid.mouse.nonzero.ok] i={} buttons={:#x} dx={} dy={} wheel={}",
+                        i, decoded.buttons, decoded.dx, decoded.dy, decoded.wheel
+                    );
+                }
             }
         } else {
             serial_println!("[sexusb.hid.mouse.decode.bad] len={}", intr_actual);
         }
     }
+    serial_println!(
+        "[sexusb.hid.mouse.continuous.done] attempts={} nonzero_seen={}",
+        CONTINUOUS_POLL_ATTEMPTS, saw_nonzero as u32
+    );
     if !saw_nonzero {
-        serial_println!("[sexusb.hid.mouse.nonzero.miss] count={}", INTR_POLL_COUNT);
+        serial_println!("[sexusb.hid.mouse.nonzero.miss] count={}", CONTINUOUS_POLL_ATTEMPTS);
     }
-    serial_println!("[sexusb.xhci.intr_in.poll.complete.ok]");
-    serial_println!("[sexusb.xhci.config.complete.ok]");
-
     loop { sys_yield(); }
 }
