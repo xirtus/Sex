@@ -462,8 +462,8 @@ pub extern "C" fn _start() -> ! {
             0 => continue,
             0xE4 => {
                 // OP_WINDOW_CREATE safe inline ABI: arg0=x, arg1=y, arg2=(h<<32)|w
-                // Stabilization: store only, no immediate placeholder paint.
-                // Immediate blue fallback paint here is a known startup flicker source.
+                // Store only, no immediate placeholder paint.
+                // Immediate blue paint here causes startup flicker.
                 let x = msg.arg0 as i32;
                 let y = msg.arg1 as i32;
                 let w = (msg.arg2 as u32).min(MAX_FB_W as u32);

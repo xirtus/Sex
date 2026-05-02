@@ -15,7 +15,7 @@ fn send_update(update: SilkBarUpdate) {
         update.b as u64,
     );
     if result.is_err() {
-        // Stabilization: avoid formatting/log work on hot error path.
+        // Keep hot error path minimal: avoid formatting/log work here.
         unsafe {
             static mut DROP_COUNTER: u64 = 0;
             DROP_COUNTER = DROP_COUNTER.wrapping_add(1);
@@ -81,7 +81,7 @@ pub extern "C" fn _start() -> ! {
         }
 
         if focus_state != last_focus_state {
-            // Temporary Stage 2C focus->urgent visual stub.
+            // Focus state drives workspace urgent highlight.
             // none: clear all; shell/app/debug => ws0/ws1/ws2 urgent respectively.
             let urgent_ws = match focus_state {
                 1 => Some(0u8),
