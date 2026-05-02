@@ -489,8 +489,6 @@ pub extern "C" fn _start() -> ! {
             }
             0xEC => {
                 // OP_SURFACE_CREATE_ID: arg0=surface_id(non-zero), arg1=(y<<32)|x, arg2=(h<<32)|w
-                // Stabilization gate: ignore linen-owned surface traffic for now.
-                if msg.caller_pd == 6 { continue; }
                 let surface_id = msg.arg0;
                 if surface_id == 0 { continue; }
                 let x = msg.arg1 as i32;
@@ -579,7 +577,6 @@ pub extern "C" fn _start() -> ! {
             }
             0xED => {
                 // OP_SET_FOCUS: arg0=surface_id (0 clears focus). Unknown id safe.
-                if msg.caller_pd == 6 { continue; }
                 if !fb_live { continue; }
                 unsafe {
                     FOCUSED_SURFACE_ID = msg.arg0;
@@ -588,7 +585,6 @@ pub extern "C" fn _start() -> ! {
             }
             0xEE => {
                 // OP_SURFACE_DESTROY: arg0=surface_id. Hide/deactivate surface.
-                if msg.caller_pd == 6 { continue; }
                 let target_id = msg.arg0;
                 if target_id == 0 { continue; }
                 unsafe {
