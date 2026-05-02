@@ -279,6 +279,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     if end_addr < HIGH_HALF_BASE {
         return;
     }
+    let total_pixels = pixels;
 
     let focused_id = unsafe { FOCUSED_SURFACE_ID };
     for y in 0..h {
@@ -296,7 +297,9 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                 composite_pixel(x, y, w, h, bg(y), focused_id)
             };
             let idx = y * w + x;
-            unsafe { core::ptr::write_volatile(fb.add(idx), c); }
+            if idx < total_pixels {
+                unsafe { core::ptr::write_volatile(fb.add(idx), c); }
+            }
         }
     }
 }
@@ -312,6 +315,10 @@ fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     if h < 51 {
         return;
     }
+    let total_pixels = match w.checked_mul(h) {
+        Some(v) => v,
+        None => return,
+    };
     for y in 0..51 {
         for x in 0..w {
             let c: u32 = if y < 50 {
@@ -324,7 +331,9 @@ fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                 0x00385078
             };
             let idx = y * w + x;
-            unsafe { core::ptr::write_volatile(fb.add(idx), c); }
+            if idx < total_pixels {
+                unsafe { core::ptr::write_volatile(fb.add(idx), c); }
+            }
         }
     }
 }
@@ -336,6 +345,10 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
     if fb_addr < HIGH_HALF_BASE { return; }
     if w == 0 || h == 0 || w > MAX_FB_W || h > MAX_FB_H { return; }
     if h < 51 { return; }
+    let total_pixels = match w.checked_mul(h) {
+        Some(v) => v,
+        None => return,
+    };
     let focused_id = unsafe { FOCUSED_SURFACE_ID };
     for y in 50..h {
         for x in 0..w {
@@ -344,7 +357,10 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
             } else {
                 composite_pixel(x, y, w, h, bg(y), focused_id)
             };
-            unsafe { core::ptr::write_volatile(fb.add(y * w + x), c); }
+            let idx = y * w + x;
+            if idx < total_pixels {
+                unsafe { core::ptr::write_volatile(fb.add(idx), c); }
+            }
         }
     }
 }

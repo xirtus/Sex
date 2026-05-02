@@ -1,5 +1,20 @@
 # HANDOFF.md — v8+ USER_FAULT_CONTAINMENT_V1
 
+## 2026-05-02 Clock Freeze Regression (FIXED ✅)
+
+**Symptom:** Clock advanced briefly (~2 seconds) then froze after merging `debug/silkbar-delivery` into `master`.
+
+**Root cause:** `sexdisplay` (PD1) hit a user-mode page fault while writing framebuffer pixels in redraw paths. Once PD1 died, clock updates from `silkbar` no longer appeared even though scheduler kept running other PDs.
+
+**Fix:** Added strict per-pixel framebuffer index bounds checks (`idx < w*h`) in all redraw/write loops.
+
+**Files changed:**
+| File | Change |
+|------|--------|
+| `servers/sexdisplay/src/main.rs` | Added write guards in `render`, `redraw_clock_only`, and `redraw_surface_area` |
+
+**Regression guard (must keep):** Any framebuffer write path in userland renderers must validate write index against total pixel count before `write_volatile`.
+
 ## Current Runtime State ✅
 
 - **All 6 PDs spawn and run** (sexdisplay, sexdrive, silk-shell, sexinput, silkbar, linen).
