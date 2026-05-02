@@ -1005,3 +1005,33 @@ Implementation:
     when incoming USB report is nonzero.
 - `sexinput` synthetic drag proof loop is gated off during USB physical proof
   mode to prevent `[sexinput.drag_proof.*]` noise from masking real USB motion.
+
+## QEMU_DISPLAY_BACKEND_TOGGLE_V1
+
+### Problem
+QEMU input delivery for usb-mouse was unreliable under default SDL: reports showed
+`buttons=0x0 dx=0 dy=0` (idle-only). Explicit SDL grab did not fix. The real blocker
+was likely a host-side QEMU forwarding issue rather than OS architecture.
+
+### Solution
+Added `SEXOS_QEMU_DISPLAY` env var to `./dev.sh run` with four modes:
+
+| Mode       | QEMU flag                              |
+|------------|----------------------------------------|
+| `sdl`      | `-display sdl`                         |
+| `sdl-grab` | `-display sdl,grab-mod=lctrl-lalt`     |
+| `gtk`      | `-display gtk`                         |
+| `gtk-grab` | `-display gtk,grab-on-hover=on`        |
+
+Default is `sdl` (preserves existing behavior). The mode is echoed before QEMU launch.
+
+### Usage
+```bash
+SEXOS_QEMU_DISPLAY=gtk-grab SEXUSB_QEMU_DEVICE=mouse ./dev.sh run
+```
+
+### Scope
+- Only touches `dev.sh` and this doc.
+- No Rust/kernel/ABI/cap changes.
+- No changes to `run-nographic`, build, or ISO generation.
+- `SEXUSB_QEMU_DEVICE` selector is independent (unchanged).

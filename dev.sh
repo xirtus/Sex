@@ -18,6 +18,20 @@ case "$USB_DEV" in
     ;;
 esac
 
+# Select QEMU display/input backend.
+DISPLAY_MODE="${SEXOS_QEMU_DISPLAY:-sdl}"
+case "$DISPLAY_MODE" in
+  sdl)      DISPLAY_ARG="-display sdl" ;;
+  sdl-grab) DISPLAY_ARG="-display sdl,grab-mod=lctrl-lalt" ;;
+  gtk)      DISPLAY_ARG="-display gtk" ;;
+  gtk-grab) DISPLAY_ARG="-display gtk,grab-on-hover=on" ;;
+  *)
+    echo "error: unknown SEXOS_QEMU_DISPLAY=$DISPLAY_MODE (use sdl, sdl-grab, gtk, gtk-grab)"
+    exit 1
+    ;;
+esac
+echo "QEMU display mode: $DISPLAY_MODE"
+
 case "$CMD" in
   run)
     qemu-system-x86_64 \
@@ -29,7 +43,7 @@ case "$CMD" in
       $USB_DEVICE_ARG \
       $TRACE_ARGS \
       -serial stdio \
-      -display sdl
+      $DISPLAY_ARG
     ;;
   run-nographic)
     qemu-system-x86_64 \
