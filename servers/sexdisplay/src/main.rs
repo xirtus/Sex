@@ -51,10 +51,14 @@ const SURFACE_EMPTY: Surface = Surface {
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 static mut FOCUSED_SURFACE_ID: u64 = 0;
 const FOCUS_SURFACE_COLOR: u32 = 0x00A8E0FF;
+// Shell-owned OS cursor surface. Always rendered last (above all app surfaces).
+const CURSOR_SURFACE_ID: u64 = 0x90;
 
 /// Rate-limited rejection counter for unauthorized surface ops.
 /// Logs at most every 64 rejections to prevent IPC/log storms.
 static REJECT_COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static CURSOR_Z_TOP_LOGGED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 /// Clamp a surface rectangle against framebuffer dimensions.
 /// Returns `(x, y, w, h)` guaranteed to be within FB bounds and below the bar.
@@ -311,6 +315,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
             }
         }
     }
+    draw_cursor_z_top(fb, w, h, total_pixels);
 }
 
 fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
@@ -370,6 +375,32 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
             if idx < total_pixels {
                 unsafe { core::ptr::write_volatile(fb.add(idx), c); }
             }
+        }
+    }
+    draw_cursor_z_top(fb, w, h, total_pixels);
+}
+
+/// Pass 3: draw cursor surface (CURSOR_SURFACE_ID) unconditionally on top of all other surfaces.
+/// Called at the end of both render() and redraw_surface_area().
+fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
+    unsafe {
+        for surf in SURFACES.iter() {
+            if !surf.active || surf.surface_id != CURSOR_SURFACE_ID { continue; }
+            let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+            if sw == 0 || sh == 0 { break; }
+            if !CURSOR_Z_TOP_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                serial_println!("[sexdisplay.cursor_surface.z_top.ok] id={:#x}", CURSOR_SURFACE_ID);
+            }
+            let color = surf.color;
+            for cy in sy..sy + sh {
+                for cx in sx..sx + sw {
+                    let idx = cy * w + cx;
+                    if idx < total_pixels {
+                        core::ptr::write_volatile(fb.add(idx), color);
+                    }
+                }
+            }
+            break;
         }
     }
 }
