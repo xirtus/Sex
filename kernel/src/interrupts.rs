@@ -370,10 +370,6 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
     TICKS.fetch_add(1, Ordering::Relaxed);
     let core_id = crate::core_local::CoreLocal::get().core_id;
     let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
-    
-    if TICKS.load(Ordering::Relaxed) % 100 == 0 {
-        serial_println!("[DEBUG] timer_tick: core {} using runqueue at {:p}", core_id, &sched.runqueue);
-    }
 
     let result = sched.tick();
     if result.is_none() {
