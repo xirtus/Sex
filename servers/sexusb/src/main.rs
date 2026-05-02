@@ -134,6 +134,10 @@ pub extern "C" fn _start() -> ! {
     const TRB_TYPE_ADDRESS_DEVICE_CMD: u32 = 8;
     const TRB_TYPE_NOOP_CMD: u32 = 23;
     const TRB_TYPE_CMD_COMPLETION_EVENT: u32 = 33;
+    const TRB_TYPE_TRANSFER_EVENT: u32 = 32;
+    const TRB_TYPE_SETUP_STAGE: u32 = 2;
+    const TRB_TYPE_DATA_STAGE: u32 = 3;
+    const TRB_TYPE_STATUS_STAGE: u32 = 4;
     const TRB_CC_SUCCESS: u32 = 1;
 
     serial_println!("[sexusb.boot]");
@@ -684,6 +688,156 @@ pub extern "C" fn _start() -> ! {
     let dev_slot_dw3 = unsafe { core::ptr::read_volatile(dev_slot_dw3_ptr) };
     let slot_state = (dev_slot_dw3 >> 27) & 0x1F;
     serial_println!("[sexusb.xhci.address_device.state.ok] slot_state={}", slot_state);
+
+    // ===== GET_DESCRIPTOR(DEVICE, 0, 0, 8) =====
+    // Phase: USB_XHCI_GET_DEVICE_DESCRIPTOR_8_PROOF_V1
+    // Scope: exactly one EP0 control transfer, 8 bytes, no Evaluate Context,
+    //        no 18-byte fetch, no HID.
+    serial_println!("[sexusb.xhci.desc8.start]");
+
+    // Allocate separate descriptor DMA page (no alias with EP0 transfer ring).
+    let desc_data_phys = sys_alloc_phys(PAGE_SIZE);
+    let desc_data_va = sys_map_phys(desc_data_phys, PAGE_SIZE);
+    if desc_data_phys == 0 || desc_data_phys == u64::MAX
+        || desc_data_va == 0 || desc_data_va == u64::MAX
+    {
+        serial_println!("[sexusb.xhci.desc8.alloc.bad]");
+        loop { sys_yield(); }
+    }
+    if (desc_data_phys % 64) != 0 || (desc_data_phys % PAGE_SIZE) != 0 {
+        serial_println!("[sexusb.xhci.desc8.align.bad]");
+        loop { sys_yield(); }
+    }
+    unsafe { core::ptr::write_bytes(desc_data_va as *mut u8, 0, PAGE_SIZE as usize); }
+    serial_println!("[sexusb.xhci.desc8.alloc.ok] phys={:#x} va={:#x}", desc_data_phys, desc_data_va);
+
+    // EP0 transfer ring state: explicit indices and cycle.
+    // ep0_cycle (TRCS) starts at 1, toggles ONLY on segment boundary wrap
+    // (spec 4.11.3.1). NOT per TD. Same rule as CRCS for command ring.
+    // Stop marker MUST use ep0_cycle ^ 1 (opposite). Same-cycle Reserved TRB
+    // matches TRCS and is consumed as valid type=0 → silent corruption.
+    let mut ep0_idx: u64 = 0;
+    let ep0_cycle: u32 = 1;
+    let _ = (ep0_idx, ep0_cycle);
+
+    // Write 3-TRB chain: Setup Stage (type=2), Data Stage (type=3, IN),
+    // Status Stage (type=4, DIR=OUT, IOC=1), then stop marker at ep0_idx+3.
+    // GET_DESCRIPTOR(DEVICE, 0, 0, wLength=8) setup packet:
+    //   [0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x08, 0x00] (LE bytes)
+    // d0 = 0x0100_0680, d1 = 0x0008_0000
+
+    // Setup Stage TRB (type=2): IDT=1 (immediate data), CH=1 (chain),
+    // TRT=IN(1) in d3[17:16], TRB Transfer Length=8.
+    let setup_d3 = (TRB_TYPE_SETUP_STAGE << 10)  // type=2 in bits 15:10
+        | (1u32 << 16)                           // TRT=IN (0b01) in bits 17:16
+        | ep0_cycle;
+    trb_write_volatile(ep0_ring_va, ep0_idx,
+        0x0100_0680u32,  // d0: bmReqType=0x80,bReq=0x06,wVal_lo=0x00,wVal_hi=0x01
+        0x0008_0000u32,  // d1: wIdx_lo=0x00,wIdx_hi=0x00,wLen_lo=0x08,wLen_hi=0x00
+        (8u32 << 0)      // TRB Transfer Length = 8
+            | (1u32 << 17)  // IDT=1
+            | (1u32 << 18), // CH=1
+        setup_d3);
+
+    // Data Stage TRB (type=3): DIR=IN (1), CH=1 (chain to Status),
+    // TRB Transfer Length=8, IDT=0 (buffer mode), IOC=0, ISP=0.
+    let data_d3 = (TRB_TYPE_DATA_STAGE << 10)    // type=3 in bits 15:10
+        | (1u32 << 16)                           // DIR=IN (1) in bit 16
+        | ep0_cycle;
+    trb_write_volatile(ep0_ring_va, ep0_idx + 1,
+        (desc_data_phys & 0xFFFF_FFFF) as u32,
+        (desc_data_phys >> 32) as u32,
+        (8u32 << 0)      // TRB Transfer Length = 8
+            | (1u32 << 18), // CH=1 (IOC=0, ISP=0, IDT=0)
+        data_d3);
+
+    // Status Stage TRB (type=4): DIR=OUT (0 for control read status),
+    // CH=0 (end of TD), IOC=1 (generate Transfer Event).
+    let status_d3 = (TRB_TYPE_STATUS_STAGE << 10) // type=4 in bits 15:10
+        | (0u32 << 16)                            // DIR=OUT (0)
+        | ep0_cycle;
+    trb_write_volatile(ep0_ring_va, ep0_idx + 2,
+        0, 0,
+        1u32 << 22,  // IOC=1 in bit 22
+        status_d3);
+
+    // Cycle-stop marker at ep0_idx+3 with opposite cycle (ep0_cycle ^ 1).
+    // Same-cycle Reserved TRB at this position would match TRCS and be
+    // consumed as a valid type=0 TRB → undefined behavior.
+    trb_write_volatile(ep0_ring_va, ep0_idx + 3, 0, 0, 0, ep0_cycle ^ 1);
+    serial_println!("[sexusb.xhci.desc8.trbs.ok]");
+
+    // Advance producer index past submitted TRBs + stop marker.
+    // ep0_cycle stays stable (no segment wrap in this phase).
+    ep0_idx += 4;
+    let _ = (ep0_idx,);
+
+    // Doorbell: EP0 on slot_id. DB Target = 1 (EP0 endpoint ID).
+    // DB index = en_slot_id (1-based slot from Enable Slot).
+    if db_base.wrapping_add(en_slot_id as u64 * 4 + 4) > map_va.wrapping_add(MAP_BYTES) {
+        serial_println!("[sexusb.xhci.desc8.doorbell.bad]");
+        loop { sys_yield(); }
+    }
+    mmio_write32(db_base, en_slot_id as u64 * 4, 1u32);  // target=1 (EP0)
+    serial_println!("[sexusb.xhci.desc8.doorbell.ok]");
+
+    // Consume Transfer Event (type=32) at current ev_idx.
+    // Validate: cc==Success, slot_id matches, endpoint_id==1 (EP0).
+    let mut desc_ok = false;
+    for _ in 0..POLL_BUDGET {
+        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        if (ev_d3 & 1) == (ev_dcs as u32) {
+            let ev_type = (ev_d3 >> 10) & 0x3F;
+            if ev_type == TRB_TYPE_TRANSFER_EVENT {
+                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                let cc = (ev_d2 >> 24) & 0xFF;
+                let slot = (ev_d3 >> 24) & 0xFF;
+                let ep   = (ev_d3 >> 16) & 0x1F;
+                if cc == TRB_CC_SUCCESS && slot == en_slot_id && ep == 1 {
+                    desc_ok = true;
+                    serial_println!("[sexusb.xhci.desc8.event.ok]");
+                } else {
+                    serial_println!("[sexusb.xhci.desc8.event.bad] cc={} slot={} ep={}", cc, slot, ep);
+                }
+                // Clear consumed event cycle bit (spec 4.11.4)
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // Advance event dequeue pointer and update ERDP.
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS {
+                    ev_idx = 0;
+                    ev_dcs ^= 1;
+                }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write64(intr0_base, XHCI_INTR_ERDP, new_erdp | ev_dcs);
+            }
+            break;
+        }
+        sys_yield();
+    }
+
+    if !desc_ok {
+        serial_println!("[sexusb.xhci.desc8.timeout.bad]");
+        loop { sys_yield(); }
+    }
+
+    // Read 8 raw bytes from descriptor data buffer.
+    let desc_buf = desc_data_va as *const u8;
+    let b0 = unsafe { core::ptr::read_volatile(desc_buf.add(0)) };
+    let b1 = unsafe { core::ptr::read_volatile(desc_buf.add(1)) };
+    let b2 = unsafe { core::ptr::read_volatile(desc_buf.add(2)) };
+    let b3 = unsafe { core::ptr::read_volatile(desc_buf.add(3)) };
+    let b4 = unsafe { core::ptr::read_volatile(desc_buf.add(4)) };
+    let b5 = unsafe { core::ptr::read_volatile(desc_buf.add(5)) };
+    let b6 = unsafe { core::ptr::read_volatile(desc_buf.add(6)) };
+    let b7 = unsafe { core::ptr::read_volatile(desc_buf.add(7)) };
+    serial_println!("[sexusb.xhci.desc8.bytes.ok] bytes=[{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x},{:#x}]",
+        b0, b1, b2, b3, b4, b5, b6, b7);
+
+    // bMaxPacketSize0 is at offset 7 in device descriptor.
+    let mps = b7;
+    serial_println!("[sexusb.xhci.desc8.mps.ok] mps={}", mps);
+
+    serial_println!("[sexusb.xhci.desc8.complete.ok]");
 
     loop { sys_yield(); }
 }

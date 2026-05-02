@@ -326,6 +326,49 @@ Event[2]: type=33, cc=1, slot_id=en_slot_id → success
 
 **XHCI CRCS rule**: XHCI command ring cycle (CRCR.RCS per spec 5.4.5) toggles ONLY on segment boundary wrap, NOT per TRB fetch. All valid commands within a segment share the same cycle bit. Stop marker MUST use opposite cycle (`!cmd_cycle`). A same-cycle Reserved TRB (type=0) matches CRCS and is consumed as a valid command → undefined behavior / silent corruption.
 
+## USB_XHCI_GET_DEVICE_DESCRIPTOR_8_PROOF_V1
+
+### Changes
+- Added TRB type constants: `TRB_TYPE_SETUP_STAGE=2`, `TRB_TYPE_DATA_STAGE=3`,
+  `TRB_TYPE_STATUS_STAGE=4`, `TRB_TYPE_TRANSFER_EVENT=32`.
+- Added EP0 transfer ring state: `ep0_idx: u64`, `ep0_cycle: u32` (TRCS).
+- TRCS rule: starts at 1, toggles ONLY on segment boundary wrap (spec 4.11.3.1),
+  NOT per TD. Same correctness class as CRCS.
+- Allocated separate descriptor DMA page via syscall31+30 (no alias with EP0
+  transfer ring). Validated non-zero, 64-byte alignment, zeroed.
+- Wrote 3-TRB EP0 control transfer chain for GET_DESCRIPTOR(DEVICE,0,0,8):
+  - Setup Stage (type=2): IDT=1, CH=1, TRT=IN(d3[17:16]=0b01)
+  - Data Stage (type=3): DIR=IN(d3[16]=1), CH=1, ISP=0, IOC=0, buffer mode
+  - Status Stage (type=4): DIR=OUT(d3[16]=0), CH=0, IOC=1 (generates Transfer Event)
+  - Stop marker at ep0_idx+3 with `ep0_cycle ^ 1` (opposite cycle)
+- Verified exact XHCI bitfields before coding (Setup IDT/CH/IOC/TRT,
+  Data CH/IOC/ISP/DIR, Status CH/IOC/DIR, Transfer Event cc/slot/ep).
+- Doorbell: `mmio_write32(db_base, en_slot_id * 4, 1u32)` — DB Target=1 for EP0.
+- Bounded poll for Transfer Event (type=32) at current `ev_idx`/`ev_dcs` (no
+  hardcoded index). Validate cc==Success, slot_id matches, endpoint_id==1.
+- Standard event consumption: clear cycle bit, advance ev_idx, handle wrap,
+  update ERDP.
+- Log 8 raw descriptor bytes + bMaxPacketSize0 from offset 7.
+- No Evaluate Context (deferred), no 18-byte fetch, no HID.
+
+### Non-goals preserved
+- No Evaluate Context
+- No full 18-byte descriptor
+- No Configure Endpoint
+- No HID parsing or routing
+- No IRQ handler
+- No kernel/ABI edits
+- No sexinput routing
+- No sexlink
+
+### Build
+- Build gate passed: `./scripts/entrypoint_build.sh`.
+- Zero warnings for sexusb.
+
+### Next
+- `USB_XHCI_EP0_MPS_EVALUATE_CONTEXT_PLAN_V1`: plan only — design Evaluate
+  Context command to update EP0 MPS from bMaxPacketSize0. No implementation, no HID.
+
 ## CORRECTED XHCI SPEC FACTS (post-Audit V1)
 
 **Context stride**: XHCI context array element stride = 32 bytes if CSZ=0, 64 bytes if CSZ=1 (HCCPARAMS1 bit 2). NOT 16/32. Slot/EP0 context fields occupy the first 16 bytes of each stride; remaining bytes are reserved.
