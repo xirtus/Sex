@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use silkbar_model::{SilkBarUpdate, UpdateKind, ChipKind, OP_SILKBAR_UPDATE};
+use silkbar_model::{SilkBarUpdate, UpdateKind, ChipKind, OP_SILKBAR_UPDATE, validate_contract};
 
 fn send_update(update: SilkBarUpdate) {
     let _ = sex_pdx::pdx_call(
@@ -15,6 +15,10 @@ fn send_update(update: SilkBarUpdate) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    if !validate_contract() {
+        loop { core::hint::spin_loop(); }
+    }
+
     let mut focus_state: u8 = 0;
     let mut last_focus_state: u8 = 0xFF;
     let mut chip_phase: u8 = 0;

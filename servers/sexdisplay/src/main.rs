@@ -8,7 +8,7 @@ use silkbar_model::{SilkBar, SilkBarUpdate, apply_update, DEFAULT_SILK_BAR,
                     WS_INACTIVE_W,
                     CHIP_X0, CHIP_X1, CHIP_X2, CHIP_X3, CHIP_Y, CHIP_H, CHIP_W, CLOCK_W,
                     LAUNCHER_X, LAUNCHER_Y, LAUNCHER_W, LAUNCHER_H,
-                    ChipKind};
+                    ChipKind, validate_contract};
 
 const FALLBACK_PTR: u64 = 0xffff8000fd000000;
 const FALLBACK_W: u32 = 1280;
@@ -402,6 +402,10 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    if !validate_contract() {
+        loop { core::hint::spin_loop(); }
+    }
+
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
 

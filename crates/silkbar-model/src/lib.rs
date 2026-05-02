@@ -43,6 +43,9 @@ pub const LAYOUT_COUNT: usize = 10;
 /// ABI version for SilkBar model shared across PDX boundary.
 /// Increment when `SilkBarUpdate` layout or `UpdateKind` discriminants change.
 pub const ABI_VERSION: u32 = 1;
+pub const SILK_DE_BAR_ABI_V1: u32 = 1;
+pub const SILK_DE_REQUIRED_MODULES: usize = LAYOUT_COUNT;
+pub const SILK_DE_REQUIRED_CHIPS: usize = MAX_CHIPS;
 
 // ── PDX Protocol Opcodes (v6: wire names exist, no live transport yet) ──────
 
@@ -55,6 +58,28 @@ pub const OP_SILKBAR_PING: u64 = 0xF0;
 pub const OP_SILKBAR_GET_ABI: u64 = 0xF1;
 /// Opcode: push SilkBarUpdate (unpacked across arg0/arg1/arg2).
 pub const OP_SILKBAR_UPDATE: u64 = 0xF2;
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum ModuleSlot {
+    Launcher = 0,
+    Workspace0 = 1,
+    Workspace1 = 2,
+    Workspace2 = 3,
+    Workspace3 = 4,
+    Workspace4 = 5,
+    Chip0 = 6,
+    Chip1 = 7,
+    Chip2 = 8,
+    Clock = 9,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum ChipSlot {
+    Chip0 = 0,
+    Chip1 = 1,
+    Chip2 = 2,
+    Clock = 3,
+}
 
 // ── Data Model Types ────────────────────────────────────────────────────────
 
@@ -492,6 +517,33 @@ pub fn validate_invariants() -> bool {
         return false;
     }
 
+    true
+}
+
+/// Contract gate for Silk DE top strip.
+/// Use this at producer/consumer startup to reject ABI/layout drift early.
+pub fn validate_contract() -> bool {
+    if ABI_VERSION != SILK_DE_BAR_ABI_V1 {
+        return false;
+    }
+    if LAYOUT_COUNT != SILK_DE_REQUIRED_MODULES {
+        return false;
+    }
+    if MAX_CHIPS != SILK_DE_REQUIRED_CHIPS {
+        return false;
+    }
+    if DEFAULT_SILK_BAR.layout.len() != SILK_DE_REQUIRED_MODULES {
+        return false;
+    }
+    if DEFAULT_SILK_BAR.chips.len() != SILK_DE_REQUIRED_CHIPS {
+        return false;
+    }
+    if SILKBAR_UPDATE_SIZE != 16 {
+        return false;
+    }
+    if UPDATE_QUEUE_CAP != 32 {
+        return false;
+    }
     true
 }
 
