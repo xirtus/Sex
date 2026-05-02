@@ -613,8 +613,57 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             0xEF => {
-                // Temporary containment: fill-rect is disabled during PD1 stabilization.
-                continue;
+                // OP_SURFACE_FILL_RECT: arg0=surface_id, arg1=(sy<<32)|sx,
+                // arg2=(color<<32)|(sh<<16)|sw.
+                let surface_id = msg.arg0;
+                if surface_id == 0 { continue; }
+                if !fb_live { continue; }
+
+                let sx = (msg.arg1 & 0xFFFF_FFFF) as i32;
+                let sy = ((msg.arg1 >> 32) & 0xFFFF_FFFF) as i32;
+                let mut sw = (msg.arg2 & 0xFFFF) as u32;
+                let mut sh = ((msg.arg2 >> 16) & 0xFFFF) as u32;
+                let color = (msg.arg2 >> 32) as u32;
+                if sw == 0 || sh == 0 { continue; }
+
+                unsafe {
+                    let mut updated = false;
+                    for slot in SURFACES.iter_mut() {
+                        if !(slot.active && slot.surface_id == surface_id) {
+                            continue;
+                        }
+                        if slot.owner_pd != msg.caller_pd {
+                            let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                            if n & 0x3F == 0 {
+                                serial_println!("AUTH: 0xEF fill rejected sid={} caller={} owner={}",
+                                    surface_id, msg.caller_pd, slot.owner_pd);
+                            }
+                            break;
+                        }
+
+                        sw = sw.min(slot.w);
+                        sh = sh.min(slot.h);
+                        if sw == 0 || sh == 0 { break; }
+
+                        let max_sx = slot.w.saturating_sub(sw) as i32;
+                        let max_sy = slot.h.saturating_sub(sh) as i32;
+                        let fill_sx = sx.clamp(0, max_sx);
+                        let fill_sy = sy.clamp(0, max_sy);
+
+                        slot.fill_sx = fill_sx;
+                        slot.fill_sy = fill_sy;
+                        slot.fill_sw = sw;
+                        slot.fill_sh = sh;
+                        slot.fill_color = color;
+                        slot.fill_active = true;
+                        updated = true;
+                        break;
+                    }
+
+                    if updated {
+                        redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+                    }
+                }
             }
             _ => {
                 // Ignore unrelated messages and continue draining.
