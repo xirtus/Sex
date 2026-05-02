@@ -11,19 +11,28 @@ fn panic(_info: &PanicInfo) -> ! {
 
 // ── Pointer state for HID report normalizer ──
 static mut LAST_BUTTONS: u8 = 0;
+const OP_HID_EVENT: u64 = 0x202;
+
+#[derive(Copy, Clone)]
+struct HidPointerRawReport {
+    dx: i16,
+    dy: i16,
+    buttons: u8,
+    wheel: i8,
+}
 
 /// Parse a boot-mouse-style 3-byte report, detect button edge transitions,
 /// and emit normalized EV_REL/EV_BTN events via the callback.
 ///
 /// Transport-agnostic: callable from synthetic producer or future USB HID source.
 /// Returns the number of events emitted (0-4: 1 REL + up to 3 button edges).
-fn parse_mouse_report(
-    report: &[u8; 3],
+fn normalize_pointer_report_v1(
+    report: HidPointerRawReport,
     last_buttons: &mut u8,
     mut emit: impl FnMut(u64, u64, u64),
 ) -> usize {
     let mut count = 0;
-    let buttons = report[0] & 0x07;       // mask to valid button bits
+    let buttons = report.buttons & 0x07;       // mask to valid button bits
     let changed = buttons ^ *last_buttons; // XOR edge detection
     let mut bit = 1u8;
     let mut btn_id = 1u8;
@@ -40,13 +49,16 @@ fn parse_mouse_report(
     }
     *last_buttons = buttons;
 
-    // Emit REL event if motion non-zero (sign-extend via i8 for negative deltas)
-    let dx = (report[1] as i8) as i32;
-    let dy = (report[2] as i8) as i32;
+    // Keep wire encoding byte-for-byte: shell decodes as msg.argN as i32.
+    let dx = report.dx as i32;
+    let dy = report.dy as i32;
     if dx != 0 || dy != 0 {
         emit(dx as u64, dy as u64, EV_REL);
         count += 1;
     }
+
+    // V1 keeps wheel in the raw report model but does not emit wheel events yet.
+    let _ = report.wheel;
 
     count
 }
@@ -75,21 +87,21 @@ pub extern "C" fn _start() -> ! {
                 // Typed event via 0x202: arg0=code(break-bit stripped), arg1=1(press)/0(release), arg2=EV_KEY
                 let value = if scancode & 0x80 == 0 { 1 } else { 0 };
                 let code = (scancode & 0x7F) as u64;
-                pdx_call(SLOT_SHELL, 0x202, code, value, EV_KEY);
+                pdx_call(SLOT_SHELL, OP_HID_EVENT, code, value, EV_KEY);
             }
         }
 
         // 3. Synthetic pointer event producer (transport proof, not product)
         //    Emits bounded EV_REL + occasional EV_BTN to validate the typed event path
         //    through silk-shell's existing POINTER_EVENT_NORMALIZATION_V1 consumer.
-        //    Cadence cap: 1 burst per 120 ticks. Routes through parse_mouse_report()
+        //    Cadence cap: 1 burst per 120 ticks. Routes through normalize_pointer_report_v1()
         //    normalizer to prove transport-agnostic contract.
         tick = tick.wrapping_add(1);
         if tick % 120 == 0 {
             let buttons = if tick % 480 == 0 { 0x01 } else { 0x00 };
-            let report = [buttons, 5, 3];
-            parse_mouse_report(&report, unsafe { &mut *core::ptr::addr_of_mut!(LAST_BUTTONS) }, |arg0, arg1, arg2| {
-                pdx_call(SLOT_SHELL, 0x202, arg0, arg1, arg2);
+            let report = HidPointerRawReport { dx: 5, dy: 3, buttons, wheel: 0 };
+            normalize_pointer_report_v1(report, unsafe { &mut *core::ptr::addr_of_mut!(LAST_BUTTONS) }, |arg0, arg1, arg2| {
+                pdx_call(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2);
                 if arg2 == EV_BTN && arg1 == 1 {
                     serial_println!("[sexinput] Synthetic pointer click press");
                 }
