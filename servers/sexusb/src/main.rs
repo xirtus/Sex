@@ -131,6 +131,7 @@ pub extern "C" fn _start() -> ! {
     const XHCI_INTR_ERSTBA: u64 = 0x10;
     const XHCI_INTR_ERDP: u64 = 0x18;
     const TRB_TYPE_ENABLE_SLOT_CMD: u32 = 9;
+    const TRB_TYPE_ADDRESS_DEVICE_CMD: u32 = 8;
     const TRB_TYPE_NOOP_CMD: u32 = 23;
     const TRB_TYPE_CMD_COMPLETION_EVENT: u32 = 33;
     const TRB_CC_SUCCESS: u32 = 1;
@@ -611,6 +612,78 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.xhci.addr_ctx.dcbaa.ok]");
 
     serial_println!("[sexusb.xhci.addr_ctx.layout.ok]");
+
+    // ===== Address Device =====
+    serial_println!("[sexusb.xhci.address_device.start]");
+
+    // Address Device Command TRB at cmd_idx with cmd_cycle.
+    // d0/d1 = input_context_phys, d2 = 0,
+    // d3 = (slot_id << 24) | (type=8 << 10) | cmd_cycle (BSR=0 for normal address)
+    let addr_dev_d0 = (input_ctx_phys & 0xFFFF_FFFF) as u32;
+    let addr_dev_d1 = (input_ctx_phys >> 32) as u32;
+    let addr_dev_d3 = (en_slot_id << 24)
+        | (TRB_TYPE_ADDRESS_DEVICE_CMD << 10)
+        | cmd_cycle;
+    trb_write_volatile(cmd_ring_va, cmd_idx, addr_dev_d0, addr_dev_d1, 0u32, addr_dev_d3);
+    serial_println!("[sexusb.xhci.address_device.trb.ok]");
+
+    // Cycle-stop at cmd_idx+1 with opposite cycle.
+    trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle ^ 1);
+
+    // Doorbell 0 (command ring).
+    mmio_write32(db_base, 0, 0u32);
+    serial_println!("[sexusb.xhci.address_device.doorbell.ok]");
+
+    // Consume command completion event at ev_idx.
+    let mut addr_dev_ok = false;
+    for _ in 0..POLL_BUDGET {
+        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        if (ev_d3 & 1) == (ev_dcs as u32) {
+            let ev_type = (ev_d3 >> 10) & 0x3F;
+            if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
+                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                let ev_cc = (ev_d2 >> 24) & 0xFF;
+                let ev_slot_id = (ev_d3 >> 24) & 0xFF;
+                if ev_cc == TRB_CC_SUCCESS && ev_slot_id == en_slot_id {
+                    addr_dev_ok = true;
+                    serial_println!("[sexusb.xhci.address_device.event.seen]");
+                    serial_println!("[sexusb.xhci.address_device.complete.ok]");
+                    serial_println!("[sexusb.xhci.address_device.slot.ok]");
+                } else {
+                    serial_println!("[sexusb.xhci.address_device.complete.bad] cc={} slot={}", ev_cc, ev_slot_id);
+                }
+                // Clear consumed event cycle bit (spec 4.11.4)
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // Advance event dequeue pointer and update ERDP.
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS {
+                    ev_idx = 0;
+                    ev_dcs ^= 1;
+                }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write64(intr0_base, XHCI_INTR_ERDP, new_erdp | ev_dcs);
+            }
+            break;
+        }
+        sys_yield();
+    }
+
+    if !addr_dev_ok {
+        serial_println!("[sexusb.xhci.address_device.timeout.bad]");
+        loop { sys_yield(); }
+    }
+
+    // Advance command ring producer index (cycle stable until segment wrap).
+    cmd_idx += 1;
+    let _ = (cmd_idx,);
+
+    // Read device context slot state from DW3 (offset 12).
+    // Slot state is in bits 31:27. After successful Address Device, should be
+    // 3 = Addressed (or 2 = Default depending on BSR).
+    let dev_slot_dw3_ptr = (device_ctx_va + 12) as *const u32;
+    let dev_slot_dw3 = unsafe { core::ptr::read_volatile(dev_slot_dw3_ptr) };
+    let slot_state = (dev_slot_dw3 >> 27) & 0x1F;
+    serial_println!("[sexusb.xhci.address_device.state.ok] slot_state={}", slot_state);
 
     loop { sys_yield(); }
 }

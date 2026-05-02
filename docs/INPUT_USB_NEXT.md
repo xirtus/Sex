@@ -266,12 +266,57 @@ If a proposed USB patch touches kernel, sexinput, sex-pdx, silk-shell, sexdispla
 - Build gate passed: `./scripts/entrypoint_build.sh`.
 - Zero warnings for sexusb.
 
-### Next
-- `USB_XHCI_ADDRESS_DEVICE_PROOF_V1`: submit Address Device TRB with the
-  prepared input context. Must succeed within bounded polls.
-  After: device is in Addressed state, ready for descriptor fetch.
+## USB_XHCI_ADDRESS_DEVICE_PROOF_V1
 
-## RULE: BootInfoFrameAllocator metadata overlap (GP at LockFreeBuddyAllocator::alloc)
+### Changes
+- Added `TRB_TYPE_ADDRESS_DEVICE_CMD` constant (type=8)
+- After context layout completes, submits Address Device Command TRB at `cmd_idx` (index 2):
+  - d0(31:0), d1 = `input_context_phys` (low/high 32 bits)
+  - d2 = 0
+  - d3 = `(slot_id << 24) | (8 << 10) | cmd_cycle`
+  - BSR=0 (normal address, not block set address)
+- Writes cycle-stop marker at `cmd_idx+1` with `!cmd_cycle`
+- Rings doorbell 0
+- Polls event at `ev_idx` (index 2) for Command Completion Event (type=33)
+- Decodes: completion code from d2[31:24], slot ID from d3[31:24]
+- Validates: cc == 1 (success) AND ev_slot_id matches `en_slot_id`
+- Clears consumed event cycle bit per spec 4.11.4, advances ev_idx, updates ERDP
+- On success: reads output Device Context slot state from `device_ctx_va + 12` DW3 bits 31:27
+- On timeout/failure: parks at `loop { sys_yield(); }` with `.timeout.bad` marker
+
+### Address Device TRB trace
+```
+cmd_idx=2 (after NOOP@0, Enable Slot@1), cmd_cycle=1 (stable)
+ev_idx=2 (after consuming NOOP@0, Enable Slot@1 events)
+
+TRB[2]: type=8, cycle=1, slot_id=en_slot_id → match CRCS=1 → valid
+TRB[3]: type=0, cycle=0 → STOP (0 != 1)
+
+Event[2]: type=33, cc=1, slot_id=en_slot_id → success
+```
+
+### Verification
+- Completion code == Success (1)
+- Event slot ID matches Enable Slot slot ID
+- Device Context slot state logged (expected: 3 = Addressed)
+
+### Non-goals preserved
+- No descriptor requests (no EP0 setup/data/status TRBs)
+- No transfers
+- No Configure Endpoint
+- No HID parsing
+- No IRQ handler changes
+- No kernel/ABI edits
+- No sexinput routing
+- No sexlink
+
+### Build
+- Build gate passed: `./scripts/entrypoint_build.sh`.
+- Zero warnings for sexusb.
+
+### Next
+- `USB_XHCI_GET_DESCRIPTOR_PLAN_V1`: plan only — design EP0 setup/data/status
+  transfer TRBs for device descriptor fetch. No implementation, no HID.
 
 **Symptom**: QEMU black screen, EXCEPTION: GP FAULT at RIP 0xffffffff80203bdb in kernel allocator. Crash PD is *not* sexusb but a different PD later in scheduler rotation (e.g., sexinput). Triggered by sexusb binary growing past a page boundary (extra ELF segment page triggers a page-table allocation from the conflicting frame pool).
 
