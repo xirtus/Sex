@@ -164,6 +164,8 @@ static mut SNAPSHOT: [WindowDescriptor; 16] = [
 static mut POINTER_X: i32 = 0;
 static mut POINTER_Y: i32 = 0;
 static mut POINTER_BUTTONS: u8 = 0; // bitmask: bit0=left, bit1=right, bit2=middle
+static mut POINTER_WHEEL_ACCUM: i32 = 0;
+static mut POINTER_USB_STATE_INIT: bool = false;
 static mut CLICK_ACTIVE: bool = false; // edge-trigger guard: reset on left release
 static mut DRAG_ACTIVE: bool = false;  // drag in progress: set on left press over focused surface
 // Linen surface 200 position tracking (stable — linen never moves)
@@ -363,6 +365,27 @@ pub extern "C" fn _start() -> ! {
                         dy,
                         wheel
                     );
+                    serial_println!("[shell.pointer.usb_state.start]");
+                    unsafe {
+                        if !POINTER_USB_STATE_INIT {
+                            POINTER_X = P.width / 2;
+                            POINTER_Y = P.height / 2;
+                            POINTER_USB_STATE_INIT = true;
+                        }
+                        let max_x = P.width.saturating_sub(1);
+                        let max_y = P.height.saturating_sub(1);
+                        POINTER_X = POINTER_X.saturating_add(dx as i32).clamp(0, max_x);
+                        POINTER_Y = POINTER_Y.saturating_add(dy as i32).clamp(0, max_y);
+                        POINTER_BUTTONS = buttons & 0x07;
+                        POINTER_WHEEL_ACCUM = POINTER_WHEEL_ACCUM.saturating_add(wheel as i32);
+                        serial_println!(
+                            "[shell.pointer.usb_state.ok] x={} y={} buttons={:#x} wheel={}",
+                            POINTER_X,
+                            POINTER_Y,
+                            POINTER_BUTTONS,
+                            POINTER_WHEEL_ACCUM
+                        );
+                    }
                     pdx_reply(0);
                 }
                 OP_HID_EVENT => {

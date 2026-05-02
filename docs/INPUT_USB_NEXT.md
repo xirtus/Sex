@@ -938,6 +938,17 @@ No `[sexusb.xhci.eval_ctx.verify.bad]`.
   allowing proof-mode receive loop execution.
 - No kernel/ABI/capability/display/policy changes in this step.
 
+### SILK_SHELL_USB_MOUSE_POINTER_STATE_PROOF_V1
+- In `silk-shell` USB report receive branch (`op=0x260`), local USB pointer
+  state is now maintained and logged:
+  `x: i32`, `y: i32`, `buttons: u8`, `wheel_accum: i32`.
+- First USB report initializes pointer to desktop center (`P.width/2`,
+  `P.height/2`), then applies clamped/saturating `dx/dy` updates.
+- Markers:
+  `[shell.pointer.usb_state.start]`,
+  `[shell.pointer.usb_state.ok] x=N y=N buttons=0x.. wheel=N`.
+- No sexdisplay/framebuffer/compositor/focus/drag policy changes in this step.
+
 ### Non-goals preserved
 - No sexinput routing
 - No IRQ handler (stay with polling)
