@@ -745,3 +745,59 @@ grep -E "usb_xhci_slot_address|usb_xhci_queue_event|usb_xhci_fetch_trb" /tmp/sex
 - No doorbell value changes
 - No HID/config descriptor changes
 - No kernel/ABI edits
+
+## USB_XHCI_HID_BOOT_MOUSE_CONFIG_WALK_V1
+
+### Changes
+- Added `hid_interface_number` capture from INTERFACE descriptor offset+2 (bInterfaceNumber).
+- Changed marker from `[sexusb.xhci.config.hid_intf]` to `[sexusb.xhci.config.hid_boot_mouse.found]`
+  with interface number logged.
+- Endpoint detail logging unchanged: `[sexusb.xhci.config.intr_ep]` with addr, mps, interval.
+- Existing `[sexusb.xhci.config.no_hid.park]` path preserved for non-boot-HID devices (usb-tablet).
+- No new TRB submissions, commands, transfers, or IRQ changes.
+
+### Verification
+```
+SEXUSB_QEMU_DEVICE=mouse SEXUSB_XHCI_TRACE=1 ./dev.sh run-nographic \
+  > /tmp/sexusb-boot-mouse-config-serial.log \
+  2> /tmp/sexusb-boot-mouse-config-trace.log
+
+grep -E "desc8|desc18|config|hid|boot|mouse|endpoint|complete.ok|no_hid|timeout|cc=|fault|panic|GP|PF" \
+  /tmp/sexusb-boot-mouse-config-serial.log | head -360
+```
+
+Expected:
+```
+[sexusb.xhci.desc8.event.ok]
+[sexusb.xhci.desc8.complete.ok]
+[sexusb.xhci.eval_ctx.event.ok]
+[sexusb.xhci.eval_ctx.verify.bad] expected=64 got=512
+[sexusb.xhci.full18.complete.ok]
+[sexusb.xhci.config.header.event.ok]
+[sexusb.xhci.config.full.event.ok]
+[sexusb.xhci.config.hid_boot_mouse.found] intf=0 off=9
+[sexusb.xhci.config.intr_ep] off=27 addr=0x81 mps=4 interval=7
+[sexusb.xhci.config.complete.ok]
+```
+No `[sexusb.xhci.config.no_hid.park]`, no #PF/#GP/panic.
+
+### Result
+- HID boot mouse interface found: class=0x03, subclass=0x01, protocol=0x02
+- Interrupt IN endpoint: addr=0x81, MPS=4, interval=7
+- Config walk parks at `loop { sys_yield(); }` after `complete.ok`
+- QEMU usb-tablet path preserved via `SEXUSB_QEMU_DEVICE=tablet`
+
+### Non-goals preserved
+- No HID report descriptor fetch
+- No SET_CONFIGURATION
+- No Configure Endpoint command
+- No interrupt transfers
+- No sexinput routing
+- No IRQ handler (stay with polling)
+
+### Next
+- `USB_XHCI_EVALUATE_CONTEXT_MPS_AUDIT_V1`: investigate expected=64 got=512
+  (Evaluate Context MPS not updated). Separate from HID proof phase.
+- `USB_XHCI_HID_REPORT_DESCRIPTOR_PROOF_V1`: fetch HID report descriptor via
+  GET_DESCRIPTOR(HID Report) to determine report size. Blocked until MPS audit
+  completes (correct MPS matters for interrupt transfers).
