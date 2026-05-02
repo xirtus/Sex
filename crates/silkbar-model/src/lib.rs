@@ -46,6 +46,13 @@ pub const ABI_VERSION: u32 = 1;
 pub const SILK_DE_BAR_ABI_V1: u32 = 1;
 pub const SILK_DE_REQUIRED_MODULES: usize = LAYOUT_COUNT;
 pub const SILK_DE_REQUIRED_CHIPS: usize = MAX_CHIPS;
+pub const SILKBAR_WORKSPACE_COUNT: usize = WORKSPACE_COUNT;
+pub const SILKBAR_WORKSPACE_IDX_MIN: u8 = 0;
+pub const SILKBAR_WORKSPACE_IDX_MAX: u8 = (WORKSPACE_COUNT - 1) as u8;
+pub const SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX: u8 = 2;
+pub const SILKBAR_CHIP_COUNT: usize = MAX_CHIPS;
+pub const SILKBAR_CHIP_IDX_MIN: u8 = 0;
+pub const SILKBAR_CHIP_IDX_MAX: u8 = (MAX_CHIPS - 1) as u8;
 
 // ── PDX Protocol Opcodes (v6: wire names exist, no live transport yet) ──────
 
@@ -536,6 +543,24 @@ pub fn validate_contract() -> bool {
         return false;
     }
     if DEFAULT_SILK_BAR.chips.len() != SILK_DE_REQUIRED_CHIPS {
+        return false;
+    }
+    if SILKBAR_WORKSPACE_COUNT != WORKSPACE_COUNT {
+        return false;
+    }
+    if SILKBAR_CHIP_COUNT != MAX_CHIPS {
+        return false;
+    }
+    if SILKBAR_WORKSPACE_IDX_MIN != 0 || SILKBAR_CHIP_IDX_MIN != 0 {
+        return false;
+    }
+    if SILKBAR_WORKSPACE_IDX_MAX as usize + 1 != SILKBAR_WORKSPACE_COUNT {
+        return false;
+    }
+    if SILKBAR_CHIP_IDX_MAX as usize + 1 != SILKBAR_CHIP_COUNT {
+        return false;
+    }
+    if SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX > SILKBAR_WORKSPACE_IDX_MAX {
         return false;
     }
     if SILKBAR_UPDATE_SIZE != 16 {

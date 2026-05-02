@@ -3,7 +3,8 @@
 
 use silkbar_model::{
     SilkBarUpdate, UpdateKind, ChipKind, OP_SILKBAR_UPDATE, validate_contract,
-    validate_deterministic_vectors,
+    validate_deterministic_vectors, SILKBAR_WORKSPACE_COUNT, SILKBAR_CHIP_COUNT,
+    SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX, SILKBAR_WORKSPACE_IDX_MAX,
 };
 
 fn send_update(update: SilkBarUpdate) {
@@ -26,8 +27,10 @@ fn send_update(update: SilkBarUpdate) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     if !validate_contract() || !validate_deterministic_vectors() {
+        sex_pdx::serial_println!("[silkbar.contract.v1.bad]");
         loop { core::hint::spin_loop(); }
     }
+    sex_pdx::serial_println!("[silkbar.contract.v1.ok]");
 
     let mut focus_state: u8 = 0;
     let mut last_focus_state: u8 = 0xFF;
@@ -41,13 +44,13 @@ pub extern "C" fn _start() -> ! {
 
     // INIT: full GLOBAL_BAR state — workspace activation, chip visibility, clock
     // Workspace 3 active (index 2), others inactive
-    for ws_idx in 0..5 {
+    for ws_idx in 0..SILKBAR_WORKSPACE_COUNT as u8 {
         send_update(SilkBarUpdate::new(
-            UpdateKind::SetWorkspaceActive as u32, ws_idx, if ws_idx == 2 { 1 } else { 0 }, 0,
+            UpdateKind::SetWorkspaceActive as u32, ws_idx, if ws_idx == SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX { 1 } else { 0 }, 0,
         ));
     }
     // All four status chips visible
-    for chip_idx in 0..4 {
+    for chip_idx in 0..SILKBAR_CHIP_COUNT as u8 {
         send_update(SilkBarUpdate::new(
             UpdateKind::SetChipVisible as u32, chip_idx, 1, 0,
         ));
@@ -68,8 +71,8 @@ pub extern "C" fn _start() -> ! {
         // Process at most one upstream message per loop (non-blocking).
         if let Some(msg) = sex_pdx::pdx_try_listen_raw(0) {
             if msg.type_id == sex_pdx::OP_SILKBAR_WORKSPACE_ACTIVE {
-                let ws = (msg.arg0 as u8).min(4);
-                for i in 0..5 {
+                let ws = (msg.arg0 as u8).min(SILKBAR_WORKSPACE_IDX_MAX);
+                for i in 0..SILKBAR_WORKSPACE_COUNT as u8 {
                     send_update(SilkBarUpdate::new(
                         UpdateKind::SetWorkspaceActive as u32, i, if i == ws { 1 } else { 0 }, 0,
                     ));
@@ -89,7 +92,7 @@ pub extern "C" fn _start() -> ! {
                 3 => Some(2u8),
                 _ => None,
             };
-            for ws in 0..5u8 {
+            for ws in 0..SILKBAR_WORKSPACE_COUNT as u8 {
                 let urgent = if Some(ws) == urgent_ws { 1 } else { 0 };
                 send_update(SilkBarUpdate::new(
                     UpdateKind::SetWorkspaceUrgent as u32, ws, urgent, 0,
