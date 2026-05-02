@@ -771,7 +771,7 @@ Expected:
 [sexusb.xhci.desc8.event.ok]
 [sexusb.xhci.desc8.complete.ok]
 [sexusb.xhci.eval_ctx.event.ok]
-[sexusb.xhci.eval_ctx.verify.bad] expected=64 got=512
+[sexusb.xhci.eval_ctx.ss_mps_512.ok] port_speed=3 ss_mps=512 descriptor_bMaxPacketSize0=64
 [sexusb.xhci.full18.complete.ok]
 [sexusb.xhci.config.header.event.ok]
 [sexusb.xhci.config.full.event.ok]
@@ -795,9 +795,51 @@ No `[sexusb.xhci.config.no_hid.park]`, no #PF/#GP/panic.
 - No sexinput routing
 - No IRQ handler (stay with polling)
 
+## USB_XHCI_EVALUATE_CONTEXT_MPS_AUDIT_V1
+
+### Result
+MPS=512 is valid for this configuration. Port speed ID=3 (SuperSpeed per xHCI
+PSI mapping); USB 3.0 &sect;9.6.1 fixes EP0 MPS at 512 for SS ports. The controller
+correctly ignores Evaluate Context MPS update requests for SS ports. The device
+descriptor bMaxPacketSize0=64 is a USB 2.0 encoding that does not apply to SS
+context.
+
+### Changes
+- Added `[sexusb.xhci.mps.audit]` report-only markers dumping EP0 context
+  DW0..DW3 before and after Evaluate Context, with speed/descriptor/context sources.
+- Added `[sexusb.xhci.eval_ctx.ss_mps_512.ok]` path: acknowledges MPS=512 is
+  valid for SuperSpeed ports, replacing the false `verify.bad` marker.
+- Retained `[sexusb.xhci.eval_ctx.verify.bad]` for non-SS mismatches only.
+
+### Verification
+```
+SEXUSB_QEMU_DEVICE=mouse SEXUSB_XHCI_TRACE=1 ./dev.sh run-nographic \
+  > /tmp/sexusb-mps-audit-serial.log \
+  2> /tmp/sexusb-mps-audit-trace.log
+
+grep -E "mps.audit|eval_ctx.ss_mps_512|verify.bad|desc8|desc18|config.complete|hid_boot_mouse" \
+  /tmp/sexusb-mps-audit-serial.log | head -40
+```
+
+Expected markers:
+```
+[sexusb.xhci.mps.audit] port_speed=3
+[sexusb.xhci.mps.audit] device_desc_bMaxPacketSize0=64
+[sexusb.xhci.mps.audit] output_ep0_mps_before=512
+[sexusb.xhci.mps.audit] output_ep0_mps_after=512
+[sexusb.xhci.eval_ctx.ss_mps_512.ok] port_speed=3 ss_mps=512 descriptor_bMaxPacketSize0=64
+```
+No `[sexusb.xhci.eval_ctx.verify.bad]`.
+
+### Non-goals preserved
+- No HID report descriptor fetch
+- No SET_CONFIGURATION
+- No Configure Endpoint command
+- No interrupt transfers
+- No sexinput routing
+- No IRQ handler (stay with polling)
+
 ### Next
-- `USB_XHCI_EVALUATE_CONTEXT_MPS_AUDIT_V1`: investigate expected=64 got=512
-  (Evaluate Context MPS not updated). Separate from HID proof phase.
 - `USB_XHCI_HID_REPORT_DESCRIPTOR_PROOF_V1`: fetch HID report descriptor via
-  GET_DESCRIPTOR(HID Report) to determine report size. Blocked until MPS audit
-  completes (correct MPS matters for interrupt transfers).
+  GET_DESCRIPTOR(HID Report) to determine report size. MPS resolved to 512 for
+  SS ports, which will be the MPS for interrupt transfers.
