@@ -1,21 +1,38 @@
 #![no_std]
 #![no_main]
 
-use silkbar_model::{SilkBarUpdate, UpdateKind, ChipKind, OP_SILKBAR_UPDATE, validate_contract};
+use silkbar_model::{
+    SilkBarUpdate, UpdateKind, ChipKind, OP_SILKBAR_UPDATE, validate_contract,
+    validate_deterministic_vectors,
+};
 
 fn send_update(update: SilkBarUpdate) {
-    let _ = sex_pdx::pdx_call(
+    let result = sex_pdx::pdx_call_checked(
         sex_pdx::SLOT_DISPLAY,
         OP_SILKBAR_UPDATE,
         update.kind as u64,
         (update.index as u64) << 32 | update.a as u64,
         update.b as u64,
     );
+    if let Err(status) = result {
+        // Rate-limited: log roughly every 64th failure
+        unsafe {
+            static mut DROP_COUNTER: u64 = 0;
+            let count = DROP_COUNTER.wrapping_add(1);
+            DROP_COUNTER = count;
+            if count & 0x3F == 0 {
+                sex_pdx::serial_println!(
+                    "[silkbar] drop: kind={} idx={} status={} count={}",
+                    update.kind, update.index, status, count,
+                );
+            }
+        }
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    if !validate_contract() {
+    if !validate_contract() || !validate_deterministic_vectors() {
         loop { core::hint::spin_loop(); }
     }
 
