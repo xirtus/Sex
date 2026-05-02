@@ -8,7 +8,6 @@ members = [
     "servers/sexinput",
     "servers/silkbar",
     "apps/sexdrive",
-    "apps/quil",
     "purple-scanout",
     "crates/sex-pdx",
     "crates/sex-graphics",
