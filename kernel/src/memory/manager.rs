@@ -155,6 +155,15 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
             metadata_pages,
             total_pages
         );
+    } else {
+        // Advance BootInfoFrameAllocator past metadata pages so it doesn't
+        // give out frames that overlap with the buddy allocator's PageMetadata
+        // array. Otherwise the frame allocator would allocate a metadata page
+        // as a page table page, corrupting the PageMetadata when page table
+        // entries are written.
+        for _ in 0..metadata_pages {
+            frame_allocator.allocate_frame();
+        }
     }
     let usable_frames_total = crate::memory::allocator::debug_global_free_frames();
     crate::serial_println!("allocator.usable_frames.total={}", usable_frames_total);

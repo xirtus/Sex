@@ -296,6 +296,11 @@ pub extern "C" fn _start() -> ! {
     // Command NOOP TRB at index 0. d3: type in [15:10], cycle in bit0.
     let noop_d3 = (TRB_TYPE_NOOP_CMD << 10) | 1u32;
     trb_write_volatile(cmd_ring_va, 0, 0, 0, 0, noop_d3);
+
+    // CRCS starts at 1 (set by CRCR RCS=1). After Noop consumed, CRCS toggles to 0.
+    // Write a cycle-stop marker at index 1 (just cycle=1, rest zero). After CRCS→0,
+    // controller sees cycle(1) != CRCS(0) and stops — avoids processing zeroed TRBs.
+    trb_write_volatile(cmd_ring_va, 1, 0, 0, 0, 1u32);
     serial_println!("[sexusb.xhci.cmd.noop.trb.ok]");
 
     let dboff_raw = mmio_read32(cap_base, XHCI_CAP_DBOFF);
@@ -342,8 +347,10 @@ pub extern "C" fn _start() -> ! {
     // Clear event slot to avoid stale completion decode on reused index 0 polling.
     trb_write_volatile(event_ring_va, 0, 0, 0, 0, 0);
 
-    // Enable Slot command at command ring index 1, producer cycle=1.
-    let enable_slot_d3 = (TRB_TYPE_ENABLE_SLOT_CMD << 10) | 1u32;
+    // Enable Slot at index 1. CRCS is now 0 (toggled after Noop consumed),
+    // so use cycle=0 to match. After Enable Slot is consumed, CRCS toggles
+    // back to 1, and index 2 (still zeroed, cycle=0) becomes the stop.
+    let enable_slot_d3 = (TRB_TYPE_ENABLE_SLOT_CMD << 10) | 0u32;
     trb_write_volatile(cmd_ring_va, 1, 0, 0, 0, enable_slot_d3);
     serial_println!("[sexusb.xhci.enable_slot.trb.ok]");
 
