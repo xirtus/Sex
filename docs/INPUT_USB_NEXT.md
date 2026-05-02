@@ -453,9 +453,152 @@ Event[2]: type=33, cc=1, slot_id=en_slot_id → success
 - Zero warnings for sexusb.
 
 ### Next
-- `USB_HID_BOOT_MOUSE_REPORT_PLAN_V1`: plan only — design HID boot protocol
-  mouse report fetch via EP0 control transfer (GET_DESCRIPTOR(HID report)).
-  No implementation, no HID routing to sexinput.
+- `USB_XHCI_CONFIG_DESCRIPTOR_PLAN_V1`: plan only — design GET_DESCRIPTOR(CONFIGURATION)
+  header TD and full config TD, then parse descriptor walk to discover HID boot mouse
+  interface (class=0x03, subclass=0x01, protocol=0x02) and its interrupt IN endpoint.
+  No implementation, no SET_CONFIGURATION, no HID report fetch, no interrupt transfers.
+
+## USB_XHCI_CONFIG_DESCRIPTOR_PLAN_V1
+
+### Purpose
+Discover the USB Configuration descriptor to find a HID boot mouse interface (class=0x03,
+subclass=0x01, protocol=0x02) and its interrupt IN endpoint. This is a prerequisite for
+later HID report fetching and interrupt transfers. Plan only — no implementation.
+
+### Two-Phase EP0 Transfer Design
+
+**TD1 — Config Header (GET_DESCRIPTOR(CONFIGURATION, 0, wLength=9)):**
+- Allocated desc_data_va page from GET_DESCRIPTOR(8) already has room for >9 bytes.
+- Zero first 9 bytes before TD to prevent stale data on short/residual.
+- Setup Stage: GET_DESCRIPTOR(CONFIGURATION, index=0, wLength=9)
+  - d0 = 0x0200_0680 (bmReqType=0x80, bReq=0x06, wValue_lo=0x00, wValue_hi=0x02)
+  - d1 = (9u32 << 16) (wIndex=0, wLength=9)
+  - TRB Transfer Length = 9, IDT=1, CH=1, TRT=IN
+- Data Stage: DIR=IN, CH=1, TRB Transfer Length=9, buffer=desc_data_phys
+- Status Stage: DIR=OUT, CH=0, IOC=1
+- Poll Transfer Event. Decode residue.
+- **residue > 0 → [sexusb.config.header_residue.bad] → fatal park** (can't trust wTotalLength)
+- Read wTotalLength from desc buffer bytes 2(lo),3(hi). Validate:
+  - **wTotalLength < 9 → [sexusb.config.total_len.bad] → fatal park** (corrupt descriptor)
+  - wTotalLength == 9 → valid but no descriptors beyond header → no-HID will park later
+- Log wTotalLength.
+
+**TD2 — Full Config (GET_DESCRIPTOR(CONFIGURATION, 0, wLength=wTotalLength)):**
+- Read EP0 dequeue pointer from Device Context at runtime, compute deq_index.
+- Verify deq_index + 3 < 256 (fits in EP0 ring page).
+- Zero desc_data_va first wTotalLength bytes before TD.
+- Setup Stage: GET_DESCRIPTOR(CONFIGURATION, index=0, wLength=wTotalLength)
+  - d0 = 0x0200_0680
+  - d1 = (wTotalLength as u32) << 16  ← NOT .to_le(), correct LE packing via shift
+  - TRB Transfer Length = wTotalLength, IDT=1, CH=1, TRT=IN
+- Data Stage: DIR=IN, CH=1, TRB Transfer Length=wTotalLength, buffer=desc_data_phys
+- Status Stage: DIR=OUT, CH=0, IOC=1
+- Poll Transfer Event. Decode residue.
+  - **residue >= wTotalLength → [sexusb.config.full_residue_full.bad] → fatal park**
+  - **residue > 0 → [sexusb.config.full_residue_partial.warn] → walk only received_len = wTotalLength - residue**
+
+### Descriptor Walk Design
+
+Walk received buffer from offset 0, tracking `offset < received_len`:
+- Each descriptor: bLength at offset, bDescriptorType at offset+1.
+- If bLength == 0 → malformed → [sexusb.config.desc_zero_len.bad] → fatal park.
+- If bLength > received_len - offset → truncation → fatal park (can't safely parse).
+- Advance offset += bLength.
+
+**bDescriptorType values:**
+- type=2 (CONFIGURATION): skip (header already consumed, but walk skips these fields)
+- type=4 (INTERFACE): parse bInterfaceClass(offset+5), bInterfaceSubClass(offset+6),
+  bInterfaceProtocol(offset+7). If class=0x03, subclass=0x01, protocol=0x02 → set
+  `inside_hid_mouse = true`. Otherwise clear `inside_hid_mouse = false`.
+- type=0x21 (HID): only if `inside_hid_mouse == true`.
+  Validate: bLength >= 9, bDescriptorType == 0x21.
+  Read bDescriptorType[0] at offset+6, must be 0x22 (HID Report).
+  Read wDescriptorLength at bytes offset+7(low), offset+8(high).
+  If any HID field invalid → **[sexusb.config.hid_desc.bad]** → fatal park.
+- type=5 (ENDPOINT): only if `inside_hid_mouse == true`.
+  bEndpointAddress at offset+2: bit 7 = direction (1=IN), bits 3:0 = endpoint number.
+  bmAttributes at offset+3: bits 1:0 = type (0x03=Interrupt).
+  wMaxPacketSize at bytes offset+4(low), offset+5(high): mask with 0x07FF for packet size.
+  - **If wMaxPacketSize & 0x07FF == 0 → [sexusb.config.intr_ep_mps.bad]** → fatal park.
+  - If direction=IN, type=Interrupt, MPS > 0 → found interrupt IN endpoint.
+  - Log endpoint address, MPS, interval (bInterval at offset+6).
+
+Only the first HID boot mouse interface and its first interrupt IN endpoint are recorded.
+If walk completes without finding HID boot mouse → **[sexusb.config.no_hid.park]** → park.
+
+### Non-goals preserved
+- No SET_CONFIGURATION
+- No HID report fetch (GET_DESCRIPTOR(HID report) deferred)
+- No interrupt endpoint transfers
+- No HID routing to sexinput
+- No IRQ handler changes
+- No kernel/ABI edits
+- No sexlink
+
+### Next
+- `USB_XHCI_HID_REPORT_DESCRIPTOR_PLAN_V1`: plan only — design GET_DESCRIPTOR(HID report)
+  to obtain report descriptor and determine report size. Implementation deferred until
+  config descriptor phase proves HID boot mouse interface + interrupt IN endpoint exist.
+
+### Build
+- Build gate passed: `./scripts/entrypoint_build.sh`.
+- Zero warnings for sexusb.
+
+## USB_XHCI_CONFIG_DESCRIPTOR_PROOF_V1
+
+### Changes
+- After full18 completes, initiates two-phase config descriptor discovery:
+- **TD1 — Config Header (wLength=9):** reads EP0 dequeue pointer from Device Context,
+  zeros first 9 bytes of descriptor buffer, writes 3-TRB chain for GET_DESCRIPTOR
+  (CONFIGURATION, 0, 9). Validates Transfer Event residue == 0 (fatal park if >0).
+  Reads wTotalLength from bytes 2(lo),3(hi). Rejects <9, allows ==9 (no-HID parks).
+- **TD2 — Full Config (wLength=wTotalLength):** reads EP0 dequeue pointer again (after
+  TD1 consumption), zeros first wTotalLength bytes, writes 3-TRB chain with
+  `d1 = (wTotalLength as u32) << 16` (correct LE packing). Validates residue: >=
+  wTotalLength → fatal park; >0 → partial.warn, walk only received_len; 0 → complete.
+- **Descriptor walk:** iterates received buffer, parsing each descriptor by type.
+  Tracks `inside_hid_mouse` flag set on INTERFACE descriptor matching
+  class=0x03/subclass=0x01/protocol=0x02, cleared on next INTERFACE.
+  HID descriptor (type=0x21): validates bDescriptorType[0]==0x22 at offset+6, reads
+  wDescriptorLength at offsets +7/+8 (not +8/+9).
+  Endpoint descriptor (type=5): masks wMaxPacketSize with 0x07FF, rejects 0.
+  Records first interrupt IN endpoint found within matched HID interface.
+- Markers: `config.header_residue.bad`, `config.total_len.bad`,
+  `config.full_residue_full.bad`, `config.full_residue_partial.warn`,
+  `config.desc_zero_len.bad`, `config.desc_truncated.bad`,
+  `config.hid_desc.bad`, `config.intr_ep_mps.bad`, `config.no_hid.park`,
+  `config.complete.ok`.
+
+### Non-goals preserved
+- No SET_CONFIGURATION
+- No Configure Endpoint command
+- No HID report fetch
+- No interrupt endpoint transfers
+- No HID routing to sexinput
+- No IRQ handler changes
+- No kernel/ABI edits
+- No sexlink
+
+### Setup d1 packing note
+For GET_DESCRIPTOR(CONFIGURATION) setup packet:
+- d0 = 0x0200_0680 (bmReqType=0x80, bReq=0x06, wValue=0x0200)
+- d1 = (wLength as u32) << 16 (wIndex=0, wLength in bytes 6-7 LE)
+  Verified against USB spec Table 9-2: wLength occupies bytes 6(low) and 7(high)
+  of the 8-byte setup packet. With wIndex=0, the u32 LE representation is
+  (wLength_hi << 24) | (wLength_lo << 16) | 0 | 0 = wLength << 16.
+
+### XHCI Spec Facts Verified
+- **Setup Stage wLength packing**: USB setup packet bytes [6..7] = wLength in little-endian.
+  d1 = wLength << 16 (since wIndex=0, this places wLength in bytes 6-7 of the 8-byte packet).
+  Verified against USB spec Table 9-2 (Standard Device Requests) and XHCI spec Table 6-34
+  (Setup Stage TRB).
+- **Config descriptor wTotalLength**: offset 2(lo), 3(hi) in u16 little-endian.
+- **HID descriptor wDescriptorLength**: offset 7(lo), 8(hi). Not 8,9.
+- **Endpoint wMaxPacketSize**: u16 at offset 4(lo),5(hi). Only bits 10:0 = packet size.
+  Mask with 0x07FF. Upper bits: 12:11 = transactions/burst, 15:13 = reserved.
+- **Interface association rule**: Each INTERFACE descriptor starts a new interface context.
+  HID and ENDPOINT descriptors belong to the most recently parsed INTERFACE descriptor.
+  Track state via `inside_hid_mouse` flag, cleared on next INTERFACE.
 
 ## CORRECTED XHCI SPEC FACTS (post-Audit V1)
 
@@ -469,6 +612,40 @@ Event[2]: type=33, cc=1, slot_id=en_slot_id → success
 
 **Context Entries**: Number of endpoint contexts following slot context. For Slot+EP0, set to 1 (EP0 is context index 1). The controller checks this to determine how many contexts to validate.
 
-**Event ring consumption**: Each consumed event MUST advance ERDP. After consuming index N, write ERDP = event_ring_phys + (N+1)*16. On wrap past segment end, toggle DCS in the ERDP write. Otherwise controller won't write new events.
+**Event ring consumption**: Each consumed event MUST advance ERDP. After consuming index N, write ERDP = event_ring_phys + (N+1)*16. On wrap past segment end, toggle DCS in software state (not ERDP). ERDP low bits are reserved per spec 5.3.8.3 (bits 2:0 = 0, bit 3 = EHB). Do NOT encode DCS into ERDP.
+
+**ERDP low bits (spec 5.3.8.3)**: ERDP bits 2:0 are reserved (must be 0). Bit 3 is EHB (Event Handler Busy, RW1C). Event ring DCS is a software-only variable that tracks the expected cycle bit on incoming event TRBs. It is NOT stored in ERDP. Writing `event_ring_phys | 1` sets reserved bit 0, which may cause undefined controller behavior including command ring rejection. Initial ERDP must be `event_ring_phys` with no low bits set. When advancing ERDP after event consumption, use `next_event_phys` only, never `next_event_phys | dcs`.
 
 **Command ring**: Track cmd_enqueue_index and cmd_producer_cycle explicitly. Write cycle-stop marker after each doorbell batch. Do not hardcode indices across phases.
+
+**XHCI init order (spec 4.6.6)**: DCBAAP and CRCR must be programmed BEFORE Run/Stop (USBCMD.RS=1). The correct order is:
+  1. Halt controller (clear RS, wait HCHalted)
+  2. Reset controller (set HCRST, wait HCRST=0 + CNR=0)
+  3. Allocate/zero ring memory pages (cmd ring, event ring, ERST, DCBAA)
+  4. Program CONFIG.MaxSlotsEnabled = MaxSlots from HCSPARAMS1[31:24] (op_base+0x08)
+  5. Program DCBAAP (operational register 0x30)
+  6. Program CRCR (operational register 0x18) with RCS=1
+  7. Program ERSTSZ/ERSTBA/ERDP (interrupter registers)
+  8. Optionally set IMAN.IE=1
+  9. Set USBCMD.RS=1 (Run/Stop), wait HCHalted=0
+  10. Ring doorbell 0 to submit commands
+  Violating this order causes the controller to ignore commands silently (NOOP appears written to ring but event never arrives). Missing CONFIG.MaxSlotsEnabled (step 4) leaves MaxSlotsEnabled=0 after reset, causing QEMU xhci to refuse command ring processing (CRR stays 0, HCE=0x1000).
+
+**runtime_base+0x00 is MFINDEX (read-only)**: Interrupter 0 registers start at runtime_base+0x20, not runtime_base+0x00. Writing to runtime_base+0x00 through +0x1C hits MFINDEX and reserved space. Correct base for interrupter registers:
+  - IMAN at intr_base+0x00 (runtime_base+0x20)
+  - ERSTSZ at intr_base+0x08 (runtime_base+0x28)
+  - ERSTBA at intr_base+0x10 (runtime_base+0x30)
+  - ERDP at intr_base+0x18 (runtime_base+0x38)
+
+**BAR mapping must be UC (Uncacheable)**: XHCI MMIO registers must not be cached. PTE must have PCD=1 (bit 4) and PWT=1 (bit 3). Without these, CPU caches MMIO reads/writes and register writes silently disappear. Verified: PTE raw=0xfebd401f shows bits 3 and 4 set.
+
+**mmio_write64 must write upper dword first**: XHCI spec 3.2.4 requires 64-bit register writes to be upper-dword-first. Writing lower dword first on some implementations causes the controller to latch a partial value. Correct sequence: write offset+4, then write offset.
+
+**QEMU nec-xhci CRCR/DCBAAP/ERSTBA/ERDP low-first quirk**: QEMU's `nec-usb-xhci` model latches the internal command ring pointer on the upper dword write of CRCR (offset 0x1c), using the CURRENT lower dword value. Writing upper dword first (per spec 3.2.4) while the lower dword is still 0 from reset causes the internal pointer to latch as 0. The fix:
+- Write CRCR lower dword (offset 0x18) first, then upper dword (offset 0x1c).
+- Same quirk applies to DCBAAP (offsets 0x30/0x34), ERSTBA (runtime+0x10/+0x14), and ERDP (runtime+0x18/+0x1c).
+- All 64-bit xHCI controller registers in sexusb use lower-dword-first writes for QEMU compatibility.
+- Do NOT generalize to all MMIO without proof. Only the four xHCI control registers are affected.
+- ERDP advance after event consumption also uses lower-dword-first.
+
+**BAR size cap**: QEMU nec-usb-xhci BAR0 spans 64KB (0x10000). Kernel MAP_PCI_BAR must not clamp to 4KB or runtime/operational registers past offset 0x1000 will alias or read back zero.
