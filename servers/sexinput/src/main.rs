@@ -13,9 +13,10 @@ fn panic(_info: &PanicInfo) -> ! {
 static mut LAST_BUTTONS: u8 = 0;
 const OP_HID_EVENT: u64 = 0x202;
 const OP_USB_MOUSE_REPORT: u64 = 0x260;
-// USB physical capture mode: keep synthetic drag proof code available, but
-// disable repeated injection so physical USB movement logs are not polluted.
-const USB_PROOF_DISABLE_SYNTH_DRAG: bool = true;
+// Enable synthetic drag proof via HID_EVENT path.
+// Proves sexinput→shell drag-window behavior without physical USB device.
+// Positions cursor at (200,200) over SURFACE_ID_APP, fires left-click, drag move, release.
+const USB_PROOF_DISABLE_SYNTH_DRAG: bool = false;
 // One-shot synthetic click proof via OP_USB_MOUSE_REPORT path.
 // Proves sexinput→shell click_focus chain without physical USB device.
 // Positions cursor over SURFACE_ID_LINEN (900,500,300x150), fires left click.

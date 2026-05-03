@@ -374,7 +374,7 @@ When the screen is black:
 
 ---
 
-## Current Status (last updated 2026-05-03 — Renderer Conformance Cleanup)
+## Current Status (last updated 2026-05-03 — Drag Window Proof V1)
 
 - **Renderer conformance cleanup (RENDERER_CONFORMANCE_CLEANUP_V1, commit e9596eb):**
   - 11 magic color literals replaced with DEFAULT_THEME fields (values identical)
@@ -408,6 +408,15 @@ When the screen is black:
     [shell.pointer.usb_state.nonzero.ok] x=767 y=487 buttons=0x0 wheel=0 dx=127 dy=127
     [shell.pointer.usb_state.nonzero.ok] x=894 y=486 buttons=0x0 wheel=0 dx=0 dy=-128
     ```
+- **Drag-window proof PROVEN (DRAG_WINDOW_PROOF_V1, commit 04566ab+):**
+  - Synthetic drag proof via HID_EVENT path (sexinput -> silk-shell)
+  - `[shell.drag.start] id=100 x=200 y=200`
+  - `[shell.drag.move] id=100 x=206 y=204 dx=6 dy=4`
+  - `[shell.drag.send.ok] id=100`
+  - `[shell.drag.end] id=100 x=206 y=204`
+  - USB path also supports drag (start/end/movement with proof markers)
+  - No new ABI, no kernel edits, no sexdisplay edits
+  - Verify: `grep -E "shell.drag.start|shell.drag.move|shell.drag.end" /tmp/drag-proof.log`
 - **Click-focus chain PROVEN (SYNTHETIC_CLICK_FOCUS_PROOF_V1, commit 72753aa):**
   - Sexinput synthetic one-shot routes via `OP_USB_MOUSE_REPORT` → silk-shell
   - `[shell.click_focus.down] x=940 y=520 buttons=0x1`
@@ -427,10 +436,13 @@ When the screen is black:
 - USB tablet decode code is correct; silk-shell click-focus code is correct
 - Only real physical mouse over SDL window can deliver button events
 
+**Completed (2026-05-03):**
+- **Synthetic drag proof** (DRAG_WINDOW_PROOF_V1): `USB_PROOF_DISABLE_SYNTH_DRAG = false` enables the sexinput→shell→drag chain. Verified via `grep -E "shell.drag" /tmp/drag-proof.log`.
+
 **Next action — choose one:**
 1. **Physical mouse proof**: move real mouse into `SDL_VIDEO_DRIVER=x11 SEXUSB_QEMU_DEVICE=tablet ./dev.sh run` window, click twice (first click grabbed by SDL, second reaches USB tablet). Check for `buttons=0x01` and `[shell.click_focus.down/hit/send.ok]`.
-2. **Synthetic downstream proof**: set `USB_PROOF_DISABLE_SYNTH_DRAG = false` in `servers/sexinput/src/main.rs`, rebuild, run nographic. Proves `sexinput→shell→click_focus` chain (not USB tablet decode).
-3. **uinput virtual mouse**: create Linux virtual input device via `/dev/uinput` — events appear as real device events, bypass SDL XTest filter. Full-chain proof.
+2. **uinput virtual mouse**: create Linux virtual input device via `/dev/uinput` — events appear as real device events, bypass SDL XTest filter. Full-chain proof.
+3. **Re-enable synthetic click-focus proof**: set `USB_PROOF_DISABLE_SYNTH_CLICK = false` — proves click-focus chain alongside drag proof.
 
 ## Critical ABI Facts (discovered this session)
 

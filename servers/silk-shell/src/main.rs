@@ -169,6 +169,9 @@ static mut POINTER_WHEEL_ACCUM: i32 = 0;
 static mut POINTER_USB_STATE_INIT: bool = false;
 static mut CLICK_ACTIVE: bool = false; // edge-trigger guard: reset on left release
 static mut DRAG_ACTIVE: bool = false;  // drag in progress: set on left press over focused surface
+static mut DRAG_SURFACE_ID: u64 = 0;   // surface being dragged
+static mut LAST_DRAG_X: i32 = 0;       // pointer X at drag start/move
+static mut LAST_DRAG_Y: i32 = 0;       // pointer Y at drag start/move
 // Linen surface 200 position tracking (stable — linen never moves)
 static mut SURFACE_200_X: i32 = 900;
 static mut SURFACE_200_Y: i32 = 500;
@@ -435,13 +438,69 @@ pub extern "C" fn _start() -> ! {
                             } else {
                                 serial_println!("[shell.click_focus.hit] id={}", focused);
                             }
+                            // ── Drag start on left-button down over shell surface ──
+                            if is_shell_surface(FOCUSED_SURFACE_ID)
+                                && point_in_surface(POINTER_X, POINTER_Y, FOCUSED_SURFACE_ID)
+                            {
+                                DRAG_ACTIVE = true;
+                                DRAG_SURFACE_ID = FOCUSED_SURFACE_ID;
+                                LAST_DRAG_X = POINTER_X;
+                                LAST_DRAG_Y = POINTER_Y;
+                                serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, POINTER_X, POINTER_Y);
+                            }
                         } else if !left_held {
-                            CLICK_ACTIVE = false;
+                            if CLICK_ACTIVE {
+                                CLICK_ACTIVE = false;
+                            }
+                            if DRAG_ACTIVE {
+                                serial_println!("[shell.drag.end] id={} x={} y={}", DRAG_SURFACE_ID, POINTER_X, POINTER_Y);
+                                DRAG_ACTIVE = false;
+                                DRAG_SURFACE_ID = 0;
+                            }
                         }
                         // Move cursor surface to updated pointer position.
                         serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
                         pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
                         serial_println!("[shell.cursor_surface.move.ok]");
+                        // ── USB drag movement: move focused surface by delta while button held ──
+                        if DRAG_ACTIVE {
+                            let focused = FOCUSED_SURFACE_ID;
+                            let mut moved = false;
+                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                if let Some(w) = WINDOWS.get_mut(1) {
+                                    w.desc.x = w.desc.x.wrapping_add(dx as i32);
+                                    w.desc.y = w.desc.y.wrapping_add(dy as i32);
+                                    let (cx, cy) = clamp_position(w.desc.x, w.desc.y, SURFACE_100_W, SURFACE_100_H);
+                                    w.desc.x = cx; w.desc.y = cy;
+                                    moved = true;
+                                }
+                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+                                SURFACE_101_X = SURFACE_101_X.wrapping_add(dx as i32);
+                                SURFACE_101_Y = SURFACE_101_Y.wrapping_add(dy as i32);
+                                let (cx, cy) = clamp_position(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H);
+                                SURFACE_101_X = cx; SURFACE_101_Y = cy;
+                                moved = true;
+                            } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
+                                SURFACE_102_X = SURFACE_102_X.wrapping_add(dx as i32);
+                                SURFACE_102_Y = SURFACE_102_Y.wrapping_add(dy as i32);
+                                let (cx, cy) = clamp_position(SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H);
+                                SURFACE_102_X = cx; SURFACE_102_Y = cy;
+                                moved = true;
+                            } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
+                                SURFACE_103_X = SURFACE_103_X.wrapping_add(dx as i32);
+                                SURFACE_103_Y = SURFACE_103_Y.wrapping_add(dy as i32);
+                                let (cx, cy) = clamp_position(SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H);
+                                SURFACE_103_X = cx; SURFACE_103_Y = cy;
+                                moved = true;
+                            }
+                            if moved {
+                                mutated = true;
+                                LAST_DRAG_X = POINTER_X;
+                                LAST_DRAG_Y = POINTER_Y;
+                                serial_println!("[shell.drag.move] id={} x={} y={} dx={} dy={}", focused, LAST_DRAG_X, LAST_DRAG_Y, dx, dy);
+                                serial_println!("[shell.drag.send.ok] id={}", focused);
+                            }
+                        }
                     }
                     pdx_reply(0);
                 }
@@ -1109,32 +1168,40 @@ pub extern "C" fn _start() -> ! {
                             // ── Drag movement: move focused surface by delta while button held ──
                             if DRAG_ACTIVE {
                                 let focused = FOCUSED_SURFACE_ID;
+                                let mut moved = false;
                                 if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
                                     if let Some(w) = WINDOWS.get_mut(1) {
                                         w.desc.x = w.desc.x.wrapping_add(dx);
                                         w.desc.y = w.desc.y.wrapping_add(dy);
                                         let (cx, cy) = clamp_position(w.desc.x, w.desc.y, SURFACE_100_W, SURFACE_100_H);
                                         w.desc.x = cx; w.desc.y = cy;
-                                        mutated = true;
+                                        moved = true;
                                     }
                                 } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
                                     SURFACE_101_X = SURFACE_101_X.wrapping_add(dx);
                                     SURFACE_101_Y = SURFACE_101_Y.wrapping_add(dy);
                                     let (cx, cy) = clamp_position(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H);
                                     SURFACE_101_X = cx; SURFACE_101_Y = cy;
-                                    mutated = true;
+                                    moved = true;
                                 } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
                                     SURFACE_102_X = SURFACE_102_X.wrapping_add(dx);
                                     SURFACE_102_Y = SURFACE_102_Y.wrapping_add(dy);
                                     let (cx, cy) = clamp_position(SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H);
                                     SURFACE_102_X = cx; SURFACE_102_Y = cy;
-                                    mutated = true;
+                                    moved = true;
                                 } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
                                     SURFACE_103_X = SURFACE_103_X.wrapping_add(dx);
                                     SURFACE_103_Y = SURFACE_103_Y.wrapping_add(dy);
                                     let (cx, cy) = clamp_position(SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H);
                                     SURFACE_103_X = cx; SURFACE_103_Y = cy;
+                                    moved = true;
+                                }
+                                if moved {
                                     mutated = true;
+                                    LAST_DRAG_X = POINTER_X;
+                                    LAST_DRAG_Y = POINTER_Y;
+                                    serial_println!("[shell.drag.move] id={} x={} y={} dx={} dy={}", focused, LAST_DRAG_X, LAST_DRAG_Y, dx, dy);
+                                    serial_println!("[shell.drag.send.ok] id={}", focused);
                                 }
                             }
 
@@ -1180,13 +1247,17 @@ pub extern "C" fn _start() -> ! {
                                         && point_in_surface(POINTER_X, POINTER_Y, FOCUSED_SURFACE_ID)
                                     {
                                         DRAG_ACTIVE = true;
-                                        serial_println!("[silk-shell] Drag start surface {}", FOCUSED_SURFACE_ID);
+                                        DRAG_SURFACE_ID = FOCUSED_SURFACE_ID;
+                                        LAST_DRAG_X = POINTER_X;
+                                        LAST_DRAG_Y = POINTER_Y;
+                                        serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, POINTER_X, POINTER_Y);
                                     }
                                 } else if !pressed {
                                     CLICK_ACTIVE = false;
                                     if DRAG_ACTIVE {
+                                        serial_println!("[shell.drag.end] id={} x={} y={}", DRAG_SURFACE_ID, POINTER_X, POINTER_Y);
                                         DRAG_ACTIVE = false;
-                                        serial_println!("[silk-shell] Drag end");
+                                        DRAG_SURFACE_ID = 0;
                                     }
                                 }
                             }
