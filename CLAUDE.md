@@ -374,8 +374,13 @@ When the screen is black:
 
 ---
 
-## Current Status (last updated 2026-05-03 — Click-Focus Chain PROVEN)
+## Current Status (last updated 2026-05-03 — SilkBar Contract Locked)
 
+- **SilkBar contract locked (SILK_DE_CONTRACT_LOCK_V1, commit 17cbbe7):**
+  - `validate_silkbar_contract() -> u32` added to silkbar-model (reason code: 0=ok, 1=contract, 2=vectors)
+  - Both silkbar and sexdisplay emit `[silk.contract.validate.start/ok/fail]` markers at `_start`
+  - Stale digest constant removed (was blocking validation since initial commit)
+  - Both servers print `[silk.contract.validate.ok] version=1` on every boot
 - **Scheduler stall is FIXED.** All PDX domains spawn and schedule correctly.
 - **USB HID boot-class mouse pipeline is code-complete** (committed through `proof-xhci-intr-ring-advance-20260502`).
 - **QEMU usb-tablet HID support (04566ab) — PROVEN:**
