@@ -25,6 +25,11 @@ Workspace clicks on SilkBar now update real active workspace state through the f
 
 ## Files Changed
 
+### servers/sexdisplay/src/main.rs
+- **Renamed `redraw_clock_only()` → `redraw_top_strip()`** — function already redrew the entire top strip (y<50) including bar colors, workspace indicators, and chips. Name now reflects actual scope.
+- **OP_SILKBAR_UPDATE handler**: Changed conditional redraw (clock-only) to unconditional redraw. Previously: `if handle_silkbar_update(...) { redraw_clock_only(); }`. Now: always call `redraw_top_strip()` for any SilkBar update. This is the critical fix that makes workspace switches visually appear on screen.
+- All callers of `redraw_clock_only` updated to `redraw_top_strip`.
+
 ### servers/silkbar/src/main.rs
 - Added proof markers to existing OP_SILKBAR_WORKSPACE_ACTIVE handler:
   `[silkbar.workspace.recv]`, `[silkbar.workspace.active.set]`,
@@ -34,10 +39,11 @@ Workspace clicks on SilkBar now update real active workspace state through the f
 - Adjusted synthetic click position from x=600 to x=635 to target workspace 2 (idx 2)
 
 ## Architecture
-- **No kernel edits, no PDX ABI changes, no sexdisplay edits**
+- **No kernel edits, no PDX ABI changes**
 - Existing `OP_SILKBAR_WORKSPACE_ACTIVE` path (silkshell → silkbar) already correct
 - Silkbar forwards to sexdisplay via existing `send_update()` / `OP_SILKBAR_UPDATE` transport
 - Sexdisplay applies `SetWorkspaceActive` via existing `apply_update()` in render model
+- **Critical fix**: sexdisplay previously only redrew the top strip for clock updates. Extended to redraw for ALL SilkBar updates (workspace, chips, clock) so workspace active/urgent changes appear visually.
 - Render proof hash captured on first render (baseline: workspace 2 active) before workspace switch reaches renderer
 - Click-focus, drag, and launcher/status/clock classification preserved
 

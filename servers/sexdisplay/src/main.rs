@@ -320,7 +320,10 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     draw_launcher_panel(fb, w, h, total_pixels);
 }
 
-fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
+/// Redraw the top strip (rows 0..50) — bar background, workspace indicators, chips, and clock digits.
+/// Called for all SilkBar updates (clock, workspace active/urgent, chip visibility/kind).
+/// This is the only function that touches y<50 pixels after initial render.
+fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     let fb_addr = fb as u64;
     if fb_addr < HIGH_HALF_BASE {
         return;
@@ -584,7 +587,7 @@ pub extern "C" fn _start() -> ! {
             bar.clock_mm = ((sec_now / 60) % 60) as u8;
             bar.clock_ss = (sec_now % 60) as u8;
             if fb_live {
-                unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+                unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
             }
         }
 
@@ -594,11 +597,14 @@ pub extern "C" fn _start() -> ! {
         };
         match msg.type_id {
             silkbar_model::OP_SILKBAR_UPDATE => {
-                if handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2) {
+                let is_clock = handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
+                if is_clock {
                     clock_from_silkbar = true;
-                    if fb_live {
-                        unsafe { redraw_clock_only(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
-                    }
+                }
+                // Redraw top strip for ALL SilkBar updates (workspace, chips, clock) so that
+                // workspace active, urgent, chip visibility/kind, and clock changes all appear.
+                if fb_live {
+                    unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
                 }
             }
             0x11 => { // OP_PRIMARY_FB
