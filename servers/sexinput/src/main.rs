@@ -21,7 +21,7 @@ const USB_PROOF_DISABLE_SYNTH_DRAG: bool = false;
 // Proves sexinput→shell click_focus chain without physical USB device.
 // Positions cursor over SURFACE_ID_LINEN (900,500,300x150), fires left click.
 // OFF by default — set false to re-run click-focus proof.
-const USB_PROOF_DISABLE_SYNTH_CLICK: bool = true;
+const USB_PROOF_DISABLE_SYNTH_CLICK: bool = false;
 // SilkBar panel click proof — fires synthetic clicks on bar elements
 // (launcher, workspace, status chip, clock) to prove hit-test dispatch.
 // ON by default for this mission.
@@ -291,6 +291,34 @@ pub extern "C" fn _start() -> ! {
                 18 if tick == 25 => {
                     pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
                     silkbar_click_stage = 19;
+                }
+                // Close clock panel (second click on clock at 1100, 25)
+                19 if tick == 27 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1100, 25, EV_ABS);
+                    silkbar_click_stage = 20;
+                }
+                20 if tick == 28 => {
+                    serial_println!("[sexinput.synthetic.silkbar_click] target=clock_close");
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 1, EV_BTN);
+                    silkbar_click_stage = 21;
+                }
+                21 if tick == 29 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
+                    silkbar_click_stage = 22;
+                }
+                // Click bell at (1025, 25) — centered in CHIP_X_BELL=1020..1038
+                22 if tick == 31 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1025, 25, EV_ABS);
+                    silkbar_click_stage = 23;
+                }
+                23 if tick == 32 => {
+                    serial_println!("[sexinput.synthetic.silkbar_click] target=bell");
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 1, EV_BTN);
+                    silkbar_click_stage = 24;
+                }
+                24 if tick == 33 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
+                    silkbar_click_stage = 25;
                 }
                 _ => {}
             }
