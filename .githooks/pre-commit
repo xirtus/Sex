@@ -4,5 +4,8 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-echo "[pre-commit] running SexOS ABI guard"
+echo "[pre-commit] ABI guard"
 ./scripts/sexos_pipeline.sh
+
+echo "[pre-commit] invariant gates"
+./scripts/audit_invariant_gates.sh

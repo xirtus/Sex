@@ -322,11 +322,36 @@ git diff --stat | grep -cE "kernel/|sex-pdx/|sexdisplay|silk-shell|sexinput|sexu
 - **STOP FIRST:** If scenario requires manual timing or race condition wins.
 
 ### Global Completion Rule
-Every feature must prove:
-- boundary proof
-- negative proof
-- integration proof
-- handoff proof
+Every feature must prove all of the following before it is considered complete:
+
+- **boundary proof** — feature touches exactly one domain boundary; no scope creep
+- **negative proof** — the inverse case is safe (e.g. click outside dismisses, missing ID does not crash)
+- **integration proof** — combined scenario passes (INTEGRATED_SCENARIO_PROOF_V1)
+- **handoff proof** — symptom, root cause, invariant violated, proof command, fix pattern recorded
+- **build proof** — `./scripts/entrypoint_build.sh` passes cleanly
+- **boot/runtime proof with exact log markers** — boot log shows all required pass markers and zero fault/panic/GP/PF markers
+- **fault scan pass** — `grep -cE "fault|panic|GP|PF|PAGE FAULT|GENERAL PROTECTION"` returns 0 in the boot log
+- **forbidden diff scan pass** — `git diff` passes all invariant gates: no kernel edits without STOP FIRST, no sex-pdx edits without STOP FIRST, no framebuffer writes outside sexdisplay, no shell pixel writes, no std/libc/thread/POSIX imports, ≤2 major domains, no backing-buffer redesign
+
+The `scripts/audit_invariant_gates.sh` script automates the forbidden diff scan. Run it before every commit.
+
+### Anti-Scope Rule
+- If a patch touches **USB + shell + display + kernel + sex-pdx** together, reject it and split.
+- If a patch spans **more than two major domains** (kernel, sex-pdx, sexdisplay, silk-shell, sexinput, sexusb, apps), STOP FIRST before implementation.
+
+### Validation Commands
+
+```bash
+# Verify all subcontracts are documented
+rg "SHELL_GLOBAL_INTERACTION_CONTRACT_V1|SHELL_INTERACTION_STATE_V1|HIT_TEST_PRIORITY_V1|EVENT_ORDERING_CONTRACT_V1|SURFACE_ID_LIFETIME_V1|CHROME_MODE_ARBITRATION_V1|DEAD_PD_SURFACE_CLEANUP_V1|INTEGRATED_SCENARIO_PROOF_V1" -n docs/ CLAUDE.md
+
+# Verify docs-only changes
+git diff --stat
+git diff -- '*.md' '*.txt'
+
+# Verify boundary compliance
+git diff --stat | grep -cE "kernel/|sex-pdx/|sexdisplay|silk-shell|sexinput|sexusb|apps/" | xargs test 3 -gt || echo "WARNING: patch touches 3+ domains"
+```
 
 ---
 
@@ -347,7 +372,7 @@ Priority-ordered for minimum risk per step — aligned with NEXT_BOUNDARY_HARDEN
 
 ---
 
-## 6. Key Files Reference
+## 8. Key Files Reference
 
 | File | Role |
 |------|------|
@@ -364,7 +389,7 @@ Priority-ordered for minimum risk per step — aligned with NEXT_BOUNDARY_HARDEN
 
 ---
 
-## 7. Current Handoff Index
+## 9. Current Handoff Index
 
 | Document | Proves |
 |----------|--------|
