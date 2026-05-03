@@ -277,6 +277,16 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             SURFACE_ID_TEST3  => (SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H),
             SURFACE_ID_TEST4  => (SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H),
             SURFACE_ID_LINEN  => (SURFACE_200_X, SURFACE_200_Y, SURFACE_200_W, SURFACE_200_H),
+            // OS-owned surfaces: cursor and panels are known but non-focusable —
+            // log nonfocusable.reject, not unknown.reject.
+            SURFACE_ID_CURSOR
+            | SURFACE_ID_LAUNCHER
+            | SURFACE_ID_STATUS
+            | SURFACE_ID_CLOCK
+            | SURFACE_ID_BELL => {
+                serial_println!("[shell.surface.nonfocusable.reject] point_in_surface id={:#x}", sid);
+                return false;
+            }
             _ => {
                 serial_println!("[shell.surface.unknown.reject] point_in_surface id={}", sid);
                 return false;
@@ -357,6 +367,15 @@ unsafe fn clear_drag_if_dead() {
 fn is_shell_surface(sid: u64) -> bool {
     sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
     || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
+}
+
+/// Returns true if the surface ID is eligible for click/keyboard focus.
+/// OS-owned surfaces (cursor, panels) are intentionally excluded —
+/// they are rendered and toggled by the shell but never take focus.
+fn is_focusable_surface(sid: u64) -> bool {
+    sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
+    || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
+    || sid == SURFACE_ID_LINEN
 }
 
 /// Guarded transition between interaction states.
