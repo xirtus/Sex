@@ -1215,3 +1215,33 @@ USB tablet decode code is correct. No code change needed for button byte parsing
 For automated CI-friendly proof: implement uinput virtual mouse device (option 3 above)
 OR accept physical-mouse-only for button proof and document as such.
 Current ISO and code are correct. This is purely an automated-injection blocker.
+
+## BOOT MODE GUIDE (GATE_USB_INPUT_PROOF_LOOPS_V1)
+
+### Normal boot (default)
+```bash
+./dev.sh run               # SDL window, quiet
+./dev.sh run-nographic     # headless, quiet
+```
+Expected: desktop appears, USB input works, no proof-loop noise.
+Logs: ~1300 lines at boot, then USB movement/button events only.
+
+### USB probe proof (verbose ring logs)
+Set `HID_VERBOSE_RING_LOG: bool = true` in `servers/sexusb/src/main.rs`, rebuild.
+```bash
+SEXUSB_XHCI_TRACE=1 SEXUSB_QEMU_DEVICE=tablet ./dev.sh run
+```
+Logs per-iteration `[sexusb.xhci.intr_ring.advance]` and `continuous.idle` markers.
+
+### Synthetic click-focus proof
+Set `USB_PROOF_DISABLE_SYNTH_CLICK: bool = false` in `servers/sexinput/src/main.rs`, rebuild.
+```bash
+./dev.sh run-nographic
+```
+Fires once at tick 10-15. Pass criteria:
+```
+[sexinput.synthetic.click_focus.start/down/up]
+[shell.click_focus.down] x=940 y=520 buttons=0x1
+[shell.click_focus.hit] id=200
+[shell.click_focus.send.ok] id=200
+```
