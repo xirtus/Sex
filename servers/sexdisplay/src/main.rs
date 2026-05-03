@@ -53,6 +53,7 @@ static mut FOCUSED_SURFACE_ID: u64 = 0;
 const FOCUS_SURFACE_COLOR: u32 = 0x00A8E0FF;
 // Shell-owned OS cursor surface. Always rendered last (above all app surfaces).
 const CURSOR_SURFACE_ID: u64 = 0x90;
+const LAUNCHER_PANEL_SURFACE_ID: u64 = 0x92;
 
 /// Rate-limited rejection counter for unauthorized surface ops.
 /// Logs at most every 64 rejections to prevent IPC/log storms.
@@ -316,6 +317,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         }
     }
     draw_cursor_z_top(fb, w, h, total_pixels);
+    draw_launcher_panel(fb, w, h, total_pixels);
 }
 
 fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
@@ -378,6 +380,7 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
         }
     }
     draw_cursor_z_top(fb, w, h, total_pixels);
+    draw_launcher_panel(fb, w, h, total_pixels);
 }
 
 // Classic NW arrow, 8 wide × 16 tall.
@@ -471,6 +474,42 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
                     if idx < total_pixels {
                         core::ptr::write_volatile(fb.add(idx), CURSOR_ARROW_COLOR);
                     }
+                }
+            }
+            break;
+        }
+    }
+}
+
+/// Pass 4: draw launcher panel surface (LAUNCHER_PANEL_SURFACE_ID) on top of all
+/// app surfaces but under the cursor. Renders a solid rect with a thin border.
+/// Only active when the launcher surface is active (toggled by shell).
+/// Does not affect the top-strip render proof (y<50 area).
+fn draw_launcher_panel(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
+    unsafe {
+        for surf in SURFACES.iter() {
+            if !surf.active || surf.surface_id != LAUNCHER_PANEL_SURFACE_ID { continue; }
+            let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+            if sw == 0 || sh == 0 { break; }
+            const LAUNCHER_PANEL_COLOR: u32 = 0x00203058;
+            const LAUNCHER_BORDER_COLOR: u32 = 0x00405880;
+            serial_println!("[sexdisplay.launcher_panel.draw] id={:#x} x={} y={} w={} h={}",
+                LAUNCHER_PANEL_SURFACE_ID, sx, sy, sw, sh);
+            for row in 0..sh {
+                let py = sy + row;
+                if py >= h { break; }
+                for col in 0..sw {
+                    let px = sx + col;
+                    if px >= w { continue; }
+                    let idx = py * w + px;
+                    if idx >= total_pixels { continue; }
+                    // 1px border on all sides
+                    let color = if row == 0 || row == sh - 1 || col == 0 || col == sw - 1 {
+                        LAUNCHER_BORDER_COLOR
+                    } else {
+                        LAUNCHER_PANEL_COLOR
+                    };
+                    core::ptr::write_volatile(fb.add(idx), color);
                 }
             }
             break;

@@ -264,6 +264,20 @@ pub extern "C" fn _start() -> ! {
                     pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
                     silkbar_click_stage = 13;
                 }
+                // Close launcher panel (click launcher button again to dismiss)
+                13 if tick == 19 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 100, 25, EV_ABS);
+                    silkbar_click_stage = 14;
+                }
+                14 if tick == 20 => {
+                    serial_println!("[sexinput.synthetic.silkbar_click] target=launcher_close");
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 1, EV_BTN);
+                    silkbar_click_stage = 15;
+                }
+                15 if tick == 21 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
+                    silkbar_click_stage = 16;
+                }
                 _ => {}
             }
         }

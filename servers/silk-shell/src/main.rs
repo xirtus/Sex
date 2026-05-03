@@ -24,6 +24,7 @@ pub const SURFACE_ID_TEST3: u64 = 102;
 pub const SURFACE_ID_TEST4: u64 = 103;
 pub const SURFACE_ID_LINEN: u64 = 200;
 pub const SURFACE_ID_CURSOR: u64 = 0x90; // 144 — OS-owned cursor, no collision with app IDs
+pub const SURFACE_ID_LAUNCHER: u64 = 0x92; // 146 — launcher panel surface, toggled by launcher button
 pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 
 // ── Policy Model ──────────────────────────────────────────────────────────
@@ -173,6 +174,8 @@ static mut DRAG_ACTIVE: bool = false;  // drag in progress: set on left press ov
 static mut DRAG_SURFACE_ID: u64 = 0;   // surface being dragged
 static mut LAST_DRAG_X: i32 = 0;       // pointer X at drag start/move
 static mut LAST_DRAG_Y: i32 = 0;       // pointer Y at drag start/move
+// Launcher panel toggle state
+static mut LAUNCHER_ACTIVE: bool = false;
 // Linen surface 200 position tracking (stable — linen never moves)
 static mut SURFACE_200_X: i32 = 900;
 static mut SURFACE_200_Y: i32 = 500;
@@ -287,6 +290,21 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
         }
         Action::OpenLauncher => {
             serial_println!("[shell.silkbar.click] target=launcher x={} y={}", ux, uy);
+            unsafe {
+                if !LAUNCHER_ACTIVE {
+                    serial_println!("[shell.launcher.open.start]");
+                    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_LAUNCHER,
+                        (55u64 << 32) | 80u64,
+                        (360u64 << 32) | 240u64);
+                    serial_println!("[shell.launcher.open.ok] id={:#x}", SURFACE_ID_LAUNCHER);
+                    LAUNCHER_ACTIVE = true;
+                } else {
+                    serial_println!("[shell.launcher.close.start]");
+                    pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_LAUNCHER, 0, 0);
+                    serial_println!("[shell.launcher.close.ok] id={:#x}", SURFACE_ID_LAUNCHER);
+                    LAUNCHER_ACTIVE = false;
+                }
+            }
             true
         }
         Action::OpenClock => {
