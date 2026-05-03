@@ -2,7 +2,7 @@
 #![no_main]
 
 use silkbar_model::{
-    SilkBarUpdate, UpdateKind, ChipKind, OP_SILKBAR_UPDATE, validate_silkbar_contract,
+    SilkBarUpdate, UpdateKind, ChipKind, ChipSlot, OP_SILKBAR_UPDATE, validate_silkbar_contract,
     SILKBAR_ABI_VERSION, SILKBAR_WORKSPACE_COUNT, SILKBAR_CHIP_COUNT,
     SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX, SILKBAR_WORKSPACE_IDX_MAX,
 };
@@ -130,26 +130,26 @@ pub extern "C" fn _start() -> ! {
                 0 => {
                     let chip0_kind = if chip0_net { ChipKind::Net } else { ChipKind::Wifi };
                     send_update(SilkBarUpdate::new(
-                        UpdateKind::SetChipKind as u32, 0, chip0_kind as u32, 0,
+                        UpdateKind::SetChipKind as u32, ChipSlot::Chip0 as u8, chip0_kind as u32, 0,
                     ));
                     send_update(SilkBarUpdate::new(
-                        UpdateKind::SetChipKind as u32, 1, ChipKind::Wifi as u32, 0,
+                        UpdateKind::SetChipKind as u32, ChipSlot::Chip1 as u8, ChipKind::Wifi as u32, 0,
                     ));
                     chip0_net = !chip0_net;
                 }
                 1 => {
                     send_update(SilkBarUpdate::new(
-                        UpdateKind::SetChipKind as u32, 2, ChipKind::Battery as u32, 0,
+                        UpdateKind::SetChipKind as u32, ChipSlot::Chip2 as u8, ChipKind::Battery as u32, 0,
                     ));
                 }
                 2 => {
                     send_update(SilkBarUpdate::new(
-                        UpdateKind::SetChipKind as u32, 3, ChipKind::Net as u32, 0,
+                        UpdateKind::SetChipKind as u32, ChipSlot::Clock as u8, ChipKind::Net as u32, 0,
                     ));
                 }
                 _ => {
                     send_update(SilkBarUpdate::new(
-                        UpdateKind::SetChipKind as u32, 3, ChipKind::Battery as u32, 0,
+                        UpdateKind::SetChipKind as u32, ChipSlot::Clock as u8, ChipKind::Battery as u32, 0,
                     ));
                 }
             }
