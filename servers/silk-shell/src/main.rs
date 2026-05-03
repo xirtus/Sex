@@ -25,6 +25,7 @@ pub const SURFACE_ID_TEST4: u64 = 103;
 pub const SURFACE_ID_LINEN: u64 = 200;
 pub const SURFACE_ID_CURSOR: u64 = 0x90; // 144 — OS-owned cursor, no collision with app IDs
 pub const SURFACE_ID_LAUNCHER: u64 = 0x92; // 146 — launcher panel surface, toggled by launcher button
+pub const SURFACE_ID_STATUS: u64 = 0x93; // 147 — status panel surface, toggled by status chip click
 pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 
 // ── Policy Model ──────────────────────────────────────────────────────────
@@ -176,6 +177,8 @@ static mut LAST_DRAG_X: i32 = 0;       // pointer X at drag start/move
 static mut LAST_DRAG_Y: i32 = 0;       // pointer Y at drag start/move
 // Launcher panel toggle state
 static mut LAUNCHER_ACTIVE: bool = false;
+// Status panel toggle state
+static mut STATUS_ACTIVE: bool = false;
 // Linen surface 200 position tracking (stable — linen never moves)
 static mut SURFACE_200_X: i32 = 900;
 static mut SURFACE_200_Y: i32 = 500;
@@ -313,6 +316,21 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
         }
         Action::ToggleModule(_module) => {
             serial_println!("[shell.silkbar.click] target=status x={} y={}", ux, uy);
+            unsafe {
+                if !STATUS_ACTIVE {
+                    serial_println!("[shell.status.open.start] id={:#x}", SURFACE_ID_STATUS);
+                    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATUS,
+                        (55u64 << 32) | 860u64,
+                        (300u64 << 32) | 200u64);
+                    serial_println!("[shell.status.open.ok] id={:#x}", SURFACE_ID_STATUS);
+                    STATUS_ACTIVE = true;
+                } else {
+                    serial_println!("[shell.status.close.start] id={:#x}", SURFACE_ID_STATUS);
+                    pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_STATUS, 0, 0);
+                    serial_println!("[shell.status.close.ok] id={:#x}", SURFACE_ID_STATUS);
+                    STATUS_ACTIVE = false;
+                }
+            }
             true
         }
     }

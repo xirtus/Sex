@@ -278,6 +278,20 @@ pub extern "C" fn _start() -> ! {
                     pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
                     silkbar_click_stage = 16;
                 }
+                // Close status panel (second click on status chip at 940, 25)
+                16 if tick == 23 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 940, 25, EV_ABS);
+                    silkbar_click_stage = 17;
+                }
+                17 if tick == 24 => {
+                    serial_println!("[sexinput.synthetic.silkbar_click] target=status_close");
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 1, EV_BTN);
+                    silkbar_click_stage = 18;
+                }
+                18 if tick == 25 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
+                    silkbar_click_stage = 19;
+                }
                 _ => {}
             }
         }
