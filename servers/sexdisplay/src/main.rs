@@ -576,6 +576,7 @@ pub extern "C" fn _start() -> ! {
     let mut bar = DEFAULT_SILK_BAR;
     let mut last_clock_second = sex_pdx::get_ticks() / 62;
     let mut clock_from_silkbar = false;
+    let mut last_silkbar_clock_sec: u64 = 0;
     let mut fb_live = false;
     let mut render_proof_done = false;
 
@@ -585,6 +586,23 @@ pub extern "C" fn _start() -> ! {
     // 2. Listen for runtime FB handoff and SilkBar updates
     loop {
         let sec_now = sex_pdx::get_ticks() / 62;
+
+        // Liveness-gate: if SilkBar clock stalls for >5 seconds while we trust
+        // it, resume the local fallback. The stale-time gate (below) ensures
+        // SilkBar must send fresh time to re-take ownership when it recovers.
+        if clock_from_silkbar && sec_now.saturating_sub(last_silkbar_clock_sec) > 5 {
+            clock_from_silkbar = false;
+            // Budgeted: first 4 fallback-resume events.
+            unsafe {
+                static mut CLOCK_FALLBACK_RESUME_BUDGET: u32 = 4;
+                let remaining = &mut CLOCK_FALLBACK_RESUME_BUDGET;
+                if *remaining > 0 {
+                    *remaining -= 1;
+                    sex_pdx::serial_println!("[sexdisplay.clock.fallback.resume] reason=silkbar_stale");
+                }
+            }
+        }
+
         if !clock_from_silkbar && sec_now > last_clock_second {
             last_clock_second = sec_now;
             bar.clock_hh = ((sec_now / 3600) % 24) as u8;
@@ -604,18 +622,23 @@ pub extern "C" fn _start() -> ! {
                 let (applied, kind) = handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
                 if applied {
                     if kind == UpdateKind::SetClock as u32 {
-                        // Gate: only cede fallback to silkbar if the received time
-                        // is not stale. A boot-time SetClock that arrives seconds
-                        // late (behind the init message batch) must not permanently
-                        // disable the fallback clock.
                         if !clock_from_silkbar {
+                            // Gate: only cede fallback to silkbar if the received
+                            // time is not stale. A boot-time SetClock that arrives
+                            // seconds late (behind the init message batch) must not
+                            // permanently disable the fallback clock.
                             let incoming_ss = bar.clock_ss;
                             let fallback_ss = (sec_now % 60) as u8;
                             let stale = incoming_ss < fallback_ss
                                 && (fallback_ss.wrapping_sub(incoming_ss) < 30);
                             if !stale {
                                 clock_from_silkbar = true;
+                                last_silkbar_clock_sec = sec_now;
                             }
+                        } else {
+                            // Already trusting SilkBar — every SetClock resets
+                            // the liveness timeout.
+                            last_silkbar_clock_sec = sec_now;
                         }
                     }
                     if fb_live {
