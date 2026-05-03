@@ -384,7 +384,15 @@ When the screen is black:
 
 ---
 
-## Current Status (last updated 2026-05-03 — REAL_CLICK_TARGET_PROOF_V1)
+## Current Status (last updated 2026-05-03 — INTERACTIVE_MODE_PROOF_GATE_V1)
+
+- **Interactive mode proof gate (INTERACTIVE_MODE_PROOF_GATE_V1):**
+  - Three hardcoded `USB_PROOF_DISABLE_*` consts merged into single `SYNTHETIC_INPUT_PROOFS_DISABLED` gate
+  - Uses `option_env!("SEXOS_PROOFS_DISABLED")` — set env var at build time to disable proofs for interactive use
+  - Default (unset): proofs enabled for CI/nographic verification
+  - Zero proof code removed — all blocks conditionally gated
+  - No kernel/PDX/ABI changes
+  - See docs/handoff/INTERACTIVE_MODE_PROOF_GATE_V1.md
 
 - **M2 audit assert patch (SILK_DE_M2_ASSERT_PATCH_V1):**
   - F3: sexdisplay apply_update() return value now captured; invalid updates logged with [silkde.m2.assert.bad] and do NOT trigger redraw

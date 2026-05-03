@@ -13,21 +13,27 @@ fn panic(_info: &PanicInfo) -> ! {
 static mut LAST_BUTTONS: u8 = 0;
 const OP_HID_EVENT: u64 = 0x202;
 const OP_USB_MOUSE_REPORT: u64 = 0x260;
-// Enable synthetic drag proof via HID_EVENT path.
-// Proves sexinput→shell drag-window behavior without physical USB device.
-// Positions cursor at (200,200) over SURFACE_ID_APP, fires left-click, drag move, release.
-const USB_PROOF_DISABLE_SYNTH_DRAG: bool = false;
-// One-shot synthetic click proof via OP_USB_MOUSE_REPORT path.
-// Proves sexinput→shell click_focus chain without physical USB device.
-// Positions cursor over SURFACE_ID_LINEN (900,500,300x150), fires left click.
-// OFF by default — set false to re-run click-focus proof.
-const USB_PROOF_DISABLE_SYNTH_CLICK: bool = false;
-// SilkBar panel click proof — fires synthetic clicks on bar elements
-// (launcher, workspace, status chip, clock) to prove hit-test dispatch.
-// ON by default for this mission.
-const USB_PROOF_DISABLE_SYNTH_SILKBAR_CLICK: bool = false;
+/// Master switch for all synthetic input proofs (drag, click-focus, silkbar clicks).
+///
+/// Set env var `SEXOS_PROOFS_DISABLED=1` at build time to disable all proofs
+/// for interactive visual use. Default (unset): proofs enabled for CI/nographic
+/// verification. Build once per mode; the env var is embedded at compile time.
+///
+/// Equivalent to the previous three individual `USB_PROOF_DISABLE_*` constants,
+/// merged into one gate to simplify toggling.
+///
+/// # Build commands
+/// ```sh
+/// # Proof mode (CI / nographic): default, proofs enabled
+/// ./scripts/entrypoint_build.sh
+///
+/// # Interactive visual mode: proofs disabled
+/// SEXOS_PROOFS_DISABLED=1 ./scripts/entrypoint_build.sh
+/// ```
+const SYNTHETIC_INPUT_PROOFS_DISABLED: bool = option_env!("SEXOS_PROOFS_DISABLED").is_some();
 // One-shot gate: set true after synthetic drag proof stages 0→1→2 complete.
 // Prevents the drag proof from wrapping and replaying endlessly every 120 ticks.
+// Also set true when a real USB mouse input arrives, cancelling remaining proofs.
 static mut SYNTHETIC_DRAG_PROOF_DONE: bool = false;
 
 #[derive(Copy, Clone)]
@@ -207,7 +213,7 @@ pub extern "C" fn _start() -> ! {
         //    with % 3 forever, causing endless drag.start/move/end cycles every
         //    120 ticks that flood the shell and starve visual updates.
         tick = tick.wrapping_add(1);
-        if !USB_PROOF_DISABLE_SYNTH_DRAG && !unsafe { SYNTHETIC_DRAG_PROOF_DONE } && tick % 120 == 0 {
+        if !SYNTHETIC_INPUT_PROOFS_DISABLED && !unsafe { SYNTHETIC_DRAG_PROOF_DONE } && tick % 120 == 0 {
             let report = match drag_proof_stage {
                 0 => {
                     pdx_call(SLOT_SHELL, OP_HID_EVENT, 200, 200, EV_ABS);
@@ -240,7 +246,7 @@ pub extern "C" fn _start() -> ! {
         // 4. Synthetic SilkBar click proof via HID_EVENT path.
         //    Fires clicks on launcher, workspace, status chip, clock.
         //    Resets CLICK_ACTIVE before each click to avoid drag-proof interference.
-        if !USB_PROOF_DISABLE_SYNTH_SILKBAR_CLICK {
+        if !SYNTHETIC_INPUT_PROOFS_DISABLED {
             match silkbar_click_stage {
                 // Reset CLICK_ACTIVE from drag proof (stage 0 at tick 0 sets left held)
                 0 if tick == 2 => {
@@ -368,7 +374,7 @@ pub extern "C" fn _start() -> ! {
         //    Proves sexinput→shell click_focus chain.
         //    Uses EV_ABS for positioning (not delta accumulation) to avoid
         //    coordinate corruption from concurrent silkbar proof EV_ABS events.
-        if !USB_PROOF_DISABLE_SYNTH_CLICK {
+        if !SYNTHETIC_INPUT_PROOFS_DISABLED {
             match synth_click_stage {
                 0 if tick == 10 => {
                     // Init cursor (POINTER_USB_STATE_INIT → 640,400)
