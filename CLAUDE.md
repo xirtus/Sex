@@ -374,8 +374,12 @@ When the screen is black:
 
 ---
 
-## Current Status (last updated 2026-05-03 — Top-Strip Render Proof)
+## Current Status (last updated 2026-05-03 — Renderer Conformance Cleanup)
 
+- **Renderer conformance cleanup (RENDERER_CONFORMANCE_CLEANUP_V1, commit e9596eb):**
+  - 11 magic color literals replaced with DEFAULT_THEME fields (values identical)
+  - Remaining custom colors (Wifi/Battery chips, launcher dot, bg gradient) have no theme mapping
+  - Top-strip hash confirmed unchanged: `0x3c8d391f6e312fca`
 - **Top-strip render proof live (SILK_TOP_STRIP_RENDER_PROOF_V1, commit c22afa9):**
   - FNV-1a hash over rows 0..50 (50×w pixels) after first live render
   - Hash printed atomically (single pdx_call) to avoid scheduler interleave
