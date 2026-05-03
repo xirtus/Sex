@@ -334,20 +334,14 @@ unsafe fn clear_focus_if_dead() {
         for &sid in &z_order {
             if sid == focused { continue; }
             if surface_is_alive(sid) {
-                FOCUSED_SURFACE_ID = sid;
-                pdx_call(SLOT_DISPLAY, 0xED, sid, 0, 0);
-                found = true;
-                let remaining = SURFACE_FOCUS_ACCEPT_BUDGET.load(core::sync::atomic::Ordering::Relaxed);
-                if remaining > 0 {
-                    serial_println!("[shell.surface.focus.fallback] id={}", sid);
-                    SURFACE_FOCUS_ACCEPT_BUDGET.store(remaining - 1, core::sync::atomic::Ordering::Relaxed);
+                if try_set_focus(sid) {
+                    found = true;
                 }
                 break;
             }
         }
         if !found {
-            FOCUSED_SURFACE_ID = 0;
-            pdx_call(SLOT_DISPLAY, 0xED, 0, 0, 0);
+            try_set_focus(0);
             serial_println!("[shell.surface.focus.clear.none]");
         }
     }
@@ -376,6 +370,29 @@ fn is_focusable_surface(sid: u64) -> bool {
     sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
     || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
     || sid == SURFACE_ID_LINEN
+}
+
+/// Try to set focus to a surface. Returns true if focus was applied.
+/// Guards: surface must be focusable and alive.
+/// Clearing focus (sid=0) is always allowed (resets to no surface).
+/// Emits unbudgeted reject markers for nonfocusable or dead surfaces.
+unsafe fn try_set_focus(sid: u64) -> bool {
+    if sid == 0 {
+        FOCUSED_SURFACE_ID = 0;
+        pdx_call(SLOT_DISPLAY, 0xED, 0, 0, 0);
+        return true;
+    }
+    if !is_focusable_surface(sid) {
+        serial_println!("[shell.focus.reject.nonfocusable] id={}", sid);
+        return false;
+    }
+    if !surface_is_alive(sid) {
+        serial_println!("[shell.focus.reject.dead] id={}", sid);
+        return false;
+    }
+    FOCUSED_SURFACE_ID = sid;
+    pdx_call(SLOT_DISPLAY, 0xED, sid, 0, 0);
+    true
 }
 
 /// Guarded transition between interaction states.
@@ -651,8 +668,7 @@ pub extern "C" fn _start() -> ! {
                                 if hit_id != 0 {
                                     serial_println!("[shell.click_focus.hit] id={}", hit_id);
                                     serial_println!("[shell.click_focus.send.start] id={}", hit_id);
-                                    FOCUSED_SURFACE_ID = hit_id;
-                                    pdx_call(SLOT_DISPLAY, 0xED, hit_id, 0, 0);
+                                    try_set_focus(hit_id);
                                     serial_println!("[shell.click_focus.send.ok] id={}", hit_id);
                                 } else {
                                     serial_println!("[shell.click_focus.miss]");
@@ -739,29 +755,19 @@ pub extern "C" fn _start() -> ! {
                                 match action {
                                     SurfaceAction::FocusToggle => {
                                         let current = FOCUSED_SURFACE_ID;
-                                        if current == SURFACE_ID_APP && SURFACE_101_ALIVE {
-                                            FOCUSED_SURFACE_ID = SURFACE_ID_STATIC;
-                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0);
+                                        if current == SURFACE_ID_APP && try_set_focus(SURFACE_ID_STATIC) {
                                             mutated = true;
                                             serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
-                                        } else if current == SURFACE_ID_STATIC && SURFACE_102_ALIVE {
-                                            FOCUSED_SURFACE_ID = SURFACE_ID_TEST3;
-                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_TEST3, 0, 0);
+                                        } else if current == SURFACE_ID_STATIC && try_set_focus(SURFACE_ID_TEST3) {
                                             mutated = true;
                                             serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
-                                        } else if current == SURFACE_ID_TEST3 && SURFACE_103_ALIVE {
-                                            FOCUSED_SURFACE_ID = SURFACE_ID_TEST4;
-                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_TEST4, 0, 0);
+                                        } else if current == SURFACE_ID_TEST3 && try_set_focus(SURFACE_ID_TEST4) {
                                             mutated = true;
                                             serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
-                                        } else if current == SURFACE_ID_TEST4 {
-                                            FOCUSED_SURFACE_ID = SURFACE_ID_LINEN;
-                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_LINEN, 0, 0);
+                                        } else if current == SURFACE_ID_TEST4 && try_set_focus(SURFACE_ID_LINEN) {
                                             mutated = true;
                                             serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
-                                        } else if current == SURFACE_ID_LINEN && SURFACE_100_ALIVE {
-                                            FOCUSED_SURFACE_ID = SURFACE_ID_APP;
-                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+                                        } else if current == SURFACE_ID_LINEN && try_set_focus(SURFACE_ID_APP) {
                                             mutated = true;
                                             serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
                                         }
@@ -793,67 +799,59 @@ pub extern "C" fn _start() -> ! {
                                         }
                                         if destroyed {
                                             if target == SURFACE_ID_APP {
-                                                if SURFACE_101_ALIVE { FOCUSED_SURFACE_ID = SURFACE_ID_STATIC; pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0); serial_println!("[silk-shell] Auto-switched focus to surface 101"); }
-                                                else if SURFACE_102_ALIVE { FOCUSED_SURFACE_ID = SURFACE_ID_TEST3; pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_TEST3, 0, 0); serial_println!("[silk-shell] Auto-switched focus to surface 102"); }
-                                                else if SURFACE_103_ALIVE { FOCUSED_SURFACE_ID = SURFACE_ID_TEST4; pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_TEST4, 0, 0); serial_println!("[silk-shell] Auto-switched focus to surface 103"); }
+                                                if SURFACE_101_ALIVE && try_set_focus(SURFACE_ID_STATIC) { serial_println!("[silk-shell] Auto-switched focus to surface 101"); }
+                                                else if SURFACE_102_ALIVE && try_set_focus(SURFACE_ID_TEST3) { serial_println!("[silk-shell] Auto-switched focus to surface 102"); }
+                                                else if SURFACE_103_ALIVE && try_set_focus(SURFACE_ID_TEST4) { serial_println!("[silk-shell] Auto-switched focus to surface 103"); }
                                             } else if target == SURFACE_ID_STATIC {
-                                                if SURFACE_100_ALIVE { FOCUSED_SURFACE_ID = SURFACE_ID_APP; pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0); serial_println!("[silk-shell] Auto-switched focus to surface 100"); }
-                                                else if SURFACE_102_ALIVE { FOCUSED_SURFACE_ID = SURFACE_ID_TEST3; pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_TEST3, 0, 0); serial_println!("[silk-shell] Auto-switched focus to surface 102"); }
-                                                else if SURFACE_103_ALIVE { FOCUSED_SURFACE_ID = SURFACE_ID_TEST4; pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_TEST4, 0, 0); serial_println!("[silk-shell] Auto-switched focus to surface 103"); }
+                                                if SURFACE_100_ALIVE && try_set_focus(SURFACE_ID_APP) { serial_println!("[silk-shell] Auto-switched focus to surface 100"); }
+                                                else if SURFACE_102_ALIVE && try_set_focus(SURFACE_ID_TEST3) { serial_println!("[silk-shell] Auto-switched focus to surface 102"); }
+                                                else if SURFACE_103_ALIVE && try_set_focus(SURFACE_ID_TEST4) { serial_println!("[silk-shell] Auto-switched focus to surface 103"); }
                                             } else if target == SURFACE_ID_TEST3 {
-                                                if SURFACE_100_ALIVE { FOCUSED_SURFACE_ID = SURFACE_ID_APP; pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0); serial_println!("[silk-shell] Auto-switched focus to surface 100"); }
-                                                else if SURFACE_101_ALIVE { FOCUSED_SURFACE_ID = SURFACE_ID_STATIC; pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0); serial_println!("[silk-shell] Auto-switched focus to surface 101"); }
-                                                else if SURFACE_103_ALIVE { FOCUSED_SURFACE_ID = SURFACE_ID_TEST4; pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_TEST4, 0, 0); serial_println!("[silk-shell] Auto-switched focus to surface 103"); }
+                                                if SURFACE_100_ALIVE && try_set_focus(SURFACE_ID_APP) { serial_println!("[silk-shell] Auto-switched focus to surface 100"); }
+                                                else if SURFACE_101_ALIVE && try_set_focus(SURFACE_ID_STATIC) { serial_println!("[silk-shell] Auto-switched focus to surface 101"); }
+                                                else if SURFACE_103_ALIVE && try_set_focus(SURFACE_ID_TEST4) { serial_println!("[silk-shell] Auto-switched focus to surface 103"); }
                                             } else if target == SURFACE_ID_TEST4 {
-                                                if SURFACE_100_ALIVE { FOCUSED_SURFACE_ID = SURFACE_ID_APP; pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0); serial_println!("[silk-shell] Auto-switched focus to surface 100"); }
-                                                else if SURFACE_101_ALIVE { FOCUSED_SURFACE_ID = SURFACE_ID_STATIC; pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0); serial_println!("[silk-shell] Auto-switched focus to surface 101"); }
-                                                else if SURFACE_102_ALIVE { FOCUSED_SURFACE_ID = SURFACE_ID_TEST3; pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_TEST3, 0, 0); serial_println!("[silk-shell] Auto-switched focus to surface 102"); }
+                                                if SURFACE_100_ALIVE && try_set_focus(SURFACE_ID_APP) { serial_println!("[silk-shell] Auto-switched focus to surface 100"); }
+                                                else if SURFACE_101_ALIVE && try_set_focus(SURFACE_ID_STATIC) { serial_println!("[silk-shell] Auto-switched focus to surface 101"); }
+                                                else if SURFACE_102_ALIVE && try_set_focus(SURFACE_ID_TEST3) { serial_println!("[silk-shell] Auto-switched focus to surface 102"); }
                                             }
                                             mutated = true;
                                         }
                                     }
 
                                     SurfaceAction::Focus100 => {
-                                        if SURFACE_100_ALIVE {
-                                            FOCUSED_SURFACE_ID = SURFACE_ID_APP;
-                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+                                        if try_set_focus(SURFACE_ID_APP) {
                                             mutated = true;
                                             serial_println!("[silk-shell] Focus switched to surface 100");
                                         }
                                     }
 
                                     SurfaceAction::Focus101 => {
-                                        if SURFACE_101_ALIVE {
-                                            FOCUSED_SURFACE_ID = SURFACE_ID_STATIC;
-                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_STATIC, 0, 0);
+                                        if try_set_focus(SURFACE_ID_STATIC) {
                                             mutated = true;
                                             serial_println!("[silk-shell] Focus switched to surface 101");
                                         }
                                     }
 
                                     SurfaceAction::Focus102 => {
-                                        if SURFACE_102_ALIVE {
-                                            FOCUSED_SURFACE_ID = SURFACE_ID_TEST3;
-                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_TEST3, 0, 0);
+                                        if try_set_focus(SURFACE_ID_TEST3) {
                                             mutated = true;
                                             serial_println!("[silk-shell] Focus switched to surface 102");
                                         }
                                     }
 
                                     SurfaceAction::Focus103 => {
-                                        if SURFACE_103_ALIVE {
-                                            FOCUSED_SURFACE_ID = SURFACE_ID_TEST4;
-                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_TEST4, 0, 0);
+                                        if try_set_focus(SURFACE_ID_TEST4) {
                                             mutated = true;
                                             serial_println!("[silk-shell] Focus switched to surface 103");
                                         }
                                     }
 
                                     SurfaceAction::Focus200 => {
-                                        FOCUSED_SURFACE_ID = SURFACE_ID_LINEN;
-                                        pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_LINEN, 0, 0);
-                                        mutated = true;
-                                        serial_println!("[silk-shell] Focus switched to surface 200");
+                                        if try_set_focus(SURFACE_ID_LINEN) {
+                                            mutated = true;
+                                            serial_println!("[silk-shell] Focus switched to surface 200");
+                                        }
                                     }
 
                                     SurfaceAction::RecreateFocused => {
@@ -898,8 +896,7 @@ pub extern "C" fn _start() -> ! {
                                             WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
                                             SURFACE_100_W = rw; SURFACE_100_H = rh;
                                             WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
-                                            FOCUSED_SURFACE_ID = SURFACE_ID_APP;
-                                            pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+                                            try_set_focus(SURFACE_ID_APP);
                                             mutated = true;
                                             serial_println!("[silk-shell] Recreated surface 100 (fallback)");
                                         }
@@ -927,13 +924,11 @@ pub extern "C" fn _start() -> ! {
                                         SURFACE_103_X = rx4; SURFACE_103_Y = ry4;
                                         SURFACE_103_W = rw4; SURFACE_103_H = rh4;
 
-                                        FOCUSED_SURFACE_ID = SURFACE_ID_APP;
-
                                         pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
                                         pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (ry2 as u64) << 32 | rx2 as u64, (rh2 as u64) << 32 | rw2 as u64);
                                         pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST3, (ry3 as u64) << 32 | rx3 as u64, (rh3 as u64) << 32 | rw3 as u64);
                                         pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST4, (ry4 as u64) << 32 | rx4 as u64, (rh4 as u64) << 32 | rw4 as u64);
-                                        pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
+                                        try_set_focus(SURFACE_ID_APP);
 
                                         mutated = true;
                                         serial_println!("[silk-shell] Reset all surfaces to boot state");
@@ -1464,9 +1459,8 @@ pub extern "C" fn _start() -> ! {
                                             }
                                         }
                                         if hit_id != 0 {
-                                            FOCUSED_SURFACE_ID = hit_id;
-                                            pdx_call(SLOT_DISPLAY, 0xED, hit_id, 0, 0);
-                                            serial_println!("[silk-shell] Click focus surface {}", hit_id);
+                                            try_set_focus(hit_id);
+                                            serial_println!("[silk-shell] Click focus surface {}", FOCUSED_SURFACE_ID);
                                         }
                                     }
                                     // SilkBar intercept: if pointer is in top strip, handle and skip drag
