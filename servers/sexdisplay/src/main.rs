@@ -189,6 +189,11 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
     if let Some(c) = workspace_color(x, y, bar) { return c; }
     // Status chip backgrounds
     if let Some(c) = chip_color(x, y, bar) { return c; }
+    // Bell indicator (gold bell between Battery and Clock)
+    let (bx, by, bw, bh) = module_rect(bar, ModuleSlot::Bell);
+    if in_rect(x, y, bx, by, bw, bh) {
+        return 0x00FFD700; // gold bell
+    }
     // Launcher button with rounded-illusion border (model position)
     let (lx, ly, lw, lh) = module_rect(bar, ModuleSlot::Launcher);
     if in_rect(x, y, lx, ly, lw, lh) {
@@ -610,6 +615,7 @@ pub extern "C" fn _start() -> ! {
             0x11 => { // OP_PRIMARY_FB
                 if handle_primary_fb(msg.arg0, msg.arg1) {
                     fb_live = true;
+                    serial_println!("[pdx.identity.accept] display owner_pd validation active");
                     // Coalesce startup repaints into one clean first frame.
                     unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
                     if !render_proof_done {
@@ -825,6 +831,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             _ => {
+                serial_println!("[pdx.opcode.unknown] display type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
                 // Ignore unrelated messages and continue draining.
                 continue;
             }

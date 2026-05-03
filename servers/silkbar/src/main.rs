@@ -86,6 +86,8 @@ pub extern "C" fn _start() -> ! {
             } else if msg.type_id == sex_pdx::OP_SILKBAR_FOCUS_STATE {
                 // Clamp invalid producer values to debug(3) to keep update space bounded.
                 focus_state = (msg.arg0 as u8).min(3);
+            } else {
+                sex_pdx::serial_println!("[pdx.opcode.unknown] silkbar type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
             }
         }
 

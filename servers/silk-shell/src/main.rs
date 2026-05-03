@@ -27,6 +27,7 @@ pub const SURFACE_ID_CURSOR: u64 = 0x90; // 144 — OS-owned cursor, no collisio
 pub const SURFACE_ID_LAUNCHER: u64 = 0x92; // 146 — launcher panel surface, toggled by launcher button
 pub const SURFACE_ID_STATUS: u64 = 0x93; // 147 — status panel surface, toggled by status chip click
 pub const SURFACE_ID_CLOCK: u64 = 0x94; // 148 — clock panel surface, toggled by clock click
+pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by bell click
 
 // OS-owned surface ID registry:
 //   0x90  cursor
@@ -190,6 +191,8 @@ static mut LAUNCHER_ACTIVE: bool = false;
 static mut STATUS_ACTIVE: bool = false;
 // Clock panel toggle state
 static mut CLOCK_ACTIVE: bool = false;
+// Bell panel toggle state
+static mut BELL_ACTIVE: bool = false;
 // Linen surface 200 position tracking (stable — linen never moves)
 static mut SURFACE_200_X: i32 = 900;
 static mut SURFACE_200_Y: i32 = 500;
@@ -337,6 +340,11 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
         Action::ToggleModule(_module) => {
             serial_println!("[shell.silkbar.click] target=status x={} y={}", ux, uy);
             unsafe { toggle_os_panel(&mut STATUS_ACTIVE, SURFACE_ID_STATUS, "status", 860, 55, 200, 300); }
+            true
+        }
+        Action::OpenBell => {
+            serial_println!("[shell.silkbar.click] target=bell x={} y={}", ux, uy);
+            unsafe { toggle_os_panel(&mut BELL_ACTIVE, SURFACE_ID_BELL, "bell", 600, 55, 240, 300); }
             true
         }
     }
@@ -1344,7 +1352,7 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             _ => {
-                // pdx_reply(ERR_CAP_INVALID); // Only reply if it was a call
+                serial_println!("[pdx.opcode.unknown] shell type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
             }
         }
 
