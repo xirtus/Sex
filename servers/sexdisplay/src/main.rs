@@ -404,6 +404,48 @@ const CURSOR_ARROW_BITMAP: [u8; 16] = [
     0b00000001, //         *
 ];
 
+/// Read back rows 0..50 (SilkBar top strip) and emit a deterministic FNV-1a hash.
+/// Fires once after the first live render (after OP_PRIMARY_FB handoff).
+/// Proves top-strip pixels are non-zero/rendered; never touches write path.
+unsafe fn top_strip_render_proof(fb: *const u32, w: usize, h: usize) {
+    let fb_addr = fb as u64;
+    if fb_addr < HIGH_HALF_BASE { return; }
+    if w == 0 || w > MAX_FB_W || h < 50 { return; }
+    let strip_rows: usize = 50;
+    let strip_pixels = match strip_rows.checked_mul(w) {
+        Some(v) => v,
+        None => return,
+    };
+    serial_println!("[silk.render_proof.top_strip.start]");
+    let mut h_val: u64 = 0xcbf29ce484222325;
+    let mut any_nonzero = false;
+    for i in 0..strip_pixels {
+        let px = core::ptr::read_volatile(fb.add(i));
+        if px != 0 { any_nonzero = true; }
+        h_val ^= px as u64;
+        h_val = h_val.wrapping_mul(0x100000001b3);
+    }
+    // Print hash atomically: format into stack buffer, single pdx_call(0,69)
+    // avoids scheduler interleave between format chunks.
+    {
+        let prefix = b"[silk.render_proof.top_strip.hash] value=0x";
+        let digits = b"0123456789abcdef";
+        let mut buf = [0u8; 64];
+        let plen = prefix.len();
+        buf[..plen].copy_from_slice(prefix);
+        for i in 0..16usize {
+            buf[plen + i] = digits[((h_val >> (60 - i * 4)) & 0xF) as usize];
+        }
+        buf[plen + 16] = b'\n';
+        let _ = sex_pdx::pdx_call(0, 69, buf.as_ptr() as u64, (plen + 17) as u64, 0);
+    }
+    if any_nonzero {
+        serial_println!("[silk.render_proof.top_strip.ok]");
+    } else {
+        serial_println!("[silk.render_proof.top_strip.fail] reason=all_zero");
+    }
+}
+
 /// Pass 3: draw cursor surface (CURSOR_SURFACE_ID) unconditionally on top of all other surfaces.
 /// Renders an arrow bitmap instead of a solid rect; transparent pixels are not written.
 /// Called at the end of both render() and redraw_surface_area().
@@ -489,6 +531,7 @@ pub extern "C" fn _start() -> ! {
     let mut last_clock_second = sex_pdx::get_ticks() / 62;
     let mut clock_from_silkbar = false;
     let mut fb_live = false;
+    let mut render_proof_done = false;
 
     // 1. Render immediately with fallback — visible before any IPC
     unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
@@ -524,6 +567,10 @@ pub extern "C" fn _start() -> ! {
                     fb_live = true;
                     // Coalesce startup repaints into one clean first frame.
                     unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+                    if !render_proof_done {
+                        render_proof_done = true;
+                        unsafe { top_strip_render_proof(FB_PTR as *const u32, FB_W as usize, FB_H as usize); }
+                    }
                 }
             }
             0 => continue,
