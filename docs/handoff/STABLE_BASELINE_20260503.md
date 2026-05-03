@@ -18,6 +18,7 @@ The following are **proven and stable** — regressions in these areas are block
 | SilkBar ABI contract validates | PASS | 2026-05-03 |
 | Top-strip render proof (FNV-1a hash) | PASS | 2026-05-03 |
 | Renderer conformance cleanup | PASS | 2026-05-03 |
+| Surface ID lifetime guards (shell-only) | PASS | 2026-05-03 |
 | Click-focus (hit-test + dispatch) | PASS | 2026-05-03 |
 | Drag-window (click-hold-move-release) | PASS | 2026-05-03 |
 | SilkBar clickable controls (hit-test all 10 slots) | PASS | 2026-05-03 |

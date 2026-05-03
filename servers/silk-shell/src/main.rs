@@ -277,7 +277,10 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             SURFACE_ID_TEST3  => (SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H),
             SURFACE_ID_TEST4  => (SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H),
             SURFACE_ID_LINEN  => (SURFACE_200_X, SURFACE_200_Y, SURFACE_200_W, SURFACE_200_H),
-            _ => return false,
+            _ => {
+                serial_println!("[shell.surface.unknown.reject] point_in_surface id={}", sid);
+                return false;
+            }
         };
         px >= x && px < (x + w as i32) && py >= y && py < (y + h as i32)
     }
@@ -286,12 +289,67 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
 /// Returns true if the surface is alive (not destroyed).
 fn surface_is_alive(sid: u64) -> bool {
     match sid {
-        SURFACE_ID_APP    => unsafe { SURFACE_100_ALIVE },
-        SURFACE_ID_STATIC => unsafe { SURFACE_101_ALIVE },
-        SURFACE_ID_TEST3  => unsafe { SURFACE_102_ALIVE },
-        SURFACE_ID_TEST4  => unsafe { SURFACE_103_ALIVE },
-        SURFACE_ID_LINEN  => true,  // linen never destroys its surface
-        _ => false,
+        SURFACE_ID_APP      => unsafe { SURFACE_100_ALIVE },
+        SURFACE_ID_STATIC   => unsafe { SURFACE_101_ALIVE },
+        SURFACE_ID_TEST3    => unsafe { SURFACE_102_ALIVE },
+        SURFACE_ID_TEST4    => unsafe { SURFACE_103_ALIVE },
+        SURFACE_ID_LINEN    => true,  // linen never destroys its surface
+        SURFACE_ID_CURSOR   => true,  // cursor never destroyed
+        SURFACE_ID_LAUNCHER => unsafe { LAUNCHER_ACTIVE },
+        SURFACE_ID_STATUS   => unsafe { STATUS_ACTIVE },
+        SURFACE_ID_CLOCK    => unsafe { CLOCK_ACTIVE },
+        SURFACE_ID_BELL     => unsafe { BELL_ACTIVE },
+        _ => {
+            serial_println!("[shell.surface.unknown.reject] surface_is_alive id={}", sid);
+            false
+        }
+    }
+}
+
+/// Budget for [shell.surface.focus.accept] and [shell.surface.focus.fallback]
+/// markers. Hot-path accept markers are budgeted; reject/dead markers stay unbudgeted.
+static SURFACE_FOCUS_ACCEPT_BUDGET: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(8);
+
+/// If the current focused surface is dead, clear focus to first alive surface
+/// in z-order, or to 0 (none). Logs reject/fallback/none markers.
+/// Call before any focus-dependent operation.
+unsafe fn clear_focus_if_dead() {
+    let focused = FOCUSED_SURFACE_ID;
+    if focused != 0 && !surface_is_alive(focused) {
+        serial_println!("[shell.surface.focus.clear.dead] id={}", focused);
+        let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
+                       SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
+        let mut found = false;
+        for &sid in &z_order {
+            if sid == focused { continue; }
+            if surface_is_alive(sid) {
+                FOCUSED_SURFACE_ID = sid;
+                pdx_call(SLOT_DISPLAY, 0xED, sid, 0, 0);
+                found = true;
+                let remaining = SURFACE_FOCUS_ACCEPT_BUDGET.load(core::sync::atomic::Ordering::Relaxed);
+                if remaining > 0 {
+                    serial_println!("[shell.surface.focus.fallback] id={}", sid);
+                    SURFACE_FOCUS_ACCEPT_BUDGET.store(remaining - 1, core::sync::atomic::Ordering::Relaxed);
+                }
+                break;
+            }
+        }
+        if !found {
+            FOCUSED_SURFACE_ID = 0;
+            pdx_call(SLOT_DISPLAY, 0xED, 0, 0, 0);
+            serial_println!("[shell.surface.focus.clear.none]");
+        }
+    }
+}
+
+/// If currently dragging a surface that is no longer alive, cancel the drag.
+unsafe fn clear_drag_if_dead() {
+    if let InteractionState::Dragging { surface_id, .. } = INTERACTION {
+        if !surface_is_alive(surface_id) {
+            serial_println!("[shell.surface.drag.cancel.dead] id={}", surface_id);
+            try_transition(InteractionState::Idle);
+        }
     }
 }
 
@@ -521,6 +579,9 @@ pub extern "C" fn _start() -> ! {
                     );
                     serial_println!("[shell.pointer.usb_state.start]");
                     unsafe {
+                        // Surface-lifetime safety guards before any focus/drag operation
+                        clear_focus_if_dead();
+                        clear_drag_if_dead();
                         if !POINTER_USB_STATE_INIT {
                             POINTER_X = P.width / 2;
                             POINTER_Y = P.height / 2;
@@ -604,6 +665,9 @@ pub extern "C" fn _start() -> ! {
                         pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
                         serial_println!("[shell.cursor_surface.move.ok]");
                         // ── USB drag movement: move focused surface by delta while button held ──
+                        // clear_drag_if_dead() transitions to Idle if the drag target died,
+                        // so the next `if matches!` will naturally skip movement.
+                        clear_drag_if_dead();
                         if matches!(INTERACTION, InteractionState::Dragging { .. }) {
                             let focused = FOCUSED_SURFACE_ID;
                             let mut moved = false;
@@ -1305,6 +1369,9 @@ pub extern "C" fn _start() -> ! {
                             POINTER_Y = POINTER_Y.wrapping_add(dy);
 
                             // ── Drag movement: move focused surface by delta while button held ──
+                            // clear_drag_if_dead() transitions to Idle if the drag target died,
+                            // so the next `if matches!` will naturally skip movement.
+                            clear_drag_if_dead();
                             if matches!(INTERACTION, InteractionState::Dragging { .. }) {
                                 let focused = FOCUSED_SURFACE_ID;
                                 let mut moved = false;
@@ -1354,6 +1421,10 @@ pub extern "C" fn _start() -> ! {
                             }
                             serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
                                 button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);
+
+                            // Surface-lifetime safety guards before any focus/drag operation
+                            clear_focus_if_dead();
+                            clear_drag_if_dead();
 
                             // ── Click-to-focus: left-button press edge (0→1 transition only) ──
                             if button == 1 {

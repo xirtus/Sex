@@ -53,11 +53,14 @@ Individual phase proofs pass, but global UI behavior fails from event-order bugs
 - **STOP FIRST:** If pipeline requires multi-threaded or async locks inside the loop.
 
 ### D. SURFACE_ID_LIFETIME_V1
+- **Status:** PARTIALLY IMPLEMENTED (SURFACE_ID_LIFETIME_PATCH_V1, 2026-05-03)
 - **Goal:** Safe and monotonic surface ID management.
 - **Owner:** `silk-shell`
 - **Allowed:** `silk-shell`, `sexdisplay`
 - **Forbidden:** `kernel`, `sexinput`
 - **Invariants:** No random permanent magic IDs for real apps. Early phases: monotonic IDs, no reuse. Dead IDs tombstoned. Focus cannot point to tombstoned surface. Unknown IDs fail safely. App death cannot leave dangling focused surface.
+- **Implemented guards:** `clear_focus_if_dead()` clears focus if it points to a dead surface. `clear_drag_if_dead()` cancels drag if drag target is dead. `surface_is_alive()` covers all known IDs (cursor, panels, app surfaces). Unknown IDs produce `[shell.surface.unknown.reject]` markers.
+- **Not yet implemented:** Monotonic ID allocation (requires ABI change), tombstone registry, dead PD cleanup (requires kernel events).
 - **Pass:** App closure properly tombstones ID and clears focus.
 - **Negative Proof:** Focus pointing to an invalid/dead ID does not crash the shell or display.
 - **STOP FIRST:** If ID lifetime requires complex garbage collection.
