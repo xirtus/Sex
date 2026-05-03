@@ -150,6 +150,9 @@ fn decode_tablet_report(buf: &[u8], len: usize) -> Option<TabletReport> {
 
 const SLOT_USB_SEXINPUT: u64 = 9;
 const OP_USB_MOUSE_REPORT: u64 = 0x260;
+// Gate per-iteration ring-advance and idle-poll serial logs.
+// Off by default for quiet production boot; set true for USB proof sessions.
+const HID_VERBOSE_RING_LOG: bool = false;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -2579,7 +2582,7 @@ pub extern "C" fn _start() -> ! {
                     packed_axes,
                 );
                 if td.buttons == 0 && dx_i8 == 0 && dy_i8 == 0 {
-                    if i < 8 || i % 64 == 0 {
+                    if HID_VERBOSE_RING_LOG && (i < 8 || i % 64 == 0) {
                         serial_println!("[sexusb.hid.tablet.continuous.idle] i={}", i);
                     }
                 } else {
@@ -2617,7 +2620,7 @@ pub extern "C" fn _start() -> ! {
                     packed_axes,
                 );
                 if decoded.buttons == 0 && decoded.dx == 0 && decoded.dy == 0 && decoded.wheel == 0 {
-                    if i < 8 || i % 64 == 0 {
+                    if HID_VERBOSE_RING_LOG && (i < 8 || i % 64 == 0) {
                         serial_println!("[sexusb.hid.mouse.continuous.idle] i={}", i);
                     }
                 } else {
@@ -2657,7 +2660,9 @@ pub extern "C" fn _start() -> ! {
             );
             intr_prod = 0;
         }
-        serial_println!("[sexusb.xhci.intr_ring.advance] next={} cycle={}", intr_prod, intr_pcs);
+        if HID_VERBOSE_RING_LOG {
+            serial_println!("[sexusb.xhci.intr_ring.advance] next={} cycle={}", intr_prod, intr_pcs);
+        }
         i = i.wrapping_add(1);
     }
     loop { sys_yield(); }

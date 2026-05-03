@@ -19,7 +19,8 @@ const USB_PROOF_DISABLE_SYNTH_DRAG: bool = true;
 // One-shot synthetic click proof via OP_USB_MOUSE_REPORT path.
 // Proves sexinput→shell click_focus chain without physical USB device.
 // Positions cursor over SURFACE_ID_LINEN (900,500,300x150), fires left click.
-const USB_PROOF_DISABLE_SYNTH_CLICK: bool = false;
+// OFF by default — set false to re-run click-focus proof.
+const USB_PROOF_DISABLE_SYNTH_CLICK: bool = true;
 
 #[derive(Copy, Clone)]
 struct HidPointerRawReport {
