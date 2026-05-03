@@ -9,6 +9,7 @@ use sex_pdx::{
     SLOT_DISPLAY, SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
     SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
 };
+use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y, PANEL_W, PANEL_H};
 
 // Local Opcodes
 pub const OP_DISPLAY_SET_SNAPSHOT: u64 = 0x15;
@@ -263,6 +264,48 @@ fn is_shell_surface(sid: u64) -> bool {
     || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
 }
 
+/// Handle a left-click within the SilkBar top strip (y < 50).
+/// Uses hit_test_action() from silkbar-model to determine what was clicked,
+/// then dispatches the action (workspace switch, launcher, etc.).
+fn handle_silkbar_click(px: i32, py: i32) -> bool {
+    if py < 0 || py >= 50 || px < 0 {
+        return false;
+    }
+    let ux = px as usize;
+    let uy = py as usize;
+    if uy < PANEL_Y || uy >= PANEL_Y + PANEL_H || ux < PANEL_X || ux >= PANEL_X + PANEL_W {
+        return false;
+    }
+    let action = hit_test_action(&DEFAULT_SILK_BAR, ux, uy);
+    match action {
+        Action::None => false,
+        Action::SwitchWorkspace(n) => {
+            // n is 1-indexed workspace number; convert to 0-indexed for silkbar
+            let ws_idx = n.saturating_sub(1).min(4);
+            serial_println!("[shell.silkbar.hit] element=Workspace({})", n);
+            serial_println!("[shell.silkbar.action] SwitchWorkspace({})", n);
+            pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, ws_idx as u64, 0, 0);
+            serial_println!("[shell.silkbar.send.ok]");
+            true
+        }
+        Action::OpenLauncher => {
+            serial_println!("[shell.silkbar.hit] element=Launcher");
+            serial_println!("[shell.silkbar.action] OpenLauncher");
+            true
+        }
+        Action::OpenClock => {
+            serial_println!("[shell.silkbar.hit] element=Clock");
+            serial_println!("[shell.silkbar.action] OpenClock");
+            true
+        }
+        Action::ToggleModule(_module) => {
+            serial_println!("[shell.silkbar.hit] element=Chip");
+            serial_println!("[shell.silkbar.action] ToggleModule");
+            true
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     sex_rt::heap_init();
@@ -438,8 +481,8 @@ pub extern "C" fn _start() -> ! {
                             } else {
                                 serial_println!("[shell.click_focus.hit] id={}", focused);
                             }
-                            // ── Drag start on left-button down over shell surface ──
-                            if is_shell_surface(FOCUSED_SURFACE_ID)
+                            // SilkBar intercept: if pointer is in top strip, handle and skip drag
+                            if !handle_silkbar_click(POINTER_X, POINTER_Y) && is_shell_surface(FOCUSED_SURFACE_ID)
                                 && point_in_surface(POINTER_X, POINTER_Y, FOCUSED_SURFACE_ID)
                             {
                                 DRAG_ACTIVE = true;
@@ -1242,8 +1285,8 @@ pub extern "C" fn _start() -> ! {
                                             serial_println!("[silk-shell] Click focus surface {}", hit_id);
                                         }
                                     }
-                                    // ── Drag start: if pointer is over the now-focused shell surface ──
-                                    if is_shell_surface(FOCUSED_SURFACE_ID)
+                                    // SilkBar intercept: if pointer is in top strip, handle and skip drag
+                                    if !handle_silkbar_click(POINTER_X, POINTER_Y) && is_shell_surface(FOCUSED_SURFACE_ID)
                                         && point_in_surface(POINTER_X, POINTER_Y, FOCUSED_SURFACE_ID)
                                     {
                                         DRAG_ACTIVE = true;
