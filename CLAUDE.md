@@ -374,7 +374,7 @@ When the screen is black:
 
 ---
 
-## Current Status (last updated 2026-05-03 — USB Tablet Button Injection Blocked)
+## Current Status (last updated 2026-05-03 — Click-Focus Chain PROVEN)
 
 - **Scheduler stall is FIXED.** All PDX domains spawn and schedule correctly.
 - **USB HID boot-class mouse pipeline is code-complete** (committed through `proof-xhci-intr-ring-advance-20260502`).
@@ -394,10 +394,15 @@ When the screen is black:
     [shell.pointer.usb_state.nonzero.ok] x=767 y=487 buttons=0x0 wheel=0 dx=127 dy=127
     [shell.pointer.usb_state.nonzero.ok] x=894 y=486 buttons=0x0 wheel=0 dx=0 dy=-128
     ```
-- **Not yet proven:**
-  - **Button events** — all tablet reports show `buttons=0x0` (no click)
-  - **Click-focus hit-test** — requires button-down edge with nonzero position
-  - **Full continuous movement** — received only 2 nonzero reports at boot (initial WM position), then idle
+- **Click-focus chain PROVEN (SYNTHETIC_CLICK_FOCUS_PROOF_V1, commit 72753aa):**
+  - Sexinput synthetic one-shot routes via `OP_USB_MOUSE_REPORT` → silk-shell
+  - `[shell.click_focus.down] x=940 y=520 buttons=0x1`
+  - `[shell.click_focus.hit] id=200` (SURFACE_ID_LINEN)
+  - `[shell.click_focus.send.ok] id=200`
+- **Not yet proven via physical USB tablet:**
+  - **Button events from USB tablet** — blocked by SDL2/XTest filter + QEMU 11.0 routing
+  - Tablet decode code `buf[0]&0x07` is correct (code inspection)
+  - Physical mouse or `/dev/uinput` needed for full USB button proof
 - **Critical blocker (QEMU 11.0):** QMP/HMP input injection does NOT route to USB HID devices. Events consumed by PS/2 display layer only. Confirmed: `input-send-event` returns `{"return": {}}` but usb-mouse/tablet sees nothing.
 - **Workaround discovered:** `SDL_VIDEO_DRIVER=x11` + `-display sdl` produces a visible X11 window (confirmed via `xdotool`). Mouse events from the host X11 desktop forwarded through SDL do reach the usb-tablet device. This enables proof in headless environments with Xvfb or similar.
 
