@@ -384,7 +384,7 @@ When the screen is black:
 
 ---
 
-## Current Status (last updated 2026-05-03 — SILK_DE_M2_ASSERT_PATCH_V1)
+## Current Status (last updated 2026-05-03 — REAL_CLICK_TARGET_PROOF_V1)
 
 - **M2 audit assert patch (SILK_DE_M2_ASSERT_PATCH_V1):**
   - F3: sexdisplay apply_update() return value now captured; invalid updates logged with [silkde.m2.assert.bad] and do NOT trigger redraw
@@ -392,6 +392,14 @@ When the screen is black:
   - F1 (queue overflow) and F2 (stale clock watchdog) deferred to separate boundary decisions
   - Files: crates/silkbar-model/src/lib.rs (+8 lines), servers/sexdisplay/src/main.rs (+6/-6 lines)
   - Zero kernel/sex-pdx/silk-shell/sexinput edits. Zero ABI changes. Zero warnings.
+- **Real click target proof (REAL_CLICK_TARGET_PROOF_V1):**
+  - Audit confirmed: real USB button decode at sexinput line 101-106; buttons/dx/dy from same message; POINTER_X/Y updated before click hit-test; SilkBar intercept runs before drag start; try_set_focus() guards all focus writes; synthetic/real paths separable
+  - **Fix 1 — Double-apply eliminated:** EV_REL now owns cursor movement exclusively. USB handler no longer applies dx/dy to POINTER_X/Y. Real USB sexinput no longer forwards OP_USB_MOUSE_REPORT (only HID EV_BTN + EV_REL). Synthetic click-focus proof still uses OP_USB_MOUSE_REPORT directly.
+  - **Fix 2 — Coordinate corruption fixed:** Synthetic click-focus proof uses EV_ABS(940,560) for positioning before button down, immune to concurrent silkbar EV_ABS interference.
+  - **Fix 3 — EV_BTN owns click targeting:** Full click-target markers ([shell.click_focus.down], [shell.click.real.target], [shell.click.real.focus.ok]) added to EV_BTN handler for real USB clicks.
+  - Ownership: EV_REL moves cursor, EV_BTN targets clicks, OP_USB_MOUSE_REPORT is synthetic-only.
+  - Files: servers/sexinput/src/main.rs, servers/silk-shell/src/main.rs
+  - Zero kernel/sex-pdx/sexdisplay edits. Zero ABI changes.
 - **Renderer conformance cleanup (RENDERER_CONFORMANCE_CLEANUP_V1, commit e9596eb):**
   - 11 magic color literals replaced with DEFAULT_THEME fields (values identical)
   - Remaining custom colors (Wifi/Battery chips, launcher dot, bg gradient) have no theme mapping

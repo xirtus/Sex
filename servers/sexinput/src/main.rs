@@ -144,13 +144,29 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
 
+                // Budgeted diagnostic for real USB button transitions.
+                // Fires only when buttons field is nonzero (actual button event).
+                // Synthetic click-focus proof also sends OP_USB_MOUSE_REPORT but
+                // with buttons=0x01/0x00 at known early ticks; real clicks happen
+                // later and this marker distinguishes button events from pure moves.
+                unsafe {
+                    static mut MOUSE_REAL_BUTTON_BUDGET: u32 = 16;
+                    let remaining = &mut MOUSE_REAL_BUTTON_BUDGET;
+                    if *remaining > 0 && buttons != 0 {
+                        *remaining -= 1;
+                        serial_println!("[sexinput.mouse.real.button] buttons={:#x} dx={} dy={}", buttons, dx, dy);
+                    }
+                }
+
                 serial_println!("[sexinput.usb_mouse.shell_send.start]");
-                // Proof tap for shell-side decode logging.
-                let proof_send = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, buttons as u64, packed);
-                let mut send_err: u64 = match proof_send {
-                    Ok(_) => 0,
-                    Err(err) => err,
-                };
+                // Forward normalized HID events only (EV_BTN edges + EV_REL movement).
+                // OP_USB_MOUSE_REPORT is NOT forwarded — the HID EV_BTN handler in the shell
+                // handles click-to-focus, and EV_REL handles cursor movement + drag.
+                // This eliminates the dx/dy double-apply bug where both the USB handler
+                // and the HID EV_REL handler applied the same delta.
+                // The synthetic click-focus proof sends OP_USB_MOUSE_REPORT directly to the
+                // shell and is unaffected by this change.
+                let mut send_err: u64 = 0;
 
                 for i in 0..norm_count {
                     let (arg0, arg1, arg2) = normalized_events[i];
@@ -348,10 +364,11 @@ pub extern "C" fn _start() -> ! {
         }
 
         // 5. One-shot synthetic click proof via USB mouse path.
-        //    Moves cursor to (940,560) ∈ SURFACE_ID_LINEN, then clicks.
+        //    Sets cursor to (940,560) ∈ SURFACE_ID_LINEN, then clicks.
         //    Proves sexinput→shell click_focus chain.
+        //    Uses EV_ABS for positioning (not delta accumulation) to avoid
+        //    coordinate corruption from concurrent silkbar proof EV_ABS events.
         if !USB_PROOF_DISABLE_SYNTH_CLICK {
-            // packed_axes = dx_u8 | (dy_u8 << 8)
             match synth_click_stage {
                 0 if tick == 10 => {
                     // Init cursor (POINTER_USB_STATE_INIT → 640,400)
@@ -359,35 +376,21 @@ pub extern "C" fn _start() -> ! {
                     let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0u64, 0u64);
                     synth_click_stage = 1;
                 }
-                1 if tick == 11 => {
-                    // Move +127,+100 → cursor (767,500)
-                    let packed: u64 = (127u8 as u64) | ((100u8 as u64) << 8);
-                    let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0u64, packed);
-                    synth_click_stage = 2;
-                }
-                2 if tick == 12 => {
-                    // Move +127,+60 → cursor (894,560)
-                    let packed: u64 = (127u8 as u64) | ((60u8 as u64) << 8);
-                    let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0u64, packed);
-                    synth_click_stage = 3;
-                }
-                3 if tick == 13 => {
-                    // Move +46,+0 → cursor (940,560) ∈ LINEN [900,1200)×[500,650)
-                    let packed: u64 = 46u8 as u64;
-                    let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0u64, packed);
-                    synth_click_stage = 4;
-                }
-                4 if tick == 14 => {
+                1 if tick == 14 => {
+                    // EV_ABS anchors cursor at (940,560) ∈ LINEN [900,1200)×[500,650)
+                    // This explicit positioning is immune to EV_ABS interference from
+                    // the synthetic silkbar click proof (ticks 2-33).
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 940, 560, EV_ABS);
                     // Button down — triggers click_focus hit on SURFACE_ID_LINEN
                     serial_println!("[sexinput.synthetic.click_focus.down]");
                     let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0x01u64, 0u64);
-                    synth_click_stage = 5;
+                    synth_click_stage = 2;
                 }
-                5 if tick == 15 => {
+                2 if tick == 15 => {
                     // Button up — resets CLICK_ACTIVE
                     serial_println!("[sexinput.synthetic.click_focus.up]");
                     let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0u64, 0u64);
-                    synth_click_stage = 6;
+                    synth_click_stage = 3;
                 }
                 _ => {}
             }

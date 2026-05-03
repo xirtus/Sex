@@ -623,10 +623,12 @@ pub extern "C" fn _start() -> ! {
                             POINTER_Y = P.height / 2;
                             POINTER_USB_STATE_INIT = true;
                         }
-                        let max_x = P.width.saturating_sub(1);
-                        let max_y = P.height.saturating_sub(1);
-                        POINTER_X = POINTER_X.saturating_add(dx as i32).clamp(0, max_x);
-                        POINTER_Y = POINTER_Y.saturating_add(dy as i32).clamp(0, max_y);
+                        // POINTER_X/Y is NOT updated from dx/dy here.
+                        // Real USB cursor movement comes from HID EV_REL (forwarded by sexinput's
+                        // normalizer). This eliminates the dx/dy double-apply bug where both the USB
+                        // handler and the HID EV_REL handler applied the same delta.
+                        // The synthetic click-focus proof uses EV_ABS before button down to set
+                        // the click position explicitly, so it is unaffected by this change.
                         POINTER_BUTTONS = buttons & 0x07;
                         POINTER_WHEEL_ACCUM = POINTER_WHEEL_ACCUM.saturating_add(wheel as i32);
                         serial_println!(
@@ -653,10 +655,10 @@ pub extern "C" fn _start() -> ! {
                             try_transition(InteractionState::ClickPending);
                             serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", POINTER_X, POINTER_Y, buttons);
                             let focused = FOCUSED_SURFACE_ID;
+                            let mut hit_id = 0u64;
                             if !point_in_surface(POINTER_X, POINTER_Y, focused) {
                                 let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                                                SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
-                                let mut hit_id = 0u64;
                                 for &sid in z_order.iter() {
                                     if sid == focused { continue; }
                                     if !surface_is_alive(sid) { continue; }
@@ -670,6 +672,15 @@ pub extern "C" fn _start() -> ! {
                                     serial_println!("[shell.click_focus.send.start] id={}", hit_id);
                                     try_set_focus(hit_id);
                                     serial_println!("[shell.click_focus.send.ok] id={}", hit_id);
+                                    // Budgeted real-click focus confirmation.
+                                    unsafe {
+                                        static mut CLICK_REAL_FOCUS_BUDGET: u32 = 8;
+                                        let rem = &mut CLICK_REAL_FOCUS_BUDGET;
+                                        if *rem > 0 {
+                                            *rem -= 1;
+                                            serial_println!("[shell.click.real.focus.ok] id={}", hit_id);
+                                        }
+                                    }
                                 } else {
                                     serial_println!("[shell.click_focus.miss]");
                                 }
@@ -677,11 +688,33 @@ pub extern "C" fn _start() -> ! {
                                 serial_println!("[shell.click_focus.hit] id={}", focused);
                             }
                             // SilkBar intercept: if pointer is in top strip, handle and skip drag
-                            if !handle_silkbar_click(POINTER_X, POINTER_Y) && is_shell_surface(FOCUSED_SURFACE_ID)
+                            let silkbar_handled = handle_silkbar_click(POINTER_X, POINTER_Y);
+                            if !silkbar_handled && is_shell_surface(FOCUSED_SURFACE_ID)
                                 && point_in_surface(POINTER_X, POINTER_Y, FOCUSED_SURFACE_ID)
                             {
                                 try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: POINTER_X, current_y: POINTER_Y });
                                 serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, POINTER_X, POINTER_Y);
+                            }
+                            // Budgeted real-click target marker.
+                            // Fires for OP_USB_MOUSE_REPORT path (real USB + synthetic click-focus proof).
+                            // Budget 16: synthetic proof consumes ~1 slot, real clicks use the rest.
+                            unsafe {
+                                static mut CLICK_REAL_TARGET_BUDGET: u32 = 16;
+                                let rem = &mut CLICK_REAL_TARGET_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    let (kind, target) = if silkbar_handled {
+                                        ("chrome", 0u64)
+                                    } else if hit_id != 0 {
+                                        ("app", hit_id)
+                                    } else if point_in_surface(POINTER_X, POINTER_Y, focused) {
+                                        ("app", focused)
+                                    } else {
+                                        ("none", 0u64)
+                                    };
+                                    serial_println!("[shell.click.real.target] x={} y={} target={} kind={}",
+                                        POINTER_X, POINTER_Y, target, kind);
+                                }
                             }
                         } else if !left_held {
                             match INTERACTION {
@@ -1388,6 +1421,14 @@ pub extern "C" fn _start() -> ! {
                         } else if event_class == EV_REL {
                             let dx = msg.arg0 as i32;
                             let dy = msg.arg1 as i32;
+                            // Initialize POINTER_X/Y on first EV_REL (real USB path).
+                            // The USB handler also does this for OP_USB_MOUSE_REPORT path
+                            // (synthetic proof). Whichever fires first sets the center position.
+                            if !POINTER_USB_STATE_INIT {
+                                POINTER_X = P.width / 2;
+                                POINTER_Y = P.height / 2;
+                                POINTER_USB_STATE_INIT = true;
+                            }
                             POINTER_X = POINTER_X.wrapping_add(dx);
                             POINTER_Y = POINTER_Y.wrapping_add(dy);
 
@@ -1434,6 +1475,19 @@ pub extern "C" fn _start() -> ! {
 
                             serial_println!("[silk-shell] Pointer REL d=({},{}) pos=({},{})",
                                 dx, dy, POINTER_X, POINTER_Y);
+                            // Move cursor surface to updated pointer position.
+                            serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
+                            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                            serial_println!("[shell.cursor_surface.move.ok]");
+                            // Budgeted diagnostic for cursor position after HID REL event (real USB movement).
+                            unsafe {
+                                static mut CURSOR_MOVE_BUDGET_REL: u32 = 16;
+                                let remaining = &mut CURSOR_MOVE_BUDGET_REL;
+                                if *remaining > 0 {
+                                    *remaining -= 1;
+                                    serial_println!("[shell.cursor.move] x={} y={}", POINTER_X, POINTER_Y);
+                                }
+                            }
                         } else if event_class == EV_BTN {
                             let button = msg.arg0 as u8;
                             let pressed = msg.arg1 != 0;
@@ -1455,10 +1509,11 @@ pub extern "C" fn _start() -> ! {
                                     try_transition(InteractionState::ClickPending);
                                     // Hit-test in visual z-order: focused first, then reverse slot order
                                     let focused = FOCUSED_SURFACE_ID;
+                                    let mut hit_id = 0u64;
+                                    serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", POINTER_X, POINTER_Y, POINTER_BUTTONS);
                                     if !point_in_surface(POINTER_X, POINTER_Y, focused) {
                                         let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                                                        SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
-                                        let mut hit_id = 0u64;
                                         for &sid in &z_order {
                                             if sid == focused { continue; }
                                             if !surface_is_alive(sid) { continue; }
@@ -1468,16 +1523,52 @@ pub extern "C" fn _start() -> ! {
                                             }
                                         }
                                         if hit_id != 0 {
+                                            serial_println!("[shell.click_focus.hit] id={}", hit_id);
+                                            serial_println!("[shell.click_focus.send.start] id={}", hit_id);
                                             try_set_focus(hit_id);
-                                            serial_println!("[silk-shell] Click focus surface {}", FOCUSED_SURFACE_ID);
+                                            serial_println!("[shell.click_focus.send.ok] id={}", hit_id);
+                                            // Budgeted real-click focus confirmation.
+                                            unsafe {
+                                                static mut CLICK_REAL_FOCUS_BUDGET_BTN: u32 = 8;
+                                                let rem = &mut CLICK_REAL_FOCUS_BUDGET_BTN;
+                                                if *rem > 0 {
+                                                    *rem -= 1;
+                                                    serial_println!("[shell.click.real.focus.ok] id={}", hit_id);
+                                                }
+                                            }
+                                        } else {
+                                            serial_println!("[shell.click_focus.miss]");
                                         }
+                                    } else {
+                                        serial_println!("[shell.click_focus.hit] id={}", focused);
                                     }
                                     // SilkBar intercept: if pointer is in top strip, handle and skip drag
-                                    if !handle_silkbar_click(POINTER_X, POINTER_Y) && is_shell_surface(FOCUSED_SURFACE_ID)
+                                    let silkbar_handled = handle_silkbar_click(POINTER_X, POINTER_Y);
+                                    if !silkbar_handled && is_shell_surface(FOCUSED_SURFACE_ID)
                                         && point_in_surface(POINTER_X, POINTER_Y, FOCUSED_SURFACE_ID)
                                     {
                                         try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: POINTER_X, current_y: POINTER_Y });
                                         serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, POINTER_X, POINTER_Y);
+                                    }
+                                    // Budgeted real-click target marker.
+                                    // Fires for HID EV_BTN path (real USB buttons + synthetic drag proof).
+                                    unsafe {
+                                        static mut CLICK_REAL_TARGET_BUDGET_BTN: u32 = 16;
+                                        let rem = &mut CLICK_REAL_TARGET_BUDGET_BTN;
+                                        if *rem > 0 {
+                                            *rem -= 1;
+                                            let (kind, target) = if silkbar_handled {
+                                                ("chrome", 0u64)
+                                            } else if hit_id != 0 {
+                                                ("app", hit_id)
+                                            } else if point_in_surface(POINTER_X, POINTER_Y, focused) {
+                                                ("app", focused)
+                                            } else {
+                                                ("none", 0u64)
+                                            };
+                                            serial_println!("[shell.click.real.target] x={} y={} target={} kind={}",
+                                                POINTER_X, POINTER_Y, target, kind);
+                                        }
                                     }
                                 } else if !pressed {
                                     match INTERACTION {
