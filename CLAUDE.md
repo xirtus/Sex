@@ -601,7 +601,24 @@ Phases (exact order from baseline):
 5. BELL_CAPABILITY_ATTENTION_V1
 6. LINEN_STATIC_SURFACE_V1
 
-**Do not skip this document.** Agents that ignore it reintroduce regressions in proven areas.
+## Shell Global Interaction Contract (2026-05-03)
+
+Read `docs/handoff/STABLE_BASELINE_20260503.md` section 6 (`SHELL_GLOBAL_INTERACTION_CONTRACT_V1`).
+
+**Core insight:** Local phase proofs are not sufficient. Global UI behavior can fail from event-order bugs, focus conflicts, chrome conflicts, surface ID ambiguity, or dead-PD dangling state.
+
+7 subcontracts govern interaction integrity:
+- A. SHELL_INTERACTION_STATE_V1 — unified state table (no scattered `*_ACTIVE` booleans)
+- B. HIT_TEST_PRIORITY_V1 — strict z-order
+- C. EVENT_ORDERING_CONTRACT_V1 — deterministic pipeline
+- D. SURFACE_ID_LIFETIME_V1 — monotonic IDs, tombstoning
+- E. CHROME_MODE_ARBITRATION_V1 — exclusive chrome, no focus steal
+- F. DEAD_PD_SURFACE_CLEANUP_V1 — safe teardown
+- G. INTEGRATED_SCENARIO_PROOF_V1 — combined scenario verification
+
+**Every feature must prove:** boundary proof, negative proof, integration proof, handoff proof.
+
+---
 
 ## SilkBar Action Slot Expansion (2026-05-03)
 

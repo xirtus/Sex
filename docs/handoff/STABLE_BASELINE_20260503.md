@@ -28,6 +28,7 @@ The following are **proven and stable** — regressions in these areas are block
 | USB xHCI/report route (interrupt-IN path) | PASS | 2026-05-03 |
 | Synthetic downstream click proof (sexinput → shell → sexdisplay) | PASS | 2026-05-03 |
 | Panel toggle consolidation (single `toggle_os_panel` helper) | PASS | 2026-05-03 |
+| Bell panel toggle (id=0x95) | PASS | 2026-05-03 |
 
 ---
 
@@ -90,9 +91,9 @@ Stable allocation. Do not reassign without updating this table and all handoffs.
 - Neither proves physical USB HID button-down edge detection.
 
 ### Panel Visuals
-- All three toggled panels (launcher/status/clock) are **solid-color rects** drawn by sexdisplay's generic surface path. No content/controls yet.
+- All four toggled panels (launcher/status/clock/bell) are **solid-color rects** drawn by sexdisplay's generic surface path. No content/controls yet.
 - Status panel is reserved for future quick settings. Clock panel for future calendar/time UI.
-- Bell (0x95) is reserved but not built.
+- Bell panel (0x95) toggles open/closed via Bell chip click — no notification content yet.
 
 ---
 
@@ -220,9 +221,11 @@ git diff --stat | grep -cE "kernel/|sex-pdx/|sexdisplay|silk-shell|sexinput|sexu
 | Document | Location |
 |----------|----------|
 | Allocator boot hang triage | `docs/handoff/ALLOCATOR_BOOT_HANG_TRIAGE_V1.md` |
+| Bell panel toggle (BELL_PANEL_TOGGLE_V1) | `docs/handoff/BELL_PANEL_TOGGLE_V1.md` |
 | Drag window proof | `docs/handoff/DRAG_WINDOW_PROOF_V1.md` |
 | Panel toggle consolidation | `docs/handoff/PANEL_TOGGLE_CONSOLIDATION_V1.md` |
 | SilkBar action slot expansion (Bell ABI) | `docs/handoff/SILKBAR_ACTION_SLOT_EXPANSION_V1.md` |
+| Shell Global Interaction Contract | `docs/handoff/SHELL_GLOBAL_INTERACTION_CONTRACT_V1.md` |
 | SilkBar clickable controls | `docs/handoff/SILKBAR_CLICKABLE_CONTROLS_V1.md` |
 | Clock panel toggle | `docs/handoff/SILKBAR_CLOCK_PANEL_V1.md` |
 | Status panel toggle | `docs/handoff/SILKBAR_STATUS_PANEL_V1.md` |
@@ -359,7 +362,7 @@ git diff --stat | grep -cE "kernel/|sex-pdx/|sexdisplay|silk-shell|sexinput|sexu
 
 Priority-ordered for minimum risk per step — aligned with NEXT_BOUNDARY_HARDENING_PLAN_V1 phases:
 
-1. **Bell panel toggle** (BELL_PANEL_TOGGLE_V1) — action proof only, uses `toggle_os_panel()` at reserved id=0x95. Prerequisite: Bell ABI slot proven (PASS 2026-05-03).
+1. ~~**Bell panel toggle** (BELL_PANEL_TOGGLE_V1) — action proof only, uses `toggle_os_panel()` at reserved id=0x95.~~ **DONE** (PASS 2026-05-03)
 2. **USB_BUTTON_CLICK_PROOF_V1** — physical USB button events. Allowed: sexusb, sexinput. Forbidden: silk-shell, sexdisplay, kernel.
 3. **SHELL_FOCUS_CONTRACT_V1** — formalize input routing based on focus. Allowed: silk-shell, sexinput.
 4. **SURFACE_OWNERSHIP_CONTRACT_V1** — formalize app/shell/display surface relationships. Allowed: silk-shell, sexdisplay.
@@ -393,7 +396,9 @@ Priority-ordered for minimum risk per step — aligned with NEXT_BOUNDARY_HARDEN
 
 | Document | Proves |
 |----------|--------|
+| `BELL_PANEL_TOGGLE_V1.md` | Bell panel toggle (id=0x95) |
 | `DRAG_WINDOW_PROOF_V1.md` | Click-hold drag on shell-managed surfaces |
+| `SHELL_GLOBAL_INTERACTION_CONTRACT_V1.md` | 7 subcontracts for integrated UI behavior |
 | `SILKBAR_CLICKABLE_CONTROLS_V1.md` | Hit-test dispatch for all 10 SilkBar slots |
 | `SILKBAR_CLOCK_PANEL_V1.md` | Clock panel toggle (id=0x94) |
 | `SILKBAR_STATUS_PANEL_V1.md` | Status panel toggle (id=0x93) |
