@@ -74,11 +74,15 @@ pub extern "C" fn _start() -> ! {
         if let Some(msg) = sex_pdx::pdx_try_listen_raw(0) {
             if msg.type_id == sex_pdx::OP_SILKBAR_WORKSPACE_ACTIVE {
                 let ws = (msg.arg0 as u8).min(SILKBAR_WORKSPACE_IDX_MAX);
+                sex_pdx::serial_println!("[silkbar.workspace.recv] index={}", ws);
+                sex_pdx::serial_println!("[silkbar.workspace.active.set] index={}", ws);
+                sex_pdx::serial_println!("[silkbar.workspace.active.send.start] index={}", ws);
                 for i in 0..SILKBAR_WORKSPACE_COUNT as u8 {
                     send_update(SilkBarUpdate::new(
                         UpdateKind::SetWorkspaceActive as u32, i, if i == ws { 1 } else { 0 }, 0,
                     ));
                 }
+                sex_pdx::serial_println!("[silkbar.workspace.active.send.ok] index={}", ws);
             } else if msg.type_id == sex_pdx::OP_SILKBAR_FOCUS_STATE {
                 // Clamp invalid producer values to debug(3) to keep update space bounded.
                 focus_state = (msg.arg0 as u8).min(3);

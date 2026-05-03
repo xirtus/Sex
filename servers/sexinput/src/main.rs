@@ -222,9 +222,9 @@ pub extern "C" fn _start() -> ! {
                     pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
                     silkbar_click_stage = 4;
                 }
-                // Click workspace 2 at (600, 25) — SwitchWorkspace(3)
+                // Click workspace 2 (index=2) at (635, 25) — SwitchWorkspace(3), ws_idx=2
                 4 if tick == 7 => {
-                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 600, 25, EV_ABS);
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 635, 25, EV_ABS);
                     silkbar_click_stage = 5;
                 }
                 5 if tick == 8 => {

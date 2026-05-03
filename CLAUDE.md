@@ -408,6 +408,10 @@ When the screen is black:
     [shell.pointer.usb_state.nonzero.ok] x=767 y=487 buttons=0x0 wheel=0 dx=127 dy=127
     [shell.pointer.usb_state.nonzero.ok] x=894 y=486 buttons=0x0 wheel=0 dx=0 dy=-128
     ```
+- **Workspace switch through silkbar PROVEN (SILKBAR_WORKSPACE_SWITCH_V1, commit e675df7+):**
+  - Workspace clicks now update real active workspace state: shell → silkbar → sexdisplay
+  - `[silkbar.workspace.recv/active.set/active.send.start/active.send.ok]` markers
+  - No renderer or ABI changes; uses existing OP_SILKBAR_UPDATE transport
 - **SilkBar clickable controls PROVEN (SILKBAR_CLICKABLE_CONTROLS_V1, commit c5c24d8+):**
   - Shell hit-test for panel regions using silkbar-model geometry + DEFAULT_SILK_BAR layout
   - `[shell.silkbar.click] target=launcher/workspace/status/clock` markers
