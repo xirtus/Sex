@@ -197,6 +197,11 @@ static mut POINTER_BUTTONS: u8 = 0; // bitmask: bit0=left, bit1=right, bit2=midd
 static mut POINTER_WHEEL_ACCUM: i32 = 0;
 static mut POINTER_USB_STATE_INIT: bool = false;
 static mut INTERACTION: InteractionState = InteractionState::Idle;
+/// Number of allowed [shell.interaction.transition] log lines remaining.
+/// Uses AtomicU32 (not static mut) to guarantee the compiler cannot elide
+/// the decrement — shared references to static mut are UB and get optimized.
+static INTERACTION_LOG_BUDGET: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(16);
 // Panel surface-alive tracking (separate from interaction state)
 static mut LAUNCHER_ACTIVE: bool = false;
 // Status panel toggle state
@@ -318,7 +323,14 @@ unsafe fn try_transition(next: InteractionState) {
         _ => false,
     };
     if allowed {
-        serial_println!("[shell.interaction.transition] from={:?} to={:?}", current, next);
+        // Log first N transitions, then suppress.
+        // Uses AtomicU32 (not static mut + volatile) to guarantee the compiler
+        // cannot elide the decrement (shared ref to static mut is UB).
+        let remaining = INTERACTION_LOG_BUDGET.load(core::sync::atomic::Ordering::Relaxed);
+        if remaining > 0 {
+            serial_println!("[shell.interaction.transition] from={:?} to={:?}", current, next);
+            INTERACTION_LOG_BUDGET.store(remaining - 1u32, core::sync::atomic::Ordering::Relaxed);
+        }
         INTERACTION = next;
     } else {
         serial_println!("[shell.interaction.forbidden] from={:?} to={:?}", current, next);
