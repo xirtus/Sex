@@ -550,17 +550,16 @@ fn handle_primary_fb(ptr: u64, packed: u64) -> bool {
     true
 }
 
-fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> bool {
-    let clock_update = arg0 as u32 == UpdateKind::SetClock as u32;
-    // arg0 = UpdateKind, arg1 = (index << 32) | a, arg2 = b
+fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> (bool, u32) {
+    let kind = arg0 as u32;
     let update = SilkBarUpdate {
-        kind: arg0 as u32,
+        kind,
         index: (arg1 >> 32) as u8,
         a: arg1 as u32,
         b: arg2 as u32,
     };
-    apply_update(bar, update);
-    clock_update
+    let ok = apply_update(bar, update);
+    (ok, kind)
 }
 
 #[no_mangle]
@@ -602,14 +601,16 @@ pub extern "C" fn _start() -> ! {
         };
         match msg.type_id {
             silkbar_model::OP_SILKBAR_UPDATE => {
-                let is_clock = handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
-                if is_clock {
-                    clock_from_silkbar = true;
-                }
-                // Redraw top strip for ALL SilkBar updates (workspace, chips, clock) so that
-                // workspace active, urgent, chip visibility/kind, and clock changes all appear.
-                if fb_live {
-                    unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+                let (applied, kind) = handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
+                if applied {
+                    if kind == UpdateKind::SetClock as u32 {
+                        clock_from_silkbar = true;
+                    }
+                    if fb_live {
+                        unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+                    }
+                } else {
+                    serial_println!("[silkde.m2.assert.bad] apply_update=false kind={}", kind);
                 }
             }
             0x11 => { // OP_PRIMARY_FB

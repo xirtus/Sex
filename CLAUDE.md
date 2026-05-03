@@ -379,8 +379,14 @@ When the screen is black:
 
 ---
 
-## Current Status (last updated 2026-05-03 — Drag Window Proof V1)
+## Current Status (last updated 2026-05-03 — SILK_DE_M2_ASSERT_PATCH_V1)
 
+- **M2 audit assert patch (SILK_DE_M2_ASSERT_PATCH_V1):**
+  - F3: sexdisplay apply_update() return value now captured; invalid updates logged with [silkde.m2.assert.bad] and do NOT trigger redraw
+  - F4: ChipSlot discriminant invariant added to validate_contract() -- Chip0/Chip1/Chip2/Clock discriminants must match CHIP_SLOTS indices 0/1/2/3
+  - F1 (queue overflow) and F2 (stale clock watchdog) deferred to separate boundary decisions
+  - Files: crates/silkbar-model/src/lib.rs (+8 lines), servers/sexdisplay/src/main.rs (+6/-6 lines)
+  - Zero kernel/sex-pdx/silk-shell/sexinput edits. Zero ABI changes. Zero warnings.
 - **Renderer conformance cleanup (RENDERER_CONFORMANCE_CLEANUP_V1, commit e9596eb):**
   - 11 magic color literals replaced with DEFAULT_THEME fields (values identical)
   - Remaining custom colors (Wifi/Battery chips, launcher dot, bg gradient) have no theme mapping

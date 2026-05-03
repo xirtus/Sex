@@ -36,14 +36,15 @@ pub const CHIP_X1: usize = 958;
 pub const CHIP_X2: usize = 986;
 pub const CHIP_X3: usize = 1090;
 pub const CLOCK_W: usize = 80;
+pub const CHIP_X_BELL: usize = 1020; // Bell icon between Battery and Clock
 
-/// Total number of layout boxes: 1 launcher + 5 workspaces + 4 chips
-pub const LAYOUT_COUNT: usize = 10;
+/// Total number of layout boxes: 1 launcher + 5 workspaces + 4 chips + 1 bell
+pub const LAYOUT_COUNT: usize = 11;
 
 /// ABI version for SilkBar model shared across PDX boundary.
 /// Increment when `SilkBarUpdate` layout or `UpdateKind` discriminants change.
-pub const ABI_VERSION: u32 = 1;
-pub const SILK_DE_BAR_ABI_V1: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
+pub const SILK_DE_BAR_ABI_V1: u32 = 2;
 pub const SILK_DE_REQUIRED_MODULES: usize = LAYOUT_COUNT;
 pub const SILK_DE_REQUIRED_CHIPS: usize = MAX_CHIPS;
 pub const SILKBAR_WORKSPACE_COUNT: usize = WORKSPACE_COUNT;
@@ -57,7 +58,7 @@ pub const SILKBAR_CHIP_IDX_MAX: u8 = (MAX_CHIPS - 1) as u8;
 // ── PDX Protocol Opcodes (v6: wire names exist, no live transport yet) ──────
 
 /// PDX-facing ABI version (u64 for register-width return).
-pub const SILKBAR_ABI_VERSION: u64 = 1;
+pub const SILKBAR_ABI_VERSION: u64 = 2;
 
 /// Opcode: ping → returns 0 (connectivity check).
 pub const OP_SILKBAR_PING: u64 = 0xF0;
@@ -78,6 +79,7 @@ pub enum ModuleSlot {
     Chip1 = 7,
     Chip2 = 8,
     Clock = 9,
+    Bell = 10,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -97,6 +99,7 @@ pub enum Module {
     Workspaces(usize),
     StatusChip(usize),
     Clock,
+    Bell,
 }
 
 /// Action triggered when this module slot is clicked.
@@ -107,6 +110,7 @@ pub enum Action {
     SwitchWorkspace(u8),
     ToggleModule(Module),
     OpenClock,
+    OpenBell,
 }
 
 /// Geometry + identity + action for one module slot.
@@ -583,6 +587,14 @@ pub fn validate_contract() -> bool {
     if UPDATE_QUEUE_CAP != 32 {
         return false;
     }
+    // F4: ChipSlot discriminants must match CHIP_SLOTS array indices.
+    // If these drift, the renderer chip_color() CHIP_SLOTS array will
+    // index into wrong ModuleSlot positions. Bell is excluded — it is a
+    // ModuleSlot (discriminant 10), not a ChipSlot.
+    if ChipSlot::Chip0 as usize != 0 { return false; }
+    if ChipSlot::Chip1 as usize != 1 { return false; }
+    if ChipSlot::Chip2 as usize != 2 { return false; }
+    if ChipSlot::Clock as usize != 3 { return false; }
     true
 }
 
@@ -648,6 +660,7 @@ pub const DEFAULT_SILK_BAR: SilkBar = SilkBar {
         LayoutBox { x: CHIP_X1, y: CHIP_Y, w: CHIP_W, h: CHIP_H, module: Module::StatusChip(1), action: Action::ToggleModule(Module::StatusChip(1)) },
         LayoutBox { x: CHIP_X2, y: CHIP_Y, w: CHIP_W, h: CHIP_H, module: Module::StatusChip(2), action: Action::ToggleModule(Module::StatusChip(2)) },
         LayoutBox { x: CHIP_X3, y: CHIP_Y, w: CLOCK_W, h: CHIP_H, module: Module::Clock,        action: Action::OpenClock },
+        LayoutBox { x: CHIP_X_BELL, y: CHIP_Y, w: CHIP_W, h: CHIP_H, module: Module::Bell,      action: Action::OpenBell },
     ],
     workspaces: [
         WorkspaceState { index: 1, active: false, urgent: false },
