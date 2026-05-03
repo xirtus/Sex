@@ -32,9 +32,9 @@ validate_contract() {
 validate_silk_de_gates() {
   rg -n "pub fn validate_deterministic_vectors\\(" crates/silkbar-model/src/lib.rs >/dev/null \
     || fail "silkbar-model missing validate_deterministic_vectors"
-  rg -n "validate_deterministic_vectors\\(\\)" servers/silkbar/src/main.rs >/dev/null \
+  rg -n "validate_silkbar_contract\\(\\)" servers/silkbar/src/main.rs >/dev/null \
     || fail "silkbar startup must enforce deterministic vectors gate"
-  rg -n "validate_deterministic_vectors\\(\\)" servers/sexdisplay/src/main.rs >/dev/null \
+  rg -n "validate_silkbar_contract\\(\\)" servers/sexdisplay/src/main.rs >/dev/null \
     || fail "sexdisplay startup must enforce deterministic vectors gate"
 }
 

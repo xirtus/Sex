@@ -2,8 +2,8 @@
 #![no_main]
 
 use silkbar_model::{
-    SilkBarUpdate, UpdateKind, ChipKind, OP_SILKBAR_UPDATE, validate_contract,
-    validate_deterministic_vectors, SILKBAR_WORKSPACE_COUNT, SILKBAR_CHIP_COUNT,
+    SilkBarUpdate, UpdateKind, ChipKind, OP_SILKBAR_UPDATE, validate_silkbar_contract,
+    SILKBAR_ABI_VERSION, SILKBAR_WORKSPACE_COUNT, SILKBAR_CHIP_COUNT,
     SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX, SILKBAR_WORKSPACE_IDX_MAX,
 };
 
@@ -26,11 +26,13 @@ fn send_update(update: SilkBarUpdate) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    if !validate_contract() || !validate_deterministic_vectors() {
-        sex_pdx::serial_println!("[silkbar.contract.v1.bad]");
+    sex_pdx::serial_println!("[silk.contract.validate.start]");
+    let contract_err = validate_silkbar_contract();
+    if contract_err != 0 {
+        sex_pdx::serial_println!("[silk.contract.validate.fail] reason={}", contract_err);
         loop { core::hint::spin_loop(); }
     }
-    sex_pdx::serial_println!("[silkbar.contract.v1.ok]");
+    sex_pdx::serial_println!("[silk.contract.validate.ok] version={}", SILKBAR_ABI_VERSION);
 
     let mut focus_state: u8 = 0;
     let mut last_focus_state: u8 = 0xFF;

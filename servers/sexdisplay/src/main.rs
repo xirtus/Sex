@@ -4,7 +4,7 @@
 
 use sex_pdx::serial_println;
 use silkbar_model::{SilkBar, SilkBarUpdate, UpdateKind, apply_update, DEFAULT_SILK_BAR,
-                    ChipKind, ModuleSlot, validate_contract, validate_deterministic_vectors};
+                    ChipKind, ModuleSlot, validate_silkbar_contract, SILKBAR_ABI_VERSION};
 
 const FALLBACK_PTR: u64 = 0xffff8000fd000000;
 const FALLBACK_W: u32 = 1280;
@@ -476,10 +476,12 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> 
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    if !validate_contract() || !validate_deterministic_vectors() {
-        serial_println!("[sexdisplay.silkbar.contract.v1.bad]");
+    serial_println!("[silk.contract.validate.start]");
+    let contract_err = validate_silkbar_contract();
+    if contract_err != 0 {
+        serial_println!("[silk.contract.validate.fail] reason={}", contract_err);
     } else {
-        serial_println!("[sexdisplay.silkbar.contract.v1.ok]");
+        serial_println!("[silk.contract.validate.ok] version={}", SILKBAR_ABI_VERSION);
     }
 
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
