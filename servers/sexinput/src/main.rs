@@ -16,6 +16,10 @@ const OP_USB_MOUSE_REPORT: u64 = 0x260;
 // USB physical capture mode: keep synthetic drag proof code available, but
 // disable repeated injection so physical USB movement logs are not polluted.
 const USB_PROOF_DISABLE_SYNTH_DRAG: bool = true;
+// One-shot synthetic click proof via OP_USB_MOUSE_REPORT path.
+// Proves sexinput→shell click_focus chain without physical USB device.
+// Positions cursor over SURFACE_ID_LINEN (900,500,300x150), fires left click.
+const USB_PROOF_DISABLE_SYNTH_CLICK: bool = false;
 
 #[derive(Copy, Clone)]
 struct HidPointerRawReport {
@@ -78,6 +82,7 @@ pub extern "C" fn _start() -> ! {
 
     let mut tick: u64 = 0;
     let mut drag_proof_stage: u8 = 0;
+    let mut synth_click_stage: u8 = 0;
 
     loop {
         // 0. Local USB->sexinput PDX proof path (no shell routing in this phase).
@@ -184,6 +189,52 @@ pub extern "C" fn _start() -> ! {
             });
 
             drag_proof_stage = (drag_proof_stage + 1) % 3;
+        }
+
+        // 4. One-shot synthetic click proof via USB mouse path.
+        //    Moves cursor to (940,560) ∈ SURFACE_ID_LINEN, then clicks.
+        //    Proves sexinput→shell click_focus chain.
+        if !USB_PROOF_DISABLE_SYNTH_CLICK {
+            // packed_axes = dx_u8 | (dy_u8 << 8)
+            match synth_click_stage {
+                0 if tick == 10 => {
+                    // Init cursor (POINTER_USB_STATE_INIT → 640,400)
+                    serial_println!("[sexinput.synthetic.click_focus.start]");
+                    let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0u64, 0u64);
+                    synth_click_stage = 1;
+                }
+                1 if tick == 11 => {
+                    // Move +127,+100 → cursor (767,500)
+                    let packed: u64 = (127u8 as u64) | ((100u8 as u64) << 8);
+                    let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0u64, packed);
+                    synth_click_stage = 2;
+                }
+                2 if tick == 12 => {
+                    // Move +127,+60 → cursor (894,560)
+                    let packed: u64 = (127u8 as u64) | ((60u8 as u64) << 8);
+                    let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0u64, packed);
+                    synth_click_stage = 3;
+                }
+                3 if tick == 13 => {
+                    // Move +46,+0 → cursor (940,560) ∈ LINEN [900,1200)×[500,650)
+                    let packed: u64 = 46u8 as u64;
+                    let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0u64, packed);
+                    synth_click_stage = 4;
+                }
+                4 if tick == 14 => {
+                    // Button down — triggers click_focus hit on SURFACE_ID_LINEN
+                    serial_println!("[sexinput.synthetic.click_focus.down]");
+                    let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0x01u64, 0u64);
+                    synth_click_stage = 5;
+                }
+                5 if tick == 15 => {
+                    // Button up — resets CLICK_ACTIVE
+                    serial_println!("[sexinput.synthetic.click_focus.up]");
+                    let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0u64, 0u64);
+                    synth_click_stage = 6;
+                }
+                _ => {}
+            }
         }
 
         sys_yield();
