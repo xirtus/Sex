@@ -32,6 +32,15 @@ Ship a stable Silk DE top-strip stack where `silkbar` produces contract-valid up
 2. Add controlled animation cadence (no flood) from `silkbar` producer.
 3. Validate focus/workspace/chip transitions under load.
 
+### Phase 5: Boundary Hardening and M2 Audit
+1. Execute `NEXT_BOUNDARY_HARDENING_PLAN_V1` rules documented in `STABLE_BASELINE_20260503.md`.
+2. Follow ordered phases exactly: USB_BUTTON_CLICK_PROOF_V1 → SHELL_FOCUS_CONTRACT_V1 → SURFACE_OWNERSHIP_CONTRACT_V1 → DOCK_OVERLAYBAR_MODEL_V1 → BELL_CAPABILITY_ATTENTION_V1 → LINEN_STATIC_SURFACE_V1.
+3. Enforce `SHELL_GLOBAL_INTERACTION_CONTRACT_V1` subcontracts to prevent event-order bugs and cross-domain state dangling.
+4. Reject patches that cross boundaries (e.g. touching USB, shell, display, and kernel simultaneously).
+5. Every feature proves exactly one boundary.
+6. Any patch spanning more than two major domains must STOP FIRST.
+7. Validation: `rg "NEXT_BOUNDARY_HARDENING_PLAN_V1|USB_BUTTON_CLICK_PROOF_V1|SHELL_FOCUS_CONTRACT_V1|SURFACE_OWNERSHIP_CONTRACT_V1|DOCK_OVERLAYBAR_MODEL_V1|BELL_CAPABILITY_ATTENTION_V1|LINEN_STATIC_SURFACE_V1|SHELL_GLOBAL_INTERACTION_CONTRACT_V1|SHELL_INTERACTION_STATE_V1|HIT_TEST_PRIORITY_V1|EVENT_ORDERING_CONTRACT_V1|SURFACE_ID_LIFETIME_V1|CHROME_MODE_ARBITRATION_V1|DEAD_PD_SURFACE_CLEANUP_V1|INTEGRATED_SCENARIO_PROOF_V1" -n docs CLAUDE.md`
+
 ## Parallel Work Assignment
 
 ### Codex (local, now)

@@ -51,7 +51,7 @@ The `syscall` instruction strictly calculates segments. `x86_64::registers::mode
 
 ### NEXT_BOUNDARY_HARDENING_PLAN_V1 Anti-Scope-Creep Rule
 **STOP FIRST:** Reject patches touching USB + shell + display + kernel + sex-pdx together. Any patch spanning more than two major domains must STOP FIRST before implementation.
-- Use `rg "NEXT_BOUNDARY_HARDENING_PLAN_V1|USB_BUTTON_CLICK_PROOF_V1|SHELL_FOCUS_CONTRACT_V1|SURFACE_OWNERSHIP_CONTRACT_V1|DOCK_OVERLAYBAR_MODEL_V1|BELL_CAPABILITY_ATTENTION_V1|LINEN_STATIC_SURFACE_V1" -n docs CLAUDE.md` to confirm the plan.
+- Use `rg "NEXT_BOUNDARY_HARDENING_PLAN_V1|USB_BUTTON_CLICK_PROOF_V1|SHELL_FOCUS_CONTRACT_V1|SURFACE_OWNERSHIP_CONTRACT_V1|DOCK_OVERLAYBAR_MODEL_V1|BELL_CAPABILITY_ATTENTION_V1|LINEN_STATIC_SURFACE_V1|SHELL_GLOBAL_INTERACTION_CONTRACT_V1|SHELL_INTERACTION_STATE_V1|HIT_TEST_PRIORITY_V1|EVENT_ORDERING_CONTRACT_V1|SURFACE_ID_LIFETIME_V1|CHROME_MODE_ARBITRATION_V1|DEAD_PD_SURFACE_CLEANUP_V1|INTEGRATED_SCENARIO_PROOF_V1" -n docs CLAUDE.md` to confirm the plan.
 - Ensure every feature proves exactly ONE boundary.
 
 ### Token Discipline
@@ -585,8 +585,21 @@ It documents:
 - Locked invariants (what must not be violated)
 - Known limitations (USB button proof, panel visuals)
 - Standard verification command
+- **NEXT_BOUNDARY_HARDENING_PLAN_V1** (section 5): ordered phases, boundary rules, anti-scope-creep rules
+- Recurring bug handoff format
 - Next recommended feature order
 - Surface ID registry (0x90 cursor, 0x92-0x94 panels, 0x95 reserved, 100+ apps)
+
+**Hard rule: Every feature proves exactly one boundary.**
+**Anti-scope-creep: Reject patches touching USB + shell + display + kernel + sex-pdx together.**
+
+Phases (exact order from baseline):
+1. USB_BUTTON_CLICK_PROOF_V1
+2. SHELL_FOCUS_CONTRACT_V1
+3. SURFACE_OWNERSHIP_CONTRACT_V1
+4. DOCK_OVERLAYBAR_MODEL_V1
+5. BELL_CAPABILITY_ATTENTION_V1
+6. LINEN_STATIC_SURFACE_V1
 
 **Do not skip this document.** Agents that ignore it reintroduce regressions in proven areas.
 
