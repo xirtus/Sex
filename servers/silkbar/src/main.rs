@@ -16,10 +16,17 @@ fn send_update(update: SilkBarUpdate) {
         update.b as u64,
     );
     if result.is_err() {
-        // Keep hot error path minimal: avoid formatting/log work here.
+        // Budgeted error diagnostic: log first 16 drops.
         unsafe {
             static mut DROP_COUNTER: u64 = 0;
+            static mut DROP_LOG_BUDGET: u32 = 16;
+            let n = DROP_COUNTER;
             DROP_COUNTER = DROP_COUNTER.wrapping_add(1);
+            let remaining = &mut DROP_LOG_BUDGET;
+            if *remaining > 0 {
+                *remaining -= 1;
+                sex_pdx::serial_println!("[silkbar.send_update.drop] kind={} count={}", update.kind, n);
+            }
         }
     }
 }
@@ -38,14 +45,18 @@ pub extern "C" fn _start() -> ! {
     let mut last_focus_state: u8 = 0xFF;
     let mut chip_phase: u8 = 0;
     let mut chip0_net: bool = true;
-    let mut last_uptime_seconds: u64 = u64::MAX;
+    // Initialize to 0 so the first loop iteration skips the redundant
+    // SetClock(ss=0) and waits until uptime_seconds advances to 1.
+    // Sexdisplay's fallback clock handles the first second.
+    let mut last_uptime_seconds: u64 = 0;
 
     /// Approximate LAPIC timer ticks per second (divide=16, init_count=1_000_000).
     /// Not calibrated — yields monotonic uptime, not wall-clock accuracy.
     const LAPIC_TICKS_PER_SECOND_APPROX: u64 = 62;
 
-    // INIT: full GLOBAL_BAR state — workspace activation, chip visibility, clock
-    // Workspace 3 active (index 2), others inactive
+    // INIT: full GLOBAL_BAR state — workspace activation, chip visibility.
+    // Clock is deliberately omitted: sexdisplay fallback handles the first
+    // second, and the main loop sends SetClock starting at ss=1.
     for ws_idx in 0..SILKBAR_WORKSPACE_COUNT as u8 {
         send_update(SilkBarUpdate::new(
             UpdateKind::SetWorkspaceActive as u32, ws_idx, if ws_idx == SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX { 1 } else { 0 }, 0,
@@ -55,17 +66,6 @@ pub extern "C" fn _start() -> ! {
     for chip_idx in 0..SILKBAR_CHIP_COUNT as u8 {
         send_update(SilkBarUpdate::new(
             UpdateKind::SetChipVisible as u32, chip_idx, 1, 0,
-        ));
-    }
-    // Initial clock — derived from kernel uptime
-    {
-        let ticks = sex_pdx::get_ticks();
-        let uptime_seconds = ticks / LAPIC_TICKS_PER_SECOND_APPROX;
-        let hh0 = ((uptime_seconds / 3600) % 24) as u8;
-        let mm0 = ((uptime_seconds / 60) % 60) as u8;
-        let ss0 = (uptime_seconds % 60) as u8;
-        send_update(SilkBarUpdate::new(
-            UpdateKind::SetClock as u32, 0, hh0 as u32, ((mm0 as u32) << 8) | ss0 as u32,
         ));
     }
 
@@ -161,6 +161,15 @@ pub extern "C" fn _start() -> ! {
         send_update(SilkBarUpdate::new(
             UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
         ));
+        // Budgeted diagnostic: first 12 clock sends
+        {
+            static mut CLOCK_SEND_BUDGET: u32 = 12;
+            let remaining = unsafe { &mut CLOCK_SEND_BUDGET };
+            if *remaining > 0 {
+                *remaining -= 1;
+                sex_pdx::serial_println!("[silkbar.clock.send] hh={} mm={} ss={}", hh, mm, ss);
+            }
+        }
     }
 }
 

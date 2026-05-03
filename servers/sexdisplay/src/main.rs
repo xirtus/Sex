@@ -604,7 +604,19 @@ pub extern "C" fn _start() -> ! {
                 let (applied, kind) = handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
                 if applied {
                     if kind == UpdateKind::SetClock as u32 {
-                        clock_from_silkbar = true;
+                        // Gate: only cede fallback to silkbar if the received time
+                        // is not stale. A boot-time SetClock that arrives seconds
+                        // late (behind the init message batch) must not permanently
+                        // disable the fallback clock.
+                        if !clock_from_silkbar {
+                            let incoming_ss = bar.clock_ss;
+                            let fallback_ss = (sec_now % 60) as u8;
+                            let stale = incoming_ss < fallback_ss
+                                && (fallback_ss.wrapping_sub(incoming_ss) < 30);
+                            if !stale {
+                                clock_from_silkbar = true;
+                            }
+                        }
                     }
                     if fb_live {
                         unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }

@@ -317,6 +317,8 @@ function pointer call in userland.
 | `servers/sexusb/src/main.rs` | xHCI interrupt-IN Transfer Ring dequeue stuck at slot 1 forever | Circular ring: 15 Normal slots + Link TRB at slot 15 with TC=1. Track `intr_prod`/`intr_pcs`. See §xHCI Interrupt Ring below. |
 | `servers/sexusb/src/main.rs` | Bounded 512-attempt outer poll exhausted before user interaction | Changed to unbounded `loop` with wrapping `u32` counter. |
 | `servers/sexinput/src/main.rs` | Synthetic drag proof wraps forever via `% 3`, storms shell with drag.start/move/end every 120 ticks | Added `SYNTHETIC_DRAG_PROOF_DONE` one-shot gate; stage 2 sets `DONE=true`, block guarded by `!DONE`. See `docs/handoff/INPUT_REPLAY_STORM_FIX_V1.md`. |
+| `servers/sexdisplay/src/main.rs` | Stale boot-time SetClock(ss=0) arrives seconds late, permanently disables fallback via `clock_from_silkbar=true` one-way latch. Silkbar later SetClock messages lost to SPSC ring overflow under MPSC load. Clock freezes at 00:00 within 4s. | Added stale-time gate: `clock_from_silkbar=true` only if incoming ss ≥ fallback ss (within 30s midnight window). See `docs/handoff/CLOCK_FREEZE_FALLBACK_GATE_V1.md`. |
+| `servers/silkbar/src/main.rs` | Initial SetClock(ss=0) in boot init sent with stale time; `last_uptime_seconds` initialized to `u64::MAX` causes redundant ss=0 on first loop iteration | Removed init SetClock (fallback handles first second); changed `last_uptime_seconds` init to `0`. |
 
 ---
 
@@ -462,6 +464,7 @@ When the screen is black:
 **Completed (2026-05-03):**
 - **Synthetic drag proof** (DRAG_WINDOW_PROOF_V1): `USB_PROOF_DISABLE_SYNTH_DRAG = false` enables the sexinput→shell→drag chain. Verified via `grep -E "shell.drag" /tmp/drag-proof.log`.
 - **Input replay storm fix** (INPUT_REPLAY_STORM_FIX_V1): Synthetic drag proof no longer wraps forever via `% 3`. One-shot gate `SYNTHETIC_DRAG_PROOF_DONE` prevents replay after stage 2. `shell.drag.start` count reduced from 50 to 1 per boot. Only `servers/sexinput/src/main.rs` changed. See `docs/handoff/INPUT_REPLAY_STORM_FIX_V1.md`.
+- **Clock freeze fallback gate** (CLOCK_FREEZE_FALLBACK_GATE_V1): SilkBar clock no longer freezes at 00:00 within 4s. Added stale-time gate in sexdisplay — `clock_from_silkbar = true` only if incoming SetClock ss ≥ fallback ss (within 30s midnight window). Removed stale initial SetClock(ss=0) from silkbar boot init. Changed `last_uptime_seconds` from `u64::MAX` to `0`. See `docs/handoff/CLOCK_FREEZE_FALLBACK_GATE_V1.md`.
 
 **Next action — choose one:**
 1. **Physical mouse proof**: move real mouse into `SDL_VIDEO_DRIVER=x11 SEXUSB_QEMU_DEVICE=tablet ./dev.sh run` window, click twice (first click grabbed by SDL, second reaches USB tablet). Check for `buttons=0x01` and `[shell.click_focus.down/hit/send.ok]`.
