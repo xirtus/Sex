@@ -309,6 +309,8 @@ function pointer call in userland.
 | `kernel/src/gdt.rs`         | `unsafe {}` around `interrupts::disable()`        | Remove unsafe block |
 | `kernel/src/elf.rs`         | `let mut flags` (flags never mutated)             | Remove `mut` |
 | `CLAUDE.md` (old note)      | "serial_println! must go through pdx_call(0,69)" | WRONG: sex-pdx uses direct asm syscall rax=69. Kernel handles natively. |
+| `servers/sexusb/src/main.rs` | xHCI interrupt-IN Transfer Ring dequeue stuck at slot 1 forever | Circular ring: 15 Normal slots + Link TRB at slot 15 with TC=1. Track `intr_prod`/`intr_pcs`. See §xHCI Interrupt Ring below. |
+| `servers/sexusb/src/main.rs` | Bounded 512-attempt outer poll exhausted before user interaction | Changed to unbounded `loop` with wrapping `u32` counter. |
 
 ---
 
@@ -372,14 +374,44 @@ When the screen is black:
 
 ---
 
-## Current Status (last updated 2026-04-29 — v8 SilkBar PDX Integration)
+## Current Status (last updated 2026-05-03 — USB Tablet Button Injection Blocked)
 
-- **Scheduler stall is FIXED.** All 5 PDs spawn and schedule correctly: sexdisplay (PD1), sexdrive (PD2), silk-shell (PD3), sexinput (PD4), silkbar (PD5).
-- **Current task:** Integrate silkbar → sexdisplay PDX clock update (v8 scalar protocol).
-- **Active bug:** Cross-crate `static` references from silkbar-model crate produce unrelocated GOT entries. Kernel ELF loader doesn't do `.rela.dyn` processing.
-  - Fix: Changed `pub static` → `pub const` for `DEFAULT_SILK_BAR` and `DEFAULT_THEME` in silkbar-model.
-  - sexdisplay/main.rs rewritten as PDX-aware renderer: listens for OP_PRIMARY_FB (0x11) and OP_SILKBAR_UPDATE (0xF2).
-- **Next action:** Rebuild and boot-verify.
+- **Scheduler stall is FIXED.** All PDX domains spawn and schedule correctly.
+- **USB HID boot-class mouse pipeline is code-complete** (committed through `proof-xhci-intr-ring-advance-20260502`).
+- **QEMU usb-tablet HID support (04566ab) — PROVEN:**
+  - Tablet HID interface detection via config walk (`hid_tablet.found`)
+  - HID report descriptor shape scan recognizes tablet/pointer (`tablet_shape.ok`)
+  - SHORT_PACKET (cc=13) accepted in interrupt-IN event handler
+  - Absolute position reports decoded: `[sexusb.hid.tablet.raw] b0=0x0 b1=0x0 b2=0x0 b3=0x0 b4=0x0 actual=6`
+  - **Nonzero position reports captured** in SDL X11 session:
+    ```
+    [sexusb.hid.tablet.report] i=1 buttons=0x0 x=32741 y=9625 dx=127 dy=127
+    [sexusb.hid.tablet.nonzero.ok] i=1 buttons=0x0 x=32741 y=9625 dx=127 dy=127
+    [sexusb.hid.tablet.report] i=2 buttons=0x0 x=32741 y=9379 dx=0 dy=-128
+    ```
+  - Shell pointer state received nonzero reports:
+    ```
+    [shell.pointer.usb_state.nonzero.ok] x=767 y=487 buttons=0x0 wheel=0 dx=127 dy=127
+    [shell.pointer.usb_state.nonzero.ok] x=894 y=486 buttons=0x0 wheel=0 dx=0 dy=-128
+    ```
+- **Not yet proven:**
+  - **Button events** — all tablet reports show `buttons=0x0` (no click)
+  - **Click-focus hit-test** — requires button-down edge with nonzero position
+  - **Full continuous movement** — received only 2 nonzero reports at boot (initial WM position), then idle
+- **Critical blocker (QEMU 11.0):** QMP/HMP input injection does NOT route to USB HID devices. Events consumed by PS/2 display layer only. Confirmed: `input-send-event` returns `{"return": {}}` but usb-mouse/tablet sees nothing.
+- **Workaround discovered:** `SDL_VIDEO_DRIVER=x11` + `-display sdl` produces a visible X11 window (confirmed via `xdotool`). Mouse events from the host X11 desktop forwarded through SDL do reach the usb-tablet device. This enables proof in headless environments with Xvfb or similar.
+
+**Button injection blocked (confirmed 2026-05-03):**
+- SDL2 filters XTest synthetic events (`send_event=True`); `xdotool` uses XTest → zero USB reports
+- VNC RFB `PointerEvent` also does NOT reach USB HID in QEMU 11.0
+- QMP/HMP: already confirmed blocked (prior session)
+- USB tablet decode code is correct; silk-shell click-focus code is correct
+- Only real physical mouse over SDL window can deliver button events
+
+**Next action — choose one:**
+1. **Physical mouse proof**: move real mouse into `SDL_VIDEO_DRIVER=x11 SEXUSB_QEMU_DEVICE=tablet ./dev.sh run` window, click twice (first click grabbed by SDL, second reaches USB tablet). Check for `buttons=0x01` and `[shell.click_focus.down/hit/send.ok]`.
+2. **Synthetic downstream proof**: set `USB_PROOF_DISABLE_SYNTH_DRAG = false` in `servers/sexinput/src/main.rs`, rebuild, run nographic. Proves `sexinput→shell→click_focus` chain (not USB tablet decode).
+3. **uinput virtual mouse**: create Linux virtual input device via `/dev/uinput` — events appear as real device events, bypass SDL XTest filter. Full-chain proof.
 
 ## Critical ABI Facts (discovered this session)
 
@@ -434,3 +466,64 @@ Key landmarks in interrupts.rs:
 - Update kinds: 0=SetWorkspaceActive, 1=SetWorkspaceUrgent, 2=SetChipVisible, 3=SetChipKind, 4=SetClock, 5=SetThemeToken
 - `silkbar-model` crate provides: types, `DEFAULT_SILK_BAR` (const), `DEFAULT_THEME` (const), `apply_update()`, `SilkBarUpdateQueue`
 - sexdisplay imports `silkbar-model` for types; renders clock chip at position CHIP_X3=1090, CHIP_Y=18
+
+---
+
+## xHCI Interrupt-IN Transfer Ring (sexusb)
+
+**Critical invariant (FIXED 2026-05-02):** Never write all Normal TRBs to ring slot 0.
+
+After the xHCI processes slot 0 and the software re-writes slot 0 again, the controller
+dequeue pointer is at slot 1. Ringing the doorbell makes the controller re-read slot 1
+(not slot 0). If slot 1 has cycle=0, controller stops — all polls after the first stall.
+
+**Fix in `servers/sexusb/src/main.rs`:**
+- Ring layout: `INTR_TR_RING_SIZE = 16`. Slots 0–14 = Normal TRBs. Slot 15 = Link TRB.
+- Link TRB: `d0/d1 = intr_ring_phys`, `d3 = (TRB_TYPE_LINK<<10) | TC | intr_pcs`.
+  TC=1 causes xHCI to toggle its Consumer Cycle State on wrap.
+- Poll loop state: `intr_prod: u64 = 0`, `intr_pcs: u32 = 1`.
+- Each iteration: write Normal TRB at `intr_prod` with `intr_pcs`, ring doorbell, wait event.
+- After event consumed: `intr_prod += 1`. If `intr_prod >= 15`: toggle `intr_pcs`,
+  update Link TRB cycle bit to new `intr_pcs`, `intr_prod = 0`.
+- Endpoint dequeue: `ep_deq = intr_ring_phys | 1` (DCS=1 matches initial `intr_pcs=1`).
+
+**QEMU SDL/tablet grab:**
+- SDL requires a left-click inside the window to grab host mouse. First click consumed by SDL (not forwarded to USB). Second click = first real USB button event.
+- `dx`/`dy` events only arrive after grab in boot-mouse mode. For usb-tablet, absolute position reports arrive even without grab (QEMU SDL forwards absolute motion directly).
+- **Key finding:** `SDL_VIDEO_DRIVER=x11` is required when DISPLAY is available but Wayland is default. Without this, SDL uses Wayland backend and creates no visible X11 window.
+- Do NOT use `-display gtk,grab-on-hover=on` — GTK steals keyboard focus, stray keypresses open Limine config editor and prevent boot.
+- Proof sequence: `SDL_VIDEO_DRIVER=x11 SEXUSB_QEMU_DEVICE=tablet ./dev.sh run`, wait for desktop, find window via `xdotool search --name "QEMU"`, inject mouse via `xdotool mousemove --window $WID X Y` and `xdotool click 1`.
+
+---
+
+## USB Input Pipeline Architecture
+
+```
+QEMU usb-mouse (boot HID, relative, 4-byte reports)
+  OR QEMU usb-tablet (absolute, 6-byte reports via interrupt-IN, decoded to relative deltas)
+  → sexusb (PD7 @ 0x46000000): xHCI interrupt-IN polling, circular ring,
+                                SHORT_PACKET acceptance, tablet absolute→relative delta
+  → sexinput (PD4 @ 0x43000000): normalize, clamp, send OP_USB_MOUSE_REPORT to silk-shell
+  → silk-shell (PD3 @ 0x42000000): update POINTER_X/Y/buttons, move cursor surface (0xEB),
+                                    click-focus hit-test (0xED)
+  → sexdisplay (PD1 @ 0x40000000): render surfaces, cursor z-top pass, arrow bitmap
+```
+
+**Tablet decode path (sexusb):**
+- `decode_tablet_report(buf, len) -> Option<TabletReport>`: parses 5 bytes (buttons, abs_x u16 LE, abs_y u16 LE)
+- Static mut state: `PREV_ABS_X`, `PREV_ABS_Y`, `FIRST_TABLET_REPORT`
+- Delta computation: `dx = clamp( abs_x - prev_x, -128, 127 )` (same for dy)
+- First report: sets prev to current, sends zero delta (prevents initial position jump)
+- Same PDX message format as boot mouse (OP_USB_MOUSE_REPORT = 0x260, packed_axes)
+- **Key invariant:** tablet absolute positions (0..32767) are converted to relative deltas before reaching sexinput. sexinput and silk-shell see no difference from boot mouse reports.
+
+**Surface opcodes (shell→sexdisplay):**
+- `0xEC` create surface: arg0=id, arg1=(y<<32)|x, arg2=(h<<32)|w
+- `0xEB` move surface: arg0=id, arg1=x, arg2=y
+- `0xED` focus surface: arg0=id
+- `0xEE` destroy surface: arg0=id
+- `0xEF` fill rect: arg0=id, arg1=(sy<<32)|sx, arg2=(color<<32)|(sh<<16)|sw
+
+**Cursor surface:** `SURFACE_ID_CURSOR = 0x90` (144). Created first at boot (slot 0 in SURFACES array). `draw_cursor_z_top()` renders arrow bitmap unconditionally after all other passes.
+
+**Click-focus guard:** `CLICK_ACTIVE` bool prevents repeat focus on held button. Rising edge only (button down, not held).

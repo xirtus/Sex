@@ -1113,3 +1113,105 @@ The input subsystem routes events only to the active pointer device
 (auto-selected by QEMU based on display backend), not to all registered handlers.
 
 **Decision**: Stop QMP injection path. Proceed to `USB_TABLET_HID_PROBE_V1`.
+
+## USB_TABLET_HID_PROBE_V1 (2026-05-03)
+
+### Status
+**PROVEN: tablet device detection, report descriptor scan, absolute position reports received and decoded to relative deltas.**
+**NOT PROVEN: button events (buttons=0x0 always), click-focus hit-test.**
+
+### Changes (commit 04566ab)
+- Config walk dual detection: tracks `found_hid_mouse` and `found_hid_tablet` independently
+- HID report descriptor shape scan: recognizes tablet/pointer shape (`05 01` + `09 01` + `09 30` + `09 31`)
+- `TabletReport` struct + `decode_tablet_report(buf, len)` parsing 5 bytes (buttons, abs_x u16 LE, abs_y u16 LE)
+- `TRB_CC_SHORT_PACKET` constant (13) accepted in interrupt-IN event handler
+- `is_tablet_device` flag selects decode path at runtime
+- Static mut state for absolute position tracking (`PREV_ABS_X`, `PREV_ABS_Y`, `FIRST_TABLET_REPORT`)
+- Delta computation with `clamp(-128, 127)` — same PDX message format as boot mouse (OP_USB_MOUSE_REPORT = 0x260)
+
+### Evidence
+Captured in `SDL_VIDEO_DRIVER=x11` session:
+```
+[sexusb.hid.tablet.raw] b0=0x0 b1=0x0 b2=0x0 b3=0x0 b4=0x0 actual=6
+[sexusb.hid.tablet.report] i=1 buttons=0x0 x=32741 y=9625 dx=127 dy=127
+[sexusb.hid.tablet.nonzero.ok] i=1 buttons=0x0 x=32741 y=9625 dx=127 dy=127
+[sexusb.hid.tablet.report] i=2 buttons=0x0 x=32741 y=9379 dx=0 dy=-128
+[shell.pointer.usb_state.nonzero.ok] x=767 y=487 buttons=0x0 wheel=0 dx=127 dy=127
+[shell.pointer.usb_state.nonzero.ok] x=894 y=486 buttons=0x0 wheel=0 dx=0 dy=-128
+```
+
+### Key Findings
+1. **SDL_VIDEO_DRIVER=x11 is required** when DISPLAY is available but Wayland is default. Without this, SDL uses Wayland backend, no X11 window appears for xdotool injection.
+2. **Tablet absolute position reports arrive even without SDL grab** — unlike boot-mouse which requires grab for relative motion.
+3. **QEMU 11.0 QMP/HMP still doesn't route to USB** — confirmed independently for both usb-mouse and usb-tablet.
+
+### Next
+- Test in visible graphical session with real mouse:
+  ```
+  SDL_VIDEO_DRIVER=x11 SEXUSB_QEMU_DEVICE=tablet ./dev.sh run
+  ```
+- Or inject via xdotool:
+  ```
+  WID=$(xdotool search --name "QEMU" | head -1)
+  xdotool mousemove --window $WID 400 300
+  xdotool click 1
+  # Check for buttons=0x01 and click_focus markers
+  ```
+- If button events still do not reach sexusb, the issue is QEMU host input routing to USB device model. Fallback: real USB passthrough or internal synthetic proof mode.
+
+## USB_TABLET_BUTTON_CLICK_FOCUS_PROBE_V1 (2026-05-03)
+
+### Status
+**BLOCKED: automated button injection has no path to QEMU USB HID in this environment.**
+
+### Root Cause (confirmed)
+SDL2 explicitly filters synthetic X11 events:
+- `xdotool` uses XTest extension which sets `send_event=True` on injected MotionNotify/ButtonPress
+- SDL2 `X11_DispatchEvent()` checks `event.xmotion.send_event` / `event.xbutton.send_event`
+  and silently discards any event with `send_event=True`
+- Result: xdotool mousemove/click/mousedown/mouseup generate zero USB tablet reports
+
+VNC RFB PointerEvent also blocked:
+- Python VNC client connects to QEMU `-vnc :10`, sends RFC 6143 PointerEvent (type=5)
+- Events reach QEMU VNC server but do NOT propagate to USB HID device
+- Same QEMU 11.0 routing issue as QMP/HMP: input events go to PS/2 display layer only
+- `[sexusb.hid.tablet.raw]` shows only the single boot-time zero report, no change after VNC
+
+### What DOES work
+Initial cursor position at SDL window open: one absolute position report is delivered
+(probably from `SDL_GetMouseState()` at window creation, bypassing the event filter):
+```
+[sexusb.hid.tablet.report] i=1 buttons=0x0 x=14463 y=15113 dx=127 dy=127
+```
+This is a one-shot event — subsequent cursor moves via xdotool do NOT trigger more reports.
+
+### Systematic test summary
+| Method | Position events | Button events |
+|--------|----------------|---------------|
+| xdotool mousemove (--window) | none | none |
+| xdotool mousemove (screen-abs) | none | none |
+| xdotool mousedown/mouseup | none | none |
+| VNC RFB PointerEvent | none | none |
+| QMP/HMP (prior result) | none | none |
+| Real mouse over SDL window (physical) | yes (1 boot-time) | untested |
+
+### Code inspection conclusion
+USB tablet decode code is correct. No code change needed for button byte parsing:
+- `decode_tablet_report()`: `buttons = buf[0] & 0x07` — correct for QEMU usb-tablet format
+- `silk-shell` click-focus edge: `left_held = (buttons & 0x01) != 0` — correct
+- Both `[shell.click_focus.down]` and `[shell.click_focus.hit/send.ok]` markers present in code
+
+### Paths to button proof
+1. **Physical mouse** (definitive): move real mouse over SDL window, click once (for SDL grab),
+   click again. Expected: `buttons=0x01` in tablet report → `[shell.click_focus.down/hit/send.ok]`
+2. **Synthetic sexinput mode** (downstream proof only):
+   set `USB_PROOF_DISABLE_SYNTH_DRAG = false` in `servers/sexinput/src/main.rs` + rebuild.
+   Proves `sexinput→shell→click_focus` chain. Does NOT test `sexusb` tablet button decode.
+3. **evdev/uinput** (full-chain synthetic): create virtual mouse via `/dev/uinput` —
+   uinput events bypass SDL's XTest filter and appear as real device events.
+4. **Real USB passthrough**: `-device usb-host,vendorid=X,productid=Y` with physical tablet.
+
+### Next
+For automated CI-friendly proof: implement uinput virtual mouse device (option 3 above)
+OR accept physical-mouse-only for button proof and document as such.
+Current ISO and code are correct. This is purely an automated-injection blocker.
