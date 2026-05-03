@@ -26,6 +26,15 @@ pub const SURFACE_ID_LINEN: u64 = 200;
 pub const SURFACE_ID_CURSOR: u64 = 0x90; // 144 — OS-owned cursor, no collision with app IDs
 pub const SURFACE_ID_LAUNCHER: u64 = 0x92; // 146 — launcher panel surface, toggled by launcher button
 pub const SURFACE_ID_STATUS: u64 = 0x93; // 147 — status panel surface, toggled by status chip click
+pub const SURFACE_ID_CLOCK: u64 = 0x94; // 148 — clock panel surface, toggled by clock click
+
+// OS-owned surface ID registry:
+//   0x90  cursor
+//   0x92  launcher panel
+//   0x93  status/quick-settings panel
+//   0x94  clock panel
+//   0x95  reserved (Bell panel)
+//   100+  app surfaces (SURFACE_ID_APP, SURFACE_ID_STATIC, etc.)
 pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 
 // ── Policy Model ──────────────────────────────────────────────────────────
@@ -179,6 +188,8 @@ static mut LAST_DRAG_Y: i32 = 0;       // pointer Y at drag start/move
 static mut LAUNCHER_ACTIVE: bool = false;
 // Status panel toggle state
 static mut STATUS_ACTIVE: bool = false;
+// Clock panel toggle state
+static mut CLOCK_ACTIVE: bool = false;
 // Linen surface 200 position tracking (stable — linen never moves)
 static mut SURFACE_200_X: i32 = 900;
 static mut SURFACE_200_Y: i32 = 500;
@@ -270,6 +281,28 @@ fn is_shell_surface(sid: u64) -> bool {
     || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
 }
 
+/// Toggle an OS-owned panel surface open/closed.
+/// - If `*active` is false: creates surface `surface_id` at (x, y) with size (w, h).
+/// - If `*active` is true: destroys surface `surface_id`.
+/// Emits `[shell.{label}.open/close.start/ok] id={surface_id:#x}` markers.
+/// Preserves existing marker naming convention for all three panels.
+unsafe fn toggle_os_panel(active: &mut bool, surface_id: u64, label: &str, x: u32, y: u32, w: u32, h: u32) -> bool {
+    if !*active {
+        serial_println!("[shell.{}.open.start] id={:#x}", label, surface_id);
+        pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
+            (y as u64) << 32 | x as u64,
+            (h as u64) << 32 | w as u64);
+        serial_println!("[shell.{}.open.ok] id={:#x}", label, surface_id);
+        *active = true;
+    } else {
+        serial_println!("[shell.{}.close.start] id={:#x}", label, surface_id);
+        pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
+        serial_println!("[shell.{}.close.ok] id={:#x}", label, surface_id);
+        *active = false;
+    }
+    true
+}
+
 /// Handle a left-click within the SilkBar top strip (y < 50).
 /// Uses hit_test_action() from silkbar-model to determine what was clicked,
 /// then dispatches the action (workspace switch, launcher, etc.).
@@ -293,44 +326,17 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
         }
         Action::OpenLauncher => {
             serial_println!("[shell.silkbar.click] target=launcher x={} y={}", ux, uy);
-            unsafe {
-                if !LAUNCHER_ACTIVE {
-                    serial_println!("[shell.launcher.open.start]");
-                    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_LAUNCHER,
-                        (55u64 << 32) | 80u64,
-                        (360u64 << 32) | 240u64);
-                    serial_println!("[shell.launcher.open.ok] id={:#x}", SURFACE_ID_LAUNCHER);
-                    LAUNCHER_ACTIVE = true;
-                } else {
-                    serial_println!("[shell.launcher.close.start]");
-                    pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_LAUNCHER, 0, 0);
-                    serial_println!("[shell.launcher.close.ok] id={:#x}", SURFACE_ID_LAUNCHER);
-                    LAUNCHER_ACTIVE = false;
-                }
-            }
+            unsafe { toggle_os_panel(&mut LAUNCHER_ACTIVE, SURFACE_ID_LAUNCHER, "launcher", 80, 55, 240, 360); }
             true
         }
         Action::OpenClock => {
             serial_println!("[shell.silkbar.click] target=clock x={} y={}", ux, uy);
+            unsafe { toggle_os_panel(&mut CLOCK_ACTIVE, SURFACE_ID_CLOCK, "clock", 1000, 55, 240, 300); }
             true
         }
         Action::ToggleModule(_module) => {
             serial_println!("[shell.silkbar.click] target=status x={} y={}", ux, uy);
-            unsafe {
-                if !STATUS_ACTIVE {
-                    serial_println!("[shell.status.open.start] id={:#x}", SURFACE_ID_STATUS);
-                    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATUS,
-                        (55u64 << 32) | 860u64,
-                        (300u64 << 32) | 200u64);
-                    serial_println!("[shell.status.open.ok] id={:#x}", SURFACE_ID_STATUS);
-                    STATUS_ACTIVE = true;
-                } else {
-                    serial_println!("[shell.status.close.start] id={:#x}", SURFACE_ID_STATUS);
-                    pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_STATUS, 0, 0);
-                    serial_println!("[shell.status.close.ok] id={:#x}", SURFACE_ID_STATUS);
-                    STATUS_ACTIVE = false;
-                }
-            }
+            unsafe { toggle_os_panel(&mut STATUS_ACTIVE, SURFACE_ID_STATUS, "status", 860, 55, 200, 300); }
             true
         }
     }
