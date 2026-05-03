@@ -280,27 +280,21 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
     match action {
         Action::None => false,
         Action::SwitchWorkspace(n) => {
-            // n is 1-indexed workspace number; convert to 0-indexed for silkbar
             let ws_idx = n.saturating_sub(1).min(4);
-            serial_println!("[shell.silkbar.hit] element=Workspace({})", n);
-            serial_println!("[shell.silkbar.action] SwitchWorkspace({})", n);
+            serial_println!("[shell.silkbar.click] target=workspace index={} x={} y={}", n, ux, uy);
             pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, ws_idx as u64, 0, 0);
-            serial_println!("[shell.silkbar.send.ok]");
             true
         }
         Action::OpenLauncher => {
-            serial_println!("[shell.silkbar.hit] element=Launcher");
-            serial_println!("[shell.silkbar.action] OpenLauncher");
+            serial_println!("[shell.silkbar.click] target=launcher x={} y={}", ux, uy);
             true
         }
         Action::OpenClock => {
-            serial_println!("[shell.silkbar.hit] element=Clock");
-            serial_println!("[shell.silkbar.action] OpenClock");
+            serial_println!("[shell.silkbar.click] target=clock x={} y={}", ux, uy);
             true
         }
         Action::ToggleModule(_module) => {
-            serial_println!("[shell.silkbar.hit] element=Chip");
-            serial_println!("[shell.silkbar.action] ToggleModule");
+            serial_println!("[shell.silkbar.click] target=status x={} y={}", ux, uy);
             true
         }
     }

@@ -22,6 +22,10 @@ const USB_PROOF_DISABLE_SYNTH_DRAG: bool = false;
 // Positions cursor over SURFACE_ID_LINEN (900,500,300x150), fires left click.
 // OFF by default — set false to re-run click-focus proof.
 const USB_PROOF_DISABLE_SYNTH_CLICK: bool = true;
+// SilkBar panel click proof — fires synthetic clicks on bar elements
+// (launcher, workspace, status chip, clock) to prove hit-test dispatch.
+// ON by default for this mission.
+const USB_PROOF_DISABLE_SYNTH_SILKBAR_CLICK: bool = false;
 
 #[derive(Copy, Clone)]
 struct HidPointerRawReport {
@@ -85,6 +89,7 @@ pub extern "C" fn _start() -> ! {
     let mut tick: u64 = 0;
     let mut drag_proof_stage: u8 = 0;
     let mut synth_click_stage: u8 = 0;
+    let mut silkbar_click_stage: u8 = 0;
 
     loop {
         // 0. Local USB->sexinput PDX proof path (no shell routing in this phase).
@@ -193,7 +198,77 @@ pub extern "C" fn _start() -> ! {
             drag_proof_stage = (drag_proof_stage + 1) % 3;
         }
 
-        // 4. One-shot synthetic click proof via USB mouse path.
+        // 4. Synthetic SilkBar click proof via HID_EVENT path.
+        //    Fires clicks on launcher, workspace, status chip, clock.
+        //    Resets CLICK_ACTIVE before each click to avoid drag-proof interference.
+        if !USB_PROOF_DISABLE_SYNTH_SILKBAR_CLICK {
+            match silkbar_click_stage {
+                // Reset CLICK_ACTIVE from drag proof (stage 0 at tick 0 sets left held)
+                0 if tick == 2 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
+                    silkbar_click_stage = 1;
+                }
+                // Click launcher at (100, 25)
+                1 if tick == 3 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 100, 25, EV_ABS);
+                    silkbar_click_stage = 2;
+                }
+                2 if tick == 4 => {
+                    serial_println!("[sexinput.synthetic.silkbar_click] target=launcher");
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 1, EV_BTN);
+                    silkbar_click_stage = 3;
+                }
+                3 if tick == 5 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
+                    silkbar_click_stage = 4;
+                }
+                // Click workspace 2 at (600, 25) — SwitchWorkspace(3)
+                4 if tick == 7 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 600, 25, EV_ABS);
+                    silkbar_click_stage = 5;
+                }
+                5 if tick == 8 => {
+                    serial_println!("[sexinput.synthetic.silkbar_click] target=workspace index=3");
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 1, EV_BTN);
+                    silkbar_click_stage = 6;
+                }
+                6 if tick == 9 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
+                    silkbar_click_stage = 7;
+                }
+                // Click status chip at (940, 25)
+                7 if tick == 11 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 940, 25, EV_ABS);
+                    silkbar_click_stage = 8;
+                }
+                8 if tick == 12 => {
+                    serial_println!("[sexinput.synthetic.silkbar_click] target=status");
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 1, EV_BTN);
+                    silkbar_click_stage = 9;
+                }
+                9 if tick == 13 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
+                    silkbar_click_stage = 10;
+                }
+                // Click clock at (1100, 25)
+                10 if tick == 15 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1100, 25, EV_ABS);
+                    silkbar_click_stage = 11;
+                }
+                11 if tick == 16 => {
+                    serial_println!("[sexinput.synthetic.silkbar_click] target=clock");
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 1, EV_BTN);
+                    silkbar_click_stage = 12;
+                }
+                12 if tick == 17 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
+                    silkbar_click_stage = 13;
+                }
+                _ => {}
+            }
+        }
+
+        // 5. One-shot synthetic click proof via USB mouse path.
         //    Moves cursor to (940,560) ∈ SURFACE_ID_LINEN, then clicks.
         //    Proves sexinput→shell click_focus chain.
         if !USB_PROOF_DISABLE_SYNTH_CLICK {

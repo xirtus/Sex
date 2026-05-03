@@ -408,6 +408,13 @@ When the screen is black:
     [shell.pointer.usb_state.nonzero.ok] x=767 y=487 buttons=0x0 wheel=0 dx=127 dy=127
     [shell.pointer.usb_state.nonzero.ok] x=894 y=486 buttons=0x0 wheel=0 dx=0 dy=-128
     ```
+- **SilkBar clickable controls PROVEN (SILKBAR_CLICKABLE_CONTROLS_V1, commit c5c24d8+):**
+  - Shell hit-test for panel regions using silkbar-model geometry + DEFAULT_SILK_BAR layout
+  - `[shell.silkbar.click] target=launcher/workspace/status/clock` markers
+  - Synthetic proof clicks all four target types via HID_EVENT path (ticks 2-17)
+  - Workspace clicks dispatch OP_SILKBAR_WORKSPACE_ACTIVE; others classified and logged
+  - Drag and click-focus preserved (bar at y<50, surfaces at y>=50 — no overlap)
+  - Verify: `grep "shell.silkbar.click" /tmp/silkbar-click.log`
 - **Drag-window proof PROVEN (DRAG_WINDOW_PROOF_V1, commit 04566ab+):**
   - Synthetic drag proof via HID_EVENT path (sexinput -> silk-shell)
   - `[shell.drag.start] id=100 x=200 y=200`
