@@ -14,21 +14,30 @@ impl BootInfoFrameAllocator {
         BootInfoFrameAllocator { memory_map, next: 0 }
     }
 
-    fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> {
-        let regions = self.memory_map.entries();
-        regions.iter()
-            .filter(|r| r.type_ == 0) // 0 = LIMINE_MEMMAP_USABLE
-            .map(|r| r.base..(r.base + r.length))
-            .flat_map(|r| r.step_by(4096))
-            .map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
-    }
 }
 
 unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
+    /// O(n²) BUGFIX: usable_frames().nth(self.next) regenerates the iterator every call,
+    /// causing ~2.1 billion traversals for 256 MiB heap (65536 pages) under QEMU.
+    ///
+    /// Fix: cursor-based allocation walks memory regions directly, O(num_regions) per call.
+    /// Total: ~30 regions × 65536 calls ≈ 2M operations (vs 2.1B before).
+    ///
+    /// Removed usable_frames() helper — obsolete after this fix.
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        let frame = self.usable_frames().nth(self.next);
-        self.next += 1;
-        frame
+        let regions = self.memory_map.entries();
+        let mut frame_index = 0usize;
+        for region in regions.iter().filter(|r| r.type_ == 0) {
+            let frames_in_region = (region.length / 4096) as usize;
+            if frame_index + frames_in_region > self.next {
+                let offset = self.next.saturating_sub(frame_index) as u64;
+                let phys_addr = region.base + offset * 4096;
+                self.next += 1;
+                return Some(PhysFrame::containing_address(PhysAddr::new(phys_addr)));
+            }
+            frame_index += frames_in_region;
+        }
+        None
     }
 }
 

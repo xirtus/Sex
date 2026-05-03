@@ -49,6 +49,11 @@ The `syscall` instruction strictly calculates segments. `x86_64::registers::mode
 
 ## Standing Orders for Claude Code Sessions
 
+### NEXT_BOUNDARY_HARDENING_PLAN_V1 Anti-Scope-Creep Rule
+**STOP FIRST:** Reject patches touching USB + shell + display + kernel + sex-pdx together. Any patch spanning more than two major domains must STOP FIRST before implementation.
+- Use `rg "NEXT_BOUNDARY_HARDENING_PLAN_V1|USB_BUTTON_CLICK_PROOF_V1|SHELL_FOCUS_CONTRACT_V1|SURFACE_OWNERSHIP_CONTRACT_V1|DOCK_OVERLAYBAR_MODEL_V1|BELL_CAPABILITY_ATTENTION_V1|LINEN_STATIC_SURFACE_V1" -n docs CLAUDE.md` to confirm the plan.
+- Ensure every feature proves exactly ONE boundary.
+
 ### Token Discipline
 - **Read files before searching.** If the answer is likely in a source file already
   known from this document, read that file directly. Do not web search for things
@@ -569,3 +574,30 @@ QEMU usb-mouse (boot HID, relative, 4-byte reports)
 **Cursor surface:** `SURFACE_ID_CURSOR = 0x90` (144). Created first at boot (slot 0 in SURFACES array). `draw_cursor_z_top()` renders arrow bitmap unconditionally after all other passes.
 
 **Click-focus guard:** `CLICK_ACTIVE` bool prevents repeat focus on held button. Rising edge only (button down, not held).
+
+---
+
+## Stable Baseline Reference (2026-05-03)
+
+Read `docs/handoff/STABLE_BASELINE_20260503.md` before any new feature work.
+It documents:
+- All proven features and their last verification date
+- Locked invariants (what must not be violated)
+- Known limitations (USB button proof, panel visuals)
+- Standard verification command
+- Next recommended feature order
+- Surface ID registry (0x90 cursor, 0x92-0x94 panels, 0x95 reserved, 100+ apps)
+
+**Do not skip this document.** Agents that ignore it reintroduce regressions in proven areas.
+
+## SilkBar Action Slot Expansion (2026-05-03)
+
+ABI v1→v2 expansion adds Bell module slot (index 10, between Battery and Clock, x=1020).
+Read `docs/handoff/SILKBAR_ACTION_SLOT_EXPANSION_V1.md` before adding Bell panel behavior.
+
+**Key invariants:**
+- LAYOUT_COUNT = 11 (was 10)
+- MAX_CHIPS = 4 (unchanged — Bell is a ModuleSlot, not a chip)
+- Bell hit-test → `Action::OpenBell` (no panel toggle yet)
+- Bell rendering: gold 0x00FFD700 at (1020, 18, 18, 22)
+- After this expansion is proven, BELL_PANEL_TOGGLE_V1 wires toggle_os_panel()
