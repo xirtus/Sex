@@ -26,6 +26,9 @@ const USB_PROOF_DISABLE_SYNTH_CLICK: bool = false;
 // (launcher, workspace, status chip, clock) to prove hit-test dispatch.
 // ON by default for this mission.
 const USB_PROOF_DISABLE_SYNTH_SILKBAR_CLICK: bool = false;
+// One-shot gate: set true after synthetic drag proof stages 0→1→2 complete.
+// Prevents the drag proof from wrapping and replaying endlessly every 120 ticks.
+static mut SYNTHETIC_DRAG_PROOF_DONE: bool = false;
 
 #[derive(Copy, Clone)]
 struct HidPointerRawReport {
@@ -172,8 +175,12 @@ pub extern "C" fn _start() -> ! {
 
         // 3. Deterministic synthetic drag proof (bounded):
         //    EV_ABS anchor, then BTN down -> REL move -> BTN up via normalizer.
+        //    One-shot: after stages 0→1→2 complete, SYNTHETIC_DRAG_PROOF_DONE
+        //    prevents further replay. Without this gate, drag_proof_stage wraps
+        //    with % 3 forever, causing endless drag.start/move/end cycles every
+        //    120 ticks that flood the shell and starve visual updates.
         tick = tick.wrapping_add(1);
-        if !USB_PROOF_DISABLE_SYNTH_DRAG && tick % 120 == 0 {
+        if !USB_PROOF_DISABLE_SYNTH_DRAG && !unsafe { SYNTHETIC_DRAG_PROOF_DONE } && tick % 120 == 0 {
             let report = match drag_proof_stage {
                 0 => {
                     pdx_call(SLOT_SHELL, OP_HID_EVENT, 200, 200, EV_ABS);
@@ -181,7 +188,12 @@ pub extern "C" fn _start() -> ! {
                     HidPointerRawReport { dx: 0, dy: 0, buttons: 0x01, wheel: 0 } // left down edge
                 }
                 1 => HidPointerRawReport { dx: 6, dy: 4, buttons: 0x01, wheel: 0 }, // drag move
-                _ => HidPointerRawReport { dx: 0, dy: 0, buttons: 0x00, wheel: 0 }, // left up edge
+                _ => {
+                    // Stage 2 (final): button up. Set DONE to prevent wrap/replay.
+                    unsafe { SYNTHETIC_DRAG_PROOF_DONE = true; }
+                    serial_println!("[sexinput.drag_proof.done]");
+                    HidPointerRawReport { dx: 0, dy: 0, buttons: 0x00, wheel: 0 } // left up edge
+                }
             };
 
             normalize_pointer_report_v1(report, unsafe { &mut *core::ptr::addr_of_mut!(LAST_BUTTONS) }, |arg0, arg1, arg2| {
