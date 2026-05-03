@@ -699,6 +699,15 @@ pub extern "C" fn _start() -> ! {
                         serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
                         pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
                         serial_println!("[shell.cursor_surface.move.ok]");
+                        // Budgeted diagnostic for cursor position after USB mouse report.
+                        unsafe {
+                            static mut CURSOR_MOVE_BUDGET: u32 = 16;
+                            let remaining = &mut CURSOR_MOVE_BUDGET;
+                            if *remaining > 0 {
+                                *remaining -= 1;
+                                serial_println!("[shell.cursor.move] x={} y={}", POINTER_X, POINTER_Y);
+                            }
+                        }
                         // ── USB drag movement: move focused surface by delta while button held ──
                         // clear_drag_if_dead() transitions to Idle if the drag target died,
                         // so the next `if matches!` will naturally skip movement.

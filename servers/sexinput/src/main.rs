@@ -133,6 +133,17 @@ pub extern "C" fn _start() -> ! {
                 );
                 serial_println!("[sexinput.usb_mouse.normalize.ok]");
 
+                // Budgeted diagnostic for real USB mouse deltas arriving from sexusb.
+                // Not triggered by synthetic proof paths (those send HID_EVENT directly).
+                unsafe {
+                    static mut MOUSE_REAL_DELTA_BUDGET: u32 = 16;
+                    let remaining = &mut MOUSE_REAL_DELTA_BUDGET;
+                    if *remaining > 0 {
+                        *remaining -= 1;
+                        serial_println!("[sexinput.mouse.real.delta] dx={} dy={} buttons={:#x}", dx, dy, buttons);
+                    }
+                }
+
                 serial_println!("[sexinput.usb_mouse.shell_send.start]");
                 // Proof tap for shell-side decode logging.
                 let proof_send = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, buttons as u64, packed);
