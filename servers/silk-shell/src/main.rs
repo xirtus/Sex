@@ -54,6 +54,22 @@ enum SurfaceAction {
     LegacyFocusToggle,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelKind {
+    Launcher,
+    Status,
+    Clock,
+    Bell,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InteractionState {
+    Idle,
+    ClickPending,
+    Dragging { surface_id: u64, current_x: i32, current_y: i32 },
+    PanelActive { panel: PanelKind },
+}
+
 struct DesktopPolicy {
     width: i32,
     height: i32,
@@ -180,12 +196,8 @@ static mut POINTER_Y: i32 = 0;
 static mut POINTER_BUTTONS: u8 = 0; // bitmask: bit0=left, bit1=right, bit2=middle
 static mut POINTER_WHEEL_ACCUM: i32 = 0;
 static mut POINTER_USB_STATE_INIT: bool = false;
-static mut CLICK_ACTIVE: bool = false; // edge-trigger guard: reset on left release
-static mut DRAG_ACTIVE: bool = false;  // drag in progress: set on left press over focused surface
-static mut DRAG_SURFACE_ID: u64 = 0;   // surface being dragged
-static mut LAST_DRAG_X: i32 = 0;       // pointer X at drag start/move
-static mut LAST_DRAG_Y: i32 = 0;       // pointer Y at drag start/move
-// Launcher panel toggle state
+static mut INTERACTION: InteractionState = InteractionState::Idle;
+// Panel surface-alive tracking (separate from interaction state)
 static mut LAUNCHER_ACTIVE: bool = false;
 // Status panel toggle state
 static mut STATUS_ACTIVE: bool = false;
@@ -284,12 +296,41 @@ fn is_shell_surface(sid: u64) -> bool {
     || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
 }
 
+/// Guarded transition between interaction states.
+/// Logs allowed transitions as `[shell.interaction.transition]` and
+/// forbidden transitions as `[shell.interaction.forbidden]`.
+/// Does nothing (no state change) on forbidden transitions.
+unsafe fn try_transition(next: InteractionState) {
+    let current = INTERACTION;
+    let allowed = match (current, next) {
+        // Idle → any state allowed (click, panel open)
+        (InteractionState::Idle, _) => true,
+        // ClickPending → Dragging (drag start), Idle (release), or PanelActive (silkbar panel open)
+        (InteractionState::ClickPending, InteractionState::Dragging { .. }) => true,
+        (InteractionState::ClickPending, InteractionState::Idle) => true,
+        (InteractionState::ClickPending, InteractionState::PanelActive { .. }) => true,
+        // Dragging → Idle (release)
+        (InteractionState::Dragging { .. }, InteractionState::Idle) => true,
+        // PanelActive → Idle (panel close) or ClickPending (click while panel open)
+        (InteractionState::PanelActive { .. }, InteractionState::Idle) => true,
+        (InteractionState::PanelActive { .. }, InteractionState::ClickPending) => true,
+        // All other transitions forbidden
+        _ => false,
+    };
+    if allowed {
+        serial_println!("[shell.interaction.transition] from={:?} to={:?}", current, next);
+        INTERACTION = next;
+    } else {
+        serial_println!("[shell.interaction.forbidden] from={:?} to={:?}", current, next);
+    }
+}
+
 /// Toggle an OS-owned panel surface open/closed.
 /// - If `*active` is false: creates surface `surface_id` at (x, y) with size (w, h).
 /// - If `*active` is true: destroys surface `surface_id`.
 /// Emits `[shell.{label}.open/close.start/ok] id={surface_id:#x}` markers.
 /// Preserves existing marker naming convention for all three panels.
-unsafe fn toggle_os_panel(active: &mut bool, surface_id: u64, label: &str, x: u32, y: u32, w: u32, h: u32) -> bool {
+unsafe fn toggle_os_panel(active: &mut bool, kind: PanelKind, surface_id: u64, label: &str, x: u32, y: u32, w: u32, h: u32) -> bool {
     if !*active {
         serial_println!("[shell.{}.open.start] id={:#x}", label, surface_id);
         pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
@@ -297,11 +338,13 @@ unsafe fn toggle_os_panel(active: &mut bool, surface_id: u64, label: &str, x: u3
             (h as u64) << 32 | w as u64);
         serial_println!("[shell.{}.open.ok] id={:#x}", label, surface_id);
         *active = true;
+        try_transition(InteractionState::PanelActive { panel: kind });
     } else {
         serial_println!("[shell.{}.close.start] id={:#x}", label, surface_id);
         pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
         serial_println!("[shell.{}.close.ok] id={:#x}", label, surface_id);
         *active = false;
+        try_transition(InteractionState::Idle);
     }
     true
 }
@@ -329,22 +372,22 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
         }
         Action::OpenLauncher => {
             serial_println!("[shell.silkbar.click] target=launcher x={} y={}", ux, uy);
-            unsafe { toggle_os_panel(&mut LAUNCHER_ACTIVE, SURFACE_ID_LAUNCHER, "launcher", 80, 55, 240, 360); }
+            unsafe { toggle_os_panel(&mut LAUNCHER_ACTIVE, PanelKind::Launcher, SURFACE_ID_LAUNCHER, "launcher", 80, 55, 240, 360); }
             true
         }
         Action::OpenClock => {
             serial_println!("[shell.silkbar.click] target=clock x={} y={}", ux, uy);
-            unsafe { toggle_os_panel(&mut CLOCK_ACTIVE, SURFACE_ID_CLOCK, "clock", 1000, 55, 240, 300); }
+            unsafe { toggle_os_panel(&mut CLOCK_ACTIVE, PanelKind::Clock, SURFACE_ID_CLOCK, "clock", 1000, 55, 240, 300); }
             true
         }
         Action::ToggleModule(_module) => {
             serial_println!("[shell.silkbar.click] target=status x={} y={}", ux, uy);
-            unsafe { toggle_os_panel(&mut STATUS_ACTIVE, SURFACE_ID_STATUS, "status", 860, 55, 200, 300); }
+            unsafe { toggle_os_panel(&mut STATUS_ACTIVE, PanelKind::Status, SURFACE_ID_STATUS, "status", 860, 55, 200, 300); }
             true
         }
         Action::OpenBell => {
             serial_println!("[shell.silkbar.click] target=bell x={} y={}", ux, uy);
-            unsafe { toggle_os_panel(&mut BELL_ACTIVE, SURFACE_ID_BELL, "bell", 600, 55, 240, 300); }
+            unsafe { toggle_os_panel(&mut BELL_ACTIVE, PanelKind::Bell, SURFACE_ID_BELL, "bell", 600, 55, 240, 300); }
             true
         }
     }
@@ -497,8 +540,8 @@ pub extern "C" fn _start() -> ! {
                         }
                         // Left-button down edge → click-to-focus hit-test.
                         let left_held = (buttons & 0x01) != 0;
-                        if left_held && !CLICK_ACTIVE {
-                            CLICK_ACTIVE = true;
+                        if left_held && (INTERACTION == InteractionState::Idle || matches!(INTERACTION, InteractionState::PanelActive { .. })) {
+                            try_transition(InteractionState::ClickPending);
                             serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", POINTER_X, POINTER_Y, buttons);
                             let focused = FOCUSED_SURFACE_ID;
                             if !point_in_surface(POINTER_X, POINTER_Y, focused) {
@@ -529,20 +572,19 @@ pub extern "C" fn _start() -> ! {
                             if !handle_silkbar_click(POINTER_X, POINTER_Y) && is_shell_surface(FOCUSED_SURFACE_ID)
                                 && point_in_surface(POINTER_X, POINTER_Y, FOCUSED_SURFACE_ID)
                             {
-                                DRAG_ACTIVE = true;
-                                DRAG_SURFACE_ID = FOCUSED_SURFACE_ID;
-                                LAST_DRAG_X = POINTER_X;
-                                LAST_DRAG_Y = POINTER_Y;
+                                try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: POINTER_X, current_y: POINTER_Y });
                                 serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, POINTER_X, POINTER_Y);
                             }
                         } else if !left_held {
-                            if CLICK_ACTIVE {
-                                CLICK_ACTIVE = false;
-                            }
-                            if DRAG_ACTIVE {
-                                serial_println!("[shell.drag.end] id={} x={} y={}", DRAG_SURFACE_ID, POINTER_X, POINTER_Y);
-                                DRAG_ACTIVE = false;
-                                DRAG_SURFACE_ID = 0;
+                            match INTERACTION {
+                                InteractionState::ClickPending => {
+                                    try_transition(InteractionState::Idle);
+                                }
+                                InteractionState::Dragging { surface_id, .. } => {
+                                    serial_println!("[shell.drag.end] id={} x={} y={}", surface_id, POINTER_X, POINTER_Y);
+                                    try_transition(InteractionState::Idle);
+                                }
+                                _ => {}
                             }
                         }
                         // Move cursor surface to updated pointer position.
@@ -550,7 +592,7 @@ pub extern "C" fn _start() -> ! {
                         pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
                         serial_println!("[shell.cursor_surface.move.ok]");
                         // ── USB drag movement: move focused surface by delta while button held ──
-                        if DRAG_ACTIVE {
+                        if matches!(INTERACTION, InteractionState::Dragging { .. }) {
                             let focused = FOCUSED_SURFACE_ID;
                             let mut moved = false;
                             if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
@@ -582,9 +624,7 @@ pub extern "C" fn _start() -> ! {
                             }
                             if moved {
                                 mutated = true;
-                                LAST_DRAG_X = POINTER_X;
-                                LAST_DRAG_Y = POINTER_Y;
-                                serial_println!("[shell.drag.move] id={} x={} y={} dx={} dy={}", focused, LAST_DRAG_X, LAST_DRAG_Y, dx, dy);
+                                serial_println!("[shell.drag.move] id={} x={} y={} dx={} dy={}", focused, POINTER_X, POINTER_Y, dx, dy);
                                 serial_println!("[shell.drag.send.ok] id={}", focused);
                             }
                         }
@@ -1253,7 +1293,7 @@ pub extern "C" fn _start() -> ! {
                             POINTER_Y = POINTER_Y.wrapping_add(dy);
 
                             // ── Drag movement: move focused surface by delta while button held ──
-                            if DRAG_ACTIVE {
+                            if matches!(INTERACTION, InteractionState::Dragging { .. }) {
                                 let focused = FOCUSED_SURFACE_ID;
                                 let mut moved = false;
                                 if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
@@ -1285,9 +1325,7 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 if moved {
                                     mutated = true;
-                                    LAST_DRAG_X = POINTER_X;
-                                    LAST_DRAG_Y = POINTER_Y;
-                                    serial_println!("[shell.drag.move] id={} x={} y={} dx={} dy={}", focused, LAST_DRAG_X, LAST_DRAG_Y, dx, dy);
+                                    serial_println!("[shell.drag.move] id={} x={} y={} dx={} dy={}", focused, POINTER_X, POINTER_Y, dx, dy);
                                     serial_println!("[shell.drag.send.ok] id={}", focused);
                                 }
                             }
@@ -1307,8 +1345,8 @@ pub extern "C" fn _start() -> ! {
 
                             // ── Click-to-focus: left-button press edge (0→1 transition only) ──
                             if button == 1 {
-                                if pressed && !CLICK_ACTIVE {
-                                    CLICK_ACTIVE = true;
+                                if pressed && (INTERACTION == InteractionState::Idle || matches!(INTERACTION, InteractionState::PanelActive { .. })) {
+                                    try_transition(InteractionState::ClickPending);
                                     // Hit-test in visual z-order: focused first, then reverse slot order
                                     let focused = FOCUSED_SURFACE_ID;
                                     if !point_in_surface(POINTER_X, POINTER_Y, focused) {
@@ -1333,18 +1371,19 @@ pub extern "C" fn _start() -> ! {
                                     if !handle_silkbar_click(POINTER_X, POINTER_Y) && is_shell_surface(FOCUSED_SURFACE_ID)
                                         && point_in_surface(POINTER_X, POINTER_Y, FOCUSED_SURFACE_ID)
                                     {
-                                        DRAG_ACTIVE = true;
-                                        DRAG_SURFACE_ID = FOCUSED_SURFACE_ID;
-                                        LAST_DRAG_X = POINTER_X;
-                                        LAST_DRAG_Y = POINTER_Y;
+                                        try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: POINTER_X, current_y: POINTER_Y });
                                         serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, POINTER_X, POINTER_Y);
                                     }
                                 } else if !pressed {
-                                    CLICK_ACTIVE = false;
-                                    if DRAG_ACTIVE {
-                                        serial_println!("[shell.drag.end] id={} x={} y={}", DRAG_SURFACE_ID, POINTER_X, POINTER_Y);
-                                        DRAG_ACTIVE = false;
-                                        DRAG_SURFACE_ID = 0;
+                                    match INTERACTION {
+                                        InteractionState::ClickPending => {
+                                            try_transition(InteractionState::Idle);
+                                        }
+                                        InteractionState::Dragging { surface_id, .. } => {
+                                            serial_println!("[shell.drag.end] id={} x={} y={}", surface_id, POINTER_X, POINTER_Y);
+                                            try_transition(InteractionState::Idle);
+                                        }
+                                        _ => {}
                                     }
                                 }
                             }
