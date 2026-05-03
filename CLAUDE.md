@@ -465,6 +465,7 @@ When the screen is black:
 - **Synthetic drag proof** (DRAG_WINDOW_PROOF_V1): `USB_PROOF_DISABLE_SYNTH_DRAG = false` enables the sexinput→shell→drag chain. Verified via `grep -E "shell.drag" /tmp/drag-proof.log`.
 - **Input replay storm fix** (INPUT_REPLAY_STORM_FIX_V1): Synthetic drag proof no longer wraps forever via `% 3`. One-shot gate `SYNTHETIC_DRAG_PROOF_DONE` prevents replay after stage 2. `shell.drag.start` count reduced from 50 to 1 per boot. Only `servers/sexinput/src/main.rs` changed. See `docs/handoff/INPUT_REPLAY_STORM_FIX_V1.md`.
 - **Clock freeze fallback gate** (CLOCK_FREEZE_FALLBACK_GATE_V1): SilkBar clock no longer freezes at 00:00 within 4s. Added stale-time gate in sexdisplay — `clock_from_silkbar = true` only if incoming SetClock ss ≥ fallback ss (within 30s midnight window). Removed stale initial SetClock(ss=0) from silkbar boot init. Changed `last_uptime_seconds` from `u64::MAX` to `0`. See `docs/handoff/CLOCK_FREEZE_FALLBACK_GATE_V1.md`.
+- **PDX ring overflow diagnostics** (PDX_RING_OVERFLOW_DIAGNOSTIC_V1): Refined `[silkbar.send_update.drop]` marker with `idx` and `err` fields for precision. Budget 16. Zero drops in normal boot. Diagnostics only — no ACK/retry. See `docs/handoff/PDX_RING_OVERFLOW_DIAGNOSTIC_V1.md`.
 
 **Next action — choose one:**
 1. **Physical mouse proof**: move real mouse into `SDL_VIDEO_DRIVER=x11 SEXUSB_QEMU_DEVICE=tablet ./dev.sh run` window, click twice (first click grabbed by SDL, second reaches USB tablet). Check for `buttons=0x01` and `[shell.click_focus.down/hit/send.ok]`.

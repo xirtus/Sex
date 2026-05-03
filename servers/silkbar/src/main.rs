@@ -15,7 +15,7 @@ fn send_update(update: SilkBarUpdate) {
         (update.index as u64) << 32 | update.a as u64,
         update.b as u64,
     );
-    if result.is_err() {
+    if let Err(err) = result {
         // Budgeted error diagnostic: log first 16 drops.
         unsafe {
             static mut DROP_COUNTER: u64 = 0;
@@ -25,7 +25,8 @@ fn send_update(update: SilkBarUpdate) {
             let remaining = &mut DROP_LOG_BUDGET;
             if *remaining > 0 {
                 *remaining -= 1;
-                sex_pdx::serial_println!("[silkbar.send_update.drop] kind={} count={}", update.kind, n);
+                sex_pdx::serial_println!("[silkbar.send_update.drop] kind={} idx={} err={:#x} count={}",
+                    update.kind, update.index, err, n);
             }
         }
     }
