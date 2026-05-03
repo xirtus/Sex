@@ -374,8 +374,13 @@ When the screen is black:
 
 ---
 
-## Current Status (last updated 2026-05-03 — SilkBar Contract Locked)
+## Current Status (last updated 2026-05-03 — Top-Strip Render Proof)
 
+- **Top-strip render proof live (SILK_TOP_STRIP_RENDER_PROOF_V1, commit c22afa9):**
+  - FNV-1a hash over rows 0..50 (50×w pixels) after first live render
+  - Hash printed atomically (single pdx_call) to avoid scheduler interleave
+  - Baseline hash: `0x3c8d391f6e312fca` (QEMU virtio-gpu, 1280 wide, default bar state)
+  - Verify: `grep "silk.render_proof" /tmp/silk-render-proof.log`
 - **SilkBar contract locked (SILK_DE_CONTRACT_LOCK_V1, commit 17cbbe7):**
   - `validate_silkbar_contract() -> u32` added to silkbar-model (reason code: 0=ok, 1=contract, 2=vectors)
   - Both silkbar and sexdisplay emit `[silk.contract.validate.start/ok/fail]` markers at `_start`
