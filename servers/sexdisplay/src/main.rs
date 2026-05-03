@@ -4,7 +4,7 @@
 
 use sex_pdx::serial_println;
 use silkbar_model::{SilkBar, SilkBarUpdate, UpdateKind, apply_update, DEFAULT_SILK_BAR,
-                    ChipKind, ModuleSlot, validate_silkbar_contract, SILKBAR_ABI_VERSION};
+                    DEFAULT_THEME, ChipKind, ModuleSlot, validate_silkbar_contract, SILKBAR_ABI_VERSION};
 
 const FALLBACK_PTR: u64 = 0xffff8000fd000000;
 const FALLBACK_W: u32 = 1280;
@@ -152,9 +152,9 @@ fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
         let (wx, wy, ww, wh) = module_rect(bar, *slot);
         if in_rect(x, y, wx, wy, ww, wh) {
             let ws = &bar.workspaces[idx];
-            if ws.active { return Some(0x00A8A0FF); }
-            if ws.urgent { return Some(0x00FF6666); }
-            return Some(0x00304068);
+            if ws.active { return Some(DEFAULT_THEME.active); }
+            if ws.urgent { return Some(DEFAULT_THEME.urgent); }
+            return Some(DEFAULT_THEME.muted);
         }
     }
     None
@@ -173,10 +173,10 @@ fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
             let chip = &bar.chips[idx];
             if !chip.visible { return Some(0x00102038); }
             match chip.kind {
-                ChipKind::Net     => return Some(0x004C8DFF),
+                ChipKind::Net     => return Some(DEFAULT_THEME.chip_fill),
                 ChipKind::Wifi    => return Some(0x0038D6C8),
                 ChipKind::Battery => return Some(0x00FFB84D),
-                ChipKind::Clock   => return Some(0x006F86A8),
+                ChipKind::Clock   => return Some(DEFAULT_THEME.chip_border),
             }
         }
     }
@@ -196,11 +196,11 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
         let xw = lx + lw - 2;
         let yh = ly + lh - 2;
         if x < x2 || x >= xw || y < y2 || y >= yh {
-            return 0x00385078; // low-contrast glass edge
+            return DEFAULT_THEME.panel_glow; // low-contrast glass edge
         }
         return 0x0070CCFF; // cyan launcher dot
     }
-    0x00182040 // deep blue-violet glass bar default
+    DEFAULT_THEME.panel_fill // deep blue-violet glass bar default
 }
 
 // 5×7 bitmap glyphs for digits 0-9 (MSB = leftmost pixel)
@@ -222,7 +222,7 @@ const FONT: [[u8; 7]; 10] = [
 /// This is called inline during rendering to avoid a separate overlay pass
 /// that would create a tear window between bar-fill and clock-overlay.
 fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
-    const CLOCK_FG: u32 = 0x00C8D8FF;
+    const CLOCK_FG: u32 = DEFAULT_THEME.text;
     let (cx, cy, _, _) = module_rect(bar, ModuleSlot::Clock);
     let cx = cx;
     let cy = cy + 1; // slight inset into chip area
@@ -305,7 +305,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                     bar_color(x, y, bar)
                 }
             } else if y == 50 {
-                0x00385078 // low-contrast bar edge
+                DEFAULT_THEME.panel_glow // low-contrast bar edge
             } else {
                 composite_pixel(x, y, w, h, bg(y), focused_id)
             };
@@ -342,7 +342,7 @@ fn redraw_clock_only(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                     bar_color(x, y, bar)
                 }
             } else {
-                0x00385078
+                DEFAULT_THEME.panel_glow
             };
             let idx = y * w + x;
             if idx < total_pixels {
@@ -367,7 +367,7 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
     for y in 50..h {
         for x in 0..w {
             let c: u32 = if y == 50 {
-                0x00385078 // low-contrast bar edge
+                DEFAULT_THEME.panel_glow // low-contrast bar edge
             } else {
                 composite_pixel(x, y, w, h, bg(y), focused_id)
             };
