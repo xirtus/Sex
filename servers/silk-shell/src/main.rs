@@ -1664,6 +1664,26 @@ fn atlas_card_pos(scene_idx: usize, cw: u32) -> (i32, i32, u32, u32) {
     (x, y, card_w, card_h)
 }
 
+/// Hit-test Atlas scene cards at screen position (px, py).
+/// Returns the scene index (0..4) if the point is within a card,
+/// or None if the click misses all cards.
+/// Coordinate conversion: overlay surface starts at y=P.bar_height,
+/// and atlas_card_pos() returns positions relative to the overlay.
+fn atlas_scene_at_point(px: i32, py: i32) -> Option<u8> {
+    let cw = P.width as u32;
+    let local_y = py - P.bar_height;
+    if cw == 0 || local_y < 0 { return None; }
+    for scene_idx in 0..ATLAS_MAX_SCENES {
+        let (cx, cy, card_w, card_h) = atlas_card_pos(scene_idx, cw);
+        if px >= cx && px < cx + card_w as i32
+            && local_y >= cy && local_y < cy + card_h as i32
+        {
+            return Some(scene_idx as u8);
+        }
+    }
+    None
+}
+
 /// Render Atlas overview using existing 0xEC/0xEF/0xEE protocol.
 /// Creates a shell-owned overlay surface and draws scene cards as fill rects.
 /// No sexdisplay changes, no new ABI, no thumbnails.
@@ -3553,6 +3573,38 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
 /// Emits [shell.frame.rim.drag.start] for rim drag, [shell.frame.chrome.capture] for other chrome.
 unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
+    // ── Atlas intercept: if Atlas mode is enabled, hit-test scene cards ──
+    // Consumes all clicks while Atlas is open — hits switch scene and exit,
+    // misses keep Atlas open. No SilkBar or frame chrome interaction in Atlas mode.
+    if ATLAS_MODE_ENABLED {
+        if let Some(scene_idx) = atlas_scene_at_point(px, py) {
+            // Hit a scene card: destroy overlay, switch to scene, exit Atlas.
+            pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_ATLAS_OVERLAY, 0, 0);
+            let already_active = scene_idx == ACTIVE_SCENE_IDX;
+            if !already_active {
+                switch_scene(scene_idx);
+            } else {
+                // Clicked active scene card: restore normal rendering without switching.
+                sync_scene_visibility();
+                clear_focus_if_dead();
+                clear_drag_if_dead();
+                clear_hover_if_wrong_scene();
+                tile_visible_frames();
+                snap_capture_layout();
+            }
+            ATLAS_MODE_ENABLED = false;
+            static mut ATLAS_SELECT_BUDGET: u32 = 4;
+            let b = &mut ATLAS_SELECT_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.atlas.select] id={}", scene_idx); }
+            return (HitTarget::None, true);
+        } else {
+            // Click missed all cards — keep Atlas open, consume click.
+            static mut ATLAS_MISS_BUDGET: u32 = 4;
+            let b = &mut ATLAS_MISS_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.atlas.miss]"); }
+            return (HitTarget::None, true);
+        }
+    }
     let target = hit_test_at(px, py);
     match target {
         HitTarget::Surface(sid) => {
