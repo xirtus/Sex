@@ -475,6 +475,52 @@ unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
     }
 }
 
+/// Perform hit-test at (px, py) and update focus if a different surface is hit.
+/// Priority order: SilkBar chrome → focused surface → z-order fallback.
+/// Returns (hit_id, silkbar_handled) where hit_id=0 if no surface, silkbar_handled=true
+/// if SilkBar chrome consumed the click (drag is skipped in that case).
+/// Emits [shell.click_focus.down/hit/miss] markers using the given buttons_val.
+/// Caller must have already transitioned to ClickPending before calling.
+unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (u64, bool) {
+    serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
+    let focused = FOCUSED_SURFACE_ID;
+    let mut hit_id = 0u64;
+    if !point_in_surface(px, py, focused) {
+        let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
+                       SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
+        for &sid in &z_order {
+            if sid == focused { continue; }
+            if !surface_is_alive(sid) {
+                serial_println!("[shell.hit_test.skip] id={} reason=dead", sid);
+                continue;
+            }
+            if point_in_surface(px, py, sid) {
+                hit_id = sid;
+                break;
+            }
+        }
+        if hit_id != 0 {
+            serial_println!("[shell.click_focus.hit] id={}", hit_id);
+            serial_println!("[shell.click_focus.send.start] id={}", hit_id);
+            try_set_focus(hit_id);
+            serial_println!("[shell.click_focus.send.ok] id={}", hit_id);
+        } else {
+            serial_println!("[shell.click_focus.miss]");
+        }
+    } else {
+        serial_println!("[shell.click_focus.hit] id={}", focused);
+    }
+    // SilkBar intercept: if pointer is in top strip, handle and skip drag
+    let silkbar_handled = handle_silkbar_click(px, py);
+    if !silkbar_handled && is_shell_surface(FOCUSED_SURFACE_ID)
+        && point_in_surface(px, py, FOCUSED_SURFACE_ID)
+    {
+        try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: px, current_y: py });
+        serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, px, py);
+    }
+    (hit_id, silkbar_handled)
+}
+
 /// Toggle an OS-owned panel surface open/closed.
 /// - If `*active` is false: creates surface `surface_id` at (x, y) with size (w, h).
 /// - If `*active` is true: destroys surface `surface_id`.
@@ -697,48 +743,8 @@ pub extern "C" fn _start() -> ! {
                         let left_held = (buttons & 0x01) != 0;
                         if left_held && (INTERACTION == InteractionState::Idle || matches!(INTERACTION, InteractionState::PanelActive { .. })) {
                             try_transition(InteractionState::ClickPending);
-                            serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", POINTER_X, POINTER_Y, buttons);
                             let focused = FOCUSED_SURFACE_ID;
-                            let mut hit_id = 0u64;
-                            if !point_in_surface(POINTER_X, POINTER_Y, focused) {
-                                let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
-                                               SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
-                                for &sid in z_order.iter() {
-                                    if sid == focused { continue; }
-                                    if !surface_is_alive(sid) { continue; }
-                                    if point_in_surface(POINTER_X, POINTER_Y, sid) {
-                                        hit_id = sid;
-                                        break;
-                                    }
-                                }
-                                if hit_id != 0 {
-                                    serial_println!("[shell.click_focus.hit] id={}", hit_id);
-                                    serial_println!("[shell.click_focus.send.start] id={}", hit_id);
-                                    try_set_focus(hit_id);
-                                    serial_println!("[shell.click_focus.send.ok] id={}", hit_id);
-                                    // Budgeted real-click focus confirmation.
-                                    unsafe {
-                                        static mut CLICK_REAL_FOCUS_BUDGET: u32 = 8;
-                                        let rem = &mut CLICK_REAL_FOCUS_BUDGET;
-                                        if *rem > 0 {
-                                            *rem -= 1;
-                                            serial_println!("[shell.click.real.focus.ok] id={}", hit_id);
-                                        }
-                                    }
-                                } else {
-                                    serial_println!("[shell.click_focus.miss]");
-                                }
-                            } else {
-                                serial_println!("[shell.click_focus.hit] id={}", focused);
-                            }
-                            // SilkBar intercept: if pointer is in top strip, handle and skip drag
-                            let silkbar_handled = handle_silkbar_click(POINTER_X, POINTER_Y);
-                            if !silkbar_handled && is_shell_surface(FOCUSED_SURFACE_ID)
-                                && point_in_surface(POINTER_X, POINTER_Y, FOCUSED_SURFACE_ID)
-                            {
-                                try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: POINTER_X, current_y: POINTER_Y });
-                                serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, POINTER_X, POINTER_Y);
-                            }
+                            let (hit_id, silkbar_handled) = click_hit_test_and_focus(POINTER_X, POINTER_Y, buttons);
                             // Budgeted real-click target marker.
                             // Fires for OP_USB_MOUSE_REPORT path (real USB + synthetic click-focus proof).
                             // Budget 16: synthetic proof consumes ~1 slot, real clicks use the rest.
@@ -1508,49 +1514,8 @@ pub extern "C" fn _start() -> ! {
                             if button == 1 {
                                 if pressed && (INTERACTION == InteractionState::Idle || matches!(INTERACTION, InteractionState::PanelActive { .. })) {
                                     try_transition(InteractionState::ClickPending);
-                                    // Hit-test in visual z-order: focused first, then reverse slot order
                                     let focused = FOCUSED_SURFACE_ID;
-                                    let mut hit_id = 0u64;
-                                    serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", POINTER_X, POINTER_Y, POINTER_BUTTONS);
-                                    if !point_in_surface(POINTER_X, POINTER_Y, focused) {
-                                        let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
-                                                       SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
-                                        for &sid in &z_order {
-                                            if sid == focused { continue; }
-                                            if !surface_is_alive(sid) { continue; }
-                                            if point_in_surface(POINTER_X, POINTER_Y, sid) {
-                                                hit_id = sid;
-                                                break;
-                                            }
-                                        }
-                                        if hit_id != 0 {
-                                            serial_println!("[shell.click_focus.hit] id={}", hit_id);
-                                            serial_println!("[shell.click_focus.send.start] id={}", hit_id);
-                                            try_set_focus(hit_id);
-                                            serial_println!("[shell.click_focus.send.ok] id={}", hit_id);
-                                            // Budgeted real-click focus confirmation.
-                                            unsafe {
-                                                static mut CLICK_REAL_FOCUS_BUDGET_BTN: u32 = 8;
-                                                let rem = &mut CLICK_REAL_FOCUS_BUDGET_BTN;
-                                                if *rem > 0 {
-                                                    *rem -= 1;
-                                                    serial_println!("[shell.click.real.focus.ok] id={}", hit_id);
-                                                }
-                                            }
-                                        } else {
-                                            serial_println!("[shell.click_focus.miss]");
-                                        }
-                                    } else {
-                                        serial_println!("[shell.click_focus.hit] id={}", focused);
-                                    }
-                                    // SilkBar intercept: if pointer is in top strip, handle and skip drag
-                                    let silkbar_handled = handle_silkbar_click(POINTER_X, POINTER_Y);
-                                    if !silkbar_handled && is_shell_surface(FOCUSED_SURFACE_ID)
-                                        && point_in_surface(POINTER_X, POINTER_Y, FOCUSED_SURFACE_ID)
-                                    {
-                                        try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: POINTER_X, current_y: POINTER_Y });
-                                        serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, POINTER_X, POINTER_Y);
-                                    }
+                                    let (hit_id, silkbar_handled) = click_hit_test_and_focus(POINTER_X, POINTER_Y, POINTER_BUTTONS);
                                     // Budgeted real-click target marker.
                                     // Fires for HID EV_BTN path (real USB buttons + synthetic drag proof).
                                     unsafe {
