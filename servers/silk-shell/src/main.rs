@@ -47,8 +47,10 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 //   0x92  launcher panel
 //   0x93  status/quick-settings panel
 //   0x94  clock panel
-//   0x95  reserved (Bell panel)
+//   0x95  bell panel
+//   0x96  scene settings panel
 //   100+  app surfaces (SURFACE_ID_APP, SURFACE_ID_STATIC, etc.)
+pub const SURFACE_ID_SCENE_SETTINGS: u64 = 0x96;
 pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 
 // ── Scene Render Token presets ────────────────────────────────────────────────
@@ -354,6 +356,7 @@ enum SurfaceAction {
     RecreateFocused,
     RestoreMinimized,
     ToggleTopBar,
+    ToggleSceneSettingsPanel,
     CycleRenderTokenPreset,
     CycleCustomTint,
     ResetAll,
@@ -369,6 +372,7 @@ enum PanelKind {
     Status,
     Clock,
     Bell,
+    Settings,
 }
 
 /// Typed result of a hit-test. Distinguishes app surfaces from chrome elements
@@ -444,6 +448,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x3E => Some(SurfaceAction::ToggleTopBar),           // F4
         0x3F => Some(SurfaceAction::CycleRenderTokenPreset), // F5
         0x40 => Some(SurfaceAction::CycleCustomTint),        // F6
+        0x41 => Some(SurfaceAction::ToggleSceneSettingsPanel), // F7
         0x3B => Some(SurfaceAction::LegacyFocusToggle),
         0x47 => Some(SurfaceAction::SnapHome),
         0x4F => Some(SurfaceAction::SnapEnd),
@@ -659,6 +664,13 @@ static mut STATUS_ACTIVE: bool = false;
 static mut CLOCK_ACTIVE: bool = false;
 // Bell panel toggle state
 static mut BELL_ACTIVE: bool = false;
+// Scene Settings panel toggle state
+static mut SCENE_SETTINGS_ACTIVE: bool = false;
+// Scene Settings panel geometry (static position, no text labels in V1)
+const SCENE_SETTINGS_PANEL_X: u32 = 870;
+const SCENE_SETTINGS_PANEL_Y: u32 = 60;
+const SCENE_SETTINGS_PANEL_W: u32 = 340;
+const SCENE_SETTINGS_PANEL_H: u32 = 280;
 // Linen surface 200 position tracking (stable — linen never moves)
 static mut SURFACE_200_X: i32 = 900;
 static mut SURFACE_200_Y: i32 = 500;
@@ -780,6 +792,7 @@ fn surface_is_alive(sid: u64) -> bool {
         SURFACE_ID_STATUS   => unsafe { STATUS_ACTIVE },
         SURFACE_ID_CLOCK    => unsafe { CLOCK_ACTIVE },
         SURFACE_ID_BELL     => unsafe { BELL_ACTIVE },
+        SURFACE_ID_SCENE_SETTINGS => unsafe { SCENE_SETTINGS_ACTIVE },
         _ => {
             serial_println!("[shell.surface.unknown.reject] surface_is_alive id={}", sid);
             false
@@ -912,7 +925,8 @@ unsafe fn is_closeable_surface(surface_id: u64) -> bool {
     match surface_id {
         SURFACE_ID_LINEN | SURFACE_ID_CURSOR
         | SURFACE_ID_LAUNCHER | SURFACE_ID_STATUS
-        | SURFACE_ID_CLOCK | SURFACE_ID_BELL => false,
+        | SURFACE_ID_CLOCK | SURFACE_ID_BELL
+        | SURFACE_ID_SCENE_SETTINGS => false,
         _ => surface_is_alive(surface_id),
     }
 }
@@ -2091,6 +2105,35 @@ unsafe fn toggle_os_panel(active: &mut bool, kind: PanelKind, surface_id: u64, l
     true
 }
 
+/// Toggle the Scene Settings quick panel (surface 0x96) via F7.
+/// Reuses the same 0xEC/0xEE show/hide pattern as OS panels.
+/// No text labels in V1 — shaped/colored rect affordances only.
+unsafe fn toggle_scene_settings_panel() {
+    // Budgeted marker for panel toggle
+    static mut PANEL_BUDGET: u32 = 16;
+    let budget = &mut PANEL_BUDGET;
+
+    if !SCENE_SETTINGS_ACTIVE {
+        serial_println!("[shell.scene.settings.panel.open.start] id={:#x}", SURFACE_ID_SCENE_SETTINGS);
+        pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_SCENE_SETTINGS,
+            (SCENE_SETTINGS_PANEL_Y as u64) << 32 | SCENE_SETTINGS_PANEL_X as u64,
+            (SCENE_SETTINGS_PANEL_H as u64) << 32 | SCENE_SETTINGS_PANEL_W as u64);
+        serial_println!("[shell.scene.settings.panel.open.ok] id={:#x}", SURFACE_ID_SCENE_SETTINGS);
+        SCENE_SETTINGS_ACTIVE = true;
+        try_transition(InteractionState::PanelActive { panel: PanelKind::Settings });
+    } else {
+        serial_println!("[shell.scene.settings.panel.close.start] id={:#x}", SURFACE_ID_SCENE_SETTINGS);
+        pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_SCENE_SETTINGS, 0, 0);
+        serial_println!("[shell.scene.settings.panel.close.ok] id={:#x}", SURFACE_ID_SCENE_SETTINGS);
+        SCENE_SETTINGS_ACTIVE = false;
+        try_transition(InteractionState::Idle);
+    }
+    if *budget > 0 {
+        *budget -= 1;
+        serial_println!("[shell.scene.settings.panel] visible={}", SCENE_SETTINGS_ACTIVE as u8);
+    }
+}
+
 /// Handle a left-click within the SilkBar top strip (y < 50).
 /// Uses hit_test_action() from silkbar-model to determine what was clicked,
 /// then dispatches the action (workspace switch, launcher, etc.).
@@ -2594,6 +2637,11 @@ pub extern "C" fn _start() -> ! {
                                         if toggle_top_bar_for_active_frame() {
                                             mutated = true;
                                         }
+                                    }
+
+                                    SurfaceAction::ToggleSceneSettingsPanel => {
+                                        mutated = true;
+                                        unsafe { toggle_scene_settings_panel(); }
                                     }
 
                                     SurfaceAction::CycleRenderTokenPreset => {
