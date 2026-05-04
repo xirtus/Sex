@@ -33,6 +33,15 @@ const CMD_TOGGLE_TOP_BAR: u64 = 6;
 const CMD_SET_ACCESSIBILITY: u64 = 7;
 const CMD_RESET_DEFAULTS: u64 = 8;
 
+// Scene Settings protocol synthetic proof gate.
+// Build with SEXOS_SCENE_SETTINGS_PROTOCOL_PROOF=1 to enable.
+// Default (unset): zero behavior change.
+const SCENE_SETTINGS_PROTOCOL_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SCENE_SETTINGS_PROTOCOL_PROOF").is_some();
+
+/// Synthetic proof stage counter. Advances 0..4 then stops forever.
+static mut SCENE_SETTINGS_PROTOCOL_PROOF_STAGE: u8 = 0;
+
 // Well-known key ID for scene appearance settings blob.
 const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
 
@@ -641,6 +650,8 @@ struct ShellFrame {
     tab_count: u8,
     /// Fixed-size tab array. Unused entries are None.
     tabs: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize],
+    /// The workspace/scene this frame belongs to.
+    scene_id: u8,
     /// Reserved for future flags (split orientation, pinned state, etc.).
     flags: u32,
     /// Saved normal (pre-zoom) geometry. Valid when FRAME_FLAG_ZOOMED is set.
@@ -728,6 +739,13 @@ static mut HOVER_KIND: u32 = HOVER_NONE;
 static mut HOVERED_FRAME_LIGHT: u32 = FRAME_LIGHT_NONE;
 static mut FOCUS_ID: u64 = 0;
 static mut FOCUSED_SURFACE_ID: u64 = SURFACE_ID_APP;
+/// Active workspace/scene index (0..WORKSPACE_COUNT-1).
+static mut ACTIVE_SCENE_IDX: u8 = 0;
+/// Bounded tombstone list for recently-closed surface IDs.
+/// Prevents immediate reuse of freed IDs. Circular insertion.
+static mut TOMBSTONES: [u64; 8] = [0; 8];
+static mut TOMBSTONE_NEXT: usize = 0;
+static mut TOMBSTONE_COUNT: usize = 0;
 static mut SURFACE_100_ALIVE: bool = true;
 static mut SURFACE_101_ALIVE: bool = true;
 static mut SURFACE_101_X: i32 = 180;
@@ -905,6 +923,29 @@ fn surface_is_alive(sid: u64) -> bool {
     }
 }
 
+/// Record a surface ID as permanently closed. Prevents immediate reuse
+/// via tombstone checks in focus/drag/hover paths.
+/// Circular buffer: oldest entry dropped when full.
+unsafe fn tombstone_surface(sid: u64) {
+    let idx = TOMBSTONE_NEXT;
+    TOMBSTONES[idx] = sid;
+    TOMBSTONE_NEXT = (idx + 1) % TOMBSTONES.len();
+    if TOMBSTONE_COUNT < TOMBSTONES.len() {
+        TOMBSTONE_COUNT += 1;
+    }
+}
+
+/// Returns true if `sid` is in the tombstone set (recently closed, must
+/// not be focused, dragged, hovered, or restored as live).
+unsafe fn is_tombstoned(sid: u64) -> bool {
+    for i in 0..TOMBSTONE_COUNT {
+        if TOMBSTONES[i] == sid {
+            return true;
+        }
+    }
+    false
+}
+
 /// Budget for [shell.surface.focus.accept] and [shell.surface.focus.fallback]
 /// markers. Hot-path accept markers are budgeted; reject/dead markers stay unbudgeted.
 static SURFACE_FOCUS_ACCEPT_BUDGET: core::sync::atomic::AtomicU32 =
@@ -959,6 +1000,79 @@ fn is_focusable_surface(sid: u64) -> bool {
     sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
     || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
     || sid == SURFACE_ID_LINEN
+}
+
+// ── Scene / Workspace Helpers ──────────────────────────────────────────────────
+/// Return true if the given surface belongs to the active scene.
+/// Surfaces with no frame association (panels, cursor) always pass.
+unsafe fn surface_in_active_scene(sid: u64) -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            for tab in frame.tabs.iter() {
+                if let Some(t) = tab {
+                    if t.surface_id == sid {
+                        return frame.scene_id == ACTIVE_SCENE_IDX;
+                    }
+                }
+            }
+        }
+    }
+    true // surface not found in any frame (panels/cursor) → visible
+}
+
+/// If the focused surface belongs to a frame in a non-active scene,
+/// clear focus to a surface in the active scene.
+unsafe fn clear_focus_if_wrong_scene() {
+    let focused = FOCUSED_SURFACE_ID;
+    if focused != 0 && !surface_in_active_scene(focused) {
+        serial_println!("[shell.scene.focus.clear.wrong-scene] id={}", focused);
+        // Try to focus the first alive surface in the active scene.
+        let mut found = false;
+        for f in FRAMES.iter() {
+            if let Some(frame) = f {
+                if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
+                if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
+                    if surface_is_alive(tab.surface_id) && !is_tombstoned(tab.surface_id) {
+                        if try_set_focus(tab.surface_id) {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if !found {
+            try_set_focus(0);
+            serial_println!("[shell.scene.focus.clear.none]");
+        }
+    }
+}
+
+/// Hide surfaces belonging to non-active scenes, show surfaces belonging
+/// to the active scene. Called after ACTIVE_SCENE_IDX changes.
+unsafe fn sync_scene_visibility() {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            let in_active = frame.scene_id == ACTIVE_SCENE_IDX;
+            for tab in frame.tabs.iter() {
+                if let Some(t) = tab {
+                    let sid = t.surface_id;
+                    if surface_is_alive(sid) && in_active {
+                        // Re-activate surface on display.
+                        let bounds = get_surface_bounds(sid);
+                        if let Some((rx, ry, rw, rh)) = bounds {
+                            pdx_call(SLOT_DISPLAY, 0xEC, sid,
+                                (ry as u64) << 32 | rx as u64,
+                                (rh as u64) << 32 | rw as u64);
+                        }
+                    } else if surface_is_alive(sid) && !in_active {
+                        // Hide surface on display.
+                        pdx_call(SLOT_DISPLAY, 0xEE, sid, 0, 0);
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ── Frame Chrome Query Helpers ─────────────────────────────────────────────────
@@ -1051,6 +1165,7 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
         SURFACE_ID_TEST4  => SURFACE_103_ALIVE = false,
         _ => return false, // unknown or non-closeable surface
     }
+    tombstone_surface(surface_id);
     pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
     // Focus fallback: if the closed surface was focused, clear_focus_if_dead
     // will auto-switch to the next alive surface in z-order.
@@ -1789,6 +1904,10 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         serial_println!("[shell.focus.reject.dead] id={}", sid);
         return false;
     }
+    if is_tombstoned(sid) {
+        serial_println!("[shell.focus.reject.tombstoned] id={}", sid);
+        return false;
+    }
     FOCUSED_SURFACE_ID = sid;
     serial_println!("[shell.focus.set] id={}", sid);
     pdx_call(SLOT_DISPLAY, 0xED, sid, 0, 0);
@@ -2258,6 +2377,18 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
             let ws_idx = n.saturating_sub(1).min(4);
             serial_println!("[shell.silkbar.click] target=workspace index={} x={} y={}", n, ux, uy);
             pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, ws_idx as u64, 0, 0);
+            unsafe {
+                let prev = ACTIVE_SCENE_IDX;
+                if prev != ws_idx as u8 {
+                    ACTIVE_SCENE_IDX = ws_idx as u8;
+                    sync_scene_visibility();
+                    clear_focus_if_wrong_scene();
+                    clear_drag_if_dead();
+                    static mut SCENE_SWITCH_BUDGET: u32 = 8;
+                    let b = &mut SCENE_SWITCH_BUDGET;
+                    if *b > 0 { *b -= 1; serial_println!("[shell.scene.switch] from={} to={}", prev, ACTIVE_SCENE_IDX); }
+                }
+            }
             true
         }
         Action::OpenLauncher => {
@@ -2327,6 +2458,7 @@ pub extern "C" fn _start() -> ! {
                 Some(ShellTab { surface_id: SURFACE_ID_STATIC, title_id: 0, flags: 0 }),
                 None, None, None, None, None, None,
             ],
+            scene_id: 0,
             flags: FRAME_FLAG_TOP_BAR, // top bar ON by default
             normal_x: boot_x,
             normal_y: boot_y,
@@ -2428,6 +2560,27 @@ pub extern "C" fn _start() -> ! {
         if !SHELL_USB_MOUSE_RECEIVE_UNPARK_PROOF_V1 {
             core::hint::spin_loop();
             continue;
+        }
+
+        // ── Scene Settings Protocol synthetic proof ──
+        if SCENE_SETTINGS_PROTOCOL_PROOF_ENABLED {
+            unsafe {
+                let stage = SCENE_SETTINGS_PROTOCOL_PROOF_STAGE;
+                if stage < 5 {
+                    SCENE_SETTINGS_PROTOCOL_PROOF_STAGE = stage + 1;
+                    serial_println!("[shell.scene.settings.cmd.proof] stage={}", stage);
+                    match stage {
+                        0 => handle_scene_settings_cmd(CMD_SET_PRESET, 1, 0),
+                        1 => handle_scene_settings_cmd(CMD_CYCLE_TINT, 0, 0),
+                        2 => handle_scene_settings_cmd(CMD_TOGGLE_TOP_BAR, 0, 0),
+                        3 => handle_scene_settings_cmd(CMD_RESET_DEFAULTS, 0, 0),
+                        4 => handle_scene_settings_cmd(99, 0, 0),
+                        _ => {}
+                    }
+                    sys_yield();
+                    continue;
+                }
+            }
         }
 
         let mut mutated = false;
@@ -2658,6 +2811,7 @@ pub extern "C" fn _start() -> ! {
                                             serial_println!("[silk-shell] Destroyed surface 103");
                                         }
                                         if destroyed {
+                                            tombstone_surface(target);
                                             if target == SURFACE_ID_APP {
                                                 if SURFACE_101_ALIVE && try_set_focus(SURFACE_ID_STATIC) { serial_println!("[silk-shell] Auto-switched focus to surface 101"); }
                                                 else if SURFACE_102_ALIVE && try_set_focus(SURFACE_ID_TEST3) { serial_println!("[silk-shell] Auto-switched focus to surface 102"); }
