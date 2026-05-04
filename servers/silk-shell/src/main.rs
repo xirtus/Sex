@@ -1262,6 +1262,238 @@ unsafe fn sync_scene_visibility() {
     }
 }
 
+// ── Scene Shortcut Command Helpers (SCENE_SHORTCUTS_V1) ─────────────────────
+// These are deterministic command-level helpers for scene/frame/tab actions,
+// callable from key bindings, synthetic input, or existing code paths.
+// They use only the existing Scene/Frame/Tab model — no new IPC, no kernel changes.
+
+/// Maximum workspace/scene count (0..WORKSPACE_COUNT-1).
+const WORKSPACE_COUNT: u8 = 5;
+
+/// Switch active scene to a specific index. Safe: clamps to WORKSPACE_COUNT-1.
+/// Calls sync_scene_visibility(), clears focus/drag/hover, re-tiles visible frames.
+unsafe fn switch_scene(scene_idx: u8) {
+    let idx = scene_idx.min(WORKSPACE_COUNT - 1);
+    if idx == ACTIVE_SCENE_IDX { return; }
+    let prev = ACTIVE_SCENE_IDX;
+    ACTIVE_SCENE_IDX = idx;
+    sync_scene_visibility();
+    clear_focus_if_wrong_scene();
+    clear_drag_if_dead();
+    clear_hover_if_wrong_scene();
+    tile_visible_frames();
+    snap_capture_layout();
+    static mut SCENE_SWITCH_SHORTCUT_BUDGET: u32 = 4;
+    let b = &mut SCENE_SWITCH_SHORTCUT_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.scene.shortcut.switch] from={} to={}", prev, ACTIVE_SCENE_IDX); }
+}
+
+/// Advance to the next workspace (wraps around).
+unsafe fn next_scene() {
+    let next = (ACTIVE_SCENE_IDX + 1) % WORKSPACE_COUNT;
+    switch_scene(next);
+}
+
+/// Go to the previous workspace (wraps around).
+unsafe fn prev_scene() {
+    let prev = if ACTIVE_SCENE_IDX == 0 { WORKSPACE_COUNT - 1 } else { ACTIVE_SCENE_IDX - 1 };
+    switch_scene(prev);
+}
+
+/// Find the first non-minimized frame in the active scene, optionally starting
+/// from `start_frame_id` (exclusive, wrapping). Used by next/prev frame helpers.
+/// Returns None if no valid frame exists in the active scene.
+unsafe fn next_frame_in_scene(start_frame_id: u32, forward: bool) -> Option<u32> {
+    let mut best: Option<u32> = None;
+    if forward {
+        // Find the next frame after start_frame_id (wrapping to 0).
+        for f in FRAMES.iter() {
+            if let Some(frame) = f {
+                if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
+                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
+                if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
+                    if !surface_is_alive(tab.surface_id) { continue; }
+                    if is_tombstoned(tab.surface_id) { continue; }
+                } else { continue; }
+                if frame.frame_id <= start_frame_id { continue; }
+                if best.map_or(true, |b| frame.frame_id < b) {
+                    best = Some(frame.frame_id);
+                }
+            }
+        }
+        // Wrap: if no frame after start, try from the beginning.
+        if best.is_none() {
+            for f in FRAMES.iter() {
+                if let Some(frame) = f {
+                    if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
+                    if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
+                    if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
+                        if !surface_is_alive(tab.surface_id) { continue; }
+                        if is_tombstoned(tab.surface_id) { continue; }
+                    } else { continue; }
+                    if frame.frame_id >= start_frame_id { continue; }
+                    if best.map_or(true, |b| frame.frame_id < b) {
+                        best = Some(frame.frame_id);
+                    }
+                }
+            }
+        }
+    } else {
+        // Find the previous frame before start_frame_id (wrapping to end).
+        for f in FRAMES.iter() {
+            if let Some(frame) = f {
+                if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
+                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
+                if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
+                    if !surface_is_alive(tab.surface_id) { continue; }
+                    if is_tombstoned(tab.surface_id) { continue; }
+                } else { continue; }
+                if frame.frame_id >= start_frame_id { continue; }
+                if best.map_or(true, |b| frame.frame_id > b) {
+                    best = Some(frame.frame_id);
+                }
+            }
+        }
+        // Wrap: if no frame before start, try from the end.
+        if best.is_none() {
+            for f in FRAMES.iter() {
+                if let Some(frame) = f {
+                    if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
+                    if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
+                    if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
+                        if !surface_is_alive(tab.surface_id) { continue; }
+                        if is_tombstoned(tab.surface_id) { continue; }
+                    } else { continue; }
+                    if frame.frame_id <= start_frame_id { continue; }
+                    if best.map_or(true, |b| frame.frame_id > b) {
+                        best = Some(frame.frame_id);
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+/// Move focus to the next non-minimized frame in the active scene (wrapping).
+unsafe fn focus_next_frame() {
+    let current_fid = selected_frame_id().unwrap_or(0);
+    if let Some(next_fid) = next_frame_in_scene(current_fid, true) {
+        if let Some(sid) = active_surface_for_frame(next_fid) {
+            if try_set_focus(sid) {
+                static mut FOCUS_NEXT_FRAME_BUDGET: u32 = 4;
+                let b = &mut FOCUS_NEXT_FRAME_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[shell.shortcut.focus_next_frame] frame={}", next_fid); }
+            }
+        }
+    }
+}
+
+/// Move focus to the previous non-minimized frame in the active scene (wrapping).
+unsafe fn focus_prev_frame() {
+    let current_fid = selected_frame_id().unwrap_or(MAX_FRAMES as u32);
+    if let Some(prev_fid) = next_frame_in_scene(current_fid, false) {
+        if let Some(sid) = active_surface_for_frame(prev_fid) {
+            if try_set_focus(sid) {
+                static mut FOCUS_PREV_FRAME_BUDGET: u32 = 4;
+                let b = &mut FOCUS_PREV_FRAME_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[shell.shortcut.focus_prev_frame] frame={}", prev_fid); }
+            }
+        }
+    }
+}
+
+/// Switch to the next tab in the focused frame (wraps around).
+/// Does nothing if only one tab is present.
+unsafe fn focus_next_tab() {
+    let fid = match selected_frame_id() {
+        Some(f) => f,
+        None => return,
+    };
+    let frame = match FRAMES.iter().find_map(|f| {
+        if let Some(fr) = f { if fr.frame_id == fid { Some(fr) } else { None } } else { None }
+    }) {
+        Some(fr) => fr,
+        None => return,
+    };
+    if frame.tab_count <= 1 { return; }
+    let next_tab = (frame.active_tab as u32 + 1) % frame.tab_count as u32;
+    // Drop the borrow before calling switch_to_tab (which mutates FRAMES).
+    drop(frame);
+    if switch_to_tab(fid, next_tab) {
+        static mut FOCUS_NEXT_TAB_BUDGET: u32 = 4;
+        let b = &mut FOCUS_NEXT_TAB_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.shortcut.focus_next_tab] frame={} tab={}", fid, next_tab); }
+    }
+}
+
+/// Switch to the previous tab in the focused frame (wraps around).
+/// Does nothing if only one tab is present.
+unsafe fn focus_prev_tab() {
+    let fid = match selected_frame_id() {
+        Some(f) => f,
+        None => return,
+    };
+    let frame = match FRAMES.iter().find_map(|f| {
+        if let Some(fr) = f { if fr.frame_id == fid { Some(fr) } else { None } } else { None }
+    }) {
+        Some(fr) => fr,
+        None => return,
+    };
+    if frame.tab_count <= 1 { return; }
+    let prev_tab = if frame.active_tab == 0 { frame.tab_count - 1 } else { frame.active_tab - 1 };
+    drop(frame);
+    if switch_to_tab(fid, prev_tab as u32) {
+        static mut FOCUS_PREV_TAB_BUDGET: u32 = 4;
+        let b = &mut FOCUS_PREV_TAB_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.shortcut.focus_prev_tab] frame={} tab={}", fid, prev_tab); }
+    }
+}
+
+/// Toggle minimize/restore for the frame containing the focused surface.
+/// If minimized → restore. If not minimized → minimize.
+/// Returns true if state changed.
+unsafe fn toggle_minimize_focused_frame() -> bool {
+    let fid = match selected_frame_id() {
+        Some(f) => f,
+        None => return false,
+    };
+    if frame_is_minimized(fid) {
+        restore_minimized_frame(fid)
+    } else {
+        minimize_frame(fid)
+    }
+}
+
+/// Toggle zoom/unzoom for the frame containing the focused surface.
+/// Returns true if state changed.
+unsafe fn toggle_zoom_focused_frame() -> bool {
+    let fid = match selected_frame_id() {
+        Some(f) => f,
+        None => return false,
+    };
+    toggle_zoom_frame(fid)
+}
+
+/// Close the focused frame's active tab (or entire frame if last tab).
+/// Falls back to close_surface_from_frame_light on the active surface.
+/// Safe: only destroys closeable surfaces, clears focus, tombstones.
+unsafe fn close_focused_tab_or_frame_safe() -> bool {
+    let fid = match selected_frame_id() {
+        Some(f) => f,
+        None => return false,
+    };
+    let sid = match active_surface_for_frame(fid) {
+        Some(s) => s,
+        None => return false,
+    };
+    if is_closeable_surface(sid) {
+        close_surface_from_frame_light(sid)
+    } else {
+        false
+    }
+}
+
 // ── Frame Chrome Query Helpers ─────────────────────────────────────────────────
 // These are shell-policy queries that map between surface_id (display/input
 // object) and the Frame/Tab model (window management abstraction).
@@ -1359,6 +1591,7 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     clear_focus_if_dead();
     // Re-tile remaining visible frames.
     tile_visible_frames();
+    snap_capture_layout();
     true
 }
 
@@ -1470,6 +1703,7 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
             serial_println!("[shell.frame.minimize] frame={} surface={}", frame_id, surface_id);
         }
     }
+    snap_capture_layout();
     true
 }
 
@@ -1519,6 +1753,7 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
             serial_println!("[shell.frame.restore] frame={} surface={}", frame_id, surface_id);
         }
     }
+    snap_capture_layout();
     true
 }
 
@@ -1666,6 +1901,7 @@ unsafe fn zoom_frame(frame_id: u32) -> bool {
             serial_println!("[shell.frame.zoom] frame={} surface={}", frame_id, surface_id);
         }
     }
+    snap_capture_layout();
     true
 }
 
@@ -1711,6 +1947,7 @@ unsafe fn unzoom_frame(frame_id: u32) -> bool {
             serial_println!("[shell.frame.unzoom] frame={} surface={}", frame_id, surface_id);
         }
     }
+    snap_capture_layout();
     true
 }
 
@@ -1943,6 +2180,7 @@ unsafe fn toggle_top_bar_for_active_frame() -> bool {
                 frame_id, new_state as u32);
         }
     }
+    snap_capture_layout();
     true
 }
 
@@ -2022,6 +2260,7 @@ unsafe fn switch_to_tab(frame_id: u32, tab_index: u32) -> bool {
                 frame_id, old_surface_id, new_surface_id, tab_index);
         }
     }
+    snap_capture_layout();
     true
 }
 
@@ -2649,6 +2888,7 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
                     clear_drag_if_dead();
                     clear_hover_if_wrong_scene();
                     tile_visible_frames();
+                    snap_capture_layout();
                     static mut SCENE_SWITCH_BUDGET: u32 = 8;
                     let b = &mut SCENE_SWITCH_BUDGET;
                     if *b > 0 { *b -= 1; serial_println!("[shell.scene.switch] from={} to={}", prev, ACTIVE_SCENE_IDX); }
@@ -2677,6 +2917,236 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
             true
         }
     }
+}
+
+// ── Scene Layout Snapshot (SCENE_PERSISTENCE_V1A) ─────────────────────────
+// In-memory snapshot/restore for Scene layout. NO disk, NO sexstore, NO filesystem.
+// Lives only in static memory for the current boot/session.
+// Versioned fixed-size structs with bounded arrays and XOR checksum validation.
+
+/// Magic bytes: "SC" (Scene Capture)
+const SNAP_MAGIC: u8 = b'S'; // 0x53 — 'S' for Scene snapshot
+/// Snapshot format version.
+const SNAP_VERSION: u8 = 0x01;
+
+/// Per-frame data in a snapshot. Fixed-size, no heap.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct FrameSnapshot {
+    /// 0 = slot empty/invalid; 1 = valid entry.
+    present: u8,
+    frame_id: u32,
+    scene_id: u8,
+    active_tab: u8,
+    tab_count: u8,
+    flags: u32,
+    normal_x: i32,
+    normal_y: i32,
+    normal_w: u32,
+    normal_h: u32,
+    /// Surface IDs for each tab (only first tab_count entries valid on restore).
+    tab_surfaces: [u64; MAX_TABS_PER_FRAME as usize],
+}
+
+/// Top-level snapshot: versioned, fixed-size, checksummed.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct SceneLayoutSnapshot {
+    magic: u8,
+    version: u8,
+    active_scene: u8,
+    frame_count: u8,
+    /// XOR checksum of all bytes in the struct (magic..checksum excluded from XOR).
+    checksum: u8,
+    /// Padding to ensure deterministic layout (reserved, zero).
+    _reserved: [u8; 3],
+    frames: [FrameSnapshot; MAX_FRAMES],
+}
+
+/// Global snapshot storage — single copy, no queue, no history.
+static mut SCENE_SNAPSHOT: SceneLayoutSnapshot = SceneLayoutSnapshot {
+    magic: 0,
+    version: 0,
+    active_scene: 0,
+    frame_count: 0,
+    checksum: 0,
+    _reserved: [0u8; 3],
+    frames: [FrameSnapshot {
+        present: 0, frame_id: 0, scene_id: 0, active_tab: 0, tab_count: 0,
+        flags: 0, normal_x: 0, normal_y: 0, normal_w: 0, normal_h: 0,
+        tab_surfaces: [0u64; MAX_TABS_PER_FRAME as usize],
+    }; MAX_FRAMES],
+};
+
+/// Compute XOR checksum over the layout fields of a SceneLayoutSnapshot.
+/// Skips the checksum byte itself (offset 4). Used for validate-after-restore
+/// and defensive integrity checks.
+fn snap_compute_checksum(snap: &SceneLayoutSnapshot) -> u8 {
+    let ptr = snap as *const SceneLayoutSnapshot as *const u8;
+    let len = core::mem::size_of::<SceneLayoutSnapshot>();
+    let mut chk: u8 = 0u8;
+    for i in 0..len {
+        // Skip the checksum byte at offset 4.
+        if i == 4 { continue; }
+        chk ^= unsafe { *ptr.add(i) };
+    }
+    chk
+}
+
+/// Capture current FRAMES layout into the global SCENE_SNAPSHOT.
+/// Called after layout mutations to keep the snapshot current.
+unsafe fn snap_capture_layout() {
+    let snap = &mut SCENE_SNAPSHOT;
+    snap.magic = SNAP_MAGIC;
+    snap.version = SNAP_VERSION;
+    snap.active_scene = ACTIVE_SCENE_IDX;
+    snap._reserved = [0u8; 3];
+
+    let mut fcount: u8 = 0;
+    for (i, f_opt) in FRAMES.iter().enumerate() {
+        let fs = &mut snap.frames[i];
+        if let Some(frame) = f_opt {
+            fs.present = 1;
+            fs.frame_id = frame.frame_id;
+            fs.scene_id = frame.scene_id;
+            fs.active_tab = frame.active_tab;
+            fs.tab_count = frame.tab_count;
+            fs.flags = frame.flags;
+            fs.normal_x = frame.normal_x;
+            fs.normal_y = frame.normal_y;
+            fs.normal_w = frame.normal_w;
+            fs.normal_h = frame.normal_h;
+            // Copy tab surface IDs (only valid entries).
+            for t in 0..MAX_TABS_PER_FRAME as usize {
+                fs.tab_surfaces[t] = match &frame.tabs[t] {
+                    Some(tab) => tab.surface_id,
+                    None => 0u64,
+                };
+            }
+            fcount += 1;
+        } else {
+            fs.present = 0;
+            fs.frame_id = 0;
+            fs.scene_id = 0;
+            fs.active_tab = 0;
+            fs.tab_count = 0;
+            fs.flags = 0;
+            fs.normal_x = 0;
+            fs.normal_y = 0;
+            fs.normal_w = 0;
+            fs.normal_h = 0;
+            for t in 0..MAX_TABS_PER_FRAME as usize {
+                fs.tab_surfaces[t] = 0u64;
+            }
+        }
+    }
+    snap.frame_count = fcount;
+    snap.checksum = snap_compute_checksum(snap);
+}
+
+/// Validate a SceneLayoutSnapshot: magic, version, counts, checksum.
+/// Returns true if the snapshot is structurally valid.
+/// Does NOT validate surface liveness — that is done in snap_restore_layout.
+fn snap_validate(snap: &SceneLayoutSnapshot) -> bool {
+    if snap.magic != SNAP_MAGIC { return false; }
+    if snap.version != SNAP_VERSION { return false; }
+    if snap.frame_count as usize > MAX_FRAMES { return false; }
+    if snap.active_scene as usize >= WORKSPACE_COUNT as usize { return false; }
+    // Verify each present frame has valid tab_count and flags.
+    for i in 0..snap.frame_count as usize {
+        let fs = &snap.frames[i];
+        if fs.present == 0 { continue; }
+        if fs.tab_count as usize > MAX_TABS_PER_FRAME as usize { return false; }
+        if fs.active_tab as usize >= fs.tab_count as usize { return false; }
+        // Flags must not contain reserved bits (only MINIMIZED | ZOOMED | TOP_BAR).
+        let known_flags = FRAME_FLAG_MINIMIZED | FRAME_FLAG_ZOOMED | FRAME_FLAG_TOP_BAR;
+        if fs.flags & !known_flags != 0 { return false; }
+    }
+    // Verify checksum.
+    if snap.checksum != snap_compute_checksum(snap) { return false; }
+    true
+}
+
+/// Restore FRAMES and ACTIVE_SCENE_IDX from a validated snapshot.
+/// Safe: skips tombstoned/dead surfaces, clamps geometry, clears invalid state.
+/// If snapshot is invalid, returns false and leaves current layout unchanged.
+unsafe fn snap_restore_layout() -> bool {
+    let snap = &SCENE_SNAPSHOT;
+    if !snap_validate(snap) {
+        static mut SNAP_RESTORE_REJECT_BUDGET: u32 = 1;
+        let b = &mut SNAP_RESTORE_REJECT_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.snapshot.restore.reject] reason=invalid"); }
+        return false;
+    }
+
+    let mut restored_count: u8 = 0;
+    for i in 0..MAX_FRAMES {
+        let fs = &snap.frames[i];
+        if fs.present == 0 {
+            FRAMES[i] = None;
+            continue;
+        }
+        // Build tabs array: skip tombstoned/dead surfaces.
+        let mut tabs: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] = [None; MAX_TABS_PER_FRAME as usize];
+        let mut valid_count: u8 = 0;
+        for t in 0..fs.tab_count as usize {
+            let sid = fs.tab_surfaces[t];
+            if sid == 0 { continue; }
+            if is_tombstoned(sid) { continue; }
+            if !surface_is_alive(sid) { continue; }
+            tabs[valid_count as usize] = Some(ShellTab { surface_id: sid, title_id: 0, flags: 0 });
+            valid_count += 1;
+        }
+        if valid_count == 0 { continue; } // skip frame with no valid tabs
+
+        // Clamp geometry using existing helpers.
+        let (cx, cy) = clamp_position(fs.normal_x.max(0), fs.normal_y.max(0), fs.normal_w.max(1), fs.normal_h.max(1));
+        let (cw, ch) = clamp_surface_size(cx, cy, fs.normal_w.max(1), fs.normal_h.max(1));
+
+        FRAMES[i] = Some(ShellFrame {
+            frame_id: fs.frame_id,
+            active_tab: fs.active_tab.min(valid_count - 1),
+            tab_count: valid_count,
+            tabs,
+            scene_id: fs.scene_id.min(WORKSPACE_COUNT - 1),
+            flags: fs.flags & (FRAME_FLAG_MINIMIZED | FRAME_FLAG_ZOOMED | FRAME_FLAG_TOP_BAR),
+            normal_x: cx,
+            normal_y: cy,
+            normal_w: cw,
+            normal_h: ch,
+        });
+        restored_count += 1;
+    }
+
+    if restored_count == 0 {
+        static mut SNAP_RESTORE_EMPTY_BUDGET: u32 = 1;
+        let b = &mut SNAP_RESTORE_EMPTY_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.snapshot.restore.reject] reason=no_valid_frames"); }
+        return false;
+    }
+
+    // Restore active scene.
+    ACTIVE_SCENE_IDX = snap.active_scene;
+    // Notify silkbar of active scene.
+    pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, ACTIVE_SCENE_IDX as u64, 0, 0);
+
+    // Sync visibility: show surfaces in active scene, hide others.
+    sync_scene_visibility();
+
+    // Clear stale focus/hover/drag.
+    clear_focus_if_dead();
+    clear_focus_if_wrong_scene();
+    clear_drag_if_dead();
+    clear_hover_if_wrong_scene();
+
+    // Re-tile visible frames.
+    tile_visible_frames();
+
+    static mut SNAP_RESTORE_OK_BUDGET: u32 = 1;
+    let b = &mut SNAP_RESTORE_OK_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.snapshot.restore.ok] frames={} scene={}",
+        restored_count, ACTIVE_SCENE_IDX); }
+    true
 }
 
 #[no_mangle]
@@ -2731,6 +3201,9 @@ pub extern "C" fn _start() -> ! {
             normal_h: boot_h,
         });
         serial_println!("[shell.frame.model.init] frames=1 tabs=1");
+
+        // Initial snapshot after frames are set up.
+        snap_capture_layout();
 
         sys_set_state(SVC_STATE_LISTENING);
     }
@@ -3095,6 +3568,7 @@ pub extern "C" fn _start() -> ! {
                                                 else if SURFACE_102_ALIVE && try_set_focus(SURFACE_ID_TEST3) { serial_println!("[silk-shell] Auto-switched focus to surface 102"); }
                                             }
                                             mutated = true;
+                                            snap_capture_layout();
                                         }
                                     }
 
@@ -3179,6 +3653,7 @@ pub extern "C" fn _start() -> ! {
                                             mutated = true;
                                             serial_println!("[silk-shell] Recreated surface 100 (fallback)");
                                         }
+                                        snap_capture_layout();
                                     }
 
                                     SurfaceAction::RestoreMinimized => {
@@ -3238,6 +3713,7 @@ pub extern "C" fn _start() -> ! {
                                         pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST3, (ry3 as u64) << 32 | rx3 as u64, (rh3 as u64) << 32 | rw3 as u64);
                                         pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST4, (ry4 as u64) << 32 | rx4 as u64, (rh4 as u64) << 32 | rw4 as u64);
                                         try_set_focus(SURFACE_ID_APP);
+                                        snap_capture_layout();
 
                                         mutated = true;
                                         serial_println!("[silk-shell] Reset all surfaces to boot state");
@@ -3251,6 +3727,7 @@ pub extern "C" fn _start() -> ! {
                                     SurfaceAction::Center => {
                                         mutated = true;
                                         tile_visible_frames();
+                                        snap_capture_layout();
                                     }
 
                                     SurfaceAction::ShrinkWidth => {
