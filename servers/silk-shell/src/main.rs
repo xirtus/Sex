@@ -2470,7 +2470,42 @@ pub extern "C" fn _start() -> ! {
                     unsafe {
                         // ── Event-class dispatch ──
                         if event_class == EV_KEY && value == 1 {
-                            // ── Make-code dispatch via policy lookup ──────────────
+                            // ── Scene Settings panel key intercept ──────────────
+                            // When panel visible, route 1/2/3/Esc to panel commands.
+                            // [shell.scene.settings.panel.key] budget 16.
+                            // F7 (0x41) falls through to normal dispatch unchanged.
+                            if SCENE_SETTINGS_ACTIVE {
+                                static mut PANEL_KEY_BUDGET: u32 = 16;
+                                let b = &mut PANEL_KEY_BUDGET;
+                                match scancode {
+                                    0x01 => { // Esc → close panel
+                                        pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_SCENE_SETTINGS, 0, 0);
+                                        SCENE_SETTINGS_ACTIVE = false;
+                                        try_transition(InteractionState::Idle);
+                                        mutated = true;
+                                        if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.panel.key] cmd=close"); }
+                                    }
+                                    0x02 => { // Key 1 → cycle preset (like F5)
+                                        cycle_scene_render_token_preset();
+                                        mutated = true;
+                                        if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.panel.key] cmd=preset"); }
+                                    }
+                                    0x03 => { // Key 2 → cycle tint (like F6)
+                                        cycle_custom_tint();
+                                        mutated = true;
+                                        if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.panel.key] cmd=tint"); }
+                                    }
+                                    0x04 => { // Key 3 → toggle top bar (like F4)
+                                        if toggle_top_bar_for_active_frame() {
+                                            mutated = true;
+                                        }
+                                        if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.panel.key] cmd=topbar"); }
+                                    }
+                                    // All other scancodes (including F7=0x41) fall through to normal dispatch
+                                    _ => {}
+                                }
+                            }
+                            // ── Normal make-code dispatch via policy lookup ──────
                             if let Some(action) = scancode_to_action(scancode) {
                                 match action {
                                     SurfaceAction::FocusToggle => {
