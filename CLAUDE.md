@@ -664,3 +664,44 @@ Read `docs/handoff/SILKBAR_ACTION_SLOT_EXPANSION_V1.md` before adding Bell panel
 - Bell hit-test → `Action::OpenBell` (no panel toggle yet)
 - Bell rendering: gold 0x00FFD700 at (1020, 18, 18, 22)
 - After this expansion is proven, BELL_PANEL_TOGGLE_V1 wires toggle_os_panel()
+
+---
+
+## Diagnostic: TABLET_LIVENESS_TRACE_V1 (2026-05-04)
+
+8 bounded markers (max 16 each) across 4 servers tracing cursor pipeline:
+`sexusb → sexinput → silk-shell → sexdisplay`
+
+**Non-interactive finding:** 15 reports forwarded, all dx=dy=0. QEMU 11.0.0 usb-tablet always reports (0,0) in headless env. Requires interactive SDL test with physical mouse.
+**Sexdisplay changes are diagnostics-only** (2 budgeted markers, zero behavioral changes).
+**Do not commit** until interactive movement test confirms cursor delivery chain.
+See `docs/handoff/TABLET_LIVENESS_TRACE_V1.md`.
+
+## Diagnostic: QEMU_INPUT_CONFIG_AUDIT_V1 (2026-05-04)
+
+**Status:** dev.sh audit complete. QEMU 11.0.0 not delivering non-idle coordinates to usb-tablet.
+Guest pipeline proven healthy. Dead layer is outside guest (QEMU input delivery).
+
+dev.sh changes (flags only, no guest code):
+- `QEMU_PRINT_CMD=1` — print exact argv, no launch
+- `SEXUSB_QEMU_DEVICE=tablet-display-sdl` — adds `display=sdl` to usb-tablet
+- `SEXOS_QEMU_NODEFAULTS=1` — adds `-nodefaults` (disables PS/2 input)
+- `SEXOS_QEMU_DISPLAY=none` — for headless runs
+
+See `docs/handoff/QEMU_INPUT_CONFIG_AUDIT_V1.md`.
+
+## Diagnostic: HOST_INPUT_BACKEND_AUDIT_V1 (2026-05-04)
+
+**Status:** QEMU 11.0.0 does not deliver host pointer motion to emulated USB HID.
+Both usb-mouse and usb-tablet produce only idle reports on real local desktop
+with physical trackpad movement. GTK and SDL backends both fail.
+Problem is upstream of guest — cannot fix in SexOS server code.
+See `docs/handoff/HOST_INPUT_BACKEND_AUDIT_V1.md`.
+**Implemented as KEYBOARD_DEVICE_MODE_V1.** See `docs/handoff/KEYBOARD_DEVICE_MODE_V1.md`.
+
+USB keyboard replaces mouse as HID device (mouse only produces idle reports).
+- `SEXUSB_QEMU_DEVICE=kbd` → QEMU `-device usb-kbd,bus=xhci.0`
+- `SEXOS_KEYBOARD_CURSOR=1` at build time enables arrow/WASD → EV_REL (8px step)
+- sexusb: keyboard HID detection + forward via `OP_USB_KEYBOARD_REPORT=0x261`
+- sexinput: decode + map HID usage IDs to EV_REL cursor movement
+- No xHCI refactor (single-device mode). No kernel/ABI/renderer/display/shell changes.

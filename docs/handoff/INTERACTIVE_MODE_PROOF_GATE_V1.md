@@ -49,6 +49,28 @@ SEXUSB_XHCI_TRACE=0 SDL_VIDEO_DRIVER=x11 ./dev.sh run
 - `servers/sexinput/src/main.rs` — replaced three `const USB_PROOF_DISABLE_*`
   with one `const SYNTHETIC_INPUT_PROOFS_DISABLED` using `option_env!`
 
+## Critical Workflow Note
+
+**`SEXOS_PROOFS_DISABLED=1` MUST be set at build time, not runtime.**
+
+The gate uses `option_env!("SEXOS_PROOFS_DISABLED")` which is a Rust compile-time
+macro. Setting the env var only in `dev.sh run` (or at QEMU invocation) has zero
+effect on the compiled binary. The ISO must be rebuilt with the env var:
+
+```sh
+# CORRECT: env var during build
+SEXOS_PROOFS_DISABLED=1 ./scripts/entrypoint_build.sh
+./dev.sh run
+
+# WRONG: env var only at runtime — proofs still active
+./scripts/entrypoint_build.sh
+SEXOS_PROOFS_DISABLED=1 ./dev.sh run   # ← DOES NOT WORK
+```
+
+**Diagnostic marker:** Look for `[proof.gate.state]` at boot:
+- `enabled=1 source=default` — proofs ACTIVE (env var not set at build)
+- `enabled=0 source=env` — proofs DISABLED (env var was set at build)
+
 ## Verification
 
 ### Proof mode (default, nographic)
