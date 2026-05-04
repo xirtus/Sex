@@ -64,7 +64,7 @@ unsafe fn kv_reply(target_pd: u64, val: u64) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     loop {
-        let msg = pdx_listen_raw(SLOT_SEXSTORE);
+        let msg = pdx_listen_raw(0); // Slot 0 = self message_ring (all servers listen here)
         let caller = msg.caller_pd as u64;
 
         unsafe {

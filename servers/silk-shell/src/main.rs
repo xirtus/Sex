@@ -249,12 +249,18 @@ unsafe fn handle_sexstore_get_reply(value: u64) {
             }
         }
     } else {
-        // Corrupt or missing blob: keep defaults already sent at boot.
+        // Blob invalid: either sexstore returned 0 (not found) or
+        // magic/version/checksum didn't match (corrupt).
+        // Keep defaults already sent at boot.
         unsafe {
             static mut LOAD_FAIL_BUDGET: u32 = 1;
             if LOAD_FAIL_BUDGET > 0 {
                 LOAD_FAIL_BUDGET -= 1;
-                serial_println!("[shell.scene.settings.load] ok=0 corrupt");
+                if value == 0 {
+                    serial_println!("[shell.scene.settings.load] ok=0 not-found");
+                } else {
+                    serial_println!("[shell.scene.settings.load] ok=0 corrupt");
+                }
             }
         }
     }

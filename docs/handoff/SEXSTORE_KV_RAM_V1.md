@@ -26,7 +26,19 @@ RAM-only K/V table. `[SEXOS ENTRYPOINT] success`.
 
 ---
 
-## KV Table
+## Fixes
+
+### Listen Slot (2026-05-04, discovered during SCENE_SETTINGS_BOOT_PROOF_V1)
+
+`pdx_listen_raw(SLOT_SEXSTORE)` → `pdx_listen_raw(0)`.
+
+The kernel routes all incoming IPC messages to the PD's internal `message_ring`,
+which is read via `pdx_listen_raw(0)` (slot 0 = self). Non-zero slots resolve
+to capabilities in the PD's cap table, but sexstore was never granted a
+`MessageQueue` capability at slot 10. The `Domain` capability at slot 10 in
+*silk-shell's* cap table (used for sending) is unrelated to sexstore's own
+listen path. All servers in the system listen on slot 0. See kernel listen
+handler at `kernel/src/syscalls/mod.rs` for details.
 
 - **Type**: `static mut [KvSlot; 16]` — 16 slots, each 16 bytes → 256 bytes total
 - **Key**: `u32`
