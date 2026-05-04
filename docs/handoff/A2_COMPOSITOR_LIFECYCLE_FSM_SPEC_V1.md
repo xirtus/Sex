@@ -153,7 +153,8 @@ LifecycleGeneration is required in A3. Rationale:
 ## 7. LifecycleGeneration Specification
 
 ```rust
-/// Monotonic counter incremented on each Tombstoned→Destroyed transition.
+/// Monotonic counter incremented on transitions that invalidate stale
+/// references: entering Closing, Closing→Tombstoned, Tombstoned→Destroyed.
 /// Used to detect stale references (FocusRef, hover, drag).
 /// Starting value: 1. Never decrements. Wraparound checked but assumed improbable.
 static mut LIFECYCLE_GENERATION: u64 = 1;
@@ -161,11 +162,13 @@ static mut LIFECYCLE_GENERATION: u64 = 1;
 
 ### Increment Rules
 
-1. Incremented exactly once per Closing→Tombstoned transition (before Destroyed increment if both happen in sequence).
-2. Incremented exactly once per direct Destroyed transition (if surface is destroyed without going through Closing→Tombstoned — e.g., panel surface toggle).
-3. Never decremented.
-4. Wraparound: checked at each increment. If generation would wrap to 0, STOP FIRST (wraparound requires audit of all FocusRef references).
-5. Generation 0 is reserved for "no surface" / uninitialized state.
+1. Incremented once when a live state (Visible/Hidden/Minimized) enters Closing.
+2. Incremented once on Closing→Tombstoned.
+3. Incremented once on Tombstoned→Destroyed.
+4. If a surface transitions directly from a live state to Destroyed without going through Closing→Tombstoned (e.g., panel surface toggle), increment once at the Destroyed transition.
+5. Never decremented.
+6. Wraparound: checked at each increment. If generation would wrap to 0, STOP FIRST (wraparound requires audit of all FocusRef references).
+7. Generation 0 is reserved for "no surface" / uninitialized state.
 
 ### Stale Reference Detection
 
