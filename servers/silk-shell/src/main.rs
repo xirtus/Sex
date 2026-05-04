@@ -7,7 +7,7 @@ use core::panic::PanicInfo;
 use sex_pdx::{
     pdx_call, pdx_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
     SLOT_DISPLAY, SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
-    OP_SURFACE_TAB_INFO,
+    OP_SURFACE_TAB_INFO, OP_APPEARANCE_TOKENS,
     SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
 };
 use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y, PANEL_W, PANEL_H};
@@ -38,6 +38,45 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 //   0x95  reserved (Bell panel)
 //   100+  app surfaces (SURFACE_ID_APP, SURFACE_ID_STATIC, etc.)
 pub const OP_SURFACE_DESTROY: u64 = 0xEE;
+
+// ── Scene Render Token defaults (must match DEFAULT_RENDER_TOKENS in sexdisplay) ─
+const DTOK_FOCUS_SURFACE:  u32 = 0x007AAFA4;
+const DTOK_FRAME_RIM:      u32 = 0x00B8F2E8;
+const DTOK_FRAME_TOP_BAR:  u32 = 0x0088C2B7;
+const DTOK_ACTIVE_TAB:     u32 = 0x007AAFA4;
+const DTOK_INACTIVE_TAB:   u32 = 0x006080B0;
+const DTOK_CLOSE_LIGHT:    u32 = 0x00FF4444;
+const DTOK_MINIMIZE_LIGHT: u32 = 0x00FFCC44;
+const DTOK_ZOOM_LIGHT:     u32 = 0x0044FF44;
+
+#[inline]
+fn pack_u32_pair(lo: u32, hi: u32) -> u64 {
+    (lo as u64) | ((hi as u64) << 32)
+}
+
+/// Push scene render tokens to sexdisplay via OP_APPEARANCE_TOKENS (0xFC).
+/// Two sequential pdx_call messages; sexdisplay state machine disambiguates calls.
+unsafe fn send_scene_render_tokens() {
+    // Call 1: 6 colors packed into 3 × u64 args
+    pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
+        pack_u32_pair(DTOK_FOCUS_SURFACE,  DTOK_FRAME_RIM),
+        pack_u32_pair(DTOK_FRAME_TOP_BAR,  DTOK_ACTIVE_TAB),
+        pack_u32_pair(DTOK_INACTIVE_TAB,   DTOK_CLOSE_LIGHT),
+    );
+    // Call 2: remaining 2 colors + flags; arg2=0 (reserved)
+    pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
+        pack_u32_pair(DTOK_MINIMIZE_LIGHT, DTOK_ZOOM_LIGHT),
+        0u64, // appearance_flags=0, effect_levels=0
+        0u64, // reserved
+    );
+    unsafe {
+        static mut SHELL_TOKEN_SEND_BUDGET: u32 = 4;
+        if SHELL_TOKEN_SEND_BUDGET > 0 {
+            SHELL_TOKEN_SEND_BUDGET -= 1;
+            serial_println!("[shell.appearance.tokens.send] seq=2 sent");
+        }
+    }
+}
 
 // ── Policy Model ──────────────────────────────────────────────────────────
 
@@ -1958,6 +1997,10 @@ pub extern "C" fn _start() -> ! {
     // Send initial tab metadata for frame 1 (surface 100: 1 tab, active tab 0)
     unsafe { send_frame_tab_info(1); }
     serial_println!("[silk-shell] Boot tab info sent to sexdisplay");
+
+    // Push default scene render tokens to sexdisplay (establishes DISPLAY_TOKENS baseline)
+    unsafe { send_scene_render_tokens(); }
+    serial_println!("[silk-shell] Boot scene render tokens sent to sexdisplay");
 
     loop {
         // Runtime containment: park without syscall while null-jump root cause is isolated.

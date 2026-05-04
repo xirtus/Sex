@@ -92,6 +92,51 @@ const FRAME_TOP_BAR_LIGHT_TOP: usize = 4;
 /// Light vertical zone: bottom (exclusive).
 const FRAME_TOP_BAR_LIGHT_BOTTOM: usize = 12; // 4 + 8
 
+// ── Appearance Tokens (V1: flat ARGB, no alpha blending, blur forced zero) ────
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct RenderTokensV1 {
+    focus_surface_color: u32,
+    frame_rim_color: u32,
+    frame_top_bar_color: u32,
+    active_tab_color: u32,
+    inactive_tab_color: u32,
+    close_light_color: u32,
+    minimize_light_color: u32,
+    zoom_light_color: u32,
+    appearance_flags: u8,
+    effect_levels: u8,
+}
+
+const DEFAULT_RENDER_TOKENS: RenderTokensV1 = RenderTokensV1 {
+    focus_surface_color:  FOCUS_SURFACE_COLOR,
+    frame_rim_color:      FRAME_RIM_COLOR,
+    frame_top_bar_color:  FRAME_TOP_BAR_COLOR,
+    active_tab_color:     TAB_ACTIVE_COLOR,
+    inactive_tab_color:   TAB_INACTIVE_COLOR,
+    close_light_color:    FRAME_LIGHT_CLOSE_COLOR,
+    minimize_light_color: FRAME_LIGHT_MINIMIZE_COLOR,
+    zoom_light_color:     FRAME_LIGHT_ZOOM_COLOR,
+    appearance_flags:     0,
+    effect_levels:        0,
+};
+
+static mut DISPLAY_TOKENS: RenderTokensV1 = DEFAULT_RENDER_TOKENS;
+
+// Token reception state machine. Call 1 buffers; Call 2 commits.
+static mut TOKEN_BUF_CALL1_RECEIVED: bool = false;
+static mut TOKEN_BUF_ARG0: u64 = 0;
+static mut TOKEN_BUF_ARG1: u64 = 0;
+static mut TOKEN_BUF_ARG2: u64 = 0;
+
+/// Force alpha byte to 0xFF. Renderer ignores alpha (raw framebuffer write),
+/// but this guards against any future alpha-blending path receiving a zero.
+#[inline]
+fn clamp_color_token(c: u32) -> u32 {
+    c | 0xFF000000
+}
+
 // Shell-owned OS cursor surface. Always rendered last (above all app surfaces).
 const CURSOR_SURFACE_ID: u64 = 0x90;
 const LAUNCHER_PANEL_SURFACE_ID: u64 = 0x92;
@@ -150,7 +195,7 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                     // ── TOP BAR ZONE (default chrome mode) ──
                     if top_bar_active && ly < FRAME_TOP_BAR_HEIGHT_PX {
                         // Default to top bar background color.
-                        c = FRAME_TOP_BAR_COLOR;
+                        c = DISPLAY_TOKENS.frame_top_bar_color;
                         // Tab strip override: full 16px height, after light exclusion,
                         // before right rim. Uses same tab block geometry as minimal mode
                         // but with wider exclusion zone for larger lights.
@@ -163,9 +208,9 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                             if slot_w > 0 {
                                 let tab_idx = (lx - FRAME_TOP_BAR_LIGHT_EXCLUSION_PX) / slot_w;
                                 if tab_idx == surf.active_tab as usize {
-                                    c = TAB_ACTIVE_COLOR;
+                                    c = DISPLAY_TOKENS.active_tab_color;
                                 } else {
-                                    c = TAB_INACTIVE_COLOR;
+                                    c = DISPLAY_TOKENS.inactive_tab_color;
                                 }
                             }
                         }
@@ -174,17 +219,17 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                         if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {
                             let l1_end = FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                             if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX && lx < l1_end {
-                                c = FRAME_LIGHT_CLOSE_COLOR;
+                                c = DISPLAY_TOKENS.close_light_color;
                             } else {
                                 let l2_start = l1_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
                                 let l2_end = l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                                 if lx >= l2_start && lx < l2_end {
-                                    c = FRAME_LIGHT_MINIMIZE_COLOR;
+                                    c = DISPLAY_TOKENS.minimize_light_color;
                                 } else {
                                     let l3_start = l2_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
                                     let l3_end = l3_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                                     if lx >= l3_start && lx < l3_end {
-                                        c = FRAME_LIGHT_ZOOM_COLOR;
+                                        c = DISPLAY_TOKENS.zoom_light_color;
                                     }
                                 }
                             }
@@ -203,19 +248,19 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                             if lx >= FRAME_LIGHT_GAP_PX
                                 && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
                             {
-                                c = FRAME_LIGHT_CLOSE_COLOR;
+                                c = DISPLAY_TOKENS.close_light_color;
                             }
                             // MINIMIZE: gap + size + gap
                             else if lx >= FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX
                                 && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
                             {
-                                c = FRAME_LIGHT_MINIMIZE_COLOR;
+                                c = DISPLAY_TOKENS.minimize_light_color;
                             }
                             // ZOOM: gap + 2*(size + gap)
                             else if lx >= FRAME_LIGHT_GAP_PX + 2 * (FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX)
                                 && lx < FRAME_LIGHT_GAP_PX + 2 * (FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX) + FRAME_LIGHT_SIZE_PX
                             {
-                                c = FRAME_LIGHT_ZOOM_COLOR;
+                                c = DISPLAY_TOKENS.zoom_light_color;
                             }
                             // Tab strip: equal-width colored blocks after light exclusion
                             // zone and before right rim. Active tab is bright, inactive dim.
@@ -228,24 +273,24 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                                 if slot_w > 0 {
                                     let tab_idx = (lx - TAB_STRIP_LIGHT_EXCLUSION_PX) / slot_w;
                                     if tab_idx == surf.active_tab as usize {
-                                        c = TAB_ACTIVE_COLOR;
+                                        c = DISPLAY_TOKENS.active_tab_color;
                                     } else {
-                                        c = TAB_INACTIVE_COLOR;
+                                        c = DISPLAY_TOKENS.inactive_tab_color;
                                     }
                                 } else {
-                                    c = FRAME_RIM_COLOR;
+                                    c = DISPLAY_TOKENS.frame_rim_color;
                                 }
                             } else {
-                                c = FRAME_RIM_COLOR;
+                                c = DISPLAY_TOKENS.frame_rim_color;
                             }
                         } else {
                             // Left, right, or bottom rim edge (or top edge in minimal mode
                             // already handled above — this catches left/right/bottom always).
-                            c = FRAME_RIM_COLOR;
+                            c = DISPLAY_TOKENS.frame_rim_color;
                         }
                     } else {
                         // ── SURFACE CONTENT AREA ──
-                        c = fill_rect_color(surf, x, y, FOCUS_SURFACE_COLOR);
+                        c = fill_rect_color(surf, x, y, DISPLAY_TOKENS.focus_surface_color);
                     }
                     break;
                 }
@@ -1075,6 +1120,60 @@ pub extern "C" fn _start() -> ! {
 
                     if updated {
                         redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+                    }
+                }
+            }
+            0xFC => {
+                // OP_APPEARANCE_TOKENS: two-call state machine.
+                // Call 1 (TOKEN_BUF_CALL1_RECEIVED=false): buffer 6 packed colors in arg0/arg1/arg2.
+                // Call 2 (TOKEN_BUF_CALL1_RECEIVED=true): commit 8 colors + flags to DISPLAY_TOKENS.
+                // Sequenced by receiver state only — no arg2 tagging (color data in Call 1 arg2).
+                unsafe {
+                    if !TOKEN_BUF_CALL1_RECEIVED {
+                        TOKEN_BUF_ARG0 = msg.arg0;
+                        TOKEN_BUF_ARG1 = msg.arg1;
+                        TOKEN_BUF_ARG2 = msg.arg2;
+                        TOKEN_BUF_CALL1_RECEIVED = true;
+                        static mut APPEARANCE_TOKENS_SEQ0_BUDGET: u32 = 4;
+                        if APPEARANCE_TOKENS_SEQ0_BUDGET > 0 {
+                            APPEARANCE_TOKENS_SEQ0_BUDGET -= 1;
+                            serial_println!("[sexdisplay.appearance.tokens] seq=0 buffered");
+                        }
+                    } else {
+                        let focus_surface_color  = clamp_color_token(TOKEN_BUF_ARG0 as u32);
+                        let frame_rim_color      = clamp_color_token((TOKEN_BUF_ARG0 >> 32) as u32);
+                        let frame_top_bar_color  = clamp_color_token(TOKEN_BUF_ARG1 as u32);
+                        let active_tab_color     = clamp_color_token((TOKEN_BUF_ARG1 >> 32) as u32);
+                        let inactive_tab_color   = clamp_color_token(TOKEN_BUF_ARG2 as u32);
+                        let close_light_color    = clamp_color_token((TOKEN_BUF_ARG2 >> 32) as u32);
+                        let minimize_light_color = clamp_color_token(msg.arg0 as u32);
+                        let zoom_light_color     = clamp_color_token((msg.arg0 >> 32) as u32);
+                        let appearance_flags     = (msg.arg1 & 0xFF) as u8;
+                        let effect_levels        = ((msg.arg1 >> 8) & 0xFF) as u8 & !0x0F; // blur=0 in V1
+                        DISPLAY_TOKENS = RenderTokensV1 {
+                            focus_surface_color,
+                            frame_rim_color,
+                            frame_top_bar_color,
+                            active_tab_color,
+                            inactive_tab_color,
+                            close_light_color,
+                            minimize_light_color,
+                            zoom_light_color,
+                            appearance_flags,
+                            effect_levels,
+                        };
+                        TOKEN_BUF_CALL1_RECEIVED = false;
+                        static mut APPEARANCE_TOKENS_APPLIED: u32 = 0;
+                        APPEARANCE_TOKENS_APPLIED += 1;
+                        let applied = APPEARANCE_TOKENS_APPLIED;
+                        static mut APPEARANCE_TOKENS_SEQ1_BUDGET: u32 = 4;
+                        if APPEARANCE_TOKENS_SEQ1_BUDGET > 0 {
+                            APPEARANCE_TOKENS_SEQ1_BUDGET -= 1;
+                            serial_println!("[sexdisplay.appearance.tokens] seq=1 applied={}", applied);
+                        }
+                        if fb_live {
+                            redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+                        }
                     }
                 }
             }

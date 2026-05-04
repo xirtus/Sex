@@ -99,6 +99,9 @@ pub const SILKBAR_ABI_VERSION: u64 = 1;
 // Surface tab metadata opcode (silk-shell → sexdisplay)
 pub const OP_SURFACE_TAB_INFO: u64 = 0xFD;
 
+// Appearance tokens opcode (silk-shell → sexdisplay, two-call state machine)
+pub const OP_APPEARANCE_TOKENS: u64 = 0xFC;
+
 // Typed input event class constants (IPC encoding for 0x202 OP_HID_EVENT)
 pub const EV_KEY: u64 = 1;
 pub const EV_REL: u64 = 2;
