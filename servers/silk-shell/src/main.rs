@@ -1285,6 +1285,19 @@ unsafe fn clear_drag_if_dead() {
     }
 }
 
+/// If currently dragging a surface that belongs to a non-active scene,
+/// cancel the drag. Call after scene switch.
+unsafe fn clear_drag_if_wrong_scene() {
+    if let InteractionState::Dragging { surface_id, .. } = INTERACTION {
+        if !surface_in_active_scene(surface_id) {
+            static mut DRAG_SCENE_BUDGET: u32 = 4;
+            let b = &mut DRAG_SCENE_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.scene.drag.clear.wrong-scene] id={}", surface_id); }
+            try_transition(InteractionState::Idle);
+        }
+    }
+}
+
 /// Returns true if the surface is shell-managed (draggable in V1).
 fn is_shell_surface(sid: u64) -> bool {
     sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
@@ -1378,6 +1391,9 @@ unsafe fn sync_scene_visibility() {
             }
         }
     }
+    static mut SCENE_VISIBILITY_BUDGET: u32 = 8;
+    let b = &mut SCENE_VISIBILITY_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.scene.visibility] sync"); }
 }
 
 // ── Scene Shortcut Command Helpers (SCENE_SHORTCUTS_V1) ─────────────────────
@@ -1398,6 +1414,7 @@ unsafe fn switch_scene(scene_idx: u8) {
     sync_scene_visibility();
     clear_focus_if_wrong_scene();
     clear_drag_if_dead();
+    clear_drag_if_wrong_scene();
     clear_hover_if_wrong_scene();
     tile_visible_frames();
     snap_capture_layout();
@@ -3376,6 +3393,7 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
                     sync_scene_visibility();
                     clear_focus_if_wrong_scene();
                     clear_drag_if_dead();
+                    clear_drag_if_wrong_scene();
                     clear_hover_if_wrong_scene();
                     tile_visible_frames();
                     snap_capture_layout();
@@ -3627,6 +3645,7 @@ unsafe fn snap_restore_layout() -> bool {
     clear_focus_if_dead();
     clear_focus_if_wrong_scene();
     clear_drag_if_dead();
+    clear_drag_if_wrong_scene();
     clear_hover_if_wrong_scene();
 
     // Re-tile visible frames.
