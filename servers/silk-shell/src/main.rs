@@ -1352,6 +1352,20 @@ const SCENE_FLAG_HAS_FOCUS: u8      = 1 << 2;  // scene contains focused surface
 const SCENE_FLAG_HAS_MINIMIZED: u8  = 1 << 3;  // scene has at least one minimized frame
 const SCENE_FLAG_HAS_ZOOMED: u8     = 1 << 4;  // scene has at least one zoomed frame
 
+// ── Scene Accent Token Constants ────────────────────────────────────────────
+/// Index of the Clear (default, no accent) tint bundle.
+const ACCENT_DEFAULT: u8 = 0;
+/// Index of the WarmTint bundle (amber/copper).
+const ACCENT_WARM: u8    = 1;
+/// Index of the CoolTint bundle (icy blue).
+const ACCENT_COOL: u8    = 2;
+/// Index of the CoralTint bundle (pink/coral).
+const ACCENT_CORAL: u8   = 3;
+/// Index of the GoldTint bundle (gold).
+const ACCENT_GOLD: u8    = 4;
+/// Number of valid accent tokens (matches CUSTOM_TINT_BUNDLES count).
+const ACCENT_COUNT: u8   = 5;
+
 // ── Atlas Render Constants (card layout, colors) ─────────────────────────────
 /// Atlas card width in pixels.
 const ATLAS_CARD_W: u32 = 220;
@@ -1412,6 +1426,12 @@ struct Scene {
     flags: u8,
     /// Human-readable fixed label, zero-padded.
     label: [u8; ATLAS_LABEL_LEN],
+    /// Accent token: index into CUSTOM_TINT_BUNDLES (0..ACCENT_COUNT).
+    /// 0 = Clear/default (no accent). Used to differentiate scene chrome.
+    accent: u8,
+    /// Pinned flag: when true, the scene survives frame-close operations
+    /// and is not auto-destroyed when empty. Default false in V1.
+    pinned: bool,
 }
 
 /// Atlas snapshot: the shell's map of all Scenes, derived from existing state.
@@ -1463,6 +1483,8 @@ static mut ATLAS_SNAPSHOT: AtlasSnapshot = AtlasSnapshot {
 static mut SCENES: [Scene; ATLAS_MAX_SCENES] = [Scene {
     flags: SCENE_FLAG_EMPTY,
     label: [0u8; ATLAS_LABEL_LEN],
+    accent: 0,
+    pinned: false,
 }; ATLAS_MAX_SCENES];
 
 /// Atlas mode enabled: when true, the shell is in overview mode (no rendering yet in V1).
@@ -2153,15 +2175,36 @@ fn atlas_default_label(scene_id: u32) -> [u8; ATLAS_LABEL_LEN] {
 /// B1: initialize shell-local Scene state.
 /// Safe under current single-shell mutation model; no IPC, no allocation.
 unsafe fn scene_init_all() {
+    // Accent defaults cycle through available tints for visual distinction.
+    let default_accents: [u8; ATLAS_MAX_SCENES] = [
+        ACCENT_DEFAULT, // Scene 0: Clear (no accent)
+        ACCENT_WARM,    // Scene 1: Warm amber/copper
+        ACCENT_COOL,    // Scene 2: Cool icy blue
+        ACCENT_CORAL,   // Scene 3: Coral pink
+        ACCENT_GOLD,    // Scene 4: Gold
+    ];
+
     for si in 0..ATLAS_MAX_SCENES {
         SCENES[si] = Scene {
             flags: SCENE_FLAG_EMPTY,
             label: atlas_default_label(si as u32),
+            accent: default_accents[si],
+            pinned: false,
         };
     }
 
     for si in 0..ATLAS_MAX_SCENES {
         scene_update_flags(si as u8);
+    }
+
+    static mut SETTINGS_INIT_BUDGET: u32 = 4;
+    let b = &mut SETTINGS_INIT_BUDGET;
+    if *b > 0 {
+        *b -= 1;
+        serial_println!("[atlas.scene.settings.init] scenes={} accents=[{},{},{},{},{}]",
+            ATLAS_MAX_SCENES,
+            SCENES[0].accent, SCENES[1].accent, SCENES[2].accent,
+            SCENES[3].accent, SCENES[4].accent);
     }
 
     serial_println!("[scene.core.init] scenes={}", ATLAS_MAX_SCENES);
@@ -2209,6 +2252,55 @@ unsafe fn scene_update_flags(scene_idx: u8) {
     SCENES[idx].flags = flags;
 }
 
+// ── Scene Settings Helpers (ATLAS_SCENE_SETTINGS_MODEL_V1) ──────────────────
+/// Validate that a scene_id is within the valid range (0..ATLAS_MAX_SCENES).
+#[inline]
+unsafe fn validate_scene_id(scene_id: u8) -> bool {
+    (scene_id as usize) < ATLAS_MAX_SCENES
+}
+
+/// Return the accent token for a scene, or ACCENT_DEFAULT if invalid.
+#[inline]
+unsafe fn scene_accent_token(scene_id: u8) -> u8 {
+    let idx = scene_id as usize;
+    if idx >= ATLAS_MAX_SCENES {
+        static mut SETTINGS_REJECT_BUDGET: u32 = 8;
+        let b = &mut SETTINGS_REJECT_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[atlas.scene.settings.reject] fn=accent id={}", scene_id); }
+        return ACCENT_DEFAULT;
+    }
+    SCENES[idx].accent
+}
+
+/// Return whether a scene is pinned, or false if invalid.
+#[inline]
+unsafe fn scene_is_pinned(scene_id: u8) -> bool {
+    let idx = scene_id as usize;
+    if idx >= ATLAS_MAX_SCENES {
+        static mut SETTINGS_REJECT_BUDGET: u32 = 8;
+        let b = &mut SETTINGS_REJECT_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[atlas.scene.settings.reject] fn=pinned id={}", scene_id); }
+        return false;
+    }
+    static mut SETTINGS_READ_BUDGET: u32 = 32;
+    let b = &mut SETTINGS_READ_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[atlas.scene.settings.read] fn=pinned id={} val={}", scene_id, SCENES[idx].pinned); }
+    SCENES[idx].pinned
+}
+
+/// Return a copy of the scene label, or zeroed array if invalid.
+#[inline]
+unsafe fn scene_label_token(scene_id: u8) -> [u8; ATLAS_LABEL_LEN] {
+    let idx = scene_id as usize;
+    if idx >= ATLAS_MAX_SCENES {
+        static mut SETTINGS_REJECT_BUDGET: u32 = 8;
+        let b = &mut SETTINGS_REJECT_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[atlas.scene.settings.reject] fn=label id={}", scene_id); }
+        return [0u8; ATLAS_LABEL_LEN];
+    }
+    SCENES[idx].label
+}
+
 /// Capture current shell state into the ATLAS_SNAPSHOT.
 /// Derives SceneDescriptors from existing FRAMES, ACTIVE_SCENE_IDX, FOCUSED_SURFACE_ID.
 /// Safe: no allocation, no IPC, no sexdisplay changes.
@@ -2227,42 +2319,75 @@ unsafe fn atlas_capture_snapshot() {
         }; ATLAS_MAX_SCENES],
     };
 
+    // C1: [atlas.snapshot.start] — begin capture with lifecycle filtering.
+    serial_println!("[atlas.snapshot.start]");
+
     // Derive focused frame for active scene.
     let active_focused_frame = selected_frame_id().unwrap_or(0);
 
     // B1: Refresh scene flags from FRAMES state.
-        for si in 0..ATLAS_MAX_SCENES {
-            scene_update_flags(si as u8);
-        }
+    for si in 0..ATLAS_MAX_SCENES {
+        scene_update_flags(si as u8);
+    }
 
-        for scene_idx in 0..ATLAS_MAX_SCENES {
-            let sd = &mut snapshot.scenes[scene_idx];
-            sd.scene_id = scene_idx as u32;
-            sd.label = SCENES[scene_idx].label;
+    for scene_idx in 0..ATLAS_MAX_SCENES {
+        let sd = &mut snapshot.scenes[scene_idx];
+        sd.scene_id = scene_idx as u32;
+        sd.label = SCENES[scene_idx].label;
 
-            let mut frame_count: u8 = 0;
+        let mut frame_count: u8 = 0;
 
-            for f in FRAMES.iter() {
-                if let Some(frame) = f {
-                    if frame.scene_id as usize != scene_idx { continue; }
-                    // A8+: Skip frames whose active tab is dead or tombstoned.
-                    if let Some(sid) = active_surface_for_frame(frame.frame_id) {
-                        if !surface_is_alive(sid) || is_tombstoned(sid) {
-                            static mut ATLAS_PREVIEW_SKIP_DEAD_BUDGET: u32 = 8;
-                            let b = &mut ATLAS_PREVIEW_SKIP_DEAD_BUDGET;
-                            if *b > 0 { *b -= 1; serial_println!("[atlas.preview.skip_dead] scene={} frame={} sid={}", scene_idx, frame.frame_id, sid); }
+        for f in FRAMES.iter() {
+            if let Some(frame) = f {
+                if frame.scene_id as usize != scene_idx { continue; }
+                // C1: Skip minimized frames — hidden via 0xEE, not visible in tiling.
+                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 {
+                    serial_println!("[atlas.snapshot.skip] scene={} frame={} reason=minimized", scene_idx, frame.frame_id);
+                    continue;
+                }
+                // C1: Skip frames with dead, tombstoned, or lifecycle-invalid active tab.
+                if let Some(sid) = active_surface_for_frame(frame.frame_id) {
+                    if !surface_is_alive(sid) {
+                        serial_println!("[atlas.snapshot.skip] scene={} frame={} sid={} reason=dead", scene_idx, frame.frame_id, sid);
+                        continue;
+                    }
+                    if is_tombstoned(sid) {
+                        serial_println!("[atlas.snapshot.skip] scene={} frame={} sid={} reason=tombstoned", scene_idx, frame.frame_id, sid);
+                        continue;
+                    }
+                    // C1: Skip surfaces in non-tileable lifecycle states.
+                    if let Some(state) = lifecycle_state(sid) {
+                        match state {
+                            LifecycleState::Closing | LifecycleState::Destroyed
+                            | LifecycleState::Hidden => {
+                                serial_println!("[atlas.snapshot.skip] scene={} frame={} sid={} reason=lifecycle:{:?}",
+                                    scene_idx, frame.frame_id, sid, state);
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                    // C1: Skip surfaces with stale generation.
+                    if let Some(fr) = make_focus_ref(sid) {
+                        if !focus_ref_is_current(&fr) {
+                            serial_println!("[atlas.snapshot.skip] scene={} frame={} sid={} reason=generation",
+                                scene_idx, frame.frame_id, sid);
                             continue;
                         }
                     }
-                    if frame_count >= ATLAS_MAX_FRAMES_PER_SCENE as u8 { break; }
-                    sd.frame_ids[frame_count as usize] = frame.frame_id;
-                    frame_count += 1;
+                } else {
+                    continue;
                 }
+                if frame_count >= ATLAS_MAX_FRAMES_PER_SCENE as u8 { break; }
+                sd.frame_ids[frame_count as usize] = frame.frame_id;
+                frame_count += 1;
+                serial_println!("[atlas.snapshot.frame] scene={} frame={}", scene_idx, frame.frame_id);
             }
+        }
 
-            sd.frame_count = frame_count;
-            // B1: Use cached scene flags instead of re-deriving.
-            sd.flags = SCENES[scene_idx].flags;
+        sd.frame_count = frame_count;
+        // B1: Use cached scene flags instead of re-deriving.
+        sd.flags = SCENES[scene_idx].flags;
 
         // Focus: only the active scene has a tracked focused frame.
         if scene_idx == ACTIVE_SCENE_IDX as usize {
@@ -2272,6 +2397,9 @@ unsafe fn atlas_capture_snapshot() {
                 sd.flags |= SCENE_FLAG_HAS_FOCUS;
             }
         }
+
+        serial_println!("[atlas.snapshot.scene] scene={} frames={} flags={:#x}",
+            scene_idx, sd.frame_count, sd.flags);
     }
 
     ATLAS_SNAPSHOT = snapshot;
@@ -2283,17 +2411,6 @@ unsafe fn atlas_capture_snapshot() {
         let active = ACTIVE_SCENE_IDX;
         serial_println!("[shell.atlas.capture] scenes={} active={}",
             ATLAS_MAX_SCENES, active);
-    }
-    // Scene-level frame counts (post-filtering).
-    for si in 0..ATLAS_MAX_SCENES {
-        let sd = &ATLAS_SNAPSHOT.scenes[si];
-        static mut ATLAS_PREVIEW_SCENE_BUDGET: [u32; 5] = [4; 5];
-        let sb = &mut ATLAS_PREVIEW_SCENE_BUDGET[si];
-        if *sb > 0 {
-            *sb -= 1;
-            serial_println!("[atlas.preview.scene] scene={} frames={} flags={:#x}",
-                si, sd.frame_count, sd.flags);
-        }
     }
 }
 
@@ -2313,6 +2430,7 @@ unsafe fn atlas_toggle() {
         // Exiting Atlas: clear overlay, restore normal rendering.
         atlas_clear_stub();
         ATLAS_MODE_ENABLED = false;
+        serial_println!("[atlas.view.exit]");
         static mut ATLAS_EXIT_BUDGET: u32 = 4;
         let b = &mut ATLAS_EXIT_BUDGET;
         if *b > 0 { *b -= 1; serial_println!("[shell.atlas.exit]"); }
@@ -2323,6 +2441,7 @@ unsafe fn atlas_toggle() {
         atlas_render_stub();
         clear_hover_if_wrong_scene();
         clear_drag_if_dead();
+        serial_println!("[atlas.view.enter]");
         static mut ATLAS_ENTER_BUDGET: u32 = 4;
         let b = &mut ATLAS_ENTER_BUDGET;
         if *b > 0 { *b -= 1; serial_println!("[shell.atlas.enter]"); }
@@ -2489,6 +2608,36 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
             static mut ATLAS_CANCEL_BUDGET: u32 = 4;
             let b = &mut ATLAS_CANCEL_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[shell.atlas.cancel]"); }
+        }
+        0x1E => { // 'A' — cycle accent token for selected scene
+            let sel = ATLAS_SELECTED_SCENE;
+            if validate_scene_id(sel) {
+                let idx = sel as usize;
+                let new_accent = (SCENES[idx].accent + 1) % ACCENT_COUNT;
+                SCENES[idx].accent = new_accent;
+                static mut ATLAS_ACCENT_BUDGET: u32 = 16;
+                let b = &mut ATLAS_ACCENT_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[atlas.scene.settings.accent] scene={} accent={}", sel, new_accent); }
+            } else {
+                static mut ATLAS_UI_REJECT_BUDGET: u32 = 8;
+                let b = &mut ATLAS_UI_REJECT_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[atlas.scene.settings.ui.reject] fn=accent scene={}", sel); }
+            }
+        }
+        0x19 => { // 'P' — toggle pinned flag for selected scene
+            let sel = ATLAS_SELECTED_SCENE;
+            if validate_scene_id(sel) {
+                let idx = sel as usize;
+                let new_pinned = !SCENES[idx].pinned;
+                SCENES[idx].pinned = new_pinned;
+                static mut ATLAS_PIN_BUDGET: u32 = 16;
+                let b = &mut ATLAS_PIN_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[atlas.scene.settings.pin] scene={} pinned={}", sel, new_pinned); }
+            } else {
+                static mut ATLAS_UI_REJECT_BUDGET: u32 = 8;
+                let b = &mut ATLAS_UI_REJECT_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[atlas.scene.settings.ui.reject] fn=pin scene={}", sel); }
+            }
         }
         _ => {
             static mut ATLAS_KEY_BUDGET: u32 = 4;
