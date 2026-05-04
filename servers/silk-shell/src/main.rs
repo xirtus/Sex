@@ -58,6 +58,7 @@ pub const SURFACE_ID_STATIC: u64 = 101;
 pub const SURFACE_ID_TEST3: u64 = 102;
 pub const SURFACE_ID_TEST4: u64 = 103;
 pub const SURFACE_ID_LINEN: u64 = 200;
+pub const SURFACE_ID_QUIL: u64 = 201;
 pub const SURFACE_ID_CURSOR: u64 = 0x90; // 144 — OS-owned cursor, no collision with app IDs
 pub const SURFACE_ID_LAUNCHER: u64 = 0x92; // 146 — launcher panel surface, toggled by launcher button
 pub const SURFACE_ID_STATUS: u64 = 0x93; // 147 — status panel surface, toggled by status chip click
@@ -72,6 +73,8 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 //   0x95  bell panel
 //   0x96  scene settings panel
 //   100+  app surfaces (SURFACE_ID_APP, SURFACE_ID_STATIC, etc.)
+//   200   linen (file viewer)
+//   201   quil (editor stub)
 pub const SURFACE_ID_SCENE_SETTINGS: u64 = 0x96;
 pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 
@@ -692,6 +695,10 @@ unsafe fn tile_visible_frames() {
                 SURFACE_200_X = rx; SURFACE_200_Y = ry;
                 SURFACE_200_W = rw; SURFACE_200_H = rh;
             }
+            SURFACE_ID_QUIL => {
+                SURFACE_201_X = rx; SURFACE_201_Y = ry;
+                SURFACE_201_W = rw; SURFACE_201_H = rh;
+            }
             _ => {}
         }
         pdx_call(SLOT_DISPLAY, 0xEC, sid,
@@ -986,6 +993,11 @@ static mut SURFACE_200_X: i32 = 900;
 static mut SURFACE_200_Y: i32 = 500;
 static mut SURFACE_200_W: u32 = 300;
 static mut SURFACE_200_H: u32 = 150;
+// Quil surface 201 position tracking
+static mut SURFACE_201_X: i32 = 100;
+static mut SURFACE_201_Y: i32 = 100;
+static mut SURFACE_201_W: u32 = 640;
+static mut SURFACE_201_H: u32 = 480;
 
 fn clamp_surface_size(x: i32, y: i32, w: u32, h: u32) -> (u32, u32) {
     let max_w = (P.width - x).max(P.min_width as i32) as u32;
@@ -1037,6 +1049,8 @@ fn emit_snapshot() {
         }
         // Linen surface 200 position update
         pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_LINEN, SURFACE_200_X as u64, SURFACE_200_Y as u64);
+        // Quil surface 201 position update
+        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_QUIL, SURFACE_201_X as u64, SURFACE_201_Y as u64);
     }
 }
 
@@ -1051,6 +1065,7 @@ unsafe fn get_surface_bounds(sid: u64) -> Option<(i32, i32, u32, u32)> {
         SURFACE_ID_TEST3  => Some((SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H)),
         SURFACE_ID_TEST4  => Some((SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H)),
         SURFACE_ID_LINEN  => Some((SURFACE_200_X, SURFACE_200_Y, SURFACE_200_W, SURFACE_200_H)),
+        SURFACE_ID_QUIL   => Some((SURFACE_201_X, SURFACE_201_Y, SURFACE_201_W, SURFACE_201_H)),
         _ => None,
     }
 }
@@ -1072,6 +1087,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             SURFACE_ID_TEST3  => (SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H),
             SURFACE_ID_TEST4  => (SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H),
             SURFACE_ID_LINEN  => (SURFACE_200_X, SURFACE_200_Y, SURFACE_200_W, SURFACE_200_H),
+            SURFACE_ID_QUIL   => (SURFACE_201_X, SURFACE_201_Y, SURFACE_201_W, SURFACE_201_H),
             // OS-owned surfaces: cursor and panels are known but non-focusable —
             // log nonfocusable.reject, not unknown.reject.
             SURFACE_ID_CURSOR
@@ -1099,6 +1115,7 @@ fn surface_is_alive(sid: u64) -> bool {
         SURFACE_ID_TEST3    => unsafe { SURFACE_102_ALIVE },
         SURFACE_ID_TEST4    => unsafe { SURFACE_103_ALIVE },
         SURFACE_ID_LINEN    => true,  // linen never destroys its surface
+        SURFACE_ID_QUIL     => true,  // quil never destroys its surface
         SURFACE_ID_CURSOR   => true,  // cursor never destroyed
         SURFACE_ID_LAUNCHER => unsafe { LAUNCHER_ACTIVE },
         SURFACE_ID_STATUS   => unsafe { STATUS_ACTIVE },
@@ -1147,7 +1164,7 @@ unsafe fn clear_focus_if_dead() {
     let focused = FOCUSED_SURFACE_ID;
     if focused != 0 && !surface_is_alive(focused) {
         serial_println!("[shell.surface.focus.clear.dead] id={}", focused);
-        let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
+        let z_order = [SURFACE_ID_QUIL, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                        SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
         let mut found = false;
         for &sid in &z_order {
@@ -1189,6 +1206,7 @@ fn is_focusable_surface(sid: u64) -> bool {
     sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
     || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
     || sid == SURFACE_ID_LINEN
+    || sid == SURFACE_ID_QUIL
 }
 
 // ── Scene / Workspace Helpers ──────────────────────────────────────────────────
@@ -1674,6 +1692,177 @@ unsafe fn linen_frame_id() -> Option<u32> {
     None
 }
 
+// ── Quil Surface Control Helpers ──────────────────────────────────────────
+// Quil is a first-class shell-managed app surface matching Linen control pattern.
+// Frame is created lazily (not at boot) to preserve boot visual.
+
+/// Frame ID reserved for Quil's ShellFrame.
+const QUIL_FRAME_ID: u32 = 3;
+/// Boot geometry for Quil when first opened.
+const QUIL_BOOT_X: i32 = 100;
+const QUIL_BOOT_Y: i32 = 100;
+const QUIL_BOOT_W: u32 = 640;
+const QUIL_BOOT_H: u32 = 480;
+
+/// Ensure a ShellFrame exists for Quil in an empty FRAMES slot, assigned to
+/// the active scene. Returns the frame_id if created/found, or 0 if no slot.
+/// Does NOT change visibility or tiling — caller decides that.
+unsafe fn ensure_quil_frame() -> Option<u32> {
+    // Check if Quil frame already exists.
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == QUIL_FRAME_ID {
+                return Some(QUIL_FRAME_ID);
+            }
+        }
+    }
+    // Find an empty slot.
+    for (slot_idx, slot) in FRAMES.iter_mut().enumerate() {
+        if slot.is_none() {
+            *slot = Some(ShellFrame {
+                frame_id: QUIL_FRAME_ID,
+                active_tab: 0,
+                tab_count: 1,
+                tabs: {
+                    let mut t: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                        [None; MAX_TABS_PER_FRAME as usize];
+                    t[0] = Some(ShellTab {
+                        surface_id: SURFACE_ID_QUIL,
+                        title_id: 0,
+                        flags: 0,
+                    });
+                    t
+                },
+                scene_id: ACTIVE_SCENE_IDX,
+                flags: FRAME_FLAG_TOP_BAR, // top bar ON by default
+                normal_x: QUIL_BOOT_X,
+                normal_y: QUIL_BOOT_Y,
+                normal_w: QUIL_BOOT_W,
+                normal_h: QUIL_BOOT_H,
+            });
+            static mut QUIL_CREATE_BUDGET: u32 = 4;
+            let b = &mut QUIL_CREATE_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.quil.frame.create] frame={} slot={}", QUIL_FRAME_ID, slot_idx); }
+            return Some(QUIL_FRAME_ID);
+        }
+    }
+    // No empty slot — log and fail.
+    static mut QUIL_NOSLOT_BUDGET: u32 = 4;
+    let b = &mut QUIL_NOSLOT_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.quil.frame.reject] reason=no_slot"); }
+    None
+}
+
+/// Open Quil in the active scene: ensure frame exists, un-minimize, position,
+/// focus, and tile. If Quil is already visible in the active scene, focuses it.
+/// Returns true if Quil became visible/focused.
+unsafe fn open_quil_in_active_scene() -> bool {
+    let fid = match ensure_quil_frame() {
+        Some(f) => f,
+        None => return false,
+    };
+
+    // Update frame scene to current active scene.
+    for f in FRAMES.iter_mut() {
+        if let Some(frame) = f {
+            if frame.frame_id == fid {
+                frame.scene_id = ACTIVE_SCENE_IDX;
+                break;
+            }
+        }
+    }
+
+    if frame_is_minimized(fid) {
+        if !restore_minimized_frame(fid) {
+            return false;
+        }
+    } else if frame_is_zoomed(fid) {
+        // Already visible and zoomed — ensure focus.
+    } else {
+        // Already visible in tiling — ensure focus and re-tile.
+        let sid = match active_surface_for_frame(fid) {
+            Some(s) => s,
+            None => return false,
+        };
+        if surface_is_alive(sid) {
+            pdx_call(SLOT_DISPLAY, 0xEC, sid,
+                (QUIL_BOOT_Y as u64) << 32 | QUIL_BOOT_X as u64,
+                (QUIL_BOOT_H as u64) << 32 | QUIL_BOOT_W as u64);
+        }
+        tile_visible_frames();
+        try_set_focus(sid);
+    }
+
+    if let Some(sid) = active_surface_for_frame(fid) {
+        try_set_focus(sid);
+    }
+
+    snap_capture_layout();
+    static mut QUIL_OPEN_BUDGET: u32 = 4;
+    let b = &mut QUIL_OPEN_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.quil.open] frame={}", fid); }
+    true
+}
+
+/// Focus Quil if it is already open (frame exists and not minimized in active
+/// scene). If Quil is not open, call open_quil_in_active_scene().
+/// Returns true if focus was set.
+unsafe fn focus_or_open_quil() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == QUIL_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                if let Some(sid) = active_surface_for_frame(QUIL_FRAME_ID) {
+                    if try_set_focus(sid) {
+                        static mut QUIL_FOCUS_BUDGET: u32 = 4;
+                        let b = &mut QUIL_FOCUS_BUDGET;
+                        if *b > 0 { *b -= 1; serial_println!("[shell.quil.focus] frame={}", QUIL_FRAME_ID); }
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    open_quil_in_active_scene()
+}
+
+/// Toggle Quil visibility in the active scene. If Quil frame exists and is
+/// not minimized, minimize it. Otherwise open/un-minimize it.
+/// Returns true if state changed.
+unsafe fn toggle_quil() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == QUIL_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                if minimize_frame(QUIL_FRAME_ID) {
+                    static mut QUIL_TOGGLE_BUDGET: u32 = 4;
+                    let b = &mut QUIL_TOGGLE_BUDGET;
+                    if *b > 0 { *b -= 1; serial_println!("[shell.quil.toggle.minimize] frame={}", QUIL_FRAME_ID); }
+                    return true;
+                }
+                return false;
+            }
+        }
+    }
+    open_quil_in_active_scene()
+}
+
+/// Return Quil's frame_id, if its frame exists.
+unsafe fn quil_frame_id() -> Option<u32> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == QUIL_FRAME_ID {
+                return Some(QUIL_FRAME_ID);
+            }
+        }
+    }
+    None
+}
+
 // ── Frame Chrome Query Helpers ─────────────────────────────────────────────────
 // These are shell-policy queries that map between surface_id (display/input
 // object) and the Frame/Tab model (window management abstraction).
@@ -1741,7 +1930,7 @@ unsafe fn selected_window_options_mask() -> u32 {
 /// OS-owned surfaces (linen, cursor, panels) and unknown surfaces cannot be closed.
 unsafe fn is_closeable_surface(surface_id: u64) -> bool {
     match surface_id {
-        SURFACE_ID_LINEN | SURFACE_ID_CURSOR
+        SURFACE_ID_LINEN | SURFACE_ID_QUIL | SURFACE_ID_CURSOR
         | SURFACE_ID_LAUNCHER | SURFACE_ID_STATUS
         | SURFACE_ID_CLOCK | SURFACE_ID_BELL
         | SURFACE_ID_SCENE_SETTINGS => false,
@@ -2026,6 +2215,10 @@ unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32)
         SURFACE_ID_LINEN => {
             SURFACE_200_X = x; SURFACE_200_Y = y;
             SURFACE_200_W = w; SURFACE_200_H = h;
+        }
+        SURFACE_ID_QUIL => {
+            SURFACE_201_X = x; SURFACE_201_Y = y;
+            SURFACE_201_W = w; SURFACE_201_H = h;
         }
         _ => {}
     }
