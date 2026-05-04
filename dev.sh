@@ -58,7 +58,8 @@ if [ "${SEXOS_QEMU_I8042:-}" = "off" ]; then
 fi
 
 # Assemble QEMU arguments.
-QEMU_BIN="qemu-system-x86_64"
+# QEMU_BIN override: use QEMU_BIN=/path/to/qemu-system-x86_64 to test different versions
+QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 QEMU_ARGS=(
     $MACHINE_ARG
     -m 512M
@@ -97,7 +98,7 @@ case "$CMD" in
     "$QEMU_BIN" "${QEMU_ARGS[@]}"
     ;;
   run-nographic)
-    qemu-system-x86_64 \
+    "$QEMU_BIN" \
       $MACHINE_ARG \
       -m 512M \
       -cpu max,+pku \
