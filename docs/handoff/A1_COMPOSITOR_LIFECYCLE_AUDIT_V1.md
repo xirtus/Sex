@@ -103,7 +103,7 @@ The current silk-shell lifecycle model is **implicit, scattered, and incomplete*
 - `ATLAS_MODE_ENABLED: bool` — state only, no visual behavior in V1
 - Atlas is overview mode, not a separate lifecycle owner
 
-**Contradiction with A doc:** A doc says "No heap allocation for FSM state (static arrays only)" (STOP FIRST §12.10). But `WINDOWS: Vec<WindowState>` at line 870 is a `Vec` — heap-allocated. This must be reconciled in A3.
+**Contradiction with A doc:** `WINDOWS: Vec<WindowState>` at line 870 is an existing heap-backed model that conflicts with the target lifecycle canon (STOP FIRST §12.10: "No heap allocation for FSM state (static arrays only)"). A2 must decide whether to preserve temporarily, replace with static arrays in A3, or STOP FIRST if replacement causes broad refactor.
 
 ---
 
@@ -222,7 +222,7 @@ Idle → ClickPending → Dragging → Idle
 | Drag cancels before lifecycle transition | Drag cancelled AFTER close/minimize, not before. No check in toggle_zoom_frame(). | **Blocks A5** |
 | Apps cannot force focus — caller identity check | No caller validation. Any code path can call try_set_focus(). | **Blocks A4** |
 | Minimized cannot receive pointer focus | try_set_focus() doesn't check frame_accepts_input(). Could focus minimized. | **Blocks A4** |
-| No heap allocation for FSM state | `WINDOWS: Vec<WindowState>` uses heap. | Requires reconciliation in A3 |
+| No heap allocation for FSM state | `WINDOWS: Vec<WindowState>` is heap-backed | A2 must decide: preserve, replace in A3, or STOP FIRST if broad refactor |
 | Lifecycle transitions produce proof markers | No lifecycle proof markers exist. Existing markers are per-operation. | **Blocks A8** |
 | 0xEE for destroy only, 0x?? for hide | 0xEE used for both destroy AND minimize/hide. | **Blocks A7** |
 | All geometry bounds-checked | Yes, clamp_position/clamp_surface_size exist. | ✅ OK |
@@ -276,7 +276,7 @@ Idle → ClickPending → Dragging → Idle
 | try_set_focus() doesn't check minimized | `try_set_focus()` | §11.4 | **High** | A4: add `frame_accepts_input()` check |
 | 0xEE used for both destroy and hide | `close_surface_from_frame_light()`, `minimize_frame()` | §11.11 | **High** | A7: separate opcodes or add lifecycle state to payload |
 | Drag not checked before lifecycle transition | `close_surface_from_frame_light()`, `toggle_zoom_frame()` | §11.9 | **High** | A5: add drag-before guard |
-| WINDOWS uses Vec (heap) | line 870 | §12.10 (STOP FIRST) | **Medium** | A3: convert to static array |
+| WINDOWS uses Vec (heap) | line 870 | §12.10 (STOP FIRST) | Medium | A2: decide preserve vs replace vs STOP FIRST |
 | Close not idempotent (no reject proof marker) | `close_surface_from_frame_light()` | §11.6, §11.19 | **Medium** | A5: add reject marker |
 | Focus change during drag not blocked | `try_set_focus()` | §11.9 | **Medium** | A4: add drag-pin rule |
 | Hardcoded z-order in clear_focus_if_dead() | `clear_focus_if_dead()` | §11.3 | **Low** | A4: derive z-order from frame state |
@@ -290,7 +290,7 @@ Idle → ClickPending → Dragging → Idle
 **A2 (FSM Spec) blockers:** None. A2 is a handoff doc — the audit confirms the FSM spec can be written against the A doc's 8-state model regardless of current code state.
 
 **A3 (Shell Lifecycle Model) blockers:**
-1. `WINDOWS: Vec<WindowState>` is heap-allocated — must be converted to static array before state-tracking can be static
+1. `WINDOWS: Vec<WindowState>` is heap-backed — A2 must decide strategy before A3 adds state tracking
 2. No lifecycle state field on Surface/Frame — needs `surface_lifecycle: LifecycleState` enum
 3. No LifecycleGeneration counter — needs `LIFECYCLE_GENERATION: u64`
 4. No FocusRef — needs `FOCUSED_SURFACE: Option<(u64, u64)>` (surface_id + generation)
@@ -307,7 +307,7 @@ Idle → ClickPending → Dragging → Idle
 ## 15. Recommended Smallest-Safe Phase Order
 
 1. **A2 (FSM spec)** — No code, no blockers. Write handoff doc defining 8-state FSM, transitions, guards, proof markers. Can proceed immediately.
-2. **A3 (Shell lifecycle model)** — Add `LifecycleState` enum per surface, `LifecycleGeneration` counter, convert `WINDOWS` Vec to static array. No behavior change yet.
+2. **A3 (Shell lifecycle model)** — Add `LifecycleState` enum per surface, `LifecycleGeneration` counter, resolve `WINDOWS` Vec strategy per A2 decision. No behavior change yet.
 3. **A4 (Focus validity guards)** — Add generation safety to focus, caller validation framework, minimized check, drag-pin rule. Update `clear_focus_if_dead()` and `clear_focus_if_wrong_scene()`.
 4. **A6 (Tombstone events)** — Add generation to tombstone records, timestamp, caller identity. Can be done independently of A5.
 5. **A5 (Frame light actions)** — Wire close→Closing→Tombstoned→Destroyed through FSM. Add drag-before guard. Separate 0xEE destroy from 0x?? hide.
@@ -327,7 +327,7 @@ No STOP FIRST violations were found in the current codebase. The following areas
 3. **Any Destroyed surface resurrection** — no code path resurfaces dead IDs ✅ (but no mechanism prevents it if allocation changes)
 4. **Any focus on Tombstoned/Minimized** — try_set_focus() checks tombstoned but NOT minimized ✅ partial (minimized missing)
 5. **Any lifecycle transition during active drag** — close_surface_from_frame_light() does not check drag before close ❌ (gap, not violation — no drag target is closed by current dispatch paths in practice)
-6. **Any dynamic allocation for FSM state** — `WINDOWS: Vec<WindowState>` IS heap-allocated ❌ — STOP FIRST violation if A3 does not convert to static array
+6. **Any dynamic allocation for FSM state** — `WINDOWS: Vec<WindowState>` IS heap-backed — A2 must decide: preserve temporarily, replace in A3, or STOP FIRST if replacement causes broad refactor
 7. **Any sexdisplay protocol extension for lifecycle semantics** — no extension proposed ✅
 
 ---
@@ -337,7 +337,7 @@ No STOP FIRST violations were found in the current codebase. The following areas
 - **No code was changed** during this audit.
 - A2 (FSM spec) can proceed immediately — no code, handoff doc only.
 - A3, A4, A5, A6, A7, A8 must wait for A2 spec to stabilize before any implementation.
-- The `WINDOWS: Vec` heap allocation must be resolved in A3 to satisfy STOP FIRST §12.10.
+- The `WINDOWS: Vec` heap model must be resolved per A2 decision: preserve temporarily, replace in A3, or STOP FIRST.
 - The 0xEE semantic collision (destroy vs hide) must be resolved before A7 display conformance.
 - Caller identity validation mechanism must be designed in A4 before any focus authority changes.
 - Proof marker renaming (existing `[shell.*]` → `[comp.*]`) should be done in A8 to avoid breaking existing log parsing during intermediate phases.
