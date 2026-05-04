@@ -150,6 +150,7 @@ fn decode_tablet_report(buf: &[u8], len: usize) -> Option<TabletReport> {
 
 const SLOT_USB_SEXINPUT: u64 = 9;
 const OP_USB_MOUSE_REPORT: u64 = 0x260;
+const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
 // Gate per-iteration ring-advance and idle-poll serial logs.
 // Off by default for quiet production boot; set true for USB proof sessions.
 const HID_VERBOSE_RING_LOG: bool = false;
@@ -1850,6 +1851,7 @@ pub extern "C" fn _start() -> ! {
     let mut iface_is_boot_mouse: bool = false;
     let mut found_hid_mouse: bool = false;
     let mut found_hid_tablet: bool = false;
+    let mut found_hid_keyboard: bool = false;
     let mut hid_interface_number: u8 = 0;
     let mut hid_report_desc_len: u16 = 0;
     let mut intr_ep_addr: u8 = 0;
@@ -1881,10 +1883,16 @@ pub extern "C" fn _start() -> ! {
                     if is_hid {
                         inside_hid_iface = true;
                         iface_is_boot_mouse = (b_subclass == 0x01) && (b_protocol == 0x02);
+                        let is_boot_keyboard = (b_subclass == 0x01) && (b_protocol == 0x01);
                         if iface_is_boot_mouse {
                             found_hid_mouse = true;
                             hid_interface_number = b_intf_num;
                             serial_println!("[sexusb.xhci.config.hid_boot_mouse.found] intf={} off={}",
+                                b_intf_num, walk_off);
+                        } else if is_boot_keyboard {
+                            found_hid_keyboard = true;
+                            hid_interface_number = b_intf_num;
+                            serial_println!("[sexusb.xhci.config.hid_boot_keyboard.found] intf={} off={}",
                                 b_intf_num, walk_off);
                         } else if b_protocol != 0x01 {
                             // Non-keyboard HID interface (tablet/pointer)
@@ -1942,7 +1950,7 @@ pub extern "C" fn _start() -> ! {
                         intr_ep_addr = b_endpoint;
                         intr_ep_mps = pkt_size;
                         intr_ep_interval = b_interval;
-                        let ep_which = if iface_is_boot_mouse { "mouse" } else { "tablet" };
+                        let ep_which = if iface_is_boot_mouse { "mouse" } else if found_hid_keyboard { "keyboard" } else { "tablet" };
                         serial_println!("[sexusb.xhci.config.intr_ep.{}] off={} addr={:#x} mps={} interval={}",
                             ep_which, walk_off, b_endpoint, pkt_size, b_interval);
                     }
@@ -1962,12 +1970,18 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
-    if !found_hid_mouse && !found_hid_tablet {
+    if !found_hid_mouse && !found_hid_tablet && !found_hid_keyboard {
         serial_println!("[sexusb.xhci.config.no_hid.park]");
         loop { sys_yield(); }
     }
 
     let is_tablet_device = found_hid_tablet && !found_hid_mouse;
+    let is_keyboard_device = found_hid_keyboard;
+
+    // Boot keyboard diagnostic.
+    if found_hid_keyboard {
+        serial_println!("[sexusb.kbd.found] intf={} ep=0x{:x}", hid_interface_number, intr_ep_addr);
+    }
 
     // ===== GET_DESCRIPTOR(HID REPORT) =====
     // Phase: USB_XHCI_HID_REPORT_DESCRIPTOR_PROOF_V1
@@ -2454,7 +2468,7 @@ pub extern "C" fn _start() -> ! {
     // Inner loop waits indefinitely (no POLL_BUDGET timeout) — safe because the
     // xHCI completes (or NAKs-then-completes) the single enqueued TRB before we
     // re-arm. No second TRB is ever enqueued while one is outstanding.
-    let dev_kind = if is_tablet_device { "tablet" } else { "mouse" };
+    let dev_kind = if is_keyboard_device { "keyboard" } else if is_tablet_device { "tablet" } else { "mouse" };
     serial_println!("[sexusb.hid.{}.continuous.start] attempts=unbounded", dev_kind);
     let mut saw_nonzero = false;
     let mut i: u32 = 0;
@@ -2531,7 +2545,43 @@ pub extern "C" fn _start() -> ! {
         let intr_actual = intr_report_len - intr_residue;
         let report_ptr = intr_report_va as *const u8;
 
-        if is_tablet_device {
+        if is_keyboard_device {
+            // === Keyboard decode path ===
+            let kb_b0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
+            let kb_b1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
+            let kb_b2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
+            let kb_b3 = unsafe { core::ptr::read_volatile(report_ptr.add(3)) };
+            let kb_b4 = unsafe { core::ptr::read_volatile(report_ptr.add(4)) };
+            let kb_b5 = unsafe { core::ptr::read_volatile(report_ptr.add(5)) };
+            let kb_b6 = unsafe { core::ptr::read_volatile(report_ptr.add(6)) };
+            let kb_b7 = unsafe { core::ptr::read_volatile(report_ptr.add(7)) };
+            // Forward keyboard report to sexinput.
+            unsafe {
+                static mut KBD_RAW_BUDGET: u32 = 16;
+                let rem = &mut KBD_RAW_BUDGET;
+                if *rem > 0 {
+                    *rem -= 1;
+                    serial_println!("[sexusb.kbd.raw] b0=0x{:x} b2=0x{:x} b3=0x{:x} actual={}",
+                        kb_b0, kb_b2, kb_b3, intr_actual);
+                }
+            }
+            let first_key = kb_b2 as u64;
+            unsafe {
+                static mut KBD_FORWARD_BUDGET: u32 = 16;
+                let rem = &mut KBD_FORWARD_BUDGET;
+                if *rem > 0 && first_key != 0 {
+                    *rem -= 1;
+                    serial_println!("[sexusb.kbd.forward] key=0x{:x}", first_key);
+                }
+            }
+            let _ = pdx_call_checked(
+                SLOT_USB_SEXINPUT,
+                OP_USB_KEYBOARD_REPORT,
+                0,
+                kb_b0 as u64,  // arg1 = modifiers
+                first_key,     // arg2 = first pressed keycode (0 if none)
+            );
+        } else if is_tablet_device {
             // === Tablet decode path ===
             let rb0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
             let rb1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
@@ -2574,6 +2624,16 @@ pub extern "C" fn _start() -> ! {
                 };
                 let packed_axes = (dx_i8 as u8 as u64)
                     | ((dy_i8 as u8 as u64) << 8);
+                // Budgeted marker for what is forwarded to sexinput.
+                unsafe {
+                    static mut FORWARD_MOUSE_BUDGET: u32 = 16;
+                    let remaining = &mut FORWARD_MOUSE_BUDGET;
+                    if *remaining > 0 {
+                        *remaining -= 1;
+                        serial_println!("[sexusb.forward.mouse] buttons=0x{:x} packed=0x{:x}",
+                            td.buttons, packed_axes);
+                    }
+                }
                 let _ = pdx_call_checked(
                     SLOT_USB_SEXINPUT,
                     OP_USB_MOUSE_REPORT,
@@ -2586,6 +2646,18 @@ pub extern "C" fn _start() -> ! {
                         serial_println!("[sexusb.hid.tablet.continuous.idle] i={}", i);
                     }
                 } else {
+                    // Budgeted tablet report liveness marker.
+                    unsafe {
+                        static mut TABLET_LIVE_BUDGET: u32 = 16;
+                        let rem = &mut TABLET_LIVE_BUDGET;
+                        if *rem > 0 {
+                            *rem -= 1;
+                            serial_println!(
+                                "[sexusb.tablet.live] n={} x={} y={} buttons=0x{:x}",
+                                i, td.abs_x, td.abs_y, td.buttons
+                            );
+                        }
+                    }
                     serial_println!(
                         "[sexusb.hid.tablet.report] i={} buttons={:#x} x={} y={} dx={} dy={}",
                         i, td.buttons, td.abs_x, td.abs_y, dx_i8, dy_i8
@@ -2612,6 +2684,16 @@ pub extern "C" fn _start() -> ! {
                 let packed_axes = (decoded.dx as u8 as u64)
                     | ((decoded.dy as u8 as u64) << 8)
                     | ((decoded.wheel as u8 as u64) << 16);
+                // Budgeted marker for what is forwarded to sexinput (mouse path).
+                unsafe {
+                    static mut FORWARD_MOUSE_BUDGET_BOOT: u32 = 16;
+                    let remaining = &mut FORWARD_MOUSE_BUDGET_BOOT;
+                    if *remaining > 0 {
+                        *remaining -= 1;
+                        serial_println!("[sexusb.forward.mouse] buttons=0x{:x} packed=0x{:x}",
+                            decoded.buttons, packed_axes);
+                    }
+                }
                 let _ = pdx_call_checked(
                     SLOT_USB_SEXINPUT,
                     OP_USB_MOUSE_REPORT,
