@@ -470,6 +470,15 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
                 serial_println!("[sexdisplay.cursor_surface.z_top.ok] id={:#x}", CURSOR_SURFACE_ID);
                 serial_println!("[sexdisplay.cursor_shape.arrow.ok] id={:#x}", CURSOR_SURFACE_ID);
             }
+            // Budgeted marker: cursor actually drawn to framebuffer.
+            unsafe {
+                static mut DISPLAY_CURSOR_DRAW_BUDGET: u32 = 16;
+                let rem = &mut DISPLAY_CURSOR_DRAW_BUDGET;
+                if *rem > 0 {
+                    *rem -= 1;
+                    serial_println!("[sexdisplay.cursor.draw] n=0 x={} y={}", ox as i32, oy as i32);
+                }
+            }
             for row in 0..CURSOR_ARROW_H {
                 let py = oy + row;
                 if py >= h { break; }
@@ -772,6 +781,17 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                     if found && fb_live {
+                        if target_id == CURSOR_SURFACE_ID {
+                            // Budgeted marker: display received cursor surface update from shell.
+                            unsafe {
+                                static mut DISPLAY_CURSOR_UPDATE_BUDGET: u32 = 16;
+                                let rem = &mut DISPLAY_CURSOR_UPDATE_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!("[sexdisplay.cursor.surface.update] n=0 x={} y={}", new_x, new_y);
+                                }
+                            }
+                        }
                         redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
                     }
                 }

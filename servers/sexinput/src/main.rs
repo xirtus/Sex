@@ -13,6 +13,7 @@ fn panic(_info: &PanicInfo) -> ! {
 static mut LAST_BUTTONS: u8 = 0;
 const OP_HID_EVENT: u64 = 0x202;
 const OP_USB_MOUSE_REPORT: u64 = 0x260;
+const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
 /// Master switch for all synthetic input proofs (drag, click-focus, silkbar clicks).
 ///
 /// Set env var `SEXOS_PROOFS_DISABLED=1` at build time to disable all proofs
@@ -31,6 +32,11 @@ const OP_USB_MOUSE_REPORT: u64 = 0x260;
 /// SEXOS_PROOFS_DISABLED=1 ./scripts/entrypoint_build.sh
 /// ```
 const SYNTHETIC_INPUT_PROOFS_DISABLED: bool = option_env!("SEXOS_PROOFS_DISABLED").is_some();
+/// Dev-only keyboard cursor fallback. When enabled, arrow keys and WASD
+/// emit EV_REL events to move the cursor, bypassing broken QEMU USB HID input.
+/// Set env var `SEXOS_KEYBOARD_CURSOR=1` at build time to enable.
+/// Gate unset = no behavior change.
+const KEYBOARD_CURSOR_ENABLED: bool = option_env!("SEXOS_KEYBOARD_CURSOR").is_some();
 // One-shot gate: set true after synthetic drag proof stages 0→1→2 complete.
 // Prevents the drag proof from wrapping and replaying endlessly every 120 ticks.
 // Also set true when a real USB mouse input arrives, cancelling remaining proofs.
@@ -91,6 +97,32 @@ pub extern "C" fn _start() -> ! {
     sex_rt::heap_init();
     serial_println!("[sexinput] Normalizer Starting...");
 
+    // Budgeted proof gate state diagnostic.
+    // Fires once at boot to confirm whether synthetic input proofs are enabled.
+    unsafe {
+        static mut PROOF_GATE_BUDGET: u32 = 1;
+        let remaining = &mut PROOF_GATE_BUDGET;
+        if *remaining > 0 {
+            *remaining -= 1;
+            let state = if SYNTHETIC_INPUT_PROOFS_DISABLED { 0 } else { 1 };
+            let source = if SYNTHETIC_INPUT_PROOFS_DISABLED { "env" } else { "default" };
+            serial_println!("[proof.gate.state] enabled={} source={}", state, source);
+        }
+    }
+
+    // Budgeted keyboard cursor gate diagnostic.
+    // Fires once at boot to confirm whether keyboard cursor fallback is enabled.
+    unsafe {
+        static mut KBD_CURSOR_GATE_BUDGET: u32 = 1;
+        let remaining = &mut KBD_CURSOR_GATE_BUDGET;
+        if *remaining > 0 {
+            *remaining -= 1;
+            serial_println!("[keyboard_cursor.gate] enabled={} source={}",
+                if KEYBOARD_CURSOR_ENABLED { 1 } else { 0 },
+                if KEYBOARD_CURSOR_ENABLED { "env" } else { "default" });
+        }
+    }
+
     unsafe {
         sys_set_state(SVC_STATE_LISTENING);
     }
@@ -149,6 +181,15 @@ pub extern "C" fn _start() -> ! {
                         serial_println!("[sexinput.mouse.real.delta] dx={} dy={} buttons={:#x}", dx, dy, buttons);
                     }
                 }
+                // Budgeted liveness: sexinput received a mouse report from sexusb (tablet path).
+                unsafe {
+                    static mut MOUSE_LIVE_BUDGET: u32 = 16;
+                    let rem = &mut MOUSE_LIVE_BUDGET;
+                    if *rem > 0 {
+                        *rem -= 1;
+                        serial_println!("[sexinput.mouse.live] n=0 dx={} dy={} buttons=0x{:x}", dx, dy, buttons);
+                    }
+                }
 
                 // Budgeted diagnostic for real USB button transitions.
                 // Fires only when buttons field is nonzero (actual button event).
@@ -176,6 +217,17 @@ pub extern "C" fn _start() -> ! {
 
                 for i in 0..norm_count {
                     let (arg0, arg1, arg2) = normalized_events[i];
+                    // Budgeted marker for EV_REL emission to shell.
+                    if arg2 == 2 { // EV_REL
+                        unsafe {
+                            static mut HID_EMIT_REL_BUDGET: u32 = 16;
+                            let rem = &mut HID_EMIT_REL_BUDGET;
+                            if *rem > 0 {
+                                *rem -= 1;
+                                serial_println!("[sexinput.hid.emit.rel] n=0 dx={} dy={}", arg0 as i32, arg1 as i32);
+                            }
+                        }
+                    }
                     if let Err(err) = pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2) {
                         if send_err == 0 {
                             send_err = err;
@@ -186,6 +238,51 @@ pub extern "C" fn _start() -> ! {
                     serial_println!("[sexinput.usb_mouse.shell_send.ok]");
                 } else {
                     serial_println!("[sexinput.usb_mouse.shell_send.fail] err={}", send_err);
+                }
+            } else if req.type_id == OP_USB_KEYBOARD_REPORT {
+                // USB HID boot keyboard report via sexusb.
+                // arg0 = reserved, arg1 = modifiers, arg2 = first keycode (USB HID usage ID)
+                let modifiers = req.arg1 as u8;
+                let keycode = req.arg2 as u8;
+                unsafe {
+                    static mut KBD_RECV_BUDGET: u32 = 16;
+                    let rem = &mut KBD_RECV_BUDGET;
+                    if *rem > 0 {
+                        *rem -= 1;
+                        serial_println!("[sexinput.kbd.recv] key=0x{:x} mod=0x{:x}", keycode, modifiers);
+                    }
+                }
+                // Dev-only keyboard cursor fallback (SEXOS_KEYBOARD_CURSOR=1).
+                // Map USB HID usage IDs to EV_REL cursor movement.
+                // Only on key-down (nonzero keycode, no rate limiting).
+                if KEYBOARD_CURSOR_ENABLED && keycode != 0 {
+                    // USB HID keyboard usage IDs for cursor keys + WASD
+                    let (dx, dy): (i32, i32) = match keycode {
+                        0x1a | 0x52 => (0, -8),   // W / Up
+                        0x16 | 0x51 => (0, 8),    // S / Down
+                        0x04 | 0x50 => (-8, 0),   // A / Left
+                        0x07 | 0x4f => (8, 0),    // D / Right
+                        _ => (0, 0),
+                    };
+                    if dx != 0 || dy != 0 {
+                        unsafe {
+                            static mut KBD_CURSOR_KEY_BUDGET_USB: u32 = 16;
+                            let rem = &mut KBD_CURSOR_KEY_BUDGET_USB;
+                            if *rem > 0 {
+                                *rem -= 1;
+                                serial_println!("[keyboard_cursor.key] code=0x{:x} dx={} dy={}", keycode, dx, dy);
+                            }
+                        }
+                        pdx_call(SLOT_SHELL, OP_HID_EVENT, dx as u64, dy as u64, EV_REL);
+                        unsafe {
+                            static mut KBD_CURSOR_REL_BUDGET_USB: u32 = 16;
+                            let rem = &mut KBD_CURSOR_REL_BUDGET_USB;
+                            if *rem > 0 {
+                                *rem -= 1;
+                                serial_println!("[keyboard_cursor.emit.rel] dx={} dy={}", dx, dy);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -203,6 +300,57 @@ pub extern "C" fn _start() -> ! {
                 let value = if scancode & 0x80 == 0 { 1 } else { 0 };
                 let code = (scancode & 0x7F) as u64;
                 pdx_call(SLOT_SHELL, OP_HID_EVENT, code, value, EV_KEY);
+
+                // 2b. Dev-only keyboard cursor fallback (SEXOS_KEYBOARD_CURSOR=1).
+                //     On key press, emit EV_REL to move cursor in 8px steps.
+                //     Arrow keys (0x48/0x50/0x4B/0x4D) and WASD (0x11/0x1F/0x1E/0x20).
+                //     Gate unset = zero overhead, no behavior change.
+                if KEYBOARD_CURSOR_ENABLED && value == 1 {
+                    let (dx, dy): (i32, i32) = match code {
+                        0x11 | 0x48 => (0, -8),   // W / Up
+                        0x1F | 0x50 => (0, 8),    // S / Down
+                        0x1E | 0x4B => (-8, 0),   // A / Left
+                        0x20 | 0x4D => (8, 0),    // D / Right
+                        _ => (0, 0),
+                    };
+                    if dx != 0 || dy != 0 {
+                        unsafe {
+                            static mut KBD_CURSOR_KEY_BUDGET: u32 = 16;
+                            let rem = &mut KBD_CURSOR_KEY_BUDGET;
+                            if *rem > 0 {
+                                *rem -= 1;
+                                serial_println!("[keyboard_cursor.key] code=0x{:x} dx={} dy={}", code, dx, dy);
+                            }
+                        }
+                        pdx_call(SLOT_SHELL, OP_HID_EVENT, dx as u64, dy as u64, EV_REL);
+                        unsafe {
+                            static mut KBD_CURSOR_REL_BUDGET: u32 = 16;
+                            let rem = &mut KBD_CURSOR_REL_BUDGET;
+                            if *rem > 0 {
+                                *rem -= 1;
+                                serial_println!("[keyboard_cursor.emit.rel] dx={} dy={}", dx, dy);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2c. Bounded one-shot keyboard cursor self-test.
+        //     When KEYBOARD_CURSOR_ENABLED is set, fires exactly one EV_REL(0, -8)
+        //     on the first poll cycle after boot to prove the pipeline works without
+        //     requiring QEMU host input routing (which is broken on QEMU 11.0.0).
+        //     Uses the same pdx_call path as real keyboard cursor movement.
+        //     One-shot: KBD_SELF_TEST_DONE prevents replay.
+        if KEYBOARD_CURSOR_ENABLED {
+            unsafe {
+                static mut KBD_SELF_TEST_DONE: bool = false;
+                if !KBD_SELF_TEST_DONE {
+                    KBD_SELF_TEST_DONE = true;
+                    serial_println!("[keyboard_cursor.self_test] dx=0 dy=-8");
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 0u64, (-8i64) as u64, EV_REL);
+                    serial_println!("[keyboard_cursor.self_test.ok]");
+                }
             }
         }
 

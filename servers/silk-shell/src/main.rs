@@ -1421,6 +1421,16 @@ pub extern "C" fn _start() -> ! {
                         } else if event_class == EV_REL {
                             let dx = msg.arg0 as i32;
                             let dy = msg.arg1 as i32;
+                            // Budgeted liveness: shell received EV_REL from sexinput.
+                            unsafe {
+                                static mut HID_REL_LIVE_BUDGET: u32 = 16;
+                                let rem = &mut HID_REL_LIVE_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!("[shell.hid.rel.live] n=0 x={} y={} dx={} dy={}",
+                                        POINTER_X, POINTER_Y, dx, dy);
+                                }
+                            }
                             // Initialize POINTER_X/Y on first EV_REL (real USB path).
                             // The USB handler also does this for OP_USB_MOUSE_REPORT path
                             // (synthetic proof). Whichever fires first sets the center position.
@@ -1475,6 +1485,15 @@ pub extern "C" fn _start() -> ! {
 
                             serial_println!("[silk-shell] Pointer REL d=({},{}) pos=({},{})",
                                 dx, dy, POINTER_X, POINTER_Y);
+                            // Budgeted marker: shell sends cursor surface update to display.
+                            unsafe {
+                                static mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET: u32 = 16;
+                                let rem = &mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!("[shell.cursor.surface.update] n=0 x={} y={}", POINTER_X, POINTER_Y);
+                                }
+                            }
                             // Move cursor surface to updated pointer position.
                             serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
                             pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
