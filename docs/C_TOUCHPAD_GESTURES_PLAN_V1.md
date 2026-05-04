@@ -128,7 +128,7 @@ Gesture FSMs are orthogonal to the shell's existing InteractionState until gestu
 
 1. Every committed gesture must have a valid GestureTarget. If target becomes invalid mid-gesture, cancel.
 2. Focus changes mid-gesture: lock initial target (V1 policy: lock, do not chase focus). Record target + lifecycle generation at start. Revalidate on commit.
-3. V1 thresholds and timeouts are fixed deterministic constants in shell source code. No runtime configuration. Future adjustments deferred to accessibility/settings track (D).
+3. V1 thresholds and timeouts are fixed deterministic constants in shell source code. No runtime configuration. Future customization remains shell-owned, validated, reversible, and gated by D accessibility + shortcut/conflict audit.
 4. Raw contacts never cross PD boundaries as unsafe pointers. Only NormalizedPointerEvent crosses sexinput→shell boundary. Apps receive only existing pointer/click path.
 5. Gesture output must be shell actions, not framebuffer writes. sexdisplay receives intents, not pixels.
 6. Gesture cancel must leave shell layout in valid state (no half-zoomed frames, no mid-switch Scene).
