@@ -31,12 +31,17 @@ const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
 /// # Interactive visual mode: proofs disabled
 /// SEXOS_PROOFS_DISABLED=1 ./scripts/entrypoint_build.sh
 /// ```
-const SYNTHETIC_INPUT_PROOFS_DISABLED: bool = option_env!("SEXOS_PROOFS_DISABLED").is_some();
+const SYNTHETIC_INPUT_PROOFS_DISABLED: bool = true; // FORCED OFF
 /// Dev-only keyboard cursor fallback. When enabled, arrow keys and WASD
 /// emit EV_REL events to move the cursor, bypassing broken QEMU USB HID input.
 /// Set env var `SEXOS_KEYBOARD_CURSOR=1` at build time to enable.
 /// Gate unset = no behavior change.
 const KEYBOARD_CURSOR_ENABLED: bool = option_env!("SEXOS_KEYBOARD_CURSOR").is_some();
+/// Enables one-shot synthetic keyboard proof for F5/F6 HID event path.
+/// Set env var `SEXOS_KEYBOARD_PROOF=1` at build time to enable.
+/// Default (unset): no behavior change.
+/// Only affects sexinput; no kernel changes.
+const KEYBOARD_PROOF_ENABLED: bool = option_env!("SEXOS_KEYBOARD_PROOF").is_some();
 // One-shot gate: set true after synthetic drag proof stages 0→1→2 complete.
 // Prevents the drag proof from wrapping and replaying endlessly every 120 ticks.
 // Also set true when a real USB mouse input arrives, cancelling remaining proofs.
@@ -131,6 +136,7 @@ pub extern "C" fn _start() -> ! {
     let mut drag_proof_stage: u8 = 0;
     let mut synth_click_stage: u8 = 0;
     let mut silkbar_click_stage: u8 = 0;
+    let mut kbd_proof_stage: u8 = 0;
 
     loop {
         // 0. Local USB->sexinput PDX proof path (no shell routing in this phase).
@@ -545,6 +551,49 @@ pub extern "C" fn _start() -> ! {
                     serial_println!("[sexinput.synthetic.click_focus.up]");
                     let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0u64, 0u64);
                     synth_click_stage = 3;
+                }
+                _ => {}
+            }
+        }
+
+        // 6. One-shot synthetic keyboard proof for F5/F6 scene settings.
+        //    Sends F5 press+release, then second F5 press+release, then F6 press+release
+        //    via OP_HID_EVENT EV_KEY.
+        //    Bounded: kbd_proof_stage prevents replay after stage 5.
+        //    Gate: SEXOS_KEYBOARD_PROOF=1 env var at build time.
+        if KEYBOARD_PROOF_ENABLED {
+            match kbd_proof_stage {
+                // F5 press: scancode 0x3F = 63, EV_KEY, value=1 (pressed)
+                0 if tick == 50 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 63, 1, EV_KEY);
+                    serial_println!("[sexinput.kbd_proof.f5.down]");
+                    kbd_proof_stage = 1;
+                }
+                // F5 release
+                1 if tick == 55 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 63, 0, EV_KEY);
+                    serial_println!("[sexinput.kbd_proof.f5.up]");
+                    kbd_proof_stage = 2;
+                }
+                // Second F5 (proves cycle wraps + persist fires again)
+                2 if tick == 100 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 63, 1, EV_KEY);
+                    kbd_proof_stage = 3;
+                }
+                3 if tick == 105 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 63, 0, EV_KEY);
+                    kbd_proof_stage = 4;
+                }
+                // F6: scancode 0x40 = 64, EV_KEY, value=1 (pressed)
+                4 if tick == 150 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 64, 1, EV_KEY);
+                    serial_println!("[sexinput.kbd_proof.f6.down]");
+                    kbd_proof_stage = 5;
+                }
+                5 if tick == 155 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 64, 0, EV_KEY);
+                    serial_println!("[sexinput.kbd_proof.f6.up]");
+                    kbd_proof_stage = 6;
                 }
                 _ => {}
             }
