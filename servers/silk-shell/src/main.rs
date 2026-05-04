@@ -1835,6 +1835,24 @@ unsafe fn surface_in_active_scene(sid: u64) -> bool {
     true // panels/cursor always visible
 }
 
+/// Return the scene_id of the frame containing this surface, if any.
+/// Surfaces with no frame association (panels, cursor) return None.
+/// B2: Used by try_set_focus to reject focus for surfaces in inactive scenes.
+unsafe fn surface_scene_id(sid: u64) -> Option<u8> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            for tab in frame.tabs.iter() {
+                if let Some(t) = tab {
+                    if t.surface_id == sid {
+                        return Some(frame.scene_id);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// If the focused surface belongs to a frame in a non-active scene,
 /// clear focus to a surface in the active scene.
 unsafe fn clear_focus_if_wrong_scene() {
@@ -2367,6 +2385,8 @@ unsafe fn switch_scene(scene_idx: u8) {
     clear_hover_if_wrong_scene();
     tile_visible_frames();
     snap_capture_layout();
+    // B2: Update scene flags for the previous scene before switching.
+    scene_update_flags(prev);
     // B1: Update scene flags for the new active scene.
     scene_update_flags(idx);
     // Capture Atlas snapshot after scene switch.
@@ -3937,8 +3957,6 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         serial_println!("[lifecycle.tombstone.reject_focus] sid={} reason=tombstoned", sid);
         return false;
     }
-    // Guard: reject focus for surfaces belonging to frames not in the active scene.
-    // Panels, cursor, and other non-frame surfaces are always eligible.
     // A4: Reject if lifecycle state does not allow focus (Visible or Mapped only).
     if !surface_is_lifecycle_focusable(sid) {
         serial_println!("[focus.lifecycle.reject] id={}", sid);
@@ -3949,6 +3967,14 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         if !focus_ref_is_current(&fr) {
             serial_println!("[focus.generation.reject] id={}", sid);
             serial_println!("[lifecycle.generation.stale_reject] sid={} gen={:?}", sid, surface_generation(sid));
+            return false;
+        }
+    }
+    // B2: Reject focus if surface belongs to a frame in a non-active scene.
+    // Panels, cursor, and non-frame surfaces have no scene association and are always eligible.
+    if let Some(scene) = surface_scene_id(sid) {
+        if scene != ACTIVE_SCENE_IDX {
+            serial_println!("[scene.focus.reject.inactive] id={} sid_scene={} active={}", sid, scene, ACTIVE_SCENE_IDX);
             return false;
         }
     }
