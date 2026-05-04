@@ -268,9 +268,16 @@ fn emit_snapshot() {
 }
 
 /// Returns true if (px, py) is within the given surface's bounds.
+/// Guards: returns false if surface is dead/invalid.
 /// Accesses surface position from static mut (caller must ensure unsafe context).
 fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
     unsafe {
+        // Self-defending: skip dead surfaces regardless of caller precondition.
+        // This ensures no hit-test or drag-start can select a destroyed surface.
+        if !surface_is_alive(sid) {
+            serial_println!("[shell.surface.dead.skip] id={} reason=inactive", sid);
+            return false;
+        }
         let (x, y, w, h) = match sid {
             SURFACE_ID_APP    => (WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, SURFACE_100_H),
             SURFACE_ID_STATIC => (SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H),
