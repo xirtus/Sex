@@ -9,6 +9,7 @@ members = [
     "servers/sexusb",
     "servers/silkbar",
     "servers/linen",
+    "servers/quil",
     "servers/sexstore",
     "apps/sexdrive",
     "purple-scanout",
