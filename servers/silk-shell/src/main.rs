@@ -77,7 +77,11 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 //   201   quil (editor stub)
 pub const SURFACE_ID_SCENE_SETTINGS: u64 = 0x96;
 pub const SURFACE_ID_ATLAS_OVERLAY: u64 = 0x97; // 151 — Atlas overview surface, toggled by F10
-pub const OP_SURFACE_DESTROY: u64 = 0xEE;
+/// 0xEE — deactivate surface on sexdisplay (active=false).
+/// Sexdisplay does NOT free resources — callers must manage lifecycle.
+/// Used for both permanent destroy AND temporary hide; the shell's
+/// lifecycle FSM (A3/A6) tracks the semantic difference.
+pub const OP_SURFACE_DEACTIVATE: u64 = 0xEE;
 
 // ── App Surface Registry ──────────────────────────────────────────────────────
 // Compile-time registry for OS-managed app surfaces (frame-owned, shell-tracked).
@@ -1473,6 +1477,8 @@ unsafe fn record_tombstone_event(
     });
     TOMBSTONE_RING_NEXT = (idx + 1) % TOMBSTONE_RING_SIZE;
     serial_println!("[tombstone.event.record] sid={} old={:?} new={:?} reason={:?} gen={}",
+        sid, old_state, new_state, reason, generation);
+    serial_println!("[lifecycle.tombstone.record] sid={} old={:?} new={:?} reason={:?} gen={}",
         sid, old_state, new_state, reason, generation);
 }
 
@@ -2939,6 +2945,7 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
         match state {
             LifecycleState::Closing | LifecycleState::Tombstoned | LifecycleState::Destroyed => {
                 serial_println!("[tombstone.close.reject.dead] sid={} state={:?}", surface_id, state);
+                serial_println!("[lifecycle.destroy.reject] sid={} state={:?} reason=already_dead", surface_id, state);
                 return false;
             }
             _ => {}
@@ -2972,8 +2979,14 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     record_tombstone_event(surface_id, old_state, LifecycleState::Closing, TombstoneReason::CloseRequested);
     set_lifecycle_state(surface_id, LifecycleState::Tombstoned);
     record_tombstone_event(surface_id, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::CloseRequested);
+    // A6: Complete the lifecycle FSM: Tombstoned -> Destroyed.
+    set_lifecycle_state(surface_id, LifecycleState::Destroyed);
+    record_tombstone_event(surface_id, LifecycleState::Tombstoned, LifecycleState::Destroyed, TombstoneReason::FinalDestroy);
+    serial_println!("[lifecycle.destroy.record] sid={}", surface_id);
     serial_println!("[frame.light.close.fsm] sid={}", surface_id);
-    pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
+    // Deactivate surface on display (active=false). Sexdisplay does not free resources;
+    // the shell's lifecycle FSM (Tombstoned) prevents reuse without generation safety.
+    pdx_call(SLOT_DISPLAY, OP_SURFACE_DEACTIVATE, surface_id, 0, 0);
     // Focus fallback: clear remaining stale focus and drag.
     clear_focus_if_dead();
     clear_drag_if_dead();
@@ -3074,8 +3087,9 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
     set_frame_minimized(frame_id, true);
     // A3: Track lifecycle state transition: Visible/Hidden -> Minimized.
     set_lifecycle_state(surface_id, LifecycleState::Minimized);
-    // Hide surface on display.
-    pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
+    // Hide surface on display (deactivate). Restore uses 0xEC to re-activate.
+    // Same 0xEE opcode as close, but lifecycle state differs (Minimized vs Tombstoned).
+    pdx_call(SLOT_DISPLAY, OP_SURFACE_DEACTIVATE, surface_id, 0, 0);
     // Clear drag if dragging this surface.
     clear_drag_if_dead();
     // Clear hover if the minimized frame was hovered.
@@ -3112,6 +3126,13 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
     };
     if !surface_is_alive(surface_id) {
         return false;
+    }
+    // A6: Reject restore for Tombstoned/Destroyed/Closing lifecycle states.
+    if let Some(state) = lifecycle_state(surface_id) {
+        if matches!(state, LifecycleState::Tombstoned | LifecycleState::Destroyed | LifecycleState::Closing) {
+            serial_println!("[lifecycle.tombstone.reject_restore] sid={} state={:?}", surface_id, state);
+            return false;
+        }
     }
     // Clear minimized flag.
     set_frame_minimized(frame_id, false);
@@ -3815,6 +3836,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
     }
     if is_tombstoned(sid) {
         serial_println!("[shell.focus.reject.tombstoned] id={}", sid);
+        serial_println!("[lifecycle.tombstone.reject_focus] sid={} reason=tombstoned", sid);
         return false;
     }
     // Guard: reject focus for surfaces belonging to frames not in the active scene.
@@ -3828,6 +3850,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
     if let Some(fr) = make_focus_ref(sid) {
         if !focus_ref_is_current(&fr) {
             serial_println!("[focus.generation.reject] id={}", sid);
+            serial_println!("[lifecycle.generation.stale_reject] sid={} gen={:?}", sid, surface_generation(sid));
             return false;
         }
     }
@@ -5043,6 +5066,9 @@ pub extern "C" fn _start() -> ! {
                                             record_tombstone_event(target, os_100, LifecycleState::Closing, TombstoneReason::DestroyCommand);
                                             set_lifecycle_state(target, LifecycleState::Tombstoned);
                                             record_tombstone_event(target, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::DestroyCommand);
+                                            set_lifecycle_state(target, LifecycleState::Destroyed);
+                                            record_tombstone_event(target, LifecycleState::Tombstoned, LifecycleState::Destroyed, TombstoneReason::FinalDestroy);
+                                            serial_println!("[lifecycle.destroy.record] sid={}", target);
                                         } else if target == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
                                             SURFACE_101_ALIVE = false;
                                             pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
@@ -5054,6 +5080,9 @@ pub extern "C" fn _start() -> ! {
                                             record_tombstone_event(target, os_101, LifecycleState::Closing, TombstoneReason::DestroyCommand);
                                             set_lifecycle_state(target, LifecycleState::Tombstoned);
                                             record_tombstone_event(target, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::DestroyCommand);
+                                            set_lifecycle_state(target, LifecycleState::Destroyed);
+                                            record_tombstone_event(target, LifecycleState::Tombstoned, LifecycleState::Destroyed, TombstoneReason::FinalDestroy);
+                                            serial_println!("[lifecycle.destroy.record] sid={}", target);
                                         } else if target == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
                                             SURFACE_102_ALIVE = false;
                                             pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
@@ -5065,6 +5094,9 @@ pub extern "C" fn _start() -> ! {
                                             record_tombstone_event(target, os_102, LifecycleState::Closing, TombstoneReason::DestroyCommand);
                                             set_lifecycle_state(target, LifecycleState::Tombstoned);
                                             record_tombstone_event(target, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::DestroyCommand);
+                                            set_lifecycle_state(target, LifecycleState::Destroyed);
+                                            record_tombstone_event(target, LifecycleState::Tombstoned, LifecycleState::Destroyed, TombstoneReason::FinalDestroy);
+                                            serial_println!("[lifecycle.destroy.record] sid={}", target);
                                         } else if target == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
                                             SURFACE_103_ALIVE = false;
                                             pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
@@ -5076,6 +5108,9 @@ pub extern "C" fn _start() -> ! {
                                             record_tombstone_event(target, os_103, LifecycleState::Closing, TombstoneReason::DestroyCommand);
                                             set_lifecycle_state(target, LifecycleState::Tombstoned);
                                             record_tombstone_event(target, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::DestroyCommand);
+                                            set_lifecycle_state(target, LifecycleState::Destroyed);
+                                            record_tombstone_event(target, LifecycleState::Tombstoned, LifecycleState::Destroyed, TombstoneReason::FinalDestroy);
+                                            serial_println!("[lifecycle.destroy.record] sid={}", target);
                                         }
                                         if destroyed {
                                             if target == SURFACE_ID_APP {
