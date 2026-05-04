@@ -1035,6 +1035,8 @@ fn emit_snapshot() {
         if SURFACE_103_ALIVE {
             pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_TEST4, SURFACE_103_X as u64, SURFACE_103_Y as u64);
         }
+        // Linen surface 200 position update
+        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_LINEN, SURFACE_200_X as u64, SURFACE_200_Y as u64);
     }
 }
 
@@ -1494,6 +1496,184 @@ unsafe fn close_focused_tab_or_frame_safe() -> bool {
     }
 }
 
+// ── Linen Surface Control Helpers (LINEN_SURFACE_CONTROL_V1) ──────────────
+// Make Linen a first-class shell-managed surface under Scene/Frame/Tab/Tiling.
+// Linen frame is created lazily (not at boot) to preserve boot visual.
+
+/// Frame ID reserved for Linen's ShellFrame.
+const LINEN_FRAME_ID: u32 = 2;
+/// Boot geometry for Linen when first opened (matches Linen's hardcoded 0xEC args).
+const LINEN_BOOT_X: i32 = 900;
+const LINEN_BOOT_Y: i32 = 500;
+const LINEN_BOOT_W: u32 = 300;
+const LINEN_BOOT_H: u32 = 150;
+
+/// Ensure a ShellFrame exists for Linen in an empty FRAMES slot, assigned to
+/// the active scene. Returns the frame_id if created/found, or 0 if no slot.
+/// Does NOT change visibility or tiling — caller decides that.
+unsafe fn ensure_linen_frame() -> Option<u32> {
+    // Check if Linen frame already exists.
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == LINEN_FRAME_ID {
+                return Some(LINEN_FRAME_ID);
+            }
+        }
+    }
+    // Find an empty slot.
+    for (slot_idx, slot) in FRAMES.iter_mut().enumerate() {
+        if slot.is_none() {
+            *slot = Some(ShellFrame {
+                frame_id: LINEN_FRAME_ID,
+                active_tab: 0,
+                tab_count: 1,
+                tabs: {
+                    let mut t: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                        [None; MAX_TABS_PER_FRAME as usize];
+                    t[0] = Some(ShellTab {
+                        surface_id: SURFACE_ID_LINEN,
+                        title_id: 0,
+                        flags: 0,
+                    });
+                    t
+                },
+                scene_id: ACTIVE_SCENE_IDX,
+                flags: FRAME_FLAG_TOP_BAR, // top bar ON by default
+                normal_x: LINEN_BOOT_X,
+                normal_y: LINEN_BOOT_Y,
+                normal_w: LINEN_BOOT_W,
+                normal_h: LINEN_BOOT_H,
+            });
+            static mut LINEN_CREATE_BUDGET: u32 = 4;
+            let b = &mut LINEN_CREATE_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.linen.frame.create] frame={} slot={}", LINEN_FRAME_ID, slot_idx); }
+            return Some(LINEN_FRAME_ID);
+        }
+    }
+    // No empty slot — log and fail.
+    static mut LINEN_NOSLOT_BUDGET: u32 = 4;
+    let b = &mut LINEN_NOSLOT_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.linen.frame.reject] reason=no_slot"); }
+    None
+}
+
+/// Open Linen in the active scene: ensure frame exists, un-minimize, position,
+/// focus, and tile. If Linen is already visible in the active scene, focuses it.
+/// Returns true if Linen became visible/focused.
+unsafe fn open_linen_in_active_scene() -> bool {
+    let fid = match ensure_linen_frame() {
+        Some(f) => f,
+        None => return false,
+    };
+
+    // Update frame scene to current active scene.
+    for f in FRAMES.iter_mut() {
+        if let Some(frame) = f {
+            if frame.frame_id == fid {
+                frame.scene_id = ACTIVE_SCENE_IDX;
+                break;
+            }
+        }
+    }
+
+    if frame_is_minimized(fid) {
+        // Restore (un-minimize) to make visible.
+        if !restore_minimized_frame(fid) {
+            return false;
+        }
+    } else if frame_is_zoomed(fid) {
+        // Already visible and zoomed — just ensure focus.
+    } else {
+        // Already visible in tiling — ensure focus and re-tile.
+        let sid = match active_surface_for_frame(fid) {
+            Some(s) => s,
+            None => return false,
+        };
+        // Ensure surface is shown on display (0xEC upsert).
+        if surface_is_alive(sid) {
+            pdx_call(SLOT_DISPLAY, 0xEC, sid,
+                (LINEN_BOOT_Y as u64) << 32 | LINEN_BOOT_X as u64,
+                (LINEN_BOOT_H as u64) << 32 | LINEN_BOOT_W as u64);
+        }
+        tile_visible_frames();
+        try_set_focus(sid);
+    }
+
+    // Focus Linen's surface.
+    if let Some(sid) = active_surface_for_frame(fid) {
+        try_set_focus(sid);
+    }
+
+    snap_capture_layout();
+    static mut LINEN_OPEN_BUDGET: u32 = 4;
+    let b = &mut LINEN_OPEN_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.linen.open] frame={}", fid); }
+    true
+}
+
+/// Focus Linen if it is already open (frame exists and not minimized in active
+/// scene). If Linen is not open, call open_linen_in_active_scene().
+/// Returns true if focus was set.
+unsafe fn focus_or_open_linen() -> bool {
+    // Check if Linen frame exists and is visible in active scene.
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == LINEN_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                if let Some(sid) = active_surface_for_frame(LINEN_FRAME_ID) {
+                    if try_set_focus(sid) {
+                        static mut LINEN_FOCUS_BUDGET: u32 = 4;
+                        let b = &mut LINEN_FOCUS_BUDGET;
+                        if *b > 0 { *b -= 1; serial_println!("[shell.linen.focus] frame={}", LINEN_FRAME_ID); }
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    // Not visible — open it.
+    open_linen_in_active_scene()
+}
+
+/// Toggle Linen visibility in the active scene. If Linen frame exists and is
+/// not minimized, minimize it. Otherwise open/un-minimize it.
+/// Returns true if state changed.
+unsafe fn toggle_linen() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == LINEN_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                // Linen visible — minimize it.
+                if minimize_frame(LINEN_FRAME_ID) {
+                    static mut LINEN_TOGGLE_BUDGET: u32 = 4;
+                    let b = &mut LINEN_TOGGLE_BUDGET;
+                    if *b > 0 { *b -= 1; serial_println!("[shell.linen.toggle.minimize] frame={}", LINEN_FRAME_ID); }
+                    return true;
+                }
+                return false;
+            }
+        }
+    }
+    // Linen not visible — open it.
+    open_linen_in_active_scene()
+}
+
+/// Return Linen's frame_id, if its frame exists.
+unsafe fn linen_frame_id() -> Option<u32> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == LINEN_FRAME_ID {
+                return Some(LINEN_FRAME_ID);
+            }
+        }
+    }
+    None
+}
+
 // ── Frame Chrome Query Helpers ─────────────────────────────────────────────────
 // These are shell-policy queries that map between surface_id (display/input
 // object) and the Frame/Tab model (window management abstraction).
@@ -1842,6 +2022,10 @@ unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32)
         SURFACE_ID_TEST4 => {
             SURFACE_103_X = x; SURFACE_103_Y = y;
             SURFACE_103_W = w; SURFACE_103_H = h;
+        }
+        SURFACE_ID_LINEN => {
+            SURFACE_200_X = x; SURFACE_200_Y = y;
+            SURFACE_200_W = w; SURFACE_200_H = h;
         }
         _ => {}
     }
