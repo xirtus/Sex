@@ -76,6 +76,7 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 //   200   linen (file viewer)
 //   201   quil (editor stub)
 pub const SURFACE_ID_SCENE_SETTINGS: u64 = 0x96;
+pub const SURFACE_ID_ATLAS_OVERLAY: u64 = 0x97; // 151 — Atlas overview surface, toggled by F10
 pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 
 // ── App Surface Registry ──────────────────────────────────────────────────────
@@ -1037,6 +1038,37 @@ const SCENE_FLAG_HAS_FOCUS: u8      = 1 << 2;  // scene contains focused surface
 const SCENE_FLAG_HAS_MINIMIZED: u8  = 1 << 3;  // scene has at least one minimized frame
 const SCENE_FLAG_HAS_ZOOMED: u8     = 1 << 4;  // scene has at least one zoomed frame
 
+// ── Atlas Render Constants (card layout, colors) ─────────────────────────────
+/// Atlas card width in pixels.
+const ATLAS_CARD_W: u32 = 220;
+/// Atlas card height in pixels.
+const ATLAS_CARD_H: u32 = 150;
+/// Gap between adjacent cards.
+const ATLAS_CARD_GAP: i32 = 24;
+/// Number of cards in first row (3 for 5 total).
+const ATLAS_CARDS_ROW0: usize = 3;
+/// Number of cards in second row (2 for 5 total).
+const ATLAS_CARDS_ROW1: usize = 2;
+/// Small frame indicator block width.
+const ATLAS_FRAME_BLOCK_W: u32 = 36;
+/// Small frame indicator block height.
+const ATLAS_FRAME_BLOCK_H: u32 = 28;
+/// Gap between frame blocks within a card.
+const ATLAS_FRAME_BLOCK_GAP: i32 = 8;
+/// Padding from card edge to frame blocks.
+const ATLAS_FRAME_PAD: i32 = 12;
+/// Upper card area height (above frame blocks) for scene color block.
+const ATLAS_CARD_TOP_H: u32 = 100;
+
+/// Atlas card colors (ARGB). Dim, non-saturated palette.
+const ATLAS_COLOR_BG: u32 = 0x00182850;          // dark navy overlay background
+const ATLAS_COLOR_CARD_ACTIVE: u32 = 0x004468c0; // brighter blue — active scene
+const ATLAS_COLOR_CARD_SCENE: u32 = 0x00284878;  // medium blue — non-active scene
+const ATLAS_COLOR_CARD_EMPTY: u32 = 0x00182850;  // dim — empty scene
+const ATLAS_COLOR_FRAME_NORMAL: u32 = 0x003860a0; // frame block (normal)
+const ATLAS_COLOR_FRAME_ZOOMED: u32 = 0x0048c080; // frame block (zoomed)
+const ATLAS_COLOR_FRAME_MINIMIZED: u32 = 0x00304060; // frame block (minimized)
+
 /// Describes one Scene for the Atlas overview.
 /// Derived from current shell state, not independently mutable.
 #[derive(Debug, Clone, Copy)]
@@ -1578,21 +1610,22 @@ unsafe fn atlas_is_enabled() -> bool {
 /// On exit: nothing extra (normal shell mode resumes).
 /// No sexdisplay changes, no rendering in V1.
 unsafe fn atlas_toggle() {
-    ATLAS_MODE_ENABLED = !ATLAS_MODE_ENABLED;
-    // Capture fresh snapshot on toggle.
-    atlas_capture_snapshot();
     if ATLAS_MODE_ENABLED {
-        // Entering Atlas: clear stale hover/drag to prevent interaction
-        // state from a previous mode bleeding into Atlas awareness.
+        // Exiting Atlas: clear overlay, restore normal rendering.
+        atlas_clear_stub();
+        ATLAS_MODE_ENABLED = false;
+        static mut ATLAS_EXIT_BUDGET: u32 = 4;
+        let b = &mut ATLAS_EXIT_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.atlas.exit]"); }
+    } else {
+        // Entering Atlas: render overlay, clear stale hover/drag.
+        ATLAS_MODE_ENABLED = true;
+        atlas_render_stub();
         clear_hover_if_wrong_scene();
         clear_drag_if_dead();
         static mut ATLAS_ENTER_BUDGET: u32 = 4;
         let b = &mut ATLAS_ENTER_BUDGET;
         if *b > 0 { *b -= 1; serial_println!("[shell.atlas.enter]"); }
-    } else {
-        static mut ATLAS_EXIT_BUDGET: u32 = 4;
-        let b = &mut ATLAS_EXIT_BUDGET;
-        if *b > 0 { *b -= 1; serial_println!("[shell.atlas.exit]"); }
     }
 }
 
@@ -1606,6 +1639,121 @@ unsafe fn atlas_exit() {
         let b = &mut ATLAS_EXIT_BUDGET;
         if *b > 0 { *b -= 1; serial_println!("[shell.atlas.exit]"); }
     }
+}
+
+// ── Atlas Render Stub ─────────────────────────────────────────────────────────
+
+/// Compute card position for a given scene index (0..4).
+/// Layout: row 0 has 3 cards (scenes 0,1,2), row 1 has 2 cards (scenes 3,4),
+/// each row centered horizontally in the content area.
+fn atlas_card_pos(scene_idx: usize, cw: u32) -> (i32, i32, u32, u32) {
+    let card_w = ATLAS_CARD_W;
+    let card_h = ATLAS_CARD_H;
+    let gap = ATLAS_CARD_GAP;
+    // Y offset from overlay top: row 0 at 30px, row 1 below with gap.
+    let (row, col) = if scene_idx < ATLAS_CARDS_ROW0 {
+        (0i32, scene_idx as i32)
+    } else {
+        (1i32, (scene_idx - ATLAS_CARDS_ROW0) as i32)
+    };
+    let cards_in_row = if row == 0 { ATLAS_CARDS_ROW0 as i32 } else { ATLAS_CARDS_ROW1 as i32 };
+    let total_w = (card_w * cards_in_row as u32) + (gap as u32 * (cards_in_row as u32 - 1));
+    let start_x = ((cw as i32 - total_w as i32) / 2).max(0);
+    let x = start_x + col * (card_w as i32 + gap);
+    let y = 30 + row * (card_h as i32 + gap);
+    (x, y, card_w, card_h)
+}
+
+/// Render Atlas overview using existing 0xEC/0xEF/0xEE protocol.
+/// Creates a shell-owned overlay surface and draws scene cards as fill rects.
+/// No sexdisplay changes, no new ABI, no thumbnails.
+unsafe fn atlas_render_stub() {
+    // Capture fresh snapshot before rendering.
+    atlas_capture_snapshot();
+
+    let cw = P.width as u32;
+    let ch = (P.height - P.bar_height) as u32;
+    if cw == 0 || ch == 0 { return; }
+
+    // Create Atlas overlay surface (full content area, below SilkBar).
+    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_ATLAS_OVERLAY,
+        (P.bar_height as u64) << 32 | 0u64,
+        (ch as u64) << 32 | cw as u64);
+
+    // Fill background with dark overlay color.
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+        0,
+        (ATLAS_COLOR_BG as u64) << 32 | (ch as u64) << 16 | cw as u64);
+
+    // Draw cards for all scenes.
+    for scene_idx in 0..ATLAS_MAX_SCENES {
+        let sd = &ATLAS_SNAPSHOT.scenes[scene_idx];
+        let (cx, cy, card_w, card_h) = atlas_card_pos(scene_idx, cw);
+
+        // Determine card color.
+        let card_color = if (sd.flags & SCENE_FLAG_ACTIVE) != 0 {
+            ATLAS_COLOR_CARD_ACTIVE
+        } else if (sd.flags & SCENE_FLAG_EMPTY) != 0 {
+            ATLAS_COLOR_CARD_EMPTY
+        } else {
+            ATLAS_COLOR_CARD_SCENE
+        };
+
+        // Draw card background (top portion, above frame blocks).
+        let top_h = ATLAS_CARD_TOP_H.min(card_h);
+        pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+            (cy as u64) << 32 | cx as u64,
+            (card_color as u64) << 32 | (top_h as u64) << 16 | card_w as u64);
+
+        // Draw frame indicator blocks at card bottom.
+        let fc = sd.frame_count as usize;
+        let fb_w = ATLAS_FRAME_BLOCK_W;
+        let fb_h = ATLAS_FRAME_BLOCK_H;
+        let fb_gap = ATLAS_FRAME_BLOCK_GAP;
+        let fb_pad = ATLAS_FRAME_PAD;
+        let fb_total_w = (fc as u32).saturating_sub(1) * (fb_w + fb_gap as u32) + fb_w;
+        let fb_start_x = cx + (card_w as i32 - fb_total_w as i32) / 2;
+        let fb_y = cy + ATLAS_CARD_TOP_H as i32 + fb_pad;
+
+        for fi in 0..fc.min(ATLAS_MAX_FRAMES_PER_SCENE) {
+            let fb_x = fb_start_x + fi as i32 * (fb_w as i32 + fb_gap);
+            // Determine frame block color based on frame flags.
+            // V1: check scene-level flags as approximation.
+            let fb_color = if (sd.flags & SCENE_FLAG_HAS_ZOOMED) != 0 {
+                ATLAS_COLOR_FRAME_ZOOMED
+            } else if (sd.flags & SCENE_FLAG_HAS_MINIMIZED) != 0 {
+                ATLAS_COLOR_FRAME_MINIMIZED
+            } else {
+                ATLAS_COLOR_FRAME_NORMAL
+            };
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                (fb_y as u64) << 32 | fb_x as u64,
+                (fb_color as u64) << 32 | (fb_h as u64) << 16 | fb_w as u64);
+        }
+    }
+
+    static mut ATLAS_RENDER_BUDGET: u32 = 4;
+    let b = &mut ATLAS_RENDER_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.atlas.render]"); }
+}
+
+/// Clear Atlas overlay and restore normal scene rendering.
+/// Destroys the overlay surface via 0xEE, then re-syncs scene visibility
+/// and re-tiles visible frames.
+unsafe fn atlas_clear_stub() {
+    // Hide Atlas overlay surface.
+    pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_ATLAS_OVERLAY, 0, 0);
+    // Restore current scene visibility and tiling.
+    sync_scene_visibility();
+    clear_focus_if_dead();
+    clear_drag_if_dead();
+    clear_hover_if_wrong_scene();
+    tile_visible_frames();
+    snap_capture_layout();
+
+    static mut ATLAS_CLEAR_BUDGET: u32 = 4;
+    let b = &mut ATLAS_CLEAR_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.atlas.clear] restore"); }
 }
 
 /// Switch active scene to a specific index. Safe: clamps to WORKSPACE_COUNT-1.
