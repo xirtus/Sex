@@ -124,6 +124,67 @@ const APP_SURFACES: [AppSurfaceSpec; 2] = [
     },
 ];
 
+// ── A3: Lifecycle State Model ─────────────────────────────────────────────────
+// Additive metadata only. No behavior change.
+// See docs/handoff/A2_COMPOSITOR_LIFECYCLE_FSM_SPEC_V1.md
+
+/// Canonical lifecycle states for a shell-managed surface.
+/// Focus is NOT a lifecycle state — tracked separately via FocusRef.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum LifecycleState {
+    /// SurfaceId reserved but no frame mapped. No display state.
+    Allocated = 0,
+    /// Surface attached to a Frame. Has geometry but may not be visible.
+    Mapped = 1,
+    /// Surface in active scene, frame not minimized, z-order includes it.
+    Visible = 2,
+    /// Surface's frame is in a non-active scene. No input routing.
+    Hidden = 3,
+    /// Frame collapsed. Surface hidden. No pointer focus.
+    Minimized = 4,
+    /// Close requested — irreversible. Must transition to Tombstoned.
+    Closing = 5,
+    /// Surface dead but record exists. Cannot receive focus.
+    Tombstoned = 6,
+    /// Terminal. SurfaceId eligible for reuse only with generation safety.
+    Destroyed = 7,
+}
+
+/// A validated reference to a surface that may be focused.
+/// The generation field detects stale references after lifecycle transitions.
+#[derive(Debug, Clone, Copy)]
+struct FocusRef {
+    surface_id: u64,
+    generation: u64,
+}
+
+/// Per-surface lifecycle metadata.
+#[derive(Debug, Clone, Copy)]
+struct SurfaceLifecycle {
+    state: LifecycleState,
+    generation: u64,
+}
+
+/// Maximum number of tracked lifecycle surfaces.
+const LIFECYCLE_MAX_SURFACES: usize = 32;
+
+/// Lifecycle metadata for all tracked surfaces.
+/// Indexed linearly; searched by surface_id on access.
+/// Preserves existing hardcoded SurfaceIds — no dynamic allocation.
+static mut LIFECYCLE_TABLE: [Option<(u64, SurfaceLifecycle)>; LIFECYCLE_MAX_SURFACES] = [None; LIFECYCLE_MAX_SURFACES];
+
+/// Global monotonic lifecycle generation counter.
+/// Incremented on transitions that invalidate stale references:
+/// entering Closing, Closing->Tombstoned, Tombstoned->Destroyed.
+/// Starts at 1. 0 reserved for no-surface / uninitialized.
+static mut LIFECYCLE_GENERATION: u64 = 1;
+
+/// FocusRef shadow of FOCUSED_SURFACE_ID. Updated in parallel via sync_focus_ref().
+/// Does not change focus behavior — purely additive for A4 readiness.
+static mut FOCUSED_SURFACE: Option<FocusRef> = None;
+
+
 /// Validate the app surface registry at boot.
 /// Checks for duplicate surface_ids and frame_ids.
 /// Logs a diagnostic marker — does NOT halt on duplicate (shell continues safely).
@@ -1068,6 +1129,8 @@ const ATLAS_COLOR_CARD_EMPTY: u32 = 0x00182850;  // dim — empty scene
 const ATLAS_COLOR_FRAME_NORMAL: u32 = 0x003860a0; // frame block (normal)
 const ATLAS_COLOR_FRAME_ZOOMED: u32 = 0x0048c080; // frame block (zoomed)
 const ATLAS_COLOR_FRAME_MINIMIZED: u32 = 0x00304060; // frame block (minimized)
+/// Bright cyan border drawn around the currently selected Atlas card.
+const ATLAS_COLOR_SELECT: u32 = 0x0080e0ff;
 
 /// Describes one Scene for the Atlas overview.
 /// Derived from current shell state, not independently mutable.
@@ -1135,6 +1198,9 @@ static mut ATLAS_SNAPSHOT: AtlasSnapshot = AtlasSnapshot {
 /// Atlas mode enabled: when true, the shell is in overview mode (no rendering yet in V1).
 /// Toggled by F10 (ToggleAtlas). State-only — no visual behavior changes in V1.
 static mut ATLAS_MODE_ENABLED: bool = false;
+/// Index of the currently selected scene in Atlas mode (0..4).
+/// Reset to active_scene_id when entering Atlas. Updated by arrow key navigation.
+static mut ATLAS_SELECTED_SCENE: u8 = 0;
 /// Bounded tombstone list for recently-closed surface IDs.
 /// Prevents immediate reuse of freed IDs. Circular insertion.
 static mut TOMBSTONES: [u64; 8] = [0; 8];
@@ -1406,6 +1472,205 @@ unsafe fn clear_drag_if_wrong_scene() {
     }
 }
 
+
+
+// ── A3: Lifecycle State Helpers ──────────────────────────────────────────────────
+// Additive metadata only. No behavior change.
+// All helpers are unsafe because they access static mut LIFECYCLE_TABLE.
+
+/// Register a surface with its initial lifecycle state. Called once at boot.
+/// Returns false if the table is full or the surface is already registered.
+unsafe fn lifecycle_register(sid: u64, initial_state: LifecycleState) -> bool {
+    for i in 0..LIFECYCLE_MAX_SURFACES {
+        if let Some((registered_sid, _)) = &LIFECYCLE_TABLE[i] {
+            if *registered_sid == sid {
+                // Already registered — update state on re-init.
+                LIFECYCLE_TABLE[i] = Some((sid, SurfaceLifecycle {
+                    state: initial_state,
+                    generation: 1,
+                }));
+                return true;
+            }
+        }
+    }
+    for i in 0..LIFECYCLE_MAX_SURFACES {
+        if LIFECYCLE_TABLE[i].is_none() {
+            LIFECYCLE_TABLE[i] = Some((sid, SurfaceLifecycle {
+                state: initial_state,
+                generation: 1,
+            }));
+            return true;
+        }
+    }
+    false
+}
+
+/// Lookup the lifecycle state for a surface. Returns None for unknown surfaces.
+unsafe fn lifecycle_state(sid: u64) -> Option<LifecycleState> {
+    for i in 0..LIFECYCLE_MAX_SURFACES {
+        if let Some((registered_sid, ref record)) = LIFECYCLE_TABLE[i] {
+            if registered_sid == sid {
+                return Some(record.state);
+            }
+        }
+    }
+    None
+}
+
+/// Set the lifecycle state for a surface. Returns false if surface unknown.
+/// Bumps the surface generation on transitions that invalidate stale references.
+/// Additive only — does not change any behavioral boolean or flag.
+unsafe fn set_lifecycle_state(sid: u64, next: LifecycleState) -> bool {
+    for i in 0..LIFECYCLE_MAX_SURFACES {
+        if let Some((registered_sid, ref mut record)) = &mut LIFECYCLE_TABLE[i] {
+            if *registered_sid == sid {
+                let prev = record.state;
+                if prev == next {
+                    return true; // no-op
+                }
+                // Bump generation on transitions that invalidate stale references.
+                let bump = matches!((prev, next),
+                    (LifecycleState::Visible, LifecycleState::Closing)
+                    | (LifecycleState::Hidden, LifecycleState::Closing)
+                    | (LifecycleState::Minimized, LifecycleState::Closing)
+                    | (LifecycleState::Closing, LifecycleState::Tombstoned)
+                    | (LifecycleState::Tombstoned, LifecycleState::Destroyed)
+                    | (_, LifecycleState::Destroyed)
+                );
+                if bump {
+                    let new_gen = LIFECYCLE_GENERATION.wrapping_add(1);
+                    if new_gen == 0 {
+                        serial_println!("[lifecycle.generation.bump.wrap] sid={} prev={:?} next={:?}", sid, prev, next);
+                        // STOP FIRST: wraparound requires audit of all FocusRef references.
+                        // Saturate — do not wrap to 0.
+                    } else {
+                        LIFECYCLE_GENERATION = new_gen;
+                        record.generation = new_gen;
+                        serial_println!("[lifecycle.generation.bump] sid={} gen={} prev={:?} next={:?}", sid, new_gen, prev, next);
+                    }
+                }
+                record.state = next;
+                serial_println!("[lifecycle.transition.allow] sid={} from={:?} to={:?}", sid, prev, next);
+                return true;
+            }
+        }
+    }
+    serial_println!("[lifecycle.transition.reject] sid={} reason=unknown_surface", sid);
+    false
+}
+
+/// Lookup the current generation for a surface. Returns None for unknown surfaces.
+unsafe fn surface_generation(sid: u64) -> Option<u64> {
+    for i in 0..LIFECYCLE_MAX_SURFACES {
+        if let Some((registered_sid, ref record)) = LIFECYCLE_TABLE[i] {
+            if registered_sid == sid {
+                return Some(record.generation);
+            }
+        }
+    }
+    None
+}
+
+/// Bump the generation for a surface. Returns false if surface unknown.
+unsafe fn bump_surface_generation(sid: u64) -> bool {
+    for i in 0..LIFECYCLE_MAX_SURFACES {
+        if let Some((registered_sid, ref mut record)) = &mut LIFECYCLE_TABLE[i] {
+            if *registered_sid == sid {
+                let new_gen = LIFECYCLE_GENERATION.wrapping_add(1);
+                if new_gen == 0 {
+                    serial_println!("[lifecycle.generation.bump.wrap] sid={}", sid);
+                    return false;
+                }
+                LIFECYCLE_GENERATION = new_gen;
+                record.generation = new_gen;
+                serial_println!("[lifecycle.generation.bump] sid={} gen={}", sid, new_gen);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Create a FocusRef for a surface. Returns None for unknown or zero surface_id.
+unsafe fn make_focus_ref(sid: u64) -> Option<FocusRef> {
+    if sid == 0 {
+        return None;
+    }
+    let gen = surface_generation(sid)?;
+    let fr = FocusRef { surface_id: sid, generation: gen };
+    serial_println!("[lifecycle.focusref.make] sid={} gen={}", sid, gen);
+    Some(fr)
+}
+
+/// Returns true if a FocusRef is still current (generation matches).
+/// If the surface is unknown, returns false.
+unsafe fn focus_ref_is_current(r: &FocusRef) -> bool {
+    if let Some(current_gen) = surface_generation(r.surface_id) {
+        if r.generation == current_gen {
+            return true;
+        }
+        serial_println!("[lifecycle.focusref.reject] sid={} ref_gen={} current_gen={}",
+            r.surface_id, r.generation, current_gen);
+        false
+    } else {
+        serial_println!("[lifecycle.focusref.reject] sid={} reason=unknown_surface",
+            r.surface_id);
+        false
+    }
+}
+
+/// Sync FOCUSED_SURFACE (FocusRef) from FOCUSED_SURFACE_ID.
+/// Additive — does not change focus behavior.
+unsafe fn sync_focus_ref() {
+    let sid = FOCUSED_SURFACE_ID;
+    if sid == 0 {
+        FOCUSED_SURFACE = None;
+    } else {
+        FOCUSED_SURFACE = make_focus_ref(sid);
+    }
+}
+
+/// Returns true if the surface is in a live lifecycle state
+/// (Visible, Mapped, Hidden, or Minimized).
+unsafe fn surface_is_lifecycle_live(sid: u64) -> bool {
+    match lifecycle_state(sid) {
+        Some(LifecycleState::Visible) | Some(LifecycleState::Mapped)
+        | Some(LifecycleState::Hidden) | Some(LifecycleState::Minimized) => true,
+        _ => false,
+    }
+}
+
+/// Returns true if the surface can receive focus based on lifecycle state alone
+/// (Visible or Mapped). Does not check scene membership, frame flags, or caller.
+unsafe fn surface_is_lifecycle_focusable(sid: u64) -> bool {
+    match lifecycle_state(sid) {
+        Some(LifecycleState::Visible) | Some(LifecycleState::Mapped) => true,
+        _ => false,
+    }
+}
+
+/// Register all known surfaces with appropriate initial lifecycle states.
+/// Called once at boot after frame initialization.
+unsafe fn lifecycle_init_all() {
+    // Boot app surfaces — all start Visible in active scene.
+    lifecycle_register(SURFACE_ID_APP, LifecycleState::Visible);
+    lifecycle_register(SURFACE_ID_STATIC, LifecycleState::Visible);
+    lifecycle_register(SURFACE_ID_TEST3, LifecycleState::Visible);
+    lifecycle_register(SURFACE_ID_TEST4, LifecycleState::Visible);
+    lifecycle_register(SURFACE_ID_LINEN, LifecycleState::Visible);
+    lifecycle_register(SURFACE_ID_QUIL, LifecycleState::Visible);
+    // Cursor — always present, no frame.
+    lifecycle_register(SURFACE_ID_CURSOR, LifecycleState::Mapped);
+    // Panel surfaces — start Allocated (inactive, toggled on demand).
+    lifecycle_register(SURFACE_ID_LAUNCHER, LifecycleState::Allocated);
+    lifecycle_register(SURFACE_ID_STATUS, LifecycleState::Allocated);
+    lifecycle_register(SURFACE_ID_CLOCK, LifecycleState::Allocated);
+    lifecycle_register(SURFACE_ID_BELL, LifecycleState::Allocated);
+    lifecycle_register(SURFACE_ID_SCENE_SETTINGS, LifecycleState::Allocated);
+    // Atlas overlay — starts Allocated (toggled by F10).
+    lifecycle_register(SURFACE_ID_ATLAS_OVERLAY, LifecycleState::Allocated);
+    serial_println!("[lifecycle.state.init] lifecycle model initialized");
+}
 /// Returns true if the surface is shell-managed (draggable in V1).
 fn is_shell_surface(sid: u64) -> bool {
     sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
@@ -1620,6 +1885,7 @@ unsafe fn atlas_toggle() {
     } else {
         // Entering Atlas: render overlay, clear stale hover/drag.
         ATLAS_MODE_ENABLED = true;
+        ATLAS_SELECTED_SCENE = ACTIVE_SCENE_IDX;
         atlas_render_stub();
         clear_hover_if_wrong_scene();
         clear_drag_if_dead();
@@ -1684,6 +1950,121 @@ fn atlas_scene_at_point(px: i32, py: i32) -> Option<u8> {
     None
 }
 
+/// Handle keyboard input while Atlas mode is enabled.
+/// All scancodes except F10 (0x44) are routed here when ATLAS_MODE_ENABLED is true.
+/// Navigation: arrows move the selected card in the 3+2 layout.
+/// Confirm (Enter): switch to selected scene and exit Atlas.
+/// Cancel (Esc): exit Atlas without switching.
+/// Number keys 1-5: switch directly to scene (N-1).
+unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
+    // ── Number keys 1-5: direct scene select ──
+    if scancode >= 0x02 && scancode <= 0x06 {
+        let scene_idx = (scancode - 0x02) as u8;
+        if scene_idx < ATLAS_MAX_SCENES as u8 {
+            pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_ATLAS_OVERLAY, 0, 0);
+            if scene_idx != ACTIVE_SCENE_IDX {
+                switch_scene(scene_idx);
+            } else {
+                sync_scene_visibility();
+                clear_focus_if_dead();
+                clear_drag_if_dead();
+                clear_hover_if_wrong_scene();
+                tile_visible_frames();
+                snap_capture_layout();
+            }
+            ATLAS_MODE_ENABLED = false;
+            static mut ATLAS_CONFIRM_BUDGET: u32 = 4;
+            let b = &mut ATLAS_CONFIRM_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.atlas.confirm] id={}", scene_idx); }
+            return true;
+        }
+    }
+
+    match scancode {
+        0x4B => { // Left arrow
+            let sel = ATLAS_SELECTED_SCENE;
+            ATLAS_SELECTED_SCENE = match sel {
+                0 => 2, 1 => 0, 2 => 1,
+                3 => 4, 4 => 3,
+                _ => sel,
+            };
+            atlas_render_stub();
+            static mut ATLAS_KEY_BUDGET: u32 = 4;
+            let b = &mut ATLAS_KEY_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.atlas.key] dir=left sel={}", ATLAS_SELECTED_SCENE); }
+        }
+        0x4D => { // Right arrow
+            let sel = ATLAS_SELECTED_SCENE;
+            ATLAS_SELECTED_SCENE = match sel {
+                0 => 1, 1 => 2, 2 => 0,
+                3 => 4, 4 => 3,
+                _ => sel,
+            };
+            atlas_render_stub();
+            static mut ATLAS_KEY_BUDGET: u32 = 4;
+            let b = &mut ATLAS_KEY_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.atlas.key] dir=right sel={}", ATLAS_SELECTED_SCENE); }
+        }
+        0x48 => { // Up arrow
+            let sel = ATLAS_SELECTED_SCENE;
+            ATLAS_SELECTED_SCENE = match sel {
+                3 => 0, 4 => 1,
+                _ => sel,
+            };
+            if ATLAS_SELECTED_SCENE != sel {
+                atlas_render_stub();
+                static mut ATLAS_KEY_BUDGET: u32 = 4;
+                let b = &mut ATLAS_KEY_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[shell.atlas.key] dir=up sel={}", ATLAS_SELECTED_SCENE); }
+            }
+        }
+        0x50 => { // Down arrow
+            let sel = ATLAS_SELECTED_SCENE;
+            ATLAS_SELECTED_SCENE = match sel {
+                0 => 3, 1 => 4, 2 => 4,
+                _ => sel,
+            };
+            if ATLAS_SELECTED_SCENE != sel {
+                atlas_render_stub();
+                static mut ATLAS_KEY_BUDGET: u32 = 4;
+                let b = &mut ATLAS_KEY_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[shell.atlas.key] dir=down sel={}", ATLAS_SELECTED_SCENE); }
+            }
+        }
+        0x1C => { // Enter - confirm selection
+            let scene_idx = ATLAS_SELECTED_SCENE;
+            pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_ATLAS_OVERLAY, 0, 0);
+            if scene_idx != ACTIVE_SCENE_IDX {
+                switch_scene(scene_idx);
+            } else {
+                sync_scene_visibility();
+                clear_focus_if_dead();
+                clear_drag_if_dead();
+                clear_hover_if_wrong_scene();
+                tile_visible_frames();
+                snap_capture_layout();
+            }
+            ATLAS_MODE_ENABLED = false;
+            static mut ATLAS_CONFIRM_BUDGET: u32 = 4;
+            let b = &mut ATLAS_CONFIRM_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.atlas.confirm] id={}", scene_idx); }
+        }
+        0x01 => { // Escape - cancel, exit Atlas without switching
+            atlas_clear_stub();
+            ATLAS_MODE_ENABLED = false;
+            static mut ATLAS_CANCEL_BUDGET: u32 = 4;
+            let b = &mut ATLAS_CANCEL_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.atlas.cancel]"); }
+        }
+        _ => {
+            static mut ATLAS_KEY_BUDGET: u32 = 4;
+            let b = &mut ATLAS_KEY_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.atlas.key] scancode={:#x} noop", scancode); }
+        }
+    }
+    true
+}
+
 /// Render Atlas overview using existing 0xEC/0xEF/0xEE protocol.
 /// Creates a shell-owned overlay surface and draws scene cards as fill rects.
 /// No sexdisplay changes, no new ABI, no thumbnails.
@@ -1699,7 +2080,8 @@ unsafe fn atlas_render_stub() {
     pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_ATLAS_OVERLAY,
         (P.bar_height as u64) << 32 | 0u64,
         (ch as u64) << 32 | cw as u64);
-
+    // A3: Track Atlas overlay lifecycle: Allocated -> Mapped.
+    set_lifecycle_state(SURFACE_ID_ATLAS_OVERLAY, LifecycleState::Mapped);
     // Fill background with dark overlay color.
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
         0,
@@ -1750,6 +2132,23 @@ unsafe fn atlas_render_stub() {
                 (fb_y as u64) << 32 | fb_x as u64,
                 (fb_color as u64) << 32 | (fb_h as u64) << 16 | fb_w as u64);
         }
+
+        // Draw selection border around the currently selected card.
+        if ATLAS_SELECTED_SCENE < ATLAS_MAX_SCENES as u8 && scene_idx == ATLAS_SELECTED_SCENE as usize {
+            let border = 2i32;
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                (cy as u64) << 32 | cx as u64,
+                (ATLAS_COLOR_SELECT as u64) << 32 | (border as u64) << 16 | card_w as u64);
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                ((cy + card_h as i32 - border) as u64) << 32 | cx as u64,
+                (ATLAS_COLOR_SELECT as u64) << 32 | (border as u64) << 16 | card_w as u64);
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                (cy as u64) << 32 | cx as u64,
+                (ATLAS_COLOR_SELECT as u64) << 32 | (card_h as u64) << 16 | border as u64);
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                (cy as u64) << 32 | (cx + card_w as i32 - border) as u64,
+                (ATLAS_COLOR_SELECT as u64) << 32 | (card_h as u64) << 16 | border as u64);
+        }
     }
 
     static mut ATLAS_RENDER_BUDGET: u32 = 4;
@@ -1763,6 +2162,8 @@ unsafe fn atlas_render_stub() {
 unsafe fn atlas_clear_stub() {
     // Hide Atlas overlay surface.
     pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_ATLAS_OVERLAY, 0, 0);
+    // A3: Track Atlas overlay lifecycle: Mapped -> Allocated.
+    set_lifecycle_state(SURFACE_ID_ATLAS_OVERLAY, LifecycleState::Allocated);
     // Restore current scene visibility and tiling.
     sync_scene_visibility();
     clear_focus_if_dead();
@@ -2457,7 +2858,10 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
         SURFACE_ID_TEST4  => SURFACE_103_ALIVE = false,
         _ => return false, // unknown or non-closeable surface
     }
+    // A3: Track lifecycle state transition: live -> Closing -> Tombstoned.
+    set_lifecycle_state(surface_id, LifecycleState::Closing);
     tombstone_surface(surface_id);
+    set_lifecycle_state(surface_id, LifecycleState::Tombstoned);
     pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
     // Focus fallback: if the closed surface was focused, clear_focus_if_dead
     // will auto-switch to the next alive surface in z-order.
@@ -2559,6 +2963,8 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
     }
     // Mark frame as minimized.
     set_frame_minimized(frame_id, true);
+    // A3: Track lifecycle state transition: Visible/Hidden -> Minimized.
+    set_lifecycle_state(surface_id, LifecycleState::Minimized);
     // Hide surface on display.
     pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
     // Clear drag if dragging this surface.
@@ -2600,6 +3006,8 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
     }
     // Clear minimized flag.
     set_frame_minimized(frame_id, false);
+    // A3: Track lifecycle state transition: Minimized -> Visible.
+    set_lifecycle_state(surface_id, LifecycleState::Visible);
     // Re-activate surface on display via 0xEC upsert.
     // If frame was zoomed before minimize, restore to maximized geometry.
     if frame_is_zoomed(frame_id) {
@@ -3580,6 +3988,8 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         if let Some(scene_idx) = atlas_scene_at_point(px, py) {
             // Hit a scene card: destroy overlay, switch to scene, exit Atlas.
             pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_ATLAS_OVERLAY, 0, 0);
+            // A3: Track Atlas overlay lifecycle exit.
+            set_lifecycle_state(SURFACE_ID_ATLAS_OVERLAY, LifecycleState::Allocated);
             let already_active = scene_idx == ACTIVE_SCENE_IDX;
             if !already_active {
                 switch_scene(scene_idx);
@@ -3756,12 +4166,16 @@ unsafe fn toggle_os_panel(active: &mut bool, kind: PanelKind, surface_id: u64, l
             (h as u64) << 32 | w as u64);
         serial_println!("[shell.{}.open.ok] id={:#x}", label, surface_id);
         *active = true;
+        // A3: Track panel open -> Mapped lifecycle state.
+        set_lifecycle_state(surface_id, LifecycleState::Mapped);
         try_transition(InteractionState::PanelActive { panel: kind });
     } else {
         serial_println!("[shell.{}.close.start] id={:#x}", label, surface_id);
         pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
         serial_println!("[shell.{}.close.ok] id={:#x}", label, surface_id);
         *active = false;
+        // A3: Track panel close -> Allocated lifecycle state.
+        set_lifecycle_state(surface_id, LifecycleState::Allocated);
         try_transition(InteractionState::Idle);
     }
     true
@@ -3782,12 +4196,16 @@ unsafe fn toggle_scene_settings_panel() {
             (SCENE_SETTINGS_PANEL_H as u64) << 32 | SCENE_SETTINGS_PANEL_W as u64);
         serial_println!("[shell.scene.settings.panel.open.ok] id={:#x}", SURFACE_ID_SCENE_SETTINGS);
         SCENE_SETTINGS_ACTIVE = true;
+        // A3: Track panel open -> Mapped lifecycle state.
+        set_lifecycle_state(SURFACE_ID_SCENE_SETTINGS, LifecycleState::Mapped);
         try_transition(InteractionState::PanelActive { panel: PanelKind::Settings });
     } else {
         serial_println!("[shell.scene.settings.panel.close.start] id={:#x}", SURFACE_ID_SCENE_SETTINGS);
         pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_SCENE_SETTINGS, 0, 0);
         serial_println!("[shell.scene.settings.panel.close.ok] id={:#x}", SURFACE_ID_SCENE_SETTINGS);
         SCENE_SETTINGS_ACTIVE = false;
+        // A3: Track panel close -> Allocated lifecycle state.
+        set_lifecycle_state(SURFACE_ID_SCENE_SETTINGS, LifecycleState::Allocated);
         try_transition(InteractionState::Idle);
     }
     if *budget > 0 {
@@ -4141,6 +4559,9 @@ pub extern "C" fn _start() -> ! {
         });
         serial_println!("[shell.frame.model.init] frames=1 tabs=1");
 
+        // A3: Initialize lifecycle metadata for all known surfaces.
+        lifecycle_init_all();
+
         // Initial snapshot after frames are set up.
         snap_capture_layout();
 
@@ -4222,6 +4643,8 @@ pub extern "C" fn _start() -> ! {
     // Initialize focus on surface 100 (syncs sexdisplay z-order + color)
     pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
     serial_println!("[silk-shell] Boot focus set to surface 100");
+    // A3: Sync initial FocusRef from boot focus.
+    unsafe { sync_focus_ref(); }
 
     // Send initial tab metadata for frame 1 (surface 100: 1 tab, active tab 0)
     unsafe { send_frame_tab_info(1); }
@@ -4443,8 +4866,11 @@ pub extern "C" fn _start() -> ! {
                                     _ => {}
                                 }
                             }
-                            // ── Normal make-code dispatch via policy lookup ──────
-                            if let Some(action) = scancode_to_action(scancode) {
+                            // ── Atlas keyboard intercept: consume non-F10 keys when Atlas active ──
+                            if ATLAS_MODE_ENABLED && scancode != 0x44 /* F10 falls through to ToggleAtlas */ {
+                                handle_atlas_keyboard(scancode);
+                                mutated = true;
+                            } else if let Some(action) = scancode_to_action(scancode) {
                                 match action {
                                     SurfaceAction::FocusToggle => {
                                         let current = FOCUSED_SURFACE_ID;
@@ -5106,6 +5532,9 @@ pub extern "C" fn _start() -> ! {
         if mutated {
             emit_snapshot();
         }
+
+        // A3: Sync FocusRef from FOCUSED_SURFACE_ID after all state changes.
+        unsafe { sync_focus_ref(); }
 
         sys_yield();
     }
