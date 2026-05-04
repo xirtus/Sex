@@ -35,6 +35,7 @@ crates = [
   "purple-scanout/Cargo.toml",
   "servers/silkbar/Cargo.toml",
   "servers/linen/Cargo.toml",
+  "servers/quil/Cargo.toml",
   "servers/sexstore/Cargo.toml"
 ]
 
@@ -115,6 +116,13 @@ action = "cargo_manifest"
 manifest = "servers/linen/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/linen"
 dest_artifact = "iso_root/servers/linen"
+
+[[stage]]
+id = "build_quil"
+action = "cargo_manifest"
+manifest = "servers/quil/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/quil"
+dest_artifact = "iso_root/servers/quil"
 
 [[stage]]
 id = "build_sexstore"
