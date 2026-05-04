@@ -431,6 +431,50 @@ unsafe fn try_transition(next: InteractionState) {
     }
 }
 
+/// Move the surface tracked by the current Drag state by (dx, dy).
+/// Returns true if the surface was actually moved.
+/// Uses the Drag state's recorded surface_id, not FOCUSED_SURFACE_ID,
+/// so keyboard focus changes during drag do not corrupt the target.
+unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
+    if let InteractionState::Dragging { surface_id, .. } = INTERACTION {
+        let mut moved = false;
+        if surface_id == SURFACE_ID_APP && SURFACE_100_ALIVE {
+            if let Some(w) = WINDOWS.get_mut(1) {
+                w.desc.x = w.desc.x.wrapping_add(dx);
+                w.desc.y = w.desc.y.wrapping_add(dy);
+                let (cx, cy) = clamp_position(w.desc.x, w.desc.y, SURFACE_100_W, SURFACE_100_H);
+                w.desc.x = cx; w.desc.y = cy;
+                moved = true;
+            }
+        } else if surface_id == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+            SURFACE_101_X = SURFACE_101_X.wrapping_add(dx);
+            SURFACE_101_Y = SURFACE_101_Y.wrapping_add(dy);
+            let (cx, cy) = clamp_position(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H);
+            SURFACE_101_X = cx; SURFACE_101_Y = cy;
+            moved = true;
+        } else if surface_id == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
+            SURFACE_102_X = SURFACE_102_X.wrapping_add(dx);
+            SURFACE_102_Y = SURFACE_102_Y.wrapping_add(dy);
+            let (cx, cy) = clamp_position(SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H);
+            SURFACE_102_X = cx; SURFACE_102_Y = cy;
+            moved = true;
+        } else if surface_id == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
+            SURFACE_103_X = SURFACE_103_X.wrapping_add(dx);
+            SURFACE_103_Y = SURFACE_103_Y.wrapping_add(dy);
+            let (cx, cy) = clamp_position(SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H);
+            SURFACE_103_X = cx; SURFACE_103_Y = cy;
+            moved = true;
+        }
+        if moved {
+            serial_println!("[shell.drag.move] id={} x={} y={} dx={} dy={}", surface_id, POINTER_X, POINTER_Y, dx, dy);
+            serial_println!("[shell.drag.send.ok] id={}", surface_id);
+        }
+        moved
+    } else {
+        false
+    }
+}
+
 /// Toggle an OS-owned panel surface open/closed.
 /// - If `*active` is false: creates surface `surface_id` at (x, y) with size (w, h).
 /// - If `*active` is true: destroys surface `surface_id`.
@@ -741,45 +785,14 @@ pub extern "C" fn _start() -> ! {
                                 serial_println!("[shell.cursor.move] x={} y={}", POINTER_X, POINTER_Y);
                             }
                         }
-                        // ── USB drag movement: move focused surface by delta while button held ──
+                        // ── USB drag movement: move drag target surface by delta while button held ──
                         // clear_drag_if_dead() transitions to Idle if the drag target died,
-                        // so the next `if matches!` will naturally skip movement.
+                        // so the next call will naturally skip movement.
+                        // Uses the Drag state's recorded surface_id (not FOCUSED_SURFACE_ID)
+                        // so focus changes during drag do not corrupt the target.
                         clear_drag_if_dead();
-                        if matches!(INTERACTION, InteractionState::Dragging { .. }) {
-                            let focused = FOCUSED_SURFACE_ID;
-                            let mut moved = false;
-                            if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                if let Some(w) = WINDOWS.get_mut(1) {
-                                    w.desc.x = w.desc.x.wrapping_add(dx as i32);
-                                    w.desc.y = w.desc.y.wrapping_add(dy as i32);
-                                    let (cx, cy) = clamp_position(w.desc.x, w.desc.y, SURFACE_100_W, SURFACE_100_H);
-                                    w.desc.x = cx; w.desc.y = cy;
-                                    moved = true;
-                                }
-                            } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                SURFACE_101_X = SURFACE_101_X.wrapping_add(dx as i32);
-                                SURFACE_101_Y = SURFACE_101_Y.wrapping_add(dy as i32);
-                                let (cx, cy) = clamp_position(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H);
-                                SURFACE_101_X = cx; SURFACE_101_Y = cy;
-                                moved = true;
-                            } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
-                                SURFACE_102_X = SURFACE_102_X.wrapping_add(dx as i32);
-                                SURFACE_102_Y = SURFACE_102_Y.wrapping_add(dy as i32);
-                                let (cx, cy) = clamp_position(SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H);
-                                SURFACE_102_X = cx; SURFACE_102_Y = cy;
-                                moved = true;
-                            } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
-                                SURFACE_103_X = SURFACE_103_X.wrapping_add(dx as i32);
-                                SURFACE_103_Y = SURFACE_103_Y.wrapping_add(dy as i32);
-                                let (cx, cy) = clamp_position(SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H);
-                                SURFACE_103_X = cx; SURFACE_103_Y = cy;
-                                moved = true;
-                            }
-                            if moved {
-                                mutated = true;
-                                serial_println!("[shell.drag.move] id={} x={} y={} dx={} dy={}", focused, POINTER_X, POINTER_Y, dx, dy);
-                                serial_println!("[shell.drag.send.ok] id={}", focused);
-                            }
+                        if drag_move_focused(dx as i32, dy as i32) {
+                            mutated = true;
                         }
                     }
                     pdx_reply(0);
@@ -1442,45 +1455,14 @@ pub extern "C" fn _start() -> ! {
                             POINTER_X = POINTER_X.wrapping_add(dx);
                             POINTER_Y = POINTER_Y.wrapping_add(dy);
 
-                            // ── Drag movement: move focused surface by delta while button held ──
+                            // ── Drag movement: move drag target surface by delta while button held ──
                             // clear_drag_if_dead() transitions to Idle if the drag target died,
-                            // so the next `if matches!` will naturally skip movement.
+                            // so the next call will naturally skip movement.
+                            // Uses the Drag state's recorded surface_id (not FOCUSED_SURFACE_ID)
+                            // so focus changes during drag do not corrupt the target.
                             clear_drag_if_dead();
-                            if matches!(INTERACTION, InteractionState::Dragging { .. }) {
-                                let focused = FOCUSED_SURFACE_ID;
-                                let mut moved = false;
-                                if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                    if let Some(w) = WINDOWS.get_mut(1) {
-                                        w.desc.x = w.desc.x.wrapping_add(dx);
-                                        w.desc.y = w.desc.y.wrapping_add(dy);
-                                        let (cx, cy) = clamp_position(w.desc.x, w.desc.y, SURFACE_100_W, SURFACE_100_H);
-                                        w.desc.x = cx; w.desc.y = cy;
-                                        moved = true;
-                                    }
-                                } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                    SURFACE_101_X = SURFACE_101_X.wrapping_add(dx);
-                                    SURFACE_101_Y = SURFACE_101_Y.wrapping_add(dy);
-                                    let (cx, cy) = clamp_position(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H);
-                                    SURFACE_101_X = cx; SURFACE_101_Y = cy;
-                                    moved = true;
-                                } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
-                                    SURFACE_102_X = SURFACE_102_X.wrapping_add(dx);
-                                    SURFACE_102_Y = SURFACE_102_Y.wrapping_add(dy);
-                                    let (cx, cy) = clamp_position(SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H);
-                                    SURFACE_102_X = cx; SURFACE_102_Y = cy;
-                                    moved = true;
-                                } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
-                                    SURFACE_103_X = SURFACE_103_X.wrapping_add(dx);
-                                    SURFACE_103_Y = SURFACE_103_Y.wrapping_add(dy);
-                                    let (cx, cy) = clamp_position(SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H);
-                                    SURFACE_103_X = cx; SURFACE_103_Y = cy;
-                                    moved = true;
-                                }
-                                if moved {
-                                    mutated = true;
-                                    serial_println!("[shell.drag.move] id={} x={} y={} dx={} dy={}", focused, POINTER_X, POINTER_Y, dx, dy);
-                                    serial_println!("[shell.drag.send.ok] id={}", focused);
-                                }
+                            if drag_move_focused(dx, dy) {
+                                mutated = true;
                             }
 
                             serial_println!("[silk-shell] Pointer REL d=({},{}) pos=({},{})",
