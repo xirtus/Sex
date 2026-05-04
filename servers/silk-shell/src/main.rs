@@ -807,7 +807,12 @@ unsafe fn tile_visible_frames() {
 
     for i in 0..count {
         let sid = tiles[i];
-        if !surface_is_alive(sid) { continue; }
+        if !surface_is_alive(sid) {
+            static mut TILE_SKIP_DEAD_BUDGET: u32 = 8;
+            let b = &mut TILE_SKIP_DEAD_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.tile.skip_dead] sid={}", sid); }
+            continue;
+        }
 
         let (rx, ry, rw, rh) = if count == 1 {
             (0i32, P.bar_height, cw, ch)
@@ -2871,6 +2876,17 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     if !surface_is_alive(surface_id) {
         return false;
     }
+    // A5: Check drag before lifecycle transition. Cancel drag on target surface.
+    if let InteractionState::Dragging { surface_id: drag_sid, .. } = INTERACTION {
+        if drag_sid == surface_id {
+            serial_println!("[frame.light.close.reject.drag] sid={} cancel_drag", surface_id);
+            try_transition(InteractionState::Idle);
+        }
+    }
+    // A5: Clear focus first if this surface was focused.
+    if FOCUSED_SURFACE_ID == surface_id {
+        clear_focus_if_dead();
+    }
     match surface_id {
         SURFACE_ID_APP    => SURFACE_100_ALIVE = false,
         SURFACE_ID_STATIC => SURFACE_101_ALIVE = false,
@@ -2882,11 +2898,10 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     set_lifecycle_state(surface_id, LifecycleState::Closing);
     tombstone_surface(surface_id);
     set_lifecycle_state(surface_id, LifecycleState::Tombstoned);
+    serial_println!("[frame.light.close.fsm] sid={}", surface_id);
     pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
-    // Focus fallback: if the closed surface was focused, clear_focus_if_dead
-    // will auto-switch to the next alive surface in z-order.
+    // Focus fallback: clear remaining stale focus and drag.
     clear_focus_if_dead();
-    // Clear drag if the closed surface was being dragged (surface is now dead).
     clear_drag_if_dead();
     // Clear hover if the closed surface's frame is no longer valid.
     clear_hover_if_wrong_scene();
@@ -3003,7 +3018,7 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
         let b = &mut FRAME_MINIMIZE_BUDGET;
         if *b > 0 {
             *b -= 1;
-            serial_println!("[shell.frame.minimize] frame={} surface={}", frame_id, surface_id);
+            serial_println!("[frame.light.minimize.fsm] frame={} surface={}", frame_id, surface_id);
         }
     }
     snap_capture_layout();
@@ -3046,8 +3061,9 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
             return false; // geometry unavailable
         }
     }
-    // Focus the restored surface.
+    // A5: Focus restored surface and emit restore marker.
     try_set_focus(surface_id);
+    serial_println!("[frame.light.restore.fsm] frame={} surface={}", frame_id, surface_id);
     // Re-tile to include the restored frame.
     tile_visible_frames();
     unsafe {
@@ -3273,11 +3289,27 @@ unsafe fn unzoom_frame(frame_id: u32) -> bool {
 /// Toggle zoom state for the given frame. If zoomed, unzoom. If not zoomed, zoom.
 /// Returns true if the state changed.
 unsafe fn toggle_zoom_frame(frame_id: u32) -> bool {
-    if frame_is_zoomed(frame_id) {
+    // A5: Reject zoom for Closing/Tombstoned/Destroyed surfaces.
+    let surface_id = active_surface_for_frame(frame_id);
+    if let Some(sid) = surface_id {
+        match lifecycle_state(sid) {
+            Some(LifecycleState::Closing) | Some(LifecycleState::Tombstoned)
+            | Some(LifecycleState::Destroyed) => {
+                serial_println!("[frame.light.zoom.fsm.reject] frame={} surface={} lifecycle=invalid", frame_id, sid);
+                return false;
+            }
+            _ => {}
+        }
+    }
+    let result = if frame_is_zoomed(frame_id) {
         unzoom_frame(frame_id)
     } else {
         zoom_frame(frame_id)
+    };
+    if result {
+        serial_println!("[frame.light.zoom.fsm] frame={}", frame_id);
     }
+    result
 }
 
 /// Map a Frame Light kind to its corresponding selected-window option bit.
