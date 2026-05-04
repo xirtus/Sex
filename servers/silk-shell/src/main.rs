@@ -376,10 +376,13 @@ fn is_focusable_surface(sid: u64) -> bool {
 /// Guards: surface must be focusable and alive.
 /// Clearing focus (sid=0) is always allowed (resets to no surface).
 /// Emits unbudgeted reject markers for nonfocusable or dead surfaces.
+/// On success, emits [shell.focus.set] or [shell.focus.clear] markers
+/// for deterministic focus-tracking in synthetic proofs.
 unsafe fn try_set_focus(sid: u64) -> bool {
     if sid == 0 {
         FOCUSED_SURFACE_ID = 0;
         pdx_call(SLOT_DISPLAY, 0xED, 0, 0, 0);
+        serial_println!("[shell.focus.clear] id=0");
         return true;
     }
     if !is_focusable_surface(sid) {
@@ -391,6 +394,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         return false;
     }
     FOCUSED_SURFACE_ID = sid;
+    serial_println!("[shell.focus.set] id={}", sid);
     pdx_call(SLOT_DISPLAY, 0xED, sid, 0, 0);
     true
 }
