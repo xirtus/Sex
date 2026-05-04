@@ -2088,6 +2088,10 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     // Focus fallback: if the closed surface was focused, clear_focus_if_dead
     // will auto-switch to the next alive surface in z-order.
     clear_focus_if_dead();
+    // Clear drag if the closed surface was being dragged (surface is now dead).
+    clear_drag_if_dead();
+    // Clear hover if the closed surface's frame is no longer valid.
+    clear_hover_if_wrong_scene();
     // Re-tile remaining visible frames.
     tile_visible_frames();
     snap_capture_layout();
@@ -4080,6 +4084,8 @@ pub extern "C" fn _start() -> ! {
                                                 else if SURFACE_102_ALIVE && try_set_focus(SURFACE_ID_TEST3) { serial_println!("[silk-shell] Auto-switched focus to surface 102"); }
                                             }
                                             mutated = true;
+                                            clear_drag_if_dead();
+                                            clear_hover_if_wrong_scene();
                                             snap_capture_layout();
                                         }
                                     }
