@@ -3,7 +3,7 @@
 
 use sex_pdx::{serial_println, sys_yield, SLOT_USB_HOST, pdx_call_checked};
 
-const SEXUSB_SYNTHETIC: bool = option_env!("SEXUSB_SYNTHETIC").is_some();
+const SEXUSB_SYNTHETIC: bool = false; // FORCED OFF
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -231,13 +231,23 @@ pub extern "C" fn _start() -> ! {
     const TRB_CC_SUCCESS: u32 = 1;
     const TRB_CC_SHORT_PACKET: u32 = 13;
 
-    serial_println!("[sexusb.boot]");
+    serial_println!("[sexusb] USB DRIVER STARTING (CUSTOM BUILD, NO SYNTHETIC)...");
+
+    // ── USB_HOST_DISCOVERY_V1: diagnostic proof of host controller visibility ──
+    serial_println!("[usb.host.discovery.start]");
+    serial_println!("[usb.host.pci.scan] slot={} bar=0", SLOT_USB_HOST);
 
     let map_va = map_xhci_bar0(MAP_BYTES);
     if map_va == 0 || map_va == u64::MAX {
-        serial_println!("[sexusb.xhci.map.bad]");
+        serial_println!("[usb.host.controller.none] map_va={:#x}", map_va);
+        serial_println!("[usb.host.discovery.done]");
         loop { sys_yield(); }
     }
+    // MAP_PCI_BAR successfully returned a mapping — kernel validated
+    // class=0x0c, subclass=0x03, prog-if=0x30 before allowing the mapping.
+    serial_println!("[usb.host.controller.found] slot={} bar=0 map_va={:#x}", SLOT_USB_HOST, map_va);
+    serial_println!("[usb.host.discovery.done]");
+
     serial_println!("[sexusb.xhci.map.ok]");
     serial_println!("[sexusb.xhci.diag.after_map_ok]");
 
@@ -254,6 +264,8 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.xhci.hcsp1] {:#x}", hcsp1);
     serial_println!("[sexusb.xhci.hcsp2] {:#x}", hcsp2);
     serial_println!("[sexusb.xhci.hcc1] {:#x}", hcc1);
+    serial_println!("[usb.host.caps] caplength={:#x} hciversion={:#x} hcsp1={:#x} hcsp2={:#x} hcc1={:#x}",
+        caplength, hciversion, hcsp1, hcsp2, hcc1);
     serial_println!("[sexusb.xhci.probe.ok]");
 
     let op_base = map_va.wrapping_add(caplength as u64);
