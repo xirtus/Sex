@@ -65,7 +65,7 @@ enum PanelKind {
 /// Typed result of a hit-test. Distinguishes app surfaces from chrome elements
 /// and background for future Frame Chrome input routing.
 /// V1: Surface and None are produced. SilkBar is returned by handle_silkbar_click
-/// separately. FrameChrome is modeled but not yet produced.
+/// separately. FrameChrome is produced from rim/tab-strip geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HitTarget {
     /// No surface or chrome element at this position.
@@ -234,6 +234,17 @@ const HOVER_NONE: u32 = 0;
 const HOVER_FRAME_BODY: u32 = 1;    // app content area
 const HOVER_FRAME_RIM: u32 = 2;     // future: neon rim
 const HOVER_TAB_STRIP: u32 = 3;     // future: tab strip
+
+// ── Frame Chrome Hit-Production Constants ──────────────────────────────────
+/// Chrome hit-target kind for the 4px neon rim edge band.
+const FRAME_CHROME_RIM: u32 = 1;
+/// Chrome hit-target kind for a tab strip band (reserved, not produced in V1).
+const FRAME_CHROME_TAB_STRIP: u32 = 2;
+/// Thickness of the neon rim edge band in pixels.
+const FRAME_RIM_PX: i32 = 4;
+/// Height of the tab strip band in pixels (0 = disabled in V1).
+const FRAME_TAB_STRIP_PX: i32 = 0;
+
 static mut HOVERED_FRAME_ID: u32 = 0;
 static mut HOVER_KIND: u32 = HOVER_NONE;
 static mut FOCUS_ID: u64 = 0;
@@ -333,6 +344,21 @@ fn emit_snapshot() {
         if SURFACE_103_ALIVE {
             pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_TEST4, SURFACE_103_X as u64, SURFACE_103_Y as u64);
         }
+    }
+}
+
+/// Get the bounding box of a surface, if it has geometry.
+/// Returns None for OS-owned surfaces (cursor, panels) and invalid IDs.
+/// Used by chrome hit-testing to compute rim/tab-strip regions.
+/// Duplicates the bounds match from point_in_surface to avoid refactoring it.
+unsafe fn get_surface_bounds(sid: u64) -> Option<(i32, i32, u32, u32)> {
+    match sid {
+        SURFACE_ID_APP    => Some((WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, SURFACE_100_H)),
+        SURFACE_ID_STATIC => Some((SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H)),
+        SURFACE_ID_TEST3  => Some((SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H)),
+        SURFACE_ID_TEST4  => Some((SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H)),
+        SURFACE_ID_LINEN  => Some((SURFACE_200_X, SURFACE_200_Y, SURFACE_200_W, SURFACE_200_H)),
+        _ => None,
     }
 }
 
@@ -510,7 +536,7 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
                 }
             }
             HitTarget::FrameChrome { frame_id, kind } => {
-                // Not yet produced — model is ready for future chrome geometry.
+                // Produced by hit_test_surface_chrome for rim/tab-strip hits.
                 (frame_id, kind)
             }
             HitTarget::None => (0u32, HOVER_NONE),
@@ -657,14 +683,62 @@ unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
     }
 }
 
+/// Check if (x, y) hits frame chrome (rim or tab strip) for a given surface.
+/// Priority: tab strip > rim > None (content area).
+/// Returns None if the surface has no frame, or point is in content area.
+unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget> {
+    let bounds = get_surface_bounds(sid)?;
+    let (sx, sy, sw, sh) = bounds;
+    // Find the frame that owns this surface — no chrome for unowned surfaces (linen, standalone).
+    let frame_id = frame_for_surface(sid)?;
+
+    // Tab strip (top band): highest priority. Gated on FRAME_TAB_STRIP_PX > 0.
+    if FRAME_TAB_STRIP_PX > 0 {
+        let strip_top = sy;
+        let strip_bot = sy + FRAME_TAB_STRIP_PX;
+        if y >= strip_top && y < strip_bot && x >= sx && x < (sx + sw as i32) {
+            return Some(HitTarget::FrameChrome { frame_id, kind: FRAME_CHROME_TAB_STRIP });
+        }
+    }
+
+    // Rim (edge band): check all four edges of the surface.
+    let right = sx + sw as i32 - 1;
+    let bottom = sy + sh as i32 - 1;
+    let in_rim =
+        (x >= sx && x < sx + FRAME_RIM_PX)                            // left edge
+        || (x > right - FRAME_RIM_PX && x <= right)                   // right edge
+        || (y >= sy && y < sy + FRAME_RIM_PX)                         // top edge
+        || (y > bottom - FRAME_RIM_PX && y <= bottom);                // bottom edge
+    if in_rim {
+        return Some(HitTarget::FrameChrome { frame_id, kind: FRAME_CHROME_RIM });
+    }
+
+    None // content area — not a chrome hit
+}
+
 /// Perform a pure hit-test at (x, y), returning the typed target.
-/// Priority order: focused surface → z-order fallback → None.
+/// Priority order: focused surface (with chrome check) → z-order (with chrome check) → None.
+/// Produces FrameChrome targets for rim/tab-strip hits on frame-owned surfaces.
 /// Does NOT check SilkBar or trigger any side effects.
 /// SilkBar intercept is handled separately by handle_silkbar_click().
-/// FrameChrome variant is modeled but not yet produced.
 unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     let focused = FOCUSED_SURFACE_ID;
     if point_in_surface(x, y, focused) {
+        // Chrome check: rim/tab-strip takes priority over content area.
+        if let Some(chrome_target) = hit_test_surface_chrome(x, y, focused) {
+            if let HitTarget::FrameChrome { frame_id, kind } = chrome_target {
+                unsafe {
+                    static mut CHROME_HIT_PRODUCED_BUDGET: u32 = 6;
+                    let b = &mut CHROME_HIT_PRODUCED_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!("[shell.hit_target.chrome] frame={} kind={} x={} y={}",
+                            frame_id, kind, x, y);
+                    }
+                }
+            }
+            return chrome_target;
+        }
         return HitTarget::Surface(focused);
     }
     let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
@@ -676,6 +750,21 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
             continue;
         }
         if point_in_surface(x, y, sid) {
+            // Chrome check for z-order surfaces too (if frame-owned).
+            if let Some(chrome_target) = hit_test_surface_chrome(x, y, sid) {
+                if let HitTarget::FrameChrome { frame_id, kind } = chrome_target {
+                    unsafe {
+                        static mut CHROME_HIT_Z_BUDGET: u32 = 4;
+                        let b = &mut CHROME_HIT_Z_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[shell.hit_target.chrome] frame={} kind={} x={} y={} z=1",
+                                frame_id, kind, x, y);
+                        }
+                    }
+                }
+                return chrome_target;
+            }
             return HitTarget::Surface(sid);
         }
     }
@@ -698,7 +787,8 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
     } else {
         match target {
             HitTarget::Surface(sid) => ("app", sid),
-            _ => ("none", 0u64),
+            HitTarget::FrameChrome { frame_id, .. } => ("chrome_frame", frame_id as u64),
+            HitTarget::None => ("none", 0u64),
         }
     }
 }
@@ -725,17 +815,30 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         HitTarget::None => {
             serial_println!("[shell.click_focus.miss]");
         }
-        HitTarget::FrameChrome { .. } => {
-            // Not yet produced. Fall through — no focus change, no drag.
+        HitTarget::FrameChrome { frame_id, kind } => {
+            // Chrome element hit: no focus change, no drag.
+            unsafe {
+                static mut CHROME_CAPTURE_BUDGET: u32 = 4;
+                let b = &mut CHROME_CAPTURE_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!("[shell.frame.chrome.capture] frame={} kind={} x={} y={}",
+                        frame_id, kind, px, py);
+                }
+            }
         }
     }
     // SilkBar intercept: if pointer is in top strip, handle and skip drag
     let silkbar_handled = handle_silkbar_click(px, py);
-    if !silkbar_handled && is_shell_surface(FOCUSED_SURFACE_ID)
+    // Drag-start only on content area (not chrome rim/tab strip).
+    let is_chrome_hit = matches!(target, HitTarget::FrameChrome { .. });
+    if !silkbar_handled && !is_chrome_hit && is_shell_surface(FOCUSED_SURFACE_ID)
         && point_in_surface(px, py, FOCUSED_SURFACE_ID)
     {
         try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: px, current_y: py });
         serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, px, py);
+    } else if !silkbar_handled && is_chrome_hit {
+        serial_println!("[shell.drag.skip.chrome] x={} y={}", px, py);
     }
     (target, silkbar_handled)
 }
