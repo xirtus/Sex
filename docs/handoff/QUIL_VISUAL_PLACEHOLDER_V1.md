@@ -75,6 +75,11 @@ Errors: 0
 - Keyboard shortcut to distinguish placeholder from real app
 - Multiple Quil instances
 
+## Next Step
+
+→ `QUIL_SERVER_BOUNDARY_PLAN_V1` — boundary plan for creating `servers/quil`.
+  Then `QUIL_SERVER_STUB_PD_V1` — actual no_std PD stub.
+
 ---
 
 ## Change History
