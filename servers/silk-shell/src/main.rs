@@ -621,6 +621,8 @@ unsafe fn try_set_focus(sid: u64) -> bool {
                 serial_println!("[shell.selected.options] frame=0 surface=0 mask=0");
             }
         }
+        // Send cleared options mask to silkbar.
+        pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 0, 0, 0);
         return true;
     }
     if !is_focusable_surface(sid) {
@@ -645,6 +647,17 @@ unsafe fn try_set_focus(sid: u64) -> bool {
             serial_println!("[shell.selected.options] frame={} surface={} mask={:#x}",
                 match frame { Some(f) => f as u64, None => 0 },
                 sid, mask);
+        }
+    }
+    // Send live options mask to silkbar for display.
+    let live_mask = selected_window_options_mask();
+    pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, live_mask as u64, 0);
+    unsafe {
+        static mut SELECTED_OPTIONS_SEND_BUDGET: u32 = 8;
+        let b = &mut SELECTED_OPTIONS_SEND_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[shell.selected.options.send] surface={} mask={:#x}", sid, live_mask);
         }
     }
     true
@@ -1046,8 +1059,9 @@ pub extern "C" fn _start() -> ! {
 
     // Stage 2B: advertise workspace 0 active to SilkBar
     pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, 0, 0, 0);
-    // Stage 2C: one-time focus advertisement (shell)
-    pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, 0, 0);
+    // Stage 2C: focus advertisement (shell) with initial selected-window options mask.
+    let boot_options_mask = unsafe { selected_window_options_mask() };
+    pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, boot_options_mask as u64, 0);
     serial_println!("[silk-shell] Boot workspace advertisement sent to SilkBar");
 
     // Stage: cursor surface — created first so it occupies SURFACES slot 0,

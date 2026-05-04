@@ -13,6 +13,16 @@ pub const PANEL_MARGIN_TOP: usize = 10;
 pub const WORKSPACE_COUNT: usize = 5;
 pub const MAX_CHIPS: usize = 4;
 
+// ── Selected Window Option Bits (matches OPTION_* in silk-shell) ──────────
+/// Bit: selected frame can be closed/destroyed.
+pub const OPTION_CLOSE: u32 = 1;
+/// Bit: selected frame can be zoomed/maximized.
+pub const OPTION_ZOOM: u32 = 2;
+/// Bit: selected frame can be minimized/hidden.
+pub const OPTION_MINIMIZE: u32 = 4;
+/// Bit: selected frame can be moved via rim drag.
+pub const OPTION_MOVE: u32 = 8;
+
 pub const WS_Y: usize = 18;
 pub const WS_H: usize = 22;
 pub const WS_INACTIVE_W: usize = 20;
@@ -43,8 +53,8 @@ pub const LAYOUT_COUNT: usize = 11;
 
 /// ABI version for SilkBar model shared across PDX boundary.
 /// Increment when `SilkBarUpdate` layout or `UpdateKind` discriminants change.
-pub const ABI_VERSION: u32 = 2;
-pub const SILK_DE_BAR_ABI_V1: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
+pub const SILK_DE_BAR_ABI_V1: u32 = 3;
 pub const SILK_DE_REQUIRED_MODULES: usize = LAYOUT_COUNT;
 pub const SILK_DE_REQUIRED_CHIPS: usize = MAX_CHIPS;
 pub const SILKBAR_WORKSPACE_COUNT: usize = WORKSPACE_COUNT;
@@ -157,6 +167,9 @@ pub struct SilkBar {
     pub clock_hh: u8,
     pub clock_mm: u8,
     pub clock_ss: u8,
+    /// Bitmask of selected-window options (OPTION_CLOSE|ZOOM|MINIMIZE|MOVE).
+    /// Display-only — no action behavior in V1.
+    pub selected_options_mask: u32,
 }
 
 // ── Theme (v2: 10 semantic tokens) ─────────────────────────────────────────
@@ -279,6 +292,10 @@ pub enum UpdateKind {
     SetChipKind = 3,
     SetClock = 4,
     SetThemeToken = 5,
+    /// Carries selected-window options mask to sexdisplay.
+    /// a = options bitmask (OPTION_CLOSE|ZOOM|MINIMIZE|MOVE).
+    /// Display-only — no action behavior in V1.
+    SetSelectedOptions = 6,
 }
 
 /// ABI-stable update message for mutating a `SilkBar` from a PDX caller.
@@ -391,6 +408,11 @@ pub fn apply_update(bar: &mut SilkBar, update: SilkBarUpdate) -> bool {
             // SetThemeToken: acknowledged but no-op (Theme is not part of SilkBar).
             // Future: route to mutable theme storage.
             false
+        }
+        6 => {
+            // SetSelectedOptions: a = options bitmask (display-only, no action).
+            bar.selected_options_mask = update.a;
+            true
         }
         _ => false,
     }
@@ -614,6 +636,8 @@ pub fn validate_deterministic_vectors() -> bool {
         SilkBarUpdate::new(UpdateKind::SetChipKind as u32, 1, ChipKind::Battery as u32, 0),
         // Clock transition (rollover edge sample)
         SilkBarUpdate::new(UpdateKind::SetClock as u32, 0, 23, (59u32 << 8) | 58u32),
+        // Selected-window options
+        SilkBarUpdate::new(UpdateKind::SetSelectedOptions as u32, 0, OPTION_MOVE, 0),
     ];
 
     for update in vectors {
@@ -623,7 +647,7 @@ pub fn validate_deterministic_vectors() -> bool {
     }
 
     let applied = q.drain_into(&mut bar);
-    if applied != 6 {
+    if applied != 7 {
         return false;
     }
 
@@ -640,6 +664,9 @@ pub fn validate_deterministic_vectors() -> bool {
         return false;
     }
     if bar.clock_hh != 23 || bar.clock_mm != 59 || bar.clock_ss != 58 {
+        return false;
+    }
+    if bar.selected_options_mask != OPTION_MOVE {
         return false;
     }
 
@@ -678,6 +705,7 @@ pub const DEFAULT_SILK_BAR: SilkBar = SilkBar {
     clock_hh: 10,
     clock_mm: 42,
     clock_ss: 0,
+    selected_options_mask: 0,
 };
 
 pub const DEFAULT_THEME: Theme = Theme {

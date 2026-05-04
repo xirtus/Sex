@@ -185,6 +185,36 @@ fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
 }
 
 fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
+    // Selected-window option indicators (display-only, no action behavior).
+    // Rendered as small colored dots between launcher and workspace indicators.
+    // Each dot is 3x3 px at a fixed position, colored by option bit.
+    if bar.selected_options_mask != 0 {
+        const OPTIONS_X: usize = 135; // after launcher (x=100, w=20)
+        const OPTIONS_Y: usize = 19;  // same row as workspace/chip indicators
+        const DOT_W: usize = 3;
+        const DOT_H: usize = 3;
+        const DOT_GAP: usize = 5;     // spacing between dots
+        if y >= OPTIONS_Y && y < OPTIONS_Y + DOT_H {
+            for bit in 0..4 {
+                let dot_x = OPTIONS_X + bit * DOT_GAP;
+                if x >= dot_x && x < dot_x + DOT_W {
+                    if (bar.selected_options_mask >> bit) & 1 != 0 {
+                        return match bit {
+                            0 => 0x00FF4444, // CLOSE   → red
+                            1 => 0x0044FF44, // ZOOM    → green
+                            2 => 0x00FFCC44, // MINIMIZE→ yellow
+                            3 => 0x0044CCFF, // MOVE    → cyan
+                            _ => DEFAULT_THEME.panel_fill,
+                        };
+                    } else {
+                        return DEFAULT_THEME.panel_fill; // unset bit: no dot
+                    }
+                }
+            }
+            // In options row but between dots → panel background
+            return DEFAULT_THEME.panel_fill;
+        }
+    }
     // Workspace indicators
     if let Some(c) = workspace_color(x, y, bar) { return c; }
     // Status chip backgrounds
@@ -568,6 +598,17 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> 
         b: arg2 as u32,
     };
     let ok = apply_update(bar, update);
+    // Budgeted marker for selected-window options update.
+    if ok && kind == UpdateKind::SetSelectedOptions as u32 {
+        unsafe {
+            static mut SELECTED_OPTIONS_UPDATE_BUDGET: u32 = 8;
+            let b = &mut SELECTED_OPTIONS_UPDATE_BUDGET;
+            if *b > 0 {
+                *b -= 1;
+                serial_println!("[sexdisplay.selected.options.update] mask={:#x}", bar.selected_options_mask);
+            }
+        }
+    }
     (ok, kind)
 }
 

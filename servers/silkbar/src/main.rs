@@ -44,6 +44,7 @@ pub extern "C" fn _start() -> ! {
 
     let mut focus_state: u8 = 0;
     let mut last_focus_state: u8 = 0xFF;
+    let mut last_options_mask: u32 = 0;
     let mut chip_phase: u8 = 0;
     let mut chip0_net: bool = true;
     // Initialize to 0 so the first loop iteration skips the redundant
@@ -87,6 +88,17 @@ pub extern "C" fn _start() -> ! {
             } else if msg.type_id == sex_pdx::OP_SILKBAR_FOCUS_STATE {
                 // Clamp invalid producer values to debug(3) to keep update space bounded.
                 focus_state = (msg.arg0 as u8).min(3);
+                // Extract selected-window options mask from arg1 (V1 extension).
+                // Old senders pass 0 (no options) — backward compatible.
+                let options_mask = msg.arg1 as u32;
+                sex_pdx::serial_println!("[silkbar.selected.options.recv] mask={:#x}", options_mask);
+                if options_mask != last_options_mask {
+                    last_options_mask = options_mask;
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetSelectedOptions as u32, 0, options_mask, 0,
+                    ));
+                    sex_pdx::serial_println!("[silkbar.selected.options.forward] mask={:#x}", options_mask);
+                }
             } else {
                 sex_pdx::serial_println!("[pdx.opcode.unknown] silkbar type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
             }
