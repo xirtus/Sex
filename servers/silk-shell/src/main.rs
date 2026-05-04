@@ -2097,6 +2097,8 @@ unsafe fn sync_lifecycle_scene_visibility() {
 /// Hide surfaces belonging to non-active scenes, show surfaces belonging
 /// to the active scene. Called after ACTIVE_SCENE_IDX changes.
 unsafe fn sync_scene_visibility() {
+    // Metadata first: sync lifecycle state before updating display.
+    sync_lifecycle_scene_visibility();
     for f in FRAMES.iter() {
         if let Some(frame) = f {
             let in_active = frame.scene_id == ACTIVE_SCENE_IDX;
