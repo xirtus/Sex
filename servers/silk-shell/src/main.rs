@@ -250,7 +250,12 @@ const FRAME_CHROME_TAB_STRIP: u32 = 2;
 /// Thickness of the neon rim edge band in pixels.
 const FRAME_RIM_PX: i32 = 4;
 /// Height of the tab strip band in pixels (0 = disabled in V1).
-const FRAME_TAB_STRIP_PX: i32 = 0;
+const FRAME_TAB_STRIP_PX: i32 = 4;
+/// X-width of the Frame Lights exclusion zone in the top rim band.
+/// Covers: gap(2) + close(4) + gap(2) + minimize(4) + gap(2) + zoom(4) + gap(2) = 20px.
+const FRAME_TAB_LIGHT_EXCLUSION_PX: i32 = 20;
+/// Minimum width of a single tab block in the tab strip.
+const FRAME_TAB_MIN_WIDTH_PX: i32 = 12;
 
 // ── Frame Light Kind Constants (model only, no actions in V1) ──────────
 /// No light hovered / default state.
@@ -956,7 +961,76 @@ unsafe fn frame_light_at(frame_id: u32, x: i32, y: i32) -> u32 {
     FRAME_LIGHT_NONE
 }
 
-// ── Frame Chrome Hover Update ──────────────────────────────────────────────────
+// ── Frame Tab Strip Helpers ─────────────────────────────────────────────────
+
+/// Returns the number of valid tabs for the given frame.
+unsafe fn frame_tab_count(frame_id: u32) -> u32 {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id {
+                return frame.tab_count as u32;
+            }
+        }
+    }
+    0
+}
+
+/// Returns the active tab index for the given frame, or 0 if no tabs.
+unsafe fn frame_active_tab_index(frame_id: u32) -> u32 {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id {
+                return frame.active_tab as u32;
+            }
+        }
+    }
+    0
+}
+
+/// Detect which tab the pointer is over in the tab strip band.
+/// Returns Some(tab_index) if the pointer is within a tab block in the
+/// top rim band and outside the Frame Lights exclusion zone.
+/// Tab blocks are sized as equal-width slots filling the available width.
+/// Returns None if no tab is hit (lights zone, rim zone, content area).
+unsafe fn frame_tab_at(frame_id: u32, x: i32, y: i32) -> Option<u32> {
+    let surface_id = active_surface_for_frame(frame_id)?;
+    let bounds = get_surface_bounds(surface_id)?;
+    let (sx, sy, sw, _sh) = bounds;
+
+    // Must be in the top rim band (tab strip height = FRAME_TAB_STRIP_PX).
+    if y < sy || y >= sy + FRAME_TAB_STRIP_PX {
+        return None;
+    }
+
+    // Must be outside the Frame Lights exclusion zone.
+    let tab_strip_start = sx + FRAME_TAB_LIGHT_EXCLUSION_PX;
+    if x < tab_strip_start {
+        return None;
+    }
+
+    // Must not extend into the right rim edge band.
+    let right_rim_start = sx + sw as i32 - FRAME_RIM_PX;
+    if x >= right_rim_start {
+        return None;
+    }
+
+    // Compute tab slot layout: equal-width slots.
+    let tab_count = frame_tab_count(frame_id);
+    if tab_count == 0 {
+        return None;
+    }
+
+    let available_width = (right_rim_start - tab_strip_start).max(0);
+    if available_width < FRAME_TAB_MIN_WIDTH_PX {
+        // Available width too small for even one tab — treat entire area as tab 0.
+        return Some(0);
+    }
+
+    let slot_w = available_width / tab_count as i32;
+    let lx = x - tab_strip_start;
+    let tab_index = (lx / slot_w.max(1)).min(tab_count as i32 - 1);
+    Some(tab_index as u32)
+}
 /// Update frame chrome hover state from current pointer position.
 /// Called once per event loop iteration. Skips during active drag.
 /// Returns true if hover state changed (for diagnostic gating).
@@ -1201,11 +1275,21 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
     let frame_id = frame_for_surface(sid)?;
 
     // Tab strip (top band): highest priority. Gated on FRAME_TAB_STRIP_PX > 0.
+    // The tab strip excludes the Frame Lights zone (leftmost ~20px) and the
+    // right rim band (4px). Lights are handled separately with higher priority.
     if FRAME_TAB_STRIP_PX > 0 {
         let strip_top = sy;
         let strip_bot = sy + FRAME_TAB_STRIP_PX;
-        if y >= strip_top && y < strip_bot && x >= sx && x < (sx + sw as i32) {
-            return Some(HitTarget::FrameChrome { frame_id, kind: FRAME_CHROME_TAB_STRIP });
+        let tab_strip_start = sx + FRAME_TAB_LIGHT_EXCLUSION_PX;
+        let right_rim_start = sx + sw as i32 - FRAME_RIM_PX;
+        if y >= strip_top && y < strip_bot
+            && x >= tab_strip_start
+            && x < right_rim_start
+        {
+            // Verify a tab exists at this position (not empty gap).
+            if frame_tab_at(frame_id, x, y).is_some() {
+                return Some(HitTarget::FrameChrome { frame_id, kind: FRAME_CHROME_TAB_STRIP });
+            }
         }
     }
 
@@ -1572,6 +1656,27 @@ pub extern "C" fn _start() -> ! {
             serial_println!("[shell.frame.light.model] close={} minimize={} zoom={} mask={:#x}",
                 FRAME_LIGHT_CLOSE, FRAME_LIGHT_MINIMIZE, FRAME_LIGHT_ZOOM,
                 frame_light_to_option_mask(FRAME_LIGHT_ZOOM));
+        }
+    }
+
+    // Frame Tab Strip model: prove constants and helpers exist.
+    unsafe {
+        static mut FRAME_TAB_MODEL_BUDGET: u32 = 1;
+        if FRAME_TAB_MODEL_BUDGET > 0 {
+            FRAME_TAB_MODEL_BUDGET -= 1;
+            let tab_count = {
+                let mut c = 0u32;
+                for f in FRAMES.iter() {
+                    if let Some(frame) = f {
+                        c = frame.tab_count as u32;
+                        break;
+                    }
+                }
+                c
+            };
+            let has_tab = frame_tab_at(1, 140, 101).is_some(); // sx=100 + exclusion=20 + 1 tab slot
+            serial_println!("[shell.frame.tab.model] tabs={} has_tab={} strip_px={}",
+                tab_count, has_tab, FRAME_TAB_STRIP_PX);
         }
     }
 
