@@ -168,6 +168,8 @@ All tracking is additive — no behavioral boolean or flag was modified.
 
 ## 11. Proof Markers Added
 
+Pre-existing diagnostic marker `[shell.tile.skip_dead]` is present in `tile_visible_frames()`; it is behavior-neutral and may support later A4/A6 proof work.
+
 | Marker | When |
 |--------|------|
 | `[lifecycle.state.init]` | Boot initialization complete |
