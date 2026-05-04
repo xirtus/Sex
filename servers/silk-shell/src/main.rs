@@ -49,6 +49,7 @@ enum SurfaceAction {
     DestroyFocused,
     RecreateFocused,
     RestoreMinimized,
+    ToggleTopBar,
     ResetAll,
     SnapLeft, SnapRight, Maximize, Center,
     SnapHome, SnapEnd,
@@ -134,6 +135,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x0C => Some(SurfaceAction::ShrinkHeight),
         0x0D => Some(SurfaceAction::GrowHeight),
         0x49 => Some(SurfaceAction::RestoreMinimized),
+        0x3E => Some(SurfaceAction::ToggleTopBar),  // F4
         0x3B => Some(SurfaceAction::LegacyFocusToggle),
         0x47 => Some(SurfaceAction::SnapHome),
         0x4F => Some(SurfaceAction::SnapEnd),
@@ -1118,16 +1120,56 @@ unsafe fn send_frame_tab_info(frame_id: u32) {
     };
     let tab_count = frame_tab_count(frame_id);
     let active_tab = frame_active_tab_index(frame_id);
-    pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, surface_id, tab_count as u64, active_tab as u64);
+    let chrome_flags: u64 = if frame_has_top_bar(frame_id) { 1 } else { 0 };
+    // Pack chrome_flags into arg2 bit 8 (low 8 bits = active_tab).
+    let arg2 = (active_tab as u64) | (chrome_flags << 8);
+    pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, surface_id, tab_count as u64, arg2);
     unsafe {
         static mut SHELL_TAB_INFO_SEND_BUDGET: u32 = 8;
         let b = &mut SHELL_TAB_INFO_SEND_BUDGET;
         if *b > 0 {
             *b -= 1;
-            serial_println!("[shell.frame.tab.info.send] frame={} surface={} tabs={} active={}",
-                frame_id, surface_id, tab_count, active_tab);
+            serial_println!("[shell.frame.tab.info.send] frame={} surface={} tabs={} active={} chrome={}",
+                frame_id, surface_id, tab_count, active_tab, chrome_flags);
         }
     }
+}
+
+/// Toggle the top bar flag on the frame containing the currently focused surface.
+/// Resolves the frame via selected_frame_id(), flips FRAME_FLAG_TOP_BAR,
+/// and notifies sexdisplay via send_frame_tab_info() with updated chrome_flags.
+/// Does not change focus, surface geometry, drag state, minimize, or zoom state.
+/// Returns true if the toggle was applied.
+unsafe fn toggle_top_bar_for_active_frame() -> bool {
+    let frame_id = match selected_frame_id() {
+        Some(fid) => fid,
+        None => {
+            unsafe {
+                static mut TOP_BAR_TOGGLE_REJECT_BUDGET: u32 = 4;
+                let b = &mut TOP_BAR_TOGGLE_REJECT_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!("[shell.frame.topbar.toggle.reject] reason=no_active_frame");
+                }
+            }
+            return false;
+        }
+    };
+
+    let new_state = !frame_has_top_bar(frame_id);
+    set_frame_top_bar(frame_id, new_state);
+    send_frame_tab_info(frame_id);
+
+    unsafe {
+        static mut TOP_BAR_TOGGLE_BUDGET: u32 = 8;
+        let b = &mut TOP_BAR_TOGGLE_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[shell.frame.topbar.toggle] frame={} enabled={}",
+                frame_id, new_state as u32);
+        }
+    }
+    true
 }
 
 /// Switch the active tab of the given frame to `tab_index`.
@@ -2229,6 +2271,12 @@ pub extern "C" fn _start() -> ! {
                                             }
                                         } else {
                                             serial_println!("[silk-shell] No minimized frame to restore");
+                                        }
+                                    }
+
+                                    SurfaceAction::ToggleTopBar => {
+                                        if toggle_top_bar_for_active_frame() {
+                                            mutated = true;
                                         }
                                     }
 
