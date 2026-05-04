@@ -473,6 +473,8 @@ enum SurfaceAction {
     RecreateFocused,
     RestoreMinimized,
     ToggleTopBar,
+    ToggleLinen,       // F8 — open/focus/toggle Linen surface
+    ToggleQuil,        // F9 — open/focus/toggle Quil surface
     ToggleSceneSettingsPanel,
     CycleRenderTokenPreset,
     CycleCustomTint,
@@ -567,6 +569,8 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x40 => Some(SurfaceAction::CycleCustomTint),        // F6
         0x41 => Some(SurfaceAction::ToggleSceneSettingsPanel), // F7
         0x3B => Some(SurfaceAction::LegacyFocusToggle),
+        0x42 => Some(SurfaceAction::ToggleLinen),    // F8
+        0x43 => Some(SurfaceAction::ToggleQuil),     // F9
         0x47 => Some(SurfaceAction::SnapHome),
         0x4F => Some(SurfaceAction::SnapEnd),
         0x4B => Some(SurfaceAction::MoveLeft),
@@ -1224,7 +1228,13 @@ unsafe fn surface_in_active_scene(sid: u64) -> bool {
             }
         }
     }
-    true // surface not found in any frame (panels/cursor) → visible
+    // Surface not found in any frame.
+    // Panels (0x90-0x96) and cursor are always visible regardless of scene.
+    // Frame-owned surfaces (Linen, Quil) are NOT visible without a frame.
+    if sid == SURFACE_ID_LINEN || sid == SURFACE_ID_QUIL {
+        return false;
+    }
+    true // panels/cursor always visible
 }
 
 /// If the focused surface belongs to a frame in a non-active scene,
@@ -2974,7 +2984,7 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
             return HitTarget::Surface(focused);
         }
     }
-    let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
+    let z_order = [SURFACE_ID_QUIL, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                    SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
     for &sid in &z_order {
         if sid == focused { continue; }
@@ -4047,6 +4057,20 @@ pub extern "C" fn _start() -> ! {
                                     SurfaceAction::ToggleTopBar => {
                                         if toggle_top_bar_for_active_frame() {
                                             mutated = true;
+                                        }
+                                    }
+
+                                    SurfaceAction::ToggleLinen => {
+                                        if toggle_linen() {
+                                            mutated = true;
+                                            serial_println!("[shell.action.linen] toggle");
+                                        }
+                                    }
+
+                                    SurfaceAction::ToggleQuil => {
+                                        if toggle_quil() {
+                                            mutated = true;
+                                            serial_println!("[shell.action.quil] toggle");
                                         }
                                     }
 
