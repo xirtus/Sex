@@ -31,9 +31,10 @@ pub fn init() {
     let mut sexusb_id = 0;
     let mut silkbar_id = 0;
     let mut linen_id = 0;
+    let mut sexstore_id = 0;
 
     // Fixed Spawn Order (Deterministic IDs)
-    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen"];
+    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore"];
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -68,6 +69,9 @@ pub fn init() {
                             silkbar_id = id;
                         } else if domain_id == 7 {
                             linen_id = id;
+                        } else if domain_id == 8 {
+                            sexstore_id = id;
+                            serial_println!("[kernel.sexstore.spawn] id={}", id);
                         }
                     }
                     Err(e) => {
@@ -89,6 +93,10 @@ pub fn init() {
             pd.grant_capability(sex_pdx::SLOT_SHELL,   CapabilityData::Domain(silkshell_id));
             // Stage 2B: silk-shell can send workspace IPC to SilkBar
             pd.grant_capability(sex_pdx::SLOT_SILKBAR, CapabilityData::Domain(silkbar_id));
+            if sexstore_id != 0 {
+                pd.grant_capability(sex_pdx::SLOT_SEXSTORE, CapabilityData::Domain(sexstore_id));
+                serial_println!("[kernel.sexstore.cap] shell={} store={}", silkshell_id, sexstore_id);
+            }
             serial_println!("✓ Phase 25: Capabilities granted to silk-shell");
         }
 
