@@ -3,6 +3,8 @@
 
 use sex_pdx::{serial_println, sys_yield, SLOT_USB_HOST, pdx_call_checked};
 
+const SEXUSB_SYNTHETIC: bool = option_env!("SEXUSB_SYNTHETIC").is_some();
+
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop { sys_yield(); }
@@ -123,6 +125,29 @@ fn decode_boot_mouse_report(buf: &[u8], len: usize) -> Option<BootMouseReport> {
         dy: buf[2] as i8,
         wheel,
     })
+}
+
+fn send_synthetic_mouse_frame(n: u32, buttons: u8, dx: i8, dy: i8) {
+    let buf = [buttons, dx as u8, dy as u8, 0u8];
+    if let Some(decoded) = decode_boot_mouse_report(&buf, 4) {
+        let packed_axes = (decoded.dx as u8 as u64)
+            | ((decoded.dy as u8 as u64) << 8)
+            | ((decoded.wheel as u8 as u64) << 16);
+        serial_println!(
+            "[sexusb.synthetic.frame] n={} dx={} dy={} buttons={}",
+            n, decoded.dx, decoded.dy, decoded.buttons
+        );
+        match pdx_call_checked(
+            SLOT_USB_SEXINPUT,
+            OP_USB_MOUSE_REPORT,
+            0,
+            decoded.buttons as u64,
+            packed_axes,
+        ) {
+            Ok(_) => serial_println!("[sexusb.synthetic.send.ok]"),
+            Err(e) => serial_println!("[sexusb.synthetic.send.fail] e={}", e),
+        }
+    }
 }
 
 struct TabletReport {
@@ -2463,6 +2488,32 @@ pub extern "C" fn _start() -> ! {
     }
     cmd_idx += 1;
     serial_println!("[sexusb.xhci.intr_in.config_ep.ok]");
+
+    if SEXUSB_SYNTHETIC {
+        serial_println!("[sexusb.synthetic.gate] enabled=1 source=env");
+        serial_println!("[sexusb.synthetic.start]");
+        let mut n: u32 = 0;
+
+        for _ in 0..60u32 {
+            send_synthetic_mouse_frame(n, 0, 3, 2);
+            n += 1;
+            sys_yield();
+        }
+        send_synthetic_mouse_frame(n, 1, 0, 0);
+        n += 1;
+        sys_yield();
+        send_synthetic_mouse_frame(n, 0, 0, 0);
+        n += 1;
+        sys_yield();
+        for _ in 0..60u32 {
+            send_synthetic_mouse_frame(n, 0, -2, 1);
+            n += 1;
+            sys_yield();
+        }
+
+        serial_println!("[sexusb.synthetic.complete.ok]");
+        loop { sys_yield(); }
+    }
 
     // Continuous bounded poll: one TRB in-flight at a time.
     // Inner loop waits indefinitely (no POLL_BUDGET timeout) — safe because the
