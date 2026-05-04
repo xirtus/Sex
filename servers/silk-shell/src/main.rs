@@ -245,6 +245,16 @@ const FRAME_RIM_PX: i32 = 4;
 /// Height of the tab strip band in pixels (0 = disabled in V1).
 const FRAME_TAB_STRIP_PX: i32 = 0;
 
+// ── Selected Window Option Bits (model only, no action behavior in V1) ──
+/// Bit: selected frame can be closed/destroyed.
+const OPTION_CLOSE: u32 = 1;
+/// Bit: selected frame can be zoomed/maximized.
+const OPTION_ZOOM: u32 = 2;
+/// Bit: selected frame can be minimized/hidden.
+const OPTION_MINIMIZE: u32 = 4;
+/// Bit: selected frame can be moved via rim drag.
+const OPTION_MOVE: u32 = 8;
+
 static mut HOVERED_FRAME_ID: u32 = 0;
 static mut HOVER_KIND: u32 = HOVER_NONE;
 static mut FOCUS_ID: u64 = 0;
@@ -511,6 +521,32 @@ unsafe fn active_surface_for_frame(frame_id: u32) -> Option<u64> {
     None
 }
 
+// ── Selected Window Options Model ──────────────────────────────────────────
+/// Returns the frame_id of the currently selected/focused frame, if any.
+unsafe fn selected_frame_id() -> Option<u32> {
+    frame_for_surface(FOCUSED_SURFACE_ID)
+}
+
+/// Returns the surface_id of the currently selected surface, if valid.
+unsafe fn selected_surface_id() -> Option<u64> {
+    let sid = FOCUSED_SURFACE_ID;
+    if sid != 0 && surface_is_alive(sid) { Some(sid) } else { None }
+}
+
+/// Compute the options mask for the currently selected window.
+/// V1: MOVE is set for frame-owned surfaces. Other bits reserved.
+/// No action behavior implemented — model only.
+unsafe fn selected_window_options_mask() -> u32 {
+    let mut mask = 0u32;
+    if let Some(_fid) = selected_frame_id() {
+        // Frame-owned surface: can be moved via rim drag.
+        mask |= OPTION_MOVE;
+        // Future: CLOSE if destroyable (not linen), ZOOM if resizable, MINIMIZE if minimizable.
+    }
+    // Non-frame surfaces get no options in V1 (standalone surfaces are legacy/app content).
+    mask
+}
+
 // ── Frame Chrome Hover Update ──────────────────────────────────────────────────
 /// Update frame chrome hover state from current pointer position.
 /// Called once per event loop iteration. Skips during active drag.
@@ -569,11 +605,22 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
 /// Emits unbudgeted reject markers for nonfocusable or dead surfaces.
 /// On success, emits [shell.focus.set] or [shell.focus.clear] markers
 /// for deterministic focus-tracking in synthetic proofs.
+/// On success, also emits budgeted [shell.selected.options] marker
+/// with the selected frame/surface and computed options mask.
 unsafe fn try_set_focus(sid: u64) -> bool {
     if sid == 0 {
         FOCUSED_SURFACE_ID = 0;
         pdx_call(SLOT_DISPLAY, 0xED, 0, 0, 0);
         serial_println!("[shell.focus.clear] id=0");
+        // Selected window: focus cleared → no selection, mask=0.
+        unsafe {
+            static mut SELECTED_OPTIONS_CLEAR_BUDGET: u32 = 4;
+            let b = &mut SELECTED_OPTIONS_CLEAR_BUDGET;
+            if *b > 0 {
+                *b -= 1;
+                serial_println!("[shell.selected.options] frame=0 surface=0 mask=0");
+            }
+        }
         return true;
     }
     if !is_focusable_surface(sid) {
@@ -587,6 +634,19 @@ unsafe fn try_set_focus(sid: u64) -> bool {
     FOCUSED_SURFACE_ID = sid;
     serial_println!("[shell.focus.set] id={}", sid);
     pdx_call(SLOT_DISPLAY, 0xED, sid, 0, 0);
+    // Selected window options: frame, surface, and computed mask.
+    unsafe {
+        static mut SELECTED_OPTIONS_SET_BUDGET: u32 = 8;
+        let b = &mut SELECTED_OPTIONS_SET_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            let frame = selected_frame_id();
+            let mask = selected_window_options_mask();
+            serial_println!("[shell.selected.options] frame={} surface={} mask={:#x}",
+                match frame { Some(f) => f as u64, None => 0 },
+                sid, mask);
+        }
+    }
     true
 }
 
