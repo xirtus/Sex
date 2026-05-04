@@ -273,10 +273,25 @@ const FRAME_LIGHT_SIZE_PX: i32 = 4;
 /// Gap between adjacent frame lights in pixels.
 const FRAME_LIGHT_GAP_PX: i32 = 2;
 
+// ── Top Bar Geometry Constants (default mode) ─────────────────────────────────
+/// Height of the top bar chrome band in default mode (replaces top rim).
+/// The 4px neon rim on the top edge is replaced by this taller band.
+const FRAME_TOP_BAR_HEIGHT_PX: i32 = 16;
+/// Width and height of each frame light in default mode (larger than minimal mode).
+const FRAME_TOP_BAR_LIGHT_SIZE_PX: i32 = 8;
+/// Gap between adjacent frame lights in default mode.
+const FRAME_TOP_BAR_LIGHT_GAP_PX: i32 = 4;
+/// X-width of the Frame Lights exclusion zone in default mode.
+/// Covers: gap(4) + close(8) + gap(4) + minimize(8) + gap(4) + zoom(8) + gap(4) = 40px.
+const FRAME_TOP_BAR_LIGHT_EXCLUSION_PX: i32 = 40;
+
 /// ShellFrame.flags: frame is minimized (hidden via 0xEE, not destroyed).
 const FRAME_FLAG_MINIMIZED: u32 = 1 << 0;
 /// ShellFrame.flags: frame is zoomed/maximized (fills content area below SilkBar).
 const FRAME_FLAG_ZOOMED: u32 = 1 << 1;
+/// ShellFrame.flags: frame has top bar chrome band (default mode).
+/// When clear (minimal mode), only 4px neon rim is rendered.
+const FRAME_FLAG_TOP_BAR: u32 = 1 << 2;
 
 // ── Selected Window Option Bits (model only, no action behavior in V1) ──
 /// Bit: selected frame can be closed/destroyed.
@@ -765,6 +780,36 @@ unsafe fn set_frame_zoomed(frame_id: u32, zoomed: bool) {
     }
 }
 
+/// Returns true if the given frame has the top bar enabled (default mode).
+/// When true, hit targets use FRAME_TOP_BAR_HEIGHT_PX for the top chrome band.
+/// When false, hit targets use the 4px rim model (minimal mode).
+unsafe fn frame_has_top_bar(frame_id: u32) -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id && (frame.flags & FRAME_FLAG_TOP_BAR) != 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Set or clear the top bar flag on the given frame.
+unsafe fn set_frame_top_bar(frame_id: u32, enabled: bool) {
+    for f in FRAMES.iter_mut() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id {
+                if enabled {
+                    frame.flags |= FRAME_FLAG_TOP_BAR;
+                } else {
+                    frame.flags &= !FRAME_FLAG_TOP_BAR;
+                }
+                break;
+            }
+        }
+    }
+}
+
 /// Update local shell geometry statics to match a 0xEC update sent to sexdisplay.
 /// This keeps shell hit-testing in sync with the display renderer.
 /// Also fixes the stale-dimension bug on surface 100 (SURFACE_100_W/H were never
@@ -935,31 +980,55 @@ unsafe fn frame_light_at(frame_id: u32, x: i32, y: i32) -> u32 {
     };
     let (sx, sy, _sw, _sh) = bounds;
 
-    // Lights live in the top rim band only (height = FRAME_RIM_PX).
-    let top_rim_bottom = sy + FRAME_RIM_PX;
-    if y < sy || y >= top_rim_bottom {
-        return FRAME_LIGHT_NONE;
+    // Dispatch on chrome mode: top bar (default) vs minimal (4px rim).
+    if frame_has_top_bar(frame_id) {
+        // Default mode: lights in 16px top bar band.
+        let band_bottom = sy + FRAME_TOP_BAR_HEIGHT_PX;
+        if y < sy || y >= band_bottom {
+            return FRAME_LIGHT_NONE;
+        }
+        let lx = x - sx;
+        // CLOSE: gap from left edge.
+        if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX
+            && lx < FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX
+        {
+            return FRAME_LIGHT_CLOSE;
+        }
+        // MINIMIZE: gap + size + gap.
+        let l2_start = FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX
+            + FRAME_TOP_BAR_LIGHT_GAP_PX;
+        if lx >= l2_start && lx < l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX {
+            return FRAME_LIGHT_MINIMIZE;
+        }
+        // ZOOM: gap + size + gap + size + gap.
+        let l3_start = l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX + FRAME_TOP_BAR_LIGHT_GAP_PX;
+        if lx >= l3_start && lx < l3_start + FRAME_TOP_BAR_LIGHT_SIZE_PX {
+            return FRAME_LIGHT_ZOOM;
+        }
+        FRAME_LIGHT_NONE
+    } else {
+        // Minimal mode: lights in 4px rim band (existing behavior).
+        let top_rim_bottom = sy + FRAME_RIM_PX;
+        if y < sy || y >= top_rim_bottom {
+            return FRAME_LIGHT_NONE;
+        }
+        let lx = x - sx;
+        // CLOSE: gap from left edge.
+        if lx >= FRAME_LIGHT_GAP_PX && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX {
+            return FRAME_LIGHT_CLOSE;
+        }
+        // MINIMIZE: gap + size + gap.
+        let l2_start = FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX;
+        if lx >= l2_start && lx < l2_start + FRAME_LIGHT_SIZE_PX {
+            return FRAME_LIGHT_MINIMIZE;
+        }
+        // ZOOM: gap + size + gap + size + gap.
+        let l3_start = l2_start + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX;
+        if lx >= l3_start && lx < l3_start + FRAME_LIGHT_SIZE_PX {
+            return FRAME_LIGHT_ZOOM;
+        }
+        FRAME_LIGHT_NONE
     }
-
-    // X position relative to surface left edge.
-    let lx = x - sx;
-
-    // CLOSE: gap from left edge.
-    if lx >= FRAME_LIGHT_GAP_PX && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX {
-        return FRAME_LIGHT_CLOSE;
-    }
-    // MINIMIZE: gap + size + gap.
-    let l2_start = FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX;
-    if lx >= l2_start && lx < l2_start + FRAME_LIGHT_SIZE_PX {
-        return FRAME_LIGHT_MINIMIZE;
-    }
-    // ZOOM: gap + size + gap + size + gap.
-    let l3_start = l2_start + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX;
-    if lx >= l3_start && lx < l3_start + FRAME_LIGHT_SIZE_PX {
-        return FRAME_LIGHT_ZOOM;
-    }
-
-    FRAME_LIGHT_NONE
 }
 
 // ── Frame Tab Strip Helpers ─────────────────────────────────────────────────
@@ -998,13 +1067,20 @@ unsafe fn frame_tab_at(frame_id: u32, x: i32, y: i32) -> Option<u32> {
     let bounds = get_surface_bounds(surface_id)?;
     let (sx, sy, sw, _sh) = bounds;
 
-    // Must be in the top rim band (tab strip height = FRAME_TAB_STRIP_PX).
-    if y < sy || y >= sy + FRAME_TAB_STRIP_PX {
+    // Determine chrome band height and light exclusion zone based on mode.
+    let (band_height, exclusion) = if frame_has_top_bar(frame_id) {
+        (FRAME_TOP_BAR_HEIGHT_PX, FRAME_TOP_BAR_LIGHT_EXCLUSION_PX)
+    } else {
+        (FRAME_TAB_STRIP_PX, FRAME_TAB_LIGHT_EXCLUSION_PX)
+    };
+
+    // Must be in the chrome band (top bar or top rim).
+    if y < sy || y >= sy + band_height {
         return None;
     }
 
     // Must be outside the Frame Lights exclusion zone.
-    let tab_strip_start = sx + FRAME_TAB_LIGHT_EXCLUSION_PX;
+    let tab_strip_start = sx + exclusion;
     if x < tab_strip_start {
         return None;
     }
@@ -1376,15 +1452,20 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
     // Find the frame that owns this surface — no chrome for unowned surfaces (linen, standalone).
     let frame_id = frame_for_surface(sid)?;
 
+    // Determine chrome mode: top bar (default) vs minimal (4px rim).
+    let top_bar = frame_has_top_bar(frame_id);
+    let band_height = if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { FRAME_RIM_PX };
+    let tab_exclusion = if top_bar { FRAME_TOP_BAR_LIGHT_EXCLUSION_PX } else { FRAME_TAB_LIGHT_EXCLUSION_PX };
+
     // Tab strip (top band): highest priority. Gated on FRAME_TAB_STRIP_PX > 0.
-    // The tab strip excludes the Frame Lights zone (leftmost ~20px) and the
-    // right rim band (4px). Lights are handled separately with higher priority.
-    if FRAME_TAB_STRIP_PX > 0 {
-        let strip_top = sy;
-        let strip_bot = sy + FRAME_TAB_STRIP_PX;
-        let tab_strip_start = sx + FRAME_TAB_LIGHT_EXCLUSION_PX;
+    // In default mode, the tab strip uses the full top bar height.
+    // The tab strip excludes the Frame Lights zone and the right rim band.
+    // Lights are handled separately with higher priority in the click handler.
+    if FRAME_TAB_STRIP_PX > 0 || top_bar {
+        let strip_bot = sy + if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { FRAME_TAB_STRIP_PX };
+        let tab_strip_start = sx + tab_exclusion;
         let right_rim_start = sx + sw as i32 - FRAME_RIM_PX;
-        if y >= strip_top && y < strip_bot
+        if y >= sy && y < strip_bot
             && x >= tab_strip_start
             && x < right_rim_start
         {
@@ -1396,12 +1477,13 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
     }
 
     // Rim (edge band): check all four edges of the surface.
+    // In default mode, the top edge uses band_height (=top bar height) instead of FRAME_RIM_PX.
     let right = sx + sw as i32 - 1;
     let bottom = sy + sh as i32 - 1;
     let in_rim =
         (x >= sx && x < sx + FRAME_RIM_PX)                            // left edge
         || (x > right - FRAME_RIM_PX && x <= right)                   // right edge
-        || (y >= sy && y < sy + FRAME_RIM_PX)                         // top edge
+        || (y >= sy && y < sy + band_height)                          // top edge (or top bar)
         || (y > bottom - FRAME_RIM_PX && y <= bottom);                // bottom edge
     if in_rim {
         return Some(HitTarget::FrameChrome { frame_id, kind: FRAME_CHROME_RIM });
@@ -1747,7 +1829,7 @@ pub extern "C" fn _start() -> ! {
                 Some(ShellTab { surface_id: SURFACE_ID_STATIC, title_id: 0, flags: 0 }),
                 None, None, None, None, None, None,
             ],
-            flags: 0,
+            flags: FRAME_FLAG_TOP_BAR, // top bar ON by default
             normal_x: boot_x,
             normal_y: boot_y,
             normal_w: boot_w,
@@ -1795,6 +1877,17 @@ pub extern "C" fn _start() -> ! {
             let has_tab = frame_tab_at(1, 140, 101).is_some(); // sx=100 + exclusion=20, tab 0 at x=140
             serial_println!("[shell.frame.tab.model] tabs={} has_tab={} strip_px={}",
                 tab_count, has_tab, FRAME_TAB_STRIP_PX);
+        }
+    }
+
+    // Frame Top Bar model: prove flag, constants, and helper exist.
+    unsafe {
+        static mut FRAME_TOPBAR_MODEL_BUDGET: u32 = 1;
+        if FRAME_TOPBAR_MODEL_BUDGET > 0 {
+            FRAME_TOPBAR_MODEL_BUDGET -= 1;
+            let enabled = frame_has_top_bar(1) as u32;
+            serial_println!("[shell.frame.topbar.model] frame=1 enabled={} height={}",
+                enabled, FRAME_TOP_BAR_HEIGHT_PX);
         }
     }
 
