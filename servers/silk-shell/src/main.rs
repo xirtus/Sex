@@ -710,6 +710,10 @@ unsafe fn tile_visible_frames() {
         if let Some(frame) = f {
             if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
             if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
+            // Zoomed frames are excluded from tiling — their surface occupies the
+            // full content area via layout_maximize(). Tiling them would overwrite
+            // the zoomed position with a tiled position, corrupting the zoom state.
+            if (frame.flags & FRAME_FLAG_ZOOMED) != 0 { continue; }
             if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
                 if count < MAX_FRAMES {
                     tiles[count] = tab.surface_id;
