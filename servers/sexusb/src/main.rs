@@ -2492,25 +2492,55 @@ pub extern "C" fn _start() -> ! {
     if SEXUSB_SYNTHETIC {
         serial_println!("[sexusb.synthetic.gate] enabled=1 source=env");
         serial_println!("[sexusb.synthetic.start]");
+        serial_println!("[sexusb.synthetic.drag.start]");
         let mut n: u32 = 0;
 
-        for _ in 0..60u32 {
-            send_synthetic_mouse_frame(n, 0, 3, 2);
+        // Phase 1: 40 frames, drift right/down, button up (approach target surface).
+        for _ in 0..40u32 {
+            send_synthetic_mouse_frame(n, 0, 1, 1);
             n += 1;
             sys_yield();
+            sys_yield();
         }
+        // Phase 2: 1 frame, button down, no movement (triggers ClickPending → Dragging).
+        serial_println!("[sexusb.synthetic.drag.frame] n={} buttons=1 dx=0 dy=0", n);
         send_synthetic_mouse_frame(n, 1, 0, 0);
         n += 1;
         sys_yield();
+        sys_yield();
+        sys_yield();
+        sys_yield();
+        // Phase 3: 80 frames, drag right with button held.
+        for _ in 0..80u32 {
+            send_synthetic_mouse_frame(n, 1, 1, 0);
+            n += 1;
+            sys_yield();
+            sys_yield();
+        }
+        // Phase 4: 80 frames, drag down with button held.
+        for _ in 0..80u32 {
+            send_synthetic_mouse_frame(n, 1, 0, 1);
+            n += 1;
+            sys_yield();
+            sys_yield();
+        }
+        // Phase 5: 1 frame, release button.
+        serial_println!("[sexusb.synthetic.drag.frame] n={} buttons=0 dx=0 dy=0", n);
         send_synthetic_mouse_frame(n, 0, 0, 0);
         n += 1;
         sys_yield();
-        for _ in 0..60u32 {
-            send_synthetic_mouse_frame(n, 0, -2, 1);
+        sys_yield();
+        sys_yield();
+        sys_yield();
+        // Phase 6: 40 frames, drift back (button up).
+        for _ in 0..40u32 {
+            send_synthetic_mouse_frame(n, 0, -1, -1);
             n += 1;
+            sys_yield();
             sys_yield();
         }
 
+        serial_println!("[sexusb.synthetic.drag.complete]");
         serial_println!("[sexusb.synthetic.complete.ok]");
         loop { sys_yield(); }
     }
