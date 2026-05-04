@@ -81,8 +81,8 @@ pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 // ── App Surface Registry ──────────────────────────────────────────────────────
 // Compile-time registry for OS-managed app surfaces (frame-owned, shell-tracked).
 // Provides documentation, startup duplicate validation, and optional lookup.
-// Match arms for surface_is_alive/is_focusable/is_closeable remain hardcoded
-// for safety — the registry is not a dynamic dispatch table.
+// Lookup helpers use the registry for app surface focusable/closeable conformance.
+// surface_is_alive remains hardcoded (no alive field in spec).
 
 /// Specification for a shell-managed app surface.
 struct AppSurfaceSpec {
@@ -151,7 +151,6 @@ unsafe fn app_surface_registry_validate() {
 }
 
 /// Lookup an app surface spec by surface_id. Returns None for non-registered surfaces.
-#[allow(dead_code)]
 fn app_surface_spec(surface_id: u64) -> Option<&'static AppSurfaceSpec> {
     APP_SURFACES.iter().find(|s| s.surface_id == surface_id)
 }
@@ -1293,8 +1292,8 @@ fn is_shell_surface(sid: u64) -> bool {
 fn is_focusable_surface(sid: u64) -> bool {
     sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
     || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
-    || sid == SURFACE_ID_LINEN
-    || sid == SURFACE_ID_QUIL
+    // Registry lookup: app surfaces use their focusable field
+    || app_surface_spec(sid).map_or(false, |s| s.focusable)
 }
 
 // ── Scene / Workspace Helpers ──────────────────────────────────────────────────
@@ -2024,11 +2023,17 @@ unsafe fn selected_window_options_mask() -> u32 {
 /// OS-owned surfaces (linen, cursor, panels) and unknown surfaces cannot be closed.
 unsafe fn is_closeable_surface(surface_id: u64) -> bool {
     match surface_id {
-        SURFACE_ID_LINEN | SURFACE_ID_QUIL | SURFACE_ID_CURSOR
-        | SURFACE_ID_LAUNCHER | SURFACE_ID_STATUS
+        SURFACE_ID_CURSOR | SURFACE_ID_LAUNCHER | SURFACE_ID_STATUS
         | SURFACE_ID_CLOCK | SURFACE_ID_BELL
         | SURFACE_ID_SCENE_SETTINGS => false,
-        _ => surface_is_alive(surface_id),
+        _ => {
+            // Registry lookup: app surfaces use their closeable field
+            if let Some(spec) = app_surface_spec(surface_id) {
+                serial_println!("[shell.app_registry.lookup] closeable sid={} val={}", surface_id, spec.closeable);
+                return spec.closeable;
+            }
+            surface_is_alive(surface_id)
+        }
     }
 }
 
