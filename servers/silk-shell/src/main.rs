@@ -768,6 +768,9 @@ fn snap_end_pos(w: u32, h: u32) -> (i32, i32) {
 ///   4 frames → 2x2 grid
 ///   5+       → stacked rows (full width, equal height)
 unsafe fn tile_visible_frames() {
+    static mut TILE_BEGIN_BUDGET: u32 = 8;
+    let b = &mut TILE_BEGIN_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.tile.begin]"); }
     let mut tiles: [u64; MAX_FRAMES] = [0; MAX_FRAMES];
     let mut count: usize = 0;
     for f in FRAMES.iter() {
@@ -786,7 +789,18 @@ unsafe fn tile_visible_frames() {
             }
         }
     }
-    if count == 0 { return; }
+    if count == 0 {
+        // No visible frames in active scene — clear stale focus, drag, hover.
+        // Defense-in-depth: callers should already clear before calling, but
+        // this ensures safety even if a new call site omits the clearing step.
+        clear_focus_if_dead();
+        clear_drag_if_dead();
+        HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
+        static mut TILE_EMPTY_BUDGET: u32 = 4;
+        let b = &mut TILE_EMPTY_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.tile.empty]"); }
+        return;
+    }
 
     let cw: u32 = P.width as u32;
     let ch: u32 = (P.height - P.bar_height) as u32;
@@ -1428,14 +1442,19 @@ static SURFACE_FOCUS_ACCEPT_BUDGET: core::sync::atomic::AtomicU32 =
 /// Call before any focus-dependent operation.
 unsafe fn clear_focus_if_dead() {
     let focused = FOCUSED_SURFACE_ID;
-    if focused != 0 && !surface_is_alive(focused) {
-        serial_println!("[shell.surface.focus.clear.dead] id={}", focused);
+    if focused != 0 && (!surface_is_alive(focused) || !surface_is_lifecycle_focusable(focused)) {
+        if !surface_is_alive(focused) {
+            serial_println!("[focus.ref.clear] id={} reason=dead", focused);
+        } else {
+            serial_println!("[focus.ref.clear] id={} reason=not_focusable lifecycle={:?}",
+                focused, lifecycle_state(focused));
+        }
         let z_order = [SURFACE_ID_QUIL, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                        SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
         let mut found = false;
         for &sid in &z_order {
             if sid == focused { continue; }
-            if surface_is_alive(sid) {
+            if surface_is_alive(sid) && surface_is_lifecycle_focusable(sid) {
                 if try_set_focus(sid) {
                     found = true;
                 }
@@ -1723,7 +1742,8 @@ unsafe fn clear_focus_if_wrong_scene() {
             if let Some(frame) = f {
                 if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
                 if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
-                    if surface_is_alive(tab.surface_id) && !is_tombstoned(tab.surface_id) {
+                    if surface_is_alive(tab.surface_id) && !is_tombstoned(tab.surface_id)
+                            && surface_is_lifecycle_focusable(tab.surface_id) {
                         if try_set_focus(tab.surface_id) {
                             found = true;
                             break;
@@ -3693,11 +3713,22 @@ unsafe fn try_set_focus(sid: u64) -> bool {
     }
     // Guard: reject focus for surfaces belonging to frames not in the active scene.
     // Panels, cursor, and other non-frame surfaces are always eligible.
-    if !surface_in_active_scene(sid) {
-        serial_println!("[shell.focus.reject.wrong-scene] id={}", sid);
+    // A4: Reject if lifecycle state does not allow focus (Visible or Mapped only).
+    if !surface_is_lifecycle_focusable(sid) {
+        serial_println!("[focus.lifecycle.reject] id={}", sid);
         return false;
     }
+    // A4: Verify generation is current before committing focus.
+    if let Some(fr) = make_focus_ref(sid) {
+        if !focus_ref_is_current(&fr) {
+            serial_println!("[focus.generation.reject] id={}", sid);
+            return false;
+        }
+    }
     FOCUSED_SURFACE_ID = sid;
+    // A4: Sync FocusRef shadow and emit commit marker.
+    sync_focus_ref();
+    serial_println!("[focus.ref.commit] id={}", sid);
     serial_println!("[shell.focus.set] id={}", sid);
     pdx_call(SLOT_DISPLAY, 0xED, sid, 0, 0);
     // Selected window options: frame, surface, and computed mask.
