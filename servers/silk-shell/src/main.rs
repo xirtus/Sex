@@ -7,6 +7,7 @@ use core::panic::PanicInfo;
 use sex_pdx::{
     pdx_call, pdx_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
     SLOT_DISPLAY, SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
+    OP_SURFACE_TAB_INFO,
     SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
 };
 use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y, PANEL_W, PANEL_H};
@@ -1031,6 +1032,28 @@ unsafe fn frame_tab_at(frame_id: u32, x: i32, y: i32) -> Option<u32> {
     let tab_index = (lx / slot_w.max(1)).min(tab_count as i32 - 1);
     Some(tab_index as u32)
 }
+
+/// Send current tab metadata for the given frame to sexdisplay via OP_SURFACE_TAB_INFO.
+/// Called after frame init and on tab changes (future).
+unsafe fn send_frame_tab_info(frame_id: u32) {
+    let surface_id = match active_surface_for_frame(frame_id) {
+        Some(sid) => sid,
+        None => return,
+    };
+    let tab_count = frame_tab_count(frame_id);
+    let active_tab = frame_active_tab_index(frame_id);
+    pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, surface_id, tab_count as u64, active_tab as u64);
+    unsafe {
+        static mut SHELL_TAB_INFO_SEND_BUDGET: u32 = 8;
+        let b = &mut SHELL_TAB_INFO_SEND_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[shell.frame.tab.info.send] frame={} surface={} tabs={} active={}",
+                frame_id, surface_id, tab_count, active_tab);
+        }
+    }
+}
+
 /// Update frame chrome hover state from current pointer position.
 /// Called once per event loop iteration. Skips during active drag.
 /// Returns true if hover state changed (for diagnostic gating).
@@ -1701,6 +1724,10 @@ pub extern "C" fn _start() -> ! {
     // Initialize focus on surface 100 (syncs sexdisplay z-order + color)
     pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
     serial_println!("[silk-shell] Boot focus set to surface 100");
+
+    // Send initial tab metadata for frame 1 (surface 100: 1 tab, active tab 0)
+    unsafe { send_frame_tab_info(1); }
+    serial_println!("[silk-shell] Boot tab info sent to sexdisplay");
 
     loop {
         // Runtime containment: park without syscall while null-jump root cause is isolated.

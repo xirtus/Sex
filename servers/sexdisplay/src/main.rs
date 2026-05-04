@@ -34,6 +34,9 @@ struct Surface {
     h: u32,
     color: u32,
     active: bool,
+    // Per-surface tab info (V1: set via 0xFD from shell; used for colored tab blocks)
+    tab_count: u8,
+    active_tab: u8,
     // Per-surface fill rect (V1: single rect, last 0xEF wins)
     fill_sx: i32,
     fill_sy: i32,
@@ -46,6 +49,7 @@ struct Surface {
 const MAX_SURFACES: usize = 16;
 const SURFACE_EMPTY: Surface = Surface {
     surface_id: 0, owner_pd: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false,
+    tab_count: 0, active_tab: 0,
     fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0, fill_color: 0, fill_active: false,
 };
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
@@ -62,6 +66,11 @@ const FRAME_LIGHT_GAP_PX: usize = 2;
 const FRAME_LIGHT_CLOSE_COLOR: u32 = 0x00FF4444;
 const FRAME_LIGHT_MINIMIZE_COLOR: u32 = 0x00FFCC44;
 const FRAME_LIGHT_ZOOM_COLOR: u32 = 0x0044FF44;
+
+// ── Tab Strip Constants (matches shell FRAME_TAB_LIGHT_EXCLUSION_PX and TAB_*) ──
+const TAB_STRIP_LIGHT_EXCLUSION_PX: usize = 20;
+const TAB_ACTIVE_COLOR: u32 = FOCUS_SURFACE_COLOR; // 0x00A8E0FF (bright cyan)
+const TAB_INACTIVE_COLOR: u32 = 0x006080B0; // dimmed cyan
 
 // Shell-owned OS cursor surface. Always rendered last (above all app surfaces).
 const CURSOR_SURFACE_ID: u64 = 0x90;
@@ -139,6 +148,25 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                                 && lx < FRAME_LIGHT_GAP_PX + 2 * (FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX) + FRAME_LIGHT_SIZE_PX
                             {
                                 c = FRAME_LIGHT_ZOOM_COLOR;
+                            }
+                            // Tab strip: equal-width colored blocks after light exclusion
+                            // zone and before right rim. Active tab is bright, inactive dim.
+                            else if surf.tab_count > 0
+                                && lx >= TAB_STRIP_LIGHT_EXCLUSION_PX
+                                && lx < rim_right
+                            {
+                                let available = rim_right - TAB_STRIP_LIGHT_EXCLUSION_PX;
+                                let slot_w = available / surf.tab_count as usize;
+                                if slot_w > 0 {
+                                    let tab_idx = (lx - TAB_STRIP_LIGHT_EXCLUSION_PX) / slot_w;
+                                    if tab_idx == surf.active_tab as usize {
+                                        c = TAB_ACTIVE_COLOR;
+                                    } else {
+                                        c = TAB_INACTIVE_COLOR;
+                                    }
+                                } else {
+                                    c = FRAME_RIM_COLOR;
+                                }
                             } else {
                                 c = FRAME_RIM_COLOR;
                             }
@@ -779,6 +807,7 @@ pub extern "C" fn _start() -> ! {
                                 x, y, w, h,
                                 color: 0x00303860,
                                 active: true,
+                                tab_count: 0, active_tab: 0,
                                 fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0,
                                 fill_color: 0, fill_active: false,
                             };
@@ -828,6 +857,7 @@ pub extern "C" fn _start() -> ! {
                                     surface_id, owner_pd: msg.caller_pd, x, y, w, h,
                                     color,
                                     active: true,
+                                    tab_count: 0, active_tab: 0,
                                     fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0,
                                     fill_color: 0, fill_active: false,
                                 };
@@ -974,6 +1004,38 @@ pub extern "C" fn _start() -> ! {
 
                     if updated {
                         redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+                    }
+                }
+            }
+            0xFD => {
+                // OP_SURFACE_TAB_INFO: arg0=surface_id, arg1=tab_count, arg2=active_tab
+                let surface_id = msg.arg0;
+                if surface_id == 0 { continue; }
+                let tab_count = (msg.arg1 as u8).min(8);
+                let active_tab = if tab_count > 0 {
+                    (msg.arg2 as u8).min(tab_count.saturating_sub(1))
+                } else { 0 };
+                unsafe {
+                    let mut updated = false;
+                    for slot in SURFACES.iter_mut() {
+                        if slot.active && slot.surface_id == surface_id {
+                            slot.tab_count = tab_count;
+                            slot.active_tab = active_tab;
+                            updated = true;
+                            break;
+                        }
+                    }
+                    if updated {
+                        static mut SURFACE_TAB_INFO_BUDGET: u32 = 8;
+                        let b = &mut SURFACE_TAB_INFO_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[sexdisplay.surface.tab.info] surface={} tabs={} active={}",
+                                surface_id, tab_count, active_tab);
+                        }
+                        if fb_live {
+                            redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+                        }
                     }
                 }
             }
