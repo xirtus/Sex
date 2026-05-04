@@ -149,7 +149,7 @@ Current state: No app manifest format, no Scene restore journal, no app spawn pa
 - CapabilityGrantSnapshot references Collar data model; Collar capability storage depends on E track.
 - Package trust / verification waits G gate. V1: manifest format exists but trust is design-only.
 - E dependency order: E5 (KV API), E9 (persistence stabilization) for restore journal survival.
-- F dependency: Linen document lifecycle must define OpenIntent before DocumentRestoreRef can validate.
+- F dependency: DocumentRestoreRef validation depends on Linen/F OpenIntent canon and E storage gates. B must not treat DocumentRestoreRef as raw path authority.
 
 ## 12. Sexdisplay Conformance Rules
 
