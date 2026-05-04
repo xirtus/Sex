@@ -795,9 +795,12 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
 
 /// Perform hit-test at (px, py) and update focus if a different surface is hit.
 /// Priority order: focused surface → z-order fallback → None.
+/// FrameChrome rim hits start a frame-resolved surface drag without focus change.
+/// FrameChrome non-rim hits (tab strip, reserved) are captured as no-op.
 /// Returns the typed HitTarget and whether SilkBar handled the click.
 /// SilkBar intercept runs after hit-test but before drag starts.
 /// Emits [shell.click_focus.down/hit/miss] markers.
+/// Emits [shell.frame.rim.drag.start] for rim drag, [shell.frame.chrome.capture] for other chrome.
 unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
     let target = hit_test_at(px, py);
@@ -816,14 +819,36 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
             serial_println!("[shell.click_focus.miss]");
         }
         HitTarget::FrameChrome { frame_id, kind } => {
-            // Chrome element hit: no focus change, no drag.
-            unsafe {
-                static mut CHROME_CAPTURE_BUDGET: u32 = 4;
-                let b = &mut CHROME_CAPTURE_BUDGET;
-                if *b > 0 {
-                    *b -= 1;
-                    serial_println!("[shell.frame.chrome.capture] frame={} kind={} x={} y={}",
-                        frame_id, kind, px, py);
+            if kind == FRAME_CHROME_RIM {
+                // Rim drag: resolve active surface and start drag without focus change.
+                if let Some(surface_id) = active_surface_for_frame(frame_id) {
+                    if surface_is_alive(surface_id) {
+                        try_transition(InteractionState::Dragging { surface_id, current_x: px, current_y: py });
+                        unsafe {
+                            static mut RIM_DRAG_START_BUDGET: u32 = 8;
+                            let b = &mut RIM_DRAG_START_BUDGET;
+                            if *b > 0 {
+                                *b -= 1;
+                                serial_println!("[shell.frame.rim.drag.start] frame={} surface={} x={} y={}",
+                                    frame_id, surface_id, px, py);
+                            }
+                        }
+                    } else {
+                        serial_println!("[shell.frame.rim.drag.reject] frame={} reason=dead", frame_id);
+                    }
+                } else {
+                    serial_println!("[shell.frame.rim.drag.reject] frame={} reason=no_active_surface", frame_id);
+                }
+            } else {
+                // Non-rim chrome (tab strip, reserved): capture/no-op.
+                unsafe {
+                    static mut CHROME_CAPTURE_BUDGET: u32 = 4;
+                    let b = &mut CHROME_CAPTURE_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!("[shell.frame.chrome.capture] frame={} kind={} x={} y={}",
+                            frame_id, kind, px, py);
+                    }
                 }
             }
         }
@@ -831,14 +856,16 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
     // SilkBar intercept: if pointer is in top strip, handle and skip drag
     let silkbar_handled = handle_silkbar_click(px, py);
     // Drag-start only on content area (not chrome rim/tab strip).
-    let is_chrome_hit = matches!(target, HitTarget::FrameChrome { .. });
-    if !silkbar_handled && !is_chrome_hit && is_shell_surface(FOCUSED_SURFACE_ID)
+    // Rim drag is already started in the match arm above — skip content drag and skip the
+    // "drag skipped" diagnostic for rim. Non-rim chrome remains a no-op with diagnostic.
+    let is_content_hit = matches!(target, HitTarget::Surface(..) | HitTarget::None);
+    if !silkbar_handled && is_content_hit && is_shell_surface(FOCUSED_SURFACE_ID)
         && point_in_surface(px, py, FOCUSED_SURFACE_ID)
     {
         try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: px, current_y: py });
         serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, px, py);
-    } else if !silkbar_handled && is_chrome_hit {
-        serial_println!("[shell.drag.skip.chrome] x={} y={}", px, py);
+    } else if !silkbar_handled && matches!(target, HitTarget::FrameChrome { kind: FRAME_CHROME_TAB_STRIP, .. }) {
+        serial_println!("[shell.drag.skip.chrome] kind=tab_strip x={} y={}", px, py);
     }
     (target, silkbar_handled)
 }
