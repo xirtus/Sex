@@ -791,6 +791,11 @@ unsafe fn tile_visible_frames() {
         pdx_call(SLOT_DISPLAY, 0xEC, sid,
             (ry as u64) << 32 | rx as u64,
             (rh as u64) << 32 | rw as u64);
+        // Quil visual placeholder: set distinctive fill rect after geometry update.
+        if sid == SURFACE_ID_QUIL {
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL, 0,
+                (QUIL_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
+        }
     }
     static mut TILE_BUDGET: u32 = 8;
     let b = &mut TILE_BUDGET;
@@ -1797,6 +1802,10 @@ const QUIL_BOOT_Y: i32 = 100;
 const QUIL_BOOT_W: u32 = 640;
 const QUIL_BOOT_H: u32 = 480;
 
+/// Fill color for the Quil visual placeholder surface (dark slate blue-gray).
+/// Used via 0xEF opcode to sexdisplay when no real Quil server exists.
+const QUIL_PLACEHOLDER_COLOR: u32 = 0x0018202E;
+
 /// Ensure a ShellFrame exists for Quil in an empty FRAMES slot, assigned to
 /// the active scene. Returns the frame_id if created/found, or 0 if no slot.
 /// Does NOT change visibility or tiling — caller decides that.
@@ -1889,6 +1898,11 @@ unsafe fn open_quil_in_active_scene() -> bool {
     if let Some(sid) = active_surface_for_frame(fid) {
         try_set_focus(sid);
     }
+
+    // Ensure Quil placeholder fill rect is set on every open (covers the
+    // restore-from-minimized path where tile_visible_frames() is not called).
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL, 0,
+        (QUIL_PLACEHOLDER_COLOR as u64) << 32 | ((SURFACE_201_H as u64) << 16) | SURFACE_201_W as u64);
 
     snap_capture_layout();
     static mut QUIL_OPEN_BUDGET: u32 = 4;
