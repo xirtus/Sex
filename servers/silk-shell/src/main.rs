@@ -1374,6 +1374,36 @@ unsafe fn frame_is_minimized(frame_id: u32) -> bool {
     false
 }
 
+/// Returns true if the given frame should receive pointer/keyboard input.
+/// Guards: must be in active scene, non-minimized, and have alive/non-tombstoned active tab.
+unsafe fn frame_accepts_input(frame_id: u32) -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id {
+                if frame.scene_id != ACTIVE_SCENE_IDX { return false; }
+                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { return false; }
+                if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
+                    if !surface_is_alive(tab.surface_id) { return false; }
+                    if is_tombstoned(tab.surface_id) { return false; }
+                }
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// If the hovered frame no longer accepts input (wrong scene, minimized, etc.),
+/// clear hover state to avoid stale highlights. Call after scene switch or minimize.
+unsafe fn clear_hover_if_wrong_scene() {
+    if HOVERED_FRAME_ID != 0 && !frame_accepts_input(HOVERED_FRAME_ID) {
+        HOVERED_FRAME_ID = 0;
+        HOVER_KIND = HOVER_NONE;
+        HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
+        serial_println!("[shell.frame.hover.clear.wrong-scene]");
+    }
+}
+
 /// Set or clear the minimized flag on the given frame.
 unsafe fn set_frame_minimized(frame_id: u32, minimized: bool) {
     for f in FRAMES.iter_mut() {
@@ -1423,6 +1453,13 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
     pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
     // Clear drag if dragging this surface.
     clear_drag_if_dead();
+    // Clear hover if the minimized frame was hovered.
+    if HOVERED_FRAME_ID == frame_id {
+        HOVERED_FRAME_ID = 0;
+        HOVER_KIND = HOVER_NONE;
+        HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
+        serial_println!("[shell.frame.minimize.hover.clear] frame={}", frame_id);
+    }
     // Fall back focus if this surface was focused.
     clear_focus_if_dead();
     unsafe {
@@ -1798,6 +1835,10 @@ unsafe fn frame_active_tab_index(frame_id: u32) -> u32 {
 /// Tab blocks are sized as equal-width slots filling the available width.
 /// Returns None if no tab is hit (lights zone, rim zone, content area).
 unsafe fn frame_tab_at(frame_id: u32, x: i32, y: i32) -> Option<u32> {
+    // Guard: only interactive tabs on frames that accept input.
+    if !frame_accepts_input(frame_id) {
+        return None;
+    }
     let surface_id = active_surface_for_frame(frame_id)?;
     let bounds = get_surface_bounds(surface_id)?;
     let (sx, sy, sw, _sh) = bounds;
@@ -2099,6 +2140,12 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         serial_println!("[shell.focus.reject.tombstoned] id={}", sid);
         return false;
     }
+    // Guard: reject focus for surfaces belonging to frames not in the active scene.
+    // Panels, cursor, and other non-frame surfaces are always eligible.
+    if !surface_in_active_scene(sid) {
+        serial_println!("[shell.focus.reject.wrong-scene] id={}", sid);
+        return false;
+    }
     FOCUSED_SURFACE_ID = sid;
     serial_println!("[shell.focus.set] id={}", sid);
     pdx_call(SLOT_DISPLAY, 0xED, sid, 0, 0);
@@ -2231,6 +2278,12 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
     // Find the frame that owns this surface — no chrome for unowned surfaces (linen, standalone).
     let frame_id = frame_for_surface(sid)?;
 
+    // Guard: only provide chrome hit-targets for frames that accept input
+    // (active scene, non-minimized, alive, non-tombstoned).
+    if !frame_accepts_input(frame_id) {
+        return None;
+    }
+
     // Determine chrome mode: top bar (default) vs minimal (4px rim).
     let top_bar = frame_has_top_bar(frame_id);
     let band_height = if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { FRAME_RIM_PX };
@@ -2294,7 +2347,16 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
             }
             return chrome_target;
         }
-        return HitTarget::Surface(focused);
+        // Content-area hit on focused surface: verify frame accepts input.
+        if let Some(fid) = frame_for_surface(focused) {
+            if frame_accepts_input(fid) {
+                return HitTarget::Surface(focused);
+            }
+            // Frame doesn't accept input — fall through to z-order.
+        } else {
+            // Non-frame surface (linen, standalone) — always hittable.
+            return HitTarget::Surface(focused);
+        }
     }
     let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                    SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
@@ -2320,7 +2382,17 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
                 }
                 return chrome_target;
             }
-            return HitTarget::Surface(sid);
+            // Content-area hit on z-order surface: verify frame accepts input.
+            if let Some(fid) = frame_for_surface(sid) {
+                if frame_accepts_input(fid) {
+                    return HitTarget::Surface(sid);
+                }
+                // Frame doesn't accept input — skip to next z-order.
+                continue;
+            } else {
+                // Non-frame surface (linen, standalone) — always hittable.
+                return HitTarget::Surface(sid);
+            }
         }
     }
     HitTarget::None
@@ -2575,6 +2647,7 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
                     sync_scene_visibility();
                     clear_focus_if_wrong_scene();
                     clear_drag_if_dead();
+                    clear_hover_if_wrong_scene();
                     tile_visible_frames();
                     static mut SCENE_SWITCH_BUDGET: u32 = 8;
                     let b = &mut SCENE_SWITCH_BUDGET;
