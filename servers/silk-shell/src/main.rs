@@ -988,6 +988,25 @@ struct ShellFrame {
     normal_h: u32,
 }
 
+// ── B1: Scene/Frame/Tab Core Model (type-safe wrappers) ──────────────────────
+// Compact type-safe identifiers for new scene/frame/tab code.
+// Existing code continues to use raw u8/u32 for backward compatibility.
+
+/// B1: Type-safe scene identifier (0..WORKSPACE_COUNT-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
+struct SceneId(u8);
+
+/// B1: Type-safe frame identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+struct FrameId(u32);
+
+/// B1: Type-safe tab index within a frame's tab stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+struct TabIndex(u8);
+
 static mut WINDOWS: Vec<WindowState> = Vec::new();
 /// Frame chrome model: fixed-size array of frames, each with fixed-size tab array.
 /// No heap allocation for frame/tab state — all static.
@@ -1210,6 +1229,16 @@ struct SceneDescriptor {
     frame_ids: [u32; ATLAS_MAX_FRAMES_PER_SCENE],
 }
 
+/// Runtime per-scene tracking state managed by silk-shell.
+/// Renderer receives only derived surface/display operations.
+#[derive(Debug, Clone, Copy)]
+struct Scene {
+    /// Scene flags: SCENE_FLAG_*.
+    flags: u8,
+    /// Human-readable fixed label, zero-padded.
+    label: [u8; ATLAS_LABEL_LEN],
+}
+
 /// Atlas snapshot: the shell's map of all Scenes, derived from existing state.
 /// Produced by atlas_capture_snapshot() after scene switches and layout changes.
 #[derive(Debug, Clone, Copy)]
@@ -1254,6 +1283,13 @@ static mut ATLAS_SNAPSHOT: AtlasSnapshot = AtlasSnapshot {
         frame_ids: [0u32; ATLAS_MAX_FRAMES_PER_SCENE],
     }; ATLAS_MAX_SCENES],
 };
+
+/// B1 runtime per-scene tracking state, indexed by scene_id.
+static mut SCENES: [Scene; ATLAS_MAX_SCENES] = [Scene {
+    flags: SCENE_FLAG_EMPTY,
+    label: [0u8; ATLAS_LABEL_LEN],
+}; ATLAS_MAX_SCENES];
+
 /// Atlas mode enabled: when true, the shell is in overview mode (no rendering yet in V1).
 /// Toggled by F10 (ToggleAtlas). State-only — no visual behavior changes in V1.
 static mut ATLAS_MODE_ENABLED: bool = false;
@@ -1804,6 +1840,7 @@ unsafe fn surface_in_active_scene(sid: u64) -> bool {
 unsafe fn clear_focus_if_wrong_scene() {
     let focused = FOCUSED_SURFACE_ID;
     if focused != 0 && !surface_in_active_scene(focused) {
+        serial_println!("[scene.focus.reject.inactive] sid={} scene=wrong_focused", focused);
         serial_println!("[shell.scene.focus.clear.wrong-scene] id={}", focused);
         // Try to focus the first alive surface in the active scene.
         let mut found = false;
@@ -1882,6 +1919,58 @@ fn atlas_default_label(scene_id: u32) -> [u8; ATLAS_LABEL_LEN] {
     label
 }
 
+/// B1: initialize shell-local Scene state.
+/// Safe under current single-shell mutation model; no IPC, no allocation.
+unsafe fn scene_init_all() {
+    for si in 0..ATLAS_MAX_SCENES {
+        SCENES[si] = Scene {
+            flags: SCENE_FLAG_EMPTY,
+            label: atlas_default_label(si as u32),
+        };
+    }
+
+    for si in 0..ATLAS_MAX_SCENES {
+        scene_update_flags(si as u8);
+    }
+
+    serial_println!("[scene.core.init] scenes={}", ATLAS_MAX_SCENES);
+}
+
+/// B1: recompute scene flags from shell-local frame state.
+unsafe fn scene_update_flags(scene_idx: u8) {
+    let idx = scene_idx as usize;
+    if idx >= ATLAS_MAX_SCENES {
+        return;
+    }
+
+    let mut flags: u8 = 0;
+    let mut has_frames = false;
+
+    for frame_slot in FRAMES.iter() {
+        if let Some(frame) = frame_slot {
+            if frame.scene_id as usize != idx {
+                continue;
+            }
+
+            has_frames = true;
+
+            if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 {
+                flags |= SCENE_FLAG_HAS_MINIMIZED;
+            }
+
+            if (frame.flags & FRAME_FLAG_ZOOMED) != 0 {
+                flags |= SCENE_FLAG_HAS_ZOOMED;
+            }
+        }
+    }
+
+    if !has_frames {
+        flags |= SCENE_FLAG_EMPTY;
+    }
+
+    SCENES[idx].flags = flags;
+}
+
 /// Capture current shell state into the ATLAS_SNAPSHOT.
 /// Derives SceneDescriptors from existing FRAMES, ACTIVE_SCENE_IDX, FOCUSED_SURFACE_ID.
 /// Safe: no allocation, no IPC, no sexdisplay changes.
@@ -1903,32 +1992,30 @@ unsafe fn atlas_capture_snapshot() {
     // Derive focused frame for active scene.
     let active_focused_frame = selected_frame_id().unwrap_or(0);
 
-    for scene_idx in 0..ATLAS_MAX_SCENES {
-        let sd = &mut snapshot.scenes[scene_idx];
-        sd.scene_id = scene_idx as u32;
-        sd.label = atlas_default_label(scene_idx as u32);
+    // B1: Refresh scene flags from FRAMES state.
+        for si in 0..ATLAS_MAX_SCENES {
+            scene_update_flags(si as u8);
+        }
 
-        let mut frame_count: u8 = 0;
-        let mut has_minimized = false;
-        let mut has_zoomed = false;
+        for scene_idx in 0..ATLAS_MAX_SCENES {
+            let sd = &mut snapshot.scenes[scene_idx];
+            sd.scene_id = scene_idx as u32;
+            sd.label = SCENES[scene_idx].label;
 
-        for f in FRAMES.iter() {
-            if let Some(frame) = f {
-                if frame.scene_id as usize != scene_idx { continue; }
-                if frame_count >= ATLAS_MAX_FRAMES_PER_SCENE as u8 { break; }
-                sd.frame_ids[frame_count as usize] = frame.frame_id;
-                frame_count += 1;
-                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { has_minimized = true; }
-                if (frame.flags & FRAME_FLAG_ZOOMED) != 0 { has_zoomed = true; }
+            let mut frame_count: u8 = 0;
+
+            for f in FRAMES.iter() {
+                if let Some(frame) = f {
+                    if frame.scene_id as usize != scene_idx { continue; }
+                    if frame_count >= ATLAS_MAX_FRAMES_PER_SCENE as u8 { break; }
+                    sd.frame_ids[frame_count as usize] = frame.frame_id;
+                    frame_count += 1;
+                }
             }
-        }
 
-        sd.frame_count = frame_count;
-        if frame_count == 0 {
-            sd.flags |= SCENE_FLAG_EMPTY;
-        }
-        if has_minimized { sd.flags |= SCENE_FLAG_HAS_MINIMIZED; }
-        if has_zoomed { sd.flags |= SCENE_FLAG_HAS_ZOOMED; }
+            sd.frame_count = frame_count;
+            // B1: Use cached scene flags instead of re-deriving.
+            sd.flags = SCENES[scene_idx].flags;
 
         // Focus: only the active scene has a tracked focused frame.
         if scene_idx == ACTIVE_SCENE_IDX as usize {
@@ -2280,11 +2367,14 @@ unsafe fn switch_scene(scene_idx: u8) {
     clear_hover_if_wrong_scene();
     tile_visible_frames();
     snap_capture_layout();
+    // B1: Update scene flags for the new active scene.
+    scene_update_flags(idx);
     // Capture Atlas snapshot after scene switch.
     atlas_capture_snapshot();
     static mut SCENE_SWITCH_SHORTCUT_BUDGET: u32 = 4;
     let b = &mut SCENE_SWITCH_SHORTCUT_BUDGET;
     if *b > 0 { *b -= 1; serial_println!("[shell.scene.shortcut.switch] from={} to={}", prev, ACTIVE_SCENE_IDX); }
+    serial_println!("[scene.switch] from={} to={}", prev, idx);
 }
 
 /// Advance to the next workspace (wraps around).
@@ -3019,8 +3109,16 @@ unsafe fn frame_accepts_input(frame_id: u32) -> bool {
                 if frame.scene_id != ACTIVE_SCENE_IDX { return false; }
                 if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { return false; }
                 if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
-                    if !surface_is_alive(tab.surface_id) { return false; }
-                    if is_tombstoned(tab.surface_id) { return false; }
+                    if !surface_is_alive(tab.surface_id) {
+                        serial_println!("[tab.focus.reject.dead] frame={} tab={} surface={}",
+                            frame_id, frame.active_tab, tab.surface_id);
+                        return false;
+                    }
+                    if is_tombstoned(tab.surface_id) {
+                        serial_println!("[tab.focus.reject.dead] frame={} tab={} surface={} reason=tombstoned",
+                            frame_id, frame.active_tab, tab.surface_id);
+                        return false;
+                    }
                 }
                 return true;
             }
@@ -4718,9 +4816,15 @@ pub extern "C" fn _start() -> ! {
             normal_h: boot_h,
         });
         serial_println!("[shell.frame.model.init] frames=1 tabs=1");
+        serial_println!("[frame.core.attach] frame=1 scene=0 tabs=2");
+        serial_println!("[tab.core.attach] frame=1 tab=0 surface={}", SURFACE_ID_APP);
+        serial_println!("[tab.core.attach] frame=1 tab=1 surface={}", SURFACE_ID_STATIC);
 
         // A3: Initialize lifecycle metadata for all known surfaces.
         lifecycle_init_all();
+
+        // B1: Initialize scene metadata array from FRAMES state.
+        scene_init_all();
 
         // Initial snapshot after frames are set up.
         snap_capture_layout();
