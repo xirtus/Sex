@@ -37,6 +37,8 @@ struct Surface {
     // Per-surface tab info (V1: set via 0xFD from shell; used for colored tab blocks)
     tab_count: u8,
     active_tab: u8,
+    // Per-surface chrome flags (V1: bit 0 = top bar enabled)
+    chrome_flags: u8,
     // Per-surface fill rect (V1: single rect, last 0xEF wins)
     fill_sx: i32,
     fill_sy: i32,
@@ -49,16 +51,16 @@ struct Surface {
 const MAX_SURFACES: usize = 16;
 const SURFACE_EMPTY: Surface = Surface {
     surface_id: 0, owner_pd: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false,
-    tab_count: 0, active_tab: 0,
+    tab_count: 0, active_tab: 0, chrome_flags: 0,
     fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0, fill_color: 0, fill_active: false,
 };
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 static mut FOCUSED_SURFACE_ID: u64 = 0;
-const FOCUS_SURFACE_COLOR: u32 = 0x00A8E0FF;
+const FOCUS_SURFACE_COLOR: u32 = 0x007AAFA4;
 
 // ── Frame Chrome Rim (focused surface, matches shell FRAME_RIM_PX) ──
 const FRAME_RIM_PX: usize = 4;
-const FRAME_RIM_COLOR: u32 = 0x00C0F0FF;
+const FRAME_RIM_COLOR: u32 = 0x00B8F2E8;
 
 // ── Frame Light Colors (top-left rim band, matches shell FRAME_LIGHTS_HIT_TARGET_V1) ──
 const FRAME_LIGHT_SIZE_PX: usize = 4;
@@ -71,6 +73,24 @@ const FRAME_LIGHT_ZOOM_COLOR: u32 = 0x0044FF44;
 const TAB_STRIP_LIGHT_EXCLUSION_PX: usize = 20;
 const TAB_ACTIVE_COLOR: u32 = FOCUS_SURFACE_COLOR; // 0x00A8E0FF (bright cyan)
 const TAB_INACTIVE_COLOR: u32 = 0x006080B0; // dimmed cyan
+
+// ── Top Bar Chrome Mode (default mode, matches shell FRAME_TOP_BAR_*) ──
+/// Surface.chrome_flags bit: top bar enabled (16px top band replaces 4px top rim).
+const SURFACE_CHROME_TOP_BAR: u8 = 1 << 0;
+/// Height of the top bar chrome band in default mode.
+const FRAME_TOP_BAR_HEIGHT_PX: usize = 16;
+/// Width and height of each frame light in default mode.
+const FRAME_TOP_BAR_LIGHT_SIZE_PX: usize = 8;
+/// Gap between adjacent frame lights in default mode.
+const FRAME_TOP_BAR_LIGHT_GAP_PX: usize = 4;
+/// X-width of the Frame Lights exclusion zone in default mode.
+const FRAME_TOP_BAR_LIGHT_EXCLUSION_PX: usize = 40;
+/// Top bar background color (same as rim color for visual continuity).
+const FRAME_TOP_BAR_COLOR: u32 = 0x0088C2B7;
+/// Light vertical zone: top (y offset within top bar).
+const FRAME_TOP_BAR_LIGHT_TOP: usize = 4;
+/// Light vertical zone: bottom (exclusive).
+const FRAME_TOP_BAR_LIGHT_BOTTOM: usize = 12; // 4 + 8
 
 // Shell-owned OS cursor surface. Always rendered last (above all app surfaces).
 const CURSOR_SURFACE_ID: u64 = 0x90;
@@ -118,19 +138,67 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                 let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
                 if sw == 0 || sh == 0 { continue; }
                 if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
-                    // Rim + Frame Light check (focused surface only).
+                    // Rim + Frame Light + Top Bar check (focused surface only).
                     let lx = x - sx;  // local x within clamped surface
                     let ly = y - sy;  // local y within clamped surface
                     // Edge detection with saturating_sub to prevent underflow
                     // on tiny surfaces (rim fills entire surface if sw/sh < RIM_PX).
                     let rim_right = sw.saturating_sub(FRAME_RIM_PX);
                     let rim_bottom = sh.saturating_sub(FRAME_RIM_PX);
-                    if ly < FRAME_RIM_PX || lx < FRAME_RIM_PX
+                    let top_bar_active = (surf.chrome_flags & SURFACE_CHROME_TOP_BAR) != 0;
+
+                    // ── TOP BAR ZONE (default chrome mode) ──
+                    if top_bar_active && ly < FRAME_TOP_BAR_HEIGHT_PX {
+                        // Default to top bar background color.
+                        c = FRAME_TOP_BAR_COLOR;
+                        // Tab strip override: full 16px height, after light exclusion,
+                        // before right rim. Uses same tab block geometry as minimal mode
+                        // but with wider exclusion zone for larger lights.
+                        if surf.tab_count > 0
+                            && lx >= FRAME_TOP_BAR_LIGHT_EXCLUSION_PX
+                            && lx < rim_right
+                        {
+                            let available = rim_right - FRAME_TOP_BAR_LIGHT_EXCLUSION_PX;
+                            let slot_w = available / surf.tab_count as usize;
+                            if slot_w > 0 {
+                                let tab_idx = (lx - FRAME_TOP_BAR_LIGHT_EXCLUSION_PX) / slot_w;
+                                if tab_idx == surf.active_tab as usize {
+                                    c = TAB_ACTIVE_COLOR;
+                                } else {
+                                    c = TAB_INACTIVE_COLOR;
+                                }
+                            }
+                        }
+                        // Light override: only within the lights vertical band (y=4..12).
+                        // Lights are 8x8px with 4px gaps, matching shell top bar model.
+                        if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {
+                            let l1_end = FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX;
+                            if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX && lx < l1_end {
+                                c = FRAME_LIGHT_CLOSE_COLOR;
+                            } else {
+                                let l2_start = l1_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
+                                let l2_end = l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
+                                if lx >= l2_start && lx < l2_end {
+                                    c = FRAME_LIGHT_MINIMIZE_COLOR;
+                                } else {
+                                    let l3_start = l2_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
+                                    let l3_end = l3_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
+                                    if lx >= l3_start && lx < l3_end {
+                                        c = FRAME_LIGHT_ZOOM_COLOR;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // ── RIM BAND (minimal mode top edge, or left/right/bottom edges always) ──
+                    else if ly < FRAME_RIM_PX || lx < FRAME_RIM_PX
                         || lx >= rim_right || ly >= rim_bottom
                     {
                         // In the rim band. Check for Frame Lights in top-left corner.
-                        // Lights are within top rim band only (ly < FRAME_RIM_PX).
-                        if ly < FRAME_RIM_PX {
+                        // This path is reached in minimal mode (top_bar_active=false) or
+                        // for left/right/bottom edges when top bar is active.
+                        if ly < FRAME_RIM_PX && !top_bar_active {
+                            // Minimal mode top rim. Lights are within top 4px rim band.
                             // CLOSE: gap from left edge
                             if lx >= FRAME_LIGHT_GAP_PX
                                 && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
@@ -171,9 +239,12 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                                 c = FRAME_RIM_COLOR;
                             }
                         } else {
+                            // Left, right, or bottom rim edge (or top edge in minimal mode
+                            // already handled above — this catches left/right/bottom always).
                             c = FRAME_RIM_COLOR;
                         }
                     } else {
+                        // ── SURFACE CONTENT AREA ──
                         c = fill_rect_color(surf, x, y, FOCUS_SURFACE_COLOR);
                     }
                     break;
@@ -807,7 +878,7 @@ pub extern "C" fn _start() -> ! {
                                 x, y, w, h,
                                 color: 0x00303860,
                                 active: true,
-                                tab_count: 0, active_tab: 0,
+                                tab_count: 0, active_tab: 0, chrome_flags: 0,
                                 fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0,
                                 fill_color: 0, fill_active: false,
                             };
@@ -857,7 +928,7 @@ pub extern "C" fn _start() -> ! {
                                     surface_id, owner_pd: msg.caller_pd, x, y, w, h,
                                     color,
                                     active: true,
-                                    tab_count: 0, active_tab: 0,
+                                    tab_count: 0, active_tab: 0, chrome_flags: 0,
                                     fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0,
                                     fill_color: 0, fill_active: false,
                                 };
@@ -1008,12 +1079,16 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             0xFD => {
-                // OP_SURFACE_TAB_INFO: arg0=surface_id, arg1=tab_count, arg2=active_tab
+                // OP_SURFACE_TAB_INFO: arg0=surface_id, arg1=tab_count,
+                //   arg2 low 8 bits=active_tab, arg2 bit 8=chrome_flags
                 let surface_id = msg.arg0;
                 if surface_id == 0 { continue; }
                 let tab_count = (msg.arg1 as u8).min(8);
+                let raw_arg2 = msg.arg2;
+                let active_tab_raw = raw_arg2 as u8;
+                let chrome_flags_raw = ((raw_arg2 >> 8) & 0xff) as u8;
                 let active_tab = if tab_count > 0 {
-                    (msg.arg2 as u8).min(tab_count.saturating_sub(1))
+                    active_tab_raw.min(tab_count.saturating_sub(1))
                 } else { 0 };
                 unsafe {
                     let mut updated = false;
@@ -1021,6 +1096,7 @@ pub extern "C" fn _start() -> ! {
                         if slot.active && slot.surface_id == surface_id {
                             slot.tab_count = tab_count;
                             slot.active_tab = active_tab;
+                            slot.chrome_flags = chrome_flags_raw;
                             updated = true;
                             break;
                         }
@@ -1030,8 +1106,8 @@ pub extern "C" fn _start() -> ! {
                         let b = &mut SURFACE_TAB_INFO_BUDGET;
                         if *b > 0 {
                             *b -= 1;
-                            serial_println!("[sexdisplay.surface.tab.info] surface={} tabs={} active={}",
-                                surface_id, tab_count, active_tab);
+                            serial_println!("[sexdisplay.surface.tab.info] surface={} tabs={} active={} chrome={}",
+                                surface_id, tab_count, active_tab, chrome_flags_raw);
                         }
                         if fb_live {
                             redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
