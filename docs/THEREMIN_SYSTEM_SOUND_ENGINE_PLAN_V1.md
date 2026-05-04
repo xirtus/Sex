@@ -495,7 +495,7 @@ Customization is settings/shell-owned, validated, reversible, and unable to cust
 
 ### Not Customizable (11 hard boundaries)
 
-No float DSP in synthesis hot path. No codec/asset/waveform decoder. No filesystem dependency for boot/error/security sounds. No direct audio hardware access (SexAudio only). No bypass of SexAudio mixer/routing. No bypass of mute/privacy for critical/security sounds in V1. Bounded polyphony (max 2 voices). No dynamic preset/themes loading. No unbounded resonator/modal bank counts. No kernel/PDX ABI edits. sexdisplay ownership (Theremin has no visual output).
+No float DSP in synthesis hot path. No codec/asset/waveform decoder. No filesystem dependency for boot/error/security sounds. No direct audio hardware access (SexAudio only). No bypass of SexAudio mixer/routing. No mute/privacy bypass unless an explicit future Critical/Security policy is defined by Bell + SexAudio + Collar; V1 does not bypass mute. Bounded polyphony (max 2 voices). No dynamic preset/themes loading. No unbounded resonator/modal bank counts. No kernel/PDX ABI edits. sexdisplay ownership (Theremin has no visual output).
 
 ### Customization Proof Scenarios
 
