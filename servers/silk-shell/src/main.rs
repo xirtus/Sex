@@ -1054,6 +1054,85 @@ unsafe fn send_frame_tab_info(frame_id: u32) {
     }
 }
 
+/// Switch the active tab of the given frame to `tab_index`.
+/// Hides the old tab's surface via 0xEE, shows the new tab's surface via 0xEC
+/// at the current frame geometry, updates focus, and notifies sexdisplay.
+/// Returns true if the switch succeeded.
+unsafe fn switch_to_tab(frame_id: u32, tab_index: u32) -> bool {
+    // Validate frame and tab_index.
+    let frame = match FRAMES.iter_mut().find_map(|f| {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id { Some(frame) } else { None }
+        } else { None }
+    }) {
+        Some(f) => f,
+        None => return false,
+    };
+    if tab_index as u8 >= frame.tab_count {
+        return false;
+    }
+    if tab_index as u8 == frame.active_tab {
+        return true; // already on this tab — not an error
+    }
+
+    // Get old and new surface IDs.
+    let old_surface_id = match active_surface_for_frame(frame_id) {
+        Some(sid) => sid,
+        None => return false,
+    };
+    let new_surface_id = match &frame.tabs[tab_index as usize] {
+        Some(tab) => tab.surface_id,
+        None => return false,
+    };
+    if new_surface_id == old_surface_id {
+        return true;
+    }
+
+    // Capture current geometry from old surface before hiding.
+    let bounds = get_surface_bounds(old_surface_id);
+    let (sx, sy, sw, sh) = match bounds {
+        Some(b) => b,
+        None => (frame.normal_x, frame.normal_y, frame.normal_w, frame.normal_h),
+    };
+
+    // Update active_tab before sending 0xEE/0xEC so that sexdisplay
+    // renders the correct highlight when tab info is sent below.
+    frame.active_tab = tab_index as u8;
+    // Drop mutable borrow before calling other helpers.
+    drop(frame);
+
+    // Hide old surface on display.
+    if surface_is_alive(old_surface_id) {
+        pdx_call(SLOT_DISPLAY, 0xEE, old_surface_id, 0, 0);
+    }
+
+    // Show new surface at captured geometry.
+    pdx_call(SLOT_DISPLAY, 0xEC, new_surface_id,
+        (sy as u64) << 32 | sx as u64,
+        (sh as u64) << 32 | sw as u64);
+    update_local_geometry(new_surface_id, sx, sy, sw, sh);
+
+    // Set focus to new surface.
+    try_set_focus(new_surface_id);
+
+    // Clear any stale drag targeting the old surface.
+    clear_drag_if_dead();
+
+    // Notify sexdisplay of updated tab metadata.
+    send_frame_tab_info(frame_id);
+
+    unsafe {
+        static mut TAB_SWITCH_BUDGET: u32 = 8;
+        let b = &mut TAB_SWITCH_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[shell.frame.tab.switch] frame={} old={} new={} tab={}",
+                frame_id, old_surface_id, new_surface_id, tab_index);
+        }
+    }
+    true
+}
+
 /// Update frame chrome hover state from current pointer position.
 /// Called once per event loop iteration. Skips during active drag.
 /// Returns true if hover state changed (for diagnostic gating).
@@ -1510,8 +1589,23 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                         serial_println!("[shell.frame.rim.drag.reject] frame={} reason=no_active_surface", frame_id);
                     }
                 }
+            } else if kind == FRAME_CHROME_TAB_STRIP {
+                // Tab strip click: switch to tab at pointer position.
+                if let Some(tab_index) = frame_tab_at(frame_id, px, py) {
+                    if !switch_to_tab(frame_id, tab_index) {
+                        unsafe {
+                            static mut TAB_SWITCH_REJECT_BUDGET: u32 = 4;
+                            let b = &mut TAB_SWITCH_REJECT_BUDGET;
+                            if *b > 0 {
+                                *b -= 1;
+                                serial_println!("[shell.frame.tab.switch.reject] frame={} tab={} reason=switch_failed",
+                                    frame_id, tab_index);
+                            }
+                        }
+                    }
+                }
             } else {
-                // Non-rim chrome (tab strip, reserved): capture/no-op.
+                // Other non-rim chrome (reserved): capture/no-op.
                 unsafe {
                     static mut CHROME_CAPTURE_BUDGET: u32 = 4;
                     let b = &mut CHROME_CAPTURE_BUDGET;
@@ -1638,7 +1732,7 @@ pub extern "C" fn _start() -> ! {
         });
         FOCUS_ID = 2;
 
-        // Initialize frame chrome model: one frame, one tab wrapping surface 100.
+        // Initialize frame chrome model: one frame, two tabs wrapping surfaces 100 and 101.
         // normal_* initialized to boot geometry of surface 100 for zoom restore.
         let boot_x: i32 = 100;
         let boot_y: i32 = 100;
@@ -1647,10 +1741,11 @@ pub extern "C" fn _start() -> ! {
         FRAMES[0] = Some(ShellFrame {
             frame_id: 1,
             active_tab: 0,
-            tab_count: 1,
+            tab_count: 2,
             tabs: [
                 Some(ShellTab { surface_id: SURFACE_ID_APP, title_id: 0, flags: 0 }),
-                None, None, None, None, None, None, None,
+                Some(ShellTab { surface_id: SURFACE_ID_STATIC, title_id: 0, flags: 0 }),
+                None, None, None, None, None, None,
             ],
             flags: 0,
             normal_x: boot_x,
@@ -1697,7 +1792,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 c
             };
-            let has_tab = frame_tab_at(1, 140, 101).is_some(); // sx=100 + exclusion=20 + 1 tab slot
+            let has_tab = frame_tab_at(1, 140, 101).is_some(); // sx=100 + exclusion=20, tab 0 at x=140
             serial_println!("[shell.frame.tab.model] tabs={} has_tab={} strip_px={}",
                 tab_count, has_tab, FRAME_TAB_STRIP_PX);
         }
