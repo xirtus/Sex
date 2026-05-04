@@ -78,6 +78,90 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 pub const SURFACE_ID_SCENE_SETTINGS: u64 = 0x96;
 pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 
+// ── App Surface Registry ──────────────────────────────────────────────────────
+// Compile-time registry for OS-managed app surfaces (frame-owned, shell-tracked).
+// Provides documentation, startup duplicate validation, and optional lookup.
+// Match arms for surface_is_alive/is_focusable/is_closeable remain hardcoded
+// for safety — the registry is not a dynamic dispatch table.
+
+/// Specification for a shell-managed app surface.
+struct AppSurfaceSpec {
+    surface_id: u64,
+    frame_id: u32,
+    name: &'static str,
+    boot_x: i32,
+    boot_y: i32,
+    boot_w: u32,
+    boot_h: u32,
+    closeable: bool,
+    focusable: bool,
+}
+
+/// Known OS-managed app surfaces. Validated at boot for duplicates.
+const APP_SURFACES: [AppSurfaceSpec; 2] = [
+    AppSurfaceSpec {
+        surface_id: SURFACE_ID_LINEN,
+        frame_id: LINEN_FRAME_ID,
+        name: "linen",
+        boot_x: LINEN_BOOT_X,
+        boot_y: LINEN_BOOT_Y,
+        boot_w: LINEN_BOOT_W,
+        boot_h: LINEN_BOOT_H,
+        closeable: false,
+        focusable: true,
+    },
+    AppSurfaceSpec {
+        surface_id: SURFACE_ID_QUIL,
+        frame_id: QUIL_FRAME_ID,
+        name: "quil",
+        boot_x: QUIL_BOOT_X,
+        boot_y: QUIL_BOOT_Y,
+        boot_w: QUIL_BOOT_W,
+        boot_h: QUIL_BOOT_H,
+        closeable: false,
+        focusable: true,
+    },
+];
+
+/// Validate the app surface registry at boot.
+/// Checks for duplicate surface_ids and frame_ids.
+/// Logs a diagnostic marker — does NOT halt on duplicate (shell continues safely).
+unsafe fn app_surface_registry_validate() {
+    let count = APP_SURFACES.len();
+    let mut valid = true;
+    for i in 0..count {
+        for j in (i + 1)..count {
+            if APP_SURFACES[i].surface_id == APP_SURFACES[j].surface_id {
+                serial_println!("[shell.app_registry.duplicate] surface_id={} entries={},{}",
+                    APP_SURFACES[i].surface_id, i, j);
+                valid = false;
+            }
+            if APP_SURFACES[i].frame_id == APP_SURFACES[j].frame_id {
+                serial_println!("[shell.app_registry.duplicate] frame_id={} entries={},{}",
+                    APP_SURFACES[i].frame_id, i, j);
+                valid = false;
+            }
+        }
+    }
+    if valid {
+        serial_println!("[shell.app_registry.valid] count={}", count);
+    } else {
+        serial_println!("[shell.app_registry.error] duplicate detected — check surface_id/frame_id allocation");
+    }
+}
+
+/// Lookup an app surface spec by surface_id. Returns None for non-registered surfaces.
+#[allow(dead_code)]
+fn app_surface_spec(surface_id: u64) -> Option<&'static AppSurfaceSpec> {
+    APP_SURFACES.iter().find(|s| s.surface_id == surface_id)
+}
+
+/// Lookup an app surface spec by frame_id. Returns None for non-registered frames.
+#[allow(dead_code)]
+fn app_surface_spec_by_frame(frame_id: u32) -> Option<&'static AppSurfaceSpec> {
+    APP_SURFACES.iter().find(|s| s.frame_id == frame_id)
+}
+
 // ── Scene Render Token presets ────────────────────────────────────────────────
 // Fields: [focus_surface, frame_rim, frame_top_bar, active_tab,
 //          inactive_tab, close_light, minimize_light, zoom_light]
@@ -3591,6 +3675,9 @@ pub extern "C" fn _start() -> ! {
 
         // Initial snapshot after frames are set up.
         snap_capture_layout();
+
+        // Validate app surface registry at boot.
+        app_surface_registry_validate();
 
         sys_set_state(SVC_STATE_LISTENING);
     }
