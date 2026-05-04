@@ -2183,6 +2183,13 @@ unsafe fn scene_update_flags(scene_idx: u8) {
                 continue;
             }
 
+            // A8+: Skip frames whose active tab surface is dead or tombstoned.
+            if let Some(sid) = active_surface_for_frame(frame.frame_id) {
+                if !surface_is_alive(sid) || is_tombstoned(sid) {
+                    continue;
+                }
+            }
+
             has_frames = true;
 
             if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 {
@@ -2238,6 +2245,15 @@ unsafe fn atlas_capture_snapshot() {
             for f in FRAMES.iter() {
                 if let Some(frame) = f {
                     if frame.scene_id as usize != scene_idx { continue; }
+                    // A8+: Skip frames whose active tab is dead or tombstoned.
+                    if let Some(sid) = active_surface_for_frame(frame.frame_id) {
+                        if !surface_is_alive(sid) || is_tombstoned(sid) {
+                            static mut ATLAS_PREVIEW_SKIP_DEAD_BUDGET: u32 = 8;
+                            let b = &mut ATLAS_PREVIEW_SKIP_DEAD_BUDGET;
+                            if *b > 0 { *b -= 1; serial_println!("[atlas.preview.skip_dead] scene={} frame={} sid={}", scene_idx, frame.frame_id, sid); }
+                            continue;
+                        }
+                    }
                     if frame_count >= ATLAS_MAX_FRAMES_PER_SCENE as u8 { break; }
                     sd.frame_ids[frame_count as usize] = frame.frame_id;
                     frame_count += 1;
@@ -2267,6 +2283,17 @@ unsafe fn atlas_capture_snapshot() {
         let active = ACTIVE_SCENE_IDX;
         serial_println!("[shell.atlas.capture] scenes={} active={}",
             ATLAS_MAX_SCENES, active);
+    }
+    // Scene-level frame counts (post-filtering).
+    for si in 0..ATLAS_MAX_SCENES {
+        let sd = &ATLAS_SNAPSHOT.scenes[si];
+        static mut ATLAS_PREVIEW_SCENE_BUDGET: [u32; 5] = [4; 5];
+        let sb = &mut ATLAS_PREVIEW_SCENE_BUDGET[si];
+        if *sb > 0 {
+            *sb -= 1;
+            serial_println!("[atlas.preview.scene] scene={} frames={} flags={:#x}",
+                si, sd.frame_count, sd.flags);
+        }
     }
 }
 
@@ -2561,6 +2588,9 @@ unsafe fn atlas_render_stub() {
     static mut ATLAS_RENDER_BUDGET: u32 = 4;
     let b = &mut ATLAS_RENDER_BUDGET;
     if *b > 0 { *b -= 1; serial_println!("[shell.atlas.render]"); }
+    static mut ATLAS_PREVIEW_REFRESH_BUDGET: u32 = 4;
+    let rb = &mut ATLAS_PREVIEW_REFRESH_BUDGET;
+    if *rb > 0 { *rb -= 1; serial_println!("[atlas.preview.refresh] scenes={}", ATLAS_MAX_SCENES); }
 }
 
 /// Clear Atlas overlay and restore normal scene rendering.
@@ -3360,6 +3390,37 @@ unsafe fn frame_accepts_input(frame_id: u32) -> bool {
     false
 }
 
+/// B4: Derive tab chrome visibility for a frame.
+/// multi-tab frame → always visible
+/// single-tab + hover/rim hit → visible
+/// otherwise → hidden
+/// inactive/dead/minimized/tombstoned frames never show chrome.
+unsafe fn frame_chrome_visible(frame_id: u32) -> bool {
+    // Inactive scene frames never show chrome.
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id {
+                if frame.scene_id != ACTIVE_SCENE_IDX { return false; }
+                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { return false; }
+                break;
+            }
+        }
+    }
+    // Check active tab surface is alive and not tombstoned.
+    if let Some(sid) = active_surface_for_frame(frame_id) {
+        if !surface_is_alive(sid) { return false; }
+        if is_tombstoned(sid) { return false; }
+    } else {
+        return false;
+    }
+    let tab_count = frame_tab_count(frame_id);
+    if tab_count > 1 {
+        return true; // multi-tab always visible
+    }
+    // Single-tab: visible only when hovered by pointer.
+    HOVERED_FRAME_ID == frame_id && HOVER_KIND != HOVER_NONE
+}
+
 /// If the hovered frame no longer accepts input (wrong scene, minimized, etc.),
 /// clear hover state to avoid stale highlights. Call after scene switch or minimize.
 unsafe fn clear_hover_if_wrong_scene() {
@@ -3918,17 +3979,19 @@ unsafe fn send_frame_tab_info(frame_id: u32) {
     };
     let tab_count = frame_tab_count(frame_id);
     let active_tab = frame_active_tab_index(frame_id);
-    let chrome_flags: u64 = if frame_has_top_bar(frame_id) { 1 } else { 0 };
-    // Pack chrome_flags into arg2 bit 8 (low 8 bits = active_tab).
-    let arg2 = (active_tab as u64) | (chrome_flags << 8);
+    let top_bar: u64 = if frame_has_top_bar(frame_id) { 1 } else { 0 };
+    // B4: Derive tab chrome visibility from frame state + hover.
+    let tab_chrome_visible: u64 = if frame_chrome_visible(frame_id) { 1 } else { 0 };
+    // Pack: low 8 bits = active_tab, bit 8 = top_bar, bit 9 = chrome_visible.
+    let arg2 = (active_tab as u64) | (top_bar << 8) | (tab_chrome_visible << 9);
     pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, surface_id, tab_count as u64, arg2);
     unsafe {
         static mut SHELL_TAB_INFO_SEND_BUDGET: u32 = 8;
         let b = &mut SHELL_TAB_INFO_SEND_BUDGET;
         if *b > 0 {
             *b -= 1;
-            serial_println!("[shell.frame.tab.info.send] frame={} surface={} tabs={} active={} chrome={}",
-                frame_id, surface_id, tab_count, active_tab, chrome_flags);
+            serial_println!("[shell.frame.tab.info.send] frame={} surface={} tabs={} active={} top_bar={} chrome_visible={}",
+                frame_id, surface_id, tab_count, active_tab, top_bar, tab_chrome_visible);
         }
     }
 }
@@ -4134,6 +4197,45 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
                     *b -= 1;
                     serial_println!("[shell.frame.light.hover] frame={} light={}",
                         new_frame_id, new_light);
+                }
+            }
+        }
+
+        // B4: Update tab chrome visibility on hover change.
+        // Only the hovered frame's chrome state may change (multi-tab is stable;
+        // single-tab toggles on hover enter/leave).
+        if new_frame_id != 0 && frame_tab_count(new_frame_id) <= 1 {
+            let chrome_on = frame_chrome_visible(new_frame_id);
+            if chrome_on {
+                unsafe {
+                    static mut TAB_CHROME_SHOW_BUDGET: u32 = 8;
+                    let b = &mut TAB_CHROME_SHOW_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!("[tab.chrome.show] frame={}", new_frame_id);
+                    }
+                }
+            } else {
+                unsafe {
+                    static mut TAB_CHROME_HIDE_BUDGET: u32 = 4;
+                    let b = &mut TAB_CHROME_HIDE_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!("[tab.chrome.hide] frame={}", new_frame_id);
+                    }
+                }
+            }
+            // Notify sexdisplay of chrome visibility change.
+            send_frame_tab_info(new_frame_id);
+        }
+        // Multi-tab frames emit persist.multi on first hover if not already set.
+        if new_frame_id != 0 && frame_tab_count(new_frame_id) > 1 && new_kind != HOVER_NONE {
+            unsafe {
+                static mut TAB_CHROME_PERSIST_BUDGET: u32 = 8;
+                let b = &mut TAB_CHROME_PERSIST_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!("[tab.chrome.persist.multi] frame={}", new_frame_id);
                 }
             }
         }
@@ -4539,6 +4641,34 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         }
         HitTarget::FrameChrome { frame_id, kind } => {
             if kind == FRAME_CHROME_RIM {
+                // B4: Reject Frame Light actions on inactive/dead/minimized/tombstoned frames.
+                {
+                    let mut reject = false;
+                    let mut reason = "";
+                    for f in FRAMES.iter() {
+                        if let Some(frame) = f {
+                            if frame.frame_id == frame_id {
+                                if frame.scene_id != ACTIVE_SCENE_IDX { reject = true; reason = "inactive_scene"; break; }
+                                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { reject = true; reason = "minimized"; break; }
+                                if let Some(sid) = active_surface_for_frame(frame_id) {
+                                    if !surface_is_alive(sid) { reject = true; reason = "dead"; break; }
+                                    if is_tombstoned(sid) { reject = true; reason = "tombstoned"; break; }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    if reject {
+                        serial_println!("[frame.light.reject.inactive] frame={} reason={}", frame_id, reason);
+                        // Still handle rim drag for valid frames below.
+                        // If the frame is inactive/minimized but not dead/tombstoned, allow rim drag.
+                        if reason == "inactive_scene" || reason == "minimized" {
+                            // Fall through to rim drag logic.
+                        } else {
+                            return (HitTarget::None, true);
+                        }
+                    }
+                }
                 // Check if pointer is over a Frame Light before proceeding.
                 let light = frame_light_at(frame_id, px, py);
                 if light == FRAME_LIGHT_CLOSE {
