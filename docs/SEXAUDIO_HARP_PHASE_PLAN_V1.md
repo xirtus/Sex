@@ -8,6 +8,8 @@
 
 **Timing warning:** Audio sample scheduling is NOT real-time guaranteed until an approved deterministic audio timing/device interrupt model exists. V1 proof scenarios may log sample timing but must not assume guaranteed scheduling latency.
 
+**Theremin rule (cross-reference):** No sound engine feature should imply route ownership, recording, capture, or device access. Theremin only maps typed events to deterministic sound intents/presets; SexAudio owns routing/mixing/device/capture. See `docs/THEREMIN_SYSTEM_SOUND_ENGINE_PLAN_V1.md`.
+
 ---
 
 ## 1. Mission
@@ -469,3 +471,60 @@ PROOF MARKERS:
 - **Linen/sexfiles:** stores recordings and audio projects later. Does not mix, play, or route audio.
 - **sexdisplay:** remains pixels only — no audio code, no audio path, no audio visualization in framebuffer.
 - **sexusb/sexpci:** hardware bus enumeration for audio devices. SexAudio consumes device discovery events but does not manage hardware.
+
+## 22. Scan 7 — Exceeded Hypothesis
+
+Assume a rival audio system beat Silk/SexAudio across 10 dimensions:
+
+| Rival Advantage | Why Silk Would Lose | SexOS-Native Fix | Invariant Preserved | Proof Gate |
+|----------------|---------------------|------------------|-------------------|------------|
+| Audio works reliably on any hardware | Device discovery gaps could leave no audio path | Dry-run boot: AudioGraph empty ok. Discovery events from sexusb/sexpci populate graph on device arrival. | §15.17: Missing hardware fails silent/safe | SA1 |
+| Capture is privacy-gated by default | App could record without indicator | Every capture session has visible SilkBar indicator + proof event. CrossCapture requires explicit Collar grant. | §15.5: No hidden recording | SA4 |
+| Priority mixing keeps critical sounds audible | Low-priority media could drown narration | Critical priority for accessibility narration. Bell notification at Medium. Media at Normal/Low. Narration cannot be ducked/dropped. | §15.11-12: Narration always wins | SA6 |
+| No hidden recording exists | Loopback could enable hidden capture | System mix capture requires SystemMixCapture grant + indicator. Proof event for every capture. SilkBar indicator mandatory. | §15.4-5: Visible owner + route + proof | SA8 |
+| Route discovery never loses device | Device hotplug could leave orphan routes | Device lost → routes teardown → stream tombstone. Client notified. Re-routing possible if alternative device exists. | §15.15: Client notified on device loss | SA2 |
+| Buffer transport never corrupts audio | Raw shared buffers could cause memory errors | AudioBufferRef through SA7 transport gate. No raw shared memory. Copy/grant/ring design before implementation. | §15.14: No raw cross-PD audio pointers | SA7 |
+| Virtual devices are isolated and safe | Virtual device could expose real microphone | Virtual devices require VirtualDeviceCreate grant. Owned by creating client. Removed on disconnect. | §15.8-9: Virtual devices req grant | SA4 |
+| Cross-app audio is isolated | One app could route through another's output | App-to-app route requires explicit capability check. Each stream mapped to AudioClient + capability. | §15.3: Every stream maps to capability+client | SA3 |
+| Proof markers make failures obvious | Audio failure silently swallowed | Every open/close/create/deny operation produces proof marker. Denials include reason string. | §15.4-5: Proof events for all operations | SA11 |
+| Customization is rich but safe | Custom routing could bypass capability checks | All customization (§23) is shell/Harp-owned, validated, cannot bypass Collar grants or capability checks. | §15.20: Harp cannot bypass Collar grants | SA10 |
+
+## 23. Scan 8 — Customization / User Policy Surface
+
+Customization is shell/Harp-owned, validated, reversible, and unable to customize away audio capability, privacy, or routing safety.
+
+### Customizable (10 domains)
+
+| Preference | Options | Constraint |
+|-----------|---------|------------|
+| Default output device | device_id (from discovered devices) | Must exist in current AudioGraph. Missing device → fallback to system default. |
+| Default input device | device_id | Same constraint. Recording requires valid grant before device selection. |
+| Volume curve | linear/logarithmic (compiled profiles) | Cannot exceed hardware-safe max. Volume enforced by SexAudio, not app. |
+| Notification sound profile | system/bell_preset (future: custom) | Cannot disable accessibility narration (Critical priority). Override blocked. |
+| Capture privacy level | public/private (per session) | Private capture excluded from system mix. Cannot downgrade policy-mandated privacy. |
+| Notification priority | low/medium/high | Cannot set to Critical (reserved for accessibility). Cannot duck narration. |
+| Virtual device persistence | session_only/until_removed | Cannot persist beyond client disconnect without re-validation. |
+| Proof verbosity | minimum/normal/debug | Cannot suppress required audio safety markers. |
+| EQ/preset (future) | bounded compiled presets | No raw EQ curve injection. Must pass hardware-safe validation. |
+| Keybindings (future) | scancode+modifiers (for volume/device) | After D accessibility + shortcut audit. |
+
+### Not Customizable (12 hard boundaries)
+
+Collar grant checks (SelfCapture, CrossCapture, SystemMixCapture, MicrophoneCapture, VirtualDeviceCreate, Recording). Capability checks per AudioClient. SexAudio enforcement authority (Harp requests but SexAudio enforces). No hidden recording — SilkBar indicator mandatory. Narration always Critical priority. No app-to-app routing without capability. No raw shared buffer design before SA7. Virtual device ownership (creator owns; cannot steal). No kernel/PDX ABI edits. No POSIX ALSA/PulseAudio/PipeWire assumptions. sexdisplay audio ownership (sexdisplay has no audio code or path). No app direct device MMIO/DMA.
+
+### Customization Proof Scenarios
+
+1. Valid default output selected → `[audio.pref.accept]` device=N. Output routes through selected device.
+2. Invalid device selected (removed/disconnected) → `[audio.pref.reject]` reason=device_not_found, fallback to system default.
+3. Capture privacy level=private excluded from system mix → `[audio.record.start]` with privacy=private. System mix source silent for that session.
+4. Notification priority cannot set Critical → `[audio.pref.reject]` reason=priority_reserved. Critical reserved for accessibility narration.
+5. Virtual device persistence=until_removed survives client reconnect but re-validates grant → `[audio.virtual.destroy]` if grant revoked during disconnect.
+6. Proof verbosity minimum still emits `[audio.stream.open]`, `[audio.capture.start]`, `[audio.capture.denied]`, `[audio.error]` — required safety markers never suppressed.
+7. EQ preset applied → `[audio.pref.apply]` preset=name. Only compiled presets accepted.
+8. Keybinding before audit rejected → `[audio.pref.reject]` reason=no_audit. Planned-only until D accessibility gate.
+9. Notification sound profile = custom (future) cannot bypass Critical priority → narration always plays regardless of profile.
+10. Reset-to-safe-default restores canonical behavior → `[audio.pref.reset]`. All preferences back to compiled defaults.
+
+### Preference Lifecycle
+
+1. **Load** → `[audio.pref.load]`. 2. **Validate** → `[audio.pref.validate.ok]` or `.reject`. 3. **Apply** → `[audio.pref.apply]` (immediate for volume/device; policy prefs need guard re-validation). 4. **Persist** → blocked until E gates pass (memory-only in V1). 5. **Redact** → `[audio.pref.redact]` per E8 policy. 6. **Reset** → `[audio.pref.reset]`.
