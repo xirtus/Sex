@@ -479,6 +479,19 @@ unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
         if moved {
             serial_println!("[shell.drag.move] id={} x={} y={} dx={} dy={}", surface_id, POINTER_X, POINTER_Y, dx, dy);
             serial_println!("[shell.drag.send.ok] id={}", surface_id);
+            // Integrated contract diagnostic: logs drag target surface_id and
+            // current FOCUSED_SURFACE_ID. When id == focus, drag target matches
+            // the focused surface (normal case). If a FocusToggle occurs during
+            // drag, they would differ, proving drag_move_focused reads from
+            // InteractionState::Dragging, not FOCUSED_SURFACE_ID.
+            unsafe {
+                static mut INTEGRATED_DRAG_TARGET_BUDGET: u32 = 4;
+                let b = &mut INTEGRATED_DRAG_TARGET_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!("[shell.integrated.drag_target] id={} focus={}", surface_id, FOCUSED_SURFACE_ID);
+                }
+            }
         }
         moved
     } else {

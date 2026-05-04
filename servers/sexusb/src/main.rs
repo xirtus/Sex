@@ -2492,10 +2492,12 @@ pub extern "C" fn _start() -> ! {
     if SEXUSB_SYNTHETIC {
         serial_println!("[sexusb.synthetic.gate] enabled=1 source=env");
         serial_println!("[sexusb.synthetic.start]");
+        serial_println!("[integrated.proof.start]");
         serial_println!("[sexusb.synthetic.drag.start]");
         let mut n: u32 = 0;
 
         // Phase 1: 40 frames, drift right/down, button up (approach target surface).
+        serial_println!("[integrated.proof.phase] n=1 approach");
         for _ in 0..40u32 {
             send_synthetic_mouse_frame(n, 0, 1, 1);
             n += 1;
@@ -2503,6 +2505,7 @@ pub extern "C" fn _start() -> ! {
             sys_yield();
         }
         // Phase 2: 1 frame, button down, no movement (triggers ClickPending → Dragging).
+        serial_println!("[integrated.proof.phase] n=2 click");
         serial_println!("[sexusb.synthetic.drag.frame] n={} buttons=1 dx=0 dy=0", n);
         send_synthetic_mouse_frame(n, 1, 0, 0);
         n += 1;
@@ -2511,6 +2514,7 @@ pub extern "C" fn _start() -> ! {
         sys_yield();
         sys_yield();
         // Phase 3: 80 frames, drag right with button held.
+        serial_println!("[integrated.proof.phase] n=3 drag_right");
         for _ in 0..80u32 {
             send_synthetic_mouse_frame(n, 1, 1, 0);
             n += 1;
@@ -2518,6 +2522,7 @@ pub extern "C" fn _start() -> ! {
             sys_yield();
         }
         // Phase 4: 80 frames, drag down with button held.
+        serial_println!("[integrated.proof.phase] n=4 drag_down");
         for _ in 0..80u32 {
             send_synthetic_mouse_frame(n, 1, 0, 1);
             n += 1;
@@ -2525,6 +2530,7 @@ pub extern "C" fn _start() -> ! {
             sys_yield();
         }
         // Phase 5: 1 frame, release button.
+        serial_println!("[integrated.proof.phase] n=5 release");
         serial_println!("[sexusb.synthetic.drag.frame] n={} buttons=0 dx=0 dy=0", n);
         send_synthetic_mouse_frame(n, 0, 0, 0);
         n += 1;
@@ -2533,6 +2539,7 @@ pub extern "C" fn _start() -> ! {
         sys_yield();
         sys_yield();
         // Phase 6: 40 frames, drift back (button up).
+        serial_println!("[integrated.proof.phase] n=6 drift");
         for _ in 0..40u32 {
             send_synthetic_mouse_frame(n, 0, -1, -1);
             n += 1;
@@ -2540,6 +2547,7 @@ pub extern "C" fn _start() -> ! {
             sys_yield();
         }
 
+        serial_println!("[integrated.proof.complete]");
         serial_println!("[sexusb.synthetic.drag.complete]");
         serial_println!("[sexusb.synthetic.complete.ok]");
         loop { sys_yield(); }
