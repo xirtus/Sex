@@ -84,6 +84,28 @@ const DEFAULT_SCENE_APPEARANCE: SceneAppearanceState = SceneAppearanceState {
 
 static mut SCENE_APPEARANCE_STATE: SceneAppearanceState = DEFAULT_SCENE_APPEARANCE;
 
+const TINT_COUNT: usize = 5;
+type TintBundle = [u32; 8];
+
+// Slot order: [focus_surface, frame_rim, frame_top_bar, active_tab, inactive_tab,
+//              close_light, minimize_light, zoom_light]
+// Zero in any slot = keep preset value (handled by resolve_scene_render_tokens).
+// Semantic lights (slots 5/6/7) are zero in all tints.
+static CUSTOM_TINT_BUNDLES: [TintBundle; TINT_COUNT] = [
+    // 0: Clear — all zeros → use_custom_colors = 0 (clean preset)
+    [0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000],
+    // 1: WarmTint — amber/copper rim + topbar
+    [0x00000000, 0x00D4822A, 0x00B86420, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000],
+    // 2: CoolTint — icy blue rim + topbar
+    [0x00000000, 0x0080C8FF, 0x004488CC, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000],
+    // 3: CoralTint — coral focus_surface + pink rim
+    [0x00CC5566, 0x00FF8090, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000],
+    // 4: GoldTint — gold rim + active tab
+    [0x00000000, 0x00DDBB00, 0x00000000, 0x00DDBB00, 0x00000000, 0x00000000, 0x00000000, 0x00000000],
+];
+
+static mut ACTIVE_TINT_IDX: u8 = 0;
+
 #[inline]
 fn pack_u32_pair(lo: u32, hi: u32) -> u64 {
     (lo as u64) | ((hi as u64) << 32)
@@ -149,6 +171,7 @@ unsafe fn cycle_scene_render_token_preset() {
     SCENE_APPEARANCE_STATE.preset_idx =
         (SCENE_APPEARANCE_STATE.preset_idx + 1) % PRESET_COUNT as u8;
     SCENE_APPEARANCE_STATE.use_custom_colors = 0;
+    ACTIVE_TINT_IDX = 0;
     let tokens = resolve_scene_render_tokens();
     push_token_preset(&tokens);
     unsafe {
@@ -156,6 +179,32 @@ unsafe fn cycle_scene_render_token_preset() {
         if CYCLE_BUDGET > 0 {
             CYCLE_BUDGET -= 1;
             serial_println!("[shell.appearance.preset] idx={}", SCENE_APPEARANCE_STATE.preset_idx);
+        }
+    }
+}
+
+unsafe fn apply_custom_tint_bundle(idx: usize) {
+    if idx == 0 {
+        SCENE_APPEARANCE_STATE.use_custom_colors = 0;
+    } else {
+        let bundle = &CUSTOM_TINT_BUNDLES[idx];
+        for i in 0..8 {
+            SCENE_APPEARANCE_STATE.custom_colors[i] = bundle[i];
+        }
+        SCENE_APPEARANCE_STATE.use_custom_colors = 1;
+    }
+}
+
+unsafe fn cycle_custom_tint() {
+    ACTIVE_TINT_IDX = (ACTIVE_TINT_IDX + 1) % TINT_COUNT as u8;
+    apply_custom_tint_bundle(ACTIVE_TINT_IDX as usize);
+    let tokens = resolve_scene_render_tokens();
+    push_token_preset(&tokens);
+    unsafe {
+        static mut TINT_BUDGET: u32 = 32;
+        if TINT_BUDGET > 0 {
+            TINT_BUDGET -= 1;
+            serial_println!("[shell.appearance.custom] mode=tint tint={}", ACTIVE_TINT_IDX);
         }
     }
 }
@@ -172,6 +221,7 @@ enum SurfaceAction {
     RestoreMinimized,
     ToggleTopBar,
     CycleRenderTokenPreset,
+    CycleCustomTint,
     ResetAll,
     SnapLeft, SnapRight, Maximize, Center,
     SnapHome, SnapEnd,
@@ -259,6 +309,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x49 => Some(SurfaceAction::RestoreMinimized),
         0x3E => Some(SurfaceAction::ToggleTopBar),           // F4
         0x3F => Some(SurfaceAction::CycleRenderTokenPreset), // F5
+        0x40 => Some(SurfaceAction::CycleCustomTint),        // F6
         0x3B => Some(SurfaceAction::LegacyFocusToggle),
         0x47 => Some(SurfaceAction::SnapHome),
         0x4F => Some(SurfaceAction::SnapEnd),
@@ -2409,6 +2460,10 @@ pub extern "C" fn _start() -> ! {
 
                                     SurfaceAction::CycleRenderTokenPreset => {
                                         unsafe { cycle_scene_render_token_preset(); }
+                                    }
+
+                                    SurfaceAction::CycleCustomTint => {
+                                        unsafe { cycle_custom_tint(); }
                                     }
 
                                     SurfaceAction::ResetAll => {
