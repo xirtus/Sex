@@ -558,6 +558,7 @@ enum SurfaceAction {
     ToggleTopBar,
     ToggleLinen,       // F8 — open/focus/toggle Linen surface
     ToggleQuil,        // F9 — open/focus/toggle Quil surface
+    ToggleAtlas,       // F10 — toggle Atlas overview mode
     ToggleSceneSettingsPanel,
     CycleRenderTokenPreset,
     CycleCustomTint,
@@ -654,6 +655,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x3B => Some(SurfaceAction::LegacyFocusToggle),
         0x42 => Some(SurfaceAction::ToggleLinen),    // F8
         0x43 => Some(SurfaceAction::ToggleQuil),     // F9
+        0x44 => Some(SurfaceAction::ToggleAtlas),    // F10
         0x47 => Some(SurfaceAction::SnapHome),
         0x4F => Some(SurfaceAction::SnapEnd),
         0x4B => Some(SurfaceAction::MoveLeft),
@@ -1098,6 +1100,9 @@ static mut ATLAS_SNAPSHOT: AtlasSnapshot = AtlasSnapshot {
         frame_ids: [0u32; ATLAS_MAX_FRAMES_PER_SCENE],
     }; ATLAS_MAX_SCENES],
 };
+/// Atlas mode enabled: when true, the shell is in overview mode (no rendering yet in V1).
+/// Toggled by F10 (ToggleAtlas). State-only — no visual behavior changes in V1.
+static mut ATLAS_MODE_ENABLED: bool = false;
 /// Bounded tombstone list for recently-closed surface IDs.
 /// Prevents immediate reuse of freed IDs. Circular insertion.
 static mut TOMBSTONES: [u64; 8] = [0; 8];
@@ -1558,6 +1563,48 @@ unsafe fn atlas_capture_snapshot() {
         let active = ACTIVE_SCENE_IDX;
         serial_println!("[shell.atlas.capture] scenes={} active={}",
             ATLAS_MAX_SCENES, active);
+    }
+}
+
+/// Returns true if Atlas overview mode is currently enabled.
+/// State-only in V1 — no visual behavior change.
+#[allow(dead_code)]
+unsafe fn atlas_is_enabled() -> bool {
+    ATLAS_MODE_ENABLED
+}
+
+/// Toggle Atlas overview mode on/off.
+/// On enter: captures Atlas snapshot, clears hover/drag state.
+/// On exit: nothing extra (normal shell mode resumes).
+/// No sexdisplay changes, no rendering in V1.
+unsafe fn atlas_toggle() {
+    ATLAS_MODE_ENABLED = !ATLAS_MODE_ENABLED;
+    // Capture fresh snapshot on toggle.
+    atlas_capture_snapshot();
+    if ATLAS_MODE_ENABLED {
+        // Entering Atlas: clear stale hover/drag to prevent interaction
+        // state from a previous mode bleeding into Atlas awareness.
+        clear_hover_if_wrong_scene();
+        clear_drag_if_dead();
+        static mut ATLAS_ENTER_BUDGET: u32 = 4;
+        let b = &mut ATLAS_ENTER_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.atlas.enter]"); }
+    } else {
+        static mut ATLAS_EXIT_BUDGET: u32 = 4;
+        let b = &mut ATLAS_EXIT_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.atlas.exit]"); }
+    }
+}
+
+/// Exit Atlas overview mode if currently enabled. No-op if already in normal mode.
+#[allow(dead_code)]
+unsafe fn atlas_exit() {
+    if ATLAS_MODE_ENABLED {
+        ATLAS_MODE_ENABLED = false;
+        atlas_capture_snapshot();
+        static mut ATLAS_EXIT_BUDGET: u32 = 4;
+        let b = &mut ATLAS_EXIT_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.atlas.exit]"); }
     }
 }
 
@@ -4382,6 +4429,11 @@ pub extern "C" fn _start() -> ! {
                                             mutated = true;
                                             serial_println!("[shell.action.quil] toggle");
                                         }
+                                    }
+
+                                    SurfaceAction::ToggleAtlas => {
+                                        unsafe { atlas_toggle(); }
+                                        mutated = true;
                                     }
 
                                     SurfaceAction::ToggleSceneSettingsPanel => {
