@@ -45,7 +45,7 @@ fi
 
 # QMP monitor socket for deterministic input injection (dev infra only).
 QMP_ARG=""
-if [ -n "$SEXOS_QEMU_INPUT_INJECT" ]; then
+if [ -n "$SEXOS_QEMU_INPUT_INJECT" ] || [ -n "$SEXOS_QEMU_QMP" ]; then
     QMP_ARG="-qmp unix:/tmp/sexos-qmp.sock,server=on,wait=off"
     echo "QMP monitor: /tmp/sexos-qmp.sock"
 fi
@@ -82,6 +82,7 @@ if [ "$PRINT_CMD_ONLY" = "1" ]; then
     echo "i8042:       ${SEXOS_QEMU_I8042:-default}"
     echo "XHCI trace:  ${SEXUSB_XHCI_TRACE:-0}"
     echo "QMP inject:  ${SEXOS_QEMU_INPUT_INJECT:-0}"
+    echo "QMP:         ${SEXOS_QEMU_QMP:-0}"
     echo ""
     echo "=== Single-line command ==="
     echo "$QEMU_BIN ${QEMU_ARGS[*]}"
@@ -115,7 +116,8 @@ case "$CMD" in
     echo "  SEXOS_QEMU_DISPLAY=sdl|sdl-grab|gtk|gtk-grab|none   (default: sdl)"
     echo "  SEXOS_QEMU_NODEFAULTS=1          disable PS/2 defaults"
     echo "  SEXOS_QEMU_I8042=off              disable i8042/PS2 controller (USB HID input)"
-    echo "  SEXOS_QEMU_INPUT_INJECT=1        enable QMP socket"
+    echo "  SEXOS_QEMU_QMP=1                  enable QMP socket (for deterministic input injection)"
+    echo "  SEXOS_QEMU_INPUT_INJECT=1         alias for SEXOS_QEMU_QMP=1"
     echo "  SEXUSB_XHCI_TRACE=1              enable xHCI trace events"
     echo "  QEMU_PRINT_CMD=1                 print argv and exit"
     exit 1
