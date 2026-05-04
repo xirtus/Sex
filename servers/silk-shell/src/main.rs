@@ -2407,6 +2407,9 @@ unsafe fn zoom_frame(frame_id: u32) -> bool {
         (zh as u64) << 32 | zw as u64);
     // Update local geometry to match display.
     update_local_geometry(surface_id, zx, zy, zw, zh);
+    // Clear stale hover light — zoom changes surface geometry completely,
+    // invalidating any light position from the previous (non-zoomed) chrome.
+    HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
     // Preserve focus (zoom does not change focus).
     unsafe {
         static mut FRAME_ZOOM_BUDGET: u32 = 8;
@@ -2453,6 +2456,9 @@ unsafe fn unzoom_frame(frame_id: u32) -> bool {
         (nh as u64) << 32 | nw as u64);
     // Update local geometry to match display.
     update_local_geometry(surface_id, nx, ny, nw, nh);
+    // Clear stale hover light — unzoom restores normal geometry, which has
+    // different chrome than the zoomed full-content-area geometry.
+    HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
     // Preserve focus.
     unsafe {
         static mut FRAME_UNZOOM_BUDGET: u32 = 8;
@@ -2685,6 +2691,10 @@ unsafe fn toggle_top_bar_for_active_frame() -> bool {
     let new_state = !frame_has_top_bar(frame_id);
     set_frame_top_bar(frame_id, new_state);
     send_frame_tab_info(frame_id);
+    // Chrome mode changed (top bar ↔ minimal) — all light positions have
+    // shifted. Clear hover light to prevent stale light from a different
+    // chrome geometry. Hover is re-evaluated on the next pointer event.
+    HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
 
     unsafe {
         static mut TOP_BAR_TOGGLE_BUDGET: u32 = 8;
@@ -2704,6 +2714,12 @@ unsafe fn toggle_top_bar_for_active_frame() -> bool {
 /// at the current frame geometry, updates focus, and notifies sexdisplay.
 /// Returns true if the switch succeeded.
 unsafe fn switch_to_tab(frame_id: u32, tab_index: u32) -> bool {
+    // Guard: frame must accept input (active scene, non-minimized, alive, non-tombstoned).
+    // The mouse-click path (via frame_tab_at) checks this earlier, but keyboard
+    // paths (focus_next_tab, focus_prev_tab) call switch_to_tab directly.
+    if !frame_accepts_input(frame_id) {
+        return false;
+    }
     // Validate frame and tab_index.
     let frame = match FRAMES.iter_mut().find_map(|f| {
         if let Some(frame) = f {
@@ -2762,6 +2778,9 @@ unsafe fn switch_to_tab(frame_id: u32, tab_index: u32) -> bool {
 
     // Clear any stale drag targeting the old surface.
     clear_drag_if_dead();
+    // Clear stale hover light — the new active surface may have different
+    // chrome geometry, making the old light position invalid.
+    HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
 
     // Notify sexdisplay of updated tab metadata.
     send_frame_tab_info(frame_id);
