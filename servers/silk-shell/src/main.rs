@@ -47,6 +47,7 @@ enum SurfaceAction {
     Focus100, Focus101, Focus102, Focus103, Focus200,
     DestroyFocused,
     RecreateFocused,
+    RestoreMinimized,
     ResetAll,
     SnapLeft, SnapRight, Maximize, Center,
     SnapHome, SnapEnd,
@@ -131,6 +132,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x1B => Some(SurfaceAction::GrowWidth),
         0x0C => Some(SurfaceAction::ShrinkHeight),
         0x0D => Some(SurfaceAction::GrowHeight),
+        0x49 => Some(SurfaceAction::RestoreMinimized),
         0x3B => Some(SurfaceAction::LegacyFocusToggle),
         0x47 => Some(SurfaceAction::SnapHome),
         0x4F => Some(SurfaceAction::SnapEnd),
@@ -259,6 +261,9 @@ const FRAME_LIGHT_ZOOM: u32 = 3;
 const FRAME_LIGHT_SIZE_PX: i32 = 4;
 /// Gap between adjacent frame lights in pixels.
 const FRAME_LIGHT_GAP_PX: i32 = 2;
+
+/// ShellFrame.flags: frame is minimized (hidden via 0xEE, not destroyed).
+const FRAME_FLAG_MINIMIZED: u32 = 1 << 0;
 
 // ── Selected Window Option Bits (model only, no action behavior in V1) ──
 /// Bit: selected frame can be closed/destroyed.
@@ -561,6 +566,151 @@ unsafe fn selected_window_options_mask() -> u32 {
     }
     // Non-frame surfaces get no options in V1 (standalone surfaces are legacy/app content).
     mask
+}
+
+/// Returns true if the given surface can be safely closed/destroyed.
+/// OS-owned surfaces (linen, cursor, panels) and unknown surfaces cannot be closed.
+unsafe fn is_closeable_surface(surface_id: u64) -> bool {
+    match surface_id {
+        SURFACE_ID_LINEN | SURFACE_ID_CURSOR
+        | SURFACE_ID_LAUNCHER | SURFACE_ID_STATUS
+        | SURFACE_ID_CLOCK | SURFACE_ID_BELL => false,
+        _ => surface_is_alive(surface_id),
+    }
+}
+
+/// Close the given surface: mark inactive via its alive flag, notify sexdisplay
+/// via 0xEE opcode, and fall back focus if the closed surface was focused.
+/// Reuses the same destroy mechanism as keyboard SurfaceAction::DestroyFocused.
+/// Returns true if the surface was actually destroyed.
+unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
+    if !surface_is_alive(surface_id) {
+        return false;
+    }
+    match surface_id {
+        SURFACE_ID_APP    => SURFACE_100_ALIVE = false,
+        SURFACE_ID_STATIC => SURFACE_101_ALIVE = false,
+        SURFACE_ID_TEST3  => SURFACE_102_ALIVE = false,
+        SURFACE_ID_TEST4  => SURFACE_103_ALIVE = false,
+        _ => return false, // unknown or non-closeable surface
+    }
+    pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
+    // Focus fallback: if the closed surface was focused, clear_focus_if_dead
+    // will auto-switch to the next alive surface in z-order.
+    clear_focus_if_dead();
+    true
+}
+
+/// Returns true if the given frame is currently minimized.
+unsafe fn frame_is_minimized(frame_id: u32) -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id && (frame.flags & FRAME_FLAG_MINIMIZED) != 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Set or clear the minimized flag on the given frame.
+unsafe fn set_frame_minimized(frame_id: u32, minimized: bool) {
+    for f in FRAMES.iter_mut() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id {
+                if minimized {
+                    frame.flags |= FRAME_FLAG_MINIMIZED;
+                } else {
+                    frame.flags &= !FRAME_FLAG_MINIMIZED;
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// Find the first minimized frame's ID, if any.
+/// Used by keyboard restore to locate a frame to un-minimize.
+unsafe fn first_minimized_frame_id() -> Option<u32> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 {
+                return Some(frame.frame_id);
+            }
+        }
+    }
+    None
+}
+
+/// Minimize the active surface of the given frame: hide via 0xEE, set flag,
+/// clear focus and drag if the surface was focused or being dragged.
+/// Returns true if the surface was actually hidden.
+unsafe fn minimize_frame(frame_id: u32) -> bool {
+    if frame_is_minimized(frame_id) {
+        return false; // already minimized
+    }
+    let surface_id = match active_surface_for_frame(frame_id) {
+        Some(sid) => sid,
+        None => return false,
+    };
+    if !surface_is_alive(surface_id) {
+        return false;
+    }
+    // Mark frame as minimized.
+    set_frame_minimized(frame_id, true);
+    // Hide surface on display.
+    pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
+    // Clear drag if dragging this surface.
+    clear_drag_if_dead();
+    // Fall back focus if this surface was focused.
+    clear_focus_if_dead();
+    unsafe {
+        static mut FRAME_MINIMIZE_BUDGET: u32 = 8;
+        let b = &mut FRAME_MINIMIZE_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[shell.frame.minimize] frame={} surface={}", frame_id, surface_id);
+        }
+    }
+    true
+}
+
+/// Restore a minimized frame: re-activate its surface via 0xEC, clear the
+/// minimized flag, and set focus to the restored surface.
+/// Returns true if the frame was actually restored.
+unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
+    if !frame_is_minimized(frame_id) {
+        return false; // not minimized
+    }
+    let surface_id = match active_surface_for_frame(frame_id) {
+        Some(sid) => sid,
+        None => return false,
+    };
+    if !surface_is_alive(surface_id) {
+        return false;
+    }
+    // Clear minimized flag.
+    set_frame_minimized(frame_id, false);
+    // Re-activate surface on display via 0xEC upsert with stored geometry.
+    let bounds = get_surface_bounds(surface_id);
+    if let Some((rx, ry, rw, rh)) = bounds {
+        pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
+            (ry as u64) << 32 | rx as u64,
+            (rh as u64) << 32 | rw as u64);
+    } else {
+        return false; // geometry unavailable
+    }
+    // Focus the restored surface.
+    try_set_focus(surface_id);
+    unsafe {
+        static mut FRAME_RESTORE_BUDGET: u32 = 8;
+        let b = &mut FRAME_RESTORE_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[shell.frame.restore] frame={} surface={}", frame_id, surface_id);
+        }
+    }
+    true
 }
 
 /// Map a Frame Light kind to its corresponding selected-window option bit.
@@ -990,24 +1140,78 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         }
         HitTarget::FrameChrome { frame_id, kind } => {
             if kind == FRAME_CHROME_RIM {
-                // Rim drag: resolve active surface and start drag without focus change.
-                if let Some(surface_id) = active_surface_for_frame(frame_id) {
-                    if surface_is_alive(surface_id) {
-                        try_transition(InteractionState::Dragging { surface_id, current_x: px, current_y: py });
-                        unsafe {
-                            static mut RIM_DRAG_START_BUDGET: u32 = 8;
-                            let b = &mut RIM_DRAG_START_BUDGET;
-                            if *b > 0 {
-                                *b -= 1;
-                                serial_println!("[shell.frame.rim.drag.start] frame={} surface={} x={} y={}",
-                                    frame_id, surface_id, px, py);
+                // Check if pointer is over a Frame Light before proceeding.
+                let light = frame_light_at(frame_id, px, py);
+                if light == FRAME_LIGHT_CLOSE {
+                    // ── CLOSE action: destroy active surface ──
+                    if let Some(surface_id) = active_surface_for_frame(frame_id) {
+                        if is_closeable_surface(surface_id) {
+                            if close_surface_from_frame_light(surface_id) {
+                                unsafe {
+                                    static mut FRAME_LIGHT_CLOSE_BUDGET: u32 = 8;
+                                    let b = &mut FRAME_LIGHT_CLOSE_BUDGET;
+                                    if *b > 0 {
+                                        *b -= 1;
+                                        serial_println!("[shell.frame.light.close] frame={} surface={}",
+                                            frame_id, surface_id);
+                                    }
+                                }
+                            } else {
+                                serial_println!("[shell.frame.light.close.reject] frame={} surface={} reason=failed",
+                                    frame_id, surface_id);
                             }
+                        } else {
+                            serial_println!("[shell.frame.light.close.reject] frame={} surface={} reason=not_closeable",
+                                frame_id, surface_id);
                         }
                     } else {
-                        serial_println!("[shell.frame.rim.drag.reject] frame={} reason=dead", frame_id);
+                        serial_println!("[shell.frame.light.close.reject] frame={} reason=no_active_surface",
+                            frame_id);
+                    }
+                } else if light == FRAME_LIGHT_MINIMIZE {
+                    // ── MINIMIZE action: hide active surface ──
+                    if !minimize_frame(frame_id) {
+                        unsafe {
+                            static mut FRAME_MINIMIZE_REJECT_BUDGET: u32 = 4;
+                            let b = &mut FRAME_MINIMIZE_REJECT_BUDGET;
+                            if *b > 0 {
+                                *b -= 1;
+                                serial_println!("[shell.frame.minimize.reject] frame={} reason=not_minimizable",
+                                    frame_id);
+                            }
+                        }
+                    }
+                } else if light == FRAME_LIGHT_ZOOM {
+                    // ── ZOOM light: no action in V1, capture ──
+                    unsafe {
+                        static mut CHROME_CAPTURE_BUDGET: u32 = 4;
+                        let b = &mut CHROME_CAPTURE_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[shell.frame.chrome.capture] frame={} kind={} x={} y={}",
+                                frame_id, kind, px, py);
+                        }
                     }
                 } else {
-                    serial_println!("[shell.frame.rim.drag.reject] frame={} reason=no_active_surface", frame_id);
+                    // ── Rim drag (no light hovered) ──
+                    if let Some(surface_id) = active_surface_for_frame(frame_id) {
+                        if surface_is_alive(surface_id) {
+                            try_transition(InteractionState::Dragging { surface_id, current_x: px, current_y: py });
+                            unsafe {
+                                static mut RIM_DRAG_START_BUDGET: u32 = 8;
+                                let b = &mut RIM_DRAG_START_BUDGET;
+                                if *b > 0 {
+                                    *b -= 1;
+                                    serial_println!("[shell.frame.rim.drag.start] frame={} surface={} x={} y={}",
+                                        frame_id, surface_id, px, py);
+                                }
+                            }
+                        } else {
+                            serial_println!("[shell.frame.rim.drag.reject] frame={} reason=dead", frame_id);
+                        }
+                    } else {
+                        serial_println!("[shell.frame.rim.drag.reject] frame={} reason=no_active_surface", frame_id);
+                    }
                 }
             } else {
                 // Non-rim chrome (tab strip, reserved): capture/no-op.
@@ -1495,6 +1699,17 @@ pub extern "C" fn _start() -> ! {
                                             try_set_focus(SURFACE_ID_APP);
                                             mutated = true;
                                             serial_println!("[silk-shell] Recreated surface 100 (fallback)");
+                                        }
+                                    }
+
+                                    SurfaceAction::RestoreMinimized => {
+                                        if let Some(frame_id) = first_minimized_frame_id() {
+                                            if restore_minimized_frame(frame_id) {
+                                                mutated = true;
+                                                serial_println!("[silk-shell] Restored minimized frame {}", frame_id);
+                                            }
+                                        } else {
+                                            serial_println!("[silk-shell] No minimized frame to restore");
                                         }
                                     }
 
