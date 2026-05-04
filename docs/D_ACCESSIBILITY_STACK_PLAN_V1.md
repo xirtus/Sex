@@ -214,7 +214,7 @@ Assume a rival shell beat Silk accessibility across 10 dimensions:
 | Dead surfaces never receive focus | Nav could land on closing/tombstoned surface | FocusPath skips invalid nodes. Track A A4 guards validate before navigation. | §12.1: Never destroyed/tombstoned target | D3 |
 | Custom shortcuts never conflict | Keyboard bindings could collide with existing | D shortcut/conflict audit before any new binding. Conflicts documented in D1 audit. | §12.5: Keyboard nav respects Track A guards | D8 |
 | Gesture alternatives always exist | Gestures may lack keyboard equivalent | D provides input alternative for every gesture action. Track C customization gated by D. | §12.12: Input alternatives for gestures | D5 |
-| Voice control doesn't need screen scrape | No OCR pipeline exists | Apps expose intentional semantic surfaces. Shell validates before use. No scraping. | §12.10: sexdisplay never derives semantics from pixels | D6 |
+| Command/control alternatives don't need screen scrape | No OCR pipeline exists | Apps expose intentional semantic surfaces. Shell validates before use. No scraping. | §12.10: sexdisplay never derives semantics from pixels | D6 |
 | Proof markers make failures obvious | Accessibility failure silently swallowed | Every narration/navigation produces proof marker with result. Denials include reason. | §12.6: Action maps to validated intent | D8 |
 | Customization is rich but safe | Custom narration could leak private content | AccessibilityPolicy is hardcoded in V1. Future customization cannot bypass privacy rules. | §12.8: Policy is deterministic and reversible | D6 |
 
