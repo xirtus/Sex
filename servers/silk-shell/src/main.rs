@@ -245,6 +245,16 @@ const FRAME_RIM_PX: i32 = 4;
 /// Height of the tab strip band in pixels (0 = disabled in V1).
 const FRAME_TAB_STRIP_PX: i32 = 0;
 
+// ── Frame Light Kind Constants (model only, no actions in V1) ──────────
+/// No light hovered / default state.
+const FRAME_LIGHT_NONE: u32 = 0;
+/// Red close light — close active tab/frame (future action).
+const FRAME_LIGHT_CLOSE: u32 = 1;
+/// Yellow minimize light — minimize/collapse frame (future action).
+const FRAME_LIGHT_MINIMIZE: u32 = 2;
+/// Green zoom light — zoom/maximize frame (future action).
+const FRAME_LIGHT_ZOOM: u32 = 3;
+
 // ── Selected Window Option Bits (model only, no action behavior in V1) ──
 /// Bit: selected frame can be closed/destroyed.
 const OPTION_CLOSE: u32 = 1;
@@ -257,6 +267,7 @@ const OPTION_MOVE: u32 = 8;
 
 static mut HOVERED_FRAME_ID: u32 = 0;
 static mut HOVER_KIND: u32 = HOVER_NONE;
+static mut HOVERED_FRAME_LIGHT: u32 = FRAME_LIGHT_NONE;
 static mut FOCUS_ID: u64 = 0;
 static mut FOCUSED_SURFACE_ID: u64 = SURFACE_ID_APP;
 static mut SURFACE_100_ALIVE: bool = true;
@@ -547,6 +558,17 @@ unsafe fn selected_window_options_mask() -> u32 {
     mask
 }
 
+/// Map a Frame Light kind to its corresponding selected-window option bit.
+/// Returns 0 for FRAME_LIGHT_NONE or unrecognized light kinds.
+fn frame_light_to_option_mask(light: u32) -> u32 {
+    match light {
+        FRAME_LIGHT_CLOSE => OPTION_CLOSE,
+        FRAME_LIGHT_MINIMIZE => OPTION_MINIMIZE,
+        FRAME_LIGHT_ZOOM => OPTION_ZOOM,
+        _ => 0,
+    }
+}
+
 // ── Frame Chrome Hover Update ──────────────────────────────────────────────────
 /// Update frame chrome hover state from current pointer position.
 /// Called once per event loop iteration. Skips during active drag.
@@ -595,6 +617,21 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
         }
         HOVERED_FRAME_ID = new_frame_id;
         HOVER_KIND = new_kind;
+        // Frame light hover: always resets to NONE in V1 model (no pixel
+        // detection yet). Future FRAME_LIGHTS_HIT_TARGET_V1 will detect
+        // which light the pointer is over within the frame chrome region.
+        if HOVERED_FRAME_LIGHT != FRAME_LIGHT_NONE {
+            HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
+            unsafe {
+                static mut FRAME_LIGHT_HOVER_BUDGET: u32 = 8;
+                let b = &mut FRAME_LIGHT_HOVER_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!("[shell.frame.light.hover] frame={} light={}",
+                        new_frame_id, FRAME_LIGHT_NONE);
+                }
+            }
+        }
     }
     changed
 }
@@ -1063,6 +1100,17 @@ pub extern "C" fn _start() -> ! {
     let boot_options_mask = unsafe { selected_window_options_mask() };
     pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, boot_options_mask as u64, 0);
     serial_println!("[silk-shell] Boot workspace advertisement sent to SilkBar");
+
+    // Frame Lights model: prove constants and mapping exist.
+    unsafe {
+        static mut FRAME_LIGHT_MODEL_BUDGET: u32 = 1;
+        if FRAME_LIGHT_MODEL_BUDGET > 0 {
+            FRAME_LIGHT_MODEL_BUDGET -= 1;
+            serial_println!("[shell.frame.light.model] close={} minimize={} zoom={} mask={:#x}",
+                FRAME_LIGHT_CLOSE, FRAME_LIGHT_MINIMIZE, FRAME_LIGHT_ZOOM,
+                frame_light_to_option_mask(FRAME_LIGHT_ZOOM));
+        }
+    }
 
     // Stage: cursor surface — created first so it occupies SURFACES slot 0,
     // winning composite Pass 1 over all other non-focused surfaces.
