@@ -222,6 +222,11 @@ struct ShellFrame {
     tabs: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize],
     /// Reserved for future flags (split orientation, pinned state, etc.).
     flags: u32,
+    /// Saved normal (pre-zoom) geometry. Valid when FRAME_FLAG_ZOOMED is set.
+    normal_x: i32,
+    normal_y: i32,
+    normal_w: u32,
+    normal_h: u32,
 }
 
 static mut WINDOWS: Vec<WindowState> = Vec::new();
@@ -264,6 +269,8 @@ const FRAME_LIGHT_GAP_PX: i32 = 2;
 
 /// ShellFrame.flags: frame is minimized (hidden via 0xEE, not destroyed).
 const FRAME_FLAG_MINIMIZED: u32 = 1 << 0;
+/// ShellFrame.flags: frame is zoomed/maximized (fills content area below SilkBar).
+const FRAME_FLAG_ZOOMED: u32 = 1 << 1;
 
 // ── Selected Window Option Bits (model only, no action behavior in V1) ──
 /// Bit: selected frame can be closed/destroyed.
@@ -384,7 +391,7 @@ fn emit_snapshot() {
 /// Duplicates the bounds match from point_in_surface to avoid refactoring it.
 unsafe fn get_surface_bounds(sid: u64) -> Option<(i32, i32, u32, u32)> {
     match sid {
-        SURFACE_ID_APP    => Some((WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, SURFACE_100_H)),
+        SURFACE_ID_APP    => Some((WINDOWS[1].desc.x, WINDOWS[1].desc.y, WINDOWS[1].desc.width, WINDOWS[1].desc.height)),
         SURFACE_ID_STATIC => Some((SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H)),
         SURFACE_ID_TEST3  => Some((SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H)),
         SURFACE_ID_TEST4  => Some((SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H)),
@@ -405,7 +412,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             return false;
         }
         let (x, y, w, h) = match sid {
-            SURFACE_ID_APP    => (WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, SURFACE_100_H),
+            SURFACE_ID_APP    => (WINDOWS[1].desc.x, WINDOWS[1].desc.y, WINDOWS[1].desc.width, WINDOWS[1].desc.height),
             SURFACE_ID_STATIC => (SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H),
             SURFACE_ID_TEST3  => (SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H),
             SURFACE_ID_TEST4  => (SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H),
@@ -691,14 +698,23 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
     }
     // Clear minimized flag.
     set_frame_minimized(frame_id, false);
-    // Re-activate surface on display via 0xEC upsert with stored geometry.
-    let bounds = get_surface_bounds(surface_id);
-    if let Some((rx, ry, rw, rh)) = bounds {
+    // Re-activate surface on display via 0xEC upsert.
+    // If frame was zoomed before minimize, restore to maximized geometry.
+    if frame_is_zoomed(frame_id) {
+        let (zx, zy, zw, zh) = layout_maximize();
         pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
-            (ry as u64) << 32 | rx as u64,
-            (rh as u64) << 32 | rw as u64);
+            (zy as u64) << 32 | zx as u64,
+            (zh as u64) << 32 | zw as u64);
+        update_local_geometry(surface_id, zx, zy, zw, zh);
     } else {
-        return false; // geometry unavailable
+        let bounds = get_surface_bounds(surface_id);
+        if let Some((rx, ry, rw, rh)) = bounds {
+            pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
+                (ry as u64) << 32 | rx as u64,
+                (rh as u64) << 32 | rw as u64);
+        } else {
+            return false; // geometry unavailable
+        }
     }
     // Focus the restored surface.
     try_set_focus(surface_id);
@@ -711,6 +727,178 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
         }
     }
     true
+}
+
+// ── Frame Zoom/Maximize Helpers ─────────────────────────────────────────────────
+
+/// Returns true if the given frame is currently zoomed (maximized).
+unsafe fn frame_is_zoomed(frame_id: u32) -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id && (frame.flags & FRAME_FLAG_ZOOMED) != 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Set or clear the zoomed flag on the given frame.
+unsafe fn set_frame_zoomed(frame_id: u32, zoomed: bool) {
+    for f in FRAMES.iter_mut() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id {
+                if zoomed {
+                    frame.flags |= FRAME_FLAG_ZOOMED;
+                } else {
+                    frame.flags &= !FRAME_FLAG_ZOOMED;
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// Update local shell geometry statics to match a 0xEC update sent to sexdisplay.
+/// This keeps shell hit-testing in sync with the display renderer.
+/// Also fixes the stale-dimension bug on surface 100 (SURFACE_100_W/H were never
+/// updated after resize operations).
+unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32) {
+    match surface_id {
+        SURFACE_ID_APP => {
+            WINDOWS[1].desc.x = x;
+            WINDOWS[1].desc.y = y;
+            WINDOWS[1].desc.width = w;
+            WINDOWS[1].desc.height = h;
+            SURFACE_100_W = w;
+            SURFACE_100_H = h;
+        }
+        SURFACE_ID_STATIC => {
+            SURFACE_101_X = x; SURFACE_101_Y = y;
+            SURFACE_101_W = w; SURFACE_101_H = h;
+        }
+        SURFACE_ID_TEST3 => {
+            SURFACE_102_X = x; SURFACE_102_Y = y;
+            SURFACE_102_W = w; SURFACE_102_H = h;
+        }
+        SURFACE_ID_TEST4 => {
+            SURFACE_103_X = x; SURFACE_103_Y = y;
+            SURFACE_103_W = w; SURFACE_103_H = h;
+        }
+        _ => {}
+    }
+}
+
+/// Zoom (maximize) the active surface of the given frame to fill the area below
+/// the SilkBar. Saves the current normal geometry in ShellFrame.normal_* for
+/// later unzoom. Sends 0xEC with layout_maximize() geometry to sexdisplay.
+/// Returns true if the surface was actually zoomed.
+unsafe fn zoom_frame(frame_id: u32) -> bool {
+    if frame_is_zoomed(frame_id) {
+        return false; // already zoomed
+    }
+    if frame_is_minimized(frame_id) {
+        return false; // cannot zoom a minimized frame
+    }
+    let surface_id = match active_surface_for_frame(frame_id) {
+        Some(sid) => sid,
+        None => return false,
+    };
+    if !surface_is_alive(surface_id) {
+        return false;
+    }
+    // Save current normal geometry for unzoom.
+    let bounds = get_surface_bounds(surface_id);
+    let (nx, ny, nw, nh) = match bounds {
+        Some(b) => b,
+        None => return false,
+    };
+    // Store normal geometry in ShellFrame.
+    for f in FRAMES.iter_mut() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id {
+                frame.normal_x = nx;
+                frame.normal_y = ny;
+                frame.normal_w = nw;
+                frame.normal_h = nh;
+                break;
+            }
+        }
+    }
+    // Set zoomed flag.
+    set_frame_zoomed(frame_id, true);
+    // Send maximized geometry to sexdisplay.
+    let (zx, zy, zw, zh) = layout_maximize();
+    pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
+        (zy as u64) << 32 | zx as u64,
+        (zh as u64) << 32 | zw as u64);
+    // Update local geometry to match display.
+    update_local_geometry(surface_id, zx, zy, zw, zh);
+    // Preserve focus (zoom does not change focus).
+    unsafe {
+        static mut FRAME_ZOOM_BUDGET: u32 = 8;
+        let b = &mut FRAME_ZOOM_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[shell.frame.zoom] frame={} surface={}", frame_id, surface_id);
+        }
+    }
+    true
+}
+
+/// Unzoom (restore) the active surface of the given frame to its saved normal
+/// geometry. Sends 0xEC with the stored ShellFrame.normal_* rect to sexdisplay.
+/// Returns true if the surface was actually unzoomed.
+unsafe fn unzoom_frame(frame_id: u32) -> bool {
+    if !frame_is_zoomed(frame_id) {
+        return false; // not zoomed
+    }
+    let surface_id = match active_surface_for_frame(frame_id) {
+        Some(sid) => sid,
+        None => return false,
+    };
+    if !surface_is_alive(surface_id) {
+        return false;
+    }
+    // Retrieve normal geometry from ShellFrame.
+    let (nx, ny, nw, nh) = match FRAMES.iter().find_map(|f| {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id {
+                Some((frame.normal_x, frame.normal_y, frame.normal_w, frame.normal_h))
+            } else { None }
+        } else { None }
+    }) {
+        Some(b) => b,
+        None => return false,
+    };
+    // Clear zoomed flag.
+    set_frame_zoomed(frame_id, false);
+    // Send normal geometry to sexdisplay.
+    pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
+        (ny as u64) << 32 | nx as u64,
+        (nh as u64) << 32 | nw as u64);
+    // Update local geometry to match display.
+    update_local_geometry(surface_id, nx, ny, nw, nh);
+    // Preserve focus.
+    unsafe {
+        static mut FRAME_UNZOOM_BUDGET: u32 = 8;
+        let b = &mut FRAME_UNZOOM_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[shell.frame.unzoom] frame={} surface={}", frame_id, surface_id);
+        }
+    }
+    true
+}
+
+/// Toggle zoom state for the given frame. If zoomed, unzoom. If not zoomed, zoom.
+/// Returns true if the state changed.
+unsafe fn toggle_zoom_frame(frame_id: u32) -> bool {
+    if frame_is_zoomed(frame_id) {
+        unzoom_frame(frame_id)
+    } else {
+        zoom_frame(frame_id)
+    }
 }
 
 /// Map a Frame Light kind to its corresponding selected-window option bit.
@@ -1182,14 +1370,16 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                         }
                     }
                 } else if light == FRAME_LIGHT_ZOOM {
-                    // ── ZOOM light: no action in V1, capture ──
-                    unsafe {
-                        static mut CHROME_CAPTURE_BUDGET: u32 = 4;
-                        let b = &mut CHROME_CAPTURE_BUDGET;
-                        if *b > 0 {
-                            *b -= 1;
-                            serial_println!("[shell.frame.chrome.capture] frame={} kind={} x={} y={}",
-                                frame_id, kind, px, py);
+                    // ── ZOOM action: toggle zoom/unzoom ──
+                    if !toggle_zoom_frame(frame_id) {
+                        unsafe {
+                            static mut FRAME_ZOOM_REJECT_BUDGET: u32 = 4;
+                            let b = &mut FRAME_ZOOM_REJECT_BUDGET;
+                            if *b > 0 {
+                                *b -= 1;
+                                serial_println!("[shell.frame.zoom.reject] frame={} reason=not_zoomable",
+                                    frame_id);
+                            }
                         }
                     }
                 } else {
@@ -1342,6 +1532,11 @@ pub extern "C" fn _start() -> ! {
         FOCUS_ID = 2;
 
         // Initialize frame chrome model: one frame, one tab wrapping surface 100.
+        // normal_* initialized to boot geometry of surface 100 for zoom restore.
+        let boot_x: i32 = 100;
+        let boot_y: i32 = 100;
+        let boot_w: u32 = 800;
+        let boot_h: u32 = 500;
         FRAMES[0] = Some(ShellFrame {
             frame_id: 1,
             active_tab: 0,
@@ -1351,6 +1546,10 @@ pub extern "C" fn _start() -> ! {
                 None, None, None, None, None, None, None,
             ],
             flags: 0,
+            normal_x: boot_x,
+            normal_y: boot_y,
+            normal_w: boot_w,
+            normal_h: boot_h,
         });
         serial_println!("[shell.frame.model.init] frames=1 tabs=1");
 
