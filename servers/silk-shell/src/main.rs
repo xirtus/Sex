@@ -602,6 +602,107 @@ fn snap_end_pos(w: u32, h: u32) -> (i32, i32) {
     (x.max(0), y.max(P.bar_height))
 }
 
+/// Deterministic tiling for visible frames in the active scene.
+/// Collects non-minimized frames in the active scene, then assigns
+/// each frame's active-tab surface a position in the content area
+/// below the SilkBar. Called after snap, maximize, close, restore,
+/// or scene switch.
+/// Layout scheme (V1):
+///   1 frame  → full content area
+///   2 frames → left/right split
+///   3 frames → top-left, top-right, bottom-full
+///   4 frames → 2x2 grid
+///   5+       → stacked rows (full width, equal height)
+unsafe fn tile_visible_frames() {
+    let mut tiles: [u64; MAX_FRAMES] = [0; MAX_FRAMES];
+    let mut count: usize = 0;
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
+            if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
+            if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
+                if count < MAX_FRAMES {
+                    tiles[count] = tab.surface_id;
+                    count += 1;
+                }
+            }
+        }
+    }
+    if count == 0 { return; }
+
+    let cw: u32 = P.width as u32;
+    let ch: u32 = (P.height - P.bar_height) as u32;
+
+    for i in 0..count {
+        let sid = tiles[i];
+        if !surface_is_alive(sid) { continue; }
+
+        let (rx, ry, rw, rh) = if count == 1 {
+            (0i32, P.bar_height, cw, ch)
+        } else if count == 2 {
+            let half_w = cw / 2;
+            if i == 0 {
+                (0i32, P.bar_height, half_w, ch)
+            } else {
+                (half_w as i32, P.bar_height, cw - half_w, ch)
+            }
+        } else if count == 3 {
+            let half_w = cw / 2;
+            let half_h = ch / 2;
+            match i {
+                0 => (0i32, P.bar_height, half_w, ch),
+                1 => (half_w as i32, P.bar_height, cw - half_w, half_h),
+                2 => (half_w as i32, P.bar_height + half_h as i32, cw - half_w, ch - half_h),
+                _ => (0i32, P.bar_height, cw, ch),
+            }
+        } else if count == 4 {
+            let half_w = cw / 2;
+            let half_h = ch / 2;
+            match i {
+                0 => (0i32, P.bar_height, half_w, half_h),
+                1 => (half_w as i32, P.bar_height, cw - half_w, half_h),
+                2 => (0i32, P.bar_height + half_h as i32, half_w, ch - half_h),
+                3 => (half_w as i32, P.bar_height + half_h as i32, cw - half_w, ch - half_h),
+                _ => (0i32, P.bar_height, cw, ch),
+            }
+        } else {
+            let row_h = ch / count as u32;
+            let y_off = P.bar_height + (row_h * i as u32) as i32;
+            (0i32, y_off, cw, if i + 1 == count { ch - (row_h * i as u32) } else { row_h })
+        };
+
+        match sid {
+            SURFACE_ID_APP => {
+                WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
+                WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
+            }
+            SURFACE_ID_STATIC => {
+                SURFACE_101_X = rx; SURFACE_101_Y = ry;
+                SURFACE_101_W = rw; SURFACE_101_H = rh;
+            }
+            SURFACE_ID_TEST3 => {
+                SURFACE_102_X = rx; SURFACE_102_Y = ry;
+                SURFACE_102_W = rw; SURFACE_102_H = rh;
+            }
+            SURFACE_ID_TEST4 => {
+                SURFACE_103_X = rx; SURFACE_103_Y = ry;
+                SURFACE_103_W = rw; SURFACE_103_H = rh;
+            }
+            SURFACE_ID_LINEN => {
+                SURFACE_200_X = rx; SURFACE_200_Y = ry;
+                SURFACE_200_W = rw; SURFACE_200_H = rh;
+            }
+            _ => {}
+        }
+        pdx_call(SLOT_DISPLAY, 0xEC, sid,
+            (ry as u64) << 32 | rx as u64,
+            (rh as u64) << 32 | rw as u64);
+    }
+    static mut TILE_BUDGET: u32 = 8;
+    let b = &mut TILE_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.tile] count={}", count); }
+}
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     serial_println!("{}", info);
@@ -674,20 +775,106 @@ const HOVER_FRAME_BODY: u32 = 1;    // app content area
 const HOVER_FRAME_RIM: u32 = 2;     // future: neon rim
 const HOVER_TAB_STRIP: u32 = 3;     // future: tab strip
 
+// ── Chrome Template Model ─────────────────────────────────────────────────────
+/// Simple rectangle for chrome geometry.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct Rect {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+}
+
+impl Rect {
+    const fn new(x: i32, y: i32, w: u32, h: u32) -> Self {
+        Rect { x, y, w, h }
+    }
+
+    fn contains(&self, px: i32, py: i32) -> bool {
+        px >= self.x && px < self.x + self.w as i32
+            && py >= self.y && py < self.y + self.h as i32
+    }
+}
+
+/// Data-driven chrome template for Silk panels/frames.
+/// Centralizes all geometry constants that the shell uses for hit-testing
+/// and dispatch. No visual behavior change -- values match current defaults.
+/// Future Glass Chrome can read/change template values safely.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct ChromeTemplate {
+    /// Neon rim thickness in pixels (all edges).
+    rim_px: i32,
+    /// Top bar chrome band height in pixels (0 = disabled/minimal mode).
+    top_bar_height_px: i32,
+    /// Frame light square size in minimal/4px mode.
+    light_size_px: i32,
+    /// Gap between adjacent frame lights in minimal mode.
+    light_gap_px: i32,
+    /// Frame light square size in default/top-bar mode.
+    top_bar_light_size_px: i32,
+    /// Gap between adjacent frame lights in default/top-bar mode.
+    top_bar_light_gap_px: i32,
+    /// Frame Lights exclusion zone width in top-bar mode.
+    top_bar_light_exclusion_px: i32,
+    /// Frame Lights exclusion zone width in minimal mode.
+    tab_light_exclusion_px: i32,
+    /// Minimum tab strip slot width.
+    tab_min_width_px: i32,
+    /// Tab strip band height in minimal mode.
+    tab_strip_px: i32,
+    // Scene Settings panel geometry
+    settings_panel_x: u32,
+    settings_panel_y: u32,
+    settings_panel_w: u32,
+    settings_panel_h: u32,
+    // Scene Settings panel control rects (reserved; all zero in V1)
+    control_preset_up: Rect,
+    control_preset_down: Rect,
+    control_reset: Rect,
+    control_close: Rect,
+    control_topbar_toggle: Rect,
+}
+
+/// Default chrome template matching current hardcoded values.
+/// No visual behavior change. Future Glass Chrome can derive from this.
+const SILK_CHROME_TEMPLATE_DEFAULT: ChromeTemplate = ChromeTemplate {
+    rim_px: 4,
+    top_bar_height_px: 16,
+    light_size_px: 4,
+    light_gap_px: 2,
+    top_bar_light_size_px: 8,
+    top_bar_light_gap_px: 4,
+    top_bar_light_exclusion_px: 40,
+    tab_light_exclusion_px: 20,
+    tab_min_width_px: 12,
+    tab_strip_px: 4,
+    settings_panel_x: 870,
+    settings_panel_y: 60,
+    settings_panel_w: 340,
+    settings_panel_h: 280,
+    control_preset_up: Rect::new(0, 0, 0, 0),
+    control_preset_down: Rect::new(0, 0, 0, 0),
+    control_reset: Rect::new(0, 0, 0, 0),
+    control_close: Rect::new(0, 0, 0, 0),
+    control_topbar_toggle: Rect::new(0, 0, 0, 0),
+};
+
 // ── Frame Chrome Hit-Production Constants ──────────────────────────────────
 /// Chrome hit-target kind for the 4px neon rim edge band.
 const FRAME_CHROME_RIM: u32 = 1;
 /// Chrome hit-target kind for a tab strip band (reserved, not produced in V1).
 const FRAME_CHROME_TAB_STRIP: u32 = 2;
 /// Thickness of the neon rim edge band in pixels.
-const FRAME_RIM_PX: i32 = 4;
+const FRAME_RIM_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.rim_px;
 /// Height of the tab strip band in pixels (0 = disabled in V1).
-const FRAME_TAB_STRIP_PX: i32 = 4;
+const FRAME_TAB_STRIP_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.tab_strip_px;
 /// X-width of the Frame Lights exclusion zone in the top rim band.
 /// Covers: gap(2) + close(4) + gap(2) + minimize(4) + gap(2) + zoom(4) + gap(2) = 20px.
-const FRAME_TAB_LIGHT_EXCLUSION_PX: i32 = 20;
+const FRAME_TAB_LIGHT_EXCLUSION_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.tab_light_exclusion_px;
 /// Minimum width of a single tab block in the tab strip.
-const FRAME_TAB_MIN_WIDTH_PX: i32 = 12;
+const FRAME_TAB_MIN_WIDTH_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.tab_min_width_px;
 
 // ── Frame Light Kind Constants (model only, no actions in V1) ──────────
 /// No light hovered / default state.
@@ -700,21 +887,21 @@ const FRAME_LIGHT_MINIMIZE: u32 = 2;
 const FRAME_LIGHT_ZOOM: u32 = 3;
 
 /// Width and height of each frame light square in pixels (fits within 4px rim).
-const FRAME_LIGHT_SIZE_PX: i32 = 4;
+const FRAME_LIGHT_SIZE_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.light_size_px;
 /// Gap between adjacent frame lights in pixels.
-const FRAME_LIGHT_GAP_PX: i32 = 2;
+const FRAME_LIGHT_GAP_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.light_gap_px;
 
 // ── Top Bar Geometry Constants (default mode) ─────────────────────────────────
 /// Height of the top bar chrome band in default mode (replaces top rim).
 /// The 4px neon rim on the top edge is replaced by this taller band.
-const FRAME_TOP_BAR_HEIGHT_PX: i32 = 16;
+const FRAME_TOP_BAR_HEIGHT_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.top_bar_height_px;
 /// Width and height of each frame light in default mode (larger than minimal mode).
-const FRAME_TOP_BAR_LIGHT_SIZE_PX: i32 = 8;
+const FRAME_TOP_BAR_LIGHT_SIZE_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.top_bar_light_size_px;
 /// Gap between adjacent frame lights in default mode.
-const FRAME_TOP_BAR_LIGHT_GAP_PX: i32 = 4;
+const FRAME_TOP_BAR_LIGHT_GAP_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.top_bar_light_gap_px;
 /// X-width of the Frame Lights exclusion zone in default mode.
 /// Covers: gap(4) + close(8) + gap(4) + minimize(8) + gap(4) + zoom(8) + gap(4) = 40px.
-const FRAME_TOP_BAR_LIGHT_EXCLUSION_PX: i32 = 40;
+const FRAME_TOP_BAR_LIGHT_EXCLUSION_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.top_bar_light_exclusion_px;
 
 /// ShellFrame.flags: frame is minimized (hidden via 0xEE, not destroyed).
 const FRAME_FLAG_MINIMIZED: u32 = 1 << 0;
@@ -790,10 +977,10 @@ static mut BELL_ACTIVE: bool = false;
 // Scene Settings panel toggle state
 static mut SCENE_SETTINGS_ACTIVE: bool = false;
 // Scene Settings panel geometry (static position, no text labels in V1)
-const SCENE_SETTINGS_PANEL_X: u32 = 870;
-const SCENE_SETTINGS_PANEL_Y: u32 = 60;
-const SCENE_SETTINGS_PANEL_W: u32 = 340;
-const SCENE_SETTINGS_PANEL_H: u32 = 280;
+const SCENE_SETTINGS_PANEL_X: u32 = SILK_CHROME_TEMPLATE_DEFAULT.settings_panel_x;
+const SCENE_SETTINGS_PANEL_Y: u32 = SILK_CHROME_TEMPLATE_DEFAULT.settings_panel_y;
+const SCENE_SETTINGS_PANEL_W: u32 = SILK_CHROME_TEMPLATE_DEFAULT.settings_panel_w;
+const SCENE_SETTINGS_PANEL_H: u32 = SILK_CHROME_TEMPLATE_DEFAULT.settings_panel_h;
 // Linen surface 200 position tracking (stable — linen never moves)
 static mut SURFACE_200_X: i32 = 900;
 static mut SURFACE_200_Y: i32 = 500;
@@ -1170,6 +1357,8 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     // Focus fallback: if the closed surface was focused, clear_focus_if_dead
     // will auto-switch to the next alive surface in z-order.
     clear_focus_if_dead();
+    // Re-tile remaining visible frames.
+    tile_visible_frames();
     true
 }
 
@@ -1283,6 +1472,8 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
     }
     // Focus the restored surface.
     try_set_focus(surface_id);
+    // Re-tile to include the restored frame.
+    tile_visible_frames();
     unsafe {
         static mut FRAME_RESTORE_BUDGET: u32 = 8;
         let b = &mut FRAME_RESTORE_BUDGET;
@@ -2384,6 +2575,7 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
                     sync_scene_visibility();
                     clear_focus_if_wrong_scene();
                     clear_drag_if_dead();
+                    tile_visible_frames();
                     static mut SCENE_SWITCH_BUDGET: u32 = 8;
                     let b = &mut SCENE_SWITCH_BUDGET;
                     if *b > 0 { *b -= 1; serial_println!("[shell.scene.switch] from={} to={}", prev, ACTIVE_SCENE_IDX); }
@@ -2978,173 +3170,14 @@ pub extern "C" fn _start() -> ! {
                                         serial_println!("[silk-shell] Reset all surfaces to boot state");
                                     }
 
-                                    SurfaceAction::SnapLeft => {
-                                        let (rx, ry, rw, rh) = layout_left();
-                                        let focused = FOCUSED_SURFACE_ID;
-                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
-                                            WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 100 snapped to left half");
-                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            SURFACE_101_X = rx; SURFACE_101_Y = ry;
-                                            SURFACE_101_W = rw; SURFACE_101_H = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 101 snapped to left half");
-                                        } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST3, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            SURFACE_102_X = rx; SURFACE_102_Y = ry;
-                                            SURFACE_102_W = rw; SURFACE_102_H = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 102 snapped to left half");
-                                        } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST4, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            SURFACE_103_X = rx; SURFACE_103_Y = ry;
-                                            SURFACE_103_W = rw; SURFACE_103_H = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 103 snapped to left half");
-                                        }
-                                    }
-
-                                    SurfaceAction::SnapRight => {
-                                        let (rx, ry, rw, rh) = layout_right();
-                                        let focused = FOCUSED_SURFACE_ID;
-                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
-                                            WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 100 snapped to right half");
-                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            SURFACE_101_X = rx; SURFACE_101_Y = ry;
-                                            SURFACE_101_W = rw; SURFACE_101_H = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 101 snapped to right half");
-                                        } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST3, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            SURFACE_102_X = rx; SURFACE_102_Y = ry;
-                                            SURFACE_102_W = rw; SURFACE_102_H = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 102 snapped to right half");
-                                        } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST4, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            SURFACE_103_X = rx; SURFACE_103_Y = ry;
-                                            SURFACE_103_W = rw; SURFACE_103_H = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 103 snapped to right half");
-                                        }
-                                    }
-
-                                    SurfaceAction::Maximize => {
-                                        let (rx, ry, rw, rh) = layout_maximize();
-                                        let focused = FOCUSED_SURFACE_ID;
-                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
-                                            WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 100 maximized");
-                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            SURFACE_101_X = rx; SURFACE_101_Y = ry;
-                                            SURFACE_101_W = rw; SURFACE_101_H = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 101 maximized");
-                                        } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST3, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            SURFACE_102_X = rx; SURFACE_102_Y = ry;
-                                            SURFACE_102_W = rw; SURFACE_102_H = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 102 maximized");
-                                        } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST4, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            SURFACE_103_X = rx; SURFACE_103_Y = ry;
-                                            SURFACE_103_W = rw; SURFACE_103_H = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 103 maximized");
-                                        }
-                                    }
-
+                                    SurfaceAction::SnapLeft |
+                                    SurfaceAction::SnapRight |
+                                    SurfaceAction::SnapHome |
+                                    SurfaceAction::SnapEnd |
+                                    SurfaceAction::Maximize |
                                     SurfaceAction::Center => {
-                                        let focused = FOCUSED_SURFACE_ID;
-                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                            let (rx, ry, rw, rh) = P.boot_rect_100;
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
-                                            WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 100 centered");
-                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                            let (rx, ry, rw, rh) = P.boot_rect_101;
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            SURFACE_101_X = rx; SURFACE_101_Y = ry;
-                                            SURFACE_101_W = rw; SURFACE_101_H = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 101 centered");
-                                        } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
-                                            let (rx, ry, rw, rh) = P.boot_rect_102;
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST3, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            SURFACE_102_X = rx; SURFACE_102_Y = ry;
-                                            SURFACE_102_W = rw; SURFACE_102_H = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 102 centered");
-                                        } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
-                                            let (rx, ry, rw, rh) = P.boot_rect_103;
-                                            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST4, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
-                                            SURFACE_103_X = rx; SURFACE_103_Y = ry;
-                                            SURFACE_103_W = rw; SURFACE_103_H = rh;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 103 centered");
-                                        }
-                                    }
-
-                                    SurfaceAction::SnapHome => {
-                                        let focused = FOCUSED_SURFACE_ID;
-                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                            WINDOWS[1].desc.x = 0; WINDOWS[1].desc.y = P.bar_height;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 100 snapped home");
-                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                            SURFACE_101_X = 0; SURFACE_101_Y = P.bar_height;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 101 snapped home");
-                                        } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
-                                            SURFACE_102_X = 0; SURFACE_102_Y = P.bar_height;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 102 snapped home");
-                                        } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
-                                            SURFACE_103_X = 0; SURFACE_103_Y = P.bar_height;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 103 snapped home");
-                                        }
-                                    }
-
-                                    SurfaceAction::SnapEnd => {
-                                        let focused = FOCUSED_SURFACE_ID;
-                                        if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
-                                            let (ex, ey) = snap_end_pos(WINDOWS[1].desc.width, WINDOWS[1].desc.height);
-                                            WINDOWS[1].desc.x = ex; WINDOWS[1].desc.y = ey;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 100 snapped end");
-                                        } else if focused == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-                                            let (ex, ey) = snap_end_pos(SURFACE_101_W, SURFACE_101_H);
-                                            SURFACE_101_X = ex; SURFACE_101_Y = ey;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 101 snapped end");
-                                        } else if focused == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
-                                            let (ex, ey) = snap_end_pos(SURFACE_102_W, SURFACE_102_H);
-                                            SURFACE_102_X = ex; SURFACE_102_Y = ey;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 102 snapped end");
-                                        } else if focused == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
-                                            let (ex, ey) = snap_end_pos(SURFACE_103_W, SURFACE_103_H);
-                                            SURFACE_103_X = ex; SURFACE_103_Y = ey;
-                                            mutated = true;
-                                            serial_println!("[silk-shell] Surface 103 snapped end");
-                                        }
+                                        mutated = true;
+                                        tile_visible_frames();
                                     }
 
                                     SurfaceAction::ShrinkWidth => {
