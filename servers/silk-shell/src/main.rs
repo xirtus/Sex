@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use sex_pdx::{
     pdx_call, pdx_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
-    SLOT_DISPLAY, SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
+    SLOT_DISPLAY, SLOT_SILKBAR, SLOT_SEXSTORE, OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
     OP_SURFACE_TAB_INFO, OP_APPEARANCE_TOKENS,
     SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
 };
@@ -14,6 +14,18 @@ use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y,
 
 // Local Opcodes
 pub const OP_DISPLAY_SET_SNAPSHOT: u64 = 0x15;
+
+// Sexstore K/V opcodes (local copies to avoid sex-pdx ABI hash update).
+// Matches servers/sexstore/src/main.rs.
+const OP_KV_GET: u64 = 0xB0;
+const OP_KV_PUT: u64 = 0xB1;
+
+// Well-known key ID for scene appearance settings blob.
+const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
+
+// Packed blob magic/version constants (byte 0, byte 1 in the u64).
+const SCENE_BLOB_MAGIC:   u8 = 0xAC;
+const SCENE_BLOB_VERSION: u8 = 0x01;
 pub const OP_SHELL_BIND_BUFFER: u64 = 0x14;
 pub const OP_HID_EVENT: u64 = 0x202;
 pub const OP_USB_MOUSE_REPORT: u64 = 0x260;
@@ -106,6 +118,10 @@ static CUSTOM_TINT_BUNDLES: [TintBundle; TINT_COUNT] = [
 
 static mut ACTIVE_TINT_IDX: u8 = 0;
 
+/// Set when a GET is in flight at boot. Guards against misinterpreting
+/// a PUT ack (0x00 or 0x02) as a GET result. Cleared when reply arrives.
+static mut SEXSTORE_LOAD_PENDING: bool = false;
+
 #[inline]
 fn pack_u32_pair(lo: u32, hi: u32) -> u64 {
     (lo as u64) | ((hi as u64) << 32)
@@ -166,6 +182,103 @@ unsafe fn send_scene_render_tokens() {
     }
 }
 
+/// Pack current preset_idx + chrome_flags + accessibility_flags into a
+/// single u64 for sexstore PUT. Layout (little-endian):
+///
+///   Byte 0: magic     = 0xAC
+///   Byte 1: version   = 0x01
+///   Byte 2: preset_idx
+///   Byte 3: chrome_flags
+///   Byte 4: accessibility_flags
+///   Byte 5-6: reserved (0)
+///   Byte 7: checksum  = XOR(byte0 .. byte6)
+fn pack_scene_settings_blob(preset_idx: u8, chrome: u8, access: u8) -> u64 {
+    let b: [u8; 8] = [
+        SCENE_BLOB_MAGIC,
+        SCENE_BLOB_VERSION,
+        preset_idx,
+        chrome,
+        access,
+        0u8,
+        0u8,
+        0u8, // placeholder for checksum
+    ];
+    let chk: u8 = b[0] ^ b[1] ^ b[2] ^ b[3] ^ b[4] ^ b[5] ^ b[6];
+    let mut out = b;
+    out[7] = chk;
+    u64::from_le_bytes(out)
+}
+
+/// Unpack and validate a u64 from sexstore GET reply.
+/// Returns Some((preset_idx, chrome_flags, accessibility_flags)) on success,
+/// None if magic/version/checksum mismatch.
+/// Caller must clamp preset_idx to PRESET_COUNT-1 before use.
+fn unpack_scene_settings_blob(blob: u64) -> Option<(u8, u8, u8)> {
+    let b: [u8; 8] = blob.to_le_bytes();
+    if b[0] != SCENE_BLOB_MAGIC || b[1] != SCENE_BLOB_VERSION {
+        return None;
+    }
+    let expected: u8 = b[0] ^ b[1] ^ b[2] ^ b[3] ^ b[4] ^ b[5] ^ b[6];
+    if b[7] != expected {
+        return None;
+    }
+    Some((b[2], b[3], b[4]))
+}
+
+/// Handle a validated GET reply: apply persisted fields, reset ephemeral
+/// state to defaults, re-send tokens to sexdisplay.
+unsafe fn handle_sexstore_get_reply(value: u64) {
+    if let Some((preset, chrome, access)) = unpack_scene_settings_blob(value) {
+        let clamped_preset = if (preset as usize) < PRESET_COUNT { preset } else { 0 };
+        SCENE_APPEARANCE_STATE.preset_idx = clamped_preset;
+        SCENE_APPEARANCE_STATE.chrome_flags = chrome;
+        SCENE_APPEARANCE_STATE.accessibility_flags = access;
+        // Ephemeral state (not persisted): reset to defaults.
+        SCENE_APPEARANCE_STATE.use_custom_colors = 0;
+        SCENE_APPEARANCE_STATE.custom_colors = [0u32; 8];
+        ACTIVE_TINT_IDX = 0;
+        // Re-send tokens with restored settings.
+        let tokens = resolve_scene_render_tokens();
+        push_token_preset(&tokens);
+        unsafe {
+            static mut LOAD_OK_BUDGET: u32 = 1;
+            if LOAD_OK_BUDGET > 0 {
+                LOAD_OK_BUDGET -= 1;
+                serial_println!("[shell.scene.settings.load] ok=1 preset={} chrome={} access={}",
+                    clamped_preset, chrome, access);
+            }
+        }
+    } else {
+        // Corrupt or missing blob: keep defaults already sent at boot.
+        unsafe {
+            static mut LOAD_FAIL_BUDGET: u32 = 1;
+            if LOAD_FAIL_BUDGET > 0 {
+                LOAD_FAIL_BUDGET -= 1;
+                serial_println!("[shell.scene.settings.load] ok=0 corrupt");
+            }
+        }
+    }
+}
+
+/// Fire GET at boot to request persisted scene appearance settings.
+/// Default tokens are already sent before this call; the reply is handled
+/// asynchronously in the main loop via type_id == 0x1.
+unsafe fn boot_load_scene_settings() {
+    let (status, _) = pdx_call(SLOT_SEXSTORE, OP_KV_GET, SCENE_SETTINGS_KEY_APPEARANCE, 0, 0);
+    unsafe {
+        static mut BOOT_LOAD_BUDGET: u32 = 1;
+        if BOOT_LOAD_BUDGET > 0 {
+            BOOT_LOAD_BUDGET -= 1;
+            if status == 0 {
+                SEXSTORE_LOAD_PENDING = true;
+                serial_println!("[shell.scene.settings.load.request] ok=1 pending");
+            } else {
+                serial_println!("[shell.scene.settings.load.request] ok=0 status={}", status);
+            }
+        }
+    }
+}
+
 /// Advance to next preset (wrapping), clear custom override, and push resolved tokens.
 unsafe fn cycle_scene_render_token_preset() {
     SCENE_APPEARANCE_STATE.preset_idx =
@@ -179,6 +292,21 @@ unsafe fn cycle_scene_render_token_preset() {
         if CYCLE_BUDGET > 0 {
             CYCLE_BUDGET -= 1;
             serial_println!("[shell.appearance.preset] idx={}", SCENE_APPEARANCE_STATE.preset_idx);
+        }
+    }
+
+    // ── PERSIST: save new preset_idx to sexstore (fire-and-forget) ──
+    let blob = pack_scene_settings_blob(
+        SCENE_APPEARANCE_STATE.preset_idx,
+        SCENE_APPEARANCE_STATE.chrome_flags,
+        SCENE_APPEARANCE_STATE.accessibility_flags,
+    );
+    pdx_call(SLOT_SEXSTORE, OP_KV_PUT, SCENE_SETTINGS_KEY_APPEARANCE, blob, 0);
+    unsafe {
+        static mut SAVE_BUDGET: u32 = 16;
+        if SAVE_BUDGET > 0 {
+            SAVE_BUDGET -= 1;
+            serial_println!("[shell.scene.settings.save] preset={}", SCENE_APPEARANCE_STATE.preset_idx);
         }
     }
 }
@@ -2137,6 +2265,10 @@ pub extern "C" fn _start() -> ! {
     unsafe { send_scene_render_tokens(); }
     serial_println!("[silk-shell] Boot scene render tokens sent to sexdisplay");
 
+    // Fire GET to sexstore for persisted scene appearance settings.
+    // Reply arrives asynchronously in main loop via type_id == 0x1.
+    unsafe { boot_load_scene_settings(); }
+
     loop {
         // Runtime containment: park without syscall while null-jump root cause is isolated.
         if !SHELL_USB_MOUSE_RECEIVE_UNPARK_PROOF_V1 {
@@ -3046,6 +3178,18 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+            0x1 => {
+                // Reply from sexstore (GET result or PUT ack).
+                // type_id == 0x1 is the kernel's IpcReply marker for
+                // syscall 29 (SYSCALL_PDX_REPLY) pushes to incoming_replies.
+                unsafe {
+                    if SEXSTORE_LOAD_PENDING {
+                        SEXSTORE_LOAD_PENDING = false;
+                        handle_sexstore_get_reply(msg.arg0);
+                    }
+                    // PUT acks are fire-and-forget — ignored.
+                }
+            }
             _ => {
                 serial_println!("[pdx.opcode.unknown] shell type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
             }
