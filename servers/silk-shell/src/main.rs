@@ -929,6 +929,181 @@ unsafe fn tile_visible_frames() {
     if *b > 0 { *b -= 1; serial_println!("[shell.tile] count={}", count); }
 }
 
+/// B3: Deterministic tiling for the active scene.
+/// Layout rules: 1=full, 2=vertical split, 3=master+stack, 4=2x2 grid, 5+=rows.
+/// Filters: skips Minimized, Zoomed, Closing, Tombstoned, Destroyed, Hidden,
+/// dead surfaces, stale-generation tabs, and lifecyle-non-focusable surfaces.
+/// Sends 0xEC (upsert geometry) to sexdisplay for each tiled surface.
+/// After tiling, validates current focus — clears if invalid.
+unsafe fn tile_active_scene_frames() {
+    serial_println!("[tiling.active_scene.start]");
+
+    // Collect tiling candidates from the active scene.
+    let mut tiles: [u64; MAX_FRAMES] = [0; MAX_FRAMES];
+    let mut count: usize = 0;
+
+    for frame_slot in FRAMES.iter() {
+        if let Some(frame) = frame_slot {
+            // Only tile frames in the active scene.
+            if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
+            // Minimized frames are hidden via 0xEE — skip tiling.
+            if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
+            // Zoomed frames occupy full content area via layout_maximize().
+            // Tiling would overwrite the zoomed position.
+            if (frame.flags & FRAME_FLAG_ZOOMED) != 0 { continue; }
+
+            if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
+                let sid = tab.surface_id;
+
+                // B3: Skip dead surfaces.
+                if !surface_is_alive(sid) {
+                    serial_println!("[tiling.frame.skip] sid={} reason=dead", sid);
+                    continue;
+                }
+                // B3: Skip tombstoned surfaces.
+                if is_tombstoned(sid) {
+                    serial_println!("[tiling.frame.skip] sid={} reason=tombstoned", sid);
+                    continue;
+                }
+                // B3: Skip surfaces in non-focusable lifecycle states
+                // (Closing, Destroyed, Hidden, Allocated).
+                if !surface_is_lifecycle_focusable(sid) {
+                    serial_println!("[tiling.frame.skip] sid={} reason=lifecycle", sid);
+                    continue;
+                }
+                // B3: Skip surfaces with stale generation.
+                if let Some(fr) = make_focus_ref(sid) {
+                    if !focus_ref_is_current(&fr) {
+                        serial_println!("[tiling.frame.skip] sid={} reason=generation", sid);
+                        continue;
+                    }
+                }
+
+                if count < MAX_FRAMES {
+                    tiles[count] = sid;
+                    count += 1;
+                }
+            }
+        }
+    }
+
+    if count == 0 {
+        // No tileable frames in active scene — clear stale focus, drag, hover.
+        clear_focus_if_dead();
+        clear_drag_if_dead();
+        HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
+        serial_println!("[tiling.done] frames=0");
+        return;
+    }
+
+    let cw: u32 = P.width as u32;
+    let ch: u32 = (P.height - P.bar_height) as u32;
+
+    for i in 0..count {
+        let sid = tiles[i];
+
+        let (rx, ry, rw, rh) = if count == 1 {
+            (0i32, P.bar_height, cw, ch)
+        } else if count == 2 {
+            let half_w = cw / 2;
+            if i == 0 {
+                (0i32, P.bar_height, half_w, ch)
+            } else {
+                (half_w as i32, P.bar_height, cw - half_w, ch)
+            }
+        } else if count == 3 {
+            let half_w = cw / 2;
+            let half_h = ch / 2;
+            match i {
+                0 => (0i32, P.bar_height, half_w, ch),
+                1 => (half_w as i32, P.bar_height, cw - half_w, half_h),
+                2 => (half_w as i32, P.bar_height + half_h as i32, cw - half_w, ch - half_h),
+                _ => (0i32, P.bar_height, cw, ch),
+            }
+        } else if count == 4 {
+            let half_w = cw / 2;
+            let half_h = ch / 2;
+            match i {
+                0 => (0i32, P.bar_height, half_w, half_h),
+                1 => (half_w as i32, P.bar_height, cw - half_w, half_h),
+                2 => (0i32, P.bar_height + half_h as i32, half_w, ch - half_h),
+                3 => (half_w as i32, P.bar_height + half_h as i32, cw - half_w, ch - half_h),
+                _ => (0i32, P.bar_height, cw, ch),
+            }
+        } else {
+            let row_h = ch / count as u32;
+            let y_off = P.bar_height + (row_h * i as u32) as i32;
+            (0i32, y_off, cw, if i + 1 == count { ch - (row_h * i as u32) } else { row_h })
+        };
+
+        // [tiling.frame.apply]: apply tiled geometry to shell state and sexdisplay.
+        serial_println!("[tiling.frame.apply] sid={} x={} y={} w={} h={}", sid, rx, ry, rw, rh);
+
+        // Update local shadow state.
+        match sid {
+            SURFACE_ID_APP => {
+                WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
+                WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
+            }
+            SURFACE_ID_STATIC => {
+                SURFACE_101_X = rx; SURFACE_101_Y = ry;
+                SURFACE_101_W = rw; SURFACE_101_H = rh;
+            }
+            SURFACE_ID_TEST3 => {
+                SURFACE_102_X = rx; SURFACE_102_Y = ry;
+                SURFACE_102_W = rw; SURFACE_102_H = rh;
+            }
+            SURFACE_ID_TEST4 => {
+                SURFACE_103_X = rx; SURFACE_103_Y = ry;
+                SURFACE_103_W = rw; SURFACE_103_H = rh;
+            }
+            SURFACE_ID_LINEN => {
+                SURFACE_200_X = rx; SURFACE_200_Y = ry;
+                SURFACE_200_W = rw; SURFACE_200_H = rh;
+            }
+            SURFACE_ID_QUIL => {
+                SURFACE_201_X = rx; SURFACE_201_Y = ry;
+                SURFACE_201_W = rw; SURFACE_201_H = rh;
+            }
+            _ => {}
+        }
+
+        // Send 0xEC upsert to sexdisplay (A7-proven move/resize primitive).
+        pdx_call(SLOT_DISPLAY, 0xEC, sid,
+            (ry as u64) << 32 | rx as u64,
+            (rh as u64) << 32 | rw as u64);
+
+        // Quil visual placeholder: set distinctive fill rect after geometry update.
+        if sid == SURFACE_ID_QUIL {
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL, 0,
+                (QUIL_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
+        }
+    }
+
+    // B3: After tiling, validate current focus.
+    // Current focus survives only if B2 guards still pass.
+    let focused = FOCUSED_SURFACE_ID;
+    if focused != 0 {
+        let still_valid = surface_is_alive(focused)
+            && !is_tombstoned(focused)
+            && surface_is_lifecycle_focusable(focused)
+            && surface_in_active_scene(focused);
+
+        if !still_valid {
+            serial_println!("[tiling.focus.clear] sid={} reason=invalid_after_tiling", focused);
+            // Delegate to try_set_focus for full guard validation.
+            // If no candidate is valid, focus clears to 0.
+            if count > 0 {
+                try_set_focus(tiles[0]);
+            } else {
+                try_set_focus(0);
+            }
+        }
+    }
+
+    serial_println!("[tiling.done] frames={}", count);
+}
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     serial_println!("{}", info);
@@ -1883,6 +2058,42 @@ unsafe fn clear_focus_if_wrong_scene() {
     }
 }
 
+/// Sync lifecycle state to reflect scene visibility after a scene switch.
+/// Active scene surfaces → Visible, inactive → Hidden.
+/// Preserves Minimized, Closing, Tombstoned, Destroyed states unchanged.
+/// Additive lifecycle metadata only — no display or focus changes.
+unsafe fn sync_lifecycle_scene_visibility() {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            let in_active = frame.scene_id == ACTIVE_SCENE_IDX;
+            let minimized = (frame.flags & FRAME_FLAG_MINIMIZED) != 0;
+            for tab in frame.tabs.iter() {
+                if let Some(t) = tab {
+                    let sid = t.surface_id;
+                    if !surface_is_alive(sid) { continue; }
+                    if minimized { continue; }
+                    if let Some(state) = lifecycle_state(sid) {
+                        match state {
+                            LifecycleState::Closing
+                            | LifecycleState::Tombstoned
+                            | LifecycleState::Destroyed => continue,
+                            _ => {}
+                        }
+                    }
+                    if in_active {
+                        set_lifecycle_state(sid, LifecycleState::Visible);
+                    } else {
+                        set_lifecycle_state(sid, LifecycleState::Hidden);
+                    }
+                }
+            }
+        }
+    }
+    static mut SCENE_LIFECYCLE_VIS_BUDGET: u32 = 8;
+    let b = &mut SCENE_LIFECYCLE_VIS_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[lifecycle.scene.sync] active={}", ACTIVE_SCENE_IDX); }
+}
+
 /// Hide surfaces belonging to non-active scenes, show surfaces belonging
 /// to the active scene. Called after ACTIVE_SCENE_IDX changes.
 unsafe fn sync_scene_visibility() {
@@ -2163,7 +2374,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 clear_focus_if_dead();
                 clear_drag_if_dead();
                 clear_hover_if_wrong_scene();
-                tile_visible_frames();
+                tile_active_scene_frames();
                 snap_capture_layout();
             }
             ATLAS_MODE_ENABLED = false;
@@ -2235,7 +2446,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 clear_focus_if_dead();
                 clear_drag_if_dead();
                 clear_hover_if_wrong_scene();
-                tile_visible_frames();
+                tile_active_scene_frames();
                 snap_capture_layout();
             }
             ATLAS_MODE_ENABLED = false;
@@ -2363,7 +2574,7 @@ unsafe fn atlas_clear_stub() {
     clear_focus_if_dead();
     clear_drag_if_dead();
     clear_hover_if_wrong_scene();
-    tile_visible_frames();
+    tile_active_scene_frames();
     snap_capture_layout();
 
     static mut ATLAS_CLEAR_BUDGET: u32 = 4;
@@ -2383,7 +2594,7 @@ unsafe fn switch_scene(scene_idx: u8) {
     clear_drag_if_dead();
     clear_drag_if_wrong_scene();
     clear_hover_if_wrong_scene();
-    tile_visible_frames();
+    tile_active_scene_frames();
     snap_capture_layout();
     // B2: Update scene flags for the previous scene before switching.
     scene_update_flags(prev);
@@ -2702,7 +2913,7 @@ unsafe fn open_linen_in_active_scene() -> bool {
                 (LINEN_BOOT_Y as u64) << 32 | LINEN_BOOT_X as u64,
                 (LINEN_BOOT_H as u64) << 32 | LINEN_BOOT_W as u64);
         }
-        tile_visible_frames();
+        tile_active_scene_frames();
         try_set_focus(sid);
     }
 
@@ -2882,7 +3093,7 @@ unsafe fn open_quil_in_active_scene() -> bool {
                 (QUIL_BOOT_Y as u64) << 32 | QUIL_BOOT_X as u64,
                 (QUIL_BOOT_H as u64) << 32 | QUIL_BOOT_W as u64);
         }
-        tile_visible_frames();
+        tile_active_scene_frames();
         try_set_focus(sid);
     }
 
@@ -3103,7 +3314,7 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     // Clear hover if the closed surface's frame is no longer valid.
     clear_hover_if_wrong_scene();
     // Re-tile remaining visible frames.
-    tile_visible_frames();
+    tile_active_scene_frames();
     snap_capture_layout();
     true
 }
@@ -3227,6 +3438,11 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
             serial_println!("[frame.light.minimize.fsm] frame={} surface={}", frame_id, surface_id);
         }
     }
+    // A8: Re-tile after minimize — frame removed from visible set.
+    tile_active_scene_frames();
+    static mut TILE_AFTER_MINIMIZE_BUDGET: u32 = 8;
+    let b = &mut TILE_AFTER_MINIMIZE_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.tile.after_minimize] frame={}", frame_id); }
     snap_capture_layout();
     true
 }
@@ -3278,7 +3494,7 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
     try_set_focus(surface_id);
     serial_println!("[frame.light.restore.fsm] frame={} surface={}", frame_id, surface_id);
     // Re-tile to include the restored frame.
-    tile_visible_frames();
+    tile_active_scene_frames();
     unsafe {
         static mut FRAME_RESTORE_BUDGET: u32 = 8;
         let b = &mut FRAME_RESTORE_BUDGET;
@@ -3495,6 +3711,11 @@ unsafe fn unzoom_frame(frame_id: u32) -> bool {
             serial_println!("[shell.frame.unzoom] frame={} surface={}", frame_id, surface_id);
         }
     }
+    // A8: Re-tile after unzoom — frame returns to tiled layout.
+    tile_active_scene_frames();
+    static mut TILE_AFTER_UNZOOM_BUDGET: u32 = 8;
+    let b = &mut TILE_AFTER_UNZOOM_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.tile.after_unzoom] frame={}", frame_id); }
     snap_capture_layout();
     true
 }
@@ -4283,7 +4504,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                 clear_focus_if_dead();
                 clear_drag_if_dead();
                 clear_hover_if_wrong_scene();
-                tile_visible_frames();
+                tile_active_scene_frames();
                 snap_capture_layout();
             }
             ATLAS_MODE_ENABLED = false;
@@ -4526,7 +4747,7 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
                     clear_drag_if_dead();
                     clear_drag_if_wrong_scene();
                     clear_hover_if_wrong_scene();
-                    tile_visible_frames();
+                    tile_active_scene_frames();
                     snap_capture_layout();
                     atlas_capture_snapshot();
                     static mut SCENE_SWITCH_BUDGET: u32 = 8;
@@ -4781,7 +5002,7 @@ unsafe fn snap_restore_layout() -> bool {
     clear_hover_if_wrong_scene();
 
     // Re-tile visible frames.
-    tile_visible_frames();
+    tile_active_scene_frames();
 
     static mut SNAP_RESTORE_OK_BUDGET: u32 = 1;
     let b = &mut SNAP_RESTORE_OK_BUDGET;
@@ -5440,7 +5661,7 @@ pub extern "C" fn _start() -> ! {
                                     SurfaceAction::Maximize |
                                     SurfaceAction::Center => {
                                         mutated = true;
-                                        tile_visible_frames();
+                                        tile_active_scene_frames();
                                         snap_capture_layout();
                                     }
 
