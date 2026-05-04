@@ -255,6 +255,11 @@ const FRAME_LIGHT_MINIMIZE: u32 = 2;
 /// Green zoom light — zoom/maximize frame (future action).
 const FRAME_LIGHT_ZOOM: u32 = 3;
 
+/// Width and height of each frame light square in pixels (fits within 4px rim).
+const FRAME_LIGHT_SIZE_PX: i32 = 4;
+/// Gap between adjacent frame lights in pixels.
+const FRAME_LIGHT_GAP_PX: i32 = 2;
+
 // ── Selected Window Option Bits (model only, no action behavior in V1) ──
 /// Bit: selected frame can be closed/destroyed.
 const OPTION_CLOSE: u32 = 1;
@@ -569,6 +574,50 @@ fn frame_light_to_option_mask(light: u32) -> u32 {
     }
 }
 
+/// Detect which Frame Light the pointer is over, based on position within
+/// the top rim band of a frame-owned surface. Lights are 4×4 squares at the
+/// top-left of the surface, within the rim. Order: CLOSE, MINIMIZE, ZOOM
+/// (left to right). Returns FRAME_LIGHT_NONE if not over any light.
+unsafe fn frame_light_at(frame_id: u32, x: i32, y: i32) -> u32 {
+    // Resolve active surface for this frame.
+    let surface_id = match active_surface_for_frame(frame_id) {
+        Some(sid) => sid,
+        None => return FRAME_LIGHT_NONE,
+    };
+    // Get surface bounds for light geometry.
+    let bounds = match get_surface_bounds(surface_id) {
+        Some(b) => b,
+        None => return FRAME_LIGHT_NONE,
+    };
+    let (sx, sy, _sw, _sh) = bounds;
+
+    // Lights live in the top rim band only (height = FRAME_RIM_PX).
+    let top_rim_bottom = sy + FRAME_RIM_PX;
+    if y < sy || y >= top_rim_bottom {
+        return FRAME_LIGHT_NONE;
+    }
+
+    // X position relative to surface left edge.
+    let lx = x - sx;
+
+    // CLOSE: gap from left edge.
+    if lx >= FRAME_LIGHT_GAP_PX && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX {
+        return FRAME_LIGHT_CLOSE;
+    }
+    // MINIMIZE: gap + size + gap.
+    let l2_start = FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX;
+    if lx >= l2_start && lx < l2_start + FRAME_LIGHT_SIZE_PX {
+        return FRAME_LIGHT_MINIMIZE;
+    }
+    // ZOOM: gap + size + gap + size + gap.
+    let l3_start = l2_start + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX;
+    if lx >= l3_start && lx < l3_start + FRAME_LIGHT_SIZE_PX {
+        return FRAME_LIGHT_ZOOM;
+    }
+
+    FRAME_LIGHT_NONE
+}
+
 // ── Frame Chrome Hover Update ──────────────────────────────────────────────────
 /// Update frame chrome hover state from current pointer position.
 /// Called once per event loop iteration. Skips during active drag.
@@ -581,28 +630,42 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
         return false;
     }
 
+    let new_light: u32;
     let (new_frame_id, new_kind) = if y < P.bar_height {
-        // SilkBar area: no frame hover
+        // SilkBar area: no frame hover, no light hover.
+        new_light = FRAME_LIGHT_NONE;
         (0u32, HOVER_NONE)
     } else {
         let target = hit_test_at(x, y);
         match target {
             HitTarget::Surface(sid) => {
                 match frame_for_surface(sid) {
-                    Some(fid) => (fid, HOVER_FRAME_BODY),
-                    None => (0u32, HOVER_NONE),
+                    Some(fid) => {
+                        new_light = frame_light_at(fid, x, y);
+                        (fid, HOVER_FRAME_BODY)
+                    }
+                    None => {
+                        new_light = FRAME_LIGHT_NONE;
+                        (0u32, HOVER_NONE)
+                    }
                 }
             }
             HitTarget::FrameChrome { frame_id, kind } => {
-                // Produced by hit_test_surface_chrome for rim/tab-strip hits.
+                // Detect which frame light (close/minimize/zoom) the pointer
+                // is over within the top rim band of the frame's active surface.
+                new_light = frame_light_at(frame_id, x, y);
                 (frame_id, kind)
             }
-            HitTarget::None => (0u32, HOVER_NONE),
+            HitTarget::None => {
+                new_light = FRAME_LIGHT_NONE;
+                (0u32, HOVER_NONE)
+            }
         }
     };
 
     let changed = HOVERED_FRAME_ID != new_frame_id || HOVER_KIND != new_kind;
-    if changed {
+    let light_changed = HOVERED_FRAME_LIGHT != new_light;
+    if changed || light_changed {
         unsafe {
             static mut HOVER_STATE_CHANGE_BUDGET: u32 = 6;
             let b = &mut HOVER_STATE_CHANGE_BUDGET;
@@ -617,23 +680,20 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
         }
         HOVERED_FRAME_ID = new_frame_id;
         HOVER_KIND = new_kind;
-        // Frame light hover: always resets to NONE in V1 model (no pixel
-        // detection yet). Future FRAME_LIGHTS_HIT_TARGET_V1 will detect
-        // which light the pointer is over within the frame chrome region.
-        if HOVERED_FRAME_LIGHT != FRAME_LIGHT_NONE {
-            HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
+        HOVERED_FRAME_LIGHT = new_light;
+        if light_changed {
             unsafe {
                 static mut FRAME_LIGHT_HOVER_BUDGET: u32 = 8;
                 let b = &mut FRAME_LIGHT_HOVER_BUDGET;
                 if *b > 0 {
                     *b -= 1;
                     serial_println!("[shell.frame.light.hover] frame={} light={}",
-                        new_frame_id, FRAME_LIGHT_NONE);
+                        new_frame_id, new_light);
                 }
             }
         }
     }
-    changed
+    changed || light_changed
 }
 
 /// Try to set focus to a surface. Returns true if focus was applied.
