@@ -166,7 +166,52 @@ struct WindowState {
     desc: WindowDescriptor,
 }
 
+// ── Frame Chrome Model ─────────────────────────────────────────────────────────
+// Frame = tiled container owning one or more Tabs.
+// Tab = shell membership wrapper around an existing hardcoded surface_id.
+// In V1, exactly one frame exists with one tab wrapping surface 100 (APP).
+// Future phases extend to multi-tab per frame, multi-frame layout.
+
+/// Maximum tabs per frame (overkill for 4 app surfaces, allows future Chrome tabs).
+const MAX_TABS_PER_FRAME: u8 = 8;
+/// Maximum concurrent frames (overkill for current app count, allows future splits).
+const MAX_FRAMES: usize = 4;
+
+/// A tab wraps an existing surface_id with shell-level metadata.
+/// The surface remains the app/display object; the tab is shell policy only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+struct ShellTab {
+    surface_id: u64,
+    /// Reserved for future tab title string handle or content ID.
+    title_id: u64,
+    /// Reserved for future flags (pinned, muted, loading, etc.).
+    flags: u32,
+}
+
+/// A frame is a tiled container that owns one or more tabs.
+/// The active tab determines which surface is visible/interactable.
+/// Frame chrome (neon rim, tab strip) is rendered by sexdisplay based on
+/// policy-driven descriptors emitted by silk-shell. This phase defines
+/// the model only — no renderer changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+struct ShellFrame {
+    frame_id: u32,
+    /// Index into tabs[] for the currently active tab.
+    active_tab: u8,
+    /// Number of valid entries in tabs[] (must be >= 1 for a valid frame).
+    tab_count: u8,
+    /// Fixed-size tab array. Unused entries are None.
+    tabs: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize],
+    /// Reserved for future flags (split orientation, pinned state, etc.).
+    flags: u32,
+}
+
 static mut WINDOWS: Vec<WindowState> = Vec::new();
+/// Frame chrome model: fixed-size array of frames, each with fixed-size tab array.
+/// No heap allocation for frame/tab state — all static.
+static mut FRAMES: [Option<ShellFrame>; MAX_FRAMES] = [None; MAX_FRAMES];
 static mut FOCUS_ID: u64 = 0;
 static mut FOCUSED_SURFACE_ID: u64 = SURFACE_ID_APP;
 static mut SURFACE_100_ALIVE: bool = true;
@@ -377,6 +422,43 @@ fn is_focusable_surface(sid: u64) -> bool {
     sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
     || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
     || sid == SURFACE_ID_LINEN
+}
+
+// ── Frame Chrome Query Helpers ─────────────────────────────────────────────────
+// These are shell-policy queries that map between surface_id (display/input
+// object) and the Frame/Tab model (window management abstraction).
+// In V1 the mapping is 1:1: one frame, one tab, one surface. Future phases
+// extend to N tabs per frame and N frames.
+
+/// Find the frame_id that owns a tab with the given surface_id, if any.
+unsafe fn frame_for_surface(surface_id: u64) -> Option<u32> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            for t in frame.tabs.iter() {
+                if let Some(tab) = t {
+                    if tab.surface_id == surface_id {
+                        return Some(frame.frame_id);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Get the active surface_id for a given frame_id, if any.
+/// Returns the surface_id of the active tab in the specified frame.
+unsafe fn active_surface_for_frame(frame_id: u32) -> Option<u64> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id {
+                if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
+                    return Some(tab.surface_id);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Try to set focus to a surface. Returns true if focus was applied.
@@ -641,6 +723,19 @@ pub extern "C" fn _start() -> ! {
             }
         });
         FOCUS_ID = 2;
+
+        // Initialize frame chrome model: one frame, one tab wrapping surface 100.
+        FRAMES[0] = Some(ShellFrame {
+            frame_id: 1,
+            active_tab: 0,
+            tab_count: 1,
+            tabs: [
+                Some(ShellTab { surface_id: SURFACE_ID_APP, title_id: 0, flags: 0 }),
+                None, None, None, None, None, None, None,
+            ],
+            flags: 0,
+        });
+        serial_println!("[shell.frame.model.init] frames=1 tabs=1");
 
         sys_set_state(SVC_STATE_LISTENING);
     }
