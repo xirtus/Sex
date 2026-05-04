@@ -62,6 +62,20 @@ enum PanelKind {
     Bell,
 }
 
+/// Typed result of a hit-test. Distinguishes app surfaces from chrome elements
+/// and background for future Frame Chrome input routing.
+/// V1: Surface and None are produced. SilkBar is returned by handle_silkbar_click
+/// separately. FrameChrome is modeled but not yet produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HitTarget {
+    /// No surface or chrome element at this position.
+    None,
+    /// A clickable app/desktop surface. The u64 is the surface_id.
+    Surface(u64),
+    /// Future: frame chrome (tab strip, resize handle, close button, neon rim).
+    FrameChrome { frame_id: u32, kind: u32 },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InteractionState {
     Idle,
@@ -212,6 +226,16 @@ static mut WINDOWS: Vec<WindowState> = Vec::new();
 /// Frame chrome model: fixed-size array of frames, each with fixed-size tab array.
 /// No heap allocation for frame/tab state — all static.
 static mut FRAMES: [Option<ShellFrame>; MAX_FRAMES] = [None; MAX_FRAMES];
+// ── Frame Chrome Hover State ────────────────────────────────────────────────────
+// Tracked per-pointer-move. Hover does not affect focus or drag behavior.
+// Updated by update_frame_hover_at() once per event loop iteration.
+// Hover kind constants (reserved kinds for future chrome elements).
+const HOVER_NONE: u32 = 0;
+const HOVER_FRAME_BODY: u32 = 1;    // app content area
+const HOVER_FRAME_RIM: u32 = 2;     // future: neon rim
+const HOVER_TAB_STRIP: u32 = 3;     // future: tab strip
+static mut HOVERED_FRAME_ID: u32 = 0;
+static mut HOVER_KIND: u32 = HOVER_NONE;
 static mut FOCUS_ID: u64 = 0;
 static mut FOCUSED_SURFACE_ID: u64 = SURFACE_ID_APP;
 static mut SURFACE_100_ALIVE: bool = true;
@@ -461,6 +485,58 @@ unsafe fn active_surface_for_frame(frame_id: u32) -> Option<u64> {
     None
 }
 
+// ── Frame Chrome Hover Update ──────────────────────────────────────────────────
+/// Update frame chrome hover state from current pointer position.
+/// Called once per event loop iteration. Skips during active drag.
+/// Returns true if hover state changed (for diagnostic gating).
+/// Does not modify focus, drag, or any interaction state.
+/// Does not produce FrameChrome hits yet — V1 only maps Surface hits to frames.
+unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
+    // Skip during active drag — pointer is captured by drag action.
+    if matches!(INTERACTION, InteractionState::Dragging { .. }) {
+        return false;
+    }
+
+    let (new_frame_id, new_kind) = if y < P.bar_height {
+        // SilkBar area: no frame hover
+        (0u32, HOVER_NONE)
+    } else {
+        let target = hit_test_at(x, y);
+        match target {
+            HitTarget::Surface(sid) => {
+                match frame_for_surface(sid) {
+                    Some(fid) => (fid, HOVER_FRAME_BODY),
+                    None => (0u32, HOVER_NONE),
+                }
+            }
+            HitTarget::FrameChrome { frame_id, kind } => {
+                // Not yet produced — model is ready for future chrome geometry.
+                (frame_id, kind)
+            }
+            HitTarget::None => (0u32, HOVER_NONE),
+        }
+    };
+
+    let changed = HOVERED_FRAME_ID != new_frame_id || HOVER_KIND != new_kind;
+    if changed {
+        unsafe {
+            static mut HOVER_STATE_CHANGE_BUDGET: u32 = 6;
+            let b = &mut HOVER_STATE_CHANGE_BUDGET;
+            if *b > 0 {
+                *b -= 1;
+                if new_frame_id != 0 {
+                    serial_println!("[shell.frame.hover.set] frame={} kind={}", new_frame_id, new_kind);
+                } else {
+                    serial_println!("[shell.frame.hover.clear]");
+                }
+            }
+        }
+        HOVERED_FRAME_ID = new_frame_id;
+        HOVER_KIND = new_kind;
+    }
+    changed
+}
+
 /// Try to set focus to a surface. Returns true if focus was applied.
 /// Guards: surface must be focusable and alive.
 /// Clearing focus (sid=0) is always allowed (resets to no surface).
@@ -581,40 +657,77 @@ unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
     }
 }
 
-/// Perform hit-test at (px, py) and update focus if a different surface is hit.
-/// Priority order: SilkBar chrome → focused surface → z-order fallback.
-/// Returns (hit_id, silkbar_handled) where hit_id=0 if no surface, silkbar_handled=true
-/// if SilkBar chrome consumed the click (drag is skipped in that case).
-/// Emits [shell.click_focus.down/hit/miss] markers using the given buttons_val.
-/// Caller must have already transitioned to ClickPending before calling.
-unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (u64, bool) {
-    serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
+/// Perform a pure hit-test at (x, y), returning the typed target.
+/// Priority order: focused surface → z-order fallback → None.
+/// Does NOT check SilkBar or trigger any side effects.
+/// SilkBar intercept is handled separately by handle_silkbar_click().
+/// FrameChrome variant is modeled but not yet produced.
+unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     let focused = FOCUSED_SURFACE_ID;
-    let mut hit_id = 0u64;
-    if !point_in_surface(px, py, focused) {
-        let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
-                       SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
-        for &sid in &z_order {
-            if sid == focused { continue; }
-            if !surface_is_alive(sid) {
-                serial_println!("[shell.hit_test.skip] id={} reason=dead", sid);
-                continue;
-            }
-            if point_in_surface(px, py, sid) {
-                hit_id = sid;
-                break;
+    if point_in_surface(x, y, focused) {
+        return HitTarget::Surface(focused);
+    }
+    let z_order = [SURFACE_ID_LINEN, SURFACE_ID_TEST4,
+                   SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
+    for &sid in &z_order {
+        if sid == focused { continue; }
+        if !surface_is_alive(sid) {
+            serial_println!("[shell.hit_test.skip] id={} reason=dead", sid);
+            continue;
+        }
+        if point_in_surface(x, y, sid) {
+            return HitTarget::Surface(sid);
+        }
+    }
+    HitTarget::None
+}
+
+/// Extract the surface_id from a HitTarget, if it represents a surface hit.
+unsafe fn hit_target_surface(target: HitTarget) -> Option<u64> {
+    match target {
+        HitTarget::Surface(sid) => Some(sid),
+        _ => None,
+    }
+}
+
+/// Classify a hit-target + silkbar flag into the diagnostic label used by
+/// budgeted [shell.click.real.target] markers.
+fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, u64) {
+    if silkbar_handled {
+        ("chrome", 0u64)
+    } else {
+        match target {
+            HitTarget::Surface(sid) => ("app", sid),
+            _ => ("none", 0u64),
+        }
+    }
+}
+
+/// Perform hit-test at (px, py) and update focus if a different surface is hit.
+/// Priority order: focused surface → z-order fallback → None.
+/// Returns the typed HitTarget and whether SilkBar handled the click.
+/// SilkBar intercept runs after hit-test but before drag starts.
+/// Emits [shell.click_focus.down/hit/miss] markers.
+unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
+    serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
+    let target = hit_test_at(px, py);
+    match target {
+        HitTarget::Surface(sid) => {
+            if sid != FOCUSED_SURFACE_ID {
+                serial_println!("[shell.click_focus.hit] id={}", sid);
+                serial_println!("[shell.click_focus.send.start] id={}", sid);
+                try_set_focus(sid);
+                serial_println!("[shell.click_focus.send.ok] id={}", sid);
+            } else {
+                serial_println!("[shell.click_focus.hit] id={}", sid);
             }
         }
-        if hit_id != 0 {
-            serial_println!("[shell.click_focus.hit] id={}", hit_id);
-            serial_println!("[shell.click_focus.send.start] id={}", hit_id);
-            try_set_focus(hit_id);
-            serial_println!("[shell.click_focus.send.ok] id={}", hit_id);
-        } else {
+        HitTarget::None => {
             serial_println!("[shell.click_focus.miss]");
         }
-    } else {
-        serial_println!("[shell.click_focus.hit] id={}", focused);
+        HitTarget::FrameChrome { .. } => {
+            // Not yet produced. Fall through — no focus change, no drag.
+        }
     }
     // SilkBar intercept: if pointer is in top strip, handle and skip drag
     let silkbar_handled = handle_silkbar_click(px, py);
@@ -624,7 +737,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (u64, b
         try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: px, current_y: py });
         serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, px, py);
     }
-    (hit_id, silkbar_handled)
+    (target, silkbar_handled)
 }
 
 /// Toggle an OS-owned panel surface open/closed.
@@ -862,8 +975,7 @@ pub extern "C" fn _start() -> ! {
                         let left_held = (buttons & 0x01) != 0;
                         if left_held && (INTERACTION == InteractionState::Idle || matches!(INTERACTION, InteractionState::PanelActive { .. })) {
                             try_transition(InteractionState::ClickPending);
-                            let focused = FOCUSED_SURFACE_ID;
-                            let (hit_id, silkbar_handled) = click_hit_test_and_focus(POINTER_X, POINTER_Y, buttons);
+                            let (target, silkbar_handled) = click_hit_test_and_focus(POINTER_X, POINTER_Y, buttons);
                             // Budgeted real-click target marker.
                             // Fires for OP_USB_MOUSE_REPORT path (real USB + synthetic click-focus proof).
                             // Budget 16: synthetic proof consumes ~1 slot, real clicks use the rest.
@@ -872,17 +984,9 @@ pub extern "C" fn _start() -> ! {
                                 let rem = &mut CLICK_REAL_TARGET_BUDGET;
                                 if *rem > 0 {
                                     *rem -= 1;
-                                    let (kind, target) = if silkbar_handled {
-                                        ("chrome", 0u64)
-                                    } else if hit_id != 0 {
-                                        ("app", hit_id)
-                                    } else if point_in_surface(POINTER_X, POINTER_Y, focused) {
-                                        ("app", focused)
-                                    } else {
-                                        ("none", 0u64)
-                                    };
+                                    let (kind, target_id) = hit_target_label(target, silkbar_handled);
                                     serial_println!("[shell.click.real.target] x={} y={} target={} kind={}",
-                                        POINTER_X, POINTER_Y, target, kind);
+                                        POINTER_X, POINTER_Y, target_id, kind);
                                 }
                             }
                         } else if !left_held {
@@ -1633,8 +1737,7 @@ pub extern "C" fn _start() -> ! {
                             if button == 1 {
                                 if pressed && (INTERACTION == InteractionState::Idle || matches!(INTERACTION, InteractionState::PanelActive { .. })) {
                                     try_transition(InteractionState::ClickPending);
-                                    let focused = FOCUSED_SURFACE_ID;
-                                    let (hit_id, silkbar_handled) = click_hit_test_and_focus(POINTER_X, POINTER_Y, POINTER_BUTTONS);
+                                    let (target, silkbar_handled) = click_hit_test_and_focus(POINTER_X, POINTER_Y, POINTER_BUTTONS);
                                     // Budgeted real-click target marker.
                                     // Fires for HID EV_BTN path (real USB buttons + synthetic drag proof).
                                     unsafe {
@@ -1642,17 +1745,9 @@ pub extern "C" fn _start() -> ! {
                                         let rem = &mut CLICK_REAL_TARGET_BUDGET_BTN;
                                         if *rem > 0 {
                                             *rem -= 1;
-                                            let (kind, target) = if silkbar_handled {
-                                                ("chrome", 0u64)
-                                            } else if hit_id != 0 {
-                                                ("app", hit_id)
-                                            } else if point_in_surface(POINTER_X, POINTER_Y, focused) {
-                                                ("app", focused)
-                                            } else {
-                                                ("none", 0u64)
-                                            };
+                                            let (kind, target_id) = hit_target_label(target, silkbar_handled);
                                             serial_println!("[shell.click.real.target] x={} y={} target={} kind={}",
-                                                POINTER_X, POINTER_Y, target, kind);
+                                                POINTER_X, POINTER_Y, target_id, kind);
                                         }
                                     }
                                 } else if !pressed {
@@ -1674,6 +1769,11 @@ pub extern "C" fn _start() -> ! {
             _ => {
                 serial_println!("[pdx.opcode.unknown] shell type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
             }
+        }
+
+        // ── Frame chrome hover update (once per event, after all state updates) ──
+        unsafe {
+            update_frame_hover_at(POINTER_X, POINTER_Y);
         }
 
         if mutated {
