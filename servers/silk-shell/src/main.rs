@@ -1014,6 +1014,59 @@ const FRAME_FLAG_ZOOMED: u32 = 1 << 1;
 /// When clear (minimal mode), only 4px neon rim is rendered.
 const FRAME_FLAG_TOP_BAR: u32 = 1 << 2;
 
+// ── Atlas Overview Model ─────────────────────────────────────────────────────
+/// Atlas is Silk's shell-owned map of all Scenes.
+/// It sits above Scene in the abstraction stack:
+///   Silk → Atlas → Scene → Frame → Tab → Surface
+/// V1 is data/model only: no rendering, no sexdisplay changes.
+/// Future phases add Atlas toggle action, card rendering, scene select, previews.
+
+/// Maximum scenes tracked by Atlas (equals WORKSPACE_COUNT).
+const ATLAS_MAX_SCENES: usize = 5;
+/// Maximum frames tracked per scene descriptor (equals MAX_FRAMES).
+const ATLAS_MAX_FRAMES_PER_SCENE: usize = 4;
+/// Length of fixed-size scene label byte array (no heap strings).
+const ATLAS_LABEL_LEN: usize = 16;
+
+/// SceneDescriptor flags
+const SCENE_FLAG_ACTIVE: u8         = 1 << 0;  // this scene is active
+const SCENE_FLAG_EMPTY: u8          = 1 << 1;  // scene has no frames
+const SCENE_FLAG_HAS_FOCUS: u8      = 1 << 2;  // scene contains focused surface
+const SCENE_FLAG_HAS_MINIMIZED: u8  = 1 << 3;  // scene has at least one minimized frame
+const SCENE_FLAG_HAS_ZOOMED: u8     = 1 << 4;  // scene has at least one zoomed frame
+
+/// Describes one Scene for the Atlas overview.
+/// Derived from current shell state, not independently mutable.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct SceneDescriptor {
+    /// Scene index (0..ATLAS_MAX_SCENES-1).
+    scene_id: u32,
+    /// Human-readable label (fixed bytes, zero-padded). V1: index-based default.
+    label: [u8; ATLAS_LABEL_LEN],
+    /// Flags: SCENE_FLAG_*
+    flags: u8,
+    /// Focused frame_id in this scene, or 0 if none.
+    focused_frame_id: u32,
+    /// Number of valid entries in frame_ids[].
+    frame_count: u8,
+    /// Fixed-size array of frame IDs present in this scene.
+    frame_ids: [u32; ATLAS_MAX_FRAMES_PER_SCENE],
+}
+
+/// Atlas snapshot: the shell's map of all Scenes, derived from existing state.
+/// Produced by atlas_capture_snapshot() after scene switches and layout changes.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct AtlasSnapshot {
+    /// The currently active scene_id.
+    active_scene_id: u32,
+    /// Number of valid entries in scenes[] (always ATLAS_MAX_SCENES in V1).
+    scene_count: u8,
+    /// Descriptors for all scenes, indexed by scene_id.
+    scenes: [SceneDescriptor; ATLAS_MAX_SCENES],
+}
+
 // ── Selected Window Option Bits (model only, no action behavior in V1) ──
 /// Bit: selected frame can be closed/destroyed.
 const OPTION_CLOSE: u32 = 1;
@@ -1031,6 +1084,20 @@ static mut FOCUS_ID: u64 = 0;
 static mut FOCUSED_SURFACE_ID: u64 = SURFACE_ID_APP;
 /// Active workspace/scene index (0..WORKSPACE_COUNT-1).
 static mut ACTIVE_SCENE_IDX: u8 = 0;
+/// Atlas snapshot: derived overview of all Scenes.
+/// Updated by atlas_capture_snapshot() after scene switch or layout change.
+static mut ATLAS_SNAPSHOT: AtlasSnapshot = AtlasSnapshot {
+    active_scene_id: 0,
+    scene_count: ATLAS_MAX_SCENES as u8,
+    scenes: [SceneDescriptor {
+        scene_id: 0,
+        label: [0u8; ATLAS_LABEL_LEN],
+        flags: 0,
+        focused_frame_id: 0,
+        frame_count: 0,
+        frame_ids: [0u32; ATLAS_MAX_FRAMES_PER_SCENE],
+    }; ATLAS_MAX_SCENES],
+};
 /// Bounded tombstone list for recently-closed surface IDs.
 /// Prevents immediate reuse of freed IDs. Circular insertion.
 static mut TOMBSTONES: [u64; 8] = [0; 8];
@@ -1408,6 +1475,92 @@ unsafe fn sync_scene_visibility() {
 /// Maximum workspace/scene count (0..WORKSPACE_COUNT-1).
 const WORKSPACE_COUNT: u8 = 5;
 
+// ── Atlas Capture ─────────────────────────────────────────────────────────────
+
+/// Build a default fixed-size label for a scene index.
+/// V1: "Scene N" padded with zeros. Future: user-settable labels.
+fn atlas_default_label(scene_id: u32) -> [u8; ATLAS_LABEL_LEN] {
+    let mut label = [0u8; ATLAS_LABEL_LEN];
+    // Write "Scene X" where X is 0-9 as ASCII.
+    let prefix = b"Scene ";
+    let n = core::cmp::min(prefix.len(), ATLAS_LABEL_LEN.saturating_sub(2));
+    label[..n].copy_from_slice(&prefix[..n]);
+    if n < ATLAS_LABEL_LEN {
+        label[n] = b'0' + (scene_id as u8).min(9);
+    }
+    label
+}
+
+/// Capture current shell state into the ATLAS_SNAPSHOT.
+/// Derives SceneDescriptors from existing FRAMES, ACTIVE_SCENE_IDX, FOCUSED_SURFACE_ID.
+/// Safe: no allocation, no IPC, no sexdisplay changes.
+/// Called after scene switch and layout mutations.
+unsafe fn atlas_capture_snapshot() {
+    let mut snapshot = AtlasSnapshot {
+        active_scene_id: ACTIVE_SCENE_IDX as u32,
+        scene_count: ATLAS_MAX_SCENES as u8,
+        scenes: [SceneDescriptor {
+            scene_id: 0,
+            label: [0u8; ATLAS_LABEL_LEN],
+            flags: 0,
+            focused_frame_id: 0,
+            frame_count: 0,
+            frame_ids: [0u32; ATLAS_MAX_FRAMES_PER_SCENE],
+        }; ATLAS_MAX_SCENES],
+    };
+
+    // Derive focused frame for active scene.
+    let active_focused_frame = selected_frame_id().unwrap_or(0);
+
+    for scene_idx in 0..ATLAS_MAX_SCENES {
+        let sd = &mut snapshot.scenes[scene_idx];
+        sd.scene_id = scene_idx as u32;
+        sd.label = atlas_default_label(scene_idx as u32);
+
+        let mut frame_count: u8 = 0;
+        let mut has_minimized = false;
+        let mut has_zoomed = false;
+
+        for f in FRAMES.iter() {
+            if let Some(frame) = f {
+                if frame.scene_id as usize != scene_idx { continue; }
+                if frame_count >= ATLAS_MAX_FRAMES_PER_SCENE as u8 { break; }
+                sd.frame_ids[frame_count as usize] = frame.frame_id;
+                frame_count += 1;
+                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { has_minimized = true; }
+                if (frame.flags & FRAME_FLAG_ZOOMED) != 0 { has_zoomed = true; }
+            }
+        }
+
+        sd.frame_count = frame_count;
+        if frame_count == 0 {
+            sd.flags |= SCENE_FLAG_EMPTY;
+        }
+        if has_minimized { sd.flags |= SCENE_FLAG_HAS_MINIMIZED; }
+        if has_zoomed { sd.flags |= SCENE_FLAG_HAS_ZOOMED; }
+
+        // Focus: only the active scene has a tracked focused frame.
+        if scene_idx == ACTIVE_SCENE_IDX as usize {
+            sd.flags |= SCENE_FLAG_ACTIVE;
+            if active_focused_frame != 0 {
+                sd.focused_frame_id = active_focused_frame;
+                sd.flags |= SCENE_FLAG_HAS_FOCUS;
+            }
+        }
+    }
+
+    ATLAS_SNAPSHOT = snapshot;
+
+    static mut ATLAS_CAPTURE_BUDGET: u32 = 8;
+    let b = &mut ATLAS_CAPTURE_BUDGET;
+    if *b > 0 {
+        *b -= 1;
+        let active = ACTIVE_SCENE_IDX;
+        serial_println!("[shell.atlas.capture] scenes={} active={}",
+            ATLAS_MAX_SCENES, active);
+    }
+}
+
 /// Switch active scene to a specific index. Safe: clamps to WORKSPACE_COUNT-1.
 /// Calls sync_scene_visibility(), clears focus/drag/hover, re-tiles visible frames.
 unsafe fn switch_scene(scene_idx: u8) {
@@ -1422,6 +1575,8 @@ unsafe fn switch_scene(scene_idx: u8) {
     clear_hover_if_wrong_scene();
     tile_visible_frames();
     snap_capture_layout();
+    // Capture Atlas snapshot after scene switch.
+    atlas_capture_snapshot();
     static mut SCENE_SWITCH_SHORTCUT_BUDGET: u32 = 4;
     let b = &mut SCENE_SWITCH_SHORTCUT_BUDGET;
     if *b > 0 { *b -= 1; serial_println!("[shell.scene.shortcut.switch] from={} to={}", prev, ACTIVE_SCENE_IDX); }
@@ -3424,6 +3579,7 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
                     clear_hover_if_wrong_scene();
                     tile_visible_frames();
                     snap_capture_layout();
+                    atlas_capture_snapshot();
                     static mut SCENE_SWITCH_BUDGET: u32 = 8;
                     let b = &mut SCENE_SWITCH_BUDGET;
                     if *b > 0 { *b -= 1; serial_println!("[shell.scene.switch] from={} to={}", prev, ACTIVE_SCENE_IDX); }
