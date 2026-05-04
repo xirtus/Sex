@@ -56,7 +56,33 @@ static TOKEN_PRESETS: [TokenPreset; PRESET_COUNT] = [
     [0x00000000, 0x00FFFFFF, 0x00111111, 0x00FFFF00, 0x00555555, 0x00FF4444, 0x00FFDD00, 0x0000FF44],
 ];
 
-static mut ACTIVE_PRESET_IDX: u8 = 0;
+/// In-memory appearance settings state. No persistence in V1.
+/// Initialized to BottleGlass defaults at compile time.
+#[derive(Clone, Copy)]
+struct SceneAppearanceState {
+    /// Active preset index (0..PRESET_COUNT-1).
+    preset_idx: u8,
+    /// 0 = use preset colors; nonzero = substitute nonzero custom_colors over preset.
+    use_custom_colors: u8,
+    /// Chrome layout flags (all bits reserved in V1; top bar via 0xFD, not here).
+    chrome_flags: u8,
+    /// Accessibility flags (bit 0 = high_contrast, bit 1 = colorblind_safe,
+    /// bit 2 = stronger_focus_ring, bit 3 = larger_targets).
+    accessibility_flags: u8,
+    /// Custom color overrides (same layout as TokenPreset).
+    /// Only slots with nonzero value override the preset when use_custom_colors != 0.
+    custom_colors: [u32; 8],
+}
+
+const DEFAULT_SCENE_APPEARANCE: SceneAppearanceState = SceneAppearanceState {
+    preset_idx: 0,
+    use_custom_colors: 0,
+    chrome_flags: 0,
+    accessibility_flags: 0,
+    custom_colors: [0u32; 8],
+};
+
+static mut SCENE_APPEARANCE_STATE: SceneAppearanceState = DEFAULT_SCENE_APPEARANCE;
 
 #[inline]
 fn pack_u32_pair(lo: u32, hi: u32) -> u64 {
@@ -78,27 +104,58 @@ unsafe fn push_token_preset(p: &TokenPreset) {
     );
 }
 
-/// Push default tokens at boot. Preserves [shell.appearance.tokens.send] proof marker.
+/// Resolve current SCENE_APPEARANCE_STATE to a sendable TokenPreset.
+/// Starts from the active preset; substitutes nonzero custom_colors slots if enabled.
+unsafe fn resolve_scene_render_tokens() -> TokenPreset {
+    let idx = (SCENE_APPEARANCE_STATE.preset_idx as usize) % PRESET_COUNT;
+    let base = TOKEN_PRESETS[idx];
+    if SCENE_APPEARANCE_STATE.use_custom_colors == 0 {
+        return base;
+    }
+    let mut result = base;
+    let custom = &SCENE_APPEARANCE_STATE.custom_colors;
+    for i in 0..8 {
+        if custom[i] != 0 {
+            result[i] = custom[i];
+        }
+    }
+    result
+}
+
+/// Push resolved appearance tokens at boot. Preserves [shell.appearance.tokens.send] marker.
 unsafe fn send_scene_render_tokens() {
-    push_token_preset(&TOKEN_PRESETS[0]);
+    let tokens = resolve_scene_render_tokens();
+    push_token_preset(&tokens);
     unsafe {
         static mut SHELL_TOKEN_SEND_BUDGET: u32 = 4;
         if SHELL_TOKEN_SEND_BUDGET > 0 {
             SHELL_TOKEN_SEND_BUDGET -= 1;
             serial_println!("[shell.appearance.tokens.send] seq=2 sent");
         }
+        static mut STATE_BUDGET: u32 = 1;
+        if STATE_BUDGET > 0 {
+            STATE_BUDGET -= 1;
+            serial_println!("[shell.appearance.state] preset={} custom={} chrome={} access={}",
+                SCENE_APPEARANCE_STATE.preset_idx,
+                SCENE_APPEARANCE_STATE.use_custom_colors,
+                SCENE_APPEARANCE_STATE.chrome_flags,
+                SCENE_APPEARANCE_STATE.accessibility_flags);
+        }
     }
 }
 
-/// Advance to next preset (wrapping) and push to sexdisplay.
+/// Advance to next preset (wrapping), clear custom override, and push resolved tokens.
 unsafe fn cycle_scene_render_token_preset() {
-    ACTIVE_PRESET_IDX = (ACTIVE_PRESET_IDX + 1) % PRESET_COUNT as u8;
-    push_token_preset(&TOKEN_PRESETS[ACTIVE_PRESET_IDX as usize]);
+    SCENE_APPEARANCE_STATE.preset_idx =
+        (SCENE_APPEARANCE_STATE.preset_idx + 1) % PRESET_COUNT as u8;
+    SCENE_APPEARANCE_STATE.use_custom_colors = 0;
+    let tokens = resolve_scene_render_tokens();
+    push_token_preset(&tokens);
     unsafe {
         static mut CYCLE_BUDGET: u32 = 16;
         if CYCLE_BUDGET > 0 {
             CYCLE_BUDGET -= 1;
-            serial_println!("[shell.appearance.preset] idx={}", ACTIVE_PRESET_IDX);
+            serial_println!("[shell.appearance.preset] idx={}", SCENE_APPEARANCE_STATE.preset_idx);
         }
     }
 }
