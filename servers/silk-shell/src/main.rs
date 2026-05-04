@@ -20,6 +20,19 @@ pub const OP_DISPLAY_SET_SNAPSHOT: u64 = 0x15;
 const OP_KV_GET: u64 = 0xB0;
 const OP_KV_PUT: u64 = 0xB1;
 
+// Scene Settings protocol opcode (local; promote to sex-pdx when Settings app PD exists).
+const OP_SCENE_SETTINGS_CMD: u64 = 0xFB;
+
+// Scene Settings command IDs (arg0 values for OP_SCENE_SETTINGS_CMD).
+const CMD_SET_PRESET: u64 = 1;
+const CMD_CYCLE_PRESET: u64 = 2;
+const CMD_SET_TINT: u64 = 3;
+const CMD_CYCLE_TINT: u64 = 4;
+const CMD_SET_CHROME_FLAGS: u64 = 5;
+const CMD_TOGGLE_TOP_BAR: u64 = 6;
+const CMD_SET_ACCESSIBILITY: u64 = 7;
+const CMD_RESET_DEFAULTS: u64 = 8;
+
 // Well-known key ID for scene appearance settings blob.
 const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
 
@@ -341,6 +354,98 @@ unsafe fn cycle_custom_tint() {
         if TINT_BUDGET > 0 {
             TINT_BUDGET -= 1;
             serial_println!("[shell.appearance.custom] mode=tint tint={}", ACTIVE_TINT_IDX);
+        }
+    }
+}
+
+// ── Scene Settings command handler ───────────────────────────────────────
+/// Handle a Scene Settings IPC command from any caller.
+/// cmd: one of CMD_SET_PRESET..CMD_RESET_DEFAULTS
+/// value: command-specific argument (preset index, tint index, flags, etc.)
+/// _flags: reserved for future use; ignored in V1.
+///
+/// Mutation and persistence rules per SCENE_SETTINGS_PROTOCOL_PLAN_V1.
+/// Never blocks. All commands are safe — invalid inputs are silently clamped or ignored.
+unsafe fn handle_scene_settings_cmd(cmd: u64, value: u64, _flags: u64) {
+    static mut CMD_BUDGET: u32 = 32;
+    let b = &mut CMD_BUDGET;
+    match cmd {
+        CMD_SET_PRESET => {
+            let idx = if (value as usize) < PRESET_COUNT { value as u8 } else { 0 };
+            SCENE_APPEARANCE_STATE.preset_idx = idx;
+            SCENE_APPEARANCE_STATE.use_custom_colors = 0;
+            SCENE_APPEARANCE_STATE.custom_colors = [0u32; 8];
+            ACTIVE_TINT_IDX = 0;
+            let tokens = resolve_scene_render_tokens();
+            push_token_preset(&tokens);
+            let blob = pack_scene_settings_blob(
+                SCENE_APPEARANCE_STATE.preset_idx,
+                SCENE_APPEARANCE_STATE.chrome_flags,
+                SCENE_APPEARANCE_STATE.accessibility_flags,
+            );
+            pdx_call(SLOT_SEXSTORE, OP_KV_PUT, SCENE_SETTINGS_KEY_APPEARANCE, blob, 0);
+            if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.cmd] cmd=1 preset={} ok=1", idx); }
+        }
+        CMD_CYCLE_PRESET => {
+            cycle_scene_render_token_preset();
+            if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.cmd] cmd=2 ok=1"); }
+        }
+        CMD_SET_TINT => {
+            let idx = (value as u8) % TINT_COUNT as u8;
+            ACTIVE_TINT_IDX = idx;
+            apply_custom_tint_bundle(idx as usize);
+            let tokens = resolve_scene_render_tokens();
+            push_token_preset(&tokens);
+            if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.cmd] cmd=3 tint={} ok=1", idx); }
+        }
+        CMD_CYCLE_TINT => {
+            cycle_custom_tint();
+            if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.cmd] cmd=4 ok=1"); }
+        }
+        CMD_SET_CHROME_FLAGS => {
+            SCENE_APPEARANCE_STATE.chrome_flags = value as u8;
+            let tokens = resolve_scene_render_tokens();
+            push_token_preset(&tokens);
+            let blob = pack_scene_settings_blob(
+                SCENE_APPEARANCE_STATE.preset_idx,
+                SCENE_APPEARANCE_STATE.chrome_flags,
+                SCENE_APPEARANCE_STATE.accessibility_flags,
+            );
+            pdx_call(SLOT_SEXSTORE, OP_KV_PUT, SCENE_SETTINGS_KEY_APPEARANCE, blob, 0);
+            if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.cmd] cmd=5 flags={} ok=1", value as u8); }
+        }
+        CMD_TOGGLE_TOP_BAR => {
+            toggle_top_bar_for_active_frame();
+            if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.cmd] cmd=6 ok=1"); }
+        }
+        CMD_SET_ACCESSIBILITY => {
+            SCENE_APPEARANCE_STATE.accessibility_flags = value as u8;
+            let tokens = resolve_scene_render_tokens();
+            push_token_preset(&tokens);
+            let blob = pack_scene_settings_blob(
+                SCENE_APPEARANCE_STATE.preset_idx,
+                SCENE_APPEARANCE_STATE.chrome_flags,
+                SCENE_APPEARANCE_STATE.accessibility_flags,
+            );
+            pdx_call(SLOT_SEXSTORE, OP_KV_PUT, SCENE_SETTINGS_KEY_APPEARANCE, blob, 0);
+            if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.cmd] cmd=7 flags={} ok=1", value as u8); }
+        }
+        CMD_RESET_DEFAULTS => {
+            SCENE_APPEARANCE_STATE = DEFAULT_SCENE_APPEARANCE;
+            ACTIVE_TINT_IDX = 0;
+            let tokens = resolve_scene_render_tokens();
+            push_token_preset(&tokens);
+            let blob = pack_scene_settings_blob(
+                SCENE_APPEARANCE_STATE.preset_idx,
+                SCENE_APPEARANCE_STATE.chrome_flags,
+                SCENE_APPEARANCE_STATE.accessibility_flags,
+            );
+            pdx_call(SLOT_SEXSTORE, OP_KV_PUT, SCENE_SETTINGS_KEY_APPEARANCE, blob, 0);
+            if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.cmd] cmd=8 ok=1"); }
+        }
+        _ => {
+            // Unknown command — log and ignore.
+            if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.cmd] cmd={} ok=0 unknown", cmd); }
         }
     }
 }
@@ -3267,6 +3372,15 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+            OP_SCENE_SETTINGS_CMD => {
+                // Scene Settings protocol command.
+                // Dispatch is synchronous, non-blocking, no reply wait.
+                unsafe {
+                    handle_scene_settings_cmd(msg.arg0, msg.arg1, msg.arg2);
+                }
+                pdx_reply(0);
+                mutated = true;
+            }
             0x1 => {
                 // Reply from sexstore (GET result or PUT ack).
                 // type_id == 0x1 is the kernel's IpcReply marker for
