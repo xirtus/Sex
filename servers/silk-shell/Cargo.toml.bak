@@ -1,8 +1,0 @@
-[package]
-name = "silk-shell"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-sex-pdx = { path = "../../crates/sex-pdx" }
-sex-rt = { path = "../../sex-rt" }

@@ -166,43 +166,7 @@ struct SurfaceLifecycle {
     generation: u64,
 }
 
-/// A6: Reason for a tombstone event recording.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-enum TombstoneReason {
-    /// Normal frame-light close button.
-    CloseRequested = 0,
-    /// Focus cleared because surface is dead or lifecycle-invalid.
-    FocusCleared = 1,
-    /// Drag cancelled because surface is dead.
-    DragCancelled = 2,
-    /// Keyboard-triggered DestroyFocused action.
-    DestroyCommand = 3,
-    /// Final Tombstoned -> Destroyed transition (future, not yet wired).
-    FinalDestroy = 4,
-}
-
-/// A6: Tombstone event — records a surface death transition with context.
-/// Stored in a fixed-size ring buffer for observability and proof.
-#[derive(Debug, Clone, Copy)]
-struct TombstoneEvent {
-    /// The surface whose lifecycle changed.
-    surface_id: u64,
-    /// Lifecycle generation at time of recording.
-    generation: u64,
-    /// LifecycleState before the transition.
-    old_state: LifecycleState,
-    /// LifecycleState after the transition (or same for focus/drag clears).
-    new_state: LifecycleState,
-    /// Why this event was recorded.
-    reason: TombstoneReason,
-    /// Frame the surface belongs to (0 if unknown/no frame).
-    frame_id: u32,
-    /// Tab index within the frame (0 if unknown/single-tab).
-    tab_index: u8,
-}
-
-/// Maximum number of tracked lifecycle surfaces.
+/// [TEST] Maximum number of tracked lifecycle surfaces.
 const LIFECYCLE_MAX_SURFACES: usize = 32;
 
 /// Lifecycle metadata for all tracked surfaces.
@@ -1256,11 +1220,11 @@ static mut ATLAS_MODE_ENABLED: bool = false;
 /// Index of the currently selected scene in Atlas mode (0..4).
 /// Reset to active_scene_id when entering Atlas. Updated by arrow key navigation.
 static mut ATLAS_SELECTED_SCENE: u8 = 0;
-/// A6: Tombstone event ring buffer (size = power of 2 for efficient modulo).
-/// Overwrites oldest entry when full. Replaces old TOMBSTONES u64 ring.
-const TOMBSTONE_RING_SIZE: usize = 16;
-static mut TOMBSTONE_RING: [Option<TombstoneEvent>; TOMBSTONE_RING_SIZE] = [None; TOMBSTONE_RING_SIZE];
-static mut TOMBSTONE_RING_NEXT: usize = 0;
+/// Bounded tombstone list for recently-closed surface IDs.
+/// Prevents immediate reuse of freed IDs. Circular insertion.
+static mut TOMBSTONES: [u64; 8] = [0; 8];
+static mut TOMBSTONE_NEXT: usize = 0;
+static mut TOMBSTONE_COUNT: usize = 0;
 static mut SURFACE_100_ALIVE: bool = true;
 static mut SURFACE_101_ALIVE: bool = true;
 static mut SURFACE_101_X: i32 = 180;
@@ -1450,40 +1414,24 @@ fn surface_is_alive(sid: u64) -> bool {
     }
 }
 
-/// A6: Record a tombstone event in the ring buffer.
-/// Overwrites oldest entry when full. Replaces old tombstone_surface().
-unsafe fn record_tombstone_event(
-    sid: u64,
-    old_state: LifecycleState,
-    new_state: LifecycleState,
-    reason: TombstoneReason,
-) {
-    let generation = surface_generation(sid).unwrap_or(0);
-    let frame_id = frame_for_surface(sid).unwrap_or(0);
-    let tab_index: u8 = 0; // single-tab in V1 — always 0
-    let idx = TOMBSTONE_RING_NEXT;
-    TOMBSTONE_RING[idx] = Some(TombstoneEvent {
-        surface_id: sid,
-        generation,
-        old_state,
-        new_state,
-        reason,
-        frame_id,
-        tab_index,
-    });
-    TOMBSTONE_RING_NEXT = (idx + 1) % TOMBSTONE_RING_SIZE;
-    serial_println!("[tombstone.event.record] sid={} old={:?} new={:?} reason={:?} gen={}",
-        sid, old_state, new_state, reason, generation);
+/// Record a surface ID as permanently closed. Prevents immediate reuse
+/// via tombstone checks in focus/drag/hover paths.
+/// Circular buffer: oldest entry dropped when full.
+unsafe fn tombstone_surface(sid: u64) {
+    let idx = TOMBSTONE_NEXT;
+    TOMBSTONES[idx] = sid;
+    TOMBSTONE_NEXT = (idx + 1) % TOMBSTONES.len();
+    if TOMBSTONE_COUNT < TOMBSTONES.len() {
+        TOMBSTONE_COUNT += 1;
+    }
 }
 
-/// Returns true if `sid` is in the tombstone ring (recently closed, must
+/// Returns true if `sid` is in the tombstone set (recently closed, must
 /// not be focused, dragged, hovered, or restored as live).
 unsafe fn is_tombstoned(sid: u64) -> bool {
-    for i in 0..TOMBSTONE_RING_SIZE {
-        if let Some(ref event) = TOMBSTONE_RING[i] {
-            if event.surface_id == sid {
-                return true;
-            }
+    for i in 0..TOMBSTONE_COUNT {
+        if TOMBSTONES[i] == sid {
+            return true;
         }
     }
     false
@@ -1502,9 +1450,6 @@ unsafe fn clear_focus_if_dead() {
     if focused != 0 && (!surface_is_alive(focused) || !surface_is_lifecycle_focusable(focused)) {
         if !surface_is_alive(focused) {
             serial_println!("[focus.ref.clear] id={} reason=dead", focused);
-            // A6: Record tombstone when focus is cleared because the surface is dead.
-            let st = lifecycle_state(focused).unwrap_or(LifecycleState::Allocated);
-            record_tombstone_event(focused, st, st, TombstoneReason::FocusCleared);
         } else {
             serial_println!("[focus.ref.clear] id={} reason=not_focusable lifecycle={:?}",
                 focused, lifecycle_state(focused));
@@ -1533,9 +1478,6 @@ unsafe fn clear_drag_if_dead() {
     if let InteractionState::Dragging { surface_id, .. } = INTERACTION {
         if !surface_is_alive(surface_id) {
             serial_println!("[shell.surface.drag.cancel.dead] id={}", surface_id);
-            // A6: Record tombstone for drag cancelled due to dead surface.
-            let st = lifecycle_state(surface_id).unwrap_or(LifecycleState::Allocated);
-            record_tombstone_event(surface_id, st, st, TombstoneReason::DragCancelled);
             try_transition(InteractionState::Idle);
         }
     }
@@ -2934,23 +2876,10 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     if !surface_is_alive(surface_id) {
         return false;
     }
-    // A6: Reject close if surface already in Closing/Tombstoned/Destroyed state.
-    if let Some(state) = lifecycle_state(surface_id) {
-        match state {
-            LifecycleState::Closing | LifecycleState::Tombstoned | LifecycleState::Destroyed => {
-                serial_println!("[tombstone.close.reject.dead] sid={} state={:?}", surface_id, state);
-                return false;
-            }
-            _ => {}
-        }
-    }
     // A5: Check drag before lifecycle transition. Cancel drag on target surface.
     if let InteractionState::Dragging { surface_id: drag_sid, .. } = INTERACTION {
         if drag_sid == surface_id {
             serial_println!("[frame.light.close.reject.drag] sid={} cancel_drag", surface_id);
-            // A6: Record tombstone for drag cancelled before close.
-            let st = lifecycle_state(surface_id).unwrap_or(LifecycleState::Allocated);
-            record_tombstone_event(surface_id, st, st, TombstoneReason::DragCancelled);
             try_transition(InteractionState::Idle);
         }
     }
@@ -2965,13 +2894,10 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
         SURFACE_ID_TEST4  => SURFACE_103_ALIVE = false,
         _ => return false, // unknown or non-closeable surface
     }
-    // A3/A6: Track lifecycle state transition: live -> Closing -> Tombstoned.
-    // Record tombstone events for each stage.
-    let old_state = lifecycle_state(surface_id).unwrap_or(LifecycleState::Visible);
+    // A3: Track lifecycle state transition: live -> Closing -> Tombstoned.
     set_lifecycle_state(surface_id, LifecycleState::Closing);
-    record_tombstone_event(surface_id, old_state, LifecycleState::Closing, TombstoneReason::CloseRequested);
+    tombstone_surface(surface_id);
     set_lifecycle_state(surface_id, LifecycleState::Tombstoned);
-    record_tombstone_event(surface_id, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::CloseRequested);
     serial_println!("[frame.light.close.fsm] sid={}", surface_id);
     pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
     // Focus fallback: clear remaining stale focus and drag.
@@ -5037,47 +4963,24 @@ pub extern "C" fn _start() -> ! {
                                             pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
                                             destroyed = true;
                                             serial_println!("[silk-shell] Destroyed surface 100");
-                                            // A6: lifecycle transitions + tombstone for keyboard destroy.
-                                            let os_100 = lifecycle_state(target).unwrap_or(LifecycleState::Visible);
-                                            set_lifecycle_state(target, LifecycleState::Closing);
-                                            record_tombstone_event(target, os_100, LifecycleState::Closing, TombstoneReason::DestroyCommand);
-                                            set_lifecycle_state(target, LifecycleState::Tombstoned);
-                                            record_tombstone_event(target, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::DestroyCommand);
                                         } else if target == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
                                             SURFACE_101_ALIVE = false;
                                             pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
                                             destroyed = true;
                                             serial_println!("[silk-shell] Destroyed surface 101");
-                                            // A6: lifecycle transitions + tombstone for keyboard destroy.
-                                            let os_101 = lifecycle_state(target).unwrap_or(LifecycleState::Visible);
-                                            set_lifecycle_state(target, LifecycleState::Closing);
-                                            record_tombstone_event(target, os_101, LifecycleState::Closing, TombstoneReason::DestroyCommand);
-                                            set_lifecycle_state(target, LifecycleState::Tombstoned);
-                                            record_tombstone_event(target, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::DestroyCommand);
                                         } else if target == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
                                             SURFACE_102_ALIVE = false;
                                             pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
                                             destroyed = true;
                                             serial_println!("[silk-shell] Destroyed surface 102");
-                                            // A6: lifecycle transitions + tombstone for keyboard destroy.
-                                            let os_102 = lifecycle_state(target).unwrap_or(LifecycleState::Visible);
-                                            set_lifecycle_state(target, LifecycleState::Closing);
-                                            record_tombstone_event(target, os_102, LifecycleState::Closing, TombstoneReason::DestroyCommand);
-                                            set_lifecycle_state(target, LifecycleState::Tombstoned);
-                                            record_tombstone_event(target, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::DestroyCommand);
                                         } else if target == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
                                             SURFACE_103_ALIVE = false;
                                             pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
                                             destroyed = true;
                                             serial_println!("[silk-shell] Destroyed surface 103");
-                                            // A6: lifecycle transitions + tombstone for keyboard destroy.
-                                            let os_103 = lifecycle_state(target).unwrap_or(LifecycleState::Visible);
-                                            set_lifecycle_state(target, LifecycleState::Closing);
-                                            record_tombstone_event(target, os_103, LifecycleState::Closing, TombstoneReason::DestroyCommand);
-                                            set_lifecycle_state(target, LifecycleState::Tombstoned);
-                                            record_tombstone_event(target, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::DestroyCommand);
                                         }
                                         if destroyed {
+                                            tombstone_surface(target);
                                             if target == SURFACE_ID_APP {
                                                 if SURFACE_101_ALIVE && try_set_focus(SURFACE_ID_STATIC) { serial_println!("[silk-shell] Auto-switched focus to surface 101"); }
                                                 else if SURFACE_102_ALIVE && try_set_focus(SURFACE_ID_TEST3) { serial_println!("[silk-shell] Auto-switched focus to surface 102"); }

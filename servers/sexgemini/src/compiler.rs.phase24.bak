@@ -1,4 +1,0 @@
-pub fn compile_rust(source: &[u8]) -> PageHandover {
-    /* rustc driver stub */
-    PageHandover { pfn: 0, pku_key: 2 }
-}

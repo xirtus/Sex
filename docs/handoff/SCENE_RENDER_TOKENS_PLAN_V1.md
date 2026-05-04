@@ -34,7 +34,10 @@ Design (2026-05-04). Renderer-safe Scene RenderTokens struct and IPC protocol fr
 | `0xE7` | `OP_WINDOW_MAP` | sex-pdx (shared) | varies |
 | `0xE8` | `OP_WINDOW_WRITE` | sex-pdx (shared) | varies |
 | `0xEB` | `OP_SURFACE_UPDATE` | silk-shell (local) | SLOT_DISPLAY |
+| `0xEC` | `OP_SURFACE_UPSERT` | silk-shell (local) | SLOT_DISPLAY |
+| `0xED` | `OP_SET_FOCUS` | silk-shell (local) | SLOT_DISPLAY |
 | `0xEE` | `OP_SURFACE_DESTROY` | silk-shell (local) | SLOT_DISPLAY |
+| `0xEF` | `OP_SURFACE_FILL_RECT` | silk-shell (local) | SLOT_DISPLAY |
 | `0xF0` | `OP_SILKBAR_PING` | sex-pdx (shared) | SLOT_SILKBAR |
 | `0xF1` | `OP_SILKBAR_GET_ABI` | sex-pdx (shared) | SLOT_SILKBAR |
 | `0xF2` | `OP_SILKBAR_UPDATE` | sex-pdx (shared) | SLOT_SILKBAR |
@@ -48,7 +51,7 @@ Design (2026-05-04). Renderer-safe Scene RenderTokens struct and IPC protocol fr
 ### Opcode choice: `0xFC`
 
 - `0xF5`–`0xFB` and `0xFC` are all free in the display opcode space
-- `0xFC` is immediately adjacent to `0xFD` (existing OP_SURFACE_TAB_INFO), making the display-control opcode region contiguous (0xF5–0xFD)
+- `0xFC` is immediately adjacent to `0xFD` (existing OP_SURFACE_TAB_INFO)
 - No collision with any existing sex-pdx or local constant
 - No ABI_VERSION bump required — opcodes are not part of the ABI contract (they're protocol, not architecture)
 
@@ -87,9 +90,9 @@ pub struct RenderTokensV1 {
     /// Zoom light color (semantic green).
     pub zoom_light_color: u32,
     /// Chrome/layout flags:
-    ///   bit 0: top_bar_enabled (redundant with chrome_flags in 0xFD, but carried here for completeness)
-    ///   bit 1..3: tab_strip_mode (0=always, 1=hover, 2=hidden)
-    ///   bit 4..6: frame_lights_mode (0=always, 1=hover, 2=hidden)
+    ///   bit 0: reserved (must be 0 in V1; top bar controlled via 0xFD, not here)
+    ///   bit 1..3: tab_strip_mode (0=always, 1=hover, 2=hidden) — reserved in V1
+    ///   bit 4..6: frame_lights_mode (0=always, 1=hover, 2=hidden) — reserved in V1
     ///   bit 7: reserved
     pub chrome_flags: u8,
     /// Accessibility flags:
@@ -102,7 +105,7 @@ pub struct RenderTokensV1 {
 }
 ```
 
-**Size:** 8 × 4 + 1 + 1 = 34 bytes. Padding to 40 bytes in packed repr.
+**Size:** `#[repr(C)]` natural alignment — 8 × u32 (32 bytes) + 2 × u8 (2 bytes) + 2 bytes padding = **36 bytes**.
 
 ### Default values (matching current hardcoded constants)
 
@@ -127,7 +130,7 @@ pub const DEFAULT_RENDER_TOKENS: RenderTokensV1 = RenderTokensV1 {
 |------|-------------|-----------|
 | Alpha must be 0xFF | `token \| 0xFF000000` | No transparency in V1. Forced opaque prevents invisible chrome. |
 | Zero/black policy | Allowed if RGB ≠ 0. Pure black `0xFF000000` is valid (user choice). Pure zero `0x00000000` is clamped to `0xFF000000`. | Zero (transparent black) would make chrome invisible. Clamp alpha to 0xFF preserves intent as close to black as possible. |
-| Chrome_flags range | `top_bar_enabled` bit 0 accepted. Bits 1..7 ignored in V1 (reserved, must be zero). | Future-proofing. |
+| Chrome_flags range | All bits ignored/zeroed in V1. Top bar controlled via 0xFD exclusively. Must be 0x00 in V1. | Eliminates redundant control path. |
 | Accessibility_flags range | All bits accepted. Unknown bits ignored. | Forward-compatible. |
 | Glow_strength placeholder | Not present in V1. Reserved for future. | Deferred to effect engine. |
 | Opacity/transparency placeholder | Not present in V1. Reserved for future. | Deferred to effect engine. |
@@ -146,7 +149,7 @@ pub const OP_APPEARANCE_TOKENS: u64 = 0xFC;
 
 ### Payload packing (3 × u64 args, 2 calls)
 
-The 34-byte token set requires two sequential `pdx_call()` invocations:
+The 34-byte token payload (8 × u32 + 2 × u8) requires two sequential `pdx_call()` invocations:
 
 **Call 1 — Token colors (6 × u32 = 24 bytes, fills all 3 args)**
 
@@ -171,7 +174,7 @@ arg1: chrome_flags              (bits 0..7, as u64)
       | accessibility_flags << 8 (bits 8..15)
       | reserved (bits 16..63, zero)
 
-arg2: reserved (zero, for future expansion)
+arg2: 0 (reserved; sequence disambiguation done by receiver state machine, not this field)
 ```
 
 ### Sexdisplay handler pseudocode
@@ -208,46 +211,39 @@ static mut DISPLAY_TOKENS: RenderTokensV1 = DEFAULT_RENDER_TOKENS;
 
 ### Token sequence housekeeping
 
-Sexdisplay needs a small token reception state machine (or two dedicated static slots):
+Sexdisplay reception state machine. Call 1 stores 3 args (6 colors); Call 2 commits.
 
 ```rust
 /// Temporary storage for two-call token sequence.
-/// Call 1 fills colors_0_5, Call 2 fills colors_6_7_and_flags.
-/// After Call 2, DISPLAY_TOKENS is updated atomically.
+/// Call 1 fills args 0-2 (6 colors packed). Call 2 commits to DISPLAY_TOKENS.
 static mut TOKEN_BUF_CALL1_RECEIVED: bool = false;
-static mut TOKEN_BUF_COLORS_0_5: u64 = 0; // packed first 6 colors
-static mut TOKEN_BUF_COLORS_6_7: u64 = 0; // packed last 2 colors
-static mut TOKEN_BUF_FLAGS: u64 = 0;      // packed flags
+static mut TOKEN_BUF_ARG0: u64 = 0; // Call 1 arg0: focus_surface_color | frame_rim_color << 32
+static mut TOKEN_BUF_ARG1: u64 = 0; // Call 1 arg1: frame_top_bar_color | active_tab_color << 32
+static mut TOKEN_BUF_ARG2: u64 = 0; // Call 1 arg2: inactive_tab_color | close_light_color << 32
 ```
 
-**Alternative: Single-call with dedicated opcode per token type.** But this is simpler — 2 calls, sequential, trivial state.
+**Sequencing: pure state machine — no arg2 tagging**
 
-**Simpler alternative: Use 3 calls with clear sequencing.**
-
-```
-Call 1: token_group = 0 (colors 0-5: 6 colors in 3 args)
-Call 2: token_group = 1 (colors 6-7 + flags: 2 colors + 2 flags in 2 args)
-```
-
-Where `token_group` is encoded in the opcode or in a header arg.
-
-**Recommended approach — single opcode, header in arg2 with sequence number:**
+Do NOT use arg2 values to distinguish Call 1 from Call 2. Color data in arg2 of Call 1 can collide with any magic constant. Use `TOKEN_BUF_CALL1_RECEIVED` as the sole disambiguator.
 
 ```rust
-// Call 1: arg2 bit 0 = 0 (first batch)
-pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS, 
-    pack2(color0, color1),   // arg0
-    pack2(color2, color3),   // arg1
-    pack2(color4, color5) | SEQUENCE_FIRST);  // arg2 (low bit 0 = first)
-
-// Call 2: arg2 bit 0 = 1 (second batch)
+// Call 1: all 3 args carry colors (arg2 = color4 | color5<<32)
 pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
-    pack2(color6, color7),   // arg0
-    flags_byte | (acc_byte << 8), // arg1
-    SEQUENCE_SECOND);         // arg2 (low bit 1 = second → commit)
+    pack2(color0, color1),   // arg0: focus_surface_color, frame_rim_color
+    pack2(color2, color3),   // arg1: frame_top_bar_color, active_tab_color
+    pack2(color4, color5));  // arg2: inactive_tab_color, close_light_color
+
+// Call 2: arg2 = 0 (reserved, unused)
+pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
+    pack2(color6, color7),        // arg0: minimize_light_color, zoom_light_color
+    flags_byte | (acc_byte << 8), // arg1: chrome_flags (0), accessibility_flags
+    0u64);                         // arg2: reserved
 ```
 
-Sexdisplay: on receiving 0xFC with arg2 sequence=0, store colors. On sequence=1, store colors+flags AND commit to DISPLAY_TOKENS then redraw.
+Sexdisplay state machine:
+- 0xFC received + `TOKEN_BUF_CALL1_RECEIVED == false` → Call 1: store arg0/arg1/arg2 in TOKEN_BUF_ARG0/1/2, set flag true.
+- 0xFC received + `TOKEN_BUF_CALL1_RECEIVED == true` → Call 2: store arg0/arg1, reconstruct all 8 tokens from buffers + new args, clamp all, write DISPLAY_TOKENS, set flag false, redraw.
+- Call 2 with flag false (orphaned): discard safely.
 
 ---
 
@@ -318,18 +314,18 @@ static mut DISPLAY_TOKENS: RenderTokensV1 = DEFAULT_RENDER_TOKENS;
 /// Push the current render tokens to sexdisplay.
 /// Sends OP_APPEARANCE_TOKENS in two sequential pdx_call invocations.
 unsafe fn push_render_tokens(tokens: &RenderTokensV1) {
-    // Call 1: colors 0-5
+    // Call 1: colors 0-5 (arg2 carries color4+color5; sequence inferred by receiver state)
     pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
         pack_u32_pair(tokens.focus_surface_color, tokens.frame_rim_color),
         pack_u32_pair(tokens.frame_top_bar_color, tokens.active_tab_color),
-        pack_u32_pair(tokens.inactive_tab_color, tokens.close_light_color) | SEQUENCE_FIRST,
+        pack_u32_pair(tokens.inactive_tab_color, tokens.close_light_color),
     );
     
-    // Call 2: colors 6-7 + flags
+    // Call 2: colors 6-7 + flags; arg2=0 (reserved)
     pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
         pack_u32_pair(tokens.minimize_light_color, tokens.zoom_light_color),
         (tokens.chrome_flags as u64) | ((tokens.accessibility_flags as u64) << 8),
-        SEQUENCE_SECOND,
+        0u64, // reserved
     );
 }
 ```
@@ -421,6 +417,7 @@ Important architectural boundary:
 | sexdisplay needs to read from silk-shell memory | ❌ STOP | All data pushed via pdx_call. No shared memory. |
 | Token update requires framebuffer realloc | ❌ STOP | Colors only. Framebuffer dimensions unchanged. |
 | Settings app needed for V1 | ✅ Conditional | V1 sends default tokens at boot. No settings app needed. User toggle via F4 uses existing 0xFD path. |
+| Stale Call 1 after silk-shell crash | ✅ Accepted V1 limitation | If silk-shell dies after Call 1, `TOKEN_BUF_CALL1_RECEIVED` stays true. New Call 1 overwrites the stale buffer (safe). Orphaned stale Call 2 (from crashed run) is guarded — sexdisplay discards Call 2 when `TOKEN_BUF_CALL1_RECEIVED` is false. Risk: zero at boot (both sides initialize to same defaults). |
 
 ---
 

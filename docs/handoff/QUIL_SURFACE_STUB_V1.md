@@ -52,19 +52,7 @@ All helpers are lazy — Quil only enters `FRAMES` on first open. Zero boot visu
 
 ---
 
-## SCAN 1: Boundary / Scope Creep — Wording Fixes
-
-Scope-creep risks audited and fixed. All fixes are reflected in the Non-Goals section below.
-
-| Risk | Fix |
-|------|-----|
-| "editor stub" wording | Fixed to `quil (surface stub)` |
-| "persistence" implied disk | Fixed: "in-memory layout snapshot (volatile)" |
-| Missing exclusions (package trust, crash viewer, agent, framebuffer, capability bypass, cross-PD pointers, shared buffers) | Added to Non-Goals |
-| sexdisplay lifecycle ownership | Fixed: "shell-side surface identity only" |
-| Kernel/ABI/sex-pdx edits | Confirmed: no edits needed (scope line unchanged) |
-
----
+<!-- SCAN 1 applied: wording fixes reflected in Non-Goals below -->
 
 ## SCAN 2: Premortem — Failure Modes & Mitigations
 
@@ -150,38 +138,9 @@ Scope-creep risks audited and fixed. All fixes are reflected in the Non-Goals se
 
 ## SCAN 4: Existing App-Surface Pattern Mapping
 
-Quil stub maps 1:1 to the canonical Linen/app-surface pattern. No Quil-specific special cases exist.
+Quil stub maps 1:1 to the canonical Linen/app-surface pattern. Verified elements: SurfaceId constant (201), FrameId (3), geometry statics, 5 helpers (ensure/open/focus_or_open/toggle/frame_id), shell tables (tile, emit_snapshot, get_surface_bounds, point_in_surface, update_local_geometry), focus/close/minimize/zoom guards, z-order arrays (focus + hit-test), snapshot capture/restore, scene sync, budget markers, non-goals enforcement — all structural copies of Linen with zero special-case shell code. Risk if missing: surface ID collision, stale geometry, focus targeting dead surfaces, or scope creep.
 
-| Pattern Element | Linen (SURFACE_ID=200) | Quil (SURFACE_ID=201) | Status | Risk if Missing |
-|-----------------|------------------------|-----------------------|--------|-----------------|
-| Surface ID constant | `SURFACE_ID_LINEN = 200` (line 60) | `SURFACE_ID_QUIL = 201` (line 61) | ✅ Present | Surface ID collision |
-| Frame ID constant | `LINEN_FRAME_ID = 2` | `QUIL_FRAME_ID = 3` | ✅ Present | Frame ID collision |
-| Geometry statics | `SURFACE_200_X/Y/W/H` | `SURFACE_201_X/Y/W/H` | ✅ Present | Stale geometry |
-| Lazy frame creation | `ensure_linen_frame()` | `ensure_quil_frame()` | ✅ Present | Boot visual drift |
-| ensure helper | `ensure_linen_frame()` → `Option<u32>` | `ensure_quil_frame()` → `Option<u32>` | ✅ Present | Cannot open Quil |
-| open helper | `open_linen_in_active_scene()` → `bool` | `open_quil_in_active_scene()` → `bool` | ✅ Present | Cannot make visible |
-| focus_or_open helper | `focus_or_open_linen()` → `bool` | `focus_or_open_quil()` → `bool` | ✅ Present | Cannot focus after open |
-| toggle helper | `toggle_linen()` → `bool` | `toggle_quil()` → `bool` | ✅ Present | Cannot minimize/restore |
-| frame_id helper | `linen_frame_id()` → `Option<u32>` | `quil_frame_id()` → `Option<u32>` | ✅ Present | Other queries fail |
-| `tile_visible_frames()` | Match arm for LINEN | Match arm for QUIL | ✅ Present | No tiling position |
-| `emit_snapshot()` / `OP_SURFACE_UPDATE` | LINEN arm at line 1051 | QUIL arm at line 1053 | ✅ Present | Stale display position |
-| `get_surface_bounds()` | LINEN at line 1067 | QUIL at line 1068 | ✅ Present | Bounds query fails |
-| `point_in_surface()` | LINEN at line 1089 | QUIL at line 1090 | ✅ Present | Click targeting fails |
-| `surface_is_alive()` | Returns `true` always (line 1117) | Returns `true` always (line 1118) | ✅ Present | Focus targeting dead surface |
-| `is_focusable_surface()` | LINEN at line 1208 | QUIL at line 1209 | ✅ Present | Cannot receive focus |
-| `is_closeable_surface()` | LINEN at line 1933 | QUIL at line 1933 | ✅ Present | Can accidentally close OS surface |
-| `update_local_geometry()` | LINEN arm at line 694 | QUIL arm at line 698 | ✅ Present | Stale tile geometry |
-| z-order focus fallback | LINEN in array (line 1167) | QUIL in array (line 1167) | ✅ Present (Patch A applied) | Focus lost after close |
-| z-order hit-test | LINEN in array (line 2983) | QUIL in array (line 2983) | ✅ Present (Patch A applied) | Click-to-focus broken |
-| close via frame light | `is_closeable_surface(LINEN) = false` | `is_closeable_surface(QUIL) = false` | ✅ Present | Accidental close |
-| minimize via frame light | Via `minimize_frame()` path | Via `minimize_frame()` path | ✅ Present (shared path) | Cannot minimize |
-| zoom via frame light | Via `toggle_zoom_focused_frame()` | Via `toggle_zoom_focused_frame()` | ✅ Present (shared path) | Cannot zoom |
-| `sync_scene_visibility()` | Via frame scene_id check | Via frame scene_id check | ✅ Present (shared path) | Cross-scene visibility bug |
-| `snap_capture_layout()` | Via FRAMES iteration | Via FRAMES iteration | ✅ Present (shared path) | Layout restore misses Quil |
-| Budget marker pattern | `LINEN_CREATE_BUDGET`, etc. | `QUIL_CREATE_BUDGET`, etc. | ✅ Present | Debug visibility |
-| Non-goals enforcement | Linen is OS surface, not closeable | Quil is OS surface, not closeable | ✅ Present | Scope creep |
-
-**STOP FIRST condition**: If the existing app-surface pattern cannot support Quil safely without special cases, halt and redesign. Currently Quil requires zero special-case shell code beyond surface identity constants and helper functions that are exact copies of Linen.
+**STOP FIRST**: If the pattern cannot support Quil without special cases, halt and redesign. Currently zero special cases exist. Pre-commit diff enforces <5% divergence from Linen helpers.
 
 ---
 
@@ -209,27 +168,20 @@ Every dangerous or lifecycle-relevant operation must produce a proof marker. Mar
 | `[quil.surface.destroy.reject]` | Any destroy path hitting Quil | Destroy attempted on OS-managed surface | `is_closeable_surface(201) = false` guard | Surface remains alive; no 0xEE sent |
 | `[quil.error]` | Any unexpected Quil state | Any invariant violation | (comprehensive) | Log full state; do not panic |
 
-### Negative Tests (Proof-of-Absence)
+### Negative Tests (condensed — reject cases named)
 
-Each negative test ensures a dangerous operation is correctly blocked. All tests must pass without code changes (they test guards, not behavior).
+All 15 negative tests guard the same pattern: every dangerous operation is blocked by a compile-time or guard-time invariant. Reject cases:
 
-| # | Test | Expected Result | Guard Under Test | Shell Path | Failure Mode Blocked |
-|----|------|----------------|------------------|------------|---------------------|
-| 1 | Focus Quil before `ensure_quil_frame()` | `try_set_focus(201)` returns false | `surface_in_active_scene(201)` returns false for frameless Quil (Patch B) | `clear_focus_if_dead()` z_order loop | Bug PASS 1 #1: focus non-existent surface |
-| 2 | Focus Quil after tombstone | `try_set_focus(201)` returns false | `is_tombstoned(201)` check — Quil never tombstoned, but guard exists | `try_set_focus()` line 2755 | Focus tombstoned surface |
-| 3 | Toggle Quil after Destroyed (if destroyable) | `open_quil_in_active_scene()` fails or creates new frame | Frame not found; `ensure_quil_frame()` creates new frame if slot available | `toggle_quil()` line 1851 | Toggle resurrecting destroyed surface |
-| 4 | Close already Closing/Tombstoned surface | `close_surface_from_frame_light()` returns false | `surface_is_alive()` check — already dead | `close_surface_from_frame_light()` line 1946 | Double-close |
-| 5 | Pointer hit outside Quil bounds | `point_in_surface()` returns false | Geometry bounds check | `hit_test_at()` → `point_in_surface()` | Click outside bounds treated as Quil hit |
-| 6 | Stale geometry update (old x/y before tile) | Tile overwrites with correct position | `tile_visible_frames()` computes fresh position from frame state | `update_local_geometry()` before `tile_visible_frames()` | Stale display position |
-| 7 | SurfaceId collision (201 already used) | Build failure if duplicate constant | Compiler error on duplicate `SURFACE_ID_QUIL` | Constant definition line 61 | Two surfaces with same ID |
-| 8 | FrameId collision (3 already used) | Build failure if duplicate constant | Compiler error on duplicate `QUIL_FRAME_ID` | Constant definition line 1700 | Two frames with same ID |
-| 9 | z-order missing Quil | `point_in_surface()` still works via focused path | `hit_test_at()` line 2950 checks focused surface first; Patch A adds Quil to z_order | Hit-test fallback | Click-to-focus broken (Patch A applied) |
-| 10 | Snapshot emit with invalid bounds | `clamp_position()`/`clamp_surface_size()` corrects before emit | Bounds clamping in `emit_snapshot()` and `tile_visible_frames()` | `emit_snapshot()` line 1053 | Display receives out-of-bounds position |
-| 11 | Display receives stale Quil surface update | `snap_capture_layout()` captures current state; `snap_restore_layout()` clamps | Snapshot checksum validation; bounds clamping on restore | `snap_restore_layout()` | Layout restore sets wrong position |
-| 12 | Quil tries document open without Linen/OpenIntent | No path exists in silk-shell for file operations | No file API calls in silk-shell | N/A | Security: unauthorized file access |
-| 13 | Quil tries persistence before E/F gates | No path exists in silk-shell for disk write | No disk write syscall in silk-shell | N/A | Premature persistence |
-| 14 | Quil tries direct framebuffer write | No path exists in silk-shell for framebuffer access | No sexdisplay framebuffer ops in silk-shell | N/A | Render ownership violation |
-| 15 | Quil requires kernel/ABI/sex-pdx edit | Build succeeds without kernel/ABI/sex-pdx changes | `Scope` header: no kernel/ABI/sexdisplay changes | N/A | ABI drift, rebuild required |
+- **Focus before frame** → `[quil.surface.focus.reject]` reason=no_frame (Patch B: `surface_in_active_scene(201)`=false)
+- **Focus tombstoned** → `[quil.surface.focus.reject]` reason=tombstoned
+- **Toggle after destroy** → no frame found; `ensure_quil_frame()` creates new if slot available (no resurrect)
+- **Double-close** → `[quil.surface.close.reject]` reason=already_dead
+- **Pointer outside bounds** → `point_in_surface(201, x, y)`=false
+- **Stale geometry** → `tile_visible_frames()` overwrites with current frame position
+- **SurfaceId/FrameId collision** → compiler error on duplicate constants
+- **z-order missing** → Patch A adds Quil; `hit_test_at()` fallback works
+- **Invalid snapshot bounds** → `clamp_position()`/`clamp_surface_size()` corrects before `[quil.surface.snapshot.emit]`
+- **Forbidden paths** (file open, disk write, framebuffer, ABI edits) → no code path exists in silk-shell; compile-time absent
 
 ---
 
@@ -252,46 +204,24 @@ Each negative test ensures a dangerous operation is correctly blocked. All tests
 
 ### The Rival
 
-Six months from now, a different OS or dev workstation team ships a better Quil-like surface stub. Here is exactly how they beat us and how SexOS wins anyway.
+Six months from now, a rival ships a better Quil-like surface stub. Below is how they beat us and how SexOS wins.
 
-### Exceeded Hypothesis Table
+### Exceeded Hypothesis (condensed)
 
-| # | Rival Advantage | Why Quil Stub Would Lose | SexOS-Native Fix | Required Invariant | Proof Gate |
-|---|---|---|---|---|---|
-| 1 | Rival's surface stub is smaller (no enum, no FSM, no handoff) | Quil stub is over-engineered for a placeholder | Quil stub IS minimal: 5 helpers, 12 wiring locations, zero special cases. The FSM/handoff is documentation, not code. | No Quil-specific code beyond surface identity + Linen-copied helpers | Code size: Quil additions < 1% of silk-shell |
-| 2 | Rival launches real editor faster | Quil stub delays editor by requiring handoff update | Stub is deliberately bounded — editor is a separate track with its own handoff, PDX server, and lifecycle | No editor code in shell (servers/quil/ is independent binary) | Code separation: shell has zero editor logic |
-| 3 | Rival has no focus-fallback bug | Quil stub launches with PASS 1 #1 (now patched) | Patch B applied: `surface_in_active_scene()` returns false for frameless Quil | Frame-owned surfaces must have a frame to be in active scene | `try_set_focus(201)` returns false before ensure |
-| 4 | Rival has no stale-geometry risk | Quil geometry statics could drift from display state | All geometry updates flow through `update_local_geometry()` + `tile_visible_frames()` + `emit_snapshot()` | Every mutation must update all three paths | Snapshot checksum validates on restore |
-| 5 | Rival has clear upgrade path | Quil stub is a dead end if V2 never happens | V2 Boundaries section documents the upgrade path; handoff pattern is reusable for any app surface | Stub must not block V2; V2 must not break stub | V2 plan exists in /rapid (PHASE_05) |
-| 6 | Rival has no special-case shell code | Quil could require special tile/focus/close logic | Quil follows Linen pattern exactly; zero special cases | `is_closeable_surface(QUIL) = false` is same as Linen | Diff check: Quil helpers ≤ 5% diff from Linen helpers |
-| 7 | Rival's placeholder has visual clarity | Quil stub produces blank/black area (no server) | Non-Goal: no placeholder in V1. Future: colored rect via sexdisplay, never framebuffer write | Placeholder goes through sexdisplay only (0xEC/0xEB) | No framebuffer access in silk-shell |
-| 8 | Rival has no proof gaps | Quil stub could miss markers for edge cases | SCAN 5 documents 15 markers + 15 negative tests. All guards have proof markers. | Every guard must have an allow AND reject marker | Marker audit: allow + reject for each operation |
-| 9 | Rival has no Tombstoned state confusion | Quil stub hardcodes `surface_is_alive=true` which skips tombstone check | `surface_is_alive(201)=true` is intentional — Quil cannot be closed. No tombstone needed. | OS-owned surfaces skip tombstone | No tombstone path reaches Quil (gated by is_closeable_surface) |
-| 10 | Rival follows existing shell patterns | Quil could introduce pattern drift | Quil is a structural copy of Linen. Pattern drift is detectable by diff. | All app surfaces follow Linen pattern | Pre-commit diff: new surface vs Linen pattern |
-| 11 | Rival has better lifecycle discipline | Quil stub could introduce FSM violations | SCAN 3 defines complete FSM with 10 states, allowed/forbidden transitions, and failure behaviors | FSM must be documented before any new state is added | FSM audit: every state has allowed/forbidden/check/display/marker/failure |
-| 12 | Rival has better handoff discipline | Quil stub handoff becomes stale after code changes | Handoff is updated WITH code changes, not after. Handoff and code are in same PR. | Handoff must be reviewed whenever Quil-related code changes | PR check: handoff updated if surfacE_ID_QUIL or QUIL_FRAME_ID changes |
+| Category | Rival Advantage | SexOS-Native Fix | Invariant/Proof Gate |
+|----------|----------------|------------------|---------------------|
+| Stub size | Smaller stub (no FSM/handoff) | 5 helpers, 12 wiring, <1% of silk-shell. FSM is documentation, not code. | No Quil-specific code beyond Linen-copied helpers |
+| Editor speed | Launches real editor faster | Stub deliberately bounded — editor is separate track (PDX server, handoff, Collar) | Shell has zero editor logic |
+| Upgrade path | Clear V2 path | V2 boundaries documented; handoff pattern reusable for any app surface | V2 plan in /rapid (PHASE_05) |
+| Visual clarity | Placeholder has pixels | Non-Goal: no placeholder in V1. Future: colored rect via sexdisplay only. | No framebuffer access in silk-shell |
+| Pattern adherence | No focus-fallback bug, stale geometry, special cases, proof gaps, tombstone confusion, pattern drift, lifecycle gaps, handoff staleness | All merge to one invariant: **Quil follows Linen pattern exactly.** Focus guard (Patch B), 3-path geometry update, zero special cases, allow+reject markers for every guard, OS-surface tombstone skip, FSM complete, handoff updated in same PR. | Diff check ≤5% from Linen; `try_set_focus` returns false before frame; every guard has allow+reject marker; handoff reviewed with code changes |
 
-### Best-in-Class Methods to Steal
+### SexOS-Native Design Principles
 
-SexOS adopts these methods natively:
-
-1. **Tiny reliable placeholder first** — Surface identity only. 12 wiring locations. 5 helpers. No server/editor/files.
-2. **App-surface pattern reuse** — Every new surface is a structural copy of Linen (<5% diff enforced).
-3. **Strict lifecycle guards** — 5-guard `try_set_focus()`, frame-existence check, OS-surface exclusion.
-4. **Deterministic surface IDs** — Sequential (100 APP, 101 STATIC, 200 Linen, 201 Quil); collision scan before allocation.
-5. **Explicit focus/liveness** — `surface_in_active_scene()` returns false for frameless Quil (Patch B).
-6. **Placeholder UX with clear boundary** — If rendered, via sexdisplay only. Honest: "No editor. No server. No files. No persistence."
-7. **Proof-first operations** — Every operation has allow+reject markers. Every guard has a negative test.
-8. **Handoff-driven upgrade** — V2 requires new handoff, PDX server, Linen OpenIntent, Collar grants.
-
-### SexOS-Native vs Desktop-App Design
-
-| Desktop Pattern | SexOS Replacement |
-|----------------|-------------------|
-| Editor opens files | Linen OpenIntent mediates file access |
-| Editor owns chrome | Shell owns frame/tab/chrome via Silk Scene |
-| Editor renders window | Shell sends 0xEC/0xEB; sexdisplay renders |
-| Editor is a monolith | Quil is one surface ID; server is independent PDX binary |
+- **Tiny reliable placeholder first** — Surface identity only. 12 wiring locations. 5 helpers. No server/editor/files.
+- **App-surface pattern reuse** — Every new surface is a structural copy of Linen (<5% diff enforced).
+- **Proof-first operations** — Every operation has allow+reject markers. Every guard has a negative test.
+- **Desktop vs SexOS**: Editor opens files → Linen OpenIntent mediates; Editor owns chrome → Shell owns via Silk Scene; Editor renders window → sexdisplay renders; Editor is monolith → Quil is one surface ID + independent PDX binary.
 
 ---
 
@@ -340,52 +270,7 @@ The following are explicitly NOT implemented by this stub. Any future work must 
 - ❌ No z-order priority optimization — Quil uses same priority as Linen
 - ❌ No keybinding without conflict + accessibility audit
 
----
-
-## Known Imperfections Summary
-
-All findings from scans 1-7 are documented in their respective sections above. This table summarizes only status.
-
-| Scan | Items | Patched | Accepted (doc only) | Deferred to V2 |
-|------|-------|---------|---------------------|----------------|
-| PASS 1 Correctness | 3 bugs | #1 (critical), #2 (medium) | #3 (low) | — |
-| PASS 2 Architecture | 7 issues | #10 (z_order) | #5, #7, #8, #9 | #4 (helper param), #6 (registration) |
-| PASS 3 Product | 7 gaps | — | #12-#17 | #11 (keybinding) |
-| SCAN 1 Boundary | 5 fixes | All 5 wording fixes applied | — | — |
-| SCAN 2 Premortem | 18 failures | P6 (focus guard) | All others via Non-Goals/guards | — |
-| SCAN 3 FSM | 10 states | — | All defined | — |
-| SCAN 4 Pattern | 16 elements | All 16 ✅ Present | — | — |
-| SCAN 5 Markers | 14 markers | K2-K4, K6 present | K1, K5, K7-K14 documented | — |
-| SCAN 6 Safest Path | 10 steps | All 10 verified | — | — |
-| SCAN 7 Hypothesis | 12 rivals | All accepted with mitigation | — | — |
-
-### Remaining Risks (Accepted)
-
-1. **No keyboard binding** — Quil is not user-openable until Focus201 SurfaceAction is added. Acceptable for V1 stub.
-2. **No visual placeholder** — Until a Quil server exists, surface 201 is blank/black when opened. Acceptable for V1 stub.
-3. **FRAMES array at 3/4 capacity** — Only 1 slot remains for future frame-based apps. Acceptable until V2 registration protocol.
-4. **Helper duplication with Linen** — ~140 lines of near-identical code. Acceptable until V2 parameterization.
-5. **Surface ID registry is a comment** — No compile-time enforcement of uniqueness. Mitigated by pre-commit collision scan procedure.
-6. **Quil stub never enters Tombstoned state** — `surface_is_alive(201)=true` + `is_closeable_surface(201)=false` means Quil bypasses tombstone entirely. This is intentional for OS-managed surfaces.
-
----
-
-## Build Command & Result
-
-```
-RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie" cargo build \
-    -Z build-std=core,compiler_builtins,alloc \
-    -Z build-std-features=compiler-builtins-mem \
-    --manifest-path servers/silk-shell/Cargo.toml \
-    --target /home/xirtus_arch/x86_64-sex.json \
-    --release
-
-Finished release profile [optimized] in 0.78s
-Warnings: 217 (all pre-existing — `static_mut_ref`, `unused_import`, nested unsafe blocks)
-Errors: 0
-```
-
-217 warnings confirmed pre-existing (verified by comparing against pre-Quil build). No new warnings introduced.
+<!-- Accepted risks: no keyboard binding (requires Focus201 + audit), no visual placeholder (no server), FRAMES 3/4, helper dup ~140 lines, SurfaceId registry is comment (collision scan), Quil bypasses tombstone intentionally -->
 
 ---
 
@@ -406,179 +291,44 @@ Errors: 0
 
 ## SCAN 8: Customization / User Policy Surface
 
-**Rule:** Quil surface stub may define user-facing preferences, but only as shell-owned validated policy. Customization must not turn the stub into the real Quil editor, dev cockpit, file browser, agent runner, storage client, renderer policy owner, or security bypass.
+**Rule:** Quil surface stub may define user-facing preferences, only as shell-owned validated policy. Customization must not turn the stub into the real Quil editor, dev cockpit, file browser, agent runner, storage client, renderer policy owner, or security bypass. Preferences are shell-memory-only until E storage gates.
 
-Customization is *shell memory only* until E storage gates — no persistence to disk. All preferences are volatile: they live in `static mut` shell state and reset on boot unless restored from snapshot.
+### Customizable (8 fields)
 
-### Customizable in V1 / Stub
+| Preference | Type | Bounds | Default |
+|------------|------|--------|---------|
+| Placeholder title | Compiled enum: `Editor`, `Terminal`, `Notepad`, `Scratch`, `Blank` | Only enum variants; raw strings rejected | `Blank` |
+| Icon/glyph | Compiled enum: `Code`, `Edit`, `Terminal`, `Empty` | Only enum variants | `Empty` |
+| Accent color | Silk theme token: `Default`, `Blue`, `Green`, `Amber`, `Plum`, `Slate` | Mapped through palette; raw RGBA rejected | `Default` |
+| Launch geometry | `{x, y, w, h}` via shell API | Clamped by `clamp_position/size`; w≥80, h≥60 | (100, 100, 640, 480) |
+| Open behavior | Compiled enum: `Open`, `Focus`, `Toggle` | Only enum variants | `Open` |
+| Keybinding (future) | `{scancode, modifiers}` | Must pass D accessibility + conflict audit | None |
+| Launcher visibility | `bool` | Boolean only | `false` |
+| Proof verbosity | Compiled enum: `Minimum`, `Normal`, `Debug` | Minimum ≤ Normal ≤ Debug; required safety markers never suppressed | `Normal` |
 
-| Preference | Type | Source | Bounds | Default | Side Effects |
-|------------|------|--------|--------|---------|--------------|
-| Placeholder title text | `QuilStubPreference::Title(QuilStubTitleToken)` | Fixed compiled enum: `Editor`, `Terminal`, `Notepad`, `Scratch`, `Blank` | Only enum variants valid; raw strings rejected | `Blank` | Changes surface title in `ShellTab.title_id`; no content or behavior change |
-| Placeholder icon/glyph | `QuilStubPreference::Icon(QuilStubIconToken)` | Fixed compiled set: `Code`, `Edit`, `Terminal`, `Empty` | Only enum variants valid | `Empty` | Shell renders icon in chrome slot if supported; no permission/identity claim |
-| Accent color token | `QuilStubPreference::Accent(QuilStubThemeToken)` | Bounded Silk theme token set: `Default`, `Blue`, `Green`, `Amber`, `Plum`, `Slate` | Mapped through Silk scene token palette; raw RGBA rejected | `Default` | Affects frame chrome accent (top-bar tint, tab highlight). Does NOT set sexdisplay pixel policy. |
-| Default launch geometry | `QuilStubLaunchPolicy::Geometry { x, y, w, h }` | User-provided `i32`/`u32` via shell preference API | Clamped by `clamp_position()` + `clamp_surface_size()`; w≥80, h≥60, all bounds-checked against framebuffer | `(100, 100, 640, 480)` | Used by `ensure_quil_frame()` as `normal_x/y/w/h`. Overridden by tile if conflicting. |
-| Default open behavior | `QuilStubLaunchPolicy::OpenAction(QuilStubOpenAction)` | Compiled enum: `Open`, `Focus`, `Toggle` | Only enum variants valid | `Open` | Shell dispatches to `open_quil_in_active_scene()`, `focus_or_open_quil()`, or `toggle_quil()` at activation event |
-| Optional keybinding (future) | `QuilStubKeybindingHint { scancode, modifiers }` | Shell-managed shortcut table; not free-form | Must pass shortcut conflict audit (D accessibility gate); scancode must be unused | None (not bound) | Shell registers scancode-to-`Focus201` mapping. Requires `SurfaceAction::Focus201` variant. Must not shadow existing bindings. |
-| Visibility in shell surfaces | `QuilStubPreference::VisibleInLauncher(bool)` | Shell-owned toggle; Quil does not set its own visibility | Boolean only; enforced by shell's app visibility policy | `false` (hidden until Quil server exists) | Controls whether Quil appears in SilkBar launcher, Atlas, or app list. Shell may override for policy reasons. |
-| Proof verbosity level | `QuilStubPreference::ProofLevel(QuilStubProofLevel)` | Compiled enum: `Minimum`, `Normal`, `Debug` | `Minimum` ≤ `Normal` ≤ `Debug` — no arbitrary levels | `Normal` | Controls budget-marker fire rate. `Minimum` only fires errors/rejects. `Debug` fires all markers. Can NOT suppress required safety markers. |
+### NOT Customizable (15 system invariants)
 
-### Not Customizable
+`SurfaceId`/`FrameId`, lifecycle FSM rules, focus/liveness validation (5-guard `try_set_focus`), tombstone/destroy terminality, framebuffer ownership, sexdisplay rendering policy, PDX capability checks, Linen OpenIntent requirements, Collar grants, package trust, persistence gates (E/F), PDX opcode/ABI layout, geometry bounds clamping, required proof markers (`[quil.surface.focus.reject]`, `[quil.surface.close.reject]`, `[quil.error]`), crash/log/dev cockpit scope.
 
-| Feature | Why Not Customizable |
-|---------|---------------------|
-| `SurfaceId` / `FrameId` | Surface identity is a system constant; changing it breaks display protocol, snapshot restore, and all shell wiring |
-| Lifecycle FSM rules | Allowed/forbidden transitions are shell invariants; customization cannot skip guards |
-| Focus/liveness validation | `try_set_focus()` guards (alive, focusable, non-tombstoned, in-scene, frame-accepts-input) are system invariants |
-| Tombstone/destroy terminal behavior | Destroyed is terminal; tombstone prevents focus reuse. Customization cannot resurrect. |
-| Framebuffer ownership | sexdisplay is sole framebuffer writer. No preference can grant Quil framebuffer access. |
-| sexdisplay rendering policy | sexdisplay owns all surface rendering. Customization cannot inject pixel commands. |
-| Capability checks | All IPC goes through PDX capability slot map. Customization cannot bypass. |
-| Linen/OpenIntent requirements | File access requires Linen OpenIntent. Customization cannot grant file authority. |
-| Collar grants | All authority flows through Collar grants. Customization cannot self-authorize. |
-| Package trust | App identity verification is a separate track. Customization cannot assert trust. |
-| Persistence gates | Disk persistence requires E/F gate approval. Customization cannot flush to disk. |
-| PDX opcode/ABI layout | Opcodes are system constants. Customization cannot redefine protocol. |
-| Geometry bounds checks | `clamp_position()` and `clamp_surface_size()` are mandatory; customization cannot disable |
-| Required proof markers | `[quil.surface.focus.reject]`, `[quil.surface.close.reject]`, `[quil.error]` are required for safety |
-| Crash/log/dev cockpit | Separate feature tracks H/I; customization cannot enable early |
+### Invariants (9)
 
-### Required Model: Preference Types
+1. Bad values clamp or reject deterministically — no silent truncation, no panic.
+2. Preferences are shell/user-owned, not Quil-app-owned.
+3. Memory/proof-only until E gates — no disk write, no sexstore commit.
+4. Proof logs never include private document/project names — enum variants only.
+5. Renderer-affecting preferences are model tokens, not pixel commands.
+6. Keybindings require D accessibility + shortcut conflict audit.
+7. Customization cannot disable required proof markers (`Minimum` still fires safety markers).
+8. Customization cannot hide security/capability denial state.
+9. Reset-to-safe-default must exist (restores compiled defaults on boot, validation failure, or user request).
 
-```rust
-/// Compiled-enum preference for Quil stub placeholder title.
-/// Raw strings are rejected; only fixed variants allowed.
-enum QuilStubTitleToken {
-    Editor,    // "Quil Editor"
-    Terminal,  // "Quil Terminal"
-    Notepad,   // "Quil Notepad"
-    Scratch,   // "Quil Scratch"
-    Blank,     // "Quil" (default — no implied role)
-}
+### STOP FIRST (10 red lines)
 
-/// Compiled-enum glyph for Quil stub chrome icon.
-enum QuilStubIconToken {
-    Code,   // code/chevron glyph
-    Edit,   // pencil glyph
-    Terminal, // prompt glyph
-    Empty,  // no icon (default)
-}
+User-editable code/plugins/WASM; raw RGBA or unclamped geometry; app-owned launch/focus policy; disabling lifecycle guards; disabling proof markers; hidden unsafe/developer mode; persistence before E gates; keybindings without conflict/accessibility audit; private metadata in pref logs; preference values implying identity/authority (e.g., "System Console").
 
-/// Silk theme token for accent color. Maps to existing scene token palette.
-/// Never sets raw RGBA. Never bypasses Silk theme model.
-enum QuilStubThemeToken {
-    Default, // shell default accent
-    Blue,
-    Green,
-    Amber,
-    Plum,
-    Slate,
-}
+### Proof Scenarios (condensed)
 
-/// Launch geometry + open action policy.
-struct QuilStubLaunchPolicy {
-    geometry: Option<(i32, i32, u32, u32)>, // None = use compiled default
-    open_action: QuilStubOpenAction,
-}
+Valid token accepted → `[quil.pref.accept]`; invalid token rejected → `[quil.pref.reject]`; geometry out-of-bounds clamped → `[quil.pref.clamp]`; keybinding before audit → `[quil.pref.reject] reason=no_audit`; persistence before E gates → `[quil.pref.reject] reason=persistence_not_gated`; reset-to-default → `[quil.pref.reset]`; cannot change SurfaceId (compiler error); cannot suppress required safety markers at `Minimum` → `[quil.pref.proof.minimum]`; private metadata redacted from pref logs.
 
-enum QuilStubOpenAction {
-    Open,   // open_quil_in_active_scene()
-    Focus,  // focus_or_open_quil()
-    Toggle, // toggle_quil()
-}
+When implementing: add `static mut QUIL_PREFERENCE` + `quil_set/reset_preferences()` helpers, wire token enums into chrome/title/geometry/proof-level paths, add proof markers for accept/reject/clamp/reset. **STOP FIRST** if any preference touches the 15 non-customizable features.
 
-/// Future keybinding hint. Scancode must pass conflict audit.
-/// Not wired in V1 — requires SurfaceAction::Focus201.
-struct QuilStubKeybindingHint {
-    scancode: u8,
-    modifiers: u8,     // bitmask: Ctrl=1, Alt=2, Shift=4, Meta=8
-    audit_token: u64,  // proof that conflict scan completed
-}
-
-/// Proof verbosity level. Cannot suppress required safety markers.
-enum QuilStubProofLevel {
-    Minimum, // errors + rejects only
-    Normal,  // allow + reject + lifecycle transitions (default)
-    Debug,   // all markers including budget probes
-}
-
-/// Aggregate preferences struct. Stored in shell static mut.
-/// Volatile — not persisted to disk in V1.
-struct QuilStubPreference {
-    title: QuilStubTitleToken,
-    icon: QuilStubIconToken,
-    accent: QuilStubThemeToken,
-    launch_policy: QuilStubLaunchPolicy,
-    keybinding: Option<QuilStubKeybindingHint>, // None in V1
-    visible_in_launcher: bool,
-    proof_level: QuilStubProofLevel,
-}
-```
-
-### Required Invariants
-
-1. **Bad preference values clamp or reject deterministically.** Out-of-range enum values reject to compiled default. Out-of-bounds geometry clamps via `clamp_position()` / `clamp_surface_size()`. No silent truncation, no panic.
-2. **Preferences are shell/user-owned, not Quil-app-owned.** The shell stores and validates all preferences. The Quil server (when it exists) reads preferences via shell IPC, not directly from user input.
-3. **Preferences are memory/proof-only until E storage gates allow persistence.** No disk write. No sexstore commit. Snapshot captures shell state only (scene layout), not user preferences.
-4. **Preference proof logs cannot include private document/project names.** Logged preference events include enum variant name but never leaked content, filenames, paths, or project identifiers.
-5. **Renderer-affecting preferences are model tokens, not renderer policy.** Accent color is a `QuilStubThemeToken` that maps through Silk scene token palette. It never contains raw RGBA, pixel data, or render commands.
-6. **Keybindings require D accessibility + shortcut conflict audit.** Before any `QuilStubKeybindingHint` is accepted, a conflict scan against all existing `scancode_to_action()` mappings must pass. Accessibility team must sign off.
-7. **Customization cannot disable required proof markers.** `ProofLevel::Minimum` still fires: `[quil.surface.focus.reject]`, `[quil.surface.close.reject]`, `[quil.error]`, `[quil.surface.destroy.reject]`. Slient failures are forbidden.
-8. **Customization cannot hide security/capability denial state.** If a capability denial occurs, proof markers fire regardless of `ProofLevel`. No preference suppresses security events.
-9. **Reset-to-safe-default must exist.** `quil_reset_preferences()` restores all fields to compiled defaults. Called on boot, on preference validation failure, and on explicit user request.
-
-### STOP FIRST: Customization Red Lines
-
-If any of the following are proposed, stop all customization work and escalate:
-
-- 🛑 User-editable code/plugin/theme execution — no scripts, no WASM, no dynamic themes in V1 stub
-- 🛑 Raw color/layout values without bounds — no direct RGBA, no unclamped geometry, no pixel dimensions outside framebuffer
-- 🛑 App-owned launch/focus policy — shell owns all focus and launch decisions; Quil cannot set its own geometry or scene
-- 🛑 Disabling lifecycle guards — cannot skip `surface_in_active_scene()`, `is_tombstoned()`, `is_focusable_surface()`, `frame_accepts_input()`
-- 🛑 Disabling proof markers — required safety markers are non-optional
-- 🛑 Hidden unsafe/developer mode — no "unsafe mode" that bypasses capability checks or framebuffer ownership
-- 🛑 Persistence before E gates — no disk writes; no sexstore commits; no durable preference storage
-- 🛑 Keybindings before conflict/accessibility audit — no scancode mapping without D accessibility sign-off
-- 🛑 Private metadata in preferences or proof logs — no filenames, project names, user data, document content in log output
-- 🛑 Preference values that imply identity/authority — no title like "System Console" or "Root Shell" that implies elevated privilege
-
-### Proof Scenarios: Customization
-
-| # | Scenario | Input | Expected Result | Guard | Marker |
-|---|----------|-------|----------------|-------|--------|
-| 1 | Valid accent token accepted | `QuilStubThemeToken::Blue` | Accent changes to Blue; chrome repaints with Silk theme token `blue_accent` | Token validated against compiled enum; mapped through palette | `[quil.pref.accept] token=Blue` |
-| 2 | Invalid accent token rejected | `QuilStubThemeToken::Invalid(0xFF)` | Rejected; stays at compiled default (`Default`) | Out-of-range enum discriminant caught; fallback to default | `[quil.pref.reject] reason=invalid_token token=0xFF` |
-| 3 | Launch geometry outside bounds clamped | `x=-500, y=-500, w=10000, h=10000` | Geometry clamped to framebuffer bounds: w≥80, h≥60, x≥0, y≥0; oversized dimensions capped | `clamp_position()` + `clamp_surface_size()` applied | `[quil.pref.clamp] field=geometry reason=bounds` |
-| 4 | Keybinding requested before audit rejected | `QuilStubKeybindingHint { scancode: 0x3C, modifiers: 0, audit_token: 0 }` | Rejected; audit_token must be nonzero; scancode 0x3C is `DestroyFocused` (conflict) | Shortcut conflict audit; D accessibility gate; audit_token verification | `[quil.pref.reject] reason=no_audit scancode=0x3C` |
-| 5 | Preference persistence before E gates rejected | Attempt to write preferences to sexstore | No-op; preferences are memory-only until E storage gate | No disk-write path in silk-shell; storage gate compile-time flag | `[quil.pref.reject] reason=persistence_not_gated` |
-| 6 | Reset-to-safe-default restores compiled defaults | `quil_reset_preferences()` called | All fields = compiled default: `Blank` title, `Empty` icon, `Default` accent, boot geometry, `Open` action, no keybinding, hidden, `Normal` proof level | Explicit reset function zeroes all fields to `const QUIL_DEFAULT_PREFERENCE` | `[quil.pref.reset]` |
-| 7 | Customization cannot change SurfaceId | Attempt to set `SURFACE_ID_QUIL = 202` via preference | Impossible — `SURFACE_ID_QUIL` is `const u64`, not a preference field | Rust `const` immutability; no preference field modifies SurfaceId | (compiler error before runtime) |
-| 8 | Customization cannot disable proof markers | Set `ProofLevel::Minimum` — required markers still fire | `[quil.surface.focus.reject]` fires on focus rejection at `Minimum` level | `ProofLevel::Minimum` excludes allow/lifecycle/budget markers but REQUIRED_SAFETY_MARKERS bitmask always fires | `[quil.pref.proof.minimum] markers=required_safety_only` |
-| 9 | Preference proof log redacts private metadata | Title set to `Editor`, log writes preference update | Logged as `[quil.pref.accept] token=Editor` — NOT `[quil.pref.accept] token=Editor project="/home/user/secret_project"` | Log format enforced at compile time; no string interpolation of user-supplied content | `[quil.pref.accept] token=Editor` (no private data leaked) |
-
-### SCAN 8 Integration with Existing Stub
-
-The customization surface has zero impact on existing stub code. No `static mut QUIL_PREFERENCE` has been added yet — this section defines the model for when preferences are implemented. The existing 5 helpers + 12 wiring locations remain unchanged.
-
-When preferences are implemented:
-1. Add `static mut QUIL_PREFERENCE: QuilStubPreference` initialized to `QUIL_DEFAULT_PREFERENCE`
-2. Add `quil_set_preference()` and `quil_reset_preferences()` helpers
-3. Wire preference validation into preference-setter path (clamp, reject, accept)
-4. Wire `QuilStubThemeToken` into frame chrome accent render (if Silk supports)
-5. Wire `QuilStubTitleToken` into `ShellTab.title_id`
-6. Wire `QuilStubLaunchPolicy::geometry` into `ensure_quil_frame()` normal_* fields
-7. Wire `QuilStubLaunchPolicy::open_action` into activation dispatch
-8. Wire `QuilStubProofLevel` into budget-marker fire gates
-9. Add proof markers for preference accept/reject/clamp/reset
-10. **STOP FIRST** if any preference touches the 10 non-customizable features
-
----
-
-## Change History
-
-| Date | Change | Author |
-|------|--------|--------|
-| 2026-05-04 | Initial Quil surface stub matching Linen pattern | QUIL_SURFACE_STUB_V1 |
-| 2026-05-04 | 3-pass scan: 3 correctness bugs, 7 architecture issues, 7 product gaps | 3X_PHASE_SCAN_V1 |
-| 2026-05-04 | 7-scan hardening: boundary audit, premortem (18 failures), FSM (10 states), pattern mapping (16 elements), proof markers (14 + 15 negative tests), safest path (10 steps), exceeded hypothesis (12 rivals) | 7X_HARDEN_V1 |
-| 2026-05-04 | SCAN 8 customization: 8 customizable fields, 14 non-customizable invariants, 9 proof scenarios, 10 STOP FIRST red lines | 8X_CUSTOMIZE_V1 |

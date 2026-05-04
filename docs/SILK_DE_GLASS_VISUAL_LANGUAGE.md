@@ -5,7 +5,7 @@ Define the futuristic Apple-glass visual direction now, without renderer/composi
 This is a design-target spec and a safe near-term styling guide.
 
 ## Core Visual Principles
-- Deep blue-violet glass identity for the global bar.
+- Deep turqoise-marine "bottleglass" glass identity for the global bar.
 - Cool desktop backdrop gradients imply depth behind the bar.
 - Brightest values reserved for active/focused/clock layers.
 - Semantic chip colors communicate status at a glance.
@@ -15,10 +15,11 @@ This is a design-target spec and a safe near-term styling guide.
 ## Safe Current Subset (Now)
 Top-strip only, flat ARGB fills, no new rendering primitives:
 - Desktop backdrop as 4 flat horizontal bands:
-  - deep navy
-  - blue
+  - deep purple
+  - Turqoise
   - violet
   - warm purple
+  - yellow
 - Global bar body fill updated to deep blue-violet.
 - Workspace active state shown as lavender glow color.
 - Chips use stable semantic colors (net/wifi/battery/clock).

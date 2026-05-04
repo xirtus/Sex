@@ -166,42 +166,6 @@ struct SurfaceLifecycle {
     generation: u64,
 }
 
-/// A6: Reason for a tombstone event recording.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-enum TombstoneReason {
-    /// Normal frame-light close button.
-    CloseRequested = 0,
-    /// Focus cleared because surface is dead or lifecycle-invalid.
-    FocusCleared = 1,
-    /// Drag cancelled because surface is dead.
-    DragCancelled = 2,
-    /// Keyboard-triggered DestroyFocused action.
-    DestroyCommand = 3,
-    /// Final Tombstoned -> Destroyed transition (future, not yet wired).
-    FinalDestroy = 4,
-}
-
-/// A6: Tombstone event — records a surface death transition with context.
-/// Stored in a fixed-size ring buffer for observability and proof.
-#[derive(Debug, Clone, Copy)]
-struct TombstoneEvent {
-    /// The surface whose lifecycle changed.
-    surface_id: u64,
-    /// Lifecycle generation at time of recording.
-    generation: u64,
-    /// LifecycleState before the transition.
-    old_state: LifecycleState,
-    /// LifecycleState after the transition (or same for focus/drag clears).
-    new_state: LifecycleState,
-    /// Why this event was recorded.
-    reason: TombstoneReason,
-    /// Frame the surface belongs to (0 if unknown/no frame).
-    frame_id: u32,
-    /// Tab index within the frame (0 if unknown/single-tab).
-    tab_index: u8,
-}
-
 /// Maximum number of tracked lifecycle surfaces.
 const LIFECYCLE_MAX_SURFACES: usize = 32;
 
@@ -219,7 +183,6 @@ static mut LIFECYCLE_GENERATION: u64 = 1;
 /// FocusRef shadow of FOCUSED_SURFACE_ID. Updated in parallel via sync_focus_ref().
 /// Does not change focus behavior — purely additive for A4 readiness.
 static mut FOCUSED_SURFACE: Option<FocusRef> = None;
-
 
 /// Validate the app surface registry at boot.
 /// Checks for duplicate surface_ids and frame_ids.
@@ -804,9 +767,6 @@ fn snap_end_pos(w: u32, h: u32) -> (i32, i32) {
 ///   4 frames → 2x2 grid
 ///   5+       → stacked rows (full width, equal height)
 unsafe fn tile_visible_frames() {
-    static mut TILE_BEGIN_BUDGET: u32 = 8;
-    let b = &mut TILE_BEGIN_BUDGET;
-    if *b > 0 { *b -= 1; serial_println!("[shell.tile.begin]"); }
     let mut tiles: [u64; MAX_FRAMES] = [0; MAX_FRAMES];
     let mut count: usize = 0;
     for f in FRAMES.iter() {
@@ -825,30 +785,14 @@ unsafe fn tile_visible_frames() {
             }
         }
     }
-    if count == 0 {
-        // No visible frames in active scene — clear stale focus, drag, hover.
-        // Defense-in-depth: callers should already clear before calling, but
-        // this ensures safety even if a new call site omits the clearing step.
-        clear_focus_if_dead();
-        clear_drag_if_dead();
-        HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
-        static mut TILE_EMPTY_BUDGET: u32 = 4;
-        let b = &mut TILE_EMPTY_BUDGET;
-        if *b > 0 { *b -= 1; serial_println!("[shell.tile.empty]"); }
-        return;
-    }
+    if count == 0 { return; }
 
     let cw: u32 = P.width as u32;
     let ch: u32 = (P.height - P.bar_height) as u32;
 
     for i in 0..count {
         let sid = tiles[i];
-        if !surface_is_alive(sid) {
-            static mut TILE_SKIP_DEAD_BUDGET: u32 = 8;
-            let b = &mut TILE_SKIP_DEAD_BUDGET;
-            if *b > 0 { *b -= 1; serial_println!("[shell.tile.skip_dead] sid={}", sid); }
-            continue;
-        }
+        if !surface_is_alive(sid) { continue; }
 
         let (rx, ry, rw, rh) = if count == 1 {
             (0i32, P.bar_height, cw, ch)
@@ -1184,8 +1128,6 @@ const ATLAS_COLOR_CARD_EMPTY: u32 = 0x00182850;  // dim — empty scene
 const ATLAS_COLOR_FRAME_NORMAL: u32 = 0x003860a0; // frame block (normal)
 const ATLAS_COLOR_FRAME_ZOOMED: u32 = 0x0048c080; // frame block (zoomed)
 const ATLAS_COLOR_FRAME_MINIMIZED: u32 = 0x00304060; // frame block (minimized)
-/// Bright cyan border drawn around the currently selected Atlas card.
-const ATLAS_COLOR_SELECT: u32 = 0x0080e0ff;
 
 /// Describes one Scene for the Atlas overview.
 /// Derived from current shell state, not independently mutable.
@@ -1256,11 +1198,11 @@ static mut ATLAS_MODE_ENABLED: bool = false;
 /// Index of the currently selected scene in Atlas mode (0..4).
 /// Reset to active_scene_id when entering Atlas. Updated by arrow key navigation.
 static mut ATLAS_SELECTED_SCENE: u8 = 0;
-/// A6: Tombstone event ring buffer (size = power of 2 for efficient modulo).
-/// Overwrites oldest entry when full. Replaces old TOMBSTONES u64 ring.
-const TOMBSTONE_RING_SIZE: usize = 16;
-static mut TOMBSTONE_RING: [Option<TombstoneEvent>; TOMBSTONE_RING_SIZE] = [None; TOMBSTONE_RING_SIZE];
-static mut TOMBSTONE_RING_NEXT: usize = 0;
+/// Bounded tombstone list for recently-closed surface IDs.
+/// Prevents immediate reuse of freed IDs. Circular insertion.
+static mut TOMBSTONES: [u64; 8] = [0; 8];
+static mut TOMBSTONE_NEXT: usize = 0;
+static mut TOMBSTONE_COUNT: usize = 0;
 static mut SURFACE_100_ALIVE: bool = true;
 static mut SURFACE_101_ALIVE: bool = true;
 static mut SURFACE_101_X: i32 = 180;
@@ -1450,40 +1392,24 @@ fn surface_is_alive(sid: u64) -> bool {
     }
 }
 
-/// A6: Record a tombstone event in the ring buffer.
-/// Overwrites oldest entry when full. Replaces old tombstone_surface().
-unsafe fn record_tombstone_event(
-    sid: u64,
-    old_state: LifecycleState,
-    new_state: LifecycleState,
-    reason: TombstoneReason,
-) {
-    let generation = surface_generation(sid).unwrap_or(0);
-    let frame_id = frame_for_surface(sid).unwrap_or(0);
-    let tab_index: u8 = 0; // single-tab in V1 — always 0
-    let idx = TOMBSTONE_RING_NEXT;
-    TOMBSTONE_RING[idx] = Some(TombstoneEvent {
-        surface_id: sid,
-        generation,
-        old_state,
-        new_state,
-        reason,
-        frame_id,
-        tab_index,
-    });
-    TOMBSTONE_RING_NEXT = (idx + 1) % TOMBSTONE_RING_SIZE;
-    serial_println!("[tombstone.event.record] sid={} old={:?} new={:?} reason={:?} gen={}",
-        sid, old_state, new_state, reason, generation);
+/// Record a surface ID as permanently closed. Prevents immediate reuse
+/// via tombstone checks in focus/drag/hover paths.
+/// Circular buffer: oldest entry dropped when full.
+unsafe fn tombstone_surface(sid: u64) {
+    let idx = TOMBSTONE_NEXT;
+    TOMBSTONES[idx] = sid;
+    TOMBSTONE_NEXT = (idx + 1) % TOMBSTONES.len();
+    if TOMBSTONE_COUNT < TOMBSTONES.len() {
+        TOMBSTONE_COUNT += 1;
+    }
 }
 
-/// Returns true if `sid` is in the tombstone ring (recently closed, must
+/// Returns true if `sid` is in the tombstone set (recently closed, must
 /// not be focused, dragged, hovered, or restored as live).
 unsafe fn is_tombstoned(sid: u64) -> bool {
-    for i in 0..TOMBSTONE_RING_SIZE {
-        if let Some(ref event) = TOMBSTONE_RING[i] {
-            if event.surface_id == sid {
-                return true;
-            }
+    for i in 0..TOMBSTONE_COUNT {
+        if TOMBSTONES[i] == sid {
+            return true;
         }
     }
     false
@@ -1499,22 +1425,14 @@ static SURFACE_FOCUS_ACCEPT_BUDGET: core::sync::atomic::AtomicU32 =
 /// Call before any focus-dependent operation.
 unsafe fn clear_focus_if_dead() {
     let focused = FOCUSED_SURFACE_ID;
-    if focused != 0 && (!surface_is_alive(focused) || !surface_is_lifecycle_focusable(focused)) {
-        if !surface_is_alive(focused) {
-            serial_println!("[focus.ref.clear] id={} reason=dead", focused);
-            // A6: Record tombstone when focus is cleared because the surface is dead.
-            let st = lifecycle_state(focused).unwrap_or(LifecycleState::Allocated);
-            record_tombstone_event(focused, st, st, TombstoneReason::FocusCleared);
-        } else {
-            serial_println!("[focus.ref.clear] id={} reason=not_focusable lifecycle={:?}",
-                focused, lifecycle_state(focused));
-        }
+    if focused != 0 && !surface_is_alive(focused) {
+        serial_println!("[shell.surface.focus.clear.dead] id={}", focused);
         let z_order = [SURFACE_ID_QUIL, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                        SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
         let mut found = false;
         for &sid in &z_order {
             if sid == focused { continue; }
-            if surface_is_alive(sid) && surface_is_lifecycle_focusable(sid) {
+            if surface_is_alive(sid) {
                 if try_set_focus(sid) {
                     found = true;
                 }
@@ -1533,9 +1451,6 @@ unsafe fn clear_drag_if_dead() {
     if let InteractionState::Dragging { surface_id, .. } = INTERACTION {
         if !surface_is_alive(surface_id) {
             serial_println!("[shell.surface.drag.cancel.dead] id={}", surface_id);
-            // A6: Record tombstone for drag cancelled due to dead surface.
-            let st = lifecycle_state(surface_id).unwrap_or(LifecycleState::Allocated);
-            record_tombstone_event(surface_id, st, st, TombstoneReason::DragCancelled);
             try_transition(InteractionState::Idle);
         }
     }
@@ -1551,11 +1466,6 @@ unsafe fn clear_drag_if_wrong_scene() {
             if *b > 0 { *b -= 1; serial_println!("[shell.scene.drag.clear.wrong-scene] id={}", surface_id); }
             try_transition(InteractionState::Idle);
         }
-    }
-}
-
-
-
 // ── A3: Lifecycle State Helpers ──────────────────────────────────────────────────
 // Additive metadata only. No behavior change.
 // All helpers are unsafe because they access static mut LIFECYCLE_TABLE.
@@ -1753,6 +1663,10 @@ unsafe fn lifecycle_init_all() {
     lifecycle_register(SURFACE_ID_ATLAS_OVERLAY, LifecycleState::Allocated);
     serial_println!("[lifecycle.state.init] lifecycle model initialized");
 }
+
+    }
+}
+
 /// Returns true if the surface is shell-managed (draggable in V1).
 fn is_shell_surface(sid: u64) -> bool {
     sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
@@ -1805,8 +1719,7 @@ unsafe fn clear_focus_if_wrong_scene() {
             if let Some(frame) = f {
                 if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
                 if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
-                    if surface_is_alive(tab.surface_id) && !is_tombstoned(tab.surface_id)
-                            && surface_is_lifecycle_focusable(tab.surface_id) {
+                    if surface_is_alive(tab.surface_id) && !is_tombstoned(tab.surface_id) {
                         if try_set_focus(tab.surface_id) {
                             found = true;
                             break;
@@ -2032,7 +1945,6 @@ fn atlas_scene_at_point(px: i32, py: i32) -> Option<u8> {
     }
     None
 }
-
 /// Handle keyboard input while Atlas mode is enabled.
 /// All scancodes except F10 (0x44) are routed here when ATLAS_MODE_ENABLED is true.
 /// Navigation: arrows move the selected card in the 3+2 layout.
@@ -2044,6 +1956,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
     if scancode >= 0x02 && scancode <= 0x06 {
         let scene_idx = (scancode - 0x02) as u8;
         if scene_idx < ATLAS_MAX_SCENES as u8 {
+            // Destroy overlay, switch to scene, exit Atlas.
             pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_ATLAS_OVERLAY, 0, 0);
             if scene_idx != ACTIVE_SCENE_IDX {
                 switch_scene(scene_idx);
@@ -2091,8 +2004,8 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
         0x48 => { // Up arrow
             let sel = ATLAS_SELECTED_SCENE;
             ATLAS_SELECTED_SCENE = match sel {
-                3 => 0, 4 => 1,
-                _ => sel,
+                3 => 0, 4 => 1, // row 1 -> row 0, same column
+                _ => sel,        // already in row 0, stay
             };
             if ATLAS_SELECTED_SCENE != sel {
                 atlas_render_stub();
@@ -2104,8 +2017,8 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
         0x50 => { // Down arrow
             let sel = ATLAS_SELECTED_SCENE;
             ATLAS_SELECTED_SCENE = match sel {
-                0 => 3, 1 => 4, 2 => 4,
-                _ => sel,
+                0 => 3, 1 => 4, 2 => 4, // row 0 -> row 1; scene 2 clamps to col 1
+                _ => sel,                // already in row 1, stay
             };
             if ATLAS_SELECTED_SCENE != sel {
                 atlas_render_stub();
@@ -2140,6 +2053,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
             if *b > 0 { *b -= 1; serial_println!("[shell.atlas.cancel]"); }
         }
         _ => {
+            // All other keys consumed but no-op.
             static mut ATLAS_KEY_BUDGET: u32 = 4;
             let b = &mut ATLAS_KEY_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[shell.atlas.key] scancode={:#x} noop", scancode); }
@@ -2163,8 +2077,7 @@ unsafe fn atlas_render_stub() {
     pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_ATLAS_OVERLAY,
         (P.bar_height as u64) << 32 | 0u64,
         (ch as u64) << 32 | cw as u64);
-    // A3: Track Atlas overlay lifecycle: Allocated -> Mapped.
-    set_lifecycle_state(SURFACE_ID_ATLAS_OVERLAY, LifecycleState::Mapped);
+
     // Fill background with dark overlay color.
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
         0,
@@ -2219,15 +2132,19 @@ unsafe fn atlas_render_stub() {
         // Draw selection border around the currently selected card.
         if ATLAS_SELECTED_SCENE < ATLAS_MAX_SCENES as u8 && scene_idx == ATLAS_SELECTED_SCENE as usize {
             let border = 2i32;
+            // Top edge.
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
                 (cy as u64) << 32 | cx as u64,
                 (ATLAS_COLOR_SELECT as u64) << 32 | (border as u64) << 16 | card_w as u64);
+            // Bottom edge.
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
                 ((cy + card_h as i32 - border) as u64) << 32 | cx as u64,
                 (ATLAS_COLOR_SELECT as u64) << 32 | (border as u64) << 16 | card_w as u64);
+            // Left edge.
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
                 (cy as u64) << 32 | cx as u64,
                 (ATLAS_COLOR_SELECT as u64) << 32 | (card_h as u64) << 16 | border as u64);
+            // Right edge.
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
                 (cy as u64) << 32 | (cx + card_w as i32 - border) as u64,
                 (ATLAS_COLOR_SELECT as u64) << 32 | (card_h as u64) << 16 | border as u64);
@@ -2245,8 +2162,6 @@ unsafe fn atlas_render_stub() {
 unsafe fn atlas_clear_stub() {
     // Hide Atlas overlay surface.
     pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_ATLAS_OVERLAY, 0, 0);
-    // A3: Track Atlas overlay lifecycle: Mapped -> Allocated.
-    set_lifecycle_state(SURFACE_ID_ATLAS_OVERLAY, LifecycleState::Allocated);
     // Restore current scene visibility and tiling.
     sync_scene_visibility();
     clear_focus_if_dead();
@@ -2934,30 +2849,6 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     if !surface_is_alive(surface_id) {
         return false;
     }
-    // A6: Reject close if surface already in Closing/Tombstoned/Destroyed state.
-    if let Some(state) = lifecycle_state(surface_id) {
-        match state {
-            LifecycleState::Closing | LifecycleState::Tombstoned | LifecycleState::Destroyed => {
-                serial_println!("[tombstone.close.reject.dead] sid={} state={:?}", surface_id, state);
-                return false;
-            }
-            _ => {}
-        }
-    }
-    // A5: Check drag before lifecycle transition. Cancel drag on target surface.
-    if let InteractionState::Dragging { surface_id: drag_sid, .. } = INTERACTION {
-        if drag_sid == surface_id {
-            serial_println!("[frame.light.close.reject.drag] sid={} cancel_drag", surface_id);
-            // A6: Record tombstone for drag cancelled before close.
-            let st = lifecycle_state(surface_id).unwrap_or(LifecycleState::Allocated);
-            record_tombstone_event(surface_id, st, st, TombstoneReason::DragCancelled);
-            try_transition(InteractionState::Idle);
-        }
-    }
-    // A5: Clear focus first if this surface was focused.
-    if FOCUSED_SURFACE_ID == surface_id {
-        clear_focus_if_dead();
-    }
     match surface_id {
         SURFACE_ID_APP    => SURFACE_100_ALIVE = false,
         SURFACE_ID_STATIC => SURFACE_101_ALIVE = false,
@@ -2965,17 +2856,16 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
         SURFACE_ID_TEST4  => SURFACE_103_ALIVE = false,
         _ => return false, // unknown or non-closeable surface
     }
-    // A3/A6: Track lifecycle state transition: live -> Closing -> Tombstoned.
-    // Record tombstone events for each stage.
-    let old_state = lifecycle_state(surface_id).unwrap_or(LifecycleState::Visible);
+    // A3: Track lifecycle state transition: live -> Closing -> Tombstoned.
+    // Closing bumps generation (stale FocusRef dies when close begins).
     set_lifecycle_state(surface_id, LifecycleState::Closing);
-    record_tombstone_event(surface_id, old_state, LifecycleState::Closing, TombstoneReason::CloseRequested);
+    tombstone_surface(surface_id);
     set_lifecycle_state(surface_id, LifecycleState::Tombstoned);
-    record_tombstone_event(surface_id, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::CloseRequested);
-    serial_println!("[frame.light.close.fsm] sid={}", surface_id);
     pdx_call(SLOT_DISPLAY, 0xEE, surface_id, 0, 0);
-    // Focus fallback: clear remaining stale focus and drag.
+    // Focus fallback: if the closed surface was focused, clear_focus_if_dead
+    // will auto-switch to the next alive surface in z-order.
     clear_focus_if_dead();
+    // Clear drag if the closed surface was being dragged (surface is now dead).
     clear_drag_if_dead();
     // Clear hover if the closed surface's frame is no longer valid.
     clear_hover_if_wrong_scene();
@@ -3092,7 +2982,7 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
         let b = &mut FRAME_MINIMIZE_BUDGET;
         if *b > 0 {
             *b -= 1;
-            serial_println!("[frame.light.minimize.fsm] frame={} surface={}", frame_id, surface_id);
+            serial_println!("[shell.frame.minimize] frame={} surface={}", frame_id, surface_id);
         }
     }
     snap_capture_layout();
@@ -3135,9 +3025,8 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
             return false; // geometry unavailable
         }
     }
-    // A5: Focus restored surface and emit restore marker.
+    // Focus the restored surface.
     try_set_focus(surface_id);
-    serial_println!("[frame.light.restore.fsm] frame={} surface={}", frame_id, surface_id);
     // Re-tile to include the restored frame.
     tile_visible_frames();
     unsafe {
@@ -3363,27 +3252,11 @@ unsafe fn unzoom_frame(frame_id: u32) -> bool {
 /// Toggle zoom state for the given frame. If zoomed, unzoom. If not zoomed, zoom.
 /// Returns true if the state changed.
 unsafe fn toggle_zoom_frame(frame_id: u32) -> bool {
-    // A5: Reject zoom for Closing/Tombstoned/Destroyed surfaces.
-    let surface_id = active_surface_for_frame(frame_id);
-    if let Some(sid) = surface_id {
-        match lifecycle_state(sid) {
-            Some(LifecycleState::Closing) | Some(LifecycleState::Tombstoned)
-            | Some(LifecycleState::Destroyed) => {
-                serial_println!("[frame.light.zoom.fsm.reject] frame={} surface={} lifecycle=invalid", frame_id, sid);
-                return false;
-            }
-            _ => {}
-        }
-    }
-    let result = if frame_is_zoomed(frame_id) {
+    if frame_is_zoomed(frame_id) {
         unzoom_frame(frame_id)
     } else {
         zoom_frame(frame_id)
-    };
-    if result {
-        serial_println!("[frame.light.zoom.fsm] frame={}", frame_id);
     }
-    result
 }
 
 /// Map a Frame Light kind to its corresponding selected-window option bit.
@@ -3819,22 +3692,11 @@ unsafe fn try_set_focus(sid: u64) -> bool {
     }
     // Guard: reject focus for surfaces belonging to frames not in the active scene.
     // Panels, cursor, and other non-frame surfaces are always eligible.
-    // A4: Reject if lifecycle state does not allow focus (Visible or Mapped only).
-    if !surface_is_lifecycle_focusable(sid) {
-        serial_println!("[focus.lifecycle.reject] id={}", sid);
+    if !surface_in_active_scene(sid) {
+        serial_println!("[shell.focus.reject.wrong-scene] id={}", sid);
         return false;
     }
-    // A4: Verify generation is current before committing focus.
-    if let Some(fr) = make_focus_ref(sid) {
-        if !focus_ref_is_current(&fr) {
-            serial_println!("[focus.generation.reject] id={}", sid);
-            return false;
-        }
-    }
     FOCUSED_SURFACE_ID = sid;
-    // A4: Sync FocusRef shadow and emit commit marker.
-    sync_focus_ref();
-    serial_println!("[focus.ref.commit] id={}", sid);
     serial_println!("[shell.focus.set] id={}", sid);
     pdx_call(SLOT_DISPLAY, 0xED, sid, 0, 0);
     // Selected window options: frame, surface, and computed mask.
@@ -4125,8 +3987,6 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         if let Some(scene_idx) = atlas_scene_at_point(px, py) {
             // Hit a scene card: destroy overlay, switch to scene, exit Atlas.
             pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_ATLAS_OVERLAY, 0, 0);
-            // A3: Track Atlas overlay lifecycle exit.
-            set_lifecycle_state(SURFACE_ID_ATLAS_OVERLAY, LifecycleState::Allocated);
             let already_active = scene_idx == ACTIVE_SCENE_IDX;
             if !already_active {
                 switch_scene(scene_idx);
@@ -4696,9 +4556,7 @@ pub extern "C" fn _start() -> ! {
         });
         serial_println!("[shell.frame.model.init] frames=1 tabs=1");
 
-        // A3: Initialize lifecycle metadata for all known surfaces.
         lifecycle_init_all();
-
         // Initial snapshot after frames are set up.
         snap_capture_layout();
 
@@ -4781,7 +4639,7 @@ pub extern "C" fn _start() -> ! {
     pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
     serial_println!("[silk-shell] Boot focus set to surface 100");
     // A3: Sync initial FocusRef from boot focus.
-    unsafe { sync_focus_ref(); }
+    sync_focus_ref();
 
     // Send initial tab metadata for frame 1 (surface 100: 1 tab, active tab 0)
     unsafe { send_frame_tab_info(1); }
@@ -5037,47 +4895,24 @@ pub extern "C" fn _start() -> ! {
                                             pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
                                             destroyed = true;
                                             serial_println!("[silk-shell] Destroyed surface 100");
-                                            // A6: lifecycle transitions + tombstone for keyboard destroy.
-                                            let os_100 = lifecycle_state(target).unwrap_or(LifecycleState::Visible);
-                                            set_lifecycle_state(target, LifecycleState::Closing);
-                                            record_tombstone_event(target, os_100, LifecycleState::Closing, TombstoneReason::DestroyCommand);
-                                            set_lifecycle_state(target, LifecycleState::Tombstoned);
-                                            record_tombstone_event(target, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::DestroyCommand);
                                         } else if target == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
                                             SURFACE_101_ALIVE = false;
                                             pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
                                             destroyed = true;
                                             serial_println!("[silk-shell] Destroyed surface 101");
-                                            // A6: lifecycle transitions + tombstone for keyboard destroy.
-                                            let os_101 = lifecycle_state(target).unwrap_or(LifecycleState::Visible);
-                                            set_lifecycle_state(target, LifecycleState::Closing);
-                                            record_tombstone_event(target, os_101, LifecycleState::Closing, TombstoneReason::DestroyCommand);
-                                            set_lifecycle_state(target, LifecycleState::Tombstoned);
-                                            record_tombstone_event(target, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::DestroyCommand);
                                         } else if target == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
                                             SURFACE_102_ALIVE = false;
                                             pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
                                             destroyed = true;
                                             serial_println!("[silk-shell] Destroyed surface 102");
-                                            // A6: lifecycle transitions + tombstone for keyboard destroy.
-                                            let os_102 = lifecycle_state(target).unwrap_or(LifecycleState::Visible);
-                                            set_lifecycle_state(target, LifecycleState::Closing);
-                                            record_tombstone_event(target, os_102, LifecycleState::Closing, TombstoneReason::DestroyCommand);
-                                            set_lifecycle_state(target, LifecycleState::Tombstoned);
-                                            record_tombstone_event(target, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::DestroyCommand);
                                         } else if target == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
                                             SURFACE_103_ALIVE = false;
                                             pdx_call(SLOT_DISPLAY, 0xEE, target, 0, 0);
                                             destroyed = true;
                                             serial_println!("[silk-shell] Destroyed surface 103");
-                                            // A6: lifecycle transitions + tombstone for keyboard destroy.
-                                            let os_103 = lifecycle_state(target).unwrap_or(LifecycleState::Visible);
-                                            set_lifecycle_state(target, LifecycleState::Closing);
-                                            record_tombstone_event(target, os_103, LifecycleState::Closing, TombstoneReason::DestroyCommand);
-                                            set_lifecycle_state(target, LifecycleState::Tombstoned);
-                                            record_tombstone_event(target, LifecycleState::Closing, LifecycleState::Tombstoned, TombstoneReason::DestroyCommand);
                                         }
                                         if destroyed {
+                                            tombstone_surface(target);
                                             if target == SURFACE_ID_APP {
                                                 if SURFACE_101_ALIVE && try_set_focus(SURFACE_ID_STATIC) { serial_println!("[silk-shell] Auto-switched focus to surface 101"); }
                                                 else if SURFACE_102_ALIVE && try_set_focus(SURFACE_ID_TEST3) { serial_println!("[silk-shell] Auto-switched focus to surface 102"); }
@@ -5694,7 +5529,7 @@ pub extern "C" fn _start() -> ! {
         }
 
         // A3: Sync FocusRef from FOCUSED_SURFACE_ID after all state changes.
-        unsafe { sync_focus_ref(); }
+        sync_focus_ref();
 
         sys_yield();
     }
