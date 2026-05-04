@@ -51,6 +51,18 @@ const SURFACE_EMPTY: Surface = Surface {
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 static mut FOCUSED_SURFACE_ID: u64 = 0;
 const FOCUS_SURFACE_COLOR: u32 = 0x00A8E0FF;
+
+// ── Frame Chrome Rim (focused surface, matches shell FRAME_RIM_PX) ──
+const FRAME_RIM_PX: usize = 4;
+const FRAME_RIM_COLOR: u32 = 0x00C0F0FF;
+
+// ── Frame Light Colors (top-left rim band, matches shell FRAME_LIGHTS_HIT_TARGET_V1) ──
+const FRAME_LIGHT_SIZE_PX: usize = 4;
+const FRAME_LIGHT_GAP_PX: usize = 2;
+const FRAME_LIGHT_CLOSE_COLOR: u32 = 0x00FF4444;
+const FRAME_LIGHT_MINIMIZE_COLOR: u32 = 0x00FFCC44;
+const FRAME_LIGHT_ZOOM_COLOR: u32 = 0x0044FF44;
+
 // Shell-owned OS cursor surface. Always rendered last (above all app surfaces).
 const CURSOR_SURFACE_ID: u64 = 0x90;
 const LAUNCHER_PANEL_SURFACE_ID: u64 = 0x92;
@@ -97,7 +109,45 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                 let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
                 if sw == 0 || sh == 0 { continue; }
                 if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
-                    c = fill_rect_color(surf, x, y, FOCUS_SURFACE_COLOR);
+                    // Rim + Frame Light check (focused surface only).
+                    let lx = x - sx;  // local x within clamped surface
+                    let ly = y - sy;  // local y within clamped surface
+                    // Edge detection with saturating_sub to prevent underflow
+                    // on tiny surfaces (rim fills entire surface if sw/sh < RIM_PX).
+                    let rim_right = sw.saturating_sub(FRAME_RIM_PX);
+                    let rim_bottom = sh.saturating_sub(FRAME_RIM_PX);
+                    if ly < FRAME_RIM_PX || lx < FRAME_RIM_PX
+                        || lx >= rim_right || ly >= rim_bottom
+                    {
+                        // In the rim band. Check for Frame Lights in top-left corner.
+                        // Lights are within top rim band only (ly < FRAME_RIM_PX).
+                        if ly < FRAME_RIM_PX {
+                            // CLOSE: gap from left edge
+                            if lx >= FRAME_LIGHT_GAP_PX
+                                && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
+                            {
+                                c = FRAME_LIGHT_CLOSE_COLOR;
+                            }
+                            // MINIMIZE: gap + size + gap
+                            else if lx >= FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX
+                                && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
+                            {
+                                c = FRAME_LIGHT_MINIMIZE_COLOR;
+                            }
+                            // ZOOM: gap + 2*(size + gap)
+                            else if lx >= FRAME_LIGHT_GAP_PX + 2 * (FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX)
+                                && lx < FRAME_LIGHT_GAP_PX + 2 * (FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX) + FRAME_LIGHT_SIZE_PX
+                            {
+                                c = FRAME_LIGHT_ZOOM_COLOR;
+                            } else {
+                                c = FRAME_RIM_COLOR;
+                            }
+                        } else {
+                            c = FRAME_RIM_COLOR;
+                        }
+                    } else {
+                        c = fill_rect_color(surf, x, y, FOCUS_SURFACE_COLOR);
+                    }
                     break;
                 }
             }
