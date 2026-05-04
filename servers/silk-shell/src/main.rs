@@ -39,41 +39,66 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 //   100+  app surfaces (SURFACE_ID_APP, SURFACE_ID_STATIC, etc.)
 pub const OP_SURFACE_DESTROY: u64 = 0xEE;
 
-// ── Scene Render Token defaults (must match DEFAULT_RENDER_TOKENS in sexdisplay) ─
-const DTOK_FOCUS_SURFACE:  u32 = 0x007AAFA4;
-const DTOK_FRAME_RIM:      u32 = 0x00B8F2E8;
-const DTOK_FRAME_TOP_BAR:  u32 = 0x0088C2B7;
-const DTOK_ACTIVE_TAB:     u32 = 0x007AAFA4;
-const DTOK_INACTIVE_TAB:   u32 = 0x006080B0;
-const DTOK_CLOSE_LIGHT:    u32 = 0x00FF4444;
-const DTOK_MINIMIZE_LIGHT: u32 = 0x00FFCC44;
-const DTOK_ZOOM_LIGHT:     u32 = 0x0044FF44;
+// ── Scene Render Token presets ────────────────────────────────────────────────
+// Fields: [focus_surface, frame_rim, frame_top_bar, active_tab,
+//          inactive_tab, close_light, minimize_light, zoom_light]
+const PRESET_COUNT: usize = 4;
+type TokenPreset = [u32; 8];
+
+static TOKEN_PRESETS: [TokenPreset; PRESET_COUNT] = [
+    // 0: BottleGlass (default teal — matches DEFAULT_RENDER_TOKENS in sexdisplay)
+    [0x007AAFA4, 0x00B8F2E8, 0x0088C2B7, 0x007AAFA4, 0x006080B0, 0x00FF4444, 0x00FFCC44, 0x0044FF44],
+    // 1: VioletGlass (Silk canon purple)
+    [0x00503080, 0x00A060FF, 0x00604090, 0x00503080, 0x00302050, 0x00FF4080, 0x00FFAA00, 0x0040FF80],
+    // 2: GraphiteGlass (dark neutral)
+    [0x00282828, 0x00808080, 0x00404040, 0x00505050, 0x00303030, 0x00CC4444, 0x00CCAA44, 0x0044CC44],
+    // 3: HighContrast (accessibility proof)
+    [0x00000000, 0x00FFFFFF, 0x00111111, 0x00FFFF00, 0x00555555, 0x00FF4444, 0x00FFDD00, 0x0000FF44],
+];
+
+static mut ACTIVE_PRESET_IDX: u8 = 0;
 
 #[inline]
 fn pack_u32_pair(lo: u32, hi: u32) -> u64 {
     (lo as u64) | ((hi as u64) << 32)
 }
 
-/// Push scene render tokens to sexdisplay via OP_APPEARANCE_TOKENS (0xFC).
+/// Push a token preset to sexdisplay via OP_APPEARANCE_TOKENS (0xFC).
 /// Two sequential pdx_call messages; sexdisplay state machine disambiguates calls.
-unsafe fn send_scene_render_tokens() {
-    // Call 1: 6 colors packed into 3 × u64 args
+unsafe fn push_token_preset(p: &TokenPreset) {
     pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
-        pack_u32_pair(DTOK_FOCUS_SURFACE,  DTOK_FRAME_RIM),
-        pack_u32_pair(DTOK_FRAME_TOP_BAR,  DTOK_ACTIVE_TAB),
-        pack_u32_pair(DTOK_INACTIVE_TAB,   DTOK_CLOSE_LIGHT),
+        pack_u32_pair(p[0], p[1]),
+        pack_u32_pair(p[2], p[3]),
+        pack_u32_pair(p[4], p[5]),
     );
-    // Call 2: remaining 2 colors + flags; arg2=0 (reserved)
     pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
-        pack_u32_pair(DTOK_MINIMIZE_LIGHT, DTOK_ZOOM_LIGHT),
+        pack_u32_pair(p[6], p[7]),
         0u64, // appearance_flags=0, effect_levels=0
         0u64, // reserved
     );
+}
+
+/// Push default tokens at boot. Preserves [shell.appearance.tokens.send] proof marker.
+unsafe fn send_scene_render_tokens() {
+    push_token_preset(&TOKEN_PRESETS[0]);
     unsafe {
         static mut SHELL_TOKEN_SEND_BUDGET: u32 = 4;
         if SHELL_TOKEN_SEND_BUDGET > 0 {
             SHELL_TOKEN_SEND_BUDGET -= 1;
             serial_println!("[shell.appearance.tokens.send] seq=2 sent");
+        }
+    }
+}
+
+/// Advance to next preset (wrapping) and push to sexdisplay.
+unsafe fn cycle_scene_render_token_preset() {
+    ACTIVE_PRESET_IDX = (ACTIVE_PRESET_IDX + 1) % PRESET_COUNT as u8;
+    push_token_preset(&TOKEN_PRESETS[ACTIVE_PRESET_IDX as usize]);
+    unsafe {
+        static mut CYCLE_BUDGET: u32 = 16;
+        if CYCLE_BUDGET > 0 {
+            CYCLE_BUDGET -= 1;
+            serial_println!("[shell.appearance.preset] idx={}", ACTIVE_PRESET_IDX);
         }
     }
 }
@@ -89,6 +114,7 @@ enum SurfaceAction {
     RecreateFocused,
     RestoreMinimized,
     ToggleTopBar,
+    CycleRenderTokenPreset,
     ResetAll,
     SnapLeft, SnapRight, Maximize, Center,
     SnapHome, SnapEnd,
@@ -174,7 +200,8 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x0C => Some(SurfaceAction::ShrinkHeight),
         0x0D => Some(SurfaceAction::GrowHeight),
         0x49 => Some(SurfaceAction::RestoreMinimized),
-        0x3E => Some(SurfaceAction::ToggleTopBar),  // F4
+        0x3E => Some(SurfaceAction::ToggleTopBar),           // F4
+        0x3F => Some(SurfaceAction::CycleRenderTokenPreset), // F5
         0x3B => Some(SurfaceAction::LegacyFocusToggle),
         0x47 => Some(SurfaceAction::SnapHome),
         0x4F => Some(SurfaceAction::SnapEnd),
@@ -2321,6 +2348,10 @@ pub extern "C" fn _start() -> ! {
                                         if toggle_top_bar_for_active_frame() {
                                             mutated = true;
                                         }
+                                    }
+
+                                    SurfaceAction::CycleRenderTokenPreset => {
+                                        unsafe { cycle_scene_render_token_preset(); }
                                     }
 
                                     SurfaceAction::ResetAll => {
