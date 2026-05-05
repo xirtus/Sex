@@ -31,7 +31,7 @@ facts, and Collar grant status.
 ```
 
 **Chosen approach:** Add a rect-index field to existing 0xEF opcode (reusing
-bits 24-27 of arg2, currently zero-padding), and change sexdisplay's `Surface`
+bits 56-59 of arg2 (top nibble of color's alpha byte), and change sexdisplay's `Surface`
 struct to store an array of `MAX_RECTS` fill rects.
 No new opcode. No sex-pdx ABI symbol change. No kernel edit.
 Sexdisplay remains a dumb rectangle renderer. Silk-shell sends N sequential
@@ -141,7 +141,7 @@ Each 0xEF call specifies which rect slot to write via a rect_index field.
 - `fill_sh` → `fill_sh: [u32; MAX_RECTS]`
 - `fill_color` → `fill_color: [u32; MAX_RECTS]`
 - `fill_active: bool` → `fill_count: u8` (0 = no rects, 1-8 = active rects)
-- 0xEF handler: extract rect_index from bits 24-27 of arg2, write to slot[rect_index]
+- 0xEF handler: extract rect_index from bits 56-59 of arg2, write to slot[rect_index]
 - `fill_rect_color()`: iterate 0..fill_count, update color for each rect hit
 
 **BLOCKED_RENDERER_POLICY_RISK: LOW.** The sexdisplay renderer change is limited to iterating a fixed-size array in fill_rect_color(). No policy interpretation (sexdisplay does not know what a row is). No alpha blending. No z-ordering between rects. The renderer remains a dumb compositor. Bounds checks unchanged. This is a low-risk renderer change: it replaces a single-rect check with an array iteration of the same check.
@@ -251,9 +251,10 @@ struct Surface {
 
 **2. 0xEF handler change (line 1073-1125):**
 ```rust
-// Extract rect_index from bits 24-27 of arg2 (currently zero padding)
-// Format: arg2 = (color << 32) | (rect_index << 24) | (sh << 16) | sw
-let rect_index = ((msg.arg2 >> 24) & 0xF) as usize;
+// Extract rect_index from bits 56-59 of arg2 (top nibble of color's alpha byte).
+// Format: arg2 = (rect_index << 56) | (color_rgb << 32) | (sh << 16) | sw
+// Existing callers use 0x00RRGGBB so bits 56-63 are zero → rect_index=0.
+let rect_index = ((msg.arg2 >> 56) & 0xF) as usize;
 if rect_index >= MAX_RECTS { continue; }
 
 // When rect_index == 0 and fill_count == 0, this is the first rect.
@@ -474,7 +475,7 @@ Build:
 - ✅ Repeated 0xEF call safety (authorized and bounds-checked per call; single rect overwrite)
 - ✅ ownership split: silk-shell=policy, sexdisplay=dumb renderer
 - ✅ Exact sexdisplay Surface struct change (arrays of MAX_RECTS)
-- ✅ Exact sexdisplay 0xEF handler change (rect_index from bits 24-27)
+- ✅ Exact sexdisplay 0xEF handler change (rect_index from bits 56-59)
 - ✅ Exact fill_rect_color() change (iterate all rects, painter's)
 - ✅ Exact shell-side render function change pattern
 - ✅ STOP FIRST table (all clear)
