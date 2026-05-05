@@ -922,6 +922,9 @@ unsafe fn tile_visible_frames() {
         if sid == SURFACE_ID_QUIL {
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL, 0,
                 (QUIL_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
+            static mut QUIL_PLACEHOLDER_BUDGET: u32 = 8;
+            let b = &mut QUIL_PLACEHOLDER_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.quil.tile.placeholder] sid={}", sid); }
         }
     }
     static mut TILE_BUDGET: u32 = 8;
@@ -1398,6 +1401,26 @@ const ATLAS_COLOR_FRAME_ZOOMED: u32 = 0x0048c080; // frame block (zoomed)
 const ATLAS_COLOR_FRAME_MINIMIZED: u32 = 0x00304060; // frame block (minimized)
 /// Bright cyan border drawn around the currently selected Atlas card.
 const ATLAS_COLOR_SELECT: u32 = 0x0080e0ff;
+
+// ── C3 Atlas Visual Polish Tokens (SilkGlass palette) ────────────────
+/// Alias: background dark violet-black depth.
+const ATLAS_BG_COLOR: u32 = ATLAS_COLOR_BG;
+/// Alias: default card fill for non-active, non-empty scenes.
+const ATLAS_CARD_COLOR: u32 = ATLAS_COLOR_CARD_SCENE;
+/// Alias: active scene card fill.
+const ATLAS_CARD_ACTIVE_COLOR: u32 = ATLAS_COLOR_CARD_ACTIVE;
+/// Alias: empty scene card fill.
+const ATLAS_CARD_EMPTY_COLOR: u32 = ATLAS_COLOR_CARD_EMPTY;
+/// Alias: minimized frame hint block.
+const ATLAS_CARD_MINIMIZED_HINT_COLOR: u32 = ATLAS_COLOR_FRAME_MINIMIZED;
+/// Alias: zoomed frame hint block.
+const ATLAS_CARD_ZOOMED_HINT_COLOR: u32 = ATLAS_COLOR_FRAME_ZOOMED;
+/// Card fill for the nav-selected scene (violet-blue accent).
+const ATLAS_CARD_SELECTED_COLOR: u32 = 0x005050ff;
+/// Neon rim for the active scene card when not selected (muted cyan).
+const ATLAS_CARD_ACTIVE_RIM_COLOR: u32 = 0x004090c0;
+/// Muted rim for inactive scene cards (very dim).
+const ATLAS_CARD_INACTIVE_RIM_COLOR: u32 = 0x00204060;
 
 /// Describes one Scene for the Atlas overview.
 /// Derived from current shell state, not independently mutable.
@@ -2700,19 +2723,27 @@ unsafe fn atlas_render_stub() {
         0,
         (ATLAS_COLOR_BG as u64) << 32 | (ch as u64) << 16 | cw as u64);
 
+    // C3 proof: visual tokens active.
+    serial_println!("[atlas.visual.tokens]");
     // Draw cards for all scenes.
     for scene_idx in 0..ATLAS_MAX_SCENES {
         let sd = &ATLAS_SNAPSHOT.scenes[scene_idx];
         let (cx, cy, card_w, card_h) = atlas_card_pos(scene_idx, cw);
+        let is_selected = ATLAS_SELECTED_SCENE < ATLAS_MAX_SCENES as u8
+            && scene_idx == ATLAS_SELECTED_SCENE as usize;
 
-        // Determine card color.
-        let card_color = if (sd.flags & SCENE_FLAG_ACTIVE) != 0 {
-            ATLAS_COLOR_CARD_ACTIVE
+        // Determine card color: selected card gets accent fill.
+        let card_color = if is_selected {
+            serial_println!("[atlas.visual.selected] scene={}", scene_idx);
+            ATLAS_CARD_SELECTED_COLOR
+        } else if (sd.flags & SCENE_FLAG_ACTIVE) != 0 {
+            ATLAS_CARD_ACTIVE_COLOR
         } else if (sd.flags & SCENE_FLAG_EMPTY) != 0 {
-            ATLAS_COLOR_CARD_EMPTY
+            ATLAS_CARD_EMPTY_COLOR
         } else {
-            ATLAS_COLOR_CARD_SCENE
+            ATLAS_CARD_COLOR
         };
+        serial_println!("[atlas.visual.card] scene={} color={:#x}", scene_idx, card_color);
 
         // Draw card background (top portion, above frame blocks).
         let top_h = ATLAS_CARD_TOP_H.min(card_h);
@@ -2735,9 +2766,9 @@ unsafe fn atlas_render_stub() {
             // Determine frame block color based on frame flags.
             // V1: check scene-level flags as approximation.
             let fb_color = if (sd.flags & SCENE_FLAG_HAS_ZOOMED) != 0 {
-                ATLAS_COLOR_FRAME_ZOOMED
+                ATLAS_CARD_ZOOMED_HINT_COLOR
             } else if (sd.flags & SCENE_FLAG_HAS_MINIMIZED) != 0 {
-                ATLAS_COLOR_FRAME_MINIMIZED
+                ATLAS_CARD_MINIMIZED_HINT_COLOR
             } else {
                 ATLAS_COLOR_FRAME_NORMAL
             };
@@ -2746,8 +2777,12 @@ unsafe fn atlas_render_stub() {
                 (fb_color as u64) << 32 | (fb_h as u64) << 16 | fb_w as u64);
         }
 
+        // C3: scene flags proof marker.
+        serial_println!("[atlas.visual.flags] scene={} flags={:#x} frames={}",
+            scene_idx, sd.flags, fc);
+
         // Draw selection border around the currently selected card.
-        if ATLAS_SELECTED_SCENE < ATLAS_MAX_SCENES as u8 && scene_idx == ATLAS_SELECTED_SCENE as usize {
+        if is_selected {
             let border = 2i32;
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
                 (cy as u64) << 32 | cx as u64,
@@ -2761,6 +2796,37 @@ unsafe fn atlas_render_stub() {
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
                 (cy as u64) << 32 | (cx + card_w as i32 - border) as u64,
                 (ATLAS_COLOR_SELECT as u64) << 32 | (card_h as u64) << 16 | border as u64);
+        } else if (sd.flags & SCENE_FLAG_ACTIVE) != 0 {
+            // Active scene card gets a thin muted neon rim.
+            serial_println!("[atlas.visual.active] scene={}", scene_idx);
+            let rim = 1i32;
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                (cy as u64) << 32 | cx as u64,
+                (ATLAS_CARD_ACTIVE_RIM_COLOR as u64) << 32 | (rim as u64) << 16 | card_w as u64);
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                ((cy + card_h as i32 - rim) as u64) << 32 | cx as u64,
+                (ATLAS_CARD_ACTIVE_RIM_COLOR as u64) << 32 | (rim as u64) << 16 | card_w as u64);
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                (cy as u64) << 32 | cx as u64,
+                (ATLAS_CARD_ACTIVE_RIM_COLOR as u64) << 32 | (card_h as u64) << 16 | rim as u64);
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                (cy as u64) << 32 | (cx + card_w as i32 - rim) as u64,
+                (ATLAS_CARD_ACTIVE_RIM_COLOR as u64) << 32 | (card_h as u64) << 16 | rim as u64);
+        } else if (sd.flags & SCENE_FLAG_EMPTY) == 0 {
+            // Non-empty, non-active, non-selected card gets a very dim rim.
+            let rim = 1i32;
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                (cy as u64) << 32 | cx as u64,
+                (ATLAS_CARD_INACTIVE_RIM_COLOR as u64) << 32 | (rim as u64) << 16 | card_w as u64);
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                ((cy + card_h as i32 - rim) as u64) << 32 | cx as u64,
+                (ATLAS_CARD_INACTIVE_RIM_COLOR as u64) << 32 | (rim as u64) << 16 | card_w as u64);
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                (cy as u64) << 32 | cx as u64,
+                (ATLAS_CARD_INACTIVE_RIM_COLOR as u64) << 32 | (card_h as u64) << 16 | rim as u64);
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                (cy as u64) << 32 | (cx + card_w as i32 - rim) as u64,
+                (ATLAS_CARD_INACTIVE_RIM_COLOR as u64) << 32 | (card_h as u64) << 16 | rim as u64);
         }
     }
 
@@ -3291,6 +3357,9 @@ unsafe fn open_quil_in_active_scene() -> bool {
         if !restore_minimized_frame(fid) {
             return false;
         }
+        static mut QUIL_RESTORE_BUDGET: u32 = 8;
+        let b = &mut QUIL_RESTORE_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.quil.lifecycle.restore] frame={}", fid); }
     } else if frame_is_zoomed(fid) {
         // Already visible and zoomed — ensure focus.
     } else {
@@ -3361,7 +3430,7 @@ unsafe fn toggle_quil() -> bool {
                 if minimize_frame(QUIL_FRAME_ID) {
                     static mut QUIL_TOGGLE_BUDGET: u32 = 4;
                     let b = &mut QUIL_TOGGLE_BUDGET;
-                    if *b > 0 { *b -= 1; serial_println!("[shell.quil.toggle.minimize] frame={}", QUIL_FRAME_ID); }
+                    if *b > 0 { *b -= 1; serial_println!("[shell.quil.lifecycle.minimize] frame={}", QUIL_FRAME_ID); }
                     return true;
                 }
                 return false;
