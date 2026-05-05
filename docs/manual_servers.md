@@ -14,14 +14,14 @@
 4. [sexinput — Input / PS2 Driver](#4-sexinput--input--ps2-driver)
 5. [sexfiles — Virtual Filesystem Server](#5-sexfiles--virtual-filesystem-server)
 6. [sexdrive — NVMe / AHCI Storage Driver](#6-sexdrive--nvme--ahci-storage-driver)
-7. [sexshop — Object & Package Store](#7-sexshop--object--package-store)
+7. [sexshop — Object & Package Store (placeholder)](#7-sexshop--object--package-store-placeholder)
 8. [sexnet — Network Manager](#8-sexnet--network-manager)
 9. [sexnode — Cluster Node & Translator](#9-sexnode--cluster-node--translator)
 10. [sex-ld — Dynamic Linker](#10-sex-ld--dynamic-linker)
 11. [sexc — POSIX Syscall Server](#11-sexc--posix-syscall-server)
 12. [sext — Demand Pager](#12-sext--demand-pager)
 13. [sexgemini — Compiler Toolchain](#13-sexgemini--compiler-toolchain)
-14. [sexstore / sexstore-gui — Legacy Object Store](#14-sexstore--sexstore-gui--legacy-object-store)
+14. [sexstore — System Settings K/V](#14-sexstore--system-settings-kv)
 15. [tuxedo — DDE Translation Broker](#15-tuxedo--dde-translation-broker)
 16. [PDX Common Patterns](#16-pdx-common-patterns)
 17. [Server Dependency Map](#17-server-dependency-map)
@@ -510,17 +510,21 @@ sexfiles DiskFS → DmaCall{READ, offset, size}
 
 ---
 
-## 7. sexshop — Object & Package Store
+## 7. sexshop — Object & Package Store (placeholder)
 
 **Path:** `servers/sexshop/src/`
 **Files:** `main.rs`, `pdx.rs`, `transactions.rs`, `storage.rs`, `cache.rs`, `trampoline.rs`
-**Phase:** Phase 20+ (replaces `sexstore`)
+**Phase:** Placeholder — not built, not spawned, no PDX slot
 
 ### Purpose
 
-Lock-free PDX object store with package fetching, key-value store, transaction support, object migration, and zero-copy cache. Acts as the system package manager and persistent KV database.
+Aspirational design for a future object and package store. **Not implemented.** sexshop is not built by `sexos_build_spec.toml`, not spawned in `kernel/src/init.rs`, and has no `SLOT_SEXSHOP` constant in sex-pdx. The code in `servers/sexshop/` is dead placeholder with POSIX path assumptions incompatible with no_std SexOS.
 
-### Store Protocol
+**Do not implement or route storage work through sexshop until a separate sexshop design gate exists.**
+
+For current system-settings K/V storage, use **sexstore** (Section 14), which is the active, built, spawned bounded storage server.
+
+### Store Protocol (aspirational — not implemented)
 
 ```rust
 // servers/sexshop/src/pdx.rs
@@ -908,14 +912,48 @@ pub extern "C" fn _start() -> ! {
 
 ---
 
-## 14. sexstore / sexstore-gui — Legacy Object Store
+## 14. sexstore — System Settings K/V
 
-**Path:** `servers/sexstore/src/main.rs`, `servers/sexstore-gui/src/main.rs`
-**Phase:** Deprecated (replaced by sexshop in Phase 20)
+**Path:** `servers/sexstore/src/main.rs`
+**Phase:** Active (E4–E14)
 
-### Current Status
+### Purpose
 
-Both are **empty stub loops**. Kept in tree for reference. New code should use `sexshop`.
+Bounded system-settings K/V server. Fixed 16-slot static RAM table (256 bytes, no heap for K/V data). Stores shell scene appearance settings, audio policy flags, and other system configuration as opaque u64 values keyed by u32 identifiers.
+
+**sexstore is the active, built, spawned storage server.** It is built by `sexos_build_spec.toml`, spawned at domain 8 in `kernel/src/init.rs`, and has `SLOT_SEXSTORE=10` in sex-pdx. Only silk-shell (domain 3) has cap grant — no app direct access.
+
+### Capabilities
+
+| Feature | Status | Phase |
+|---------|--------|-------|
+| 16-slot static K/V table (u32 key → u64 value) | ✅ Active | E4+ |
+| Key validation (0x00 rejected, shell range 0x01–0x0F) | ✅ Active | E4 |
+| Value envelope validation (magic+version+checksum for key 0x01) | ✅ Active | E4 |
+| Bit-63 collision prevention (REPLY_STATUS_BIT mask) | ✅ Active | E4/E9 |
+| Capability gate (store_cap_allowed on all 3 dispatch paths) | ✅ Active | E4+ |
+| Slot states: Empty (0), Active (1), Tombstoned (2) | ✅ Active | E6 |
+| Generation counter (0=never written, 1..255, wraps 255→1) | ✅ Active | E6 |
+| DELETE / tombstone (OP_KV_DEL=0xB2, local to sexstore) | ✅ Active | E6 |
+| Structured proof markers (22 types, all StructuralMeta or PublicProof) | ✅ Active | E7/E13 |
+| Privacy redaction (no SecretContent in any marker per E8 policy) | ✅ Active | E8 |
+| Dual-page atomic swap durable backend (RAM-backed BSS scaffold) | ✅ Active | E13 |
+
+### Opcodes (local to sexstore — not in sex-pdx public ABI)
+
+| Opcode | Value | Operation |
+|--------|-------|-----------|
+| OP_KV_GET | 0xB0 | Read key value |
+| OP_KV_PUT | 0xB1 | Write key value |
+| OP_KV_DEL | 0xB2 | Delete / tombstone key |
+
+### Durable Backend (E13)
+
+sexstore implements a dual-page atomic swap durable backend using a **RAM-backed scaffold** (`static mut DURABLE_REGION: [u8; 1024]` in BSS). This is NOT real persistent storage — the 1024-byte region is volatile RAM like the K/V table. The dual-page logic (CRC validation, sequence-number toggle, boot recovery) is identical to what a hardware-backed version would use; only the page I/O abstraction layer changes when real persistent memory becomes available.
+
+### Historical note
+
+sexstore was historically referred to as **"n"** in older plan documents (PERSISTENT_STORAGE_MATURITY_PLAN_V1.md, THEREMIN_SYSTEM_SOUND_ENGINE_PLAN_V1.md). The kernel spawns it as "sexstore", the PDX slot is SLOT_SEXSTORE, and all E-track handoffs (E1–E14) use "sexstore" consistently.
 
 ---
 
@@ -1037,8 +1075,7 @@ sext ─────────────────────────
 sexgemini ────────────────────────→ (stub — invoked by sexnode translator)
 tuxedo ───────────────────────────→ (stub — invoked by sexnode DDE loader)
 
-sexstore ─────────────────────────→ (deprecated stub)
-sexstore-gui ─────────────────────→ (deprecated stub)
+sexstore ─────────────────────────→ silk-shell (GET/PUT/DEL via PDX slot 10)
 ```
 
 ### Kernel → Server IPC
