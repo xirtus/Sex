@@ -856,11 +856,12 @@ fn quil_buffer_kind_color(kind: QuilBufferKind) -> u32 {
 // Mirrors J2 linen_render_object_list pattern. No editor, no text rendering.
 // See docs/handoff/K3_QUIL_BUFFER_LIST_PLACEHOLDER_UI_V1.md
 
-/// Render a header bar + proof-marker rows for the current Quil buffer table.
-/// Uses existing 0xEF fill rect primitive with rect_index packing.
-/// The fill rect draws a header bar showing the buffer count.
-/// Each buffer is documented via proof marker and a visual row fill rect.
-/// Mirrors linen_render_object_list() pattern.
+/// Render the Quil buffer list using the Silk list row visual canon.
+/// rect_index allocation (fits within sexdisplay MAX_RECTS=8):
+///   0: header bar (static blue-purple)
+///   1: shared list background (neutral dark slate)
+///   2: selected row highlight — suppressed (no Quil selection model yet)
+///   3-7: per-row left accent bars (5px wide, buffer-kind-colored)
 unsafe fn quil_render_buffer_list() {
     let w = SURFACE_201_W;
     let h = SURFACE_201_H;
@@ -869,17 +870,31 @@ unsafe fn quil_render_buffer_list() {
     serial_println!("[quil.buffer_list.render] w={} h={}", w, h);
 
     // Draw header bar at top of surface (rect_index=0).
-    // arg2 format: (rect_index<<56)|(color_rgb<<32)|(sh<<16)|sw
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL,
-        (0u64 << 32) | 0u64,  // position (0,0)
+        (0u64 << 32) | 0u64,
         ((QUIL_LIST_HEADER_COLOR as u64) << 32)
             | ((QUIL_LIST_HEADER_H as u64) << 16)
             | w as u64);
 
-    // Emit row markers and visual fill rects, one per buffer.
     let count = quil_buffer_count();
+
+    // ── List background (rect_index=1) ───────────────────────────────────
+    let list_bg_h = QUIL_LIST_ACCENT_BARS as u32 * (QUIL_LIST_ROW_H + QUIL_LIST_ROW_GAP) - QUIL_LIST_ROW_GAP;
+    let list_bg_y = QUIL_LIST_HEADER_H;
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL,
+        (list_bg_y as u64) << 32 | 0u64,
+        (1u64 << 56)
+            | ((QUIL_LIST_BG_COLOR as u64) << 32)
+            | ((list_bg_h as u64) << 16)
+            | w as u64);
+    serial_println!("[quil.bg_rect] y={} h={}", list_bg_y, list_bg_h);
+
+    // ── Selected row highlight (rect_index=2) ───────────────────────────
+    // Suppressed — Quil has no buffer selection model. No OOB to guard.
+    serial_println!("[quil.row.reject] reason=no_selection_model");
+
+    // ── Emit row markers and accent bars (rect_indices 3-7) ─────────────
     let mut rows_emitted: u8 = 0;
-    let mut rects_sent: u8 = 0;
     for i in 0..QUIL_MAX_BUFFERS {
         if let Some(buf) = QUIL_BUFFERS[i] {
             if rows_emitted >= QUIL_LIST_MAX_ROWS {
@@ -892,31 +907,29 @@ unsafe fn quil_render_buffer_list() {
                 buf.buffer_id, kind_name, state_name, buf.linen_object_ref,
                 buf.linked_surface_id, buf.display_name);
 
-            // Send visual row rect if within fill-rect slot budget (slots 1-7; slot 0 = header).
-            if rows_emitted < QUIL_LIST_ROW_RECTS {
-                let rect_index = (rows_emitted as u64 + 1) & 0xF;
+            // Left accent bar (rect_index = 3 + rows_emitted, max 5 rows).
+            if rows_emitted < QUIL_LIST_ACCENT_BARS {
+                let accent_index = (rows_emitted as u64 + 3) & 0x7;
                 let row_y = QUIL_LIST_HEADER_H
                     + rows_emitted as u32 * (QUIL_LIST_ROW_H + QUIL_LIST_ROW_GAP);
-                let row_color = quil_buffer_kind_color(buf.kind);
+                let accent_color = quil_buffer_kind_color(buf.kind);
                 pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL,
                     (row_y as u64) << 32 | 0u64,
-                    (rect_index << 56)
-                        | ((row_color as u64) << 32)
+                    (accent_index << 56)
+                        | ((accent_color as u64) << 32)
                         | ((QUIL_LIST_ROW_H as u64) << 16)
-                        | w as u64);
-                serial_println!("[quil.row_visual.rect] index={} id={} kind={} color={:#010x}",
-                    rect_index, buf.buffer_id, kind_name, row_color);
-                rects_sent += 1;
+                        | QUIL_ACCENT_BAR_W as u64);
+                serial_println!("[quil.row_visual.accent] index={} id={} kind={} color={:#010x}",
+                    accent_index, buf.buffer_id, kind_name, accent_color);
             } else {
-                serial_println!("[quil.row_visual.skip] id={} reason=rect_budget", buf.buffer_id);
+                serial_println!("[quil.row_visual.skip] id={} reason=accent_budget", buf.buffer_id);
             }
 
             rows_emitted += 1;
         }
     }
-    serial_println!("[quil.buffer_list.done] count={} rows={} rects={}", count, rows_emitted, rects_sent);
+    serial_println!("[quil.buffer_list.done] count={} rows={}", count, rows_emitted);
 }
-
 // ── K2C: Seed Coherence Init ──────────────────────────────────────────────────
 // Called once at boot after both tables init.
 // For seed buffers that pre-declare a linen_object_ref AND a non-zero linked_surface_id,

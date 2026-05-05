@@ -54,6 +54,14 @@ Before (MAX_RECTS=8):           After (MAX_RECTS=8):
 | `LINEN_ACCENT_BAR_W` | — | `5` | Added |
 | `LINEN_SURFACE_VISUAL_H` | `220` (based on 7 rows) | `168` (based on 5 accent bars) | Updated |
 
+**Height WARN — surface height 220 → 168:**
+- `168px = HEADER_H(28) + ACCENT_BARS(5) × (ROW_H(24) + GAP(2)) + margin(10)`
+- Only 5 rows receive visual accent bars (rect 3-7 within MAX_RECTS=8). Rows beyond 5 emit `[linen.row_visual.skip]` markers but remain in model.
+- Header bar (28px) unchanged — no clipping.
+- List background rect sized to match 5 visible rows — no truncation.
+- No framebuffer/display bounds checks weakened — sexdisplay clamps `fill_sy`/`fill_sx` guard still active.
+- The 5 visible rows match the canon budget; any future increase requires STOP FIRST review for MAX_RECTS expansion.
+
 ### 2. Render function (lines 528-634)
 
 Rewritten `linen_render_object_list()` to implement the canon:
