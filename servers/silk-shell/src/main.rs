@@ -470,8 +470,6 @@ unsafe fn linen_select_prev_object() {
 
 /// Maximum visible rows in the Linen object list placeholder UI.
 const LINEN_LIST_MAX_ROWS: u8 = 8;
-/// Max rows with visual fill rects. Header takes rect_index=0; rows get 1-7 (MAX_RECTS=8).
-const LINEN_LIST_ROW_RECTS: u8 = 7;
 /// Height of each object row in the list, in pixels.
 const LINEN_LIST_ROW_H: u32 = 24;
 /// Gap between rows.
@@ -480,10 +478,16 @@ const LINEN_LIST_ROW_GAP: u32 = 2;
 const LINEN_LIST_HEADER_COLOR: u32 = 0x0038563A;
 /// Header bar height.
 const LINEN_LIST_HEADER_H: u32 = 28;
+/// Number of rows with visual accent bars (rect_indices 3-7 within MAX_RECTS=8).
+const LINEN_LIST_ACCENT_BARS: u8 = 5;
+/// Background color for the Linen list area behind all rows.
+const LINEN_LIST_BG_COLOR: u32 = 0x000C1420; // dark slate
+/// Width of the left accent bar per row, in pixels.
+const LINEN_ACCENT_BAR_W: u32 = 5;
 /// Linen surface height sized to fit all visual row rects without clipping.
-/// = HEADER_H + ROW_RECTS * (ROW_H + ROW_GAP) + 10px margin = 28 + 7*26 + 10 = 220.
+/// = HEADER_H + ACCENT_BARS * (ROW_H + ROW_GAP) + 10px margin = 28 + 5*26 + 10 = 168.
 const LINEN_SURFACE_VISUAL_H: u32 =
-    LINEN_LIST_HEADER_H + LINEN_LIST_ROW_RECTS as u32 * (LINEN_LIST_ROW_H + LINEN_LIST_ROW_GAP) + 10;
+    LINEN_LIST_HEADER_H + LINEN_LIST_ACCENT_BARS as u32 * (LINEN_LIST_ROW_H + LINEN_LIST_ROW_GAP) + 10;
 
 /// Kind-to-visual-color mapping for object list rows.
 /// Each LinenObjectKind gets a distinctive accent color for its row indicator.
@@ -521,12 +525,12 @@ unsafe fn linen_selected_object_accent() -> u32 {
     LINEN_LIST_HEADER_COLOR
 }
 
-/// Render the Linen object list as a placeholder UI inside the Linen surface.
-/// Uses existing 0xEF fill rect primitive (one rect per surface).
-/// The fill rect draws a header bar showing the object count.
-/// Each object is documented via proof marker — full row rendering
-/// requires future fill-rect expansion or text rendering in sexdisplay.
-/// Called after Linen placeholder open and after object table is ready.
+/// Render the Linen object list using the Silk list row visual canon.
+/// rect_index allocation (fits within sexdisplay MAX_RECTS=8):
+///   0: header bar (selected-object accent color)
+///   1: shared list background (neutral dark slate)
+///   2: selected row highlight (full-width bright accent)
+///   3-7: per-row left accent bars (5px wide, kind-colored)
 unsafe fn linen_render_object_list() {
     // Get current Linen surface geometry from tracked vars.
     let w = SURFACE_200_W;
@@ -542,17 +546,31 @@ unsafe fn linen_render_object_list() {
 
     // Draw header bar at top of surface using selection accent color (rect_index=0).
     // arg2 format: (rect_index<<56)|(color_rgb<<32)|(sh<<16)|sw
-    // Existing callers: bits 56-63 = 0 → rect_index=0; backward compatible.
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
         0u64,  // position (0,0) — top-left corner
         ((header_color as u64) << 32)
             | ((LINEN_LIST_HEADER_H as u64) << 16)
             | w as u64);
 
-    // Emit row markers and visual fill rects, one per object.
     let count = linen_object_count();
+
+    // ── List background (rect_index=1) ───────────────────────────────────────
+    // Single neutral rect behind all rows. Dark slate provides contrast for
+    // accent bars and selected row highlight.
+    let list_bg_h = LINEN_LIST_ACCENT_BARS as u32 * (LINEN_LIST_ROW_H + LINEN_LIST_ROW_GAP) - LINEN_LIST_ROW_GAP;
+    let list_bg_y = LINEN_LIST_HEADER_H;
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
+        (list_bg_y as u64) << 32 | 0u64,
+        (1u64 << 56)
+            | ((LINEN_LIST_BG_COLOR as u64) << 32)
+            | ((list_bg_h as u64) << 16)
+            | w as u64);
+    serial_println!("[linen.bg_rect] y={} h={}", list_bg_y, list_bg_h);
+
+    // ── Emit row markers and accent bars (rect_indices 3-7) ──────────────────
+    // Track selected row position for the highlight rect (rect_index=2).
     let mut rows_emitted: u8 = 0;
-    let mut rects_sent: u8 = 0;
+    let mut selected_row_pos: Option<u32> = None;
     for i in 0..LINEN_MAX_OBJECTS {
         if let Some(obj) = LINEN_OBJECTS[i] {
             if rows_emitted >= LINEN_LIST_MAX_ROWS {
@@ -566,30 +584,53 @@ unsafe fn linen_render_object_list() {
             serial_println!("[linen.object_list.row] id={} kind={} state={} name={} selected={}",
                 obj.object_id, kind_name, state_name, obj.display_name, selected_flag);
 
-            // Send visual row rect if within fill-rect slot budget (slots 1-7; slot 0 = header).
-            if rows_emitted < LINEN_LIST_ROW_RECTS {
-                let rect_index = (rows_emitted as u64 + 1) & 0xF;
-                let row_y = LINEN_LIST_HEADER_H
-                    + rows_emitted as u32 * (LINEN_LIST_ROW_H + LINEN_LIST_ROW_GAP);
-                let row_color = if is_selected { header_color } else { linen_kind_color(obj.kind) };
+            // Track selected row position for later highlight rect.
+            let row_y = LINEN_LIST_HEADER_H
+                + rows_emitted as u32 * (LINEN_LIST_ROW_H + LINEN_LIST_ROW_GAP);
+            if is_selected {
+                selected_row_pos = Some(row_y);
+            }
+
+            // Left accent bar (rect_index = 3 + rows_emitted, max 5 rows).
+            if rows_emitted < LINEN_LIST_ACCENT_BARS {
+                let accent_index = (rows_emitted as u64 + 3) & 0x7; // 3,4,5,6,7
+                let accent_color = if is_selected { header_color } else { linen_kind_color(obj.kind) };
                 pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
                     (row_y as u64) << 32 | 0u64,
-                    (rect_index << 56)
-                        | ((row_color as u64) << 32)
+                    (accent_index << 56)
+                        | ((accent_color as u64) << 32)
                         | ((LINEN_LIST_ROW_H as u64) << 16)
-                        | w as u64);
-                serial_println!("[linen.row_visual.rect] index={} id={} kind={} color={:#010x} selected={}",
-                    rect_index, obj.object_id, kind_name, row_color, selected_flag);
-                rects_sent += 1;
+                        | LINEN_ACCENT_BAR_W as u64);
+                serial_println!("[linen.row_visual.accent] index={} id={} kind={} color={:#010x} selected={}",
+                    accent_index, obj.object_id, kind_name, accent_color, selected_flag);
             } else {
-                serial_println!("[linen.row_visual.skip] id={} reason=rect_budget", obj.object_id);
+                serial_println!("[linen.row_visual.skip] id={} reason=accent_budget", obj.object_id);
             }
 
             rows_emitted += 1;
         }
     }
+
+    // ── Selected row highlight (rect_index=2) ───────────────────────────────
+    // Full-width bright accent bar at the selected row's y position.
+    match selected_row_pos {
+        Some(sel_y) => {
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
+                (sel_y as u64) << 32 | 0u64,
+                (2u64 << 56)
+                    | ((header_color as u64) << 32)
+                    | ((LINEN_LIST_ROW_H as u64) << 16)
+                    | w as u64);
+            serial_println!("[linen.row_visual.selected] y={} color={:#010x}", sel_y, header_color);
+        }
+        None => {
+            serial_println!("[linen.row.reject] id={} reason=not_found_in_visible_rows",
+                SELECTED_LINEN_OBJECT_ID);
+        }
+    }
+
     serial_println!("[linen.object_select.current] id={}", SELECTED_LINEN_OBJECT_ID);
-    serial_println!("[linen.object_list.done] count={} rows={} rects={}", count, rows_emitted, rects_sent);
+    serial_println!("[linen.object_list.done] count={} rows={}", count, rows_emitted);
 }
 
 // ── J3: Quil Buffer Table ────────────────────────────────────────────────────
@@ -1252,6 +1293,22 @@ unsafe fn bell_ring_count() -> usize {
     let total = BELL_RING_WRITE_INDEX;
     if total == 0 { return 0; }
     core::cmp::min(total as usize, BELL_RING_CAP)
+}
+
+/// Iterate Bell events from newest to oldest, calling `f` for each.
+/// Read-only. Does not mutate the ring. Bounded by BELL_RING_CAP.
+unsafe fn bell_for_each_event<F>(mut f: F) where F: FnMut(&BellEvent) {
+    let total = BELL_RING_WRITE_INDEX;
+    let count = bell_ring_count();
+    if count == 0 { return; }
+    // Newest-first: iterate backwards from (total-1) % cap.
+    let start = (total as usize).wrapping_sub(1) % BELL_RING_CAP;
+    for i in 0..count {
+        let idx = (start + BELL_RING_CAP - i) % BELL_RING_CAP;
+        if let Some(ref ev) = BELL_EVENTS[idx] {
+            f(ev);
+        }
+    }
 }
 
 /// Emit a shell-local Bell event for a Linen→Quil object link.
@@ -5835,6 +5892,14 @@ const BELL_BOOT_H: u32 = 480;
 
 /// Fill color for the Bell visual placeholder surface (attention red-orange).
 const BELL_PLACEHOLDER_COLOR: u32 = 0x00402020;
+/// Header bar height for the Bell event list, in pixels.
+const BELL_LIST_HEADER_H: u32 = 28;
+/// Height of each event row in the Bell list, in pixels.
+const BELL_LIST_ROW_H: u32 = 26;
+/// Gap between row fill rects in the Bell list, in pixels.
+const BELL_LIST_ROW_GAP: u32 = 2;
+/// Max rows with visual fill rects. Header takes rect_index=0; rows get 1-7.
+const BELL_LIST_ROW_RECTS: u8 = 7;
 
 // ── K11: Command Palette Stub ────────────────────────────────────────────
 // Shell-owned action router. No text input, no fuzzy search, no app manifests.
@@ -6062,6 +6127,77 @@ unsafe fn bell_frame_id() -> Option<u32> {
         }
     }
     None
+}
+
+/// Return a deterministic accent color for a Bell event row based on event kind.
+/// V1 only supports ObjectLinkedToBuffer. Color derived from linked object kind.
+unsafe fn bell_row_color(ev: &BellEvent) -> u32 {
+    match ev.kind {
+        BellEventKind::ObjectLinkedToBuffer => {
+            // Derive color from the linked object's kind if available.
+            if let Some(obj) = linen_object_by_id(ev.object_id) {
+                linen_kind_color(obj.kind)
+            } else {
+                0x00404060 // fallback muted blue-grey
+            }
+        }
+        _ => 0x00404060, // fallback for unimplemented event kinds
+    }
+}
+
+/// Render the Bell event list as row fill rects inside the Bell placeholder surface.
+/// Uses existing multi-rect pattern (header + event rows). Read-only over ring.
+unsafe fn bell_render_event_list() {
+    let w = SURFACE_204_W;
+    let h = SURFACE_204_H;
+    if w == 0 || h == 0 { return; }
+
+    serial_println!("[bell.event_list.render] w={} h={} count={}", w, h, bell_ring_count());
+
+    // Draw header bar at top of surface (rect_index=0).
+    // arg2 format: (rect_index<<56)|(color_rgb<<32)|(sh<<16)|sw
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_BELL_PLACEHOLDER,
+        (0u64 << 32) | 0u64,  // position (0,0)
+        ((BELL_PLACEHOLDER_COLOR as u64) << 32)
+            | ((BELL_LIST_HEADER_H as u64) << 16)
+            | w as u64);
+
+    // Emit row markers and visual fill rects, newest-first.
+    let mut rows_emitted: u8 = 0;
+    let mut rects_sent: u8 = 0;
+    bell_for_each_event(|ev| {
+        if rows_emitted >= BELL_LIST_ROW_RECTS {
+            serial_println!("[bell.event_list.skip] event_id={} reason=max_rows", ev.event_id);
+            return;
+        }
+        let kind_name = match ev.kind {
+            BellEventKind::ObjectLinkedToBuffer => "ObjectLinkedToBuffer",
+            _ => "Unknown",
+        };
+        serial_println!("[bell.event_list.row] event_id={} kind={} object_id={} buffer_id={}",
+            ev.event_id, kind_name, ev.object_id, ev.buffer_id);
+
+        // Send visual row rect if within fill-rect slot budget (slots 1-7; slot 0 = header).
+        if rows_emitted < BELL_LIST_ROW_RECTS {
+            let rect_index = (rows_emitted as u64 + 1) & 0xF;
+            let row_y = BELL_LIST_HEADER_H
+                + rows_emitted as u32 * (BELL_LIST_ROW_H + BELL_LIST_ROW_GAP);
+            let row_color = bell_row_color(ev);
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_BELL_PLACEHOLDER,
+                (row_y as u64) << 32 | 0u64,
+                (rect_index << 56)
+                    | ((row_color as u64) << 32)
+                    | ((BELL_LIST_ROW_H as u64) << 16)
+                    | w as u64);
+            serial_println!("[bell.row_visual.rect] index={} event_id={} kind={} color={:#010x}",
+                rect_index, ev.event_id, kind_name, row_color);
+            rects_sent += 1;
+        } else {
+            serial_println!("[bell.row_visual.skip] event_id={} reason=rect_budget", ev.event_id);
+        }
+        rows_emitted += 1;
+    });
+    serial_println!("[bell.event_list.done] count={} rows={} rects={}", bell_ring_count(), rows_emitted, rects_sent);
 }
 
 // ── K11: Command Palette Helpers ─────────────────────────────────────────────
