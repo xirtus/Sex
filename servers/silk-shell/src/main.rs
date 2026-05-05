@@ -1255,6 +1255,11 @@ unsafe fn mesh_record_fact(kind: MeshFactKind, subject_id: u64, object_id: u64, 
         idx, seq, kind, subject_id, object_id, ref_id);
     serial_println!("[mesh.fact.done] count={} fact_id={}",
         core::cmp::min(MESH_FACT_WRITE_INDEX as usize, MESH_FACT_RING_CAP), seq);
+    // N4: Live refresh Mesh fact list if Mesh surface is visible.
+    if mesh_is_visible_in_active_scene() {
+        serial_println!("[mesh.render.refresh] reason=visible_after_fact kind={:?}", kind);
+        mesh_render_fact_list();
+    }
 }
 
 /// Return the number of Mesh facts currently in the ring.
@@ -1330,6 +1335,92 @@ unsafe fn mesh_emit_linen_quil_links() {
         }
     }
     serial_println!("[mesh.object_link.done] links={} stale={}", link_count, stale_count);
+}
+
+/// Derive a deterministic row color from a Mesh fact.
+/// For ObjectLinkedToBuffer, derives color from the linked Linen object's kind.
+/// Falls back to Mesh amber diagnostic color if object is not found.
+unsafe fn mesh_fact_row_color(fact: &MeshFact) -> u32 {
+    match fact.kind {
+        MeshFactKind::ObjectLinkedToBuffer => {
+            if let Some(obj) = linen_object_by_id(fact.subject_id) {
+                linen_kind_color(obj.kind)
+            } else {
+                0x00383010 // Mesh amber fallback
+            }
+        }
+    }
+}
+
+/// Returns true if the Mesh placeholder surface is currently visible
+/// in the active scene (frame exists, not minimized, surface alive).
+unsafe fn mesh_is_visible_in_active_scene() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == MESH_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                if let Some(sid) = active_surface_for_frame(MESH_FRAME_ID) {
+                    if surface_is_alive(sid) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Render the Mesh fact ring as row fill rects inside the Mesh placeholder surface.
+/// Uses existing multi-rect pattern (header + fact rows). Read-only over ring.
+unsafe fn mesh_render_fact_list() {
+    let w = SURFACE_202_W;
+    let h = SURFACE_202_H;
+    if w == 0 || h == 0 { return; }
+
+    serial_println!("[mesh.fact_list.render] w={} h={} count={}", w, h, mesh_fact_count());
+
+    // Draw header bar at top of surface (rect_index=0).
+    // arg2 format: (rect_index<<56)|(color_rgb<<32)|(sh<<16)|sw
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_MESH,
+        (0u64 << 32) | 0u64,  // position (0,0)
+        ((MESH_PLACEHOLDER_COLOR as u64) << 32)
+            | ((MESH_LIST_HEADER_H as u64) << 16)
+            | w as u64);
+
+    // Emit row markers and visual fill rects, newest-first.
+    let mut rows_emitted: u8 = 0;
+    let mut rects_sent: u8 = 0;
+    mesh_for_each_fact(|fact| {
+        if rows_emitted >= MESH_LIST_ROW_RECTS {
+            serial_println!("[mesh.fact_list.skip] fact_id={} reason=max_rows", fact.fact_id);
+            return;
+        }
+        serial_println!("[mesh.fact_list.row] fact_id={} kind={:?} subject_id={} object_id={} ref_id={}",
+            fact.fact_id, fact.kind, fact.subject_id, fact.object_id, fact.ref_id);
+
+        // Send visual row rect if within fill-rect slot budget (slots 1-7; slot 0 = header).
+        if rows_emitted < MESH_LIST_ROW_RECTS {
+            let rect_index = (rows_emitted as u64 + 1) & 0xF;
+            let row_y = MESH_LIST_HEADER_H
+                + rows_emitted as u32 * (MESH_LIST_ROW_H + MESH_LIST_ROW_GAP);
+            let row_color = mesh_fact_row_color(fact);
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_MESH,
+                (row_y as u64) << 32 | 0u64,
+                (rect_index << 56)
+                    | ((row_color as u64) << 32)
+                    | ((MESH_LIST_ROW_H as u64) << 16)
+                    | w as u64);
+            serial_println!("[mesh.row_visual.rect] index={} fact_id={} kind={:?} color={:#010x}",
+                rect_index, fact.fact_id, fact.kind, row_color);
+            rects_sent += 1;
+        } else {
+            serial_println!("[mesh.row_visual.skip] fact_id={} reason=rect_budget", fact.fact_id);
+        }
+        rows_emitted += 1;
+    });
+    serial_println!("[mesh.fact_list.done] count={} rows={} rects={}", mesh_fact_count(), rows_emitted, rects_sent);
 }
 
 // ── J7: Bell Object Link Event Stub ──────────────────────────────────────────
@@ -5616,6 +5707,14 @@ const MESH_BOOT_H: u32 = 480;
 
 /// Fill color for the Mesh visual placeholder surface (amber/diagnostic).
 const MESH_PLACEHOLDER_COLOR: u32 = 0x00383010;
+/// Header bar height for the Mesh fact list, in pixels.
+const MESH_LIST_HEADER_H: u32 = 28;
+/// Height of each fact row in the Mesh list, in pixels.
+const MESH_LIST_ROW_H: u32 = 26;
+/// Gap between row fill rects in the Mesh list, in pixels.
+const MESH_LIST_ROW_GAP: u32 = 2;
+/// Max rows with visual fill rects. Header takes rect_index=0; rows get 1-7.
+const MESH_LIST_ROW_RECTS: u8 = 7;
 
 /// Ensure a ShellFrame exists for Mesh in an empty FRAMES slot, assigned to
 /// the active scene. Returns the frame_id if created/found, or 0 if no slot.
@@ -5733,9 +5832,8 @@ unsafe fn open_mesh_in_active_scene() -> bool {
         serial_println!("[mesh.placeholder.focus] frame={} sid={}", fid, sid);
     }
 
-    // Ensure Mesh placeholder fill rect is set on every open.
-    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_MESH, 0,
-        (MESH_PLACEHOLDER_COLOR as u64) << 32 | ((SURFACE_202_H as u64) << 16) | SURFACE_202_W as u64);
+    // N4: Render Mesh fact list (replaces old single-fill placeholder).
+    mesh_render_fact_list();
 
     serial_println!("[mesh.placeholder.open] frame={}", fid);
     // J6: Emit diagnostic link facts every time Mesh opens.
