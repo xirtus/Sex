@@ -424,6 +424,188 @@ unsafe fn linen_render_object_list() {
     serial_println!("[linen.object_list.done] count={} rows={}", count, rows_emitted);
 }
 
+// ── J3: Quil Buffer Table ────────────────────────────────────────────────────
+// In-memory, static-only Quil buffer model. No editor, parser, compiler, build.
+// See docs/handoff/J3_QUIL_BUFFER_TABLE_V1.md
+
+/// Maximum number of tracked Quil buffers.
+const QUIL_MAX_BUFFERS: usize = 16;
+
+/// Kind of Quil buffer. Maps to H2 §2 workstation object types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum QuilBufferKind {
+    Text = 0,
+    Code = 1,
+    DesignNote = 2,
+    ReviewNote = 3,
+    Diagnostic = 4,
+    BuildOutput = 5,
+    AgentTask = 6,
+    LinenObjectView = 7,
+}
+
+/// Lifecycle state of a Quil buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum QuilBufferState {
+    Allocated = 0,
+    Open = 1,
+    Dirty = 2,
+    ReadOnly = 3,
+    Closed = 4,
+    Missing = 5,
+}
+
+/// Fixed-size Quil buffer record. All fields are scalar or fixed-cap.
+#[derive(Debug, Clone, Copy)]
+struct QuilBuffer {
+    buffer_id: u64,
+    kind: QuilBufferKind,
+    state: QuilBufferState,
+    linen_object_ref: u64,
+    project_id: u64,
+    grant_ref: u64,
+    linked_surface_id: u64,
+    flags: u32,
+    display_name: &'static str,
+}
+
+/// In-memory Quil buffer table. No heap, no filesystem, no storage.
+/// Indexed linearly; searched by buffer_id on access.
+static mut QUIL_BUFFERS: [Option<QuilBuffer>; QUIL_MAX_BUFFERS] = [None; QUIL_MAX_BUFFERS];
+
+/// Seed buffers for initial Quil workspace. 6 buffers covering key kinds.
+const QUIL_SEED_BUFFERS: [QuilBuffer; 6] = [
+    QuilBuffer {
+        buffer_id: 1,
+        kind: QuilBufferKind::Code,
+        state: QuilBufferState::Open,
+        linen_object_ref: 0,
+        project_id: 1,
+        grant_ref: 0,
+        linked_surface_id: SURFACE_ID_QUIL,
+        flags: 0,
+        display_name: "main.rs",
+    },
+    QuilBuffer {
+        buffer_id: 2,
+        kind: QuilBufferKind::Text,
+        state: QuilBufferState::Open,
+        linen_object_ref: 2,
+        project_id: 1,
+        grant_ref: 0,
+        linked_surface_id: SURFACE_ID_QUIL,
+        flags: 0,
+        display_name: "Compositor Lifecycle Spec",
+    },
+    QuilBuffer {
+        buffer_id: 3,
+        kind: QuilBufferKind::DesignNote,
+        state: QuilBufferState::Open,
+        linen_object_ref: 0,
+        project_id: 1,
+        grant_ref: 0,
+        linked_surface_id: 0,
+        flags: 0,
+        display_name: "Frame Tiling Design",
+    },
+    QuilBuffer {
+        buffer_id: 4,
+        kind: QuilBufferKind::BuildOutput,
+        state: QuilBufferState::ReadOnly,
+        linen_object_ref: 5,
+        project_id: 1,
+        grant_ref: 0,
+        linked_surface_id: 0,
+        flags: 0,
+        display_name: "Current ISO Build",
+    },
+    QuilBuffer {
+        buffer_id: 5,
+        kind: QuilBufferKind::ReviewNote,
+        state: QuilBufferState::Open,
+        linen_object_ref: 0,
+        project_id: 1,
+        grant_ref: 0,
+        linked_surface_id: 0,
+        flags: 0,
+        display_name: "Review: A7 Opcode Audit",
+    },
+    QuilBuffer {
+        buffer_id: 6,
+        kind: QuilBufferKind::AgentTask,
+        state: QuilBufferState::Allocated,
+        linen_object_ref: 0,
+        project_id: 0,
+        grant_ref: 0,
+        linked_surface_id: 0,
+        flags: 0,
+        display_name: "Refactor tiling loop",
+    },
+];
+
+/// Initialize the Quil buffer table with seed buffers.
+/// Called once during boot. Emits proof markers for each seed buffer.
+unsafe fn quil_buffer_table_init() {
+    for (i, buf) in QUIL_SEED_BUFFERS.iter().enumerate() {
+        if i < QUIL_MAX_BUFFERS {
+            QUIL_BUFFERS[i] = Some(*buf);
+            serial_println!("[quil.buffer.seed] id={} kind={} name={}", buf.buffer_id, buf.kind as u8, buf.display_name);
+        }
+    }
+    serial_println!("[quil.buffer_table.init] count={}", QUIL_SEED_BUFFERS.len());
+}
+
+/// Return the number of Quil buffers currently in the table.
+unsafe fn quil_buffer_count() -> usize {
+    let mut count = 0;
+    for slot in QUIL_BUFFERS.iter() {
+        if slot.is_some() {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Find a Quil buffer by its buffer_id. Returns None if not found.
+unsafe fn quil_buffer_by_id(id: u64) -> Option<QuilBuffer> {
+    for slot in QUIL_BUFFERS.iter() {
+        if let Some(buf) = slot {
+            if buf.buffer_id == id {
+                return Some(*buf);
+            }
+        }
+    }
+    None
+}
+
+/// Return a human-readable name for a QuilBufferKind.
+fn quil_buffer_kind_name(kind: QuilBufferKind) -> &'static str {
+    match kind {
+        QuilBufferKind::Text => "Text",
+        QuilBufferKind::Code => "Code",
+        QuilBufferKind::DesignNote => "DesignNote",
+        QuilBufferKind::ReviewNote => "ReviewNote",
+        QuilBufferKind::Diagnostic => "Diagnostic",
+        QuilBufferKind::BuildOutput => "BuildOutput",
+        QuilBufferKind::AgentTask => "AgentTask",
+        QuilBufferKind::LinenObjectView => "LinenObjectView",
+    }
+}
+
+/// Return a human-readable name for a QuilBufferState.
+fn quil_buffer_state_name(state: QuilBufferState) -> &'static str {
+    match state {
+        QuilBufferState::Allocated => "Allocated",
+        QuilBufferState::Open => "Open",
+        QuilBufferState::Dirty => "Dirty",
+        QuilBufferState::ReadOnly => "ReadOnly",
+        QuilBufferState::Closed => "Closed",
+        QuilBufferState::Missing => "Missing",
+    }
+}
+
 // ── A3: Lifecycle State Model ─────────────────────────────────────────────────
 // Additive metadata only. No behavior change.
 // See docs/handoff/A2_COMPOSITOR_LIFECYCLE_FSM_SPEC_V1.md
@@ -4371,6 +4553,7 @@ unsafe fn open_quil_in_active_scene() -> bool {
     if *b > 0 { *b -= 1; serial_println!("[shell.quil.route.ping] fid={}", fid); }
 
     serial_println!("[quil.placeholder.open] frame={}", fid);
+    serial_println!("[quil.buffer_table.ready] count={}", quil_buffer_count());
     snap_capture_layout();
     static mut QUIL_OPEN_BUDGET: u32 = 4;
     let b = &mut QUIL_OPEN_BUDGET;
@@ -7064,6 +7247,9 @@ pub extern "C" fn _start() -> ! {
 
         // J1: Initialize Linen object table with seed objects.
         linen_object_table_init();
+
+        // J3: Initialize Quil buffer table with seed buffers.
+        quil_buffer_table_init();
 
         // Initial snapshot after frames are set up.
         snap_capture_layout();
