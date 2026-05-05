@@ -5923,6 +5923,10 @@ const BELL_LIST_ROW_GAP: u32 = 2;
 /// Max rows with visual fill rects. Header takes rect_index=0; rows get 1-7.
 const BELL_LIST_ROW_RECTS: u8 = 7;
 
+/// Currently selected visible row index in the Bell event list.
+/// 0 = newest event row. Repaired during render if ring shrinks.
+static mut BELL_SELECTED_ROW: u8 = 0;
+
 // ── K11: Command Palette Stub ────────────────────────────────────────────
 // Shell-owned action router. No text input, no fuzzy search, no app manifests.
 
@@ -6166,6 +6170,50 @@ unsafe fn bell_row_color(ev: &BellEvent) -> u32 {
     }
 }
 
+/// Count events visible in the Bell list (capped at BELL_LIST_ROW_RECTS).
+unsafe fn bell_visible_event_count() -> u8 {
+    let count = bell_ring_count();
+    if count == 0 { return 0; }
+    core::cmp::min(count as u8, BELL_LIST_ROW_RECTS)
+}
+
+/// Brighten a 0x00RRGGBB color for selected row highlighting.
+/// Adds 0x40 (~25%) to each RGB component with per-channel clamping.
+fn bell_selected_row_highlight(color: u32) -> u32 {
+    let r = core::cmp::min(((color >> 16) & 0xFF).wrapping_add(0x40), 0xFF);
+    let g = core::cmp::min(((color >> 8) & 0xFF).wrapping_add(0x40), 0xFF);
+    let b = core::cmp::min((color & 0xFF).wrapping_add(0x40), 0xFF);
+    (r << 16) | (g << 8) | b
+}
+
+/// Advance Bell selection to the next visible event row. Wraps around.
+unsafe fn bell_select_next_row() {
+    let count = bell_visible_event_count();
+    if count <= 1 {
+        serial_println!("[bell.selection.reject] reason=single_or_empty count={}", count);
+        return;
+    }
+    let current = BELL_SELECTED_ROW;
+    let next = if current + 1 >= count { 0 } else { current + 1 };
+    BELL_SELECTED_ROW = next;
+    serial_println!("[bell.selection.next] prev={} next={}", current, next);
+    bell_render_event_list();
+}
+
+/// Move Bell selection to the previous visible event row. Wraps around.
+unsafe fn bell_select_prev_row() {
+    let count = bell_visible_event_count();
+    if count <= 1 {
+        serial_println!("[bell.selection.reject] reason=single_or_empty count={}", count);
+        return;
+    }
+    let current = BELL_SELECTED_ROW;
+    let prev = if current == 0 { count - 1 } else { current - 1 };
+    BELL_SELECTED_ROW = prev;
+    serial_println!("[bell.selection.prev] prev={} next={}", current, prev);
+    bell_render_event_list();
+}
+
 /// Check whether the Bell surface is currently visible in the active scene.
 /// Returns true only when the Bell frame exists in the active scene,
 /// is not minimized, and the surface is alive/focusable.
@@ -6193,6 +6241,17 @@ unsafe fn bell_render_event_list() {
     let w = SURFACE_204_W;
     let h = SURFACE_204_H;
     if w == 0 || h == 0 { return; }
+
+    // Clamp selected row to valid range after ring changes.
+    let visible = bell_visible_event_count();
+    if visible == 0 {
+        BELL_SELECTED_ROW = 0;
+    } else if BELL_SELECTED_ROW >= visible {
+        let old = BELL_SELECTED_ROW;
+        BELL_SELECTED_ROW = visible.wrapping_sub(1);
+        serial_println!("[bell.selection.repair] old={} new={} count={}", old, BELL_SELECTED_ROW, visible);
+    }
+    serial_println!("[bell.selection.current] row={} visible={}", BELL_SELECTED_ROW, visible);
 
     serial_println!("[bell.event_list.render] w={} h={} count={}", w, h, bell_ring_count());
 
@@ -6224,7 +6283,15 @@ unsafe fn bell_render_event_list() {
             let rect_index = (rows_emitted as u64 + 1) & 0xF;
             let row_y = BELL_LIST_HEADER_H
                 + rows_emitted as u32 * (BELL_LIST_ROW_H + BELL_LIST_ROW_GAP);
-            let row_color = bell_row_color(ev);
+            let base_color = bell_row_color(ev);
+            let row_color = if rows_emitted == BELL_SELECTED_ROW {
+                let highlighted = bell_selected_row_highlight(base_color);
+                serial_println!("[bell.selection_visual.row] event_id={} index={} base={:#010x} highlight={:#010x}",
+                    ev.event_id, rows_emitted, base_color, highlighted);
+                highlighted
+            } else {
+                base_color
+            };
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_BELL_PLACEHOLDER,
                 (row_y as u64) << 32 | 0u64,
                 (rect_index << 56)
@@ -8889,6 +8956,18 @@ pub extern "C" fn _start() -> ! {
                                 // panel or palette handled key; skip Atlas and action dispatch
                             } else if ATLAS_MODE_ENABLED && scancode != 0x44 /* F10 falls through to ToggleAtlas */ {
                                 handle_atlas_keyboard(scancode);
+                                mutated = true;
+                            // ── Bell focused-surface navigation: J/K when Bell is focused ──
+                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_BELL_PLACEHOLDER
+                                && (scancode == 0x24 || scancode == 0x25)
+                            {
+                                if scancode == 0x24 {
+                                    serial_println!("[bell.keyboard.next] sid={}", FOCUSED_SURFACE_ID);
+                                    bell_select_next_row();
+                                } else {
+                                    serial_println!("[bell.keyboard.prev] sid={}", FOCUSED_SURFACE_ID);
+                                    bell_select_prev_row();
+                                }
                                 mutated = true;
                             } else if let Some(action) = scancode_to_action(scancode) {
                                 match action {
