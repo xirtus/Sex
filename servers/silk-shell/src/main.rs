@@ -168,6 +168,192 @@ const APP_SURFACES: [AppSurfaceSpec; 5] = [
     },
 ];
 
+// ── J1: Linen Object Table ────────────────────────────────────────────────────
+// In-memory, static-only Linen object model. No filesystem, no storage, no PDX.
+// See docs/handoff/J1_LINEN_OBJECT_TABLE_V1.md
+
+/// Maximum number of tracked Linen objects.
+const LINEN_MAX_OBJECTS: usize = 16;
+
+/// Kind of Linen object. Maps to H1 §2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum LinenObjectKind {
+    Project = 0,
+    Document = 1,
+    CodeFile = 2,
+    MediaAsset = 3,
+    BuildArtifact = 4,
+    Folder = 5,
+    Reference = 6,
+    ImportPlaceholder = 7,
+    BellEventReference = 8,
+    QuilWorkspaceReference = 9,
+    MeshDiagnosticReference = 10,
+}
+
+/// Lifecycle state of a Linen object. Maps to H1 §3 lifecycle_state field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum LinenObjectState {
+    Allocated = 0,
+    Loaded = 1,
+    Modified = 2,
+    Saved = 3,
+    Archived = 4,
+}
+
+/// Fixed-size Linen object record. All fields are scalar or fixed-cap.
+#[derive(Debug, Clone, Copy)]
+struct LinenObject {
+    object_id: u64,
+    kind: LinenObjectKind,
+    state: LinenObjectState,
+    parent_id: u64,
+    project_id: u64,
+    grant_ref: u64,
+    linked_surface_id: u64,
+    flags: u32,
+    display_name: &'static str,
+}
+
+/// In-memory Linen object table. No heap, no filesystem, no storage.
+/// Indexed linearly; searched by object_id on access.
+static mut LINEN_OBJECTS: [Option<LinenObject>; LINEN_MAX_OBJECTS] = [None; LINEN_MAX_OBJECTS];
+
+/// Seed objects for initial Linen workspace. 6 objects covering key kinds.
+const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
+    LinenObject {
+        object_id: 1,
+        kind: LinenObjectKind::Project,
+        state: LinenObjectState::Loaded,
+        parent_id: 0,
+        project_id: 1,
+        grant_ref: 0,
+        linked_surface_id: 0,
+        flags: 0,
+        display_name: "SexOS Kernel",
+    },
+    LinenObject {
+        object_id: 2,
+        kind: LinenObjectKind::Document,
+        state: LinenObjectState::Saved,
+        parent_id: 1,
+        project_id: 1,
+        grant_ref: 0,
+        linked_surface_id: 0,
+        flags: 0,
+        display_name: "Compositor Lifecycle Spec",
+    },
+    LinenObject {
+        object_id: 3,
+        kind: LinenObjectKind::CodeFile,
+        state: LinenObjectState::Loaded,
+        parent_id: 1,
+        project_id: 1,
+        grant_ref: 0,
+        linked_surface_id: SURFACE_ID_LINEN,
+        flags: 0,
+        display_name: "Silk Shell main.rs",
+    },
+    LinenObject {
+        object_id: 4,
+        kind: LinenObjectKind::MediaAsset,
+        state: LinenObjectState::Saved,
+        parent_id: 0,
+        project_id: 0,
+        grant_ref: 0,
+        linked_surface_id: 0,
+        flags: 0,
+        display_name: "Desktop Screenshot",
+    },
+    LinenObject {
+        object_id: 5,
+        kind: LinenObjectKind::BuildArtifact,
+        state: LinenObjectState::Saved,
+        parent_id: 1,
+        project_id: 1,
+        grant_ref: 0,
+        linked_surface_id: 0,
+        flags: 0,
+        display_name: "Current ISO Build",
+    },
+    LinenObject {
+        object_id: 6,
+        kind: LinenObjectKind::Folder,
+        state: LinenObjectState::Loaded,
+        parent_id: 0,
+        project_id: 0,
+        grant_ref: 0,
+        linked_surface_id: 0,
+        flags: 0,
+        display_name: "Drafts",
+    },
+];
+
+/// Initialize the Linen object table with seed objects.
+/// Called once during boot. Emits proof markers for each seed object.
+unsafe fn linen_object_table_init() {
+    for (i, obj) in LINEN_SEED_OBJECTS.iter().enumerate() {
+        if i < LINEN_MAX_OBJECTS {
+            LINEN_OBJECTS[i] = Some(*obj);
+            serial_println!("[linen.object.seed] id={} kind={} name={}", obj.object_id, obj.kind as u8, obj.display_name);
+        }
+    }
+    serial_println!("[linen.object_table.init] count={}", LINEN_SEED_OBJECTS.len());
+}
+
+/// Return the number of Linen objects currently in the table.
+unsafe fn linen_object_count() -> usize {
+    let mut count = 0;
+    for slot in LINEN_OBJECTS.iter() {
+        if slot.is_some() {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Find a Linen object by its object_id. Returns None if not found.
+unsafe fn linen_object_by_id(id: u64) -> Option<LinenObject> {
+    for slot in LINEN_OBJECTS.iter() {
+        if let Some(obj) = slot {
+            if obj.object_id == id {
+                return Some(*obj);
+            }
+        }
+    }
+    None
+}
+
+/// Return a human-readable name for a LinenObjectKind.
+fn linen_object_kind_name(kind: LinenObjectKind) -> &'static str {
+    match kind {
+        LinenObjectKind::Project => "Project",
+        LinenObjectKind::Document => "Document",
+        LinenObjectKind::CodeFile => "CodeFile",
+        LinenObjectKind::MediaAsset => "MediaAsset",
+        LinenObjectKind::BuildArtifact => "BuildArtifact",
+        LinenObjectKind::Folder => "Folder",
+        LinenObjectKind::Reference => "Reference",
+        LinenObjectKind::ImportPlaceholder => "ImportPlaceholder",
+        LinenObjectKind::BellEventReference => "BellEventRef",
+        LinenObjectKind::QuilWorkspaceReference => "QuilWorkspaceRef",
+        LinenObjectKind::MeshDiagnosticReference => "MeshDiagRef",
+    }
+}
+
+/// Return a human-readable name for a LinenObjectState.
+fn linen_object_state_name(state: LinenObjectState) -> &'static str {
+    match state {
+        LinenObjectState::Allocated => "Allocated",
+        LinenObjectState::Loaded => "Loaded",
+        LinenObjectState::Modified => "Modified",
+        LinenObjectState::Saved => "Saved",
+        LinenObjectState::Archived => "Archived",
+    }
+}
+
 // ── A3: Lifecycle State Model ─────────────────────────────────────────────────
 // Additive metadata only. No behavior change.
 // See docs/handoff/A2_COMPOSITOR_LIFECYCLE_FSM_SPEC_V1.md
@@ -3896,6 +4082,7 @@ unsafe fn open_linen_in_active_scene() -> bool {
     }
 
     serial_println!("[linen.placeholder.open] frame={}", fid);
+    serial_println!("[linen.object_table.ready] count={}", linen_object_count());
     snap_capture_layout();
     static mut LINEN_OPEN_BUDGET: u32 = 4;
     let b = &mut LINEN_OPEN_BUDGET;
@@ -6802,6 +6989,9 @@ pub extern "C" fn _start() -> ! {
 
         // B1: Initialize scene metadata array from FRAMES state.
         scene_init_all();
+
+        // J1: Initialize Linen object table with seed objects.
+        linen_object_table_init();
 
         // Initial snapshot after frames are set up.
         snap_capture_layout();
