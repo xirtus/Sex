@@ -61,6 +61,7 @@ pub const SURFACE_ID_TEST4: u64 = 103;
 pub const SURFACE_ID_LINEN: u64 = 200;
 pub const SURFACE_ID_QUIL: u64 = 201;
 pub const SURFACE_ID_MESH: u64 = 202;
+pub const SURFACE_ID_COLLAR: u64 = 203;
 pub const SURFACE_ID_CURSOR: u64 = 0x90; // 144 — OS-owned cursor, no collision with app IDs
 pub const SURFACE_ID_LAUNCHER: u64 = 0x92; // 146 — launcher panel surface, toggled by launcher button
 pub const SURFACE_ID_STATUS: u64 = 0x93; // 147 — status panel surface, toggled by status chip click
@@ -78,6 +79,7 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 //   200   linen (file viewer)
 //   201   quil (editor stub)
 //   202   mesh (diagnostic graph placeholder)
+//   203   collar (authority placeholder)
 pub const SURFACE_ID_SCENE_SETTINGS: u64 = 0x96;
 pub const SURFACE_ID_ATLAS_OVERLAY: u64 = 0x97; // 151 — Atlas overview surface, toggled by F10
 /// 0xEE — deactivate surface on sexdisplay (active=false).
@@ -106,7 +108,7 @@ struct AppSurfaceSpec {
 }
 
 /// Known OS-managed app surfaces. Validated at boot for duplicates.
-const APP_SURFACES: [AppSurfaceSpec; 3] = [
+const APP_SURFACES: [AppSurfaceSpec; 4] = [
     AppSurfaceSpec {
         surface_id: SURFACE_ID_LINEN,
         frame_id: LINEN_FRAME_ID,
@@ -137,6 +139,17 @@ const APP_SURFACES: [AppSurfaceSpec; 3] = [
         boot_y: MESH_BOOT_Y,
         boot_w: MESH_BOOT_W,
         boot_h: MESH_BOOT_H,
+        closeable: false,
+        focusable: true,
+    },
+    AppSurfaceSpec {
+        surface_id: SURFACE_ID_COLLAR,
+        frame_id: COLLAR_FRAME_ID,
+        name: "collar",
+        boot_x: COLLAR_BOOT_X,
+        boot_y: COLLAR_BOOT_Y,
+        boot_w: COLLAR_BOOT_W,
+        boot_h: COLLAR_BOOT_H,
         closeable: false,
         focusable: true,
     },
@@ -675,6 +688,7 @@ enum SurfaceAction {
     ToggleLinen,       // F8 — open/focus/toggle Linen surface
     ToggleQuil,        // F9 — open/focus/toggle Quil surface
     ToggleMesh,        // F12 — open/focus/toggle Mesh placeholder
+    ToggleCollar,      // Insert — open/focus/toggle Collar placeholder
     ToggleAtlas,       // F10 — toggle Atlas overview mode
     ToggleSceneSettingsPanel,
     CycleRenderTokenPreset,
@@ -787,6 +801,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x44 => Some(SurfaceAction::ToggleAtlas),    // F10
         0x57 => Some(SurfaceAction::AccessClose),    // F11
         0x58 => Some(SurfaceAction::ToggleMesh),    // F12
+        0x52 => Some(SurfaceAction::ToggleCollar), // Insert
         0x47 => Some(SurfaceAction::SnapHome),
         0x4F => Some(SurfaceAction::SnapEnd),
         0x4B => Some(SurfaceAction::MoveLeft),
@@ -946,6 +961,10 @@ unsafe fn tile_visible_frames() {
                 SURFACE_202_X = rx; SURFACE_202_Y = ry;
                 SURFACE_202_W = rw; SURFACE_202_H = rh;
             }
+            SURFACE_ID_COLLAR => {
+                SURFACE_203_X = rx; SURFACE_203_Y = ry;
+                SURFACE_203_W = rw; SURFACE_203_H = rh;
+            }
             _ => {}
         }
         pdx_call(SLOT_DISPLAY, 0xEC, sid,
@@ -966,6 +985,14 @@ unsafe fn tile_visible_frames() {
             static mut MESH_PLACEHOLDER_BUDGET: u32 = 8;
             let b = &mut MESH_PLACEHOLDER_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[shell.mesh.tile.placeholder] sid={}", sid); }
+        }
+        // Collar visual placeholder: muted teal/authority fill rect.
+        if sid == SURFACE_ID_COLLAR {
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_COLLAR, 0,
+                (COLLAR_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
+            static mut COLLAR_PLACEHOLDER_BUDGET: u32 = 8;
+            let b = &mut COLLAR_PLACEHOLDER_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.collar.tile.placeholder] sid={}", sid); }
         }
     }
     static mut TILE_BUDGET: u32 = 8;
@@ -1113,6 +1140,10 @@ unsafe fn tile_active_scene_frames() {
                 SURFACE_202_X = rx; SURFACE_202_Y = ry;
                 SURFACE_202_W = rw; SURFACE_202_H = rh;
             }
+            SURFACE_ID_COLLAR => {
+                SURFACE_203_X = rx; SURFACE_203_Y = ry;
+                SURFACE_203_W = rw; SURFACE_203_H = rh;
+            }
             _ => {}
         }
 
@@ -1171,7 +1202,7 @@ struct WindowState {
 /// Maximum tabs per frame (overkill for 4 app surfaces, allows future Chrome tabs).
 const MAX_TABS_PER_FRAME: u8 = 8;
 /// Maximum concurrent frames (overkill for current app count, allows future splits).
-const MAX_FRAMES: usize = 5;
+const MAX_FRAMES: usize = 6;
 
 /// A tab wraps an existing surface_id with shell-level metadata.
 /// The surface remains the app/display object; the tab is shell policy only.
@@ -1834,6 +1865,84 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
     }
 }
 
+// ── D4: Focus Description Proof ──────────────────────────────────────────
+/// Compute a deterministic numeric token for a label byte array.
+/// Simple DJB2-like hash over null-terminated [u8; 32]. No heap, no String.
+/// Only shell-owned static/bounded labels are hashed — never app-provided names.
+fn access_label_token(label: &[u8; 32]) -> u32 {
+    let mut hash: u32 = 5381;
+    for &b in label.iter() {
+        if b == 0 { break; }
+        hash = hash.wrapping_mul(33).wrapping_add(b as u32);
+    }
+    hash
+}
+
+/// Describe a semantic access node using numeric tokens only.
+/// No app text, no document names, no user content — only shell-owned
+/// role/id/state/action tokens.
+/// Marker: [access.focus.describe] with structured fields.
+unsafe fn access_describe_node(node: &AccessNode) {
+    let label_token = access_label_token(&node.label);
+    static mut ACCESS_DESCRIBE_NODE_BUDGET: u32 = 32;
+    let b = &mut ACCESS_DESCRIBE_NODE_BUDGET;
+    if *b > 0 {
+        *b -= 1;
+        serial_println!(
+            "[access.focus.describe] node_id={} role={} state={:#x} actions={:#x} target_sid={} target_fid={} target_scene={} label_token={:#x}",
+            node.node_id, node.role as u8, node.state, node.actions,
+            node.target.surface_id, node.target.frame_id, node.target.scene_id,
+            label_token
+        );
+        serial_println!(
+            "[access.focus.label_token] node_id={} token={:#x}",
+            node.node_id, label_token
+        );
+    }
+}
+
+/// Build the D2 semantic tree and find the focused node, then describe it.
+/// Called from try_set_focus() after every successful focus change.
+/// Pure logging — never mutates focus, lifecycle, or frame state.
+unsafe fn access_describe_focus() {
+    let mut nodes: [Option<AccessNode>; MAX_ACCESS_NODES] = [None; MAX_ACCESS_NODES];
+    let count = access_emit_shell_nodes(&mut nodes);
+    if count == 0 {
+        static mut ACCESS_DESCRIBE_EMPTY_BUDGET: u32 = 8;
+        let b = &mut ACCESS_DESCRIBE_EMPTY_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[access.focus.describe.reject] reason=empty_tree"); }
+        return;
+    }
+
+    let sid = FOCUSED_SURFACE_ID;
+    if sid == 0 {
+        static mut ACCESS_DESCRIBE_NOFOCUS_BUDGET: u32 = 8;
+        let b = &mut ACCESS_DESCRIBE_NOFOCUS_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[access.focus.describe.reject] reason=no_focus"); }
+        return;
+    }
+
+    for i in 0..count {
+        if let Some(ref node) = nodes[i] {
+            if node.target.surface_id == sid {
+                if !surface_is_alive(sid) || is_tombstoned(sid) {
+                    static mut ACCESS_DESCRIBE_SKIP_BUDGET: u32 = 8;
+                    let b = &mut ACCESS_DESCRIBE_SKIP_BUDGET;
+                    if *b > 0 { *b -= 1; serial_println!("[access.focus.describe.skip_dead] target={}", sid); }
+                    return;
+                }
+                access_describe_node(node);
+                return;
+            }
+        }
+    }
+
+    // Focused surface not found in semantic tree.
+    static mut ACCESS_DESCRIBE_NOTFOUND_BUDGET: u32 = 8;
+    let b = &mut ACCESS_DESCRIBE_NOTFOUND_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[access.focus.describe.reject] reason=not_in_tree target={}", sid); }
+}
+
 // ── Atlas Overview Model ─────────────────────────────────────────────────────
 /// Atlas is Silk's shell-owned map of all Scenes.
 /// It sits above Scene in the abstraction stack:
@@ -1844,7 +1953,7 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
 /// Maximum scenes tracked by Atlas (equals WORKSPACE_COUNT).
 const ATLAS_MAX_SCENES: usize = 5;
 /// Maximum frames tracked per scene descriptor (equals MAX_FRAMES).
-const ATLAS_MAX_FRAMES_PER_SCENE: usize = 5;
+const ATLAS_MAX_FRAMES_PER_SCENE: usize = 6;
 /// Length of fixed-size scene label byte array (no heap strings).
 const ATLAS_LABEL_LEN: usize = 16;
 
@@ -2084,6 +2193,11 @@ static mut SURFACE_202_X: i32 = 200;
 static mut SURFACE_202_Y: i32 = 100;
 static mut SURFACE_202_W: u32 = 640;
 static mut SURFACE_202_H: u32 = 480;
+// Collar surface 203 position tracking
+static mut SURFACE_203_X: i32 = 300;
+static mut SURFACE_203_Y: i32 = 100;
+static mut SURFACE_203_W: u32 = 640;
+static mut SURFACE_203_H: u32 = 480;
 
 fn clamp_surface_size(x: i32, y: i32, w: u32, h: u32) -> (u32, u32) {
     let max_w = (P.width - x).max(P.min_width as i32) as u32;
@@ -2139,6 +2253,8 @@ fn emit_snapshot() {
         pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_QUIL, SURFACE_201_X as u64, SURFACE_201_Y as u64);
         // Mesh surface 202 position update
         pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_MESH, SURFACE_202_X as u64, SURFACE_202_Y as u64);
+        // Collar surface 203 position update
+        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_COLLAR, SURFACE_203_X as u64, SURFACE_203_Y as u64);
     }
 }
 
@@ -2155,6 +2271,7 @@ unsafe fn get_surface_bounds(sid: u64) -> Option<(i32, i32, u32, u32)> {
         SURFACE_ID_LINEN  => Some((SURFACE_200_X, SURFACE_200_Y, SURFACE_200_W, SURFACE_200_H)),
         SURFACE_ID_QUIL   => Some((SURFACE_201_X, SURFACE_201_Y, SURFACE_201_W, SURFACE_201_H)),
         SURFACE_ID_MESH   => Some((SURFACE_202_X, SURFACE_202_Y, SURFACE_202_W, SURFACE_202_H)),
+        SURFACE_ID_COLLAR => Some((SURFACE_203_X, SURFACE_203_Y, SURFACE_203_W, SURFACE_203_H)),
         _ => None,
     }
 }
@@ -2178,6 +2295,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             SURFACE_ID_LINEN  => (SURFACE_200_X, SURFACE_200_Y, SURFACE_200_W, SURFACE_200_H),
             SURFACE_ID_QUIL   => (SURFACE_201_X, SURFACE_201_Y, SURFACE_201_W, SURFACE_201_H),
             SURFACE_ID_MESH   => (SURFACE_202_X, SURFACE_202_Y, SURFACE_202_W, SURFACE_202_H),
+            SURFACE_ID_COLLAR => (SURFACE_203_X, SURFACE_203_Y, SURFACE_203_W, SURFACE_203_H),
             // OS-owned surfaces: cursor and panels are known but non-focusable —
             // log nonfocusable.reject, not unknown.reject.
             SURFACE_ID_CURSOR
@@ -2207,6 +2325,7 @@ fn surface_is_alive(sid: u64) -> bool {
         SURFACE_ID_LINEN    => true,  // linen never destroys its surface
         SURFACE_ID_QUIL     => true,  // quil never destroys its surface
         SURFACE_ID_MESH     => true,  // mesh never destroys its surface
+        SURFACE_ID_COLLAR   => true,  // collar never destroys its surface
         SURFACE_ID_CURSOR   => true,  // cursor never destroyed
         SURFACE_ID_LAUNCHER => unsafe { LAUNCHER_ACTIVE },
         SURFACE_ID_STATUS   => unsafe { STATUS_ACTIVE },
@@ -2281,7 +2400,7 @@ unsafe fn clear_focus_if_dead() {
             serial_println!("[focus.ref.clear] id={} reason=not_focusable lifecycle={:?}",
                 focused, lifecycle_state(focused));
         }
-        let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
+        let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_COLLAR, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                        SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
         let mut found = false;
         for &sid in &z_order {
@@ -2514,6 +2633,7 @@ unsafe fn lifecycle_init_all() {
     lifecycle_register(SURFACE_ID_LINEN, LifecycleState::Visible);
     lifecycle_register(SURFACE_ID_QUIL, LifecycleState::Visible);
     lifecycle_register(SURFACE_ID_MESH, LifecycleState::Visible);
+    lifecycle_register(SURFACE_ID_COLLAR, LifecycleState::Visible);
     // Cursor — always present, no frame.
     lifecycle_register(SURFACE_ID_CURSOR, LifecycleState::Mapped);
     // Panel surfaces — start Allocated (inactive, toggled on demand).
@@ -2560,7 +2680,8 @@ unsafe fn surface_in_active_scene(sid: u64) -> bool {
     // Surface not found in any frame.
     // Panels (0x90-0x96) and cursor are always visible regardless of scene.
     // Frame-owned surfaces (Linen, Quil) are NOT visible without a frame.
-    if sid == SURFACE_ID_LINEN || sid == SURFACE_ID_QUIL || sid == SURFACE_ID_MESH {
+    if sid == SURFACE_ID_LINEN || sid == SURFACE_ID_QUIL || sid == SURFACE_ID_MESH
+        || sid == SURFACE_ID_COLLAR {
         return false;
     }
     true // panels/cursor always visible
@@ -4041,7 +4162,6 @@ unsafe fn ensure_mesh_frame() -> Option<u32> {
             }
         }
     }
-    // Find an empty slot.
     for (slot_idx, slot) in FRAMES.iter_mut().enumerate() {
         if slot.is_none() {
             *slot = Some(ShellFrame {
@@ -4202,6 +4322,195 @@ unsafe fn toggle_mesh() -> bool {
         }
     }
     open_mesh_in_active_scene()
+}
+
+// ── Collar Surface Control Helpers ─────────────────────────────────────────
+// Collar = authority wallet placeholder.
+// Mirrors Linen/Quil/Mesh placeholder pattern. No real grants yet.
+
+/// Frame ID reserved for Collar's ShellFrame.
+const COLLAR_FRAME_ID: u32 = 5;
+/// Boot geometry for Collar when first opened.
+const COLLAR_BOOT_X: i32 = 300;
+const COLLAR_BOOT_Y: i32 = 100;
+const COLLAR_BOOT_W: u32 = 640;
+const COLLAR_BOOT_H: u32 = 480;
+
+/// Fill color for the Collar visual placeholder surface (muted teal/authority).
+const COLLAR_PLACEHOLDER_COLOR: u32 = 0x00204038;
+
+/// Ensure a ShellFrame exists for Collar in an empty FRAMES slot, assigned to
+/// the active scene. Returns the frame_id if created/found, or 0 if no slot.
+unsafe fn ensure_collar_frame() -> Option<u32> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == COLLAR_FRAME_ID {
+                return Some(COLLAR_FRAME_ID);
+            }
+        }
+    }
+    for (slot_idx, slot) in FRAMES.iter_mut().enumerate() {
+        if slot.is_none() {
+            *slot = Some(ShellFrame {
+                frame_id: COLLAR_FRAME_ID,
+                active_tab: 0,
+                tab_count: 1,
+                tabs: {
+                    let mut t: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                        [None; MAX_TABS_PER_FRAME as usize];
+                    t[0] = Some(ShellTab {
+                        surface_id: SURFACE_ID_COLLAR,
+                        title_id: 0,
+                        flags: 0,
+                    });
+                    t
+                },
+                scene_id: ACTIVE_SCENE_IDX,
+                flags: FRAME_FLAG_TOP_BAR,
+                normal_x: COLLAR_BOOT_X,
+                normal_y: COLLAR_BOOT_Y,
+                normal_w: COLLAR_BOOT_W,
+                normal_h: COLLAR_BOOT_H,
+            });
+            serial_println!("[collar.placeholder.attach.frame] frame={} scene={} slot={}", COLLAR_FRAME_ID, ACTIVE_SCENE_IDX, slot_idx);
+            serial_println!("[collar.placeholder.attach.tab] frame={} tab=0 surface={}", COLLAR_FRAME_ID, SURFACE_ID_COLLAR);
+            static mut COLLAR_CREATE_BUDGET: u32 = 4;
+            let b = &mut COLLAR_CREATE_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.collar.frame.create] frame={} slot={}", COLLAR_FRAME_ID, slot_idx); }
+            return Some(COLLAR_FRAME_ID);
+        }
+    }
+    static mut COLLAR_NOSLOT_BUDGET: u32 = 4;
+    let b = &mut COLLAR_NOSLOT_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.collar.frame.reject] reason=no_slot"); }
+    None
+}
+
+/// Open Collar in the active scene: ensure frame exists, un-minimize, position,
+/// focus, and tile. If Collar is already visible in the active scene, focuses it.
+unsafe fn open_collar_in_active_scene() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == COLLAR_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                serial_println!("[collar.placeholder.reject.duplicate] frame={} scene={}", COLLAR_FRAME_ID, ACTIVE_SCENE_IDX);
+                if let Some(sid) = active_surface_for_frame(COLLAR_FRAME_ID) {
+                    if try_set_focus(sid) {
+                        serial_println!("[collar.placeholder.focus] frame={} sid={}", COLLAR_FRAME_ID, sid);
+                    }
+                }
+                return true;
+            }
+        }
+    }
+
+    let fid = match ensure_collar_frame() {
+        Some(f) => f,
+        None => return false,
+    };
+
+    for f in FRAMES.iter_mut() {
+        if let Some(frame) = f {
+            if frame.frame_id == fid {
+                frame.scene_id = ACTIVE_SCENE_IDX;
+                break;
+            }
+        }
+    }
+
+    if frame_is_minimized(fid) {
+        if !restore_minimized_frame(fid) {
+            return false;
+        }
+        static mut COLLAR_RESTORE_BUDGET: u32 = 8;
+        let b = &mut COLLAR_RESTORE_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.collar.lifecycle.restore] frame={}", fid); }
+    } else if frame_is_zoomed(fid) {
+    } else {
+        let sid = match active_surface_for_frame(fid) {
+            Some(s) => s,
+            None => return false,
+        };
+        if surface_is_alive(sid) {
+            pdx_call(SLOT_DISPLAY, 0xEC, sid,
+                (COLLAR_BOOT_Y as u64) << 32 | COLLAR_BOOT_X as u64,
+                (COLLAR_BOOT_H as u64) << 32 | COLLAR_BOOT_W as u64);
+        }
+        tile_active_scene_frames();
+        try_set_focus(sid);
+    }
+
+    if let Some(sid) = active_surface_for_frame(fid) {
+        try_set_focus(sid);
+        serial_println!("[collar.placeholder.focus] frame={} sid={}", fid, sid);
+    }
+
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_COLLAR, 0,
+        (COLLAR_PLACEHOLDER_COLOR as u64) << 32 | ((SURFACE_203_H as u64) << 16) | SURFACE_203_W as u64);
+
+    serial_println!("[collar.placeholder.open] frame={}", fid);
+    snap_capture_layout();
+    static mut COLLAR_OPEN_BUDGET: u32 = 4;
+    let b = &mut COLLAR_OPEN_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.collar.open] frame={}", fid); }
+    true
+}
+
+/// Focus Collar if it is already open. If not, open it.
+unsafe fn focus_or_open_collar() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == COLLAR_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                if let Some(sid) = active_surface_for_frame(COLLAR_FRAME_ID) {
+                    if try_set_focus(sid) {
+                        static mut COLLAR_FOCUS_BUDGET: u32 = 4;
+                        let b = &mut COLLAR_FOCUS_BUDGET;
+                        if *b > 0 { *b -= 1; serial_println!("[shell.collar.focus] frame={}", COLLAR_FRAME_ID); }
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    open_collar_in_active_scene()
+}
+
+/// Toggle Collar visibility. Minimize if visible, open if not.
+unsafe fn toggle_collar() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == COLLAR_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                if minimize_frame(COLLAR_FRAME_ID) {
+                    static mut COLLAR_TOGGLE_BUDGET: u32 = 4;
+                    let b = &mut COLLAR_TOGGLE_BUDGET;
+                    if *b > 0 { *b -= 1; serial_println!("[shell.collar.lifecycle.minimize] frame={}", COLLAR_FRAME_ID); }
+                    return true;
+                }
+                return false;
+            }
+        }
+    }
+    open_collar_in_active_scene()
+}
+
+/// Return Collar's frame_id, if its frame exists.
+unsafe fn collar_frame_id() -> Option<u32> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == COLLAR_FRAME_ID {
+                return Some(COLLAR_FRAME_ID);
+            }
+        }
+    }
+    None
 }
 
 /// Return Mesh's frame_id, if its frame exists.
@@ -4679,6 +4988,10 @@ unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32)
         SURFACE_ID_MESH => {
             SURFACE_202_X = x; SURFACE_202_Y = y;
             SURFACE_202_W = w; SURFACE_202_H = h;
+        }
+        SURFACE_ID_COLLAR => {
+            SURFACE_203_X = x; SURFACE_203_Y = y;
+            SURFACE_203_W = w; SURFACE_203_H = h;
         }
         _ => {}
     }
@@ -5357,6 +5670,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         let mut role_str = "Surface";
         if sid == SURFACE_ID_QUIL { label_str = "Quil"; role_str = "AppPlaceholder"; }
         else if sid == SURFACE_ID_MESH { label_str = "Mesh"; role_str = "AppPlaceholder"; }
+        else if sid == SURFACE_ID_COLLAR { label_str = "Collar"; role_str = "AppPlaceholder"; }
         else if sid == SURFACE_ID_LINEN { label_str = "Linen"; role_str = "AppPlaceholder"; }
         else if sid == SURFACE_ID_APP { label_str = "App"; role_str = "Frame"; }
         else if sid == SURFACE_ID_STATIC { label_str = "Test2"; role_str = "Frame"; }
@@ -5375,6 +5689,11 @@ unsafe fn try_set_focus(sid: u64) -> bool {
             serial_println!("[access.focus.describe] target={} role={} label={}", sid, role_str, label_str);
         }
     }
+
+    // D4: Structured numeric focus description via D2 semantic tree.
+    // Pure logging — never mutates focus, lifecycle, or frame state.
+    // Emits role token, state flags, action flags, target ids, label hash.
+    access_describe_focus();
 
     true
 }
@@ -5561,7 +5880,7 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
             return HitTarget::Surface(focused);
         }
     }
-    let z_order = [SURFACE_ID_QUIL, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
+    let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_COLLAR, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                    SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
     for &sid in &z_order {
         if sid == focused { continue; }
@@ -6808,6 +7127,13 @@ pub extern "C" fn _start() -> ! {
                                         if toggle_mesh() {
                                             mutated = true;
                                             serial_println!("[shell.action.mesh] toggle");
+                                        }
+                                    }
+
+                                    SurfaceAction::ToggleCollar => {
+                                        if toggle_collar() {
+                                            mutated = true;
+                                            serial_println!("[shell.action.collar] toggle");
                                         }
                                     }
 
