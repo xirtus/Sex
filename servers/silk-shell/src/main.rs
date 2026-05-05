@@ -480,6 +480,10 @@ const LINEN_LIST_ROW_GAP: u32 = 2;
 const LINEN_LIST_HEADER_COLOR: u32 = 0x0038563A;
 /// Header bar height.
 const LINEN_LIST_HEADER_H: u32 = 28;
+/// Linen surface height sized to fit all visual row rects without clipping.
+/// = HEADER_H + ROW_RECTS * (ROW_H + ROW_GAP) + 10px margin = 28 + 7*26 + 10 = 220.
+const LINEN_SURFACE_VISUAL_H: u32 =
+    LINEN_LIST_HEADER_H + LINEN_LIST_ROW_RECTS as u32 * (LINEN_LIST_ROW_H + LINEN_LIST_ROW_GAP) + 10;
 
 /// Kind-to-visual-color mapping for object list rows.
 /// Each LinenObjectKind gets a distinctive accent color for its row indicator.
@@ -3141,6 +3145,18 @@ const ATLAS_CARD_ZOOMED_HINT_COLOR: u32 = ATLAS_COLOR_FRAME_ZOOMED;
 const ATLAS_CARD_SELECTED_COLOR: u32 = 0x005050ff;
 /// Neon rim for the active scene card when not selected (muted cyan).
 const ATLAS_CARD_ACTIVE_RIM_COLOR: u32 = 0x004090c0;
+/// Atlas accent card colors (ARGB). Maps ACCENT_DEFAULT..ACCENT_GOLD.
+/// These are the rim colors from CUSTOM_TINT_BUNDLES, adapted for card fill.
+const ATLAS_ACCENT_COLORS: [u32; ACCENT_COUNT as usize] = [
+    0x00000000, // 0: Clear (use default card color)
+    0x00805020, // 1: Warm — amber/dark copper (from rim 0xD4822A, dimmed for card)
+    0x00205080, // 2: Cool — muted icy blue (from rim 0x80C8FF, dimmed for card)
+    0x00804050, // 3: Coral — muted pink (from rim 0xFF8090, dimmed for card)
+    0x00807000, // 4: Gold — muted gold (from rim 0xDDBB00, dimmed for card)
+];
+
+/// Color of the pinned indicator dot (bright gold).
+const ATLAS_PIN_COLOR: u32 = 0x00FFDD44;
 /// Muted rim for inactive scene cards (very dim).
 const ATLAS_CARD_INACTIVE_RIM_COLOR: u32 = 0x00204060;
 
@@ -3155,6 +3171,10 @@ struct SceneDescriptor {
     label: [u8; ATLAS_LABEL_LEN],
     /// Flags: SCENE_FLAG_*
     flags: u8,
+    /// Accent token: index into ATLAS_ACCENT_COLORS (0..ACCENT_COUNT). 0 = clear.
+    accent: u8,
+    /// Pinned flag: when true, scene survives frame-close operations.
+    pinned: bool,
     /// Focused frame_id in this scene, or 0 if none.
     focused_frame_id: u32,
     /// Number of valid entries in frame_ids[].
@@ -3218,6 +3238,8 @@ static mut ATLAS_SNAPSHOT: AtlasSnapshot = AtlasSnapshot {
         scene_id: 0,
         label: [0u8; ATLAS_LABEL_LEN],
         flags: 0,
+        accent: 0,
+        pinned: false,
         focused_frame_id: 0,
         frame_count: 0,
         frame_ids: [0u32; ATLAS_MAX_FRAMES_PER_SCENE],
@@ -3295,7 +3317,7 @@ const SCENE_SETTINGS_PANEL_H: u32 = SILK_CHROME_TEMPLATE_DEFAULT.settings_panel_
 static mut SURFACE_200_X: i32 = 900;
 static mut SURFACE_200_Y: i32 = 500;
 static mut SURFACE_200_W: u32 = 300;
-static mut SURFACE_200_H: u32 = 150;
+static mut SURFACE_200_H: u32 = LINEN_SURFACE_VISUAL_H;
 // Quil surface 201 position tracking
 static mut SURFACE_201_X: i32 = 100;
 static mut SURFACE_201_Y: i32 = 100;
@@ -4095,6 +4117,8 @@ unsafe fn atlas_capture_snapshot() {
             focused_frame_id: 0,
             frame_count: 0,
             frame_ids: [0u32; ATLAS_MAX_FRAMES_PER_SCENE],
+            accent: 0,
+            pinned: false,
         }; ATLAS_MAX_SCENES],
     };
 
@@ -4113,6 +4137,8 @@ unsafe fn atlas_capture_snapshot() {
         let sd = &mut snapshot.scenes[scene_idx];
         sd.scene_id = scene_idx as u32;
         sd.label = SCENES[scene_idx].label;
+        sd.accent = SCENES[scene_idx].accent;
+        sd.pinned = SCENES[scene_idx].pinned;
 
         let mut frame_count: u8 = 0;
 
@@ -4492,10 +4518,31 @@ unsafe fn atlas_render_stub() {
         let card_color = if is_selected {
             serial_println!("[atlas.visual.selected] scene={}", scene_idx);
             ATLAS_CARD_SELECTED_COLOR
-        } else if (sd.flags & SCENE_FLAG_ACTIVE) != 0 {
-            ATLAS_CARD_ACTIVE_COLOR
         } else if (sd.flags & SCENE_FLAG_EMPTY) != 0 {
             ATLAS_CARD_EMPTY_COLOR
+        } else if sd.accent != ACCENT_DEFAULT && (sd.accent as usize) < ACCENT_COUNT as usize {
+            // Use accent color for non-empty, non-selected scenes with non-zero accent.
+            let accent_color = ATLAS_ACCENT_COLORS[sd.accent as usize];
+            static mut ATLAS_ACCENT_VISUAL_BUDGET: u32 = 8;
+            if ATLAS_ACCENT_VISUAL_BUDGET > 0 {
+                ATLAS_ACCENT_VISUAL_BUDGET -= 1;
+                serial_println!("[atlas.scene.visual.accent] scene={} accent={}", scene_idx, sd.accent);
+            }
+            accent_color
+        } else if sd.accent != ACCENT_DEFAULT {
+            // Accent set but out of bounds — reject marker.
+            static mut ATLAS_VISUAL_REJECT_BUDGET: u32 = 8;
+            if ATLAS_VISUAL_REJECT_BUDGET > 0 {
+                ATLAS_VISUAL_REJECT_BUDGET -= 1;
+                serial_println!("[atlas.scene.visual.reject] scene={} reason=accent_oob accent={}", scene_idx, sd.accent);
+            }
+            if (sd.flags & SCENE_FLAG_ACTIVE) != 0 {
+                ATLAS_CARD_ACTIVE_COLOR
+            } else {
+                ATLAS_CARD_COLOR
+            }
+        } else if (sd.flags & SCENE_FLAG_ACTIVE) != 0 {
+            ATLAS_CARD_ACTIVE_COLOR
         } else {
             ATLAS_CARD_COLOR
         };
@@ -4531,6 +4578,21 @@ unsafe fn atlas_render_stub() {
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
                 (fb_y as u64) << 32 | fb_x as u64,
                 (fb_color as u64) << 32 | (fb_h as u64) << 16 | fb_w as u64);
+        }
+
+        // Draw pinned indicator dot at top-right corner of pinned scenes.
+        if sd.pinned {
+            let dot_size: i32 = 8;
+            let dot_x = cx + card_w as i32 - dot_size - 4;
+            let dot_y = cy + 4;
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                (dot_y as u64) << 32 | dot_x as u64,
+                (ATLAS_PIN_COLOR as u64) << 32 | (dot_size as u64) << 16 | dot_size as u64);
+            static mut ATLAS_PIN_VISUAL_BUDGET: u32 = 8;
+            if ATLAS_PIN_VISUAL_BUDGET > 0 {
+                ATLAS_PIN_VISUAL_BUDGET -= 1;
+                serial_println!("[atlas.scene.visual.pinned] scene={}", scene_idx);
+            }
         }
 
         // C3: scene flags proof marker.
