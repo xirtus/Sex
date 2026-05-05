@@ -470,6 +470,8 @@ unsafe fn linen_select_prev_object() {
 
 /// Maximum visible rows in the Linen object list placeholder UI.
 const LINEN_LIST_MAX_ROWS: u8 = 8;
+/// Max rows with visual fill rects. Header takes rect_index=0; rows get 1-7 (MAX_RECTS=8).
+const LINEN_LIST_ROW_RECTS: u8 = 7;
 /// Height of each object row in the list, in pixels.
 const LINEN_LIST_ROW_H: u32 = 24;
 /// Gap between rows.
@@ -534,17 +536,19 @@ unsafe fn linen_render_object_list() {
     serial_println!("[linen.selection_visual.header] object_id={} color={:#010x}",
         SELECTED_LINEN_OBJECT_ID, header_color);
 
-    // Draw header bar at top of surface using selection accent color.
-    // 0xEF: arg0=surface_id, arg1=(sy<<32)|sx, arg2=(color<<32)|(sh<<16)|sw
+    // Draw header bar at top of surface using selection accent color (rect_index=0).
+    // arg2 format: (rect_index<<56)|(color_rgb<<32)|(sh<<16)|sw
+    // Existing callers: bits 56-63 = 0 → rect_index=0; backward compatible.
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
-        (0u64 << 32) | 0u64,  // position (0,0) — top-left corner
-        (header_color as u64) << 32
-            | (LINEN_LIST_HEADER_H as u64) << 16
+        0u64,  // position (0,0) — top-left corner
+        ((header_color as u64) << 32)
+            | ((LINEN_LIST_HEADER_H as u64) << 16)
             | w as u64);
 
-    // Emit one row marker per object (proof only, not visual rows).
+    // Emit row markers and visual fill rects, one per object.
     let count = linen_object_count();
     let mut rows_emitted: u8 = 0;
+    let mut rects_sent: u8 = 0;
     for i in 0..LINEN_MAX_OBJECTS {
         if let Some(obj) = LINEN_OBJECTS[i] {
             if rows_emitted >= LINEN_LIST_MAX_ROWS {
@@ -553,14 +557,35 @@ unsafe fn linen_render_object_list() {
             }
             let kind_name = linen_object_kind_name(obj.kind);
             let state_name = linen_object_state_name(obj.state);
-            let selected_flag = if obj.object_id == SELECTED_LINEN_OBJECT_ID { "true" } else { "false" };
+            let is_selected = obj.object_id == SELECTED_LINEN_OBJECT_ID;
+            let selected_flag = if is_selected { "true" } else { "false" };
             serial_println!("[linen.object_list.row] id={} kind={} state={} name={} selected={}",
                 obj.object_id, kind_name, state_name, obj.display_name, selected_flag);
+
+            // Send visual row rect if within fill-rect slot budget (slots 1-7; slot 0 = header).
+            if rows_emitted < LINEN_LIST_ROW_RECTS {
+                let rect_index = (rows_emitted as u64 + 1) & 0xF;
+                let row_y = LINEN_LIST_HEADER_H
+                    + rows_emitted as u32 * (LINEN_LIST_ROW_H + LINEN_LIST_ROW_GAP);
+                let row_color = if is_selected { header_color } else { linen_kind_color(obj.kind) };
+                pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
+                    (row_y as u64) << 32 | 0u64,
+                    (rect_index << 56)
+                        | ((row_color as u64) << 32)
+                        | ((LINEN_LIST_ROW_H as u64) << 16)
+                        | w as u64);
+                serial_println!("[linen.row_visual.rect] index={} id={} kind={} color={:#010x} selected={}",
+                    rect_index, obj.object_id, kind_name, row_color, selected_flag);
+                rects_sent += 1;
+            } else {
+                serial_println!("[linen.row_visual.skip] id={} reason=rect_budget", obj.object_id);
+            }
+
             rows_emitted += 1;
         }
     }
     serial_println!("[linen.object_select.current] id={}", SELECTED_LINEN_OBJECT_ID);
-    serial_println!("[linen.object_list.done] count={} rows={}", count, rows_emitted);
+    serial_println!("[linen.object_list.done] count={} rows={} rects={}", count, rows_emitted, rects_sent);
 }
 
 // ── J3: Quil Buffer Table ────────────────────────────────────────────────────

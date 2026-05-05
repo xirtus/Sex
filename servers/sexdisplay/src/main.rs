@@ -20,6 +20,9 @@ static mut FB_H: u32 = FALLBACK_H;
 
 // ── Surface Registry (V1: safe inline ABI, no backing buffers) ──────────────
 
+/// Max fill rects per surface. rect_index in 0xEF selects which slot to write.
+const MAX_RECTS: usize = 8;
+
 /// A compositor surface. Rendered as a solid-color filled rect below the bar.
 /// No backing buffer, no alpha, no z-ordering (insertion order only).
 /// Ownership invariant: owner_pd is set on first create and never changes
@@ -39,20 +42,23 @@ struct Surface {
     active_tab: u8,
     // Per-surface chrome flags (V1: bit 0 = top bar enabled)
     chrome_flags: u8,
-    // Per-surface fill rect (V1: single rect, last 0xEF wins)
-    fill_sx: i32,
-    fill_sy: i32,
-    fill_sw: u32,
-    fill_sh: u32,
-    fill_color: u32,
-    fill_active: bool,
+    // Per-surface fill rects (up to MAX_RECTS; fill_count tracks highest set index + 1)
+    fill_count: u8,
+    fill_sx: [i32; MAX_RECTS],
+    fill_sy: [i32; MAX_RECTS],
+    fill_sw: [u32; MAX_RECTS],
+    fill_sh: [u32; MAX_RECTS],
+    fill_color: [u32; MAX_RECTS],
 }
 
 const MAX_SURFACES: usize = 16;
 const SURFACE_EMPTY: Surface = Surface {
     surface_id: 0, owner_pd: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false,
     tab_count: 0, active_tab: 0, chrome_flags: 0,
-    fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0, fill_color: 0, fill_active: false,
+    fill_count: 0,
+    fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
+    fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
+    fill_color: [0u32; MAX_RECTS],
 };
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 static mut FOCUSED_SURFACE_ID: u64 = 0;
@@ -300,20 +306,23 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
     c
 }
 
-/// If the global pixel (x,y) falls within the surface's active fill rect,
-/// return the fill color; otherwise return `base_color`.
+/// For each active fill rect in the surface, if the global pixel (x,y) falls
+/// within the rect, update the running color (painter's order: last match wins).
 /// Used in both passes of composite_pixel to prevent logic drift.
 fn fill_rect_color(surf: &Surface, x: usize, y: usize, base_color: u32) -> u32 {
-    if !surf.fill_active { return base_color; }
+    if surf.fill_count == 0 { return base_color; }
     let lx = (x as i32) - surf.x;
     let ly = (y as i32) - surf.y;
-    if lx >= surf.fill_sx && lx < surf.fill_sx + surf.fill_sw as i32
-        && ly >= surf.fill_sy && ly < surf.fill_sy + surf.fill_sh as i32
-    {
-        surf.fill_color
-    } else {
-        base_color
+    let mut c = base_color;
+    for i in 0..surf.fill_count as usize {
+        if surf.fill_sw[i] == 0 || surf.fill_sh[i] == 0 { continue; }
+        if lx >= surf.fill_sx[i] && lx < surf.fill_sx[i] + surf.fill_sw[i] as i32
+            && ly >= surf.fill_sy[i] && ly < surf.fill_sy[i] + surf.fill_sh[i] as i32
+        {
+            c = surf.fill_color[i];
+        }
     }
+    c
 }
 
 fn bg(y: usize) -> u32 {
@@ -924,8 +933,10 @@ pub extern "C" fn _start() -> ! {
                                 color: 0x00303860,
                                 active: true,
                                 tab_count: 0, active_tab: 0, chrome_flags: 0,
-                                fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0,
-                                fill_color: 0, fill_active: false,
+                                fill_count: 0,
+                                fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
+                                fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
+                                fill_color: [0u32; MAX_RECTS],
                             };
                             break;
                         }
@@ -974,8 +985,10 @@ pub extern "C" fn _start() -> ! {
                                     color,
                                     active: true,
                                     tab_count: 0, active_tab: 0, chrome_flags: 0,
-                                    fill_sx: 0, fill_sy: 0, fill_sw: 0, fill_sh: 0,
-                                    fill_color: 0, fill_active: false,
+                                    fill_count: 0,
+                                    fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
+                                    fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
+                                    fill_color: [0u32; MAX_RECTS],
                                 };
                                 handled = true;
                                 break;
@@ -1072,7 +1085,9 @@ pub extern "C" fn _start() -> ! {
             }
             0xEF => {
                 // OP_SURFACE_FILL_RECT: arg0=surface_id, arg1=(sy<<32)|sx,
-                // arg2=(color<<32)|(sh<<16)|sw.
+                // arg2=(rect_index<<56)|(color_rgb<<32)|(sh<<16)|sw.
+                // rect_index in bits 56-59 (top nibble of color's alpha byte).
+                // Existing callers use 0x00RRGGBB so bits 56-63 are zero → rect_index=0.
                 let surface_id = msg.arg0;
                 if surface_id == 0 { continue; }
                 if !fb_live { continue; }
@@ -1081,7 +1096,8 @@ pub extern "C" fn _start() -> ! {
                 let sy = ((msg.arg1 >> 32) & 0xFFFF_FFFF) as i32;
                 let mut sw = (msg.arg2 & 0xFFFF) as u32;
                 let mut sh = ((msg.arg2 >> 16) & 0xFFFF) as u32;
-                let color = (msg.arg2 >> 32) as u32;
+                let color = ((msg.arg2 >> 32) & 0x00FF_FFFF) as u32;
+                let rect_index = ((msg.arg2 >> 56) & 0xF) as usize;
                 if sw == 0 || sh == 0 { continue; }
 
                 unsafe {
@@ -1098,6 +1114,11 @@ pub extern "C" fn _start() -> ! {
                             }
                             break;
                         }
+                        if rect_index >= MAX_RECTS {
+                            serial_println!("[display.fill_rect.reject.index] sid={} index={}",
+                                surface_id, rect_index);
+                            break;
+                        }
 
                         sw = sw.min(slot.w);
                         sh = sh.min(slot.h);
@@ -1108,12 +1129,15 @@ pub extern "C" fn _start() -> ! {
                         let fill_sx = sx.clamp(0, max_sx);
                         let fill_sy = sy.clamp(0, max_sy);
 
-                        slot.fill_sx = fill_sx;
-                        slot.fill_sy = fill_sy;
-                        slot.fill_sw = sw;
-                        slot.fill_sh = sh;
-                        slot.fill_color = color;
-                        slot.fill_active = true;
+                        slot.fill_sx[rect_index] = fill_sx;
+                        slot.fill_sy[rect_index] = fill_sy;
+                        slot.fill_sw[rect_index] = sw;
+                        slot.fill_sh[rect_index] = sh;
+                        slot.fill_color[rect_index] = color;
+                        if rect_index + 1 > slot.fill_count as usize {
+                            slot.fill_count = (rect_index + 1) as u8;
+                        }
+                        serial_println!("[display.fill_rect.set] sid={} index={}", surface_id, rect_index);
                         updated = true;
                         break;
                     }
