@@ -8445,14 +8445,18 @@ pub extern "C" fn _start() -> ! {
                                         }
                                     }
 
-                                    // K4: Open selected Linen object into a Quil buffer.
+                                    // K9: Open selected Linen object into a Quil buffer — scoped to Linen focus.
                                     SurfaceAction::OpenObjectInQuil => {
-                                        let obj_id = linen_selected_object_id();
-                                        if obj_id == 0 {
-                                            serial_println!("[linen.quil.open.reject.no_selection]");
-                                        } else if open_linen_object_in_quil(obj_id) {
-                                            mutated = true;
-                                            serial_println!("[shell.action.open_object_in_quil] object_id={}", obj_id);
+                                        if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
+                                            let obj_id = linen_selected_object_id();
+                                            if obj_id == 0 {
+                                                serial_println!("[linen.quil.open.reject.no_selection]");
+                                            } else if open_linen_object_in_quil(obj_id) {
+                                                mutated = true;
+                                                serial_println!("[shell.action.open_object_in_quil] object_id={}", obj_id);
+                                            }
+                                        } else {
+                                            serial_println!("[linen.quil.open.reject] reason=not_focused");
                                         }
                                     }
 
