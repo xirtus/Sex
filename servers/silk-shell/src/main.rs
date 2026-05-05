@@ -6,7 +6,8 @@ use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use sex_pdx::{
     pdx_call, pdx_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
-    SLOT_DISPLAY, SLOT_SILKBAR, SLOT_SEXSTORE, OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
+    SLOT_DISPLAY, SLOT_SILKBAR, SLOT_SEXSTORE, SLOT_QUIL, OP_QUIL_PING,
+    OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
     OP_SURFACE_TAB_INFO, OP_APPEARANCE_TOKENS,
     SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
 };
@@ -3430,6 +3431,12 @@ unsafe fn open_quil_in_active_scene() -> bool {
     // restore-from-minimized path where tile_visible_frames() is not called).
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL, 0,
         (QUIL_PLACEHOLDER_COLOR as u64) << 32 | ((SURFACE_201_H as u64) << 16) | SURFACE_201_W as u64);
+
+    // V1D: Route proof — ping Quil PD to confirm shell→Quil PDX path.
+    pdx_call(SLOT_QUIL, OP_QUIL_PING, 0, 0, 0);
+    static mut QUIL_ROUTE_BUDGET: u32 = 8;
+    let b = &mut QUIL_ROUTE_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.quil.route.ping] fid={}", fid); }
 
     serial_println!("[quil.placeholder.open] frame={}", fid);
     snap_capture_layout();

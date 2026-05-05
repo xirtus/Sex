@@ -152,6 +152,16 @@ pub fn init() {
         }
     }
 
+    // Quil route: grant silk-shell capability to ping Quil (no display caps).
+    if quil_id != 0 && silkshell_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::capability::CapabilityData;
+        if let Some(pd) = DOMAIN_REGISTRY.get(silkshell_id) {
+            pd.grant_capability(sex_pdx::SLOT_QUIL, CapabilityData::Domain(quil_id));
+            serial_println!("[kernel.cap.quil.route] shell->quil slot={}", sex_pdx::SLOT_QUIL);
+        }
+    }
+
     // Hand framebuffer to sexdisplay: Limine fb.address is ALREADY VIRTUAL.
     if sexdisp_id != 0 {
         use crate::ipc::DOMAIN_REGISTRY;

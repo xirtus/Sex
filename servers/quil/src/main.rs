@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::alloc::{GlobalAlloc, Layout};
-use sex_pdx::{pdx_listen_raw, serial_println};
+use sex_pdx::{pdx_listen_raw, serial_println, OP_QUIL_PING};
 
 struct DummyAllocator;
 unsafe impl GlobalAlloc for DummyAllocator {
@@ -33,6 +33,16 @@ pub extern "C" fn _start() -> ! {
         }
 
         match msg.type_id {
+            OP_QUIL_PING => {
+                unsafe {
+                    static mut QUIL_ROUTE_BUDGET: u32 = 8;
+                    let b = &mut QUIL_ROUTE_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!("[quil.route.recv]");
+                    }
+                }
+            }
             _ => {
                 unsafe {
                     static mut QUIL_UNKNOWN_BUDGET: u32 = 8;

@@ -96,6 +96,10 @@ pub const OP_SILKBAR_WORKSPACE_ACTIVE: u64 = 0xF3;
 pub const OP_SILKBAR_FOCUS_STATE:      u64 = 0xF4;
 pub const SILKBAR_ABI_VERSION: u64 = 1;
 
+// Quil proof ping — shell→Quil route verification (QUIL_PROTOCOL_ASSIGN_V1C).
+// No display authority. Quil receives and logs, does not draw or create surfaces.
+pub const OP_QUIL_PING: u64 = 0xD0;
+
 // Surface tab metadata opcode (silk-shell → sexdisplay)
 pub const OP_SURFACE_TAB_INFO: u64 = 0xFD;
 
@@ -348,6 +352,7 @@ pub const SLOT_SHELL:   u64 = 6; // silk-shell orchestration entry
 pub const SLOT_SILKBAR: u64 = 7; // SilkBar model authority
 pub const SLOT_USB_HOST:  u64 = 8;  // USB host controller lease (XHCI probe path)
 pub const SLOT_SEXSTORE: u64 = 10; // sexstore K/V service (slot 9 = kernel-local SLOT_USB_SEXINPUT)
+pub const SLOT_QUIL: u64 = 11;    // Quil app surface server (shell→Quil route, no display caps)
 
 // Capability invocation trap numbers (ring-3 → ring-0 transition only).
 // These are sex-pdx implementation details, NOT POSIX-style syscall numbers.
