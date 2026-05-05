@@ -4,6 +4,9 @@
 **Build:** N/A (no code changes).
 **Date:** 2026-05-05
 **Depends on:** `BELL_EVENT_MODEL_DESIGN_GATE_V1.md`, `BELL_CAPABILITY_POLICY_V1.md`, `BELL_PDX_PROTOCOL_SPEC_V1.md`
+**Namespace Audit:** `BELL_NAMESPACE_COLLISION_AUDIT_V1.md` — collision confirmed, corrected placeholders below.
+
+> **⚠️ NAMESPACE CORRECTION (2026-05-05):** The original proposals below contained INVALID IDs that collide with Quil's existing namespace. See §4 for the corrected audited placeholders. All numeric assignments remain placeholders until `BELL_SLOT_OPCODE_ASSIGNMENT_V1`.
 
 ---
 
@@ -78,22 +81,29 @@ This matches the pattern where `sex-` prefix = system server binary, while the p
 
 The following decisions must be made before the server stub is implemented. They are documented here so the future implementation phase can proceed without redesign.
 
+> **⚠️ NAMESPACE CORRECTION (2026-05-05):** The original proposals below contained INVALID IDs.
+> See `BELL_NAMESPACE_COLLISION_AUDIT_V1.md` for full audit. Collision summary:
+> - Domain 9 → **INVALID** (collides with Quil domain 9)
+> - PKEY 9 → **INVALID** (collides with Quil PKEY 9)
+> - SLOT_BELL = 11 → **INVALID** (collides with SLOT_QUIL = 11)
+> - Spawn "after sexstore, before silk-shell" → **IMPOSSIBLE** (silk-shell is index 2, sexstore is index 7)
+>
+> All replaced with audited placeholders below.
+
 ### PD identity
 
-| Property | Proposed Value | Rationale |
-|----------|---------------|-----------|
-| PD ID / Domain | `9` (next after sexstore's domain 8) | Sequential domain IDs in init.rs |
-| PKEY | `9` (matching domain) | 1:1 domain-to-PKEY mapping |
-| Spawn order | After sexstore, before silk-shell | Bell may provide event context to shell on boot |
+| Property | Old (INVALID) | Corrected | Rationale |
+|----------|---------------|-----------|-----------|
+| PD ID / Domain | ~~9~~ (Quil collision) | **10** | Next contiguous after Quil's domain 9 |
+| PKEY | ~~9~~ (Quil collision) | **10** | 1:1 domain-to-PKEY mapping |
+| Spawn order | ~~After sexstore, before silk-shell~~ (impossible) | **After quil (index 9, last)** | quil is currently last; Bell spawns at end of module_paths |
 
 ### Slot
 
-| Property | Proposed Value | Rationale |
-|----------|---------------|-----------|
-| `SLOT_BELL` | `11` (next after `SLOT_SEXSTORE=10`) | Sequential slot IDs in sex-pdx |
-| Slot name | `SLOT_BELL` | Consistent with `SLOT_DISPLAY`, `SLOT_SEXSTORE` |
-
-**STOP FIRST** before assigning `SLOT_BELL` — must verify no slot collision and update kernel cap table.
+| Property | Old (INVALID) | Corrected | Rationale |
+|----------|---------------|-----------|-----------|
+| `SLOT_BELL` | ~~11~~ (SLOT_QUIL collision) | **12** | Next after SLOT_QUIL=11 (slot 9=kernel-local, 10=SEXSTORE, 11=QUIL) |
+| Slot name | `SLOT_BELL` | `SLOT_BELL` (unchanged) | Consistent with `SLOT_DISPLAY`, `SLOT_SEXSTORE` |
 
 ### Opcodes
 
@@ -101,6 +111,8 @@ No opcodes are assigned in the server stub phase. The stub only needs to:
 - Open its PDX listen slot
 - Reject all incoming messages with `[bell.unknown.reject]`
 - Not parse any payload
+
+**Audited placeholder range for future `OP_BELL_*` constants:** `0xC0-0xCF` (verified free — 0xD0 is OP_QUIL_PING).
 
 ### Cap grants
 
@@ -215,7 +227,7 @@ When implementation begins, the work should be split into these phases (each wit
 
 | Phase | Scope | Type | Depends On |
 |-------|-------|------|------------|
-| **BELL_SLOT_OPCODE_ASSIGNMENT_V1** | Assign SLOT_BELL=11, OP_BELL_NOTIFY=0xC0 (etc.) in sex-pdx | Code (sex-pdx only) | This plan + naming approval |
+| **BELL_SLOT_OPCODE_ASSIGNMENT_V1** | Assign SLOT_BELL=12, OP_BELL_NOTIFY=TBD (range 0xC0-0xCF) in sex-pdx | Code (sex-pdx only) | This plan + naming approval + namespace audit |
 | **BELL_BOOT_SPAWN_V1** | Add sexbell to init.rs spawn sequence, grant SLOT_BELL cap | Code (kernel/init.rs) | Slot assignment |
 | **BELL_SERVER_STUB_V1** | Minimal sexbell binary: boot, listen, reject unknown | Code (servers/sexbell/) | Boot spawn |
 | **BELL_UNKNOWN_REJECT_PROOF_V1** | Verify stub behavior via QEMU boot + proof markers | Test | Server stub |
@@ -230,14 +242,18 @@ When implementation begins, the work should be split into these phases (each wit
 ### Before any code
 
 1. **Approve naming**: `sexbell` for server crate, `Bell` for product/UI name.
-2. **Approve slot/opcode plan**: `SLOT_BELL=11`, `OP_BELL_NOTIFY=0xC0`, etc. (verify no conflicts).
-3. **Approve domain/PKEY/spawn order**: domain 9, PKEY 9, spawn after sexstore.
+2. **Approve slot/opcode plan**: `SLOT_BELL=12`, `OP_BELL_*` in range `0xC0-0xCF` (verified collision-free by namespace audit).
+3. **Approve domain/PKEY/spawn order**: domain 10, PKEY 10, spawn after quil.
+
+> **⚠️ STOP FIRST** — These are audited placeholders, NOT assigned code constants.
+> Do not edit sex-pdx, kernel init, or cap grants until BELL_SLOT_OPCODE_ASSIGNMENT_V1 is explicitly approved.
+> See `BELL_NAMESPACE_COLLISION_AUDIT_V1.md` for full audit evidence.
 
 ### Then implement in order
 
 ```
-BELL_SLOT_OPCODE_ASSIGNMENT_V1   → sex-pdx constants only
-BELL_BOOT_SPAWN_V1               → init.rs spawn + cap grant
+BELL_SLOT_OPCODE_ASSIGNMENT_V1   → sex-pdx constants only (SLOT_BELL=12, OP_BELL_* range 0xC0-0xCF)
+BELL_BOOT_SPAWN_V1               → init.rs spawn + cap grant (domain 10, PKEY 10)
 BELL_SERVER_STUB_V1              → sexbell binary (boot + listen + reject)
 BELL_UNKNOWN_REJECT_PROOF_V1     → verify via QEMU boot
 ```
@@ -251,6 +267,7 @@ Each phase has its own STOP FIRST gate. Do not skip phases.
 - `BELL_EVENT_MODEL_DESIGN_GATE_V1.md` — event model, lanes, privacy
 - `BELL_CAPABILITY_POLICY_V1.md` — default-deny capability policy
 - `BELL_PDX_PROTOCOL_SPEC_V1.md` — protocol opcodes, message shapes, validation flow
+- `BELL_NAMESPACE_COLLISION_AUDIT_V1.md` — namespace audit, corrected placeholder IDs
 - `SILK_LIST_ROW_VISUAL_CANON_V1.md` — canon for future inbox
 - `E15_STORAGE_DOCS_CLEANUP_V1.md` — storage canon
 - `kernel/src/init.rs` — reference for existing spawn order (sexstore domain 8)

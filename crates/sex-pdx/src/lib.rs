@@ -100,6 +100,18 @@ pub const SILKBAR_ABI_VERSION: u64 = 1;
 // No display authority. Quil receives and logs, does not draw or create surfaces.
 pub const OP_QUIL_PING: u64 = 0xD0;
 
+// Bell event protocol opcodes (BELL_SLOT_OPCODE_ASSIGNMENT_V1, namespace audited).
+// Range 0xC0-0xC7 assigned; 0xC8-0xCF reserved for Bell future expansion.
+// No server spawn, no cap grants, no kernel edits in this phase.
+pub const OP_BELL_NOTIFY:      u64 = 0xC0; // App → Bell: request to create a BellEvent
+pub const OP_BELL_CLOSE:       u64 = 0xC1; // App/Shell → Bell: dismiss event by ID
+pub const OP_BELL_ACTION:      u64 = 0xC2; // App/Shell → Bell: execute action callback
+pub const OP_BELL_LIST:        u64 = 0xC3; // Shell → Bell: list current events (summary only)
+pub const OP_BELL_CLEAR:       u64 = 0xC4; // Shell → Bell: clear events in a lane or all lanes
+pub const OP_BELL_SUBSCRIBE:   u64 = 0xC5; // SilkBar → Bell: subscribe to lane-summary updates
+pub const OP_BELL_SET_POLICY:  u64 = 0xC6; // Shell → Bell: set per-app user policy override
+pub const OP_BELL_MUTE_SENDER: u64 = 0xC7; // Shell → Bell: mute a sender PD
+
 // Surface tab metadata opcode (silk-shell → sexdisplay)
 pub const OP_SURFACE_TAB_INFO: u64 = 0xFD;
 
@@ -353,6 +365,7 @@ pub const SLOT_SILKBAR: u64 = 7; // SilkBar model authority
 pub const SLOT_USB_HOST:  u64 = 8;  // USB host controller lease (XHCI probe path)
 pub const SLOT_SEXSTORE: u64 = 10; // sexstore K/V service (slot 9 = kernel-local SLOT_USB_SEXINPUT)
 pub const SLOT_QUIL: u64 = 11;    // Quil app surface server (shell→Quil route, no display caps)
+pub const SLOT_BELL: u64 = 12;   // Bell attention/event service (domain 10, namespace audited)
 
 // Capability invocation trap numbers (ring-3 → ring-0 transition only).
 // These are sex-pdx implementation details, NOT POSIX-style syscall numbers.

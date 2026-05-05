@@ -86,6 +86,7 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 pub const SURFACE_ID_SCENE_SETTINGS: u64 = 0x96;
 pub const SURFACE_ID_ATLAS_OVERLAY: u64 = 0x97; // 151 — Atlas overview surface, toggled by F10
 pub const SURFACE_ID_COMMAND_PALETTE: u64 = 0x98; // 152 — Command palette overlay, toggled by backtick
+pub const SURFACE_ID_SPINDLE: u64 = 0x99;        // 153 — Spindle terminal console, toggled by Scroll Lock
 
 /// Placeholder grant_ref value: no real Collar grant exists yet.
 /// All current object/buffer grant_ref fields use this value.
@@ -118,7 +119,7 @@ struct AppSurfaceSpec {
 }
 
 /// Known OS-managed app surfaces. Validated at boot for duplicates.
-const APP_SURFACES: [AppSurfaceSpec; 6] = [
+const APP_SURFACES: [AppSurfaceSpec; 7] = [
     AppSurfaceSpec {
         surface_id: SURFACE_ID_LINEN,
         frame_id: LINEN_FRAME_ID,
@@ -182,6 +183,17 @@ const APP_SURFACES: [AppSurfaceSpec; 6] = [
         boot_y: COMMAND_PALETTE_BOOT_Y,
         boot_w: COMMAND_PALETTE_BOOT_W,
         boot_h: COMMAND_PALETTE_BOOT_H,
+        closeable: false,
+        focusable: true,
+    },
+    AppSurfaceSpec {
+        surface_id: SURFACE_ID_SPINDLE,
+        frame_id: SPINDLE_FRAME_ID,
+        name: "spindle",
+        boot_x: SPINDLE_BOOT_X,
+        boot_y: SPINDLE_BOOT_Y,
+        boot_w: SPINDLE_BOOT_W,
+        boot_h: SPINDLE_BOOT_H,
         closeable: false,
         focusable: true,
     },
@@ -2423,6 +2435,7 @@ enum SurfaceAction {
     ToggleMesh,        // F12 — open/focus/toggle Mesh placeholder
     ToggleCollar,      // Insert — open/focus/toggle Collar placeholder
     ToggleBell,        // PageDown — open/focus/toggle Bell placeholder
+    ToggleSpindle,     // Scroll Lock — open/focus/toggle Spindle terminal
     ToggleAtlas,       // F10 — toggle Atlas overview mode
     ToggleCommandPalette, // backtick — toggle command palette
     ToggleSceneSettingsPanel,
@@ -2539,6 +2552,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x42 => Some(SurfaceAction::ToggleLinen),    // F8
         0x43 => Some(SurfaceAction::ToggleQuil),     // F9
         0x44 => Some(SurfaceAction::ToggleAtlas),    // F10
+        0x46 => Some(SurfaceAction::ToggleSpindle),  // Scroll Lock
         0x57 => Some(SurfaceAction::AccessClose),    // F11
         0x58 => Some(SurfaceAction::ToggleMesh),    // F12
         0x59 => Some(SurfaceAction::OpenObjectInQuil), // test trigger (not standard PS/2 key)
@@ -2681,8 +2695,10 @@ unsafe fn tile_visible_frames() {
 
         match sid {
             SURFACE_ID_APP => {
-                WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
-                WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
+                if let Some(w) = WINDOWS.get_mut(1) {
+                    w.desc.x = rx; w.desc.y = ry;
+                    w.desc.width = rw; w.desc.height = rh;
+                }
             }
             SURFACE_ID_STATIC => {
                 SURFACE_101_X = rx; SURFACE_101_Y = ry;
@@ -2715,6 +2731,10 @@ unsafe fn tile_visible_frames() {
             SURFACE_ID_BELL_PLACEHOLDER => {
                 SURFACE_204_X = rx; SURFACE_204_Y = ry;
                 SURFACE_204_W = rw; SURFACE_204_H = rh;
+            }
+            SURFACE_ID_SPINDLE => {
+                SURFACE_0x99_X = rx; SURFACE_0x99_Y = ry;
+                SURFACE_0x99_W = rw; SURFACE_0x99_H = rh;
             }
             _ => {}
         }
@@ -2872,8 +2892,10 @@ unsafe fn tile_active_scene_frames() {
         // Update local shadow state.
         match sid {
             SURFACE_ID_APP => {
-                WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
-                WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
+                if let Some(w) = WINDOWS.get_mut(1) {
+                    w.desc.x = rx; w.desc.y = ry;
+                    w.desc.width = rw; w.desc.height = rh;
+                }
             }
             SURFACE_ID_STATIC => {
                 SURFACE_101_X = rx; SURFACE_101_Y = ry;
@@ -2906,6 +2928,10 @@ unsafe fn tile_active_scene_frames() {
             SURFACE_ID_BELL_PLACEHOLDER => {
                 SURFACE_204_X = rx; SURFACE_204_Y = ry;
                 SURFACE_204_W = rw; SURFACE_204_H = rh;
+            }
+            SURFACE_ID_SPINDLE => {
+                SURFACE_0x99_X = rx; SURFACE_0x99_Y = ry;
+                SURFACE_0x99_W = rw; SURFACE_0x99_H = rh;
             }
             _ => {}
         }
@@ -2965,7 +2991,7 @@ struct WindowState {
 /// Maximum tabs per frame (overkill for 4 app surfaces, allows future Chrome tabs).
 const MAX_TABS_PER_FRAME: u8 = 8;
 /// Maximum concurrent frames (overkill for current app count, allows future splits).
-const MAX_FRAMES: usize = 8;
+const MAX_FRAMES: usize = 9;
 
 /// A tab wraps an existing surface_id with shell-level metadata.
 /// The surface remains the app/display object; the tab is shell policy only.
@@ -3716,7 +3742,7 @@ unsafe fn access_describe_focus() {
 /// Maximum scenes tracked by Atlas (equals WORKSPACE_COUNT).
 const ATLAS_MAX_SCENES: usize = 5;
 /// Maximum frames tracked per scene descriptor (equals MAX_FRAMES).
-const ATLAS_MAX_FRAMES_PER_SCENE: usize = 8;
+const ATLAS_MAX_FRAMES_PER_SCENE: usize = 9;
 /// Length of fixed-size scene label byte array (no heap strings).
 const ATLAS_LABEL_LEN: usize = 16;
 
@@ -3984,6 +4010,11 @@ static mut SURFACE_204_X: i32 = 400;
 static mut SURFACE_204_Y: i32 = 100;
 static mut SURFACE_204_W: u32 = 640;
 static mut SURFACE_204_H: u32 = 480;
+// Spindle terminal surface 0x99 position tracking
+static mut SURFACE_0x99_X: i32 = SPINDLE_BOOT_X;
+static mut SURFACE_0x99_Y: i32 = SPINDLE_BOOT_Y;
+static mut SURFACE_0x99_W: u32 = SPINDLE_BOOT_W;
+static mut SURFACE_0x99_H: u32 = SPINDLE_BOOT_H;
 
 fn clamp_surface_size(x: i32, y: i32, w: u32, h: u32) -> (u32, u32) {
     let max_w = (P.width - x).max(P.min_width as i32) as u32;
@@ -4018,8 +4049,10 @@ fn emit_snapshot() {
         pdx_call(SLOT_DISPLAY, OP_DISPLAY_SET_SNAPSHOT, SNAPSHOT.as_ptr() as u64, len as u64, 0);
 
         // Surface 100 position update
-        if WINDOWS.len() > 1 && SURFACE_100_ALIVE {
-            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_APP, WINDOWS[1].desc.x as u64, WINDOWS[1].desc.y as u64);
+        if let Some(w) = WINDOWS.get(1) {
+            if SURFACE_100_ALIVE {
+                pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_APP, w.desc.x as u64, w.desc.y as u64);
+            }
         }
         // Surface 101 position update (static tracked position)
         if SURFACE_101_ALIVE {
@@ -4052,7 +4085,7 @@ fn emit_snapshot() {
 /// Duplicates the bounds match from point_in_surface to avoid refactoring it.
 unsafe fn get_surface_bounds(sid: u64) -> Option<(i32, i32, u32, u32)> {
     match sid {
-        SURFACE_ID_APP    => Some((WINDOWS[1].desc.x, WINDOWS[1].desc.y, WINDOWS[1].desc.width, WINDOWS[1].desc.height)),
+        SURFACE_ID_APP    => WINDOWS.get(1).map(|w| (w.desc.x, w.desc.y, w.desc.width, w.desc.height)),
         SURFACE_ID_STATIC => Some((SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H)),
         SURFACE_ID_TEST3  => Some((SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H)),
         SURFACE_ID_TEST4  => Some((SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H)),
@@ -4061,6 +4094,7 @@ unsafe fn get_surface_bounds(sid: u64) -> Option<(i32, i32, u32, u32)> {
         SURFACE_ID_MESH   => Some((SURFACE_202_X, SURFACE_202_Y, SURFACE_202_W, SURFACE_202_H)),
         SURFACE_ID_COLLAR => Some((SURFACE_203_X, SURFACE_203_Y, SURFACE_203_W, SURFACE_203_H)),
         SURFACE_ID_BELL_PLACEHOLDER => Some((SURFACE_204_X, SURFACE_204_Y, SURFACE_204_W, SURFACE_204_H)),
+        SURFACE_ID_SPINDLE => Some((SURFACE_0x99_X, SURFACE_0x99_Y, SURFACE_0x99_W, SURFACE_0x99_H)),
         _ => None,
     }
 }
@@ -4077,7 +4111,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             return false;
         }
         let (x, y, w, h) = match sid {
-            SURFACE_ID_APP    => (WINDOWS[1].desc.x, WINDOWS[1].desc.y, WINDOWS[1].desc.width, WINDOWS[1].desc.height),
+            SURFACE_ID_APP    => WINDOWS.get(1).map_or((0,0,0,0), |w| (w.desc.x, w.desc.y, w.desc.width, w.desc.height)),
             SURFACE_ID_STATIC => (SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H),
             SURFACE_ID_TEST3  => (SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H),
             SURFACE_ID_TEST4  => (SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H),
@@ -4086,6 +4120,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             SURFACE_ID_MESH   => (SURFACE_202_X, SURFACE_202_Y, SURFACE_202_W, SURFACE_202_H),
             SURFACE_ID_COLLAR => (SURFACE_203_X, SURFACE_203_Y, SURFACE_203_W, SURFACE_203_H),
             SURFACE_ID_BELL_PLACEHOLDER => (SURFACE_204_X, SURFACE_204_Y, SURFACE_204_W, SURFACE_204_H),
+            SURFACE_ID_SPINDLE => (SURFACE_0x99_X, SURFACE_0x99_Y, SURFACE_0x99_W, SURFACE_0x99_H),
             // OS-owned surfaces: cursor and panels are known but non-focusable —
             // log nonfocusable.reject, not unknown.reject.
             SURFACE_ID_CURSOR
@@ -4117,6 +4152,7 @@ fn surface_is_alive(sid: u64) -> bool {
         SURFACE_ID_MESH     => true,  // mesh never destroys its surface
         SURFACE_ID_COLLAR   => true,  // collar never destroys its surface
         SURFACE_ID_BELL_PLACEHOLDER => true,  // bell placeholder never destroys its surface
+        SURFACE_ID_SPINDLE  => true,  // spindle never destroys its surface
         SURFACE_ID_CURSOR   => true,  // cursor never destroyed
         SURFACE_ID_LAUNCHER => unsafe { LAUNCHER_ACTIVE },
         SURFACE_ID_STATUS   => unsafe { STATUS_ACTIVE },
@@ -6425,6 +6461,56 @@ const PALETTE_ACCENT_BAR_W: u32 = 5;
 /// Background color for the command palette list area (behind all rows).
 const PALETTE_LIST_BG_COLOR: u32 = 0x00101820; // dark slate
 
+// ── Spindle Terminal Constants ───────────────────────────────────────────────
+// Spindle = native SexOS terminal/command console. Shell-local for 0.2.
+// Toggle via Scroll Lock (scancode 0x46). No POSIX/PTY/TTY.
+const SPINDLE_FRAME_ID: u32 = 9;
+const SPINDLE_BOOT_X: i32 = 200;
+const SPINDLE_BOOT_Y: i32 = 200;
+const SPINDLE_BOOT_W: u32 = 500;
+const SPINDLE_BOOT_H: u32 = 300;
+
+/// Fill color for the Spindle surface placeholder (dark terminal teal).
+const SPINDLE_PLACEHOLDER_COLOR: u32 = 0x00182028;
+/// Header bar height for the Spindle terminal status line, in pixels.
+const SPINDLE_HEADER_H: u32 = 28;
+/// Height of each output line/row in the Spindle display, in pixels.
+const SPINDLE_ROW_H: u32 = 26;
+/// Gap between row fill rects in the Spindle display, in pixels.
+const SPINDLE_ROW_GAP: u32 = 2;
+/// Max rows with visual fill rects. Header takes rect_index=0; rows get 1-7.
+const SPINDLE_ROW_RECTS: u8 = 7;
+/// Maximum characters in a single Yarn command line buffer.
+const YARN_CMD_BUF_CAP: usize = 256;
+/// Maximum output lines tracked in the Yarn session ring.
+const YARN_OUTPUT_LINES: usize = 20;
+/// Maximum characters per output line (trimmed to fit).
+const YARN_OUTPUT_LINE_CAP: usize = 32;
+/// Maximum command history entries.
+const YARN_HISTORY_CAP: usize = 16;
+
+/// YarnSession — bounded input/output/state for the Spindle terminal.
+/// No heap, no strings, no POSIX/PTY/TTY.
+struct YarnSession {
+    cmd_buf: [u8; YARN_CMD_BUF_CAP],
+    cmd_len: usize,
+    output_lines: [[u8; YARN_OUTPUT_LINE_CAP]; YARN_OUTPUT_LINES],
+    output_count: usize,
+    history: [[u8; YARN_CMD_BUF_CAP]; YARN_HISTORY_CAP],
+    history_count: usize,
+    history_pos: i64,
+}
+
+static mut YARN: YarnSession = YarnSession {
+    cmd_buf: [0u8; YARN_CMD_BUF_CAP],
+    cmd_len: 0,
+    output_lines: [[0u8; YARN_OUTPUT_LINE_CAP]; YARN_OUTPUT_LINES],
+    output_count: 0,
+    history: [[0u8; YARN_CMD_BUF_CAP]; YARN_HISTORY_CAP],
+    history_count: 0,
+    history_pos: -1,
+};
+
 /// Shell commands exposed via the command palette.
 /// Each command routes to an existing SurfaceAction via the normal dispatch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6456,6 +6542,355 @@ const COMMAND_LIST: [CommandDef; 5] = [
 static mut COMMAND_PALETTE_OPEN: bool = false;
 /// Index into COMMAND_LIST of the currently selected command.
 static mut COMMAND_PALETTE_SELECTED: u8 = 0;
+
+// ── Spindle Surface Control Helpers ─────────────────────────────────────────
+// Spindle = native SexOS terminal/command console (0.2: shell-local).
+// Toggle via Scroll Lock (scancode 0x46). No sexdisplay protocol changes.
+
+/// Ensure a ShellFrame exists for Spindle in an empty FRAMES slot, assigned to
+/// the active scene. Returns the frame_id if created/found, or 0 if no slot.
+unsafe fn ensure_spindle_frame() -> Option<u32> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == SPINDLE_FRAME_ID {
+                return Some(SPINDLE_FRAME_ID);
+            }
+        }
+    }
+    for (slot_idx, slot) in FRAMES.iter_mut().enumerate() {
+        if slot.is_none() {
+            *slot = Some(ShellFrame {
+                frame_id: SPINDLE_FRAME_ID,
+                active_tab: 0,
+                tab_count: 1,
+                tabs: {
+                    let mut t: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                        [None; MAX_TABS_PER_FRAME as usize];
+                    t[0] = Some(ShellTab {
+                        surface_id: SURFACE_ID_SPINDLE,
+                        title_id: 0,
+                        flags: 0,
+                    });
+                    t
+                },
+                scene_id: ACTIVE_SCENE_IDX,
+                flags: FRAME_FLAG_TOP_BAR, // top bar ON by default
+                normal_x: SPINDLE_BOOT_X,
+                normal_y: SPINDLE_BOOT_Y,
+                normal_w: SPINDLE_BOOT_W,
+                normal_h: SPINDLE_BOOT_H,
+            });
+            serial_println!("[spindle.placeholder.attach.frame] frame={} scene={} slot={}", SPINDLE_FRAME_ID, ACTIVE_SCENE_IDX, slot_idx);
+            serial_println!("[spindle.placeholder.attach.tab] frame={} tab=0 surface={}", SPINDLE_FRAME_ID, SURFACE_ID_SPINDLE);
+            return Some(SPINDLE_FRAME_ID);
+        }
+    }
+    serial_println!("[spindle.frame.reject] reason=no_slot");
+    None
+}
+
+/// Open Spindle in the active scene: ensure frame exists, un-minimize, position,
+/// focus, and tile. If Spindle is already visible in the active scene, focuses it.
+/// Returns true if Spindle became visible/focused.
+unsafe fn open_spindle_in_active_scene() -> bool {
+    // Duplicate guard — if Spindle already visible in active scene, reject open.
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == SPINDLE_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                serial_println!("[spindle.placeholder.reject.duplicate] frame={} scene={}", SPINDLE_FRAME_ID, ACTIVE_SCENE_IDX);
+                if let Some(sid) = active_surface_for_frame(SPINDLE_FRAME_ID) {
+                    if try_set_focus(sid) {
+                        serial_println!("[spindle.placeholder.focus] frame={} sid={}", SPINDLE_FRAME_ID, sid);
+                    }
+                }
+                return true;
+            }
+        }
+    }
+
+    let fid = match ensure_spindle_frame() {
+        Some(f) => f,
+        None => return false,
+    };
+
+    // Update frame scene to current active scene.
+    for f in FRAMES.iter_mut() {
+        if let Some(frame) = f {
+            if frame.frame_id == fid {
+                frame.scene_id = ACTIVE_SCENE_IDX;
+                break;
+            }
+        }
+    }
+
+    if frame_is_minimized(fid) {
+        if !restore_minimized_frame(fid) {
+            return false;
+        }
+    } else if frame_is_zoomed(fid) {
+        // Already visible and zoomed — ensure focus.
+    } else {
+        let sid = match active_surface_for_frame(fid) {
+            Some(s) => s,
+            None => return false,
+        };
+        if surface_is_alive(sid) {
+            pdx_call(SLOT_DISPLAY, 0xEC, sid,
+                (SPINDLE_BOOT_Y as u64) << 32 | SPINDLE_BOOT_X as u64,
+                (SPINDLE_BOOT_H as u64) << 32 | SPINDLE_BOOT_W as u64);
+        }
+        tile_active_scene_frames();
+        try_set_focus(sid);
+    }
+
+    if let Some(sid) = active_surface_for_frame(fid) {
+        try_set_focus(sid);
+        serial_println!("[spindle.placeholder.focus] frame={} sid={}", fid, sid);
+    }
+
+    // Render Spindle output bands.
+    spindle_render();
+
+    serial_println!("[spindle.placeholder.open] frame={}", fid);
+    true
+}
+
+/// Toggle Spindle visibility in the active scene. If frame exists and is
+/// not minimized, minimize it. Otherwise open/un-minimize it.
+unsafe fn toggle_spindle() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == SPINDLE_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                if minimize_frame(SPINDLE_FRAME_ID) {
+                    return true;
+                }
+                return false;
+            }
+        }
+    }
+    open_spindle_in_active_scene()
+}
+
+/// Append an output line to the Yarn output ring buffer.
+unsafe fn yarn_append_output(text: &[u8]) {
+    let yarn = &mut YARN;
+    if yarn.output_count < YARN_OUTPUT_LINES {
+        yarn.output_count += 1;
+    }
+    // Shift lines up (discard oldest).
+    for i in 1..YARN_OUTPUT_LINES {
+        yarn.output_lines[i - 1] = yarn.output_lines[i];
+    }
+    // Write new line (trim to fit).
+    let line = &mut yarn.output_lines[YARN_OUTPUT_LINES - 1];
+    for (i, &b) in text.iter().enumerate() {
+        if i >= YARN_OUTPUT_LINE_CAP - 1 { break; }
+        line[i] = b;
+    }
+    serial_println!("[spindle.output.append] len={}", text.len().min(YARN_OUTPUT_LINE_CAP - 1));
+}
+
+/// Yarn built-in: help — list available commands.
+unsafe fn yarn_cmd_help() {
+    serial_println!("[spindle.command.help]");
+    yarn_append_output(b"Commands: help clear echo about time pd scene routes faults");
+}
+
+/// Yarn built-in: clear — reset output ring.
+unsafe fn yarn_cmd_clear() {
+    serial_println!("[spindle.command.clear]");
+    for i in 0..YARN_OUTPUT_LINES {
+        YARN.output_lines[i] = [0u8; YARN_OUTPUT_LINE_CAP];
+    }
+    YARN.output_count = 0;
+}
+
+/// Yarn built-in: echo — echo arguments back.
+unsafe fn yarn_cmd_echo(args: &[u8]) {
+    let trimmed = trim_ascii(args);
+    serial_println!("[spindle.command.echo] args={:?}", trimmed);
+    if trimmed.is_empty() {
+        yarn_append_output(b"");
+    } else {
+        yarn_append_output(trimmed);
+    }
+}
+
+/// Yarn built-in: about — system info.
+unsafe fn yarn_cmd_about() {
+    serial_println!("[spindle.command.about]");
+    yarn_append_output(b"SexOS 0.2 - Spindle terminal");
+    yarn_append_output(b"No POSIX, no TTY, no PTY");
+}
+
+/// Yarn built-in: time — show system boot time or clock reading.
+unsafe fn yarn_cmd_time() {
+    serial_println!("[spindle.command.time]");
+    // Read boot seconds from kernel (sys_tick or similar).
+    // For V1, display a placeholder.
+    yarn_append_output(b"System time: TBD (no RTC read in V1)");
+}
+
+/// Yarn built-in: pd — list active PDs.
+unsafe fn yarn_cmd_pd() {
+    serial_println!("[spindle.command.pd]");
+    // PD list from known shell slots.
+    // For V1, display known PD IDs.
+    yarn_append_output(b"PD slots: 5=display 6=shell 7=silkbar 10=store 11=quil 12=bell");
+}
+
+/// Yarn built-in: scene — list scenes.
+unsafe fn yarn_cmd_scene() {
+    serial_println!("[spindle.command.scene]");
+    // List active scene and frame counts.
+    let active = ACTIVE_SCENE_IDX;
+    let mut count = 0u8;
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.scene_id == active as u8 {
+                count += 1;
+            }
+        }
+    }
+    // Simple output for V1.
+    yarn_append_output(b"Active scene: 0");
+}
+
+/// Yarn built-in: routes — surface route map.
+unsafe fn yarn_cmd_routes() {
+    serial_println!("[spindle.command.routes]");
+    yarn_append_output(b"200=linen 201=quil 202=mesh");
+    yarn_append_output(b"203=collar 204=bell 0x98=palette 0x99=spindle");
+}
+
+/// Yarn built-in: faults — error counters.
+unsafe fn yarn_cmd_faults() {
+    serial_println!("[spindle.command.faults]");
+    yarn_append_output(b"No fault counters tracked in V1");
+}
+
+/// Trim leading/trailing whitespace (space, tab, newline) from a byte slice.
+fn trim_ascii(s: &[u8]) -> &[u8] {
+    let start = s.iter().position(|&b| b != b' ' && b != b'\t' && b != b'\n').unwrap_or(s.len());
+    let end = s.iter().rposition(|&b| b != b' ' && b != b'\t' && b != b'\n').map(|i| i + 1).unwrap_or(start);
+    &s[start..end]
+}
+
+/// Yarn session: dispatch a command from cmd_buf.
+unsafe fn spindle_dispatch() {
+    let yarn = &mut YARN;
+    let cmd = yarn.cmd_buf;
+    let len = yarn.cmd_len;
+    if len == 0 {
+        return;
+    }
+    // Save to history.
+    if yarn.history_count < YARN_HISTORY_CAP {
+        yarn.history[yarn.history_count] = cmd;
+        yarn.history_count += 1;
+    } else {
+        // Shift history.
+        for i in 1..YARN_HISTORY_CAP {
+            yarn.history[i - 1] = yarn.history[i];
+        }
+        yarn.history[YARN_HISTORY_CAP - 1] = cmd;
+    }
+    yarn.history_pos = -1;
+
+    // Echo command to output.
+    let mut echo_buf = [0u8; YARN_OUTPUT_LINE_CAP];
+    if len > 0 {
+        let copy_len = len.min(YARN_OUTPUT_LINE_CAP - 1);
+        echo_buf[..copy_len].copy_from_slice(&cmd[..copy_len]);
+    }
+    yarn_append_output(&echo_buf[..len.min(YARN_OUTPUT_LINE_CAP - 1)]);
+
+    // Match first whitespace-delimited token.
+    let args = trim_ascii(&cmd[..len]);
+    let first_space = args.iter().position(|&b| b == b' ').unwrap_or(args.len());
+    let token = &args[..first_space];
+    let rest = if first_space < args.len() { &args[first_space + 1..] } else { &[] };
+
+    match token {
+        b"help" => yarn_cmd_help(),
+        b"clear" => yarn_cmd_clear(),
+        b"echo" => yarn_cmd_echo(rest),
+        b"about" => yarn_cmd_about(),
+        b"time" => yarn_cmd_time(),
+        b"pd" => yarn_cmd_pd(),
+        b"scene" => yarn_cmd_scene(),
+        b"routes" => yarn_cmd_routes(),
+        b"faults" => yarn_cmd_faults(),
+        _ => {
+            serial_println!("[spindle.command.unknown] cmd={:?}", token);
+            yarn_append_output(b"Unknown command. Type 'help'.");
+        }
+    }
+
+    // Clear command buffer after dispatch.
+    yarn.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
+    yarn.cmd_len = 0;
+
+    // Render output bands.
+    spindle_render();
+}
+
+/// Render Spindle output using existing 0xEF fill rects (colored bands).
+/// No text rendering, no sexdisplay protocol changes.
+unsafe fn spindle_render() {
+    let w = SURFACE_0x99_W;
+    let h = SURFACE_0x99_H;
+    if w == 0 || h == 0 { return; }
+
+    serial_println!("[spindle.render.band] w={} h={}", w, h);
+
+    // Draw header bar at top of surface (rect_index=0).
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_SPINDLE,
+        (0u64 << 32) | 0u64,
+        ((SPINDLE_PLACEHOLDER_COLOR as u64) << 32)
+            | ((SPINDLE_HEADER_H as u64) << 16)
+            | w as u64);
+
+    // Draw output lines as colored fill-rect bands.
+    let yarn = &YARN;
+    let output_start = if yarn.output_count > SPINDLE_ROW_RECTS as usize {
+        yarn.output_count - SPINDLE_ROW_RECTS as usize
+    } else {
+        0
+    };
+    let visible_count = yarn.output_count - output_start;
+    for i in 0..visible_count.min(SPINDLE_ROW_RECTS as usize) {
+        let line_idx = output_start + i;
+        if line_idx >= YARN_OUTPUT_LINES { break; }
+        let rect_index = (i as u64 + 1) & 0xF;
+        let row_y = SPINDLE_HEADER_H + i as u32 * (SPINDLE_ROW_H + SPINDLE_ROW_GAP);
+        // Simple semantic coloring: command lines get accent, others get dim.
+        let color = if yarn.output_lines[line_idx][0] == b'>' {
+            0x007AAFA4u32  // teal accent for echo/prompt lines
+        } else if i == visible_count - 1 {
+            0x00386050u32  // green tint for latest output
+        } else {
+            0x00202830u32  // dim default
+        };
+        pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_SPINDLE,
+            (row_y as u64) << 32 | 0u64,
+            (rect_index << 56)
+                | ((color as u64) << 32)
+                | ((SPINDLE_ROW_H as u64) << 16)
+                | w as u64);
+        serial_println!("[spindle.render.band] index={} color={:#010x}", rect_index, color);
+    }
+    serial_println!("[spindle.render.done] lines={}", visible_count);
+}
+
+// ── Bell Surface Control Helpers ─────────────────────────────────────────────
+// Bell = attention/event placeholder surface. No real Bell PD yet.
 
 /// Ensure a ShellFrame exists for Bell in an empty FRAMES slot, assigned to
 /// the active scene. Returns the frame_id if created/found, or 0 if no slot.
@@ -7521,10 +7956,12 @@ unsafe fn set_frame_top_bar(frame_id: u32, enabled: bool) {
 unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32) {
     match surface_id {
         SURFACE_ID_APP => {
-            WINDOWS[1].desc.x = x;
-            WINDOWS[1].desc.y = y;
-            WINDOWS[1].desc.width = w;
-            WINDOWS[1].desc.height = h;
+            if let Some(wnd) = WINDOWS.get_mut(1) {
+                wnd.desc.x = x;
+                wnd.desc.y = y;
+                wnd.desc.width = w;
+                wnd.desc.height = h;
+            }
             SURFACE_100_W = w;
             SURFACE_100_H = h;
         }
@@ -9540,6 +9977,97 @@ pub extern "C" fn _start() -> ! {
                                     _ => {}
                                 }
                                 mutated = true;
+                            // ── Spindle focused-surface: capture printable input + dispatch commands ──
+                            // Consumes: Enter, Backspace, Escape, Space, alphanumeric.
+                            // All other keys fall through to scancode_to_action unchanged.
+                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_SPINDLE
+                                && (scancode == 0x1C || scancode == 0x0E || scancode == 0x01
+                                    || scancode == 0x0F || scancode == 0x39
+                                    || (scancode >= 0x02 && scancode <= 0x0B)
+                                    || (scancode >= 0x10 && scancode <= 0x19)
+                                    || (scancode >= 0x1E && scancode <= 0x26)
+                                    || scancode == 0x2C || scancode == 0x2D || scancode == 0x2E
+                                    || scancode == 0x2F || scancode == 0x30 || scancode == 0x31
+                                    || scancode == 0x32)
+                            {
+                                match scancode {
+                                    0x1C => { // Enter — dispatch command
+                                        serial_println!("[spindle.enter] len={}", YARN.cmd_len);
+                                        spindle_dispatch();
+                                    }
+                                    0x0E => { // Backspace — edit command buffer
+                                        if YARN.cmd_len > 0 {
+                                            YARN.cmd_len -= 1;
+                                            YARN.cmd_buf[YARN.cmd_len] = 0;
+                                            serial_println!("[spindle.key.backspace] len={}", YARN.cmd_len);
+                                        }
+                                    }
+                                    0x01 => { // Escape — clear command buffer
+                                        if YARN.cmd_len > 0 {
+                                            YARN.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
+                                            YARN.cmd_len = 0;
+                                            serial_println!("[spindle.key.escape]");
+                                        }
+                                    }
+                                    0x0F => { // Tab — future completion (consume for now)
+                                        serial_println!("[spindle.key.tab] deferred");
+                                    }
+                                    0x39 => { // Space
+                                        if YARN.cmd_len < YARN_CMD_BUF_CAP - 1 {
+                                            YARN.cmd_buf[YARN.cmd_len] = b' ';
+                                            YARN.cmd_len += 1;
+                                            serial_println!("[spindle.key.char] ch=' '");
+                                        }
+                                    }
+                                    // Numbers 1-9, 0 (evdev KEY_1 through KEY_0).
+                                    s if s >= 0x02 && s <= 0x0B => {
+                                        static SCAN2NUM: [u8; 10] = [b'1',b'2',b'3',b'4',b'5',b'6',b'7',b'8',b'9',b'0'];
+                                        let ch = SCAN2NUM[(s - 0x02) as usize];
+                                        if YARN.cmd_len < YARN_CMD_BUF_CAP - 1 {
+                                            YARN.cmd_buf[YARN.cmd_len] = ch;
+                                            YARN.cmd_len += 1;
+                                            serial_println!("[spindle.key.char] ch={}", ch as char);
+                                        }
+                                    }
+                                    // Lowercase letters (unshifted V1). evdev KEY_Q through KEY_P (row 1).
+                                    s if s >= 0x10 && s <= 0x19 => {
+                                        static SCAN2ROW1: [u8; 10] = [b'q',b'w',b'e',b'r',b't',b'y',b'u',b'i',b'o',b'p'];
+                                        let ch = SCAN2ROW1[(s - 0x10) as usize];
+                                        if YARN.cmd_len < YARN_CMD_BUF_CAP - 1 {
+                                            YARN.cmd_buf[YARN.cmd_len] = ch;
+                                            YARN.cmd_len += 1;
+                                            serial_println!("[spindle.key.char] ch={}", ch as char);
+                                        }
+                                    }
+                                    // Lowercase letters A-L (row 2). evdev KEY_A through KEY_L.
+                                    s if s >= 0x1E && s <= 0x26 => {
+                                        static SCAN2ROW2: [u8; 9] = [b'a',b's',b'd',b'f',b'g',b'h',b'j',b'k',b'l'];
+                                        let ch = SCAN2ROW2[(s - 0x1E) as usize];
+                                        if YARN.cmd_len < YARN_CMD_BUF_CAP - 1 {
+                                            YARN.cmd_buf[YARN.cmd_len] = ch;
+                                            YARN.cmd_len += 1;
+                                            serial_println!("[spindle.key.char] ch={}", ch as char);
+                                        }
+                                    }
+                                    // Remaining letters: Z, X, C, V, B, N, M.
+                                    s if s == 0x2C || s == 0x2D || s == 0x2E || s == 0x2F
+                                        || s == 0x30 || s == 0x31 || s == 0x32 => {
+                                        static SCAN2ROW3: [u8; 7] = [b'z',b'x',b'c',b'v',b'b',b'n',b'm'];
+                                        let idx = match s {
+                                            0x2C => 0, 0x2D => 1, 0x2E => 2, 0x2F => 3,
+                                            0x30 => 4, 0x31 => 5, 0x32 => 6,
+                                            _ => 0,
+                                        };
+                                        let ch = SCAN2ROW3[idx];
+                                        if YARN.cmd_len < YARN_CMD_BUF_CAP - 1 {
+                                            YARN.cmd_buf[YARN.cmd_len] = ch;
+                                            YARN.cmd_len += 1;
+                                            serial_println!("[spindle.key.char] ch={}", ch as char);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                mutated = true;
                             } else if let Some(action) = scancode_to_action(scancode) {
                                 match action {
                                     SurfaceAction::FocusToggle => {
@@ -9713,9 +10241,11 @@ pub extern "C" fn _start() -> ! {
                                             let (rx, ry, rw, rh) = P.boot_rect_100;
                                             pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
                                             SURFACE_100_ALIVE = true;
-                                            WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
+                                            if let Some(w) = WINDOWS.get_mut(1) {
+                                                w.desc.x = rx; w.desc.y = ry;
+                                                w.desc.width = rw; w.desc.height = rh;
+                                            }
                                             SURFACE_100_W = rw; SURFACE_100_H = rh;
-                                            WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
                                             mutated = true;
                                             serial_println!("[silk-shell] Recreated surface 100");
                                         } else if FOCUSED_SURFACE_ID == SURFACE_ID_STATIC && !SURFACE_101_ALIVE {
@@ -9747,9 +10277,11 @@ pub extern "C" fn _start() -> ! {
                                             let (rx, ry, rw, rh) = P.boot_rect_100;
                                             pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
                                             SURFACE_100_ALIVE = true;
-                                            WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
+                                            if let Some(w) = WINDOWS.get_mut(1) {
+                                                w.desc.x = rx; w.desc.y = ry;
+                                                w.desc.width = rw; w.desc.height = rh;
+                                            }
                                             SURFACE_100_W = rw; SURFACE_100_H = rh;
-                                            WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
                                             try_set_focus(SURFACE_ID_APP);
                                             mutated = true;
                                             serial_println!("[silk-shell] Recreated surface 100 (fallback)");
@@ -9806,6 +10338,13 @@ pub extern "C" fn _start() -> ! {
                                         if toggle_bell() {
                                             mutated = true;
                                             serial_println!("[shell.action.bell] toggle");
+                                        }
+                                    }
+
+                                    SurfaceAction::ToggleSpindle => {
+                                        if toggle_spindle() {
+                                            mutated = true;
+                                            serial_println!("[shell.action.spindle] toggle");
                                         }
                                     }
 
@@ -9874,9 +10413,11 @@ pub extern "C" fn _start() -> ! {
                                     SurfaceAction::ResetAll => {
                                         let (rx, ry, rw, rh) = P.boot_rect_100;
                                         SURFACE_100_ALIVE = true;
-                                        WINDOWS[1].desc.x = rx; WINDOWS[1].desc.y = ry;
+                                        if let Some(w) = WINDOWS.get_mut(1) {
+                                            w.desc.x = rx; w.desc.y = ry;
+                                            w.desc.width = rw; w.desc.height = rh;
+                                        }
                                         SURFACE_100_W = rw; SURFACE_100_H = rh;
-                                        WINDOWS[1].desc.width = rw; WINDOWS[1].desc.height = rh;
 
                                         let (rx2, ry2, rw2, rh2) = P.boot_rect_101;
                                         SURFACE_101_ALIVE = true;
@@ -9918,14 +10459,17 @@ pub extern "C" fn _start() -> ! {
                                     SurfaceAction::ShrinkWidth => {
                                         let focused = FOCUSED_SURFACE_ID;
                                         if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            let (wx, wy) = WINDOWS.get(1).map_or((0, 0), |w| (w.desc.x, w.desc.y));
                                             let new_w = SURFACE_100_W.saturating_sub(P.resize_step);
-                                            let (new_w, _) = clamp_surface_size(WINDOWS[1].desc.x, WINDOWS[1].desc.y, new_w, SURFACE_100_H);
+                                            let (new_w, _) = clamp_surface_size(wx, wy, new_w, SURFACE_100_H);
                                             if new_w != SURFACE_100_W {
                                                 pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP,
-                                                    (WINDOWS[1].desc.y as u64) << 32 | WINDOWS[1].desc.x as u64,
+                                                    (wy as u64) << 32 | wx as u64,
                                                     (SURFACE_100_H as u64) << 32 | new_w as u64);
                                                 SURFACE_100_W = new_w;
-                                                WINDOWS[1].desc.width = new_w;
+                                                if let Some(w) = WINDOWS.get_mut(1) {
+                                                    w.desc.width = new_w;
+                                                }
                                                 mutated = true;
                                                 serial_println!("[silk-shell] Surface 100 width shrunk to {}", new_w);
                                             }
@@ -9968,14 +10512,17 @@ pub extern "C" fn _start() -> ! {
                                     SurfaceAction::GrowWidth => {
                                         let focused = FOCUSED_SURFACE_ID;
                                         if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            let (wx, wy) = WINDOWS.get(1).map_or((0, 0), |w| (w.desc.x, w.desc.y));
                                             let new_w = SURFACE_100_W + P.resize_step;
-                                            let (new_w, _) = clamp_surface_size(WINDOWS[1].desc.x, WINDOWS[1].desc.y, new_w, SURFACE_100_H);
+                                            let (new_w, _) = clamp_surface_size(wx, wy, new_w, SURFACE_100_H);
                                             if new_w != SURFACE_100_W {
                                                 pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP,
-                                                    (WINDOWS[1].desc.y as u64) << 32 | WINDOWS[1].desc.x as u64,
+                                                    (wy as u64) << 32 | wx as u64,
                                                     (SURFACE_100_H as u64) << 32 | new_w as u64);
                                                 SURFACE_100_W = new_w;
-                                                WINDOWS[1].desc.width = new_w;
+                                                if let Some(w) = WINDOWS.get_mut(1) {
+                                                    w.desc.width = new_w;
+                                                }
                                                 mutated = true;
                                                 serial_println!("[silk-shell] Surface 100 width grown to {}", new_w);
                                             }
@@ -10018,14 +10565,17 @@ pub extern "C" fn _start() -> ! {
                                     SurfaceAction::ShrinkHeight => {
                                         let focused = FOCUSED_SURFACE_ID;
                                         if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            let (wx, wy) = WINDOWS.get(1).map_or((0, 0), |w| (w.desc.x, w.desc.y));
                                             let new_h = SURFACE_100_H.saturating_sub(P.resize_step);
-                                            let (_, new_h) = clamp_surface_size(WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, new_h);
+                                            let (_, new_h) = clamp_surface_size(wx, wy, SURFACE_100_W, new_h);
                                             if new_h != SURFACE_100_H {
                                                 pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP,
-                                                    (WINDOWS[1].desc.y as u64) << 32 | WINDOWS[1].desc.x as u64,
+                                                    (wy as u64) << 32 | wx as u64,
                                                     (new_h as u64) << 32 | SURFACE_100_W as u64);
                                                 SURFACE_100_H = new_h;
-                                                WINDOWS[1].desc.height = new_h;
+                                                if let Some(w) = WINDOWS.get_mut(1) {
+                                                    w.desc.height = new_h;
+                                                }
                                                 mutated = true;
                                                 serial_println!("[silk-shell] Surface 100 height shrunk to {}", new_h);
                                             }
@@ -10068,14 +10618,17 @@ pub extern "C" fn _start() -> ! {
                                     SurfaceAction::GrowHeight => {
                                         let focused = FOCUSED_SURFACE_ID;
                                         if focused == SURFACE_ID_APP && SURFACE_100_ALIVE {
+                                            let (wx, wy) = WINDOWS.get(1).map_or((0, 0), |w| (w.desc.x, w.desc.y));
                                             let new_h = SURFACE_100_H + P.resize_step;
-                                            let (_, new_h) = clamp_surface_size(WINDOWS[1].desc.x, WINDOWS[1].desc.y, SURFACE_100_W, new_h);
+                                            let (_, new_h) = clamp_surface_size(wx, wy, SURFACE_100_W, new_h);
                                             if new_h != SURFACE_100_H {
                                                 pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP,
-                                                    (WINDOWS[1].desc.y as u64) << 32 | WINDOWS[1].desc.x as u64,
+                                                    (wy as u64) << 32 | wx as u64,
                                                     (new_h as u64) << 32 | SURFACE_100_W as u64);
                                                 SURFACE_100_H = new_h;
-                                                WINDOWS[1].desc.height = new_h;
+                                                if let Some(w) = WINDOWS.get_mut(1) {
+                                                    w.desc.height = new_h;
+                                                }
                                                 mutated = true;
                                                 serial_println!("[silk-shell] Surface 100 height grown to {}", new_h);
                                             }

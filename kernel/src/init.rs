@@ -33,9 +33,10 @@ pub fn init() {
     let mut linen_id = 0;
     let mut sexstore_id = 0;
     let mut quil_id = 0;
+    let mut sexbell_id = 0;
 
     // Fixed Spawn Order (Deterministic IDs)
-    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil"];
+    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell"];
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -76,6 +77,9 @@ pub fn init() {
                         } else if domain_id == 9 {
                             quil_id = id;
                             serial_println!("[kernel.spawn.quil] id={} path={}", id, path);
+                        } else if domain_id == 10 {
+                            sexbell_id = id;
+                            serial_println!("[kernel.spawn.sexbell] id={} path={}", id, path);
                         }
                     }
                     Err(e) => {
@@ -100,6 +104,11 @@ pub fn init() {
             if sexstore_id != 0 {
                 pd.grant_capability(sex_pdx::SLOT_SEXSTORE, CapabilityData::Domain(sexstore_id));
                 serial_println!("[kernel.sexstore.cap] shell={} store={}", silkshell_id, sexstore_id);
+            }
+            // Bell read-cap: silk-shell can call OP_BELL_LIST
+            if sexbell_id != 0 {
+                pd.grant_capability(sex_pdx::SLOT_BELL, CapabilityData::Domain(sexbell_id));
+                serial_println!("[kernel.sexbell.cap.shell] shell→bell slot=12");
             }
             serial_println!("✓ Phase 25: Capabilities granted to silk-shell");
         }
@@ -159,6 +168,16 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(silkshell_id) {
             pd.grant_capability(sex_pdx::SLOT_QUIL, CapabilityData::Domain(quil_id));
             serial_println!("[kernel.cap.quil.route] shell->quil slot={}", sex_pdx::SLOT_QUIL);
+        }
+    }
+
+    // Bell self-cap: grant SLOT_BELL to sexbell for listen (no external caps).
+    if sexbell_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::capability::CapabilityData;
+        if let Some(pd) = DOMAIN_REGISTRY.get(sexbell_id) {
+            pd.grant_capability(sex_pdx::SLOT_BELL, CapabilityData::Domain(sexbell_id));
+            serial_println!("[kernel.sexbell.cap] self slot={}", sex_pdx::SLOT_BELL);
         }
     }
 
