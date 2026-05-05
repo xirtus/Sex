@@ -431,6 +431,11 @@ unsafe fn linen_render_object_list() {
 /// Maximum number of tracked Quil buffers.
 const QUIL_MAX_BUFFERS: usize = 16;
 
+/// Dynamic J4-created buffer IDs start here to avoid colliding with seed buffer IDs (1-6).
+/// Seed buffers: 1-6 (manually curated, low namespace).
+/// Dynamic buffers: QUIL_DYNAMIC_BUFFER_ID_BASE + object_id (high namespace, no overlap).
+const QUIL_DYNAMIC_BUFFER_ID_BASE: u64 = 1000;
+
 /// Kind of Quil buffer. Maps to H2 §2 workstation object types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -656,24 +661,39 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
     };
 
     // 4. Find existing buffer for this object, or create one in an empty slot.
+    // Dynamic buffer IDs use QUIL_DYNAMIC_BUFFER_ID_BASE + object_id to avoid
+    // colliding with seed buffer IDs (1-6) which occupy the low namespace.
+    let dynamic_buffer_id = QUIL_DYNAMIC_BUFFER_ID_BASE + object_id;
     let mut buffer_created = false;
     let mut found_buf = false;
     for slot in QUIL_BUFFERS.iter_mut() {
         if let Some(buf) = slot {
             if buf.linen_object_ref == object_id {
-                // Update existing buffer state.
+                // Reuse existing dynamic buffer for this object.
                 buf.state = QuilBufferState::Open;
                 buf.linked_surface_id = SURFACE_ID_QUIL;
                 found_buf = true;
+                serial_println!("[linen.quil.open.reuse_existing] object_id={} buffer_id={}", object_id, buf.buffer_id);
                 break;
             }
         }
     }
     if !found_buf {
+        // Pre-flight: verify the dynamic_buffer_id is not already taken by a different ref.
+        for slot in QUIL_BUFFERS.iter() {
+            if let Some(buf) = slot {
+                if buf.buffer_id == dynamic_buffer_id && buf.linen_object_ref != object_id {
+                    serial_println!("[linen.quil.open.reject.buffer_id_collision] dynamic_id={} existing_ref={}", dynamic_buffer_id, buf.linen_object_ref);
+                    return false;
+                }
+            }
+        }
+        // Allocate a free slot.
         for slot in QUIL_BUFFERS.iter_mut() {
             if slot.is_none() {
+                serial_println!("[linen.quil.open.dynamic_id] object_id={} dynamic_buffer_id={}", object_id, dynamic_buffer_id);
                 *slot = Some(QuilBuffer {
-                    buffer_id: object_id, // deterministic: use object's ID
+                    buffer_id: dynamic_buffer_id,
                     kind: buf_kind,
                     state: QuilBufferState::Open,
                     linen_object_ref: object_id,
@@ -690,7 +710,7 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
         }
     }
     if !found_buf {
-        serial_println!("[linen.quil.open.reject.missing] reason=no_buffer_slot");
+        serial_println!("[linen.quil.open.reject.full] object_id={}", object_id);
         return false;
     }
 
@@ -706,7 +726,7 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
 
     // 6. Emit buffer link proof marker.
     serial_println!("[linen.quil.buffer.linked] object_id={} buffer_id={} kind={}",
-        object_id, object_id, buf_kind as u8);
+        object_id, dynamic_buffer_id, buf_kind as u8);
 
     // 7. Open Quil surface if not already visible.
     let quil_opened = open_quil_in_active_scene();
@@ -720,7 +740,7 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
     mesh_emit_linen_quil_links();
 
     // 9. J7: Emit Bell placeholder event for the new link.
-    bell_emit_object_link_event(object_id, object_id);
+    bell_emit_object_link_event(object_id, dynamic_buffer_id);
 
     true
 }
