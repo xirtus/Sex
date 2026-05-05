@@ -1189,18 +1189,104 @@ unsafe fn collar_check_operation_stub(
     }
 }
 
-// ── J6: Mesh Linen/Quil Object Link Diagnostics ──────────────────────────────
-// Diagnostic-only: proof markers + shell-local link summary.
-// No live graph, no authority, no renderer changes.
+// ── J6: Mesh Linen/Quil Object Link Diagnostics + Fact Ring ──────────────────
+// Shell-local fact ring for topology/relationship data. Replaces proof-marker-only
+// diagnostics with real bounded Mesh fact memory. No Mesh PD, no IPC/ABI changes,
+// no rendering.
 // See docs/handoff/J6_MESH_OBJECT_LINKS_V1.md
+// See docs/handoff/N2_MESH_SHELL_LOCAL_FACT_RING_V1.md
+
+/// Kinds of Mesh facts stored in the shell-local fact ring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum MeshFactKind {
+    /// A Linen object was linked to a Quil buffer.
+    ObjectLinkedToBuffer = 0,
+}
+
+/// A single Mesh fact record stored in the shell-local ring buffer.
+/// Fixed-size scalars only. No pointers, no strings, no heap.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct MeshFact {
+    /// Monotonic fact ID (incremented per stored fact).
+    fact_id: u64,
+    /// Fact kind (V1: only ObjectLinkedToBuffer).
+    kind: MeshFactKind,
+    /// Primary subject ID (Linen object_id for ObjectLinkedToBuffer).
+    subject_id: u64,
+    /// Primary object ID (Quil buffer_id for ObjectLinkedToBuffer).
+    object_id: u64,
+    /// Secondary reference (linked_surface_id for ObjectLinkedToBuffer).
+    ref_id: u64,
+    /// Monotonic counter for ordering (MESH_FACT_WRITE_INDEX at write time).
+    sequence: u64,
+}
+
+/// Capacity of the Mesh fact ring buffer (power of 2 for efficient modulo).
+const MESH_FACT_RING_CAP: usize = 32;
+/// Ring buffer of Mesh facts. Index = write_index % MESH_FACT_RING_CAP.
+static mut MESH_FACTS: [Option<MeshFact>; MESH_FACT_RING_CAP] = [None; MESH_FACT_RING_CAP];
+/// Next write index into the ring (monotonic, wraps via modulo).
+static mut MESH_FACT_WRITE_INDEX: u64 = 0;
+/// Global fact sequence counter (incremented per written fact).
+static mut MESH_FACT_SEQUENCE: u64 = 0;
+
+/// Write a Mesh fact into the shell-local fact ring.
+/// Overwrites oldest entry when ring is full. Emits proof markers.
+unsafe fn mesh_record_fact(kind: MeshFactKind, subject_id: u64, object_id: u64, ref_id: u64) {
+    let idx = (MESH_FACT_WRITE_INDEX as usize) % MESH_FACT_RING_CAP;
+    let seq = MESH_FACT_SEQUENCE;
+    MESH_FACT_SEQUENCE += 1;
+    let prev = MESH_FACTS[idx].replace(MeshFact {
+        fact_id: seq,
+        kind,
+        subject_id,
+        object_id,
+        ref_id,
+        sequence: MESH_FACT_WRITE_INDEX,
+    });
+    MESH_FACT_WRITE_INDEX += 1;
+    if prev.is_some() {
+        serial_println!("[mesh.fact.overwrite] idx={} prev_fact_id={}",
+            idx, prev.unwrap().fact_id);
+    }
+    serial_println!("[mesh.fact.write] idx={} fact_id={} kind={:?} subject_id={} object_id={} ref_id={}",
+        idx, seq, kind, subject_id, object_id, ref_id);
+    serial_println!("[mesh.fact.done] count={} fact_id={}",
+        core::cmp::min(MESH_FACT_WRITE_INDEX as usize, MESH_FACT_RING_CAP), seq);
+}
+
+/// Return the number of Mesh facts currently in the ring.
+unsafe fn mesh_fact_count() -> usize {
+    let total = MESH_FACT_WRITE_INDEX;
+    if total == 0 { return 0; }
+    core::cmp::min(total as usize, MESH_FACT_RING_CAP)
+}
+
+/// Iterate Mesh facts from newest to oldest, calling `f` for each.
+/// Read-only. Does not mutate the ring. Bounded by MESH_FACT_RING_CAP.
+unsafe fn mesh_for_each_fact<F>(mut f: F) where F: FnMut(&MeshFact) {
+    let total = MESH_FACT_WRITE_INDEX;
+    let count = mesh_fact_count();
+    if count == 0 { return; }
+    // Newest-first: iterate backwards from (total-1) % cap.
+    let start = (total as usize).wrapping_sub(1) % MESH_FACT_RING_CAP;
+    for i in 0..count {
+        let idx = (start + MESH_FACT_RING_CAP - i) % MESH_FACT_RING_CAP;
+        if let Some(ref fact) = MESH_FACTS[idx] {
+            f(fact);
+        }
+    }
+}
 
 /// Scan the Quil buffer table and emit diagnostic link facts for Mesh.
 ///
 /// For each buffer with a non-zero linen_object_ref:
-/// - If the referenced LinenObject exists in LINEN_OBJECTS, emit a
-///   [mesh.object_link.row] proof marker with IDs and kind names.
+/// - If the referenced LinenObject exists, emit a [mesh.object_link.row] proof
+///   marker AND record an ObjectLinkedToBuffer fact in the shell-local ring.
 /// - If the referenced LinenObject is missing (stale ref), emit a
-///   [mesh.object_link.reject.missing_object] marker.
+///   [mesh.object_link.reject.missing_object] marker. No fact recorded.
 ///
 /// Link facts are IDs and kind names only — no object contents, no file paths,
 /// no raw pointers, no authority mutation.
@@ -1220,6 +1306,13 @@ unsafe fn mesh_emit_linen_quil_links() {
                             linen_object_kind_name(o.kind),
                             buf.buffer_id,
                             quil_buffer_kind_name(buf.kind),
+                            buf.linked_surface_id,
+                        );
+                        // Record fact in shell-local ring for valid links only.
+                        mesh_record_fact(
+                            MeshFactKind::ObjectLinkedToBuffer,
+                            o.object_id,
+                            buf.buffer_id,
                             buf.linked_surface_id,
                         );
                         link_count += 1;
