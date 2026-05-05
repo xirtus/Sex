@@ -1198,10 +1198,66 @@ enum BellEventKind {
     DiagnosticOnly = 3,
 }
 
-/// Emit a shell-local Bell placeholder event for a Linen→Quil object link.
+/// A single Bell event record stored in the shell-local ring buffer.
+/// V1 supports only ObjectLinkedToBuffer. Fixed-size scalars only.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct BellEvent {
+    /// Monotonic event ID (incremented per stored event).
+    event_id: u64,
+    /// Event kind (V1: only ObjectLinkedToBuffer is actually emitted).
+    kind: BellEventKind,
+    /// The Linen object_id involved (0 if not applicable).
+    object_id: u64,
+    /// The Quil buffer_id involved (0 if not applicable).
+    buffer_id: u64,
+    /// Monotonic counter at time of event (for ordering).
+    sequence: u64,
+}
+
+/// Shell-local Bell event ring buffer (size = power of 2 for efficient modulo).
+/// Overwrites oldest entry when full. Mirrors TOMBSTONE_RING pattern.
+const BELL_RING_CAP: usize = 16;
+/// Ring buffer of Bell events. Index = write_index % BELL_RING_CAP.
+static mut BELL_EVENTS: [Option<BellEvent>; BELL_RING_CAP] = [None; BELL_RING_CAP];
+/// Next write index into the ring (monotonic, wraps via modulo).
+static mut BELL_RING_WRITE_INDEX: u64 = 0;
+/// Global event sequence counter (incremented per written event).
+static mut BELL_EVENT_SEQUENCE: u64 = 0;
+
+/// Write an ObjectLinkedToBuffer event into the shell-local Bell ring.
+/// Overwrites oldest entry when ring is full. Emits proof markers.
+unsafe fn bell_record_event(object_id: u64, buffer_id: u64) {
+    let idx = (BELL_RING_WRITE_INDEX as usize) % BELL_RING_CAP;
+    let seq = BELL_EVENT_SEQUENCE;
+    BELL_EVENT_SEQUENCE += 1;
+    let prev = BELL_EVENTS[idx].replace(BellEvent {
+        event_id: seq,
+        kind: BellEventKind::ObjectLinkedToBuffer,
+        object_id,
+        buffer_id,
+        sequence: BELL_RING_WRITE_INDEX,
+    });
+    BELL_RING_WRITE_INDEX += 1;
+    if prev.is_some() {
+        serial_println!("[bell.ring.overwrite] idx={} prev_event_id={}",
+            idx, prev.unwrap().event_id);
+    }
+    serial_println!("[bell.ring.write] idx={} event_id={} object_id={} buffer_id={}",
+        idx, seq, object_id, buffer_id);
+}
+
+/// Return the number of Bell events currently in the ring.
+unsafe fn bell_ring_count() -> usize {
+    let total = BELL_RING_WRITE_INDEX;
+    if total == 0 { return 0; }
+    core::cmp::min(total as usize, BELL_RING_CAP)
+}
+
+/// Emit a shell-local Bell event for a Linen→Quil object link.
 ///
-/// Validates object_id and buffer_id via existing local helpers, then emits
-/// proof markers. No real queue, no notification surface, no PDX send.
+/// Validates object_id and buffer_id via existing local helpers, then writes
+/// to the shell-local Bell ring and emits proof markers.
 unsafe fn bell_emit_object_link_event(object_id: u64, buffer_id: u64) {
     serial_println!("[bell.event.stub] kind=ObjectLinkedToBuffer object_id={} buffer_id={}", object_id, buffer_id);
 
@@ -1236,6 +1292,11 @@ unsafe fn bell_emit_object_link_event(object_id: u64, buffer_id: u64) {
         buffer_id,
         quil_buffer_kind_name(buf.kind),
     );
+
+    // Write to shell-local ring buffer.
+    bell_record_event(object_id, buffer_id);
+    serial_println!("[bell.ring.done] count={} event_id={}",
+        bell_ring_count(), BELL_EVENT_SEQUENCE - 1);
 
     serial_println!("[bell.event.done] reason=emitted");
 }
