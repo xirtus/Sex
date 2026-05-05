@@ -1486,6 +1486,52 @@ unsafe fn mesh_select_prev_row() {
     mesh_render_fact_list();
 }
 
+/// Return a copy of the Mesh fact at the currently selected visible row.
+/// Iterates the ring newest-first (same order as mesh_for_each_fact)
+/// to map MESH_SELECTED_ROW to the corresponding fact. Returns None if
+/// the ring is empty or the selected index has no fact.
+unsafe fn mesh_selected_fact_snapshot() -> Option<MeshFact> {
+    let total = MESH_FACT_WRITE_INDEX;
+    let count = mesh_fact_count();
+    if count == 0 { return None; }
+    let start = (total as usize).wrapping_sub(1) % MESH_FACT_RING_CAP;
+    for i in 0..count {
+        let idx = (start + MESH_FACT_RING_CAP - i) % MESH_FACT_RING_CAP;
+        if let Some(fact) = MESH_FACTS[idx] {
+            if (i as u8) == MESH_SELECTED_ROW {
+                return Some(fact);
+            }
+        }
+    }
+    None
+}
+
+/// Emit proof markers for the currently selected Mesh fact.
+/// No action, no ack, no delete, no Mesh PD. Proof-marker-only stub.
+unsafe fn mesh_emit_selected_fact_detail_proof() {
+    if FOCUSED_SURFACE_ID != SURFACE_ID_MESH {
+        serial_println!("[mesh.detail.reject] reason=not_focused");
+        return;
+    }
+    let fact = match mesh_selected_fact_snapshot() {
+        Some(f) => f,
+        None => {
+            serial_println!("[mesh.detail.reject] reason=no_fact");
+            return;
+        }
+    };
+    serial_println!("[mesh.detail.open] fact_id={} kind={:?}", fact.fact_id, fact.kind);
+    match fact.kind {
+        MeshFactKind::ObjectLinkedToBuffer => {
+            serial_println!("[mesh.detail.fact] fact_id={} kind=ObjectLinkedToBuffer subject_id={} object_id={} ref_id={}",
+                fact.fact_id, fact.subject_id, fact.object_id, fact.ref_id);
+            serial_println!("[mesh.detail.object_link] subject_id={} object_id={} ref_id={}",
+                fact.subject_id, fact.object_id, fact.ref_id);
+        }
+    }
+    serial_println!("[mesh.detail.done] fact_id={}", fact.fact_id);
+}
+
 // ── J7: Bell Object Link Event Stub ──────────────────────────────────────────
 // Shell-local Bell placeholder event for Linen→Quil buffer links.
 // No real queue, no notification UI, no new PDX ops, no renderer changes.
@@ -9283,9 +9329,9 @@ pub extern "C" fn _start() -> ! {
                                     _ => {}
                                 }
                                 mutated = true;
-                            // ── Mesh focused-surface navigation: J/K nav (read-only) ──
+                            // ── Mesh focused-surface navigation: J/K nav + Enter detail proof ──
                             } else if FOCUSED_SURFACE_ID == SURFACE_ID_MESH
-                                && (scancode == 0x24 || scancode == 0x25)
+                                && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C)
                             {
                                 match scancode {
                                     0x24 => {
@@ -9295,6 +9341,10 @@ pub extern "C" fn _start() -> ! {
                                     0x25 => {
                                         serial_println!("[mesh.keyboard.prev] sid={}", FOCUSED_SURFACE_ID);
                                         mesh_select_prev_row();
+                                    }
+                                    0x1C => {
+                                        serial_println!("[mesh.keyboard.enter] sid={}", FOCUSED_SURFACE_ID);
+                                        mesh_emit_selected_fact_detail_proof();
                                     }
                                     _ => {}
                                 }
