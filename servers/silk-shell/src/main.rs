@@ -8111,31 +8111,36 @@ pub extern "C" fn _start() -> ! {
                             // When panel visible, route 1/2/3/Esc to panel commands.
                             // [shell.scene.settings.panel.key] budget 16.
                             // F7 (0x41) falls through to normal dispatch unchanged.
+                            let mut panel_consumed = false;
                             if SCENE_SETTINGS_ACTIVE {
                                 static mut PANEL_KEY_BUDGET: u32 = 16;
                                 let b = &mut PANEL_KEY_BUDGET;
                                 match scancode {
-                                    0x01 => { // Esc → close panel
+                                    0x01 => { // Esc → close panel; consumed to prevent AccessZoomToggle
                                         pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_SCENE_SETTINGS, 0, 0);
                                         SCENE_SETTINGS_ACTIVE = false;
                                         try_transition(InteractionState::Idle);
                                         mutated = true;
+                                        panel_consumed = true;
                                         if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.panel.key] cmd=close"); }
                                     }
                                     0x02 => { // Key 1 → cycle preset (like F5)
                                         cycle_scene_render_token_preset();
                                         mutated = true;
+                                        panel_consumed = true;
                                         if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.panel.key] cmd=preset"); }
                                     }
                                     0x03 => { // Key 2 → cycle tint (like F6)
                                         cycle_custom_tint();
                                         mutated = true;
+                                        panel_consumed = true;
                                         if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.panel.key] cmd=tint"); }
                                     }
                                     0x04 => { // Key 3 → toggle top bar (like F4)
                                         if toggle_top_bar_for_active_frame() {
                                             mutated = true;
                                         }
+                                        panel_consumed = true;
                                         if *b > 0 { *b -= 1; serial_println!("[shell.scene.settings.panel.key] cmd=topbar"); }
                                     }
                                     // All other scancodes (including F7=0x41) fall through to normal dispatch
@@ -8143,7 +8148,9 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             // ── Atlas keyboard intercept: consume non-F10 keys when Atlas active ──
-                            if ATLAS_MODE_ENABLED && scancode != 0x44 /* F10 falls through to ToggleAtlas */ {
+                            if panel_consumed {
+                                // panel handled key; skip Atlas and action dispatch
+                            } else if ATLAS_MODE_ENABLED && scancode != 0x44 /* F10 falls through to ToggleAtlas */ {
                                 handle_atlas_keyboard(scancode);
                                 mutated = true;
                             } else if let Some(action) = scancode_to_action(scancode) {
