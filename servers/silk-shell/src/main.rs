@@ -6214,6 +6214,54 @@ unsafe fn bell_select_prev_row() {
     bell_render_event_list();
 }
 
+/// Return a copy of the Bell event at the currently selected visible row.
+/// Iterates the ring newest-first (same order as bell_for_each_event)
+/// to map BELL_SELECTED_ROW to the corresponding event. Returns None if
+/// the ring is empty or the selected index has no event.
+unsafe fn bell_selected_event_snapshot() -> Option<BellEvent> {
+    let total = BELL_RING_WRITE_INDEX;
+    let count = bell_ring_count();
+    if count == 0 { return None; }
+    let start = (total as usize).wrapping_sub(1) % BELL_RING_CAP;
+    for i in 0..count {
+        let idx = (start + BELL_RING_CAP - i) % BELL_RING_CAP;
+        if let Some(ev) = BELL_EVENTS[idx] {
+            if (i as u8) == BELL_SELECTED_ROW {
+                return Some(ev);
+            }
+        }
+    }
+    None
+}
+
+/// Emit proof markers for the currently selected Bell event.
+/// No action, no ack, no delete, no Bell PD. Proof-marker-only stub.
+unsafe fn bell_emit_selected_event_detail_proof() {
+    if FOCUSED_SURFACE_ID != SURFACE_ID_BELL_PLACEHOLDER {
+        serial_println!("[bell.detail.reject] reason=not_focused");
+        return;
+    }
+    let ev = match bell_selected_event_snapshot() {
+        Some(e) => e,
+        None => {
+            serial_println!("[bell.detail.reject] reason=no_event");
+            return;
+        }
+    };
+    serial_println!("[bell.detail.open] event_id={} kind={:?}", ev.event_id, ev.kind);
+    match ev.kind {
+        BellEventKind::ObjectLinkedToBuffer => {
+            serial_println!("[bell.detail.event] event_id={} kind=ObjectLinkedToBuffer object_id={} buffer_id={}",
+                ev.event_id, ev.object_id, ev.buffer_id);
+            serial_println!("[bell.detail.object_link] object_id={} buffer_id={}", ev.object_id, ev.buffer_id);
+        }
+        _ => {
+            serial_println!("[bell.detail.reject] reason=unsupported_kind kind={:?}", ev.kind);
+        }
+    }
+    serial_println!("[bell.detail.done] event_id={}", ev.event_id);
+}
+
 /// Check whether the Bell surface is currently visible in the active scene.
 /// Returns true only when the Bell frame exists in the active scene,
 /// is not minimized, and the surface is alive/focusable.
@@ -8957,16 +9005,24 @@ pub extern "C" fn _start() -> ! {
                             } else if ATLAS_MODE_ENABLED && scancode != 0x44 /* F10 falls through to ToggleAtlas */ {
                                 handle_atlas_keyboard(scancode);
                                 mutated = true;
-                            // ── Bell focused-surface navigation: J/K when Bell is focused ──
+                            // ── Bell focused-surface navigation: J/K nav + Enter detail proof ──
                             } else if FOCUSED_SURFACE_ID == SURFACE_ID_BELL_PLACEHOLDER
-                                && (scancode == 0x24 || scancode == 0x25)
+                                && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C)
                             {
-                                if scancode == 0x24 {
-                                    serial_println!("[bell.keyboard.next] sid={}", FOCUSED_SURFACE_ID);
-                                    bell_select_next_row();
-                                } else {
-                                    serial_println!("[bell.keyboard.prev] sid={}", FOCUSED_SURFACE_ID);
-                                    bell_select_prev_row();
+                                match scancode {
+                                    0x24 => {
+                                        serial_println!("[bell.keyboard.next] sid={}", FOCUSED_SURFACE_ID);
+                                        bell_select_next_row();
+                                    }
+                                    0x25 => {
+                                        serial_println!("[bell.keyboard.prev] sid={}", FOCUSED_SURFACE_ID);
+                                        bell_select_prev_row();
+                                    }
+                                    0x1C => {
+                                        serial_println!("[bell.keyboard.enter] sid={}", FOCUSED_SURFACE_ID);
+                                        bell_emit_selected_event_detail_proof();
+                                    }
+                                    _ => {}
                                 }
                                 mutated = true;
                             } else if let Some(action) = scancode_to_action(scancode) {
