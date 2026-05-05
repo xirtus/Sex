@@ -24,6 +24,29 @@ Build flow canonical source is `sexos_build_spec.toml`.
 - `pdx_call` register return contract: `RAX=status`, `RSI=value`.
 - `pdx_listen` register decode contract: `RAX=type_id`, `RSI=caller_pd`, `RDX/R10/R8=args`.
 
+## Shell-Local Namespaces (PKEY 3 — silk-shell only)
+
+The following ID tiers exist within silk-shell but are NOT part of the IPC/PKU
+canonical map. They are shell-defined conventions, not ABI contracts. Surface
+IDs are communicated to sexdisplay at call time (0xEC/0xEF/0xEE) but sexdisplay
+treats them as opaque identifiers.
+
+| Namespace | Range | Currently Assigned | Spec Doc |
+|-----------|-------|-------------------|----------|
+| Linen object IDs | 1-16 | 1-6 (seeds) | `docs/handoff/K2B_NAMESPACE_SPEC_DOC_V1.md` §3.1 |
+| Quil seed buffer IDs | 1-6 | 1-6 (six seeds) | `docs/handoff/K2B_NAMESPACE_SPEC_DOC_V1.md` §3.2 |
+| Quil dynamic buffer IDs | 1001-1016 | `QUIL_DYNAMIC_BUFFER_ID_BASE + object_id` | `docs/handoff/K2B_NAMESPACE_SPEC_DOC_V1.md` §3.3 |
+| Surface IDs — OS panels | 0x90-0x97 | CURSOR, LAUNCHER, STATUS, CLOCK, BELL, SCENE_SETTINGS, ATLAS | `docs/handoff/K2B_NAMESPACE_SPEC_DOC_V1.md` §3.4 |
+| Surface IDs — app | 100-103 | APP, STATIC, TEST3, TEST4 | `docs/handoff/K2B_NAMESPACE_SPEC_DOC_V1.md` §3.4 |
+| Surface IDs — workstation | 200-204 | LINEN, QUIL, MESH, COLLAR, BELL_PLACEHOLDER | `docs/handoff/K2B_NAMESPACE_SPEC_DOC_V1.md` §3.4 |
+| grant_ref | 0 | All current usage (no real Collar grant) | `docs/handoff/K2B_NAMESPACE_SPEC_DOC_V1.md` §3.5 |
+
+**Rules (full details in K2B doc):**
+- Dynamic buffer IDs must never collide with seed buffer IDs or surface IDs.
+- All these namespaces are shell-local; they do NOT appear in PDX opcodes or ABI contracts.
+- grant_ref = 0 means placeholder (no real Collar grant). Non-zero requires STOP FIRST.
+- Shell-local enums (CollarOperation, CollarDecision, BellEventKind) are match-branched only.
+
 ## Build Enforcement
 - Only valid build root: `./scripts/entrypoint_build.sh`
 - Build graph source of truth: `sexos_build_spec.toml`
