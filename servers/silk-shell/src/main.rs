@@ -1335,6 +1335,263 @@ const FRAME_FLAG_ZOOMED: u32 = 1 << 1;
 /// When clear (minimal mode), only 4px neon rim is rendered.
 const FRAME_FLAG_TOP_BAR: u32 = 1 << 2;
 
+// ── D2: Accessibility Node Model ──────────────────────────────────────────
+/// Maximum semantic nodes in V1 flat tree. 64 covers ~32 frames+tabs +
+/// SilkBar + scenes + Atlas + placeholders.
+const MAX_ACCESS_NODES: usize = 64;
+
+/// Semantic role for an access node. Shell chrome only in V1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum AccessRole {
+    SilkBar          = 1,
+    SceneChip        = 2,
+    LauncherButton   = 3,
+    StatusChip       = 4,
+    ClockDisplay     = 5,
+    BellIndicator    = 6,
+    Frame            = 7,
+    Tab              = 8,
+    FrameLightClose  = 9,
+    FrameLightMinimize = 10,
+    FrameLightZoom   = 11,
+    AtlasCard        = 12,
+    SettingsPanel    = 13,
+    Panel            = 14,
+    AppPlaceholder   = 15,
+    Desktop          = 16,
+}
+
+/// State flags for an access node. u16 bitmask.
+type AccessStateFlags = u16;
+const ACCESS_FOCUSED:   AccessStateFlags = 1 << 0;
+const ACCESS_SELECTED:  AccessStateFlags = 1 << 1;
+const ACCESS_VISIBLE:   AccessStateFlags = 1 << 2;
+const ACCESS_HIDDEN:    AccessStateFlags = 1 << 3;
+const ACCESS_MINIMIZED: AccessStateFlags = 1 << 4;
+const ACCESS_ZOOMED:    AccessStateFlags = 1 << 5;
+const ACCESS_DISABLED:  AccessStateFlags = 1 << 6;
+
+/// Action flags for an access node. u16 bitmask.
+type AccessActionFlags = u16;
+const ACT_FOCUS:        AccessActionFlags = 1 << 0;
+const ACT_ACTIVATE:     AccessActionFlags = 1 << 1;
+const ACT_CLOSE:        AccessActionFlags = 1 << 2;
+const ACT_MINIMIZE:     AccessActionFlags = 1 << 3;
+const ACT_RESTORE:      AccessActionFlags = 1 << 4;
+const ACT_ZOOM:         AccessActionFlags = 1 << 5;
+const ACT_UNZOOM:       AccessActionFlags = 1 << 6;
+const ACT_SWITCH_SCENE: AccessActionFlags = 1 << 7;
+const ACT_CYCLE_ACCENT: AccessActionFlags = 1 << 8;
+const ACT_TOGGLE_PIN:   AccessActionFlags = 1 << 9;
+
+/// Target reference: which surface/frame/scene this node maps to.
+/// All fields are 0/NONE when not applicable.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct AccessTargetRef {
+    surface_id: u64,
+    frame_id: u32,
+    scene_id: u8,
+}
+
+/// A semantic access node. Fixed-size, no heap, no String.
+/// Label is [u8; 32] — enough for V1 shell chrome labels.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct AccessNode {
+    node_id: u32,
+    role: AccessRole,
+    state: AccessStateFlags,
+    actions: AccessActionFlags,
+    target: AccessTargetRef,
+    label: [u8; 32],
+}
+
+/// Insert a byte-slice label into a fixed [u8; 32] array, null-terminated.
+/// Copies at most 31 bytes + null terminator.
+fn access_copy_label(dst: &mut [u8; 32], src: &[u8]) {
+    let len = src.len().min(31);
+    dst[..len].copy_from_slice(&src[..len]);
+    dst[len] = 0;
+}
+
+/// Returns true if the target surface (if any) is a valid semantic target.
+/// Excludes tombstoned/destroyed/dead surfaces. Frame-only surfaces without
+/// a surface_id are considered valid (they carry frame-level semantics).
+unsafe fn access_node_is_valid_target(target: &AccessTargetRef) -> bool {
+    if target.surface_id == 0 && target.frame_id == 0 && target.scene_id == 0xFF {
+        return false;
+    }
+    if target.surface_id != 0 {
+        if !surface_is_alive(target.surface_id) || is_tombstoned(target.surface_id) {
+            return false;
+        }
+    }
+    if target.frame_id != 0 {
+        let frame = FRAMES.iter().flatten().find(|f| f.frame_id == target.frame_id);
+        if frame.is_none() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Emit a scene chip node into the node array at the given index.
+/// Returns the next index, or index if out of space.
+unsafe fn access_emit_scene_node(nodes: &mut [Option<AccessNode>; MAX_ACCESS_NODES], idx: usize, scene_id: u8) -> usize {
+    if idx >= MAX_ACCESS_NODES { return idx; }
+    if !validate_scene_id(scene_id) { return idx; }
+
+    let s = &SCENES[scene_id as usize];
+    let flags = s.flags;
+    let is_active = scene_id == ACTIVE_SCENE_IDX;
+
+    let mut state: AccessStateFlags = 0;
+    if is_active { state |= ACCESS_FOCUSED | ACCESS_SELECTED | ACCESS_VISIBLE; }
+    if (flags & SCENE_FLAG_EMPTY) != 0 { state |= ACCESS_HIDDEN; }
+
+    let mut actions: AccessActionFlags = 0;
+    if !is_active { actions |= ACT_SWITCH_SCENE; }
+
+    let mut label = [0u8; 32];
+    // Trim null bytes from the scene label for a clean access label.
+    let label_trimmed = core::str::from_utf8(&s.label).map(|s| s.trim_end_matches('\0')).unwrap_or("scene");
+    let label_bytes = label_trimmed.as_bytes();
+    access_copy_label(&mut label, label_bytes);
+
+    nodes[idx] = Some(AccessNode {
+        node_id: 0x1000 | scene_id as u32,
+        role: AccessRole::SceneChip,
+        state,
+        actions,
+        target: AccessTargetRef { surface_id: 0, frame_id: 0, scene_id },
+        label,
+    });
+
+    static mut ACCESS_SCENE_BUDGET: u32 = 8;
+    let b = &mut ACCESS_SCENE_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[access.node.scene] id={} role=SceneChip state={:#x} actions={:#x}", scene_id, state, actions); }
+
+    idx + 1
+}
+
+/// Emit a frame node (and its tabs + lights) into the node array.
+/// Returns the next index, or index if out of space.
+unsafe fn access_emit_frame_node(nodes: &mut [Option<AccessNode>; MAX_ACCESS_NODES], idx: usize, frame: &ShellFrame) -> usize {
+    if idx >= MAX_ACCESS_NODES { return idx; }
+
+    let fid = frame.frame_id;
+    let sid = active_surface_for_frame(fid).unwrap_or(0);
+    let minimized = (frame.flags & FRAME_FLAG_MINIMIZED) != 0;
+    let zoomed = (frame.flags & FRAME_FLAG_ZOOMED) != 0;
+    let in_active_scene = frame.scene_id == ACTIVE_SCENE_IDX;
+    let is_focused = sid != 0 && FOCUSED_SURFACE_ID == sid;
+
+    // Skip if surface is dead
+    if sid != 0 && (!surface_is_alive(sid) || is_tombstoned(sid)) {
+        static mut ACCESS_SKIP_DEAD_BUDGET: u32 = 8;
+        let b = &mut ACCESS_SKIP_DEAD_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[access.node.skip_dead] frame={} sid={}", fid, sid); }
+        return idx;
+    }
+
+    let mut state: AccessStateFlags = 0;
+    if is_focused { state |= ACCESS_FOCUSED; }
+    if in_active_scene && !minimized { state |= ACCESS_VISIBLE; }
+    if !in_active_scene { state |= ACCESS_HIDDEN; }
+    if minimized { state |= ACCESS_MINIMIZED; }
+    if zoomed { state |= ACCESS_ZOOMED; }
+
+    let mut actions: AccessActionFlags = 0;
+    if sid != 0 && in_active_scene && !minimized { actions |= ACT_FOCUS | ACT_ACTIVATE; }
+    if sid != 0 && !minimized { actions |= ACT_MINIMIZE | ACT_CLOSE; }
+    if minimized && sid != 0 { actions |= ACT_RESTORE; }
+    if !zoomed && sid != 0 { actions |= ACT_ZOOM; }
+    if zoomed { actions |= ACT_UNZOOM; }
+
+    // Derive label from app spec or fallback to "Frame".
+    let mut label = [0u8; 32];
+    if let Some(spec) = app_surface_spec_by_frame(fid) {
+        access_copy_label(&mut label, spec.name.as_bytes());
+    } else {
+        access_copy_label(&mut label, b"Frame");
+    }
+
+    nodes[idx] = Some(AccessNode {
+        node_id: 0x2000 | fid,
+        role: AccessRole::Frame,
+        state,
+        actions,
+        target: AccessTargetRef { surface_id: sid, frame_id: fid, scene_id: frame.scene_id },
+        label,
+    });
+
+    static mut ACCESS_FRAME_BUDGET: u32 = 8;
+    let b = &mut ACCESS_FRAME_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[access.node.frame] id={} state={:#x} actions={:#x}", fid, state, actions); }
+
+    idx + 1
+}
+
+/// Emit semantic nodes for all shell UI elements.
+/// Populates the fixed-size buffer and returns the count of emitted nodes.
+unsafe fn access_emit_shell_nodes(nodes: &mut [Option<AccessNode>; MAX_ACCESS_NODES]) -> usize {
+    let mut idx = 0;
+
+    // 1. Scene nodes
+    for si in 0..ATLAS_MAX_SCENES as u8 {
+        idx = access_emit_scene_node(nodes, idx, si);
+    }
+
+    // 2. Frame nodes (with implicit tabs + lights)
+    for frame_slot in FRAMES.iter() {
+        if let Some(ref frame) = frame_slot {
+            idx = access_emit_frame_node(nodes, idx, frame);
+        }
+    }
+
+    // 3. Quil placeholder (alive surfaces only)
+    if surface_is_alive(SURFACE_ID_QUIL) && !is_tombstoned(SURFACE_ID_QUIL) {
+        if idx < MAX_ACCESS_NODES {
+            let mut label = [0u8; 32];
+            access_copy_label(&mut label, b"Quil");
+            nodes[idx] = Some(AccessNode {
+                node_id: 0x3000 | SURFACE_ID_QUIL as u32,
+                role: AccessRole::AppPlaceholder,
+                state: ACCESS_VISIBLE,
+                actions: ACT_FOCUS | ACT_ACTIVATE,
+                target: AccessTargetRef { surface_id: SURFACE_ID_QUIL, frame_id: 0, scene_id: 0 },
+                label,
+            });
+            idx += 1;
+        }
+    }
+
+    // 4. Linen placeholder
+    if surface_is_alive(SURFACE_ID_LINEN) && !is_tombstoned(SURFACE_ID_LINEN) {
+        if idx < MAX_ACCESS_NODES {
+            let mut label = [0u8; 32];
+            access_copy_label(&mut label, b"Linen");
+            nodes[idx] = Some(AccessNode {
+                node_id: 0x3001,
+                role: AccessRole::AppPlaceholder,
+                state: ACCESS_VISIBLE,
+                actions: ACT_FOCUS | ACT_ACTIVATE,
+                target: AccessTargetRef { surface_id: SURFACE_ID_LINEN, frame_id: 0, scene_id: 0 },
+                label,
+            });
+            idx += 1;
+        }
+    }
+
+    static mut ACCESS_EMIT_BUDGET: u32 = 8;
+    let b = &mut ACCESS_EMIT_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[access.node.emit] count={}", idx); }
+
+    idx
+}
+
 // ── Atlas Overview Model ─────────────────────────────────────────────────────
 /// Atlas is Silk's shell-owned map of all Scenes.
 /// It sits above Scene in the abstraction stack:
@@ -4634,6 +4891,32 @@ unsafe fn try_set_focus(sid: u64) -> bool {
             serial_println!("[shell.selected.options.send] surface={} mask={:#x}", sid, live_mask);
         }
     }
+
+    // D2: Focus description marker — fired on every successful focus change.
+    // Logs role and label derived from the focused surface.
+    unsafe {
+        let mut label_str = "unknown";
+        let mut role_str = "Surface";
+        if sid == SURFACE_ID_QUIL { label_str = "Quil"; role_str = "AppPlaceholder"; }
+        else if sid == SURFACE_ID_LINEN { label_str = "Linen"; role_str = "AppPlaceholder"; }
+        else if sid == SURFACE_ID_APP { label_str = "App"; role_str = "Frame"; }
+        else if sid == SURFACE_ID_STATIC { label_str = "Test2"; role_str = "Frame"; }
+        else if sid == SURFACE_ID_TEST3 { label_str = "Test3"; role_str = "Frame"; }
+        else if sid == SURFACE_ID_TEST4 { label_str = "Test4"; role_str = "Frame"; }
+        else if sid == SURFACE_ID_CURSOR { label_str = "Cursor"; role_str = "Desktop"; }
+        else if let Some(frame_id) = frame_for_surface(sid) {
+            if let Some(spec) = app_surface_spec_by_frame(frame_id) {
+                label_str = spec.name;
+            }
+        }
+        static mut ACCESS_FOCUS_DESCRIBE_BUDGET: u32 = 32;
+        let b = &mut ACCESS_FOCUS_DESCRIBE_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[access.focus.describe] target={} role={} label={}", sid, role_str, label_str);
+        }
+    }
+
     true
 }
 
