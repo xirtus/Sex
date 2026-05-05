@@ -1507,17 +1507,19 @@ unsafe fn mesh_selected_fact_snapshot() -> Option<MeshFact> {
 }
 
 /// Emit proof markers for the currently selected Mesh fact.
+/// Returns true if a valid fact was found and proof markers emitted.
+/// Returns false if rejected (not focused, no fact).
 /// No action, no ack, no delete, no Mesh PD. Proof-marker-only stub.
-unsafe fn mesh_emit_selected_fact_detail_proof() {
+unsafe fn mesh_emit_selected_fact_detail_proof() -> bool {
     if FOCUSED_SURFACE_ID != SURFACE_ID_MESH {
         serial_println!("[mesh.detail.reject] reason=not_focused");
-        return;
+        return false;
     }
     let fact = match mesh_selected_fact_snapshot() {
         Some(f) => f,
         None => {
             serial_println!("[mesh.detail.reject] reason=no_fact");
-            return;
+            return false;
         }
     };
     serial_println!("[mesh.detail.open] fact_id={} kind={:?}", fact.fact_id, fact.kind);
@@ -1530,6 +1532,17 @@ unsafe fn mesh_emit_selected_fact_detail_proof() {
         }
     }
     serial_println!("[mesh.detail.done] fact_id={}", fact.fact_id);
+    true
+}
+
+/// N11: Focus Linen surface and select the object referenced by a Mesh fact.
+/// Only the subject_id (Linen object_id) from ObjectLinkedToBuffer facts is used.
+/// No buffer creation, no linking, no Collar gate.
+unsafe fn mesh_focus_linen_at_selected_fact(fact: &MeshFact) {
+    serial_println!("[mesh.action.focus_linen] subject_id={}", fact.subject_id);
+    open_linen_in_active_scene();
+    SELECTED_LINEN_OBJECT_ID = fact.subject_id;
+    linen_render_object_list();
 }
 
 // ── J7: Bell Object Link Event Stub ──────────────────────────────────────────
@@ -9344,7 +9357,13 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     0x1C => {
                                         serial_println!("[mesh.keyboard.enter] sid={}", FOCUSED_SURFACE_ID);
-                                        mesh_emit_selected_fact_detail_proof();
+                                        // N8: Emit detail proof markers.
+                                        if mesh_emit_selected_fact_detail_proof() {
+                                            // N11: Focus Linen at selected fact after successful proof.
+                                            if let Some(fact) = mesh_selected_fact_snapshot() {
+                                                mesh_focus_linen_at_selected_fact(&fact);
+                                            }
+                                        }
                                     }
                                     _ => {}
                                 }
