@@ -84,6 +84,12 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 //   204   bell placeholder (attention firewall)
 pub const SURFACE_ID_SCENE_SETTINGS: u64 = 0x96;
 pub const SURFACE_ID_ATLAS_OVERLAY: u64 = 0x97; // 151 — Atlas overview surface, toggled by F10
+
+/// Placeholder grant_ref value: no real Collar grant exists yet.
+/// All current object/buffer grant_ref fields use this value.
+/// Non-zero grant_ref would indicate a real Collar capability grant (deferred).
+pub const GRANT_REF_STUB: u64 = 0;
+
 /// 0xEE — deactivate surface on sexdisplay (active=false).
 /// Sexdisplay does NOT free resources — callers must manage lifecycle.
 /// Used for both permanent destroy AND temporary hide; the shell's
@@ -1624,7 +1630,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x44 => Some(SurfaceAction::ToggleAtlas),    // F10
         0x57 => Some(SurfaceAction::AccessClose),    // F11
         0x58 => Some(SurfaceAction::ToggleMesh),    // F12
-        0x59 => Some(SurfaceAction::OpenObjectInQuil), // PrintScreen — J4 test trigger
+        0x59 => Some(SurfaceAction::OpenObjectInQuil), // test trigger (not standard PS/2 key)
         0x52 => Some(SurfaceAction::ToggleCollar), // Insert
         0x51 => Some(SurfaceAction::ToggleBell),   // PageDown
         0x47 => Some(SurfaceAction::SnapHome),
