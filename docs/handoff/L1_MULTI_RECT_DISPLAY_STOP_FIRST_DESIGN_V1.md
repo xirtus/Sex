@@ -11,9 +11,13 @@ facts, and Collar grant status.
 
 ```
 ╔══════════════════════════════════════════════════════════════════╗
-║              SAFE_EXISTING_OPS + MINIMAL_STATE_CHANGE            ║
+║   SAFE_EXISTING_OPS + MINIMAL_STATE_CHANGE (see category rows)  ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║                                                                  ║
+║  SAFE_EXISTING_OPS:             YES (reuse 0xEF, no ABI edit)   ║
+║  SAFE_SHELL_BATCH_ONLY:         NO  (sexdisplay single rect)     ║
+║  BLOCKED_ABI_REQUIRED:          NO  (rect_index avoids new op)   ║
+║  BLOCKED_RENDERER_POLICY_RISK:  LOW (array iterate, no policy)  ║
 ║  Existing 0xEF opcode:          SAFE (reuse, no ABI change)      ║
 ║  Sexdisplay state change:       REQUIRED (array fill rects)      ║
 ║  Sex-pdx ABI change:            NOT REQUIRED                     ║
@@ -140,6 +144,8 @@ Each 0xEF call specifies which rect slot to write via a rect_index field.
 - 0xEF handler: extract rect_index from bits 24-27 of arg2, write to slot[rect_index]
 - `fill_rect_color()`: iterate 0..fill_count, update color for each rect hit
 
+**BLOCKED_RENDERER_POLICY_RISK: LOW.** The sexdisplay renderer change is limited to iterating a fixed-size array in fill_rect_color(). No policy interpretation (sexdisplay does not know what a row is). No alpha blending. No z-ordering between rects. The renderer remains a dumb compositor. Bounds checks unchanged. This is a low-risk renderer change: it replaces a single-rect check with an array iteration of the same check.
+
 **Storage cost:** 5 fields × 8 rects = 40 values. At ~4 bytes each = ~160 bytes.
 For 16 surfaces = ~2560 bytes total. Negligible for a kernel with 4G+ RAM.
 
@@ -156,6 +162,21 @@ identical to current (single rect). New shell can set rect_index 0..7.
 **Disadvantages:**
 - Requires sexdisplay source change (Surface struct + handler).
 - Requires shell change to send N 0xEF calls per render.
+
+### SAFE_SHELL_BATCH_ONLY Analysis
+
+**Verdict: NOT VIABLE as standalone approach.**
+
+Shell-local batching without sexdisplay changes cannot produce multiple visible rectangles per surface because:
+
+1. **0xEF overwrites, not appends.** Each call overwrites the single fill rect.
+2. **No accumulation mode.** Sexdisplay has no add-rect-to-list mode.
+3. **No framebuffer readback.** Shell cannot composite rows locally.
+
+Shell batching is only useful when combined with sexdisplay array storage (Option A).
+The shell batches N 0xEF calls with rect_index 0..N-1, and sexdisplay stores all N rects.
+
+If implemented as standalone (no sexdisplay change), shell batching produces **zero** visible multi-rect output. Proof markers show N rows, but framebuffer shows only the last rect.
 
 ### Option B: Multiple Small Surfaces (NOT RECOMMENDED)
 
@@ -358,6 +379,8 @@ rows = ~25 rows max, but shell policy can limit to 7 data rows + 1 header).
 | Framebuffer bounds removal | Safety invariant. Option A preserves all bounds. |
 | Kernel or MPK/PKEY change | Not needed for Option A. |
 | Heap-backed rect storage | Option A uses fixed array; no heap. |
+| Shell-batch-only (no sexdisplay change) | Blocked: sexdisplay single rect cannot produce multi-rect output. |
+| Renderer policy interpretation | Would break dumb-renderer boundary. Option A avoids (array iteration, not policy). |
 
 ## Forbidden Approaches
 
@@ -374,9 +397,9 @@ rows = ~25 rows max, but shell policy can limit to 7 data rows + 1 header).
 
 After L1 design approval and implementation:
 
-### L2: Linen Object Row Highlights
-First consumer. Linen object list has exactly 6 seed objects (potentially up to
-16). Rows 1-6 correspond to objects 1-6. Row colors derived from
+### L2: Linen Selected Row Visual (First Consumer)
+First consumer. L2 Linen selected row visual highlights the currently selected
+Linen object by applying a distinct fill rect behind its row. Row colors derived from
 `linen_kind_color()`. Selected row gets accent color from
 `linen_selected_object_accent()`. Header rect + 6 row rects = 7 total (≤ 8).
 
@@ -443,17 +466,19 @@ Build:
 **Document complete:** `docs/handoff/L1_MULTI_RECT_DISPLAY_STOP_FIRST_DESIGN_V1.md`
 
 **All required sections present:**
-- ✅ Verdict: SAFE_EXISTING_OPS + MINIMAL_STATE_CHANGE
+- ✅ Verdict: SAFE_EXISTING_OPS + MINIMAL_STATE_CHANGE (4 category rows in box)
 - ✅ Current 0xEF behavior summary (lines 1073-1125, fill_rect_color 306-317)
 - ✅ Sexdisplay bounds-check proof (double-bounded: sw.min + sx.clamp)
 - ✅ Whether repeated 0xEF calls are safe (yes, but same-surface calls overwrite)
 - ✅ MAX_RECTS = 8 with per-use-case justification
-- ✅ Ownership split table (shell=policy, sexdisplay=renderer)
+- ✅ Repeated 0xEF call safety (authorized and bounds-checked per call; single rect overwrite)
+- ✅ ownership split: silk-shell=policy, sexdisplay=dumb renderer
 - ✅ Exact sexdisplay Surface struct change (arrays of MAX_RECTS)
 - ✅ Exact sexdisplay 0xEF handler change (rect_index from bits 24-27)
 - ✅ Exact fill_rect_color() change (iterate all rects, painter's)
 - ✅ Exact shell-side render function change pattern
 - ✅ STOP FIRST table (all clear)
-- ✅ Forbidden approaches (5 rejected)
+- ✅ forbidden approaches: 5 rejected (shared-memory, new opcode, multi-surface, shell-local, policy)
 - ✅ Recommended consumer order: L2 Linen → L3 Quil → L4 Command Palette
 - ✅ Exact L2 implementation prompt
+- ✅ L2 Linen selected row visual (first consumer)
