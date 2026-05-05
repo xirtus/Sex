@@ -354,6 +354,76 @@ fn linen_object_state_name(state: LinenObjectState) -> &'static str {
     }
 }
 
+/// Maximum visible rows in the Linen object list placeholder UI.
+const LINEN_LIST_MAX_ROWS: u8 = 8;
+/// Height of each object row in the list, in pixels.
+const LINEN_LIST_ROW_H: u32 = 24;
+/// Gap between rows.
+const LINEN_LIST_ROW_GAP: u32 = 2;
+/// Header bar color: teal-green, top of Linen surface.
+const LINEN_LIST_HEADER_COLOR: u32 = 0x0038563A;
+/// Header bar height.
+const LINEN_LIST_HEADER_H: u32 = 28;
+
+/// Kind-to-visual-color mapping for object list rows.
+/// Each LinenObjectKind gets a distinctive accent color for its row indicator.
+fn linen_kind_color(kind: LinenObjectKind) -> u32 {
+    match kind {
+        LinenObjectKind::Project => 0x004080C0,           // blue
+        LinenObjectKind::Document => 0x0040C080,          // green
+        LinenObjectKind::CodeFile => 0x00C0A040,          // amber
+        LinenObjectKind::MediaAsset => 0x00C04080,        // magenta
+        LinenObjectKind::BuildArtifact => 0x00806040,     // brown
+        LinenObjectKind::Folder => 0x00808080,            // grey
+        LinenObjectKind::Reference => 0x006060C0,         // indigo
+        LinenObjectKind::ImportPlaceholder => 0x00C06040, // orange
+        LinenObjectKind::BellEventReference => 0x00C04040,// red
+        LinenObjectKind::QuilWorkspaceReference => 0x0040C0C0, // cyan
+        LinenObjectKind::MeshDiagnosticReference => 0x00A060C0, // violet
+    }
+}
+
+/// Render the Linen object list as a placeholder UI inside the Linen surface.
+/// Uses existing 0xEF fill rect primitive (one rect per surface).
+/// The fill rect draws a header bar showing the object count.
+/// Each object is documented via proof marker — full row rendering
+/// requires future fill-rect expansion or text rendering in sexdisplay.
+/// Called after Linen placeholder open and after object table is ready.
+unsafe fn linen_render_object_list() {
+    // Get current Linen surface geometry from tracked vars.
+    let w = SURFACE_200_W;
+    let h = SURFACE_200_H;
+    if w == 0 || h == 0 { return; }
+
+    serial_println!("[linen.object_list.render] w={} h={}", w, h);
+
+    // Draw header bar at top of surface.
+    // 0xEF: arg0=surface_id, arg1=(sy<<32)|sx, arg2=(color<<32)|(sh<<16)|sw
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
+        (0u64 << 32) | 0u64,  // position (0,0) — top-left corner
+        (LINEN_LIST_HEADER_COLOR as u64) << 32
+            | (LINEN_LIST_HEADER_H as u64) << 16
+            | w as u64);
+
+    // Emit one row marker per object (proof only, not visual rows).
+    let count = linen_object_count();
+    let mut rows_emitted: u8 = 0;
+    for i in 0..LINEN_MAX_OBJECTS {
+        if let Some(obj) = LINEN_OBJECTS[i] {
+            if rows_emitted >= LINEN_LIST_MAX_ROWS {
+                serial_println!("[linen.object_list.skip] id={} reason=max_rows", obj.object_id);
+                continue;
+            }
+            let kind_name = linen_object_kind_name(obj.kind);
+            let state_name = linen_object_state_name(obj.state);
+            serial_println!("[linen.object_list.row] id={} kind={} state={} name={}",
+                obj.object_id, kind_name, state_name, obj.display_name);
+            rows_emitted += 1;
+        }
+    }
+    serial_println!("[linen.object_list.done] count={} rows={}", count, rows_emitted);
+}
+
 // ── A3: Lifecycle State Model ─────────────────────────────────────────────────
 // Additive metadata only. No behavior change.
 // See docs/handoff/A2_COMPOSITOR_LIFECYCLE_FSM_SPEC_V1.md
@@ -4032,6 +4102,7 @@ unsafe fn open_linen_in_active_scene() -> bool {
                         serial_println!("[linen.placeholder.focus] frame={} sid={}", LINEN_FRAME_ID, sid);
                     }
                 }
+                linen_render_object_list();
                 return true;
             }
         }
@@ -4083,6 +4154,7 @@ unsafe fn open_linen_in_active_scene() -> bool {
 
     serial_println!("[linen.placeholder.open] frame={}", fid);
     serial_println!("[linen.object_table.ready] count={}", linen_object_count());
+    linen_render_object_list();
     snap_capture_layout();
     static mut LINEN_OPEN_BUDGET: u32 = 4;
     let b = &mut LINEN_OPEN_BUDGET;
