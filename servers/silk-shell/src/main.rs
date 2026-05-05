@@ -715,6 +715,10 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
     }
 
     serial_println!("[linen.quil.done] object_id={} buffer_created={}", object_id, buffer_created);
+
+    // 8. J6: Emit Mesh diagnostic link facts for all Linen↔Quil links.
+    mesh_emit_linen_quil_links();
+
     true
 }
 
@@ -808,6 +812,56 @@ unsafe fn collar_check_operation_stub(
             CollarDecision::NeedsGrantLater
         }
     }
+}
+
+// ── J6: Mesh Linen/Quil Object Link Diagnostics ──────────────────────────────
+// Diagnostic-only: proof markers + shell-local link summary.
+// No live graph, no authority, no renderer changes.
+// See docs/handoff/J6_MESH_OBJECT_LINKS_V1.md
+
+/// Scan the Quil buffer table and emit diagnostic link facts for Mesh.
+///
+/// For each buffer with a non-zero linen_object_ref:
+/// - If the referenced LinenObject exists in LINEN_OBJECTS, emit a
+///   [mesh.object_link.row] proof marker with IDs and kind names.
+/// - If the referenced LinenObject is missing (stale ref), emit a
+///   [mesh.object_link.reject.missing_object] marker.
+///
+/// Link facts are IDs and kind names only — no object contents, no file paths,
+/// no raw pointers, no authority mutation.
+unsafe fn mesh_emit_linen_quil_links() {
+    serial_println!("[mesh.object_link.start]");
+    let mut link_count: usize = 0;
+    let mut stale_count: usize = 0;
+    for slot in QUIL_BUFFERS.iter() {
+        if let Some(buf) = slot {
+            if buf.linen_object_ref != 0 {
+                let obj = linen_object_by_id(buf.linen_object_ref);
+                match obj {
+                    Some(o) => {
+                        serial_println!(
+                            "[mesh.object_link.row] object_id={} object_kind={} buffer_id={} buffer_kind={} surface_id={}",
+                            o.object_id,
+                            linen_object_kind_name(o.kind),
+                            buf.buffer_id,
+                            quil_buffer_kind_name(buf.kind),
+                            buf.linked_surface_id,
+                        );
+                        link_count += 1;
+                    }
+                    None => {
+                        serial_println!(
+                            "[mesh.object_link.reject.missing_object] buffer_id={} linen_object_ref={}",
+                            buf.buffer_id,
+                            buf.linen_object_ref,
+                        );
+                        stale_count += 1;
+                    }
+                }
+            }
+        }
+    }
+    serial_println!("[mesh.object_link.done] links={} stale={}", link_count, stale_count);
 }
 
 // ── A3: Lifecycle State Model ─────────────────────────────────────────────────
@@ -4963,6 +5017,8 @@ unsafe fn open_mesh_in_active_scene() -> bool {
         (MESH_PLACEHOLDER_COLOR as u64) << 32 | ((SURFACE_202_H as u64) << 16) | SURFACE_202_W as u64);
 
     serial_println!("[mesh.placeholder.open] frame={}", fid);
+    // J6: Emit diagnostic link facts every time Mesh opens.
+    mesh_emit_linen_quil_links();
     snap_capture_layout();
     static mut MESH_OPEN_BUDGET: u32 = 4;
     let b = &mut MESH_OPEN_BUDGET;
