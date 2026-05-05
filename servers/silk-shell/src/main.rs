@@ -442,6 +442,13 @@ const QUIL_MAX_BUFFERS: usize = 16;
 /// Dynamic buffers: QUIL_DYNAMIC_BUFFER_ID_BASE + object_id (high namespace, no overlap).
 const QUIL_DYNAMIC_BUFFER_ID_BASE: u64 = 1000;
 
+/// Maximum visible rows in the Quil buffer list placeholder UI.
+const QUIL_LIST_MAX_ROWS: u8 = 8;
+/// Header bar color: deep blue-purple, distinct from Linen teal-green header.
+const QUIL_LIST_HEADER_COLOR: u32 = 0x00302E56;
+/// Header bar height in pixels.
+const QUIL_LIST_HEADER_H: u32 = 28;
+
 /// Kind of Quil buffer. Maps to H2 §2 workstation object types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -617,6 +624,52 @@ fn quil_buffer_state_name(state: QuilBufferState) -> &'static str {
     }
 }
 
+// ── K3: Quil Buffer List Placeholder UI ─────────────────────────────────────
+// Minimal buffer list rendered via proof markers inside the Quil surface.
+// Mirrors J2 linen_render_object_list pattern. No editor, no text rendering.
+// See docs/handoff/K3_QUIL_BUFFER_LIST_PLACEHOLDER_UI_V1.md
+
+/// Render a header bar + proof-marker rows for the current Quil buffer table.
+/// Uses existing 0xEF fill rect primitive (one rect per surface).
+/// The fill rect draws a header bar showing the buffer count.
+/// Each buffer is documented via proof marker — full row rendering
+/// requires future fill-rect expansion or text rendering in sexdisplay.
+/// Called after Quil placeholder open and after J4 Linen→Quil links.
+unsafe fn quil_render_buffer_list() {
+    let w = SURFACE_201_W;
+    let h = SURFACE_201_H;
+    if w == 0 || h == 0 { return; }
+
+    serial_println!("[quil.buffer_list.render] w={} h={}", w, h);
+
+    // Draw header bar at top of surface.
+    // 0xEF: arg0=surface_id, arg1=(sy<<32)|sx, arg2=(color<<32)|(sh<<16)|sw
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL,
+        (0u64 << 32) | 0u64,  // position (0,0) — top-left corner
+        (QUIL_LIST_HEADER_COLOR as u64) << 32
+            | (QUIL_LIST_HEADER_H as u64) << 16
+            | w as u64);
+
+    // Emit one row marker per buffer (proof only, not visual rows).
+    let count = quil_buffer_count();
+    let mut rows_emitted: u8 = 0;
+    for i in 0..QUIL_MAX_BUFFERS {
+        if let Some(buf) = QUIL_BUFFERS[i] {
+            if rows_emitted >= QUIL_LIST_MAX_ROWS {
+                serial_println!("[quil.buffer_list.skip] id={} reason=max_rows", buf.buffer_id);
+                continue;
+            }
+            let kind_name = quil_buffer_kind_name(buf.kind);
+            let state_name = quil_buffer_state_name(buf.state);
+            serial_println!("[quil.buffer_list.row] buffer_id={} kind={} state={} linen_ref={} surface_id={} name={}",
+                buf.buffer_id, kind_name, state_name, buf.linen_object_ref,
+                buf.linked_surface_id, buf.display_name);
+            rows_emitted += 1;
+        }
+    }
+    serial_println!("[quil.buffer_list.done] count={} rows={}", count, rows_emitted);
+}
+
 // ── K2C: Seed Coherence Init ──────────────────────────────────────────────────
 // Called once at boot after both tables init.
 // For seed buffers that pre-declare a linen_object_ref AND a non-zero linked_surface_id,
@@ -777,6 +830,9 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
 
     // 9. J7: Emit Bell placeholder event for the new link.
     bell_emit_object_link_event(object_id, dynamic_buffer_id);
+
+    // 10. K3: Refresh Quil buffer list to show the new dynamic buffer.
+    quil_render_buffer_list();
 
     true
 }
@@ -4932,6 +4988,8 @@ unsafe fn open_quil_in_active_scene() -> bool {
 
     serial_println!("[quil.placeholder.open] frame={}", fid);
     serial_println!("[quil.buffer_table.ready] count={}", quil_buffer_count());
+    // K3: Render buffer list header + proof-marker rows on every open.
+    quil_render_buffer_list();
     snap_capture_layout();
     static mut QUIL_OPEN_BUDGET: u32 = 4;
     let b = &mut QUIL_OPEN_BUDGET;
