@@ -1379,6 +1379,17 @@ unsafe fn mesh_render_fact_list() {
     let h = SURFACE_202_H;
     if w == 0 || h == 0 { return; }
 
+    // Clamp selected row to valid range after ring changes.
+    let visible = mesh_visible_fact_count();
+    if visible == 0 {
+        MESH_SELECTED_ROW = 0;
+    } else if MESH_SELECTED_ROW >= visible {
+        let old = MESH_SELECTED_ROW;
+        MESH_SELECTED_ROW = visible.wrapping_sub(1);
+        serial_println!("[mesh.selection.repair] old={} new={} count={}", old, MESH_SELECTED_ROW, visible);
+    }
+    serial_println!("[mesh.selection.current] row={} visible={}", MESH_SELECTED_ROW, visible);
+
     serial_println!("[mesh.fact_list.render] w={} h={} count={}", w, h, mesh_fact_count());
 
     // Draw header bar at top of surface (rect_index=0).
@@ -1405,7 +1416,15 @@ unsafe fn mesh_render_fact_list() {
             let rect_index = (rows_emitted as u64 + 1) & 0xF;
             let row_y = MESH_LIST_HEADER_H
                 + rows_emitted as u32 * (MESH_LIST_ROW_H + MESH_LIST_ROW_GAP);
-            let row_color = mesh_fact_row_color(fact);
+            let base_color = mesh_fact_row_color(fact);
+            let row_color = if rows_emitted == MESH_SELECTED_ROW {
+                let highlighted = mesh_selected_row_highlight(base_color);
+                serial_println!("[mesh.selection_visual.row] fact_id={} index={} base={:#010x} highlight={:#010x}",
+                    fact.fact_id, rows_emitted, base_color, highlighted);
+                highlighted
+            } else {
+                base_color
+            };
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_MESH,
                 (row_y as u64) << 32 | 0u64,
                 (rect_index << 56)
@@ -1421,6 +1440,50 @@ unsafe fn mesh_render_fact_list() {
         rows_emitted += 1;
     });
     serial_println!("[mesh.fact_list.done] count={} rows={} rects={}", mesh_fact_count(), rows_emitted, rects_sent);
+}
+
+/// Count facts visible in the Mesh list (capped at MESH_LIST_ROW_RECTS).
+unsafe fn mesh_visible_fact_count() -> u8 {
+    let count = mesh_fact_count();
+    if count == 0 { return 0; }
+    core::cmp::min(count as u8, MESH_LIST_ROW_RECTS)
+}
+
+/// Brighten a 0x00RRGGBB color for selected row highlighting.
+/// Adds 0x40 (~25%) to each RGB component with per-channel clamping.
+fn mesh_selected_row_highlight(color: u32) -> u32 {
+    let r = core::cmp::min(((color >> 16) & 0xFF).wrapping_add(0x40), 0xFF);
+    let g = core::cmp::min(((color >> 8) & 0xFF).wrapping_add(0x40), 0xFF);
+    let b = core::cmp::min((color & 0xFF).wrapping_add(0x40), 0xFF);
+    (r << 16) | (g << 8) | b
+}
+
+/// Advance Mesh selection to the next visible fact row. Wraps around.
+unsafe fn mesh_select_next_row() {
+    let count = mesh_visible_fact_count();
+    if count <= 1 {
+        serial_println!("[mesh.selection.reject] reason=single_or_empty count={}", count);
+        return;
+    }
+    let current = MESH_SELECTED_ROW;
+    let next = if current + 1 >= count { 0 } else { current + 1 };
+    MESH_SELECTED_ROW = next;
+    serial_println!("[mesh.selection.next] prev={} next={}", current, next);
+    mesh_render_fact_list();
+}
+
+/// Move Mesh selection to the previous visible fact row. Wraps around.
+unsafe fn mesh_select_prev_row() {
+    let count = mesh_visible_fact_count();
+    if count <= 1 {
+        serial_println!("[mesh.selection.reject] reason=single_or_empty count={}", count);
+        return;
+    }
+    let current = MESH_SELECTED_ROW;
+    let prev = if current == 0 { count - 1 } else { current - 1 };
+    MESH_SELECTED_ROW = prev;
+    serial_println!("[mesh.selection.prev] prev={} next={}", current, prev);
+    mesh_render_fact_list();
 }
 
 // ── J7: Bell Object Link Event Stub ──────────────────────────────────────────
@@ -5716,6 +5779,10 @@ const MESH_LIST_ROW_GAP: u32 = 2;
 /// Max rows with visual fill rects. Header takes rect_index=0; rows get 1-7.
 const MESH_LIST_ROW_RECTS: u8 = 7;
 
+/// Currently selected visible row index in the Mesh fact list.
+/// 0 = newest fact row. Repaired during render if ring shrinks.
+static mut MESH_SELECTED_ROW: u8 = 0;
+
 /// Ensure a ShellFrame exists for Mesh in an empty FRAMES slot, assigned to
 /// the active scene. Returns the frame_id if created/found, or 0 if no slot.
 unsafe fn ensure_mesh_frame() -> Option<u32> {
@@ -9212,6 +9279,22 @@ pub extern "C" fn _start() -> ! {
                                     0x1C => {
                                         serial_println!("[bell.keyboard.enter] sid={}", FOCUSED_SURFACE_ID);
                                         bell_emit_selected_event_detail_proof();
+                                    }
+                                    _ => {}
+                                }
+                                mutated = true;
+                            // ── Mesh focused-surface navigation: J/K nav (read-only) ──
+                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_MESH
+                                && (scancode == 0x24 || scancode == 0x25)
+                            {
+                                match scancode {
+                                    0x24 => {
+                                        serial_println!("[mesh.keyboard.next] sid={}", FOCUSED_SURFACE_ID);
+                                        mesh_select_next_row();
+                                    }
+                                    0x25 => {
+                                        serial_println!("[mesh.keyboard.prev] sid={}", FOCUSED_SURFACE_ID);
+                                        mesh_select_prev_row();
                                     }
                                     _ => {}
                                 }
