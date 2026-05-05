@@ -5907,6 +5907,24 @@ unsafe fn ensure_command_palette_frame() -> Option<u32> {
     None
 }
 
+/// Return the accent color for the currently selected command in the palette.
+/// Each command gets a distinctive color to provide visual feedback on selection.
+fn command_palette_selected_accent() -> u32 {
+    unsafe {
+        let idx = COMMAND_PALETTE_SELECTED as usize;
+        if idx >= COMMAND_LIST.len() {
+            return 0x00404060; // default muted blue-grey
+        }
+        match COMMAND_LIST[idx].command {
+            Command::OpenSelectedInQuil => 0x00C0A040, // amber (matching CodeFile)
+            Command::FocusLinen => 0x0040C080,         // green (matching Document)
+            Command::FocusQuil => 0x0040C0C0,          // cyan (matching QuilWorkspaceRef)
+            Command::SceneNext => 0x006060C0,          // indigo (matching Reference)
+            Command::OpenAtlas => 0x00A060C0,          // violet (matching MeshDiagnosticRef)
+        }
+    }
+}
+
 /// Render the command palette as a placeholder overlay.
 /// Uses single 0xEF fill rect for header; rows are proof-marker-only.
 unsafe fn palette_render_list() {
@@ -5916,8 +5934,13 @@ unsafe fn palette_render_list() {
 
     serial_println!("[command_palette.render] w={} h={}", w, h);
 
-    // Draw header bar at top of surface using palette accent color.
-    let header_color: u32 = 0x00404060; // muted blue-grey
+    // Determine header color based on currently selected command.
+    let header_color = command_palette_selected_accent();
+    serial_println!("[command_palette.selection_visual.header] command={} index={} color={:#010x}",
+        COMMAND_LIST[COMMAND_PALETTE_SELECTED as usize].command as u8,
+        COMMAND_PALETTE_SELECTED, header_color);
+
+    // Draw header bar at top of surface using selected command accent color.
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_COMMAND_PALETTE,
         (0u64 << 32) | 0u64,
         (header_color as u64) << 32
