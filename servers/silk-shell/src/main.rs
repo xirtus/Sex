@@ -2438,6 +2438,7 @@ unsafe fn atlas_toggle() {
         // Entering Atlas: render overlay, clear stale hover/drag.
         ATLAS_MODE_ENABLED = true;
         ATLAS_SELECTED_SCENE = ACTIVE_SCENE_IDX;
+        serial_println!("[atlas.nav.enter.select] scene={}", ATLAS_SELECTED_SCENE);
         atlas_render_stub();
         clear_hover_if_wrong_scene();
         clear_drag_if_dead();
@@ -2514,6 +2515,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
     if scancode >= 0x02 && scancode <= 0x06 {
         let scene_idx = (scancode - 0x02) as u8;
         if scene_idx < ATLAS_MAX_SCENES as u8 {
+            serial_println!("[atlas.nav.activate] scene={} keys=number", scene_idx);
             pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_ATLAS_OVERLAY, 0, 0);
             if scene_idx != ACTIVE_SCENE_IDX {
                 switch_scene(scene_idx);
@@ -2524,6 +2526,12 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 clear_hover_if_wrong_scene();
                 tile_active_scene_frames();
                 snap_capture_layout();
+            }
+            // C2: Emit focus result after scene activation.
+            if FOCUSED_SURFACE_ID != 0 {
+                serial_println!("[atlas.nav.focus.commit] scene={} sid={}", scene_idx, FOCUSED_SURFACE_ID);
+            } else {
+                serial_println!("[atlas.nav.focus.empty] scene={}", scene_idx);
             }
             ATLAS_MODE_ENABLED = false;
             static mut ATLAS_CONFIRM_BUDGET: u32 = 4;
@@ -2541,10 +2549,13 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 3 => 4, 4 => 3,
                 _ => sel,
             };
+            if ATLAS_SELECTED_SCENE != sel {
+                serial_println!("[atlas.nav.move] dir=left from={} to={}", sel, ATLAS_SELECTED_SCENE);
+            }
             atlas_render_stub();
             static mut ATLAS_KEY_BUDGET: u32 = 4;
             let b = &mut ATLAS_KEY_BUDGET;
-            if *b > 0 { *b -= 1; serial_println!("[shell.atlas.key] dir=left sel={}", ATLAS_SELECTED_SCENE); }
+            if *b > 0 { *b -= 1; serial_println!("[shell.atlas.key] dir=right sel={}", ATLAS_SELECTED_SCENE); }
         }
         0x4D => { // Right arrow
             let sel = ATLAS_SELECTED_SCENE;
@@ -2553,6 +2564,9 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 3 => 4, 4 => 3,
                 _ => sel,
             };
+            if ATLAS_SELECTED_SCENE != sel {
+                serial_println!("[atlas.nav.move] dir=right from={} to={}", sel, ATLAS_SELECTED_SCENE);
+            }
             atlas_render_stub();
             static mut ATLAS_KEY_BUDGET: u32 = 4;
             let b = &mut ATLAS_KEY_BUDGET;
@@ -2565,6 +2579,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 _ => sel,
             };
             if ATLAS_SELECTED_SCENE != sel {
+                serial_println!("[atlas.nav.move] dir=up from={} to={}", sel, ATLAS_SELECTED_SCENE);
                 atlas_render_stub();
                 static mut ATLAS_KEY_BUDGET: u32 = 4;
                 let b = &mut ATLAS_KEY_BUDGET;
@@ -2578,6 +2593,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 _ => sel,
             };
             if ATLAS_SELECTED_SCENE != sel {
+                serial_println!("[atlas.nav.move] dir=down from={} to={}", sel, ATLAS_SELECTED_SCENE);
                 atlas_render_stub();
                 static mut ATLAS_KEY_BUDGET: u32 = 4;
                 let b = &mut ATLAS_KEY_BUDGET;
@@ -2586,6 +2602,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
         }
         0x1C => { // Enter - confirm selection
             let scene_idx = ATLAS_SELECTED_SCENE;
+            serial_println!("[atlas.nav.activate] scene={} keys=number", scene_idx);
             pdx_call(SLOT_DISPLAY, 0xEE, SURFACE_ID_ATLAS_OVERLAY, 0, 0);
             if scene_idx != ACTIVE_SCENE_IDX {
                 switch_scene(scene_idx);
@@ -2597,13 +2614,26 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 tile_active_scene_frames();
                 snap_capture_layout();
             }
+            // C2: Emit focus result after scene activation.
+            if FOCUSED_SURFACE_ID != 0 {
+                serial_println!("[atlas.nav.focus.commit] scene={} sid={}", scene_idx, FOCUSED_SURFACE_ID);
+            } else {
+                serial_println!("[atlas.nav.focus.empty] scene={}", scene_idx);
+            }
             ATLAS_MODE_ENABLED = false;
             static mut ATLAS_CONFIRM_BUDGET: u32 = 4;
             let b = &mut ATLAS_CONFIRM_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[shell.atlas.confirm] id={}", scene_idx); }
         }
         0x01 => { // Escape - cancel, exit Atlas without switching
+            serial_println!("[atlas.nav.cancel] scene={}", ACTIVE_SCENE_IDX);
             atlas_clear_stub();
+            // C2: Emit focus result after cancel.
+            if FOCUSED_SURFACE_ID != 0 {
+                serial_println!("[atlas.nav.focus.commit] scene={} sid={}", ACTIVE_SCENE_IDX, FOCUSED_SURFACE_ID);
+            } else {
+                serial_println!("[atlas.nav.focus.empty] scene={}", ACTIVE_SCENE_IDX);
+            }
             ATLAS_MODE_ENABLED = false;
             static mut ATLAS_CANCEL_BUDGET: u32 = 4;
             let b = &mut ATLAS_CANCEL_BUDGET;
