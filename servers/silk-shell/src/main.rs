@@ -3344,6 +3344,8 @@ unsafe fn ensure_quil_frame() -> Option<u32> {
                 normal_w: QUIL_BOOT_W,
                 normal_h: QUIL_BOOT_H,
             });
+            serial_println!("[quil.placeholder.attach.frame] frame={} scene={} slot={}", QUIL_FRAME_ID, ACTIVE_SCENE_IDX, slot_idx);
+            serial_println!("[quil.placeholder.attach.tab] frame={} tab=0 surface={}", QUIL_FRAME_ID, SURFACE_ID_QUIL);
             static mut QUIL_CREATE_BUDGET: u32 = 4;
             let b = &mut QUIL_CREATE_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[shell.quil.frame.create] frame={} slot={}", QUIL_FRAME_ID, slot_idx); }
@@ -3361,6 +3363,25 @@ unsafe fn ensure_quil_frame() -> Option<u32> {
 /// focus, and tile. If Quil is already visible in the active scene, focuses it.
 /// Returns true if Quil became visible/focused.
 unsafe fn open_quil_in_active_scene() -> bool {
+    // E1: duplicate guard — if Quil already visible in active scene, reject open.
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == QUIL_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                serial_println!("[quil.placeholder.reject.duplicate] frame={} scene={}", QUIL_FRAME_ID, ACTIVE_SCENE_IDX);
+                // Focus existing Quil instead.
+                if let Some(sid) = active_surface_for_frame(QUIL_FRAME_ID) {
+                    if try_set_focus(sid) {
+                        serial_println!("[quil.placeholder.focus] frame={} sid={}", QUIL_FRAME_ID, sid);
+                    }
+                }
+                return true;
+            }
+        }
+    }
+
     let fid = match ensure_quil_frame() {
         Some(f) => f,
         None => return false,
@@ -3402,6 +3423,7 @@ unsafe fn open_quil_in_active_scene() -> bool {
 
     if let Some(sid) = active_surface_for_frame(fid) {
         try_set_focus(sid);
+        serial_println!("[quil.placeholder.focus] frame={} sid={}", fid, sid);
     }
 
     // Ensure Quil placeholder fill rect is set on every open (covers the
@@ -3409,6 +3431,7 @@ unsafe fn open_quil_in_active_scene() -> bool {
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL, 0,
         (QUIL_PLACEHOLDER_COLOR as u64) << 32 | ((SURFACE_201_H as u64) << 16) | SURFACE_201_W as u64);
 
+    serial_println!("[quil.placeholder.open] frame={}", fid);
     snap_capture_layout();
     static mut QUIL_OPEN_BUDGET: u32 = 4;
     let b = &mut QUIL_OPEN_BUDGET;
