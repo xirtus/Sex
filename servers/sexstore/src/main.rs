@@ -41,6 +41,38 @@ const REPLY_STATUS_BIT: u64 = 0x8000_0000_0000_0000;
 
 const KV_SLOT_COUNT: usize = 16;
 
+// E13: Durable backend constants — dual-page atomic swap layout.
+#[allow(dead_code)]
+const DURABLE_PAGE_SIZE: usize = 512;
+const DURABLE_RECORD_COUNT: usize = 16;
+const DURABLE_PAGE_A_OFFSET: usize = 0;
+const DURABLE_PAGE_B_OFFSET: usize = 512;
+const DURABLE_PAGE_ID_MAGIC: u32 = 0x0000A5A5;
+const DURABLE_RECORD_MAGIC: u16 = 0xD5E5;
+const DURABLE_FORMAT_VERSION: u8 = 0x01;
+
+// Page header field offsets (within 512-byte page)
+const PH_OFF_PAGE_ID: usize = 0;   // 4 bytes: u32 magic
+const PH_OFF_SEQ: usize = 4;       // 4 bytes: u32 sequence number
+const PH_OFF_CRC32: usize = 8;     // 4 bytes: u32 CRC-32C of page (zeroed during compute)
+#[allow(dead_code)]
+const PH_OFF_RESERVED: usize = 12; // 4 bytes: zero
+const PH_SIZE: usize = 16;
+
+// Record field offsets (within 24-byte record, relative to record start)
+const REC_OFF_MAGIC: usize = 0;    // 2 bytes: u16 0xD5E5
+const REC_OFF_VERSION: usize = 2;  // 1 byte: u8 0x01
+const REC_OFF_FLAGS: usize = 3;    // 1 byte: bit0=active, bit1=tombstone
+const REC_OFF_SLOT_ID: usize = 4;  // 2 bytes: u16 slot index
+const REC_OFF_CRC16: usize = 6;    // 2 bytes: CRC-16-IBM of record
+const REC_OFF_STATE: usize = 8;    // 1 byte: 0=Empty, 1=Active, 2=Tombstoned
+const REC_OFF_GENERATION: usize = 9; // 1 byte: write count
+#[allow(dead_code)]
+const REC_OFF_PAD: usize = 10;     // 2 bytes: zero
+const REC_OFF_KEY: usize = 12;     // 4 bytes: u32 key
+const REC_OFF_VAL: usize = 16;     // 8 bytes: u64 value
+const REC_SIZE: usize = 24;
+
 #[derive(Clone, Copy)]
 struct KvSlot {
     state:      u8,   // 0=Empty, 1=Active, 2=Tombstoned
@@ -76,6 +108,17 @@ static mut LOG_GET_REJECT: u32 = 16;
 static mut LOG_DELETE_ALLOW: u32 = 16;
 static mut LOG_DELETE_REJECT: u32 = 8;
 
+// E13: durable proof marker budgets.
+static mut LOG_DURABLE_WRITE: u32 = 16;
+static mut LOG_DURABLE_WRITE_FAIL: u32 = 8;
+
+// E13: Durable backend storage — 1024-byte static region for two 512-byte pages.
+// V1 uses RAM-backed scaffold (not real persistent media). The dual-page atomic swap
+// logic is identical regardless of backing store; only page_read/page_write change.
+// When real persistent memory becomes available, replace the region address and
+// update page_read/page_write to use the new target.
+static mut DURABLE_REGION: [u8; 1024] = [0u8; 1024];
+
 // Reply to caller via kernel syscall 29 (SYSCALL_PDX_REPLY).
 // sex-pdx's pdx_reply() uses syscall 1 — unhandled in current kernel. Use 29 directly.
 // Kernel: rdi=target_pd, rsi=value → pushed to target's incoming_replies buffer.
@@ -108,6 +151,9 @@ unsafe fn bump_generation(slot: *mut KvSlot) {
 
 // E4: Key owner class and capability checking.
 // Silk-shell (domain 3) is the only authorized caller in E4.
+// NOTE: This value must match silk-shell's domain ID as assigned by
+// kernel/src/init.rs fixed spawn order (module_paths[2] = "silk-shell" → domain_id=3).
+// If spawn order or domain allocation changes, update this constant to match.
 const KV_SHELL_CALLER: u64 = 3;
 
 /// Return the owner class for a key.
@@ -141,8 +187,314 @@ fn store_validate_value(key: u32, value: u64) -> bool {
     true
 }
 
+// ── E13: CRC helpers (no_std, no lookup tables) ──────────────────────────────
+
+/// CRC-32C (Castagnoli) bit-by-bit. Polynomial 0x1EDC6F41, reversed 0x82F63B78.
+fn crc32c(buf: &[u8]) -> u32 {
+    let mut crc = 0xFFFFFFFFu32;
+    for &b in buf {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0x82F63B78 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
+/// CRC-16-IBM bit-by-bit. Polynomial 0x8005, initial 0x0000, no XOR out.
+fn crc16_ibm(buf: &[u8]) -> u16 {
+    let mut crc = 0x0000u16;
+    for &b in buf {
+        crc ^= (b as u16) << 8;
+        for _ in 0..8 {
+            crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x8005 } else { crc << 1 };
+        }
+    }
+    crc
+}
+
+// ── E13: Page I/O abstraction (RAM-backed scaffold for V1) ───────────────────
+
+/// Read a 512-byte page from the durable region at the given offset.
+fn durable_page_read(page_offset: usize, buf: &mut [u8; 512]) {
+    unsafe {
+        let src = core::ptr::addr_of!(DURABLE_REGION) as *const u8;
+        core::ptr::copy_nonoverlapping(src.add(page_offset), buf.as_mut_ptr(), 512);
+    }
+}
+
+/// Write a 512-byte page to the durable region at the given offset, then
+/// verify by readback comparison. Returns true if verify passes.
+fn durable_page_write(page_offset: usize, buf: &[u8; 512]) -> bool {
+    unsafe {
+        let dst = core::ptr::addr_of_mut!(DURABLE_REGION) as *mut u8;
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), dst.add(page_offset), 512);
+    }
+    // Verify-after-write: read back and compare.
+    let mut readback = [0u8; 512];
+    durable_page_read(page_offset, &mut readback);
+    // For RAM-backed scaffold this is always true; structure preserved for
+    // hardware port where readback may differ from write (cache, media).
+    readback.iter().zip(buf.iter()).all(|(a, b)| a == b)
+}
+
+// ── E13: Page validation ─────────────────────────────────────────────────────
+
+/// Validate a page: check page_id magic and CRC-32C.
+fn durable_validate_page(page: &[u8; 512]) -> bool {
+    let page_id = u32::from_le_bytes([page[0], page[1], page[2], page[3]]);
+    if page_id != DURABLE_PAGE_ID_MAGIC {
+        return false;
+    }
+    let stored_crc = u32::from_le_bytes([page[8], page[9], page[10], page[11]]);
+    // Compute CRC with the crc32 field zeroed.
+    let mut clean = *page;
+    clean[PH_OFF_CRC32..PH_OFF_CRC32 + 4].copy_from_slice(&[0u8; 4]);
+    stored_crc == crc32c(&clean)
+}
+
+/// Return the sequence number of a validated page, or 0 if invalid.
+fn durable_page_seq(page: &[u8; 512]) -> u32 {
+    if durable_validate_page(page) {
+        u32::from_le_bytes([page[4], page[5], page[6], page[7]])
+    } else {
+        0
+    }
+}
+
+// ── E13: Page building from RAM slots ───────────────────────────────────────
+
+/// Build a full 512-byte page snapshot from the 16-slot RAM table.
+fn durable_build_page(slots: &[KvSlot; 16], seq: u32) -> [u8; 512] {
+    let mut page = [0u8; 512];
+
+    // Header: page_id + seq (crc32 left zero for now)
+    page[PH_OFF_PAGE_ID..PH_OFF_PAGE_ID + 4].copy_from_slice(&DURABLE_PAGE_ID_MAGIC.to_le_bytes());
+    page[PH_OFF_SEQ..PH_OFF_SEQ + 4].copy_from_slice(&seq.to_le_bytes());
+    // PH_OFF_CRC32 stays zero during computation.
+
+    // Records
+    for i in 0..DURABLE_RECORD_COUNT {
+        let off = PH_SIZE + i * REC_SIZE;
+        let slot = &slots[i];
+
+        // Record magic + version
+        page[off + REC_OFF_MAGIC..off + REC_OFF_MAGIC + 2].copy_from_slice(&DURABLE_RECORD_MAGIC.to_le_bytes());
+        page[off + REC_OFF_VERSION] = DURABLE_FORMAT_VERSION;
+
+        // Flags: bit0 = active data, bit1 = tombstone
+        let flags: u8 = if slot.state == 1 { 0x01 } else if slot.state == 2 { 0x02 } else { 0x00 };
+        page[off + REC_OFF_FLAGS] = flags;
+
+        // Slot ID (cross-check)
+        page[off + REC_OFF_SLOT_ID..off + REC_OFF_SLOT_ID + 2].copy_from_slice(&(i as u16).to_le_bytes());
+
+        // crc16 left zeroed — computed after all other fields are set.
+
+        // State, generation (pad already zero)
+        page[off + REC_OFF_STATE] = slot.state;
+        page[off + REC_OFF_GENERATION] = slot.generation;
+
+        // Key, value
+        page[off + REC_OFF_KEY..off + REC_OFF_KEY + 4].copy_from_slice(&slot.key.to_le_bytes());
+        page[off + REC_OFF_VAL..off + REC_OFF_VAL + 8].copy_from_slice(&slot.val.to_le_bytes());
+
+        // Compute record CRC-16 (with crc16 field zeroed at offset REC_OFF_CRC16).
+        let rec_crc = crc16_ibm(&page[off..off + REC_SIZE]);
+        page[off + REC_OFF_CRC16..off + REC_OFF_CRC16 + 2].copy_from_slice(&rec_crc.to_le_bytes());
+    }
+
+    // Compute page CRC-32C (with crc32 field still zeroed).
+    let page_crc = crc32c(&page);
+    page[PH_OFF_CRC32..PH_OFF_CRC32 + 4].copy_from_slice(&page_crc.to_le_bytes());
+
+    page
+}
+
+// ── E13: Durable write (after RAM commit) ────────────────────────────────────
+
+/// Write a full page snapshot to the inactive durable page.
+/// Returns true on successful write+verify, false on failure (RAM unchanged).
+/// Called after RAM commit in PUT/DEL handlers.
+unsafe fn durable_write_all(slots: &[KvSlot; 16]) -> bool {
+    // Read current pages to determine active state.
+    let mut page_a = [0u8; 512];
+    let mut page_b = [0u8; 512];
+    durable_page_read(DURABLE_PAGE_A_OFFSET, &mut page_a);
+    durable_page_read(DURABLE_PAGE_B_OFFSET, &mut page_b);
+
+    let seq_a = durable_page_seq(&page_a);
+    let seq_b = durable_page_seq(&page_b);
+
+    // Target is the page with lower seq (inactive). If tied, target page B.
+    let target_offset = if seq_a >= seq_b { DURABLE_PAGE_B_OFFSET } else { DURABLE_PAGE_A_OFFSET };
+    let next_seq = if seq_a > seq_b { seq_a + 1 } else { seq_b + 1 };
+    // Wrap: u32::MAX → 1 (0 reserved for uninitialized)
+    let next_seq = if next_seq == 0 { 1 } else { next_seq };
+
+    let snapshot = durable_build_page(slots, next_seq);
+
+    if durable_page_write(target_offset, &snapshot) {
+        if LOG_DURABLE_WRITE > 0 {
+            LOG_DURABLE_WRITE -= 1;
+            // Log the first slot's key as representative (all slots are written).
+            let first_key = slots[0].key;
+            serial_println!("[sexstore.durable.write] key={} seq={} page={}", first_key, next_seq,
+                if target_offset == DURABLE_PAGE_A_OFFSET { "A" } else { "B" });
+        }
+        true
+    } else {
+        if LOG_DURABLE_WRITE_FAIL > 0 {
+            LOG_DURABLE_WRITE_FAIL -= 1;
+            serial_println!("[sexstore.durable.write.fail] reason=verify_fail");
+        }
+        false
+    }
+}
+
+// ── E13: Boot load — hydrate RAM from durable pages ──────────────────────────
+
+/// Load authoritative durable page into the RAM slot table.
+/// Returns (total_records, valid_records, corrupt_records) stats.
+/// Slots with corrupt records are left at their default (Empty, gen=0).
+unsafe fn durable_load_into_ram(slots: &mut [KvSlot; 16]) -> (u32, u32, u32) {
+    let mut page_a = [0u8; 512];
+    let mut page_b = [0u8; 512];
+    durable_page_read(DURABLE_PAGE_A_OFFSET, &mut page_a);
+    durable_page_read(DURABLE_PAGE_B_OFFSET, &mut page_b);
+
+    let seq_a = durable_page_seq(&page_a);
+    let seq_b = durable_page_seq(&page_b);
+
+    // Select authoritative page (higher seq). Tie-break: page A.
+    let (authoritative, auth_seq) = if seq_a >= seq_b { (&page_a, seq_a) } else { (&page_b, seq_b) };
+
+    if auth_seq == 0 {
+        // No valid durable data — all slots stay at defaults.
+        return (0, 0, 0);
+    }
+
+    let mut total: u32 = 0;
+    let mut valid: u32 = 0;
+    let mut corrupt: u32 = 0;
+
+    for i in 0..DURABLE_RECORD_COUNT {
+        let off = PH_SIZE + i * REC_SIZE;
+        total += 1;
+
+        // Validate record magic + version.
+        let magic = u16::from_le_bytes([authoritative[off + REC_OFF_MAGIC], authoritative[off + REC_OFF_MAGIC + 1]]);
+        if magic != DURABLE_RECORD_MAGIC {
+            corrupt += 1;
+            continue;
+        }
+        if authoritative[off + REC_OFF_VERSION] != DURABLE_FORMAT_VERSION {
+            corrupt += 1;
+            continue;
+        }
+
+        // Validate slot_id matches expected index.
+        let slot_id = u16::from_le_bytes([authoritative[off + REC_OFF_SLOT_ID], authoritative[off + REC_OFF_SLOT_ID + 1]]);
+        if slot_id as usize != i {
+            corrupt += 1;
+            continue;
+        }
+
+        // Validate record CRC-16 (with crc16 field zeroed during computation).
+        let stored_rec_crc = u16::from_le_bytes([authoritative[off + REC_OFF_CRC16], authoritative[off + REC_OFF_CRC16 + 1]]);
+        let mut rec_buf = [0u8; REC_SIZE];
+        rec_buf.copy_from_slice(&authoritative[off..off + REC_SIZE]);
+        // Zero the crc16 field for computation.
+        rec_buf[REC_OFF_CRC16..REC_OFF_CRC16 + 2].copy_from_slice(&[0u8; 2]);
+        let computed_rec_crc = crc16_ibm(&rec_buf);
+        if computed_rec_crc != stored_rec_crc {
+            corrupt += 1;
+            continue;
+        }
+
+        // Validate state field.
+        let state = authoritative[off + REC_OFF_STATE];
+        if state > 2 {
+            corrupt += 1;
+            continue;
+        }
+
+        // Record is valid — populate RAM slot.
+        let key = u32::from_le_bytes([
+            authoritative[off + REC_OFF_KEY],
+            authoritative[off + REC_OFF_KEY + 1],
+            authoritative[off + REC_OFF_KEY + 2],
+            authoritative[off + REC_OFF_KEY + 3],
+        ]);
+        let val = u64::from_le_bytes([
+            authoritative[off + REC_OFF_VAL],
+            authoritative[off + REC_OFF_VAL + 1],
+            authoritative[off + REC_OFF_VAL + 2],
+            authoritative[off + REC_OFF_VAL + 3],
+            authoritative[off + REC_OFF_VAL + 4],
+            authoritative[off + REC_OFF_VAL + 5],
+            authoritative[off + REC_OFF_VAL + 6],
+            authoritative[off + REC_OFF_VAL + 7],
+        ]);
+        slots[i].state = state;
+        slots[i].generation = authoritative[off + REC_OFF_GENERATION];
+        slots[i].key = key;
+        slots[i].val = val;
+        valid += 1;
+    }
+
+    // Emit boot load proof marker.
+    serial_println!("[sexstore.durable.load] seq={} records={} valid={} corrupt={}", auth_seq, total, valid, corrupt);
+    if total > 0 && valid == 0 {
+        serial_println!("[sexstore.durable.all_corrupt] reason=all_records_invalid");
+    }
+
+    (total, valid, corrupt)
+}
+
+// ── E13: Durable initialization (first boot) ─────────────────────────────────
+
+/// Initialize the durable backend on first boot (both pages invalid).
+/// Writes current RAM state as page A with seq=1.
+/// Returns true if initialization was performed (first boot), false if durable
+/// was already valid (subsequent boot).
+unsafe fn durable_init(slots: &[KvSlot; 16]) -> bool {
+    let mut page_a = [0u8; 512];
+    let mut page_b = [0u8; 512];
+    durable_page_read(DURABLE_PAGE_A_OFFSET, &mut page_a);
+    durable_page_read(DURABLE_PAGE_B_OFFSET, &mut page_b);
+
+    let seq_a = durable_page_seq(&page_a);
+    let seq_b = durable_page_seq(&page_b);
+
+    if seq_a == 0 && seq_b == 0 {
+        // First boot — both pages uninitialized. Write page A with seq=1.
+        let snapshot = durable_build_page(slots, 1);
+        let ok = durable_page_write(DURABLE_PAGE_A_OFFSET, &snapshot);
+        serial_println!("[sexstore.durable.load] seq=1 records=16 valid=16 corrupt=0 init={}", if ok { "ok" } else { "fail" });
+        true
+    } else {
+        false // Durable already valid — no init needed.
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    // E13: Initialize durable backend and load persisted state into RAM.
+    // RAM defaults first (compile-time zeroed KV table), then durable overwrites.
+    unsafe {
+        let kv_ptr: *mut KvSlot = core::ptr::addr_of_mut!(KV) as *mut KvSlot;
+        let slots: &mut [KvSlot; 16] = &mut *(kv_ptr as *mut [KvSlot; 16]);
+
+        // durable_init() writes initial page A with seq=1 on first boot.
+        // On subsequent boots, it's a no-op (both pages already valid).
+        durable_init(slots);
+
+        // durable_load_into_ram() loads the authoritative page into RAM,
+        // overwriting default slots with persisted data.
+        durable_load_into_ram(slots);
+    }
+
     // E6: emit status mapping marker once at boot.
     serial_println!("[sexstore.status.mapping] KV_OK=0x00 KV_NOT_FOUND=0x01 KV_FULL=0x02 KV_INVALID_KEY=0x03 KV_INVALID_VALUE=0x04 KV_DENIED=0x05 REPLY_BIT=0x8000");
 
@@ -248,6 +600,9 @@ pub extern "C" fn _start() -> ! {
                             LOG_PUT_ALLOW -= 1;
                             serial_println!("[sexstore.put.allow] caller={} key={} status=ok state={} gen={}", caller, key, (*slot).state, (*slot).generation);
                         }
+                        // E13: durable write after RAM commit.
+                        let kv_ref: &[KvSlot; 16] = &*(core::ptr::addr_of!(KV) as *const [KvSlot; 16]);
+                        durable_write_all(kv_ref);
                         kv_reply_status(caller, KV_OK);
                     } else {
                         // Pass 2: find empty slot or reclaim tombstoned slot.
@@ -266,6 +621,9 @@ pub extern "C" fn _start() -> ! {
                                     LOG_GENERATION_BUMP -= 1;
                                     serial_println!("[sexstore.generation.bump] key={} slot={} gen=1 op=insert", key, i);
                                 }
+                                // E13: durable write after insert.
+                                let kv_ref: &[KvSlot; 16] = &*(core::ptr::addr_of!(KV) as *const [KvSlot; 16]);
+                                durable_write_all(kv_ref);
                                 break;
                             }
                             i += 1;
@@ -279,17 +637,23 @@ pub extern "C" fn _start() -> ! {
                                     (*slot).state = 1;
                                     (*slot).key = key;
                                     (*slot).val = val;
-                                    bump_generation(slot);
+                                    // Reset generation to 1 for new key lifecycle (different from old key).
+                                    // E10: generation is per-slot but semantically per-key on reclaim.
+                                    (*slot).generation = 1;
                                     inserted = true;
                                     if LOG_GENERATION_BUMP > 0 {
                                         LOG_GENERATION_BUMP -= 1;
-                                        serial_println!("[sexstore.generation.bump] key={} slot={} gen={} op=reclaim", key, i, (*slot).generation);
+                                        serial_println!("[sexstore.generation.bump] key={} slot={} gen=1 op=reclaim", key, i);
                                     }
+                                    // E13: durable write after reclaim.
+                                    let kv_ref: &[KvSlot; 16] = &*(core::ptr::addr_of!(KV) as *const [KvSlot; 16]);
+                                    durable_write_all(kv_ref);
                                     break;
                                 }
                                 i += 1;
                             }
                         }
+                        // No durable write for full path — RAM unchanged.
                         if !inserted { full = true; }
                         let status = if full { KV_FULL } else { KV_OK };
                         if !full {
@@ -482,6 +846,9 @@ pub extern "C" fn _start() -> ! {
                                 LOG_DELETE_ALLOW -= 1;
                                 serial_println!("[sexstore.delete.allow] caller={} key={} status=ok state=2 gen={} reason=delete", caller, key, (*slot).generation);
                             }
+                            // E13: durable write after tombstone.
+                            let kv_ref: &[KvSlot; 16] = &*(core::ptr::addr_of!(KV) as *const [KvSlot; 16]);
+                            durable_write_all(kv_ref);
                             kv_reply_status(caller, KV_OK);
                         }
                         2 => {
@@ -494,6 +861,9 @@ pub extern "C" fn _start() -> ! {
                                 LOG_DELETE_ALLOW -= 1;
                                 serial_println!("[sexstore.delete.allow] caller={} key={} status=ok reason=idempotent", caller, key);
                             }
+                            // E13: durable write after idempotent delete (tombstone state already persisted).
+                            let kv_ref: &[KvSlot; 16] = &*(core::ptr::addr_of!(KV) as *const [KvSlot; 16]);
+                            durable_write_all(kv_ref);
                             kv_reply_status(caller, KV_OK);
                         }
                         _ => {
