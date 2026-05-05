@@ -62,6 +62,7 @@ pub const SURFACE_ID_LINEN: u64 = 200;
 pub const SURFACE_ID_QUIL: u64 = 201;
 pub const SURFACE_ID_MESH: u64 = 202;
 pub const SURFACE_ID_COLLAR: u64 = 203;
+pub const SURFACE_ID_BELL_PLACEHOLDER: u64 = 204;
 pub const SURFACE_ID_CURSOR: u64 = 0x90; // 144 — OS-owned cursor, no collision with app IDs
 pub const SURFACE_ID_LAUNCHER: u64 = 0x92; // 146 — launcher panel surface, toggled by launcher button
 pub const SURFACE_ID_STATUS: u64 = 0x93; // 147 — status panel surface, toggled by status chip click
@@ -80,6 +81,7 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 //   201   quil (editor stub)
 //   202   mesh (diagnostic graph placeholder)
 //   203   collar (authority placeholder)
+//   204   bell placeholder (attention firewall)
 pub const SURFACE_ID_SCENE_SETTINGS: u64 = 0x96;
 pub const SURFACE_ID_ATLAS_OVERLAY: u64 = 0x97; // 151 — Atlas overview surface, toggled by F10
 /// 0xEE — deactivate surface on sexdisplay (active=false).
@@ -108,7 +110,7 @@ struct AppSurfaceSpec {
 }
 
 /// Known OS-managed app surfaces. Validated at boot for duplicates.
-const APP_SURFACES: [AppSurfaceSpec; 4] = [
+const APP_SURFACES: [AppSurfaceSpec; 5] = [
     AppSurfaceSpec {
         surface_id: SURFACE_ID_LINEN,
         frame_id: LINEN_FRAME_ID,
@@ -150,6 +152,17 @@ const APP_SURFACES: [AppSurfaceSpec; 4] = [
         boot_y: COLLAR_BOOT_Y,
         boot_w: COLLAR_BOOT_W,
         boot_h: COLLAR_BOOT_H,
+        closeable: false,
+        focusable: true,
+    },
+    AppSurfaceSpec {
+        surface_id: SURFACE_ID_BELL_PLACEHOLDER,
+        frame_id: BELL_FRAME_ID,
+        name: "bell",
+        boot_x: BELL_BOOT_X,
+        boot_y: BELL_BOOT_Y,
+        boot_w: BELL_BOOT_W,
+        boot_h: BELL_BOOT_H,
         closeable: false,
         focusable: true,
     },
@@ -689,6 +702,7 @@ enum SurfaceAction {
     ToggleQuil,        // F9 — open/focus/toggle Quil surface
     ToggleMesh,        // F12 — open/focus/toggle Mesh placeholder
     ToggleCollar,      // Insert — open/focus/toggle Collar placeholder
+    ToggleBell,        // PageDown — open/focus/toggle Bell placeholder
     ToggleAtlas,       // F10 — toggle Atlas overview mode
     ToggleSceneSettingsPanel,
     CycleRenderTokenPreset,
@@ -802,6 +816,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x57 => Some(SurfaceAction::AccessClose),    // F11
         0x58 => Some(SurfaceAction::ToggleMesh),    // F12
         0x52 => Some(SurfaceAction::ToggleCollar), // Insert
+        0x51 => Some(SurfaceAction::ToggleBell),   // PageDown
         0x47 => Some(SurfaceAction::SnapHome),
         0x4F => Some(SurfaceAction::SnapEnd),
         0x4B => Some(SurfaceAction::MoveLeft),
@@ -965,6 +980,10 @@ unsafe fn tile_visible_frames() {
                 SURFACE_203_X = rx; SURFACE_203_Y = ry;
                 SURFACE_203_W = rw; SURFACE_203_H = rh;
             }
+            SURFACE_ID_BELL_PLACEHOLDER => {
+                SURFACE_204_X = rx; SURFACE_204_Y = ry;
+                SURFACE_204_W = rw; SURFACE_204_H = rh;
+            }
             _ => {}
         }
         pdx_call(SLOT_DISPLAY, 0xEC, sid,
@@ -993,6 +1012,14 @@ unsafe fn tile_visible_frames() {
             static mut COLLAR_PLACEHOLDER_BUDGET: u32 = 8;
             let b = &mut COLLAR_PLACEHOLDER_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[shell.collar.tile.placeholder] sid={}", sid); }
+        }
+        // Bell visual placeholder: attention/notification fill rect.
+        if sid == SURFACE_ID_BELL_PLACEHOLDER {
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_BELL_PLACEHOLDER, 0,
+                (BELL_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
+            static mut BELL_PLACEHOLDER_BUDGET: u32 = 8;
+            let b = &mut BELL_PLACEHOLDER_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.bell.tile.placeholder] sid={}", sid); }
         }
     }
     static mut TILE_BUDGET: u32 = 8;
@@ -1144,6 +1171,10 @@ unsafe fn tile_active_scene_frames() {
                 SURFACE_203_X = rx; SURFACE_203_Y = ry;
                 SURFACE_203_W = rw; SURFACE_203_H = rh;
             }
+            SURFACE_ID_BELL_PLACEHOLDER => {
+                SURFACE_204_X = rx; SURFACE_204_Y = ry;
+                SURFACE_204_W = rw; SURFACE_204_H = rh;
+            }
             _ => {}
         }
 
@@ -1202,7 +1233,7 @@ struct WindowState {
 /// Maximum tabs per frame (overkill for 4 app surfaces, allows future Chrome tabs).
 const MAX_TABS_PER_FRAME: u8 = 8;
 /// Maximum concurrent frames (overkill for current app count, allows future splits).
-const MAX_FRAMES: usize = 6;
+const MAX_FRAMES: usize = 7;
 
 /// A tab wraps an existing surface_id with shell-level metadata.
 /// The surface remains the app/display object; the tab is shell policy only.
@@ -1953,7 +1984,7 @@ unsafe fn access_describe_focus() {
 /// Maximum scenes tracked by Atlas (equals WORKSPACE_COUNT).
 const ATLAS_MAX_SCENES: usize = 5;
 /// Maximum frames tracked per scene descriptor (equals MAX_FRAMES).
-const ATLAS_MAX_FRAMES_PER_SCENE: usize = 6;
+const ATLAS_MAX_FRAMES_PER_SCENE: usize = 7;
 /// Length of fixed-size scene label byte array (no heap strings).
 const ATLAS_LABEL_LEN: usize = 16;
 
@@ -2198,6 +2229,11 @@ static mut SURFACE_203_X: i32 = 300;
 static mut SURFACE_203_Y: i32 = 100;
 static mut SURFACE_203_W: u32 = 640;
 static mut SURFACE_203_H: u32 = 480;
+// Bell placeholder surface 204 position tracking
+static mut SURFACE_204_X: i32 = 400;
+static mut SURFACE_204_Y: i32 = 100;
+static mut SURFACE_204_W: u32 = 640;
+static mut SURFACE_204_H: u32 = 480;
 
 fn clamp_surface_size(x: i32, y: i32, w: u32, h: u32) -> (u32, u32) {
     let max_w = (P.width - x).max(P.min_width as i32) as u32;
@@ -2255,6 +2291,8 @@ fn emit_snapshot() {
         pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_MESH, SURFACE_202_X as u64, SURFACE_202_Y as u64);
         // Collar surface 203 position update
         pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_COLLAR, SURFACE_203_X as u64, SURFACE_203_Y as u64);
+        // Bell placeholder surface 204 position update
+        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_BELL_PLACEHOLDER, SURFACE_204_X as u64, SURFACE_204_Y as u64);
     }
 }
 
@@ -2272,6 +2310,7 @@ unsafe fn get_surface_bounds(sid: u64) -> Option<(i32, i32, u32, u32)> {
         SURFACE_ID_QUIL   => Some((SURFACE_201_X, SURFACE_201_Y, SURFACE_201_W, SURFACE_201_H)),
         SURFACE_ID_MESH   => Some((SURFACE_202_X, SURFACE_202_Y, SURFACE_202_W, SURFACE_202_H)),
         SURFACE_ID_COLLAR => Some((SURFACE_203_X, SURFACE_203_Y, SURFACE_203_W, SURFACE_203_H)),
+        SURFACE_ID_BELL_PLACEHOLDER => Some((SURFACE_204_X, SURFACE_204_Y, SURFACE_204_W, SURFACE_204_H)),
         _ => None,
     }
 }
@@ -2296,6 +2335,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             SURFACE_ID_QUIL   => (SURFACE_201_X, SURFACE_201_Y, SURFACE_201_W, SURFACE_201_H),
             SURFACE_ID_MESH   => (SURFACE_202_X, SURFACE_202_Y, SURFACE_202_W, SURFACE_202_H),
             SURFACE_ID_COLLAR => (SURFACE_203_X, SURFACE_203_Y, SURFACE_203_W, SURFACE_203_H),
+            SURFACE_ID_BELL_PLACEHOLDER => (SURFACE_204_X, SURFACE_204_Y, SURFACE_204_W, SURFACE_204_H),
             // OS-owned surfaces: cursor and panels are known but non-focusable —
             // log nonfocusable.reject, not unknown.reject.
             SURFACE_ID_CURSOR
@@ -2326,6 +2366,7 @@ fn surface_is_alive(sid: u64) -> bool {
         SURFACE_ID_QUIL     => true,  // quil never destroys its surface
         SURFACE_ID_MESH     => true,  // mesh never destroys its surface
         SURFACE_ID_COLLAR   => true,  // collar never destroys its surface
+        SURFACE_ID_BELL_PLACEHOLDER => true,  // bell placeholder never destroys its surface
         SURFACE_ID_CURSOR   => true,  // cursor never destroyed
         SURFACE_ID_LAUNCHER => unsafe { LAUNCHER_ACTIVE },
         SURFACE_ID_STATUS   => unsafe { STATUS_ACTIVE },
@@ -2400,7 +2441,7 @@ unsafe fn clear_focus_if_dead() {
             serial_println!("[focus.ref.clear] id={} reason=not_focusable lifecycle={:?}",
                 focused, lifecycle_state(focused));
         }
-        let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_COLLAR, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
+        let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_COLLAR, SURFACE_ID_BELL_PLACEHOLDER, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                        SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
         let mut found = false;
         for &sid in &z_order {
@@ -2634,6 +2675,7 @@ unsafe fn lifecycle_init_all() {
     lifecycle_register(SURFACE_ID_QUIL, LifecycleState::Visible);
     lifecycle_register(SURFACE_ID_MESH, LifecycleState::Visible);
     lifecycle_register(SURFACE_ID_COLLAR, LifecycleState::Visible);
+    lifecycle_register(SURFACE_ID_BELL_PLACEHOLDER, LifecycleState::Visible);
     // Cursor — always present, no frame.
     lifecycle_register(SURFACE_ID_CURSOR, LifecycleState::Mapped);
     // Panel surfaces — start Allocated (inactive, toggled on demand).
@@ -2681,7 +2723,7 @@ unsafe fn surface_in_active_scene(sid: u64) -> bool {
     // Panels (0x90-0x96) and cursor are always visible regardless of scene.
     // Frame-owned surfaces (Linen, Quil) are NOT visible without a frame.
     if sid == SURFACE_ID_LINEN || sid == SURFACE_ID_QUIL || sid == SURFACE_ID_MESH
-        || sid == SURFACE_ID_COLLAR {
+        || sid == SURFACE_ID_COLLAR || sid == SURFACE_ID_BELL_PLACEHOLDER {
         return false;
     }
     true // panels/cursor always visible
@@ -4525,6 +4567,195 @@ unsafe fn mesh_frame_id() -> Option<u32> {
     None
 }
 
+// ── Bell Placeholder Surface Control Helpers ──────────────────────────────
+// Bell = attention firewall placeholder.
+// Mirrors Linen/Quil/Mesh/Collar placeholder pattern. No real notifications yet.
+
+/// Frame ID reserved for Bell's ShellFrame.
+const BELL_FRAME_ID: u32 = 6;
+/// Boot geometry for Bell when first opened.
+const BELL_BOOT_X: i32 = 400;
+const BELL_BOOT_Y: i32 = 100;
+const BELL_BOOT_W: u32 = 640;
+const BELL_BOOT_H: u32 = 480;
+
+/// Fill color for the Bell visual placeholder surface (attention red-orange).
+const BELL_PLACEHOLDER_COLOR: u32 = 0x00402020;
+
+/// Ensure a ShellFrame exists for Bell in an empty FRAMES slot, assigned to
+/// the active scene. Returns the frame_id if created/found, or 0 if no slot.
+unsafe fn ensure_bell_frame() -> Option<u32> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == BELL_FRAME_ID {
+                return Some(BELL_FRAME_ID);
+            }
+        }
+    }
+    for (slot_idx, slot) in FRAMES.iter_mut().enumerate() {
+        if slot.is_none() {
+            *slot = Some(ShellFrame {
+                frame_id: BELL_FRAME_ID,
+                active_tab: 0,
+                tab_count: 1,
+                tabs: {
+                    let mut t: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                        [None; MAX_TABS_PER_FRAME as usize];
+                    t[0] = Some(ShellTab {
+                        surface_id: SURFACE_ID_BELL_PLACEHOLDER,
+                        title_id: 0,
+                        flags: 0,
+                    });
+                    t
+                },
+                scene_id: ACTIVE_SCENE_IDX,
+                flags: FRAME_FLAG_TOP_BAR,
+                normal_x: BELL_BOOT_X,
+                normal_y: BELL_BOOT_Y,
+                normal_w: BELL_BOOT_W,
+                normal_h: BELL_BOOT_H,
+            });
+            serial_println!("[bell.placeholder.attach.frame] frame={} scene={} slot={}", BELL_FRAME_ID, ACTIVE_SCENE_IDX, slot_idx);
+            serial_println!("[bell.placeholder.attach.tab] frame={} tab=0 surface={}", BELL_FRAME_ID, SURFACE_ID_BELL_PLACEHOLDER);
+            static mut BELL_CREATE_BUDGET: u32 = 4;
+            let b = &mut BELL_CREATE_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.bell.frame.create] frame={} slot={}", BELL_FRAME_ID, slot_idx); }
+            return Some(BELL_FRAME_ID);
+        }
+    }
+    static mut BELL_NOSLOT_BUDGET: u32 = 4;
+    let b = &mut BELL_NOSLOT_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.bell.frame.reject] reason=no_slot"); }
+    None
+}
+
+/// Open Bell in the active scene: ensure frame exists, un-minimize, position,
+/// focus, and tile. If Bell is already visible in the active scene, focuses it.
+unsafe fn open_bell_in_active_scene() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == BELL_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                serial_println!("[bell.placeholder.reject.duplicate] frame={} scene={}", BELL_FRAME_ID, ACTIVE_SCENE_IDX);
+                if let Some(sid) = active_surface_for_frame(BELL_FRAME_ID) {
+                    if try_set_focus(sid) {
+                        serial_println!("[bell.placeholder.focus] frame={} sid={}", BELL_FRAME_ID, sid);
+                    }
+                }
+                return true;
+            }
+        }
+    }
+
+    let fid = match ensure_bell_frame() {
+        Some(f) => f,
+        None => return false,
+    };
+
+    for f in FRAMES.iter_mut() {
+        if let Some(frame) = f {
+            if frame.frame_id == fid {
+                frame.scene_id = ACTIVE_SCENE_IDX;
+                break;
+            }
+        }
+    }
+
+    if frame_is_minimized(fid) {
+        if !restore_minimized_frame(fid) {
+            return false;
+        }
+        static mut BELL_RESTORE_BUDGET: u32 = 8;
+        let b = &mut BELL_RESTORE_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.bell.lifecycle.restore] frame={}", fid); }
+    } else if frame_is_zoomed(fid) {
+    } else {
+        let sid = match active_surface_for_frame(fid) {
+            Some(s) => s,
+            None => return false,
+        };
+        if surface_is_alive(sid) {
+            pdx_call(SLOT_DISPLAY, 0xEC, sid,
+                (BELL_BOOT_Y as u64) << 32 | BELL_BOOT_X as u64,
+                (BELL_BOOT_H as u64) << 32 | BELL_BOOT_W as u64);
+        }
+        tile_active_scene_frames();
+        try_set_focus(sid);
+    }
+
+    if let Some(sid) = active_surface_for_frame(fid) {
+        try_set_focus(sid);
+        serial_println!("[bell.placeholder.focus] frame={} sid={}", fid, sid);
+    }
+
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_BELL_PLACEHOLDER, 0,
+        (BELL_PLACEHOLDER_COLOR as u64) << 32 | ((SURFACE_204_H as u64) << 16) | SURFACE_204_W as u64);
+
+    serial_println!("[bell.placeholder.open] frame={}", fid);
+    snap_capture_layout();
+    static mut BELL_OPEN_BUDGET: u32 = 4;
+    let b = &mut BELL_OPEN_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.bell.open] frame={}", fid); }
+    true
+}
+
+/// Focus Bell if it is already open. If not, open it.
+unsafe fn focus_or_open_bell() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == BELL_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                if let Some(sid) = active_surface_for_frame(BELL_FRAME_ID) {
+                    if try_set_focus(sid) {
+                        static mut BELL_FOCUS_BUDGET: u32 = 4;
+                        let b = &mut BELL_FOCUS_BUDGET;
+                        if *b > 0 { *b -= 1; serial_println!("[shell.bell.focus] frame={}", BELL_FRAME_ID); }
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    open_bell_in_active_scene()
+}
+
+/// Toggle Bell visibility. Minimize if visible, open if not.
+unsafe fn toggle_bell() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == BELL_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                if minimize_frame(BELL_FRAME_ID) {
+                    static mut BELL_TOGGLE_BUDGET: u32 = 4;
+                    let b = &mut BELL_TOGGLE_BUDGET;
+                    if *b > 0 { *b -= 1; serial_println!("[shell.bell.lifecycle.minimize] frame={}", BELL_FRAME_ID); }
+                    return true;
+                }
+                return false;
+            }
+        }
+    }
+    open_bell_in_active_scene()
+}
+
+/// Return Bell's frame_id, if its frame exists.
+unsafe fn bell_frame_id() -> Option<u32> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == BELL_FRAME_ID {
+                return Some(BELL_FRAME_ID);
+            }
+        }
+    }
+    None
+}
+
 // ── Frame Chrome Query Helpers ─────────────────────────────────────────────────
 // These are shell-policy queries that map between surface_id (display/input
 // object) and the Frame/Tab model (window management abstraction).
@@ -4992,6 +5223,10 @@ unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32)
         SURFACE_ID_COLLAR => {
             SURFACE_203_X = x; SURFACE_203_Y = y;
             SURFACE_203_W = w; SURFACE_203_H = h;
+        }
+        SURFACE_ID_BELL_PLACEHOLDER => {
+            SURFACE_204_X = x; SURFACE_204_Y = y;
+            SURFACE_204_W = w; SURFACE_204_H = h;
         }
         _ => {}
     }
@@ -5671,6 +5906,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         if sid == SURFACE_ID_QUIL { label_str = "Quil"; role_str = "AppPlaceholder"; }
         else if sid == SURFACE_ID_MESH { label_str = "Mesh"; role_str = "AppPlaceholder"; }
         else if sid == SURFACE_ID_COLLAR { label_str = "Collar"; role_str = "AppPlaceholder"; }
+        else if sid == SURFACE_ID_BELL_PLACEHOLDER { label_str = "Bell"; role_str = "AppPlaceholder"; }
         else if sid == SURFACE_ID_LINEN { label_str = "Linen"; role_str = "AppPlaceholder"; }
         else if sid == SURFACE_ID_APP { label_str = "App"; role_str = "Frame"; }
         else if sid == SURFACE_ID_STATIC { label_str = "Test2"; role_str = "Frame"; }
@@ -5880,7 +6116,7 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
             return HitTarget::Surface(focused);
         }
     }
-    let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_COLLAR, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
+    let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_COLLAR, SURFACE_ID_BELL_PLACEHOLDER, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                    SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
     for &sid in &z_order {
         if sid == focused { continue; }
@@ -7134,6 +7370,13 @@ pub extern "C" fn _start() -> ! {
                                         if toggle_collar() {
                                             mutated = true;
                                             serial_println!("[shell.action.collar] toggle");
+                                        }
+                                    }
+
+                                    SurfaceAction::ToggleBell => {
+                                        if toggle_bell() {
+                                            mutated = true;
+                                            serial_println!("[shell.action.bell] toggle");
                                         }
                                     }
 
