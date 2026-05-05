@@ -9344,7 +9344,7 @@ pub extern "C" fn _start() -> ! {
                                 mutated = true;
                             // ── Mesh focused-surface navigation: J/K nav + Enter detail proof ──
                             } else if FOCUSED_SURFACE_ID == SURFACE_ID_MESH
-                                && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C)
+                                && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C || scancode == 0x59)
                             {
                                 match scancode {
                                     0x24 => {
@@ -9363,6 +9363,16 @@ pub extern "C" fn _start() -> ! {
                                             if let Some(fact) = mesh_selected_fact_snapshot() {
                                                 mesh_focus_linen_at_selected_fact(&fact);
                                             }
+                                        }
+                                    }
+                                    // N14: Open selected fact's linked object in Quil via PrintScreen.
+                                    // Reuses existing open_linen_object_in_quil() which contains the
+                                    // Collar gate (LinkObjectToBuffer → AllowStub). Mesh cannot bypass
+                                    // Collar because the gate is inside the callee, not at the call site.
+                                    0x59 => {
+                                        serial_println!("[mesh.keyboard.open_in_quil] sid={}", FOCUSED_SURFACE_ID);
+                                        if let Some(fact) = mesh_selected_fact_snapshot() {
+                                            open_linen_object_in_quil(fact.subject_id);
                                         }
                                     }
                                     _ => {}
