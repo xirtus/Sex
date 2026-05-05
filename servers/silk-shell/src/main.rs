@@ -82,8 +82,10 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 //   202   mesh (diagnostic graph placeholder)
 //   203   collar (authority placeholder)
 //   204   bell placeholder (attention firewall)
+//   0x98  command palette (action router)
 pub const SURFACE_ID_SCENE_SETTINGS: u64 = 0x96;
 pub const SURFACE_ID_ATLAS_OVERLAY: u64 = 0x97; // 151 — Atlas overview surface, toggled by F10
+pub const SURFACE_ID_COMMAND_PALETTE: u64 = 0x98; // 152 — Command palette overlay, toggled by backtick
 
 /// Placeholder grant_ref value: no real Collar grant exists yet.
 /// All current object/buffer grant_ref fields use this value.
@@ -116,7 +118,7 @@ struct AppSurfaceSpec {
 }
 
 /// Known OS-managed app surfaces. Validated at boot for duplicates.
-const APP_SURFACES: [AppSurfaceSpec; 5] = [
+const APP_SURFACES: [AppSurfaceSpec; 6] = [
     AppSurfaceSpec {
         surface_id: SURFACE_ID_LINEN,
         frame_id: LINEN_FRAME_ID,
@@ -169,6 +171,17 @@ const APP_SURFACES: [AppSurfaceSpec; 5] = [
         boot_y: BELL_BOOT_Y,
         boot_w: BELL_BOOT_W,
         boot_h: BELL_BOOT_H,
+        closeable: false,
+        focusable: true,
+    },
+    AppSurfaceSpec {
+        surface_id: SURFACE_ID_COMMAND_PALETTE,
+        frame_id: COMMAND_PALETTE_FRAME_ID,
+        name: "command_palette",
+        boot_x: COMMAND_PALETTE_BOOT_X,
+        boot_y: COMMAND_PALETTE_BOOT_Y,
+        boot_w: COMMAND_PALETTE_BOOT_W,
+        boot_h: COMMAND_PALETTE_BOOT_H,
         closeable: false,
         focusable: true,
     },
@@ -1736,6 +1749,7 @@ enum SurfaceAction {
     ToggleCollar,      // Insert — open/focus/toggle Collar placeholder
     ToggleBell,        // PageDown — open/focus/toggle Bell placeholder
     ToggleAtlas,       // F10 — toggle Atlas overview mode
+    ToggleCommandPalette, // backtick — toggle command palette
     ToggleSceneSettingsPanel,
     CycleRenderTokenPreset,
     CycleCustomTint,
@@ -1864,6 +1878,8 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
 	        // K4: Linen selection cycling - gated to Linen-focused state in handler.
 	        0x24 => Some(SurfaceAction::SelectNextLinenObject), // J key
 	        0x25 => Some(SurfaceAction::SelectPrevLinenObject), // K key
+	        // K11: Command palette toggle - backtick/tilde.
+	        0x29 => Some(SurfaceAction::ToggleCommandPalette), // backtick
 	        _ => None,
 	    }
 	}
@@ -2274,7 +2290,7 @@ struct WindowState {
 /// Maximum tabs per frame (overkill for 4 app surfaces, allows future Chrome tabs).
 const MAX_TABS_PER_FRAME: u8 = 8;
 /// Maximum concurrent frames (overkill for current app count, allows future splits).
-const MAX_FRAMES: usize = 7;
+const MAX_FRAMES: usize = 8;
 
 /// A tab wraps an existing surface_id with shell-level metadata.
 /// The surface remains the app/display object; the tab is shell policy only.
@@ -3025,7 +3041,7 @@ unsafe fn access_describe_focus() {
 /// Maximum scenes tracked by Atlas (equals WORKSPACE_COUNT).
 const ATLAS_MAX_SCENES: usize = 5;
 /// Maximum frames tracked per scene descriptor (equals MAX_FRAMES).
-const ATLAS_MAX_FRAMES_PER_SCENE: usize = 7;
+const ATLAS_MAX_FRAMES_PER_SCENE: usize = 8;
 /// Length of fixed-size scene label byte array (no heap strings).
 const ATLAS_LABEL_LEN: usize = 16;
 
@@ -5631,6 +5647,49 @@ const BELL_BOOT_H: u32 = 480;
 /// Fill color for the Bell visual placeholder surface (attention red-orange).
 const BELL_PLACEHOLDER_COLOR: u32 = 0x00402020;
 
+// ── K11: Command Palette Stub ────────────────────────────────────────────
+// Shell-owned action router. No text input, no fuzzy search, no app manifests.
+
+/// Frame ID reserved for the Command Palette's ShellFrame.
+const COMMAND_PALETTE_FRAME_ID: u32 = 7;
+/// Boot geometry for Command Palette when first opened.
+const COMMAND_PALETTE_BOOT_X: i32 = 400;
+const COMMAND_PALETTE_BOOT_Y: i32 = 200;
+const COMMAND_PALETTE_BOOT_W: u32 = 480;
+const COMMAND_PALETTE_BOOT_H: u32 = 240;
+
+/// Shell commands exposed via the command palette.
+/// Each command routes to an existing SurfaceAction via the normal dispatch path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum Command {
+    OpenSelectedInQuil = 0,
+    FocusLinen = 1,
+    FocusQuil = 2,
+    SceneNext = 3,
+    OpenAtlas = 4,
+}
+
+/// Static display info for each command in the palette.
+struct CommandDef {
+    command: Command,
+    name: &'static str,
+}
+
+/// The five commands available in the command palette.
+const COMMAND_LIST: [CommandDef; 5] = [
+    CommandDef { command: Command::OpenSelectedInQuil, name: "Open in Quil" },
+    CommandDef { command: Command::FocusLinen, name: "Focus Linen" },
+    CommandDef { command: Command::FocusQuil, name: "Focus Quil" },
+    CommandDef { command: Command::SceneNext, name: "Next Scene" },
+    CommandDef { command: Command::OpenAtlas, name: "Open Atlas" },
+];
+
+/// Whether the command palette overlay is currently open.
+static mut COMMAND_PALETTE_OPEN: bool = false;
+/// Index into COMMAND_LIST of the currently selected command.
+static mut COMMAND_PALETTE_SELECTED: u8 = 0;
+
 /// Ensure a ShellFrame exists for Bell in an empty FRAMES slot, assigned to
 /// the active scene. Returns the frame_id if created/found, or 0 if no slot.
 unsafe fn ensure_bell_frame() -> Option<u32> {
@@ -5803,6 +5862,172 @@ unsafe fn bell_frame_id() -> Option<u32> {
         }
     }
     None
+}
+
+// ── K11: Command Palette Helpers ─────────────────────────────────────────────
+// Shell-owned action router. Routes to existing SurfaceAction handlers.
+
+/// Ensure a ShellFrame exists for the command palette in an empty FRAMES slot.
+unsafe fn ensure_command_palette_frame() -> Option<u32> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == COMMAND_PALETTE_FRAME_ID {
+                return Some(COMMAND_PALETTE_FRAME_ID);
+            }
+        }
+    }
+    for (slot_idx, slot) in FRAMES.iter_mut().enumerate() {
+        if slot.is_none() {
+            *slot = Some(ShellFrame {
+                frame_id: COMMAND_PALETTE_FRAME_ID,
+                active_tab: 0,
+                tab_count: 1,
+                tabs: {
+                    let mut t: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                        [None; MAX_TABS_PER_FRAME as usize];
+                    t[0] = Some(ShellTab {
+                        surface_id: SURFACE_ID_COMMAND_PALETTE,
+                        title_id: 0,
+                        flags: 0,
+                    });
+                    t
+                },
+                scene_id: ACTIVE_SCENE_IDX,
+                flags: FRAME_FLAG_TOP_BAR,
+                normal_x: COMMAND_PALETTE_BOOT_X,
+                normal_y: COMMAND_PALETTE_BOOT_Y,
+                normal_w: COMMAND_PALETTE_BOOT_W,
+                normal_h: COMMAND_PALETTE_BOOT_H,
+            });
+            serial_println!("[command_palette.attach.frame] frame={} scene={} slot={}", COMMAND_PALETTE_FRAME_ID, ACTIVE_SCENE_IDX, slot_idx);
+            serial_println!("[command_palette.attach.tab] frame={} tab=0 surface={}", COMMAND_PALETTE_FRAME_ID, SURFACE_ID_COMMAND_PALETTE);
+            return Some(COMMAND_PALETTE_FRAME_ID);
+        }
+    }
+    None
+}
+
+/// Render the command palette as a placeholder overlay.
+/// Uses single 0xEF fill rect for header; rows are proof-marker-only.
+unsafe fn palette_render_list() {
+    let w = COMMAND_PALETTE_BOOT_W;
+    let h = COMMAND_PALETTE_BOOT_H;
+    if w == 0 || h == 0 { return; }
+
+    serial_println!("[command_palette.render] w={} h={}", w, h);
+
+    // Draw header bar at top of surface using palette accent color.
+    let header_color: u32 = 0x00404060; // muted blue-grey
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_COMMAND_PALETTE,
+        (0u64 << 32) | 0u64,
+        (header_color as u64) << 32
+            | (28u64) << 16
+            | w as u64);
+
+    // Emit one row marker per command (proof only, not visual rows).
+    let selected = COMMAND_PALETTE_SELECTED;
+    let count = COMMAND_LIST.len();
+    for i in 0..count {
+        let cmd = &COMMAND_LIST[i];
+        let sel = if i as u8 == selected { "true" } else { "false" };
+        serial_println!("[command_palette.row] index={} cmd={} name={} selected={}",
+            i, cmd.command as u8, cmd.name, sel);
+    }
+    serial_println!("[command_palette.done] count={} selected={}", count, selected);
+}
+
+/// Render and call the 0xEC upsert for the command palette surface geometry.
+unsafe fn palette_show() {
+    if ensure_command_palette_frame().is_none() { return; }
+    // Position the palette via 0xEC geometry upsert.
+    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_COMMAND_PALETTE,
+        ((COMMAND_PALETTE_BOOT_Y as u64) << 32) | (COMMAND_PALETTE_BOOT_X as u64 as u64),
+        ((COMMAND_PALETTE_BOOT_H as u64) << 32) | COMMAND_PALETTE_BOOT_W as u64);
+    palette_render_list();
+}
+
+/// Toggle the command palette open/closed.
+unsafe fn toggle_command_palette() -> bool {
+    if COMMAND_PALETTE_OPEN {
+        // Close palette — minimize the frame.
+        COMMAND_PALETTE_OPEN = false;
+        if let Some(_) = bell_frame_id() { // use hide pattern
+            if minimize_frame(COMMAND_PALETTE_FRAME_ID) {
+                serial_println!("[command_palette.close]");
+                return true;
+            }
+        }
+        // If frame doesn't exist yet, just mark closed.
+        serial_println!("[command_palette.close]");
+        true
+    } else {
+        // Open palette — show the frame and render.
+        COMMAND_PALETTE_OPEN = true;
+        COMMAND_PALETTE_SELECTED = 0;
+        palette_show();
+        serial_println!("[command_palette.open]");
+        true
+    }
+}
+
+/// Advance selection to next command in the palette.
+unsafe fn palette_select_next() {
+    let count = COMMAND_LIST.len() as u8;
+    if count <= 1 { return; }
+    let next = if COMMAND_PALETTE_SELECTED + 1 >= count { 0 } else { COMMAND_PALETTE_SELECTED + 1 };
+    COMMAND_PALETTE_SELECTED = next;
+    serial_println!("[command_palette.select] index={}", next);
+    palette_render_list();
+}
+
+/// Move selection to previous command in the palette.
+unsafe fn palette_select_prev() {
+    let count = COMMAND_LIST.len() as u8;
+    if count <= 1 { return; }
+    let prev = if COMMAND_PALETTE_SELECTED == 0 { count - 1 } else { COMMAND_PALETTE_SELECTED - 1 };
+    COMMAND_PALETTE_SELECTED = prev;
+    serial_println!("[command_palette.select] index={}", prev);
+    palette_render_list();
+}
+
+/// Execute the currently selected command by routing to its SurfaceAction.
+unsafe fn palette_execute_selected() -> bool {
+    let idx = COMMAND_PALETTE_SELECTED as usize;
+    if idx >= COMMAND_LIST.len() { return false; }
+    let cmd = COMMAND_LIST[idx].command;
+    serial_println!("[command_palette.execute] cmd={} name={}", cmd as u8, COMMAND_LIST[idx].name);
+
+    // Route to existing SurfaceAction handler paths.
+    // Each of these reuses the same match arms as keyboard-triggered actions.
+    match cmd {
+        Command::OpenSelectedInQuil => {
+            if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
+                let obj_id = linen_selected_object_id();
+                if obj_id != 0 && open_linen_object_in_quil(obj_id) {
+                    return true;
+                }
+            }
+            serial_println!("[command_palette.reject] cmd={} reason=not_focused", cmd as u8);
+            false
+        }
+        Command::FocusLinen => {
+            open_linen_in_active_scene()
+        }
+        Command::FocusQuil => {
+            open_quil_in_active_scene()
+        }
+        Command::SceneNext => {
+            // Cycle to next scene.
+            let total = 3; // hardcoded scene count
+            let next = if ACTIVE_SCENE_IDX + 1 >= total { 0 } else { ACTIVE_SCENE_IDX + 1 };
+            switch_scene(next);
+            true
+        }
+        Command::OpenAtlas => {
+            atlas_toggle();
+            true
+        }
+    }
 }
 
 // ── Frame Chrome Query Helpers ─────────────────────────────────────────────────
@@ -8170,9 +8395,31 @@ pub extern "C" fn _start() -> ! {
                                     _ => {}
                                 }
                             }
+                            // ── Command palette keyboard intercept: consume keys when palette open ──
+                            if !panel_consumed && COMMAND_PALETTE_OPEN {
+                                match scancode {
+                                    0x24 => { palette_select_next(); mutated = true; } // J - next
+                                    0x25 => { palette_select_prev(); mutated = true; } // K - prev
+                                    0x1C => { // Enter - execute
+                                        let _ = palette_execute_selected();
+                                        toggle_command_palette(); // close after execute
+                                        mutated = true;
+                                    }
+                                    0x01 => { // Escape - close
+                                        toggle_command_palette();
+                                        mutated = true;
+                                    }
+                                    0x29 => { // backtick - close
+                                        toggle_command_palette();
+                                        mutated = true;
+                                    }
+                                    _ => {} // pass through to normal dispatch
+                                }
+                                if mutated { panel_consumed = true; }
+                            }
                             // ── Atlas keyboard intercept: consume non-F10 keys when Atlas active ──
                             if panel_consumed {
-                                // panel handled key; skip Atlas and action dispatch
+                                // panel or palette handled key; skip Atlas and action dispatch
                             } else if ATLAS_MODE_ENABLED && scancode != 0x44 /* F10 falls through to ToggleAtlas */ {
                                 handle_atlas_keyboard(scancode);
                                 mutated = true;
@@ -8486,6 +8733,11 @@ pub extern "C" fn _start() -> ! {
 
                                     SurfaceAction::ToggleAtlas => {
                                         unsafe { atlas_toggle(); }
+                                        mutated = true;
+                                    }
+
+                                    SurfaceAction::ToggleCommandPalette => {
+                                        unsafe { toggle_command_palette(); }
                                         mutated = true;
                                     }
 
