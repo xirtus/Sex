@@ -484,6 +484,24 @@ fn linen_kind_color(kind: LinenObjectKind) -> u32 {
     }
 }
 
+/// Return the accent color for the currently selected Linen object.
+/// Derives from the selected object's kind via linen_kind_color().
+/// Falls back to the default header color if no object is selected.
+unsafe fn linen_selected_object_accent() -> u32 {
+    let id = SELECTED_LINEN_OBJECT_ID;
+    if id == 0 {
+        return LINEN_LIST_HEADER_COLOR;
+    }
+    for slot in LINEN_OBJECTS.iter() {
+        if let Some(obj) = slot {
+            if obj.object_id == id {
+                return linen_kind_color(obj.kind);
+            }
+        }
+    }
+    LINEN_LIST_HEADER_COLOR
+}
+
 /// Render the Linen object list as a placeholder UI inside the Linen surface.
 /// Uses existing 0xEF fill rect primitive (one rect per surface).
 /// The fill rect draws a header bar showing the object count.
@@ -498,11 +516,16 @@ unsafe fn linen_render_object_list() {
 
     serial_println!("[linen.object_list.render] w={} h={}", w, h);
 
-    // Draw header bar at top of surface.
+    // Determine header color based on currently selected object's kind.
+    let header_color = linen_selected_object_accent();
+    serial_println!("[linen.selection_visual.header] object_id={} color={:#010x}",
+        SELECTED_LINEN_OBJECT_ID, header_color);
+
+    // Draw header bar at top of surface using selection accent color.
     // 0xEF: arg0=surface_id, arg1=(sy<<32)|sx, arg2=(color<<32)|(sh<<16)|sw
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
         (0u64 << 32) | 0u64,  // position (0,0) — top-left corner
-        (LINEN_LIST_HEADER_COLOR as u64) << 32
+        (header_color as u64) << 32
             | (LINEN_LIST_HEADER_H as u64) << 16
             | w as u64);
 
