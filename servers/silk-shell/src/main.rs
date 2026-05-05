@@ -611,6 +611,36 @@ fn quil_buffer_state_name(state: QuilBufferState) -> &'static str {
     }
 }
 
+// ── K2C: Seed Coherence Init ──────────────────────────────────────────────────
+// Called once at boot after both tables init.
+// For seed buffers that pre-declare a linen_object_ref AND a non-zero linked_surface_id,
+// synchronize the matching LinenObject.linked_surface_id to match.
+// This makes both tables agree on "this object is displayed on surface X"
+// without requiring a full J4/J5/J7 proof trail for seed pre-links.
+// See docs/handoff/K2C_SEED_COHERENCE_V1.md
+
+unsafe fn linen_quil_seed_coherence_init() {
+    let mut linked: usize = 0;
+    for slot in QUIL_BUFFERS.iter() {
+        if let Some(buf) = slot {
+            if buf.linen_object_ref != 0 && buf.linked_surface_id != 0 {
+                for obj_slot in LINEN_OBJECTS.iter_mut() {
+                    if let Some(o) = obj_slot {
+                        if o.object_id == buf.linen_object_ref && o.linked_surface_id != buf.linked_surface_id {
+                            o.linked_surface_id = buf.linked_surface_id;
+                            serial_println!("[linen.quil.seed_link] object_id={} buffer_id={} surface_id={}",
+                                o.object_id, buf.buffer_id, buf.linked_surface_id);
+                            linked += 1;
+                        }
+                        if o.object_id == buf.linen_object_ref { break; }
+                    }
+                }
+            }
+        }
+    }
+    serial_println!("[linen.quil.seed_coherence.done] linked={}", linked);
+}
+
 // ── J4: Linen → Quil Buffer Link ─────────────────────────────────────────────
 // Shell-local ID linking: open a Linen object into a Quil buffer slot.
 // No editor, no storage, no parser/compiler/build, no PDX calls.
@@ -7594,6 +7624,9 @@ pub extern "C" fn _start() -> ! {
 
         // J3: Initialize Quil buffer table with seed buffers.
         quil_buffer_table_init();
+
+        // K2C: Synchronize Linen linked_surface_id for seed pre-links.
+        linen_quil_seed_coherence_init();
 
         // Initial snapshot after frames are set up.
         snap_capture_layout();
