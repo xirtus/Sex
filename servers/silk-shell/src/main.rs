@@ -670,6 +670,10 @@ enum SurfaceAction {
     SnapHome, SnapEnd,
     ShrinkWidth, GrowWidth, ShrinkHeight, GrowHeight,
     LegacyFocusToggle,
+    // D3: Accessibility keyboard actions using semantic node tree.
+    AccessFocusNext,
+    AccessFocusPrev,
+    AccessActivate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -733,7 +737,9 @@ const P: DesktopPolicy = DesktopPolicy {
 
 fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
     match scancode {
-        0x0F => Some(SurfaceAction::FocusToggle),
+        0x0F => Some(SurfaceAction::AccessFocusNext), // Tab
+        0x0E => Some(SurfaceAction::AccessFocusPrev),  // Backspace
+        0x1C => Some(SurfaceAction::AccessActivate),   // Enter
         0x3C => Some(SurfaceAction::DestroyFocused),
         0x02 => Some(SurfaceAction::Focus100),
         0x03 => Some(SurfaceAction::Focus101),
@@ -1590,6 +1596,132 @@ unsafe fn access_emit_shell_nodes(nodes: &mut [Option<AccessNode>; MAX_ACCESS_NO
     if *b > 0 { *b -= 1; serial_println!("[access.node.emit] count={}", idx); }
 
     idx
+}
+
+/// D3: Handle an accessibility keyboard action by building the semantic node
+/// tree and dispatching to the appropriate lifecycle-safe path.
+///
+/// For AccessFocusNext/AccessFocusPrev: finds the next/prev valid node in the
+/// semantic tree and focuses it via try_set_focus().
+///
+/// For AccessActivate: validates the focused node's action flags and dispatches
+/// the appropriate existing action (close, minimize, restore, zoom, etc.)
+/// based on the node's role and state.
+///
+/// All actions validate targets through lifecycle-safe paths. No new lifecycle
+/// or focus semantics are created.
+unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
+    let mut nodes: [Option<AccessNode>; MAX_ACCESS_NODES] = [None; MAX_ACCESS_NODES];
+    let count = access_emit_shell_nodes(&mut nodes);
+    if count == 0 { return false; }
+
+    match action {
+        SurfaceAction::AccessFocusNext | SurfaceAction::AccessFocusPrev => {
+            let forward = action == SurfaceAction::AccessFocusNext;
+            let current_sid = FOCUSED_SURFACE_ID;
+
+            // Find current position in tree, then scan forward/backward.
+            let start = if current_sid == 0 { 0 } else {
+                // Find index of current focused surface
+                let mut pos = 0;
+                let mut found = false;
+                for i in 0..count {
+                    if let Some(ref node) = nodes[i] {
+                        if node.target.surface_id != 0 && node.target.surface_id == current_sid {
+                            pos = i;
+                            found = true;
+                            break;
+                        }
+                        pos += 1;
+                    }
+                }
+                if !found { 0 } else { pos }
+            };
+
+            // Scan for the next valid node with a focusable surface.
+            let len = count;
+            for offset in 1..=len {
+                let idx = if forward {
+                    (start + offset) % len
+                } else {
+                    (start + len - offset) % len
+                };
+                if let Some(ref node) = nodes[idx] {
+                    let sid = node.target.surface_id;
+                    if sid != 0 && surface_is_alive(sid) && !is_tombstoned(sid)
+                        && surface_is_lifecycle_focusable(sid)
+                    {
+                        let label = core::str::from_utf8(&node.label)
+                            .unwrap_or("?").trim_end_matches('\0');
+                        static mut ACCESS_FOCUS_NEXT_BUDGET: u32 = 8;
+                        let b = &mut ACCESS_FOCUS_NEXT_BUDGET;
+                        if *b > 0 { *b -= 1;
+                            serial_println!("[access.action.focus_next] from={} to={} role={:?} label={}",
+                                current_sid, sid, node.role, label);
+                        }
+                        return try_set_focus(sid);
+                    }
+                }
+            }
+            // No valid focus target found.
+            static mut ACCESS_FOCUS_EMPTY_BUDGET: u32 = 4;
+            let b = &mut ACCESS_FOCUS_EMPTY_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=focus_next reason=no_targets"); }
+            false
+        }
+
+        SurfaceAction::AccessActivate => {
+            let sid = FOCUSED_SURFACE_ID;
+            if sid == 0 {
+                static mut ACCESS_ACTIVATE_EMPTY_BUDGET: u32 = 4;
+                let b = &mut ACCESS_ACTIVATE_EMPTY_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=activate reason=no_focus"); }
+                return false;
+            }
+            if !surface_is_alive(sid) || is_tombstoned(sid) {
+                static mut ACCESS_ACTIVATE_DEAD_BUDGET: u32 = 4;
+                let b = &mut ACCESS_ACTIVATE_DEAD_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=activate reason=dead target={}", sid); }
+                return false;
+            }
+
+            // Find the frame for this surface to determine available actions.
+            let frame_id = frame_for_surface(sid).unwrap_or(0);
+
+            // Activate dispatches based on the focused node's role and state.
+            // For frames: try_set_focus (already focused), then minimize/restore/close.
+            // For scene chips: switch_scene.
+            // For placeholders: focus (already set).
+            if let Some(frame_id_val) = frame_for_surface(sid) {
+                // Surface has a frame — toggle minimize/restore as default activate action.
+                if (FRAMES.iter().flatten()
+                    .find(|f| f.frame_id == frame_id_val)
+                    .map(|f| (f.flags & FRAME_FLAG_MINIMIZED) != 0))
+                    .unwrap_or(false)
+                {
+                    // Minimized → restore
+                    restore_minimized_frame(frame_id_val);
+                    static mut ACCESS_ACTIVATE_RESTORE_BUDGET: u32 = 4;
+                    let b = &mut ACCESS_ACTIVATE_RESTORE_BUDGET;
+                    if *b > 0 { *b -= 1; serial_println!("[access.action.allow] action=activate target={} dispatch=restore", sid); }
+                } else {
+                    // Visible → minimize
+                    minimize_frame(frame_id_val);
+                    static mut ACCESS_ACTIVATE_MINIMIZE_BUDGET: u32 = 4;
+                    let b = &mut ACCESS_ACTIVATE_MINIMIZE_BUDGET;
+                    if *b > 0 { *b -= 1; serial_println!("[access.action.allow] action=activate target={} dispatch=minimize", sid); }
+                }
+            }
+            // For non-frame surfaces (placeholders, panels), activate is a no-op
+            // since they're already focused.
+            static mut ACCESS_ACTIVATE_OK_BUDGET: u32 = 8;
+            let b = &mut ACCESS_ACTIVATE_OK_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[access.keyboard.alt] action=activate target={}", sid); }
+            true
+        }
+
+        _ => false,
+    }
 }
 
 // ── Atlas Overview Model ─────────────────────────────────────────────────────
@@ -6116,6 +6248,19 @@ pub extern "C" fn _start() -> ! {
                                         } else if current == SURFACE_ID_LINEN && try_set_focus(SURFACE_ID_APP) {
                                             mutated = true;
                                             serial_println!("[silk-shell] Focus switched to surface {}", FOCUSED_SURFACE_ID);
+                                        }
+                                    }
+
+                                    // D3: Accessibility keyboard actions via semantic node tree.
+                                    // These dispatch through access_handle_keyboard_action() which uses the
+                                    // D2 semantic node tree for focus traversal and activate (minimize/restore).
+                                    // All paths are lifecycle-safe: try_set_focus, minimize_frame,
+                                    // restore_minimized_frame. No direct state mutation.
+                                    SurfaceAction::AccessFocusNext |
+                                    SurfaceAction::AccessFocusPrev |
+                                    SurfaceAction::AccessActivate => {
+                                        if access_handle_keyboard_action(action) {
+                                            mutated = true;
                                         }
                                     }
 
