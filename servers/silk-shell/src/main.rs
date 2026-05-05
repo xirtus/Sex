@@ -994,9 +994,11 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
         serial_println!("[linen.quil.open.no_grant] id={} kind={}", object_id, obj.kind as u8);
     }
 
-    // 2.5 J5: Check Collar gate before linking.
+    // 2.5 C2: Check Collar gate before linking.
+    // Grant table lookup replaces AllowStub with Allow/Deny.
+    // Caller identity derived from FOCUSED_SURFACE_ID inside gate.
     let decision = collar_check_operation_stub(CollarOperation::LinkObjectToBuffer, object_id, 0);
-    if decision != CollarDecision::AllowStub {
+    if decision != CollarDecision::Allow {
         serial_println!("[linen.quil.open.reject.collar] decision={}", decision as u8);
         return false;
     }
@@ -1097,9 +1099,10 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
     true
 }
 
-// ── J5: Collar-Gated Operation Stubs ──────────────────────────────────────────
-// Additive stubs only. No real authority checks, no secret/key storage, no PDX.
-// See docs/handoff/J5_COLLAR_GATED_OPERATION_STUBS_V1.md
+// ── C2: Collar-Gated Operation Policy ─────────────────────────────────────────
+// V2 policy table replaces J5 AllowStub with grant table lookup for
+// LinkObjectToBuffer. No real Collar PD, no ABI changes, no persistence.
+// See docs/handoff/C2_COLLAR_POLICY_TABLE_V2.md
 
 /// Operation kinds that may require Collar authority.
 /// J5 stub — no real authority checks, just proof markers.
@@ -1115,37 +1118,42 @@ enum CollarOperation {
     LinkObjectToBuffer = 6,
 }
 
-/// Decision from the Collar operation gate stub.
-/// Real Collar will return Allow or Deny with grant info.
+/// Decision from the Collar operation gate.
+/// V2: Allow/Deny replaces AllowStub for wired operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum CollarDecision {
-    /// Stub: operation allowed for safe placeholder use.
-    AllowStub = 0,
+    /// V2: Operation permitted — grant table match found.
+    Allow = 0,
+    /// V2: Operation denied — no matching active grant.
+    Deny = 1,
     /// Referenced Linen object not found.
-    DenyMissingObject = 1,
+    DenyMissingObject = 2,
     /// Referenced Quil buffer not found.
-    DenyMissingBuffer = 2,
+    DenyMissingBuffer = 3,
     /// Operation would require a real Collar grant (future).
-    NeedsGrantLater = 3,
+    NeedsGrantLater = 4,
     /// Operation blocked by STOP FIRST policy.
-    BlockedStopFirst = 4,
+    BlockedStopFirst = 5,
 }
 
-/// J5 stub policy gate. Returns a CollarDecision without real authority checks.
+/// C2: Collar policy gate. Checks grant table for wired operations.
 ///
 /// Policy:
-/// - OpenObject, LinkObjectToBuffer → AllowStub (safe placeholder ops)
+/// - OpenObject, LinkObjectToBuffer → grant table lookup (Allow/Deny)
 /// - SaveBuffer, BuildTarget, RunTarget → BlockedStopFirst (STOP FIRST policy)
 /// - RenameObject, ArchiveObject → NeedsGrantLater (requires real Collar)
 /// - If object_id != 0 and not found in LINEN_OBJECTS → DenyMissingObject
 /// - If buffer_id != 0 and not found in QUIL_BUFFERS → DenyMissingBuffer
+/// - Caller identity derived from FOCUSED_SURFACE_ID (single-threaded dispatch)
 unsafe fn collar_check_operation_stub(
     op: CollarOperation,
     object_id: u64,
     buffer_id: u64,
 ) -> CollarDecision {
-    serial_println!("[collar.gate.check] op={} object_id={} buffer_id={}", op as u8, object_id, buffer_id);
+    let caller_sid = FOCUSED_SURFACE_ID;
+    serial_println!("[collar.policy.check] op={} object_id={} buffer_id={} caller_sid={}",
+        op as u8, object_id, buffer_id, caller_sid);
 
     // Validate object_id if non-zero.
     if object_id != 0 {
@@ -1160,7 +1168,9 @@ unsafe fn collar_check_operation_stub(
         }
         if !found {
             serial_println!("[collar.gate.reject] reason=missing_object op={} object_id={}", op as u8, object_id);
-            return CollarDecision::DenyMissingObject;
+            let d = CollarDecision::DenyMissingObject;
+            record_collar_audit(op, object_id, caller_sid, d, 0, 1);
+            return d;
         }
     }
 
@@ -1169,27 +1179,176 @@ unsafe fn collar_check_operation_stub(
         let buf = quil_buffer_by_id(buffer_id);
         if buf.is_none() {
             serial_println!("[collar.gate.reject] reason=missing_buffer op={} buffer_id={}", op as u8, buffer_id);
-            return CollarDecision::DenyMissingBuffer;
+            let d = CollarDecision::DenyMissingBuffer;
+            record_collar_audit(op, buffer_id, caller_sid, d, 0, 2);
+            return d;
         }
     }
 
     match op {
         CollarOperation::OpenObject | CollarOperation::LinkObjectToBuffer => {
-            serial_println!("[collar.gate.allow_stub] op={}", op as u8);
-            CollarDecision::AllowStub
+            // V2: Grant table lookup replaces AllowStub.
+            let target_id = object_id;
+            let mut found_grant = false;
+            for slot in COLLAR_GRANTS.iter() {
+                if let Some(grant) = slot {
+                    if grant.state != CollarGrantState::Active { continue; }
+                    if grant.subject_id != caller_sid { continue; }
+                    if grant.object_id != target_id { continue; }
+                    if (grant.operation_mask & (1 << (op as u64))) == 0 { continue; }
+                    found_grant = true;
+                    serial_println!("[collar.grant.match] grant_id={} subject={} object={} op={}",
+                        grant.grant_id, grant.subject_id, grant.object_id, op as u8);
+                    serial_println!("[collar.policy.allow] op={} object={} caller={} grant={}",
+                        op as u8, target_id, caller_sid, grant.grant_id);
+                    record_collar_audit(op, target_id, caller_sid, CollarDecision::Allow, grant.grant_id, 0);
+                    return CollarDecision::Allow;
+                }
+            }
+            // No matching active grant found — deny.
+            serial_println!("[collar.grant.reject] reason=no_grant op={} object={} caller={}",
+                op as u8, target_id, caller_sid);
+            serial_println!("[collar.policy.deny] op={} object={} caller={} reason=no_grant",
+                op as u8, target_id, caller_sid);
+            record_collar_audit(op, target_id, caller_sid, CollarDecision::Deny, 0, 3);
+            CollarDecision::Deny
         }
         CollarOperation::SaveBuffer | CollarOperation::BuildTarget | CollarOperation::RunTarget => {
             serial_println!("[collar.gate.reject] reason=stop_first op={}", op as u8);
-            CollarDecision::BlockedStopFirst
+            let d = CollarDecision::BlockedStopFirst;
+            record_collar_audit(op, object_id, caller_sid, d, 0, 4);
+            d
         }
         CollarOperation::RenameObject | CollarOperation::ArchiveObject => {
             serial_println!("[collar.gate.needs_grant] op={}", op as u8);
-            CollarDecision::NeedsGrantLater
+            let d = CollarDecision::NeedsGrantLater;
+            record_collar_audit(op, object_id, caller_sid, d, 0, 5);
+            d
         }
     }
 }
 
-// ── J6: Mesh Linen/Quil Object Link Diagnostics + Fact Ring ──────────────────
+// ── C2: Collar Grant Table + Audit Ring ───────────────────────────────────────
+// Shell-local V2 policy table. Replaces AllowStub for LinkObjectToBuffer.
+// No real Collar PD, no ABI changes, no persistence.
+// See docs/handoff/C2_COLLAR_POLICY_TABLE_V2.md
+
+/// State of a Collar grant record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum CollarGrantState {
+    Active = 0,
+    Revoked = 1,
+    Expired = 2,
+    Tombstoned = 3,
+}
+
+/// A single Collar grant record. Fixed-size, no heap, no strings.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct CollarGrant {
+    grant_id: u64,
+    subject_id: u64,
+    object_id: u64,
+    operation_mask: u64,
+    generation: u64,
+    state: CollarGrantState,
+}
+
+/// A single Collar audit event record.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct CollarAuditEvent {
+    event_id: u64,
+    operation: CollarOperation,
+    object_id: u64,
+    subject_id: u64,
+    decision: CollarDecision,
+    grant_ref: u64,
+    reason: u64,
+}
+
+const COLLAR_GRANT_CAP: usize = 32;
+const COLLAR_AUDIT_CAP: usize = 64;
+
+static mut COLLAR_GRANTS: [Option<CollarGrant>; COLLAR_GRANT_CAP] = [None; COLLAR_GRANT_CAP];
+static mut COLLAR_GRANT_GENERATION: u64 = 1; // 0 reserved
+
+static mut COLLAR_AUDIT_EVENTS: [Option<CollarAuditEvent>; COLLAR_AUDIT_CAP] = [None; COLLAR_AUDIT_CAP];
+static mut COLLAR_AUDIT_WRITE_INDEX: u64 = 0;
+
+/// Record an audit event in the Collar audit ring.
+unsafe fn record_collar_audit(
+    op: CollarOperation,
+    object_id: u64,
+    subject_id: u64,
+    decision: CollarDecision,
+    grant_ref: u64,
+    reason: u64,
+) {
+    let idx = (COLLAR_AUDIT_WRITE_INDEX as usize) % COLLAR_AUDIT_CAP;
+    let prev_event_id = COLLAR_AUDIT_WRITE_INDEX;
+    COLLAR_AUDIT_EVENTS[idx] = Some(CollarAuditEvent {
+        event_id: prev_event_id,
+        operation: op,
+        object_id,
+        subject_id,
+        decision,
+        grant_ref,
+        reason,
+    });
+    COLLAR_AUDIT_WRITE_INDEX += 1;
+    if prev_event_id as usize >= COLLAR_AUDIT_CAP {
+        serial_println!("[collar.audit.overwrite] idx={}", idx);
+    }
+    serial_println!("[collar.audit.write] event_id={} op={} object={} subject={} decision={} grant={} reason={}",
+        prev_event_id, op as u8, object_id, subject_id, decision as u8, grant_ref, reason);
+}
+
+/// Initialize Collar auto-grants at boot.
+/// Creates Active grants for seed objects to known surfaces.
+unsafe fn collar_init_grants() {
+    let mut count = 0u64;
+    for slot in LINEN_OBJECTS.iter() {
+        let obj = match slot {
+            Some(o) => o,
+            None => continue,
+        };
+        // Auto-grant for Linen surface (SURFACE_ID_LINEN = 200).
+        let gen = COLLAR_GRANT_GENERATION;
+        COLLAR_GRANT_GENERATION = COLLAR_GRANT_GENERATION.wrapping_add(1);
+        let idx = (gen as usize).wrapping_sub(1) % COLLAR_GRANT_CAP;
+        COLLAR_GRANTS[idx] = Some(CollarGrant {
+            grant_id: gen,
+            subject_id: SURFACE_ID_LINEN,
+            object_id: obj.object_id,
+            operation_mask: 1 << (CollarOperation::LinkObjectToBuffer as u64),
+            generation: gen,
+            state: CollarGrantState::Active,
+        });
+        serial_println!("[collar.grant.auto] grant_id={} subject={} object={} op=LinkObjectToBuffer",
+            gen, SURFACE_ID_LINEN, obj.object_id);
+        count += 1;
+
+        // Auto-grant for Mesh surface (SURFACE_ID_MESH = 202).
+        // Mesh can open any linked object's Quil view.
+        let gen2 = COLLAR_GRANT_GENERATION;
+        COLLAR_GRANT_GENERATION = COLLAR_GRANT_GENERATION.wrapping_add(1);
+        let idx2 = (gen2 as usize).wrapping_sub(1) % COLLAR_GRANT_CAP;
+        COLLAR_GRANTS[idx2] = Some(CollarGrant {
+            grant_id: gen2,
+            subject_id: SURFACE_ID_MESH,
+            object_id: obj.object_id,
+            operation_mask: 1 << (CollarOperation::LinkObjectToBuffer as u64),
+            generation: gen2,
+            state: CollarGrantState::Active,
+        });
+        serial_println!("[collar.grant.auto] grant_id={} subject={} object={} op=LinkObjectToBuffer",
+            gen2, SURFACE_ID_MESH, obj.object_id);
+        count += 1;
+    }
+    serial_println!("[collar.grant.init] count={} generation={}", count, COLLAR_GRANT_GENERATION);
+}
 // Shell-local fact ring for topology/relationship data. Replaces proof-marker-only
 // diagnostics with real bounded Mesh fact memory. No Mesh PD, no IPC/ABI changes,
 // no rendering.
@@ -8985,6 +9144,9 @@ pub extern "C" fn _start() -> ! {
         // K2C: Synchronize Linen linked_surface_id for seed pre-links.
         linen_quil_seed_coherence_init();
 
+        // C2: Initialize Collar auto-grants for seed objects.
+        collar_init_grants();
+
         // Initial snapshot after frames are set up.
         snap_capture_layout();
 
@@ -9367,7 +9529,7 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     // N14: Open selected fact's linked object in Quil via PrintScreen.
                                     // Reuses existing open_linen_object_in_quil() which contains the
-                                    // Collar gate (LinkObjectToBuffer → AllowStub). Mesh cannot bypass
+                                    // Collar gate (LinkObjectToBuffer → grant table lookup). Mesh cannot bypass
                                     // Collar because the gate is inside the callee, not at the call site.
                                     0x59 => {
                                         serial_println!("[mesh.keyboard.open_in_quil] sid={}", FOCUSED_SURFACE_ID);
