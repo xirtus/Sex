@@ -610,6 +610,12 @@ const QUIL_LIST_MAX_ROWS: u8 = 8;
 const QUIL_LIST_HEADER_COLOR: u32 = 0x00302E56;
 /// Header bar height in pixels.
 const QUIL_LIST_HEADER_H: u32 = 28;
+/// Max rows with visual fill rects. Header takes rect_index=0; rows get 1-7 (MAX_RECTS=8).
+const QUIL_LIST_ROW_RECTS: u8 = 7;
+/// Height of each buffer row in the list, in pixels.
+const QUIL_LIST_ROW_H: u32 = 24;
+/// Vertical gap between row fill rects, in pixels.
+const QUIL_LIST_ROW_GAP: u32 = 2;
 
 /// Kind of Quil buffer. Maps to H2 §2 workstation object types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -786,17 +792,31 @@ fn quil_buffer_state_name(state: QuilBufferState) -> &'static str {
     }
 }
 
+/// Return a deterministic accent color for a QuilBufferKind.
+/// Mirrors linen_kind_color() palette but with distinct hues.
+fn quil_buffer_kind_color(kind: QuilBufferKind) -> u32 {
+    match kind {
+        QuilBufferKind::Text => 0x00808080,            // grey
+        QuilBufferKind::Code => 0x0040A060,            // green-teal
+        QuilBufferKind::DesignNote => 0x004060C0,      // blue
+        QuilBufferKind::ReviewNote => 0x00C06040,      // orange
+        QuilBufferKind::Diagnostic => 0x00C04080,      // magenta
+        QuilBufferKind::BuildOutput => 0x00806040,     // brown
+        QuilBufferKind::AgentTask => 0x006080C0,       // steel blue
+        QuilBufferKind::LinenObjectView => 0x00A060C0, // violet
+    }
+}
+
 // ── K3: Quil Buffer List Placeholder UI ─────────────────────────────────────
 // Minimal buffer list rendered via proof markers inside the Quil surface.
 // Mirrors J2 linen_render_object_list pattern. No editor, no text rendering.
 // See docs/handoff/K3_QUIL_BUFFER_LIST_PLACEHOLDER_UI_V1.md
 
 /// Render a header bar + proof-marker rows for the current Quil buffer table.
-/// Uses existing 0xEF fill rect primitive (one rect per surface).
+/// Uses existing 0xEF fill rect primitive with rect_index packing.
 /// The fill rect draws a header bar showing the buffer count.
-/// Each buffer is documented via proof marker — full row rendering
-/// requires future fill-rect expansion or text rendering in sexdisplay.
-/// Called after Quil placeholder open and after J4 Linen→Quil links.
+/// Each buffer is documented via proof marker and a visual row fill rect.
+/// Mirrors linen_render_object_list() pattern.
 unsafe fn quil_render_buffer_list() {
     let w = SURFACE_201_W;
     let h = SURFACE_201_H;
@@ -804,17 +824,18 @@ unsafe fn quil_render_buffer_list() {
 
     serial_println!("[quil.buffer_list.render] w={} h={}", w, h);
 
-    // Draw header bar at top of surface.
-    // 0xEF: arg0=surface_id, arg1=(sy<<32)|sx, arg2=(color<<32)|(sh<<16)|sw
+    // Draw header bar at top of surface (rect_index=0).
+    // arg2 format: (rect_index<<56)|(color_rgb<<32)|(sh<<16)|sw
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL,
-        (0u64 << 32) | 0u64,  // position (0,0) — top-left corner
-        (QUIL_LIST_HEADER_COLOR as u64) << 32
-            | (QUIL_LIST_HEADER_H as u64) << 16
+        (0u64 << 32) | 0u64,  // position (0,0)
+        ((QUIL_LIST_HEADER_COLOR as u64) << 32)
+            | ((QUIL_LIST_HEADER_H as u64) << 16)
             | w as u64);
 
-    // Emit one row marker per buffer (proof only, not visual rows).
+    // Emit row markers and visual fill rects, one per buffer.
     let count = quil_buffer_count();
     let mut rows_emitted: u8 = 0;
+    let mut rects_sent: u8 = 0;
     for i in 0..QUIL_MAX_BUFFERS {
         if let Some(buf) = QUIL_BUFFERS[i] {
             if rows_emitted >= QUIL_LIST_MAX_ROWS {
@@ -826,10 +847,30 @@ unsafe fn quil_render_buffer_list() {
             serial_println!("[quil.buffer_list.row] buffer_id={} kind={} state={} linen_ref={} surface_id={} name={}",
                 buf.buffer_id, kind_name, state_name, buf.linen_object_ref,
                 buf.linked_surface_id, buf.display_name);
+
+            // Send visual row rect if within fill-rect slot budget (slots 1-7; slot 0 = header).
+            if rows_emitted < QUIL_LIST_ROW_RECTS {
+                let rect_index = (rows_emitted as u64 + 1) & 0xF;
+                let row_y = QUIL_LIST_HEADER_H
+                    + rows_emitted as u32 * (QUIL_LIST_ROW_H + QUIL_LIST_ROW_GAP);
+                let row_color = quil_buffer_kind_color(buf.kind);
+                pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL,
+                    (row_y as u64) << 32 | 0u64,
+                    (rect_index << 56)
+                        | ((row_color as u64) << 32)
+                        | ((QUIL_LIST_ROW_H as u64) << 16)
+                        | w as u64);
+                serial_println!("[quil.row_visual.rect] index={} id={} kind={} color={:#010x}",
+                    rect_index, buf.buffer_id, kind_name, row_color);
+                rects_sent += 1;
+            } else {
+                serial_println!("[quil.row_visual.skip] id={} reason=rect_budget", buf.buffer_id);
+            }
+
             rows_emitted += 1;
         }
     }
-    serial_println!("[quil.buffer_list.done] count={} rows={}", count, rows_emitted);
+    serial_println!("[quil.buffer_list.done] count={} rows={} rects={}", count, rows_emitted, rects_sent);
 }
 
 // ── K2C: Seed Coherence Init ──────────────────────────────────────────────────
