@@ -3139,6 +3139,8 @@ unsafe fn ensure_linen_frame() -> Option<u32> {
                 normal_w: LINEN_BOOT_W,
                 normal_h: LINEN_BOOT_H,
             });
+            serial_println!("[linen.placeholder.attach.frame] frame={} scene={} slot={}", LINEN_FRAME_ID, ACTIVE_SCENE_IDX, slot_idx);
+            serial_println!("[linen.placeholder.attach.tab] frame={} tab=0 surface={}", LINEN_FRAME_ID, SURFACE_ID_LINEN);
             static mut LINEN_CREATE_BUDGET: u32 = 4;
             let b = &mut LINEN_CREATE_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[shell.linen.frame.create] frame={} slot={}", LINEN_FRAME_ID, slot_idx); }
@@ -3156,6 +3158,25 @@ unsafe fn ensure_linen_frame() -> Option<u32> {
 /// focus, and tile. If Linen is already visible in the active scene, focuses it.
 /// Returns true if Linen became visible/focused.
 unsafe fn open_linen_in_active_scene() -> bool {
+    // D1: duplicate guard — if Linen already visible in active scene, reject open.
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == LINEN_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                serial_println!("[linen.placeholder.reject.duplicate] frame={} scene={}", LINEN_FRAME_ID, ACTIVE_SCENE_IDX);
+                // Focus existing Linen instead.
+                if let Some(sid) = active_surface_for_frame(LINEN_FRAME_ID) {
+                    if try_set_focus(sid) {
+                        serial_println!("[linen.placeholder.focus] frame={} sid={}", LINEN_FRAME_ID, sid);
+                    }
+                }
+                return true;
+            }
+        }
+    }
+
     let fid = match ensure_linen_frame() {
         Some(f) => f,
         None => return false,
@@ -3197,8 +3218,10 @@ unsafe fn open_linen_in_active_scene() -> bool {
     // Focus Linen's surface.
     if let Some(sid) = active_surface_for_frame(fid) {
         try_set_focus(sid);
+        serial_println!("[linen.placeholder.focus] frame={} sid={}", fid, sid);
     }
 
+    serial_println!("[linen.placeholder.open] frame={}", fid);
     snap_capture_layout();
     static mut LINEN_OPEN_BUDGET: u32 = 4;
     let b = &mut LINEN_OPEN_BUDGET;
