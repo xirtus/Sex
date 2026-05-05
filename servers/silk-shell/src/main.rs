@@ -756,6 +756,7 @@ const P: DesktopPolicy = DesktopPolicy {
 
 fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
     match scancode {
+        0x01 => Some(SurfaceAction::AccessZoomToggle), // Esc
         0x0F => Some(SurfaceAction::AccessFocusNext), // Tab
         0x0E => Some(SurfaceAction::AccessFocusPrev),  // Backspace
         0x1C => Some(SurfaceAction::AccessActivate),   // Enter
@@ -784,6 +785,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x42 => Some(SurfaceAction::ToggleLinen),    // F8
         0x43 => Some(SurfaceAction::ToggleQuil),     // F9
         0x44 => Some(SurfaceAction::ToggleAtlas),    // F10
+        0x57 => Some(SurfaceAction::AccessClose),    // F11
         0x58 => Some(SurfaceAction::ToggleMesh),    // F12
         0x47 => Some(SurfaceAction::SnapHome),
         0x4F => Some(SurfaceAction::SnapEnd),
@@ -1753,6 +1755,78 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
             static mut ACCESS_ACTIVATE_OK_BUDGET: u32 = 8;
             let b = &mut ACCESS_ACTIVATE_OK_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[access.keyboard.alt] action=activate target={}", sid); }
+            true
+        }
+
+        // ── D3B: Close focused frame ──
+        SurfaceAction::AccessClose => {
+            let sid = FOCUSED_SURFACE_ID;
+            if sid == 0 {
+                static mut ACCESS_CLOSE_NOFOCUS_BUDGET: u32 = 4;
+                let b = &mut ACCESS_CLOSE_NOFOCUS_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=close reason=no_focus"); }
+                return false;
+            }
+            if !surface_is_alive(sid) || is_tombstoned(sid) {
+                static mut ACCESS_CLOSE_DEAD_BUDGET: u32 = 4;
+                let b = &mut ACCESS_CLOSE_DEAD_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=close reason=dead target={}", sid); }
+                return false;
+            }
+            if close_surface_from_frame_light(sid) {
+                static mut ACCESS_CLOSE_OK_BUDGET: u32 = 8;
+                let b = &mut ACCESS_CLOSE_OK_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[access.action.close] target={}", sid); }
+                return true;
+            }
+            static mut ACCESS_CLOSE_FAIL_BUDGET: u32 = 4;
+            let b = &mut ACCESS_CLOSE_FAIL_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=close reason=failed target={}", sid); }
+            false
+        }
+
+        // ── D3B: Toggle zoom on focused frame ──
+        SurfaceAction::AccessZoomToggle => {
+            let sid = FOCUSED_SURFACE_ID;
+            if sid == 0 {
+                static mut ACCESS_ZOOM_NOFOCUS_BUDGET: u32 = 4;
+                let b = &mut ACCESS_ZOOM_NOFOCUS_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=zoom reason=no_focus"); }
+                return false;
+            }
+            if !surface_is_alive(sid) || is_tombstoned(sid) {
+                static mut ACCESS_ZOOM_DEAD_BUDGET: u32 = 4;
+                let b = &mut ACCESS_ZOOM_DEAD_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=zoom reason=dead target={}", sid); }
+                return false;
+            }
+            if let Some(fid) = frame_for_surface(sid) {
+                if toggle_zoom_frame(fid) {
+                    static mut ACCESS_ZOOM_OK_BUDGET: u32 = 8;
+                    let b = &mut ACCESS_ZOOM_OK_BUDGET;
+                    if *b > 0 { *b -= 1; serial_println!("[access.action.zoom] frame={} target={}", fid, sid); }
+                    return true;
+                }
+            }
+            static mut ACCESS_ZOOM_FAIL_BUDGET: u32 = 4;
+            let b = &mut ACCESS_ZOOM_FAIL_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=zoom reason=failed target={}", sid); }
+            false
+        }
+
+        // ── D3B: Scene switch helpers (bindings deferred) ──
+        SurfaceAction::AccessSceneNext => {
+            next_scene();
+            static mut ACCESS_SCENE_NEXT_BUDGET: u32 = 8;
+            let b = &mut ACCESS_SCENE_NEXT_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[access.action.scene_switch] dir=next"); }
+            true
+        }
+        SurfaceAction::AccessScenePrev => {
+            prev_scene();
+            static mut ACCESS_SCENE_PREV_BUDGET: u32 = 8;
+            let b = &mut ACCESS_SCENE_PREV_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[access.action.scene_switch] dir=prev"); }
             true
         }
 
@@ -6512,6 +6586,19 @@ pub extern "C" fn _start() -> ! {
                                     SurfaceAction::AccessFocusNext |
                                     SurfaceAction::AccessFocusPrev |
                                     SurfaceAction::AccessActivate => {
+                                        if access_handle_keyboard_action(action) {
+                                            mutated = true;
+                                        }
+                                    }
+
+                                    // D3B: Additional keyboard accessibility actions.
+                                    // Close (F11) → close_surface_from_frame_light()
+                                    // Zoom toggle (Esc) → toggle_zoom_frame()
+                                    // Scene next/prev → next_scene()/prev_scene() (bindings deferred)
+                                    SurfaceAction::AccessClose |
+                                    SurfaceAction::AccessZoomToggle |
+                                    SurfaceAction::AccessSceneNext |
+                                    SurfaceAction::AccessScenePrev => {
                                         if access_handle_keyboard_action(action) {
                                             mutated = true;
                                         }
