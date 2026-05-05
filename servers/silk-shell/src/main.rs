@@ -640,6 +640,13 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
         serial_println!("[linen.quil.open.no_grant] id={} kind={}", object_id, obj.kind as u8);
     }
 
+    // 2.5 J5: Check Collar gate before linking.
+    let decision = collar_check_operation_stub(CollarOperation::LinkObjectToBuffer, object_id, 0);
+    if decision != CollarDecision::AllowStub {
+        serial_println!("[linen.quil.open.reject.collar] decision={}", decision as u8);
+        return false;
+    }
+
     // 3. Map LinenObjectKind to QuilBufferKind for the linked buffer.
     let buf_kind = match obj.kind {
         LinenObjectKind::CodeFile => QuilBufferKind::Code,
@@ -709,6 +716,98 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
 
     serial_println!("[linen.quil.done] object_id={} buffer_created={}", object_id, buffer_created);
     true
+}
+
+// ── J5: Collar-Gated Operation Stubs ──────────────────────────────────────────
+// Additive stubs only. No real authority checks, no secret/key storage, no PDX.
+// See docs/handoff/J5_COLLAR_GATED_OPERATION_STUBS_V1.md
+
+/// Operation kinds that may require Collar authority.
+/// J5 stub — no real authority checks, just proof markers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum CollarOperation {
+    OpenObject = 0,
+    RenameObject = 1,
+    ArchiveObject = 2,
+    SaveBuffer = 3,
+    BuildTarget = 4,
+    RunTarget = 5,
+    LinkObjectToBuffer = 6,
+}
+
+/// Decision from the Collar operation gate stub.
+/// Real Collar will return Allow or Deny with grant info.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum CollarDecision {
+    /// Stub: operation allowed for safe placeholder use.
+    AllowStub = 0,
+    /// Referenced Linen object not found.
+    DenyMissingObject = 1,
+    /// Referenced Quil buffer not found.
+    DenyMissingBuffer = 2,
+    /// Operation would require a real Collar grant (future).
+    NeedsGrantLater = 3,
+    /// Operation blocked by STOP FIRST policy.
+    BlockedStopFirst = 4,
+}
+
+/// J5 stub policy gate. Returns a CollarDecision without real authority checks.
+///
+/// Policy:
+/// - OpenObject, LinkObjectToBuffer → AllowStub (safe placeholder ops)
+/// - SaveBuffer, BuildTarget, RunTarget → BlockedStopFirst (STOP FIRST policy)
+/// - RenameObject, ArchiveObject → NeedsGrantLater (requires real Collar)
+/// - If object_id != 0 and not found in LINEN_OBJECTS → DenyMissingObject
+/// - If buffer_id != 0 and not found in QUIL_BUFFERS → DenyMissingBuffer
+unsafe fn collar_check_operation_stub(
+    op: CollarOperation,
+    object_id: u64,
+    buffer_id: u64,
+) -> CollarDecision {
+    serial_println!("[collar.gate.check] op={} object_id={} buffer_id={}", op as u8, object_id, buffer_id);
+
+    // Validate object_id if non-zero.
+    if object_id != 0 {
+        let mut found = false;
+        for slot in LINEN_OBJECTS.iter() {
+            if let Some(obj) = slot {
+                if obj.object_id == object_id {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if !found {
+            serial_println!("[collar.gate.reject] reason=missing_object op={} object_id={}", op as u8, object_id);
+            return CollarDecision::DenyMissingObject;
+        }
+    }
+
+    // Validate buffer_id if non-zero.
+    if buffer_id != 0 {
+        let buf = quil_buffer_by_id(buffer_id);
+        if buf.is_none() {
+            serial_println!("[collar.gate.reject] reason=missing_buffer op={} buffer_id={}", op as u8, buffer_id);
+            return CollarDecision::DenyMissingBuffer;
+        }
+    }
+
+    match op {
+        CollarOperation::OpenObject | CollarOperation::LinkObjectToBuffer => {
+            serial_println!("[collar.gate.allow_stub] op={}", op as u8);
+            CollarDecision::AllowStub
+        }
+        CollarOperation::SaveBuffer | CollarOperation::BuildTarget | CollarOperation::RunTarget => {
+            serial_println!("[collar.gate.reject] reason=stop_first op={}", op as u8);
+            CollarDecision::BlockedStopFirst
+        }
+        CollarOperation::RenameObject | CollarOperation::ArchiveObject => {
+            serial_println!("[collar.gate.needs_grant] op={}", op as u8);
+            CollarDecision::NeedsGrantLater
+        }
+    }
 }
 
 // ── A3: Lifecycle State Model ─────────────────────────────────────────────────
