@@ -73,8 +73,10 @@ Orchestrator: builds D2 semantic tree → finds focused node → validates targe
 > or future Quil buffer contents.
 
 The `access_label_token()` function hashes the D2 `[u8; 32]` label to a
-`u32` token. This is a one-way deterministic hash — it cannot be reversed
-to recover the original label. Only shell-owned static/bounded labels
+`u32` token. The label hash is deterministic and avoids printing raw labels,
+but it is not a secrecy boundary. Small/static label spaces may be guessed
+offline. Do not hash private app/user content.
+Only shell-owned static/bounded labels
 from the D2 model are hashed (e.g., "Frame", "Quil", "Linen", "Mesh").
 Future app-provided names must never be logged as plaintext — only
 through this hash, or omitted entirely.
