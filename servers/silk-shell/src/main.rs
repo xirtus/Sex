@@ -60,6 +60,7 @@ pub const SURFACE_ID_TEST3: u64 = 102;
 pub const SURFACE_ID_TEST4: u64 = 103;
 pub const SURFACE_ID_LINEN: u64 = 200;
 pub const SURFACE_ID_QUIL: u64 = 201;
+pub const SURFACE_ID_MESH: u64 = 202;
 pub const SURFACE_ID_CURSOR: u64 = 0x90; // 144 — OS-owned cursor, no collision with app IDs
 pub const SURFACE_ID_LAUNCHER: u64 = 0x92; // 146 — launcher panel surface, toggled by launcher button
 pub const SURFACE_ID_STATUS: u64 = 0x93; // 147 — status panel surface, toggled by status chip click
@@ -76,6 +77,7 @@ pub const SURFACE_ID_BELL: u64 = 0x95; // 149 — bell panel surface, toggled by
 //   100+  app surfaces (SURFACE_ID_APP, SURFACE_ID_STATIC, etc.)
 //   200   linen (file viewer)
 //   201   quil (editor stub)
+//   202   mesh (diagnostic graph placeholder)
 pub const SURFACE_ID_SCENE_SETTINGS: u64 = 0x96;
 pub const SURFACE_ID_ATLAS_OVERLAY: u64 = 0x97; // 151 — Atlas overview surface, toggled by F10
 /// 0xEE — deactivate surface on sexdisplay (active=false).
@@ -104,7 +106,7 @@ struct AppSurfaceSpec {
 }
 
 /// Known OS-managed app surfaces. Validated at boot for duplicates.
-const APP_SURFACES: [AppSurfaceSpec; 2] = [
+const APP_SURFACES: [AppSurfaceSpec; 3] = [
     AppSurfaceSpec {
         surface_id: SURFACE_ID_LINEN,
         frame_id: LINEN_FRAME_ID,
@@ -124,6 +126,17 @@ const APP_SURFACES: [AppSurfaceSpec; 2] = [
         boot_y: QUIL_BOOT_Y,
         boot_w: QUIL_BOOT_W,
         boot_h: QUIL_BOOT_H,
+        closeable: false,
+        focusable: true,
+    },
+    AppSurfaceSpec {
+        surface_id: SURFACE_ID_MESH,
+        frame_id: MESH_FRAME_ID,
+        name: "mesh",
+        boot_x: MESH_BOOT_X,
+        boot_y: MESH_BOOT_Y,
+        boot_w: MESH_BOOT_W,
+        boot_h: MESH_BOOT_H,
         closeable: false,
         focusable: true,
     },
@@ -661,6 +674,7 @@ enum SurfaceAction {
     ToggleTopBar,
     ToggleLinen,       // F8 — open/focus/toggle Linen surface
     ToggleQuil,        // F9 — open/focus/toggle Quil surface
+    ToggleMesh,        // F12 — open/focus/toggle Mesh placeholder
     ToggleAtlas,       // F10 — toggle Atlas overview mode
     ToggleSceneSettingsPanel,
     CycleRenderTokenPreset,
@@ -674,6 +688,11 @@ enum SurfaceAction {
     AccessFocusNext,
     AccessFocusPrev,
     AccessActivate,
+    // D3B: Complete shell-owned accessibility keyboard actions.
+    AccessClose,         // close focused frame (F11)
+    AccessZoomToggle,    // toggle zoom on focused frame (Esc)
+    AccessSceneNext,     // switch to next scene (deferred binding)
+    AccessScenePrev,     // switch to previous scene (deferred binding)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -765,6 +784,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x42 => Some(SurfaceAction::ToggleLinen),    // F8
         0x43 => Some(SurfaceAction::ToggleQuil),     // F9
         0x44 => Some(SurfaceAction::ToggleAtlas),    // F10
+        0x58 => Some(SurfaceAction::ToggleMesh),    // F12
         0x47 => Some(SurfaceAction::SnapHome),
         0x4F => Some(SurfaceAction::SnapEnd),
         0x4B => Some(SurfaceAction::MoveLeft),
@@ -920,6 +940,10 @@ unsafe fn tile_visible_frames() {
                 SURFACE_201_X = rx; SURFACE_201_Y = ry;
                 SURFACE_201_W = rw; SURFACE_201_H = rh;
             }
+            SURFACE_ID_MESH => {
+                SURFACE_202_X = rx; SURFACE_202_Y = ry;
+                SURFACE_202_W = rw; SURFACE_202_H = rh;
+            }
             _ => {}
         }
         pdx_call(SLOT_DISPLAY, 0xEC, sid,
@@ -932,6 +956,14 @@ unsafe fn tile_visible_frames() {
             static mut QUIL_PLACEHOLDER_BUDGET: u32 = 8;
             let b = &mut QUIL_PLACEHOLDER_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[shell.quil.tile.placeholder] sid={}", sid); }
+        }
+        // Mesh visual placeholder: amber/diagnostic fill rect.
+        if sid == SURFACE_ID_MESH {
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_MESH, 0,
+                (MESH_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
+            static mut MESH_PLACEHOLDER_BUDGET: u32 = 8;
+            let b = &mut MESH_PLACEHOLDER_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.mesh.tile.placeholder] sid={}", sid); }
         }
     }
     static mut TILE_BUDGET: u32 = 8;
@@ -1075,6 +1107,10 @@ unsafe fn tile_active_scene_frames() {
                 SURFACE_201_X = rx; SURFACE_201_Y = ry;
                 SURFACE_201_W = rw; SURFACE_201_H = rh;
             }
+            SURFACE_ID_MESH => {
+                SURFACE_202_X = rx; SURFACE_202_Y = ry;
+                SURFACE_202_W = rw; SURFACE_202_H = rh;
+            }
             _ => {}
         }
 
@@ -1133,7 +1169,7 @@ struct WindowState {
 /// Maximum tabs per frame (overkill for 4 app surfaces, allows future Chrome tabs).
 const MAX_TABS_PER_FRAME: u8 = 8;
 /// Maximum concurrent frames (overkill for current app count, allows future splits).
-const MAX_FRAMES: usize = 4;
+const MAX_FRAMES: usize = 5;
 
 /// A tab wraps an existing surface_id with shell-level metadata.
 /// The surface remains the app/display object; the tab is shell policy only.
@@ -1734,7 +1770,7 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
 /// Maximum scenes tracked by Atlas (equals WORKSPACE_COUNT).
 const ATLAS_MAX_SCENES: usize = 5;
 /// Maximum frames tracked per scene descriptor (equals MAX_FRAMES).
-const ATLAS_MAX_FRAMES_PER_SCENE: usize = 4;
+const ATLAS_MAX_FRAMES_PER_SCENE: usize = 5;
 /// Length of fixed-size scene label byte array (no heap strings).
 const ATLAS_LABEL_LEN: usize = 16;
 
@@ -1969,6 +2005,11 @@ static mut SURFACE_201_X: i32 = 100;
 static mut SURFACE_201_Y: i32 = 100;
 static mut SURFACE_201_W: u32 = 640;
 static mut SURFACE_201_H: u32 = 480;
+// Mesh surface 202 position tracking
+static mut SURFACE_202_X: i32 = 200;
+static mut SURFACE_202_Y: i32 = 100;
+static mut SURFACE_202_W: u32 = 640;
+static mut SURFACE_202_H: u32 = 480;
 
 fn clamp_surface_size(x: i32, y: i32, w: u32, h: u32) -> (u32, u32) {
     let max_w = (P.width - x).max(P.min_width as i32) as u32;
@@ -2022,6 +2063,8 @@ fn emit_snapshot() {
         pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_LINEN, SURFACE_200_X as u64, SURFACE_200_Y as u64);
         // Quil surface 201 position update
         pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_QUIL, SURFACE_201_X as u64, SURFACE_201_Y as u64);
+        // Mesh surface 202 position update
+        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_MESH, SURFACE_202_X as u64, SURFACE_202_Y as u64);
     }
 }
 
@@ -2037,6 +2080,7 @@ unsafe fn get_surface_bounds(sid: u64) -> Option<(i32, i32, u32, u32)> {
         SURFACE_ID_TEST4  => Some((SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H)),
         SURFACE_ID_LINEN  => Some((SURFACE_200_X, SURFACE_200_Y, SURFACE_200_W, SURFACE_200_H)),
         SURFACE_ID_QUIL   => Some((SURFACE_201_X, SURFACE_201_Y, SURFACE_201_W, SURFACE_201_H)),
+        SURFACE_ID_MESH   => Some((SURFACE_202_X, SURFACE_202_Y, SURFACE_202_W, SURFACE_202_H)),
         _ => None,
     }
 }
@@ -2059,6 +2103,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             SURFACE_ID_TEST4  => (SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H),
             SURFACE_ID_LINEN  => (SURFACE_200_X, SURFACE_200_Y, SURFACE_200_W, SURFACE_200_H),
             SURFACE_ID_QUIL   => (SURFACE_201_X, SURFACE_201_Y, SURFACE_201_W, SURFACE_201_H),
+            SURFACE_ID_MESH   => (SURFACE_202_X, SURFACE_202_Y, SURFACE_202_W, SURFACE_202_H),
             // OS-owned surfaces: cursor and panels are known but non-focusable —
             // log nonfocusable.reject, not unknown.reject.
             SURFACE_ID_CURSOR
@@ -2087,6 +2132,7 @@ fn surface_is_alive(sid: u64) -> bool {
         SURFACE_ID_TEST4    => unsafe { SURFACE_103_ALIVE },
         SURFACE_ID_LINEN    => true,  // linen never destroys its surface
         SURFACE_ID_QUIL     => true,  // quil never destroys its surface
+        SURFACE_ID_MESH     => true,  // mesh never destroys its surface
         SURFACE_ID_CURSOR   => true,  // cursor never destroyed
         SURFACE_ID_LAUNCHER => unsafe { LAUNCHER_ACTIVE },
         SURFACE_ID_STATUS   => unsafe { STATUS_ACTIVE },
@@ -2161,7 +2207,7 @@ unsafe fn clear_focus_if_dead() {
             serial_println!("[focus.ref.clear] id={} reason=not_focusable lifecycle={:?}",
                 focused, lifecycle_state(focused));
         }
-        let z_order = [SURFACE_ID_QUIL, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
+        let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                        SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
         let mut found = false;
         for &sid in &z_order {
@@ -2393,6 +2439,7 @@ unsafe fn lifecycle_init_all() {
     lifecycle_register(SURFACE_ID_TEST4, LifecycleState::Visible);
     lifecycle_register(SURFACE_ID_LINEN, LifecycleState::Visible);
     lifecycle_register(SURFACE_ID_QUIL, LifecycleState::Visible);
+    lifecycle_register(SURFACE_ID_MESH, LifecycleState::Visible);
     // Cursor — always present, no frame.
     lifecycle_register(SURFACE_ID_CURSOR, LifecycleState::Mapped);
     // Panel surfaces — start Allocated (inactive, toggled on demand).
@@ -2439,7 +2486,7 @@ unsafe fn surface_in_active_scene(sid: u64) -> bool {
     // Surface not found in any frame.
     // Panels (0x90-0x96) and cursor are always visible regardless of scene.
     // Frame-owned surfaces (Linen, Quil) are NOT visible without a frame.
-    if sid == SURFACE_ID_LINEN || sid == SURFACE_ID_QUIL {
+    if sid == SURFACE_ID_LINEN || sid == SURFACE_ID_QUIL || sid == SURFACE_ID_MESH {
         return false;
     }
     true // panels/cursor always visible
@@ -3894,6 +3941,207 @@ unsafe fn quil_frame_id() -> Option<u32> {
     None
 }
 
+// ── Mesh Surface Control Helpers ──────────────────────────────────────────
+// Mesh = diagnostic capability graph placeholder.
+// Mirrors Linen/Quil placeholder pattern. No live graph yet.
+
+/// Frame ID reserved for Mesh's ShellFrame.
+const MESH_FRAME_ID: u32 = 4;
+/// Boot geometry for Mesh when first opened.
+const MESH_BOOT_X: i32 = 200;
+const MESH_BOOT_Y: i32 = 100;
+const MESH_BOOT_W: u32 = 640;
+const MESH_BOOT_H: u32 = 480;
+
+/// Fill color for the Mesh visual placeholder surface (amber/diagnostic).
+const MESH_PLACEHOLDER_COLOR: u32 = 0x00383010;
+
+/// Ensure a ShellFrame exists for Mesh in an empty FRAMES slot, assigned to
+/// the active scene. Returns the frame_id if created/found, or 0 if no slot.
+unsafe fn ensure_mesh_frame() -> Option<u32> {
+    // Check if Mesh frame already exists.
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == MESH_FRAME_ID {
+                return Some(MESH_FRAME_ID);
+            }
+        }
+    }
+    // Find an empty slot.
+    for (slot_idx, slot) in FRAMES.iter_mut().enumerate() {
+        if slot.is_none() {
+            *slot = Some(ShellFrame {
+                frame_id: MESH_FRAME_ID,
+                active_tab: 0,
+                tab_count: 1,
+                tabs: {
+                    let mut t: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                        [None; MAX_TABS_PER_FRAME as usize];
+                    t[0] = Some(ShellTab {
+                        surface_id: SURFACE_ID_MESH,
+                        title_id: 0,
+                        flags: 0,
+                    });
+                    t
+                },
+                scene_id: ACTIVE_SCENE_IDX,
+                flags: FRAME_FLAG_TOP_BAR, // top bar ON by default
+                normal_x: MESH_BOOT_X,
+                normal_y: MESH_BOOT_Y,
+                normal_w: MESH_BOOT_W,
+                normal_h: MESH_BOOT_H,
+            });
+            serial_println!("[mesh.placeholder.attach.frame] frame={} scene={} slot={}", MESH_FRAME_ID, ACTIVE_SCENE_IDX, slot_idx);
+            serial_println!("[mesh.placeholder.attach.tab] frame={} tab=0 surface={}", MESH_FRAME_ID, SURFACE_ID_MESH);
+            static mut MESH_CREATE_BUDGET: u32 = 4;
+            let b = &mut MESH_CREATE_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[shell.mesh.frame.create] frame={} slot={}", MESH_FRAME_ID, slot_idx); }
+            return Some(MESH_FRAME_ID);
+        }
+    }
+    // No empty slot — log and fail.
+    static mut MESH_NOSLOT_BUDGET: u32 = 4;
+    let b = &mut MESH_NOSLOT_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.mesh.frame.reject] reason=no_slot"); }
+    None
+}
+
+/// Open Mesh in the active scene: ensure frame exists, un-minimize, position,
+/// focus, and tile. If Mesh is already visible in the active scene, focuses it.
+/// Returns true if Mesh became visible/focused.
+unsafe fn open_mesh_in_active_scene() -> bool {
+    // I1: duplicate guard — if Mesh already visible in active scene, reject open.
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == MESH_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                serial_println!("[mesh.placeholder.reject.duplicate] frame={} scene={}", MESH_FRAME_ID, ACTIVE_SCENE_IDX);
+                // Focus existing Mesh instead.
+                if let Some(sid) = active_surface_for_frame(MESH_FRAME_ID) {
+                    if try_set_focus(sid) {
+                        serial_println!("[mesh.placeholder.focus] frame={} sid={}", MESH_FRAME_ID, sid);
+                    }
+                }
+                return true;
+            }
+        }
+    }
+
+    let fid = match ensure_mesh_frame() {
+        Some(f) => f,
+        None => return false,
+    };
+
+    // Update frame scene to current active scene.
+    for f in FRAMES.iter_mut() {
+        if let Some(frame) = f {
+            if frame.frame_id == fid {
+                frame.scene_id = ACTIVE_SCENE_IDX;
+                break;
+            }
+        }
+    }
+
+    if frame_is_minimized(fid) {
+        if !restore_minimized_frame(fid) {
+            return false;
+        }
+        static mut MESH_RESTORE_BUDGET: u32 = 8;
+        let b = &mut MESH_RESTORE_BUDGET;
+        if *b > 0 { *b -= 1; serial_println!("[shell.mesh.lifecycle.restore] frame={}", fid); }
+    } else if frame_is_zoomed(fid) {
+        // Already visible and zoomed — ensure focus.
+    } else {
+        // Already visible in tiling — ensure focus and re-tile.
+        let sid = match active_surface_for_frame(fid) {
+            Some(s) => s,
+            None => return false,
+        };
+        if surface_is_alive(sid) {
+            pdx_call(SLOT_DISPLAY, 0xEC, sid,
+                (MESH_BOOT_Y as u64) << 32 | MESH_BOOT_X as u64,
+                (MESH_BOOT_H as u64) << 32 | MESH_BOOT_W as u64);
+        }
+        tile_active_scene_frames();
+        try_set_focus(sid);
+    }
+
+    if let Some(sid) = active_surface_for_frame(fid) {
+        try_set_focus(sid);
+        serial_println!("[mesh.placeholder.focus] frame={} sid={}", fid, sid);
+    }
+
+    // Ensure Mesh placeholder fill rect is set on every open.
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_MESH, 0,
+        (MESH_PLACEHOLDER_COLOR as u64) << 32 | ((SURFACE_202_H as u64) << 16) | SURFACE_202_W as u64);
+
+    serial_println!("[mesh.placeholder.open] frame={}", fid);
+    snap_capture_layout();
+    static mut MESH_OPEN_BUDGET: u32 = 4;
+    let b = &mut MESH_OPEN_BUDGET;
+    if *b > 0 { *b -= 1; serial_println!("[shell.mesh.open] frame={}", fid); }
+    true
+}
+
+/// Focus Mesh if it is already open (frame exists and not minimized in active
+/// scene). If Mesh is not open, call open_mesh_in_active_scene().
+unsafe fn focus_or_open_mesh() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == MESH_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                if let Some(sid) = active_surface_for_frame(MESH_FRAME_ID) {
+                    if try_set_focus(sid) {
+                        static mut MESH_FOCUS_BUDGET: u32 = 4;
+                        let b = &mut MESH_FOCUS_BUDGET;
+                        if *b > 0 { *b -= 1; serial_println!("[shell.mesh.focus] frame={}", MESH_FRAME_ID); }
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    open_mesh_in_active_scene()
+}
+
+/// Toggle Mesh visibility in the active scene. If Mesh frame exists and is
+/// not minimized, minimize it. Otherwise open/un-minimize it.
+unsafe fn toggle_mesh() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == MESH_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                if minimize_frame(MESH_FRAME_ID) {
+                    static mut MESH_TOGGLE_BUDGET: u32 = 4;
+                    let b = &mut MESH_TOGGLE_BUDGET;
+                    if *b > 0 { *b -= 1; serial_println!("[shell.mesh.lifecycle.minimize] frame={}", MESH_FRAME_ID); }
+                    return true;
+                }
+                return false;
+            }
+        }
+    }
+    open_mesh_in_active_scene()
+}
+
+/// Return Mesh's frame_id, if its frame exists.
+unsafe fn mesh_frame_id() -> Option<u32> {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == MESH_FRAME_ID {
+                return Some(MESH_FRAME_ID);
+            }
+        }
+    }
+    None
+}
+
 // ── Frame Chrome Query Helpers ─────────────────────────────────────────────────
 // These are shell-policy queries that map between surface_id (display/input
 // object) and the Frame/Tab model (window management abstraction).
@@ -4353,6 +4601,10 @@ unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32)
         SURFACE_ID_QUIL => {
             SURFACE_201_X = x; SURFACE_201_Y = y;
             SURFACE_201_W = w; SURFACE_201_H = h;
+        }
+        SURFACE_ID_MESH => {
+            SURFACE_202_X = x; SURFACE_202_Y = y;
+            SURFACE_202_W = w; SURFACE_202_H = h;
         }
         _ => {}
     }
@@ -5030,6 +5282,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         let mut label_str = "unknown";
         let mut role_str = "Surface";
         if sid == SURFACE_ID_QUIL { label_str = "Quil"; role_str = "AppPlaceholder"; }
+        else if sid == SURFACE_ID_MESH { label_str = "Mesh"; role_str = "AppPlaceholder"; }
         else if sid == SURFACE_ID_LINEN { label_str = "Linen"; role_str = "AppPlaceholder"; }
         else if sid == SURFACE_ID_APP { label_str = "App"; role_str = "Frame"; }
         else if sid == SURFACE_ID_STATIC { label_str = "Test2"; role_str = "Frame"; }
@@ -6461,6 +6714,13 @@ pub extern "C" fn _start() -> ! {
                                         if toggle_quil() {
                                             mutated = true;
                                             serial_println!("[shell.action.quil] toggle");
+                                        }
+                                    }
+
+                                    SurfaceAction::ToggleMesh => {
+                                        if toggle_mesh() {
+                                            mutated = true;
+                                            serial_println!("[shell.action.mesh] toggle");
                                         }
                                     }
 
