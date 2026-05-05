@@ -5786,6 +5786,15 @@ const COMMAND_PALETTE_BOOT_Y: i32 = 200;
 const COMMAND_PALETTE_BOOT_W: u32 = 480;
 const COMMAND_PALETTE_BOOT_H: u32 = 240;
 
+/// Header bar height for command palette, in pixels.
+const PALETTE_LIST_HEADER_H: u32 = 28;
+/// Max rows with visual fill rects. Header takes rect_index=0; rows get 1-5 (MAX_RECTS=8).
+const PALETTE_LIST_ROW_RECTS: u8 = 5;
+/// Height of each command row in the palette, in pixels.
+const PALETTE_LIST_ROW_H: u32 = 24;
+/// Vertical gap between row fill rects, in pixels.
+const PALETTE_LIST_ROW_GAP: u32 = 2;
+
 /// Shell commands exposed via the command palette.
 /// Each command routes to an existing SurfaceAction via the normal dispatch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6035,6 +6044,18 @@ unsafe fn ensure_command_palette_frame() -> Option<u32> {
     None
 }
 
+/// Return a deterministic muted color for a specific Command (not necessarily selected).
+/// Used for non-selected row visuals in the palette list.
+fn command_kind_color(cmd: Command) -> u32 {
+    match cmd {
+        Command::OpenSelectedInQuil => 0x00605020, // muted amber
+        Command::FocusLinen => 0x00206040,         // muted green
+        Command::FocusQuil => 0x00206060,          // muted cyan
+        Command::SceneNext => 0x00303060,          // muted indigo
+        Command::OpenAtlas => 0x00503060,          // muted violet
+    }
+}
+
 /// Return the accent color for the currently selected command in the palette.
 /// Each command gets a distinctive color to provide visual feedback on selection.
 fn command_palette_selected_accent() -> u32 {
@@ -6054,7 +6075,7 @@ fn command_palette_selected_accent() -> u32 {
 }
 
 /// Render the command palette as a placeholder overlay.
-/// Uses single 0xEF fill rect for header; rows are proof-marker-only.
+/// Uses 0xEF fill rect with rect_index packing for header + row visuals.
 unsafe fn palette_render_list() {
     let w = COMMAND_PALETTE_BOOT_W;
     let h = COMMAND_PALETTE_BOOT_H;
@@ -6068,23 +6089,46 @@ unsafe fn palette_render_list() {
         COMMAND_LIST[COMMAND_PALETTE_SELECTED as usize].command as u8,
         COMMAND_PALETTE_SELECTED, header_color);
 
-    // Draw header bar at top of surface using selected command accent color.
+    // Draw header bar at top of surface using selected command accent color (rect_index=0).
+    // arg2 format: (rect_index<<56)|(color_rgb<<32)|(sh<<16)|sw
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_COMMAND_PALETTE,
         (0u64 << 32) | 0u64,
-        (header_color as u64) << 32
-            | (28u64) << 16
+        ((header_color as u64) << 32)
+            | ((PALETTE_LIST_HEADER_H as u64) << 16)
             | w as u64);
 
-    // Emit one row marker per command (proof only, not visual rows).
+    // Emit row markers and visual fill rects, one per command.
     let selected = COMMAND_PALETTE_SELECTED;
     let count = COMMAND_LIST.len();
+    let mut rects_sent: u8 = 0;
     for i in 0..count {
         let cmd = &COMMAND_LIST[i];
-        let sel = if i as u8 == selected { "true" } else { "false" };
+        let is_selected = i as u8 == selected;
+        let sel = if is_selected { "true" } else { "false" };
         serial_println!("[command_palette.row] index={} cmd={} name={} selected={}",
             i, cmd.command as u8, cmd.name, sel);
+
+        // Send visual row rect if within fill-rect slot budget (slots 1-5; slot 0 = header).
+        if (i as u8) < PALETTE_LIST_ROW_RECTS {
+            let rect_index = (i as u64 + 1) & 0xF;
+            let row_y = PALETTE_LIST_HEADER_H
+                + i as u32 * (PALETTE_LIST_ROW_H + PALETTE_LIST_ROW_GAP);
+            let row_color = if is_selected { header_color } else { command_kind_color(cmd.command) };
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_COMMAND_PALETTE,
+                (row_y as u64) << 32 | 0u64,
+                (rect_index << 56)
+                    | ((row_color as u64) << 32)
+                    | ((PALETTE_LIST_ROW_H as u64) << 16)
+                    | w as u64);
+            serial_println!("[command_palette.row_visual.rect] index={} cmd={} name={} color={:#010x} selected={}",
+                rect_index, cmd.command as u8, cmd.name, row_color, sel);
+            rects_sent += 1;
+        } else {
+            serial_println!("[command_palette.row_visual.skip] index={} reason=rect_budget",
+                i);
+        }
     }
-    serial_println!("[command_palette.done] count={} selected={}", count, selected);
+    serial_println!("[command_palette.done] count={} selected={} rects={}", count, selected, rects_sent);
 }
 
 /// Render and call the 0xEC upsert for the command palette surface geometry.
