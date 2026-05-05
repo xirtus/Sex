@@ -227,6 +227,11 @@ struct LinenObject {
 /// Indexed linearly; searched by object_id on access.
 static mut LINEN_OBJECTS: [Option<LinenObject>; LINEN_MAX_OBJECTS] = [None; LINEN_MAX_OBJECTS];
 
+/// Shell-local selection state for Linen objects.
+/// 0 = unset (repaired to first valid on first access via linen_selected_object_id()).
+/// Only meaningful when Linen surface is focused (FOCUSED_SURFACE_ID == SURFACE_ID_LINEN).
+static mut SELECTED_LINEN_OBJECT_ID: u64 = 0;
+
 /// Seed objects for initial Linen workspace. 6 objects covering key kinds.
 const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
     LinenObject {
@@ -360,6 +365,96 @@ fn linen_object_state_name(state: LinenObjectState) -> &'static str {
     }
 }
 
+/// Return the currently selected Linen object ID.
+/// If SELECTED_LINEN_OBJECT_ID is 0 (unset), repairs to first valid object.
+/// Always returns a valid object_id (≥1) or 0 if no objects exist.
+unsafe fn linen_selected_object_id() -> u64 {
+    if SELECTED_LINEN_OBJECT_ID == 0 {
+        linen_select_first_valid_object();
+        if SELECTED_LINEN_OBJECT_ID == 0 {
+            serial_println!("[linen.object_select.reject] reason=no_objects");
+            return 0;
+        }
+        serial_println!("[linen.object_select.repair] id={}", SELECTED_LINEN_OBJECT_ID);
+    }
+    serial_println!("[linen.object_select.current] id={}", SELECTED_LINEN_OBJECT_ID);
+    SELECTED_LINEN_OBJECT_ID
+}
+
+/// Set selection to the first valid Linen object (lowest object_id).
+unsafe fn linen_select_first_valid_object() {
+    for slot in LINEN_OBJECTS.iter() {
+        if let Some(obj) = slot {
+            SELECTED_LINEN_OBJECT_ID = obj.object_id;
+            serial_println!("[linen.object_select.current] id={}", obj.object_id);
+            return;
+        }
+    }
+    SELECTED_LINEN_OBJECT_ID = 0;
+}
+
+/// Advance selection to the next valid Linen object. Wraps around.
+/// No-op if fewer than 2 objects exist. Guarded to only fire when
+/// Linen is focused (see K4 doc — temporary global debug keys otherwise).
+unsafe fn linen_select_next_object() {
+    let current = SELECTED_LINEN_OBJECT_ID;
+    let mut found_current = false;
+    let mut first_valid: u64 = 0;
+    let mut next_valid: u64 = 0;
+    for slot in LINEN_OBJECTS.iter() {
+        if let Some(obj) = slot {
+            if first_valid == 0 { first_valid = obj.object_id; }
+            if found_current && next_valid == 0 {
+                next_valid = obj.object_id;
+                break;
+            }
+            if obj.object_id == current {
+                found_current = true;
+            }
+        }
+    }
+    if next_valid != 0 {
+        SELECTED_LINEN_OBJECT_ID = next_valid;
+        serial_println!("[linen.object_select.next] prev={} next={}", current, next_valid);
+    } else if first_valid != 0 && current != first_valid {
+        // Wrap around to first valid.
+        SELECTED_LINEN_OBJECT_ID = first_valid;
+        serial_println!("[linen.object_select.next] prev={} next={} wrap", current, first_valid);
+    } else {
+        serial_println!("[linen.object_select.reject] reason=single_object id={}", current);
+    }
+}
+
+/// Move selection to the previous valid Linen object. Wraps around.
+/// No-op if fewer than 2 objects exist. Guarded to only fire when
+/// Linen is focused (see K4 doc — temporary global debug keys otherwise).
+unsafe fn linen_select_prev_object() {
+    let current = SELECTED_LINEN_OBJECT_ID;
+    let mut prev_valid: u64 = 0;
+    let mut last_valid: u64 = 0;
+    let mut first_valid: u64 = 0;
+    for slot in LINEN_OBJECTS.iter() {
+        if let Some(obj) = slot {
+            if first_valid == 0 { first_valid = obj.object_id; }
+            if obj.object_id == current {
+                break;
+            }
+            prev_valid = obj.object_id;
+            last_valid = obj.object_id;
+        }
+    }
+    if prev_valid != 0 && prev_valid != current {
+        SELECTED_LINEN_OBJECT_ID = prev_valid;
+        serial_println!("[linen.object_select.prev] prev={} current={}", prev_valid, current);
+    } else if last_valid != 0 && last_valid != current {
+        // Wrap around to last valid.
+        SELECTED_LINEN_OBJECT_ID = last_valid;
+        serial_println!("[linen.object_select.prev] prev={} current={} wrap", last_valid, current);
+    } else {
+        serial_println!("[linen.object_select.reject] reason=single_object id={}", current);
+    }
+}
+
 /// Maximum visible rows in the Linen object list placeholder UI.
 const LINEN_LIST_MAX_ROWS: u8 = 8;
 /// Height of each object row in the list, in pixels.
@@ -422,11 +517,13 @@ unsafe fn linen_render_object_list() {
             }
             let kind_name = linen_object_kind_name(obj.kind);
             let state_name = linen_object_state_name(obj.state);
-            serial_println!("[linen.object_list.row] id={} kind={} state={} name={}",
-                obj.object_id, kind_name, state_name, obj.display_name);
+            let selected_flag = if obj.object_id == SELECTED_LINEN_OBJECT_ID { "true" } else { "false" };
+            serial_println!("[linen.object_list.row] id={} kind={} state={} name={} selected={}",
+                obj.object_id, kind_name, state_name, obj.display_name, selected_flag);
             rows_emitted += 1;
         }
     }
+    serial_println!("[linen.object_select.current] id={}", SELECTED_LINEN_OBJECT_ID);
     serial_println!("[linen.object_list.done] count={} rows={}", count, rows_emitted);
 }
 
@@ -1312,7 +1409,7 @@ unsafe fn send_scene_render_tokens() {
 ///   Byte 3: chrome_flags
 ///   Byte 4: accessibility_flags
 ///   Byte 5-6: reserved (0)
-///   Byte 7: checksum  = XOR(byte0 .. byte6)
+///   Byte 7: checksum  = XOR(byte0 .. byte6) & 0x7F  (bit 7 cleared, preserves bit 63 = 0)
 fn pack_scene_settings_blob(preset_idx: u8, chrome: u8, access: u8) -> u64 {
     let b: [u8; 8] = [
         SCENE_BLOB_MAGIC,
@@ -1324,7 +1421,8 @@ fn pack_scene_settings_blob(preset_idx: u8, chrome: u8, access: u8) -> u64 {
         0u8,
         0u8, // placeholder for checksum
     ];
-    let chk: u8 = b[0] ^ b[1] ^ b[2] ^ b[3] ^ b[4] ^ b[5] ^ b[6];
+    // Mask to 7 bits: bit 7 of byte 7 = bit 63 of the u64, reserved for REPLY_STATUS_BIT.
+    let chk: u8 = (b[0] ^ b[1] ^ b[2] ^ b[3] ^ b[4] ^ b[5] ^ b[6]) & 0x7F;
     let mut out = b;
     out[7] = chk;
     u64::from_le_bytes(out)
@@ -1339,16 +1437,58 @@ fn unpack_scene_settings_blob(blob: u64) -> Option<(u8, u8, u8)> {
     if b[0] != SCENE_BLOB_MAGIC || b[1] != SCENE_BLOB_VERSION {
         return None;
     }
-    let expected: u8 = b[0] ^ b[1] ^ b[2] ^ b[3] ^ b[4] ^ b[5] ^ b[6];
+    let expected: u8 = (b[0] ^ b[1] ^ b[2] ^ b[3] ^ b[4] ^ b[5] ^ b[6]) & 0x7F;
     if b[7] != expected {
         return None;
     }
     Some((b[2], b[3], b[4]))
 }
 
+// ── E* storage reply protocol — local constants (match servers/sexstore/src/main.rs) ──
+const STORE_REPLY_STATUS_BIT: u64 = 0x8000_0000_0000_0000;
+const STORE_KV_OK:            u64 = 0x00;
+const STORE_KV_NOT_FOUND:     u64 = 0x01;
+const STORE_KV_FULL:          u64 = 0x02;
+const STORE_KV_INVALID_KEY:   u64 = 0x03;
+const STORE_KV_INVALID_VALUE: u64 = 0x04;
+const STORE_KV_DENIED:        u64 = 0x05;
+
+#[inline(always)]
+fn store_reply_is_status(reply: u64) -> bool { reply & STORE_REPLY_STATUS_BIT != 0 }
+#[inline(always)]
+fn store_reply_status(reply: u64) -> u64 { reply & !STORE_REPLY_STATUS_BIT }
+#[inline(always)]
+fn store_reply_is_value(reply: u64) -> bool { reply & STORE_REPLY_STATUS_BIT == 0 }
+
 /// Handle a validated GET reply: apply persisted fields, reset ephemeral
 /// state to defaults, re-send tokens to sexdisplay.
 unsafe fn handle_sexstore_get_reply(value: u64) {
+    // E* protocol: bit 63 = 1 means status reply, not stored value.
+    if store_reply_is_status(value) {
+        let code = store_reply_status(value);
+        unsafe {
+            static mut STATUS_BUDGET: u32 = 4;
+            if STATUS_BUDGET > 0 {
+                STATUS_BUDGET -= 1;
+                match code {
+                    STORE_KV_NOT_FOUND => serial_println!("[shell.store.reply.status] code=not_found key=0x01"),
+                    STORE_KV_DENIED    => serial_println!("[shell.store.reply.status] code=denied key=0x01"),
+                    STORE_KV_FULL      => serial_println!("[shell.store.reply.status] code=full key=0x01"),
+                    STORE_KV_INVALID_KEY   => serial_println!("[shell.store.reply.status] code=invalid_key key=0x01"),
+                    STORE_KV_INVALID_VALUE => serial_println!("[shell.store.reply.status] code=invalid_value key=0x01"),
+                    STORE_KV_OK        => serial_println!("[shell.store.reply.status] code=ok key=0x01"),
+                    _                  => serial_println!("[shell.store.reply.reject] code={:#x} key=0x01", code),
+                }
+            }
+        }
+        // Any status on GET → keep defaults already applied at boot.
+        unsafe {
+            static mut DEFAULT_BUDGET: u32 = 2;
+            if DEFAULT_BUDGET > 0 { DEFAULT_BUDGET -= 1; serial_println!("[shell.store.default] reason=status_reply"); }
+        }
+        return;
+    }
+    serial_println!("[shell.store.reply.value] key=0x01");
     if let Some((preset, chrome, access)) = unpack_scene_settings_blob(value) {
         let clamped_preset = if (preset as usize) < PRESET_COUNT { preset } else { 0 };
         SCENE_APPEARANCE_STATE.preset_idx = clamped_preset;
@@ -1581,7 +1721,10 @@ enum SurfaceAction {
     SnapHome, SnapEnd,
     ShrinkWidth, GrowWidth, ShrinkHeight, GrowHeight,
     LegacyFocusToggle,
-    // J4: Open Linen object ID 3 (CodeFile "Silk Shell main.rs") into a Quil buffer.
+    // K4: Cycle Linen object selection forward (J) / backward (K).
+    SelectNextLinenObject,
+    SelectPrevLinenObject,
+    // J4: Open selected Linen object into a Quil buffer.
     OpenObjectInQuil,
     // D3: Accessibility keyboard actions using semantic node tree.
     AccessFocusNext,
@@ -1689,15 +1832,18 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x59 => Some(SurfaceAction::OpenObjectInQuil), // test trigger (not standard PS/2 key)
         0x52 => Some(SurfaceAction::ToggleCollar), // Insert
         0x51 => Some(SurfaceAction::ToggleBell),   // PageDown
-        0x47 => Some(SurfaceAction::SnapHome),
-        0x4F => Some(SurfaceAction::SnapEnd),
-        0x4B => Some(SurfaceAction::MoveLeft),
-        0x4D => Some(SurfaceAction::MoveRight),
-        0x48 => Some(SurfaceAction::MoveUp),
-        0x50 => Some(SurfaceAction::MoveDown),
-        _ => None,
-    }
-}
+	        0x47 => Some(SurfaceAction::SnapHome),
+	        0x4F => Some(SurfaceAction::SnapEnd),
+	        0x4B => Some(SurfaceAction::MoveLeft),
+	        0x4D => Some(SurfaceAction::MoveRight),
+	        0x48 => Some(SurfaceAction::MoveUp),
+	        0x50 => Some(SurfaceAction::MoveDown),
+	        // K4: Linen selection cycling - gated to Linen-focused state in handler.
+	        0x24 => Some(SurfaceAction::SelectNextLinenObject), // J key
+	        0x25 => Some(SurfaceAction::SelectPrevLinenObject), // K key
+	        _ => None,
+	    }
+	}
 
 fn layout_left() -> (i32, i32, u32, u32) {
     (0, P.bar_height, (P.width as u32) / 2, (P.height - P.bar_height) as u32)
@@ -8269,11 +8415,38 @@ pub extern "C" fn _start() -> ! {
                                         }
                                     }
 
-                                    // J4: Test trigger — open Linen object ID 3 (CodeFile) into Quil buffer.
+                                    // K4: Open selected Linen object into a Quil buffer.
                                     SurfaceAction::OpenObjectInQuil => {
-                                        if open_linen_object_in_quil(3) {
+                                        let obj_id = linen_selected_object_id();
+                                        if obj_id == 0 {
+                                            serial_println!("[linen.quil.open.reject.no_selection]");
+                                        } else if open_linen_object_in_quil(obj_id) {
                                             mutated = true;
-                                            serial_println!("[shell.action.open_object_in_quil] object_id=3");
+                                            serial_println!("[shell.action.open_object_in_quil] object_id={}", obj_id);
+                                        }
+                                    }
+
+                                    // K4: Cycle Linen selection forward — gated to Linen-focused state.
+                                    SurfaceAction::SelectNextLinenObject => {
+                                        if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
+                                            linen_select_next_object();
+                                            linen_render_object_list();
+                                            mutated = true;
+                                            serial_println!("[shell.action.select_next_linen] id={}", SELECTED_LINEN_OBJECT_ID);
+                                        } else {
+                                            serial_println!("[linen.object_select.reject] reason=not_focused");
+                                        }
+                                    }
+
+                                    // K4: Cycle Linen selection backward — gated to Linen-focused state.
+                                    SurfaceAction::SelectPrevLinenObject => {
+                                        if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
+                                            linen_select_prev_object();
+                                            linen_render_object_list();
+                                            mutated = true;
+                                            serial_println!("[shell.action.select_prev_linen] id={}", SELECTED_LINEN_OBJECT_ID);
+                                        } else {
+                                            serial_println!("[linen.object_select.reject] reason=not_focused");
                                         }
                                     }
 
