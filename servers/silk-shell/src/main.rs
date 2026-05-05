@@ -719,6 +719,9 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
     // 8. J6: Emit Mesh diagnostic link facts for all Linen↔Quil links.
     mesh_emit_linen_quil_links();
 
+    // 9. J7: Emit Bell placeholder event for the new link.
+    bell_emit_object_link_event(object_id, object_id);
+
     true
 }
 
@@ -862,6 +865,64 @@ unsafe fn mesh_emit_linen_quil_links() {
         }
     }
     serial_println!("[mesh.object_link.done] links={} stale={}", link_count, stale_count);
+}
+
+// ── J7: Bell Object Link Event Stub ──────────────────────────────────────────
+// Shell-local Bell placeholder event for Linen→Quil buffer links.
+// No real queue, no notification UI, no new PDX ops, no renderer changes.
+// See docs/handoff/J7_BELL_OBJECT_LINK_EVENT_V1.md
+
+/// Kinds of Bell events that can be emitted as shell-local stubs.
+/// Real Bell will have a richer category/priority system (see G1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum BellEventKind {
+    ObjectLinkedToBuffer = 0,
+    ObjectOpenRequested = 1,
+    OperationNeedsGrant = 2,
+    DiagnosticOnly = 3,
+}
+
+/// Emit a shell-local Bell placeholder event for a Linen→Quil object link.
+///
+/// Validates object_id and buffer_id via existing local helpers, then emits
+/// proof markers. No real queue, no notification surface, no PDX send.
+unsafe fn bell_emit_object_link_event(object_id: u64, buffer_id: u64) {
+    serial_println!("[bell.event.stub] kind=ObjectLinkedToBuffer object_id={} buffer_id={}", object_id, buffer_id);
+
+    // Validate object exists.
+    let obj = linen_object_by_id(object_id);
+    let obj_valid = obj.is_some();
+
+    // Validate buffer exists and references the expected object.
+    let buf = quil_buffer_by_id(buffer_id);
+    let buf_valid = buf.is_some();
+
+    if !obj_valid || !buf_valid {
+        serial_println!("[bell.event.reject.missing] object_valid={} buffer_valid={}", obj_valid, buf_valid);
+        serial_println!("[bell.event.done] reason=rejected");
+        return;
+    }
+
+    let obj = obj.unwrap();
+    let buf = buf.unwrap();
+
+    // Verify the buffer actually references this object (cross-check).
+    if buf.linen_object_ref != object_id {
+        serial_println!("[bell.event.reject.missing] reason=buffer_ref_mismatch expected={} actual={}", object_id, buf.linen_object_ref);
+        serial_println!("[bell.event.done] reason=rejected");
+        return;
+    }
+
+    serial_println!(
+        "[bell.event.object_link] object_id={} object_kind={} buffer_id={} buffer_kind={}",
+        object_id,
+        linen_object_kind_name(obj.kind),
+        buffer_id,
+        quil_buffer_kind_name(buf.kind),
+    );
+
+    serial_println!("[bell.event.done] reason=emitted");
 }
 
 // ── A3: Lifecycle State Model ─────────────────────────────────────────────────
