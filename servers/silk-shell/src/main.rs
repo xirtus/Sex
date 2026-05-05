@@ -651,13 +651,16 @@ const QUIL_LIST_MAX_ROWS: u8 = 8;
 const QUIL_LIST_HEADER_COLOR: u32 = 0x00302E56;
 /// Header bar height in pixels.
 const QUIL_LIST_HEADER_H: u32 = 28;
-/// Max rows with visual fill rects. Header takes rect_index=0; rows get 1-7 (MAX_RECTS=8).
-const QUIL_LIST_ROW_RECTS: u8 = 7;
+/// Number of rows with visual accent bars (rect_indices 3-7 within MAX_RECTS=8).
+const QUIL_LIST_ACCENT_BARS: u8 = 5;
 /// Height of each buffer row in the list, in pixels.
 const QUIL_LIST_ROW_H: u32 = 24;
 /// Vertical gap between row fill rects, in pixels.
 const QUIL_LIST_ROW_GAP: u32 = 2;
-
+/// Background color for the Quil list area behind all rows.
+const QUIL_LIST_BG_COLOR: u32 = 0x000C1420; // dark slate (matching Linen)
+/// Width of the left accent bar per row, in pixels.
+const QUIL_ACCENT_BAR_W: u32 = 5;
 /// Kind of Quil buffer. Maps to H2 §2 workstation object types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -1354,6 +1357,12 @@ unsafe fn bell_emit_object_link_event(object_id: u64, buffer_id: u64) {
     bell_record_event(object_id, buffer_id);
     serial_println!("[bell.ring.done] count={} event_id={}",
         bell_ring_count(), BELL_EVENT_SEQUENCE - 1);
+
+    // Refresh Bell surface if it is currently visible in the active scene.
+    if bell_is_visible_in_active_scene() {
+        serial_println!("[bell.render.refresh] reason=visible_after_link object_id={} buffer_id={}", object_id, buffer_id);
+        bell_render_event_list();
+    }
 
     serial_println!("[bell.event.done] reason=emitted");
 }
@@ -6063,8 +6072,7 @@ unsafe fn open_bell_in_active_scene() -> bool {
         serial_println!("[bell.placeholder.focus] frame={} sid={}", fid, sid);
     }
 
-    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_BELL_PLACEHOLDER, 0,
-        (BELL_PLACEHOLDER_COLOR as u64) << 32 | ((SURFACE_204_H as u64) << 16) | SURFACE_204_W as u64);
+    bell_render_event_list();
 
     serial_println!("[bell.placeholder.open] frame={}", fid);
     snap_capture_layout();
@@ -6143,6 +6151,27 @@ unsafe fn bell_row_color(ev: &BellEvent) -> u32 {
         }
         _ => 0x00404060, // fallback for unimplemented event kinds
     }
+}
+
+/// Check whether the Bell surface is currently visible in the active scene.
+/// Returns true only when the Bell frame exists in the active scene,
+/// is not minimized, and the surface is alive/focusable.
+unsafe fn bell_is_visible_in_active_scene() -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == BELL_FRAME_ID
+                && frame.scene_id == ACTIVE_SCENE_IDX
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                if let Some(sid) = active_surface_for_frame(BELL_FRAME_ID) {
+                    if surface_is_alive(sid) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Render the Bell event list as row fill rects inside the Bell placeholder surface.
