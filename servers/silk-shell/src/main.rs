@@ -606,6 +606,111 @@ fn quil_buffer_state_name(state: QuilBufferState) -> &'static str {
     }
 }
 
+// ── J4: Linen → Quil Buffer Link ─────────────────────────────────────────────
+// Shell-local ID linking: open a Linen object into a Quil buffer slot.
+// No editor, no storage, no parser/compiler/build, no PDX calls.
+// See docs/handoff/J4_LINEN_OBJECT_TO_QUIL_BUFFER_V1.md
+
+/// Open a Linen object into a Quil buffer using shell-local IDs only.
+/// Links LINEN_OBJECTS[object_id] <-> QUIL_BUFFERS[buffer_id] via ref fields.
+/// Returns true if the link was established and Quil surface is focused.
+unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
+    serial_println!("[linen.quil.open.request] id={}", object_id);
+
+    // 1. Find the LinenObject by ID.
+    let mut found_obj: Option<LinenObject> = None;
+    for slot in LINEN_OBJECTS.iter() {
+        if let Some(obj) = slot {
+            if obj.object_id == object_id {
+                found_obj = Some(*obj);
+                break;
+            }
+        }
+    }
+    let obj = match found_obj {
+        Some(o) => o,
+        None => {
+            serial_println!("[linen.quil.open.reject.missing] id={}", object_id);
+            return false;
+        }
+    };
+
+    // 2. Check grant_ref — still allow link but emit no_grant marker.
+    if obj.grant_ref == 0 {
+        serial_println!("[linen.quil.open.no_grant] id={} kind={}", object_id, obj.kind as u8);
+    }
+
+    // 3. Map LinenObjectKind to QuilBufferKind for the linked buffer.
+    let buf_kind = match obj.kind {
+        LinenObjectKind::CodeFile => QuilBufferKind::Code,
+        LinenObjectKind::MediaAsset => QuilBufferKind::LinenObjectView,
+        LinenObjectKind::BuildArtifact => QuilBufferKind::BuildOutput,
+        _ => QuilBufferKind::Text,
+    };
+
+    // 4. Find existing buffer for this object, or create one in an empty slot.
+    let mut buffer_created = false;
+    let mut found_buf = false;
+    for slot in QUIL_BUFFERS.iter_mut() {
+        if let Some(buf) = slot {
+            if buf.linen_object_ref == object_id {
+                // Update existing buffer state.
+                buf.state = QuilBufferState::Open;
+                buf.linked_surface_id = SURFACE_ID_QUIL;
+                found_buf = true;
+                break;
+            }
+        }
+    }
+    if !found_buf {
+        for slot in QUIL_BUFFERS.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(QuilBuffer {
+                    buffer_id: object_id, // deterministic: use object's ID
+                    kind: buf_kind,
+                    state: QuilBufferState::Open,
+                    linen_object_ref: object_id,
+                    project_id: obj.project_id,
+                    grant_ref: obj.grant_ref,
+                    linked_surface_id: SURFACE_ID_QUIL,
+                    flags: 0,
+                    display_name: obj.display_name,
+                });
+                buffer_created = true;
+                found_buf = true;
+                break;
+            }
+        }
+    }
+    if !found_buf {
+        serial_println!("[linen.quil.open.reject.missing] reason=no_buffer_slot");
+        return false;
+    }
+
+    // 5. Update LinenObject's linked_surface_id in-place.
+    for slot in LINEN_OBJECTS.iter_mut() {
+        if let Some(o) = slot {
+            if o.object_id == object_id {
+                o.linked_surface_id = SURFACE_ID_QUIL;
+                break;
+            }
+        }
+    }
+
+    // 6. Emit buffer link proof marker.
+    serial_println!("[linen.quil.buffer.linked] object_id={} buffer_id={} kind={}",
+        object_id, object_id, buf_kind as u8);
+
+    // 7. Open Quil surface if not already visible.
+    let quil_opened = open_quil_in_active_scene();
+    if quil_opened {
+        serial_println!("[linen.quil.quil_opened] object_id={}", object_id);
+    }
+
+    serial_println!("[linen.quil.done] object_id={} buffer_created={}", object_id, buffer_created);
+    true
+}
+
 // ── A3: Lifecycle State Model ─────────────────────────────────────────────────
 // Additive metadata only. No behavior change.
 // See docs/handoff/A2_COMPOSITOR_LIFECYCLE_FSM_SPEC_V1.md
@@ -1150,6 +1255,8 @@ enum SurfaceAction {
     SnapHome, SnapEnd,
     ShrinkWidth, GrowWidth, ShrinkHeight, GrowHeight,
     LegacyFocusToggle,
+    // J4: Open Linen object ID 3 (CodeFile "Silk Shell main.rs") into a Quil buffer.
+    OpenObjectInQuil,
     // D3: Accessibility keyboard actions using semantic node tree.
     AccessFocusNext,
     AccessFocusPrev,
@@ -1253,6 +1360,7 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
         0x44 => Some(SurfaceAction::ToggleAtlas),    // F10
         0x57 => Some(SurfaceAction::AccessClose),    // F11
         0x58 => Some(SurfaceAction::ToggleMesh),    // F12
+        0x59 => Some(SurfaceAction::OpenObjectInQuil), // PrintScreen — J4 test trigger
         0x52 => Some(SurfaceAction::ToggleCollar), // Insert
         0x51 => Some(SurfaceAction::ToggleBell),   // PageDown
         0x47 => Some(SurfaceAction::SnapHome),
@@ -7825,6 +7933,14 @@ pub extern "C" fn _start() -> ! {
                                         if toggle_bell() {
                                             mutated = true;
                                             serial_println!("[shell.action.bell] toggle");
+                                        }
+                                    }
+
+                                    // J4: Test trigger — open Linen object ID 3 (CodeFile) into Quil buffer.
+                                    SurfaceAction::OpenObjectInQuil => {
+                                        if open_linen_object_in_quil(3) {
+                                            mutated = true;
+                                            serial_println!("[shell.action.open_object_in_quil] object_id=3");
                                         }
                                     }
 
