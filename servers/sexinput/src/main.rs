@@ -11,6 +11,8 @@ fn panic(_info: &PanicInfo) -> ! {
 
 // ── Pointer state for HID report normalizer ──
 static mut LAST_BUTTONS: u8 = 0;
+// Tracks the USB HID keycode from the previous keyboard report for press/release detection.
+static mut LAST_USB_KEY: u8 = 0;
 const OP_HID_EVENT: u64 = 0x202;
 const OP_USB_MOUSE_REPORT: u64 = 0x260;
 const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
@@ -53,6 +55,7 @@ struct HidPointerRawReport {
     dy: i16,
     buttons: u8,
     wheel: i8,
+    is_abs: bool,
 }
 
 /// Parse a boot-mouse-style 3-byte report, detect button edge transitions,
@@ -86,15 +89,95 @@ fn normalize_pointer_report_v1(
     // Keep wire encoding byte-for-byte: shell decodes as msg.argN as i32.
     let dx = report.dx as i32;
     let dy = report.dy as i32;
-    if dx != 0 || dy != 0 {
-        emit(dx as u64, dy as u64, EV_REL);
-        count += 1;
+    
+    let mut reason = "none";
+    if changed != 0 { reason = "buttons"; }
+
+    if report.is_abs {
+        unsafe {
+            static mut LAST_ABS_X: i32 = -1;
+            static mut LAST_ABS_Y: i32 = -1;
+            if dx != LAST_ABS_X || dy != LAST_ABS_Y {
+                if reason == "none" { reason = "abs"; }
+            }
+            if reason != "none" {
+                LAST_ABS_X = dx;
+                LAST_ABS_Y = dy;
+                unsafe {
+                    static mut POINTER_FORWARD_BUDGET: u32 = 2048;
+                    if POINTER_FORWARD_BUDGET > 0 {
+                        POINTER_FORWARD_BUDGET -= 1;
+                        serial_println!("[sexinput.pointer.forward.reason={}]", reason);
+                    }
+                }
+                emit(dx as u64, dy as u64, EV_ABS);
+                count += 1;
+            }
+        }
+    } else {
+        if dx != 0 || dy != 0 {
+            if reason == "none" { reason = "motion"; }
+        }
+        if reason != "none" {
+            unsafe {
+                static mut POINTER_FORWARD_BUDGET: u32 = 2048;
+                if POINTER_FORWARD_BUDGET > 0 {
+                    POINTER_FORWARD_BUDGET -= 1;
+                    serial_println!("[sexinput.pointer.forward.reason={}]", reason);
+                }
+            }
+            if dx != 0 || dy != 0 {
+                emit(dx as u64, dy as u64, EV_REL);
+                count += 1;
+            }
+        }
     }
 
     // V1 keeps wheel in the raw report model but does not emit wheel events yet.
     let _ = report.wheel;
 
     count
+}
+
+/// Translate USB HID keyboard usage ID to PS/2 scancode set 1.
+/// Returns None for unmapped keys.
+fn hid_to_ps2(hid: u8) -> Option<u8> {
+    match hid {
+        0x47 => Some(0x46), // Scroll Lock
+        0x28 => Some(0x1C), // Enter
+        0x44 => Some(0x57), // F11
+        0x45 => Some(0x58), // F12
+        0x2C => Some(0x39), // Space
+        0x2A => Some(0x0E), // Backspace
+        0x29 => Some(0x01), // Esc
+        0x04 => Some(0x1E), // a
+        0x05 => Some(0x30), // b
+        0x06 => Some(0x2E), // c
+        0x07 => Some(0x20), // d
+        0x08 => Some(0x12), // e
+        0x09 => Some(0x21), // f
+        0x0A => Some(0x22), // g
+        0x0B => Some(0x23), // h
+        0x0C => Some(0x17), // i
+        0x0D => Some(0x24), // j
+        0x0E => Some(0x25), // k
+        0x0F => Some(0x26), // l
+        0x10 => Some(0x32), // m
+        0x11 => Some(0x31), // n
+        0x12 => Some(0x18), // o
+        0x13 => Some(0x19), // p
+        0x14 => Some(0x10), // q
+        0x15 => Some(0x13), // r
+        0x16 => Some(0x1F), // s
+        0x17 => Some(0x14), // t
+        0x18 => Some(0x16), // u
+        0x19 => Some(0x2F), // v
+        0x1A => Some(0x11), // w
+        0x1B => Some(0x2D), // x
+        0x1C => Some(0x15), // y
+        0x1D => Some(0x2C), // z
+        _ => None,
+    }
 }
 
 #[no_mangle]
@@ -143,25 +226,65 @@ pub extern "C" fn _start() -> ! {
         if let Some(req) = pdx_try_listen_raw(0) {
             serial_println!("[sexinput.usb_mouse.recv] type={:#x}", req.type_id);
             if req.type_id == OP_USB_MOUSE_REPORT {
+                let cls = req.arg0;
+                unsafe {
+                    static mut SEXINPUT_POINTER_RECV_BUDGET: u32 = 16;
+                    let rem = &mut SEXINPUT_POINTER_RECV_BUDGET;
+                    if *rem > 0 {
+                        *rem -= 1;
+                        serial_println!("[sexinput.pointer.recv] class={} a0={} a1={}", cls, req.arg1 as i32, req.arg2 as i32);
+                    }
+                }
+
+                // Compatibility path: if producer already sends normalized HID event
+                // tuples in OP_USB_MOUSE_REPORT (class in arg0), forward as-is.
+                if cls == EV_REL || cls == EV_ABS || cls == EV_BTN {
+                    unsafe {
+                        static mut SEXINPUT_POINTER_SEND_BUDGET: u32 = 2048;
+                        let rem = &mut SEXINPUT_POINTER_SEND_BUDGET;
+                        if *rem > 0 {
+                            *rem -= 1;
+                            serial_println!("[sexinput.pointer.send] class={} a0={} a1={}", cls, req.arg1 as i32, req.arg2 as i32);
+                        }
+                    }
+                    if let Err(err) = pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, req.arg1, req.arg2, cls) {
+                        unsafe {
+                            static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
+                            let rem = &mut SEXINPUT_POINTER_DROP_BUDGET;
+                            if *rem > 0 {
+                                *rem -= 1;
+                                serial_println!(
+                                    "[sexinput.pointer.drop] reason=shell_send_fail class={} a0={} a1={} err={}",
+                                    cls, req.arg1 as i32, req.arg2 as i32, err
+                                );
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 let buttons = req.arg1 as u8;
                 let packed = req.arg2;
-                let dx = (packed as u8) as i8;
-                let dy = ((packed >> 8) as u8) as i8;
-                let wheel = ((packed >> 16) as u8) as i8;
+                let is_abs = ((packed >> 32) & 1) != 0;
+                let dx = if is_abs { (packed & 0xFFFF) as u16 as i16 } else { (packed as u8) as i8 as i16 };
+                let dy = if is_abs { ((packed >> 16) & 0xFFFF) as u16 as i16 } else { ((packed >> 8) as u8) as i8 as i16 };
+                let wheel = if is_abs { 0 } else { ((packed >> 16) as u8) as i8 };
                 serial_println!(
-                    "[sexinput.usb_mouse.decode.ok] buttons={:#x} dx={} dy={} wheel={}",
+                    "[sexinput.usb_mouse.decode.ok] buttons={:#x} dx={} dy={} wheel={} is_abs={}",
                     buttons,
                     dx,
                     dy,
-                    wheel
+                    wheel,
+                    is_abs
                 );
 
                 serial_println!("[sexinput.usb_mouse.normalize.start]");
                 let report = HidPointerRawReport {
-                    dx: dx as i16,
-                    dy: dy as i16,
+                    dx,
+                    dy,
                     buttons,
                     wheel,
+                    is_abs,
                 };
                 let mut normalized_events: [(u64, u64, u64); 4] = [(0, 0, 0); 4];
                 let mut norm_count: usize = 0;
@@ -223,6 +346,14 @@ pub extern "C" fn _start() -> ! {
 
                 for i in 0..norm_count {
                     let (arg0, arg1, arg2) = normalized_events[i];
+                    unsafe {
+                        static mut SEXINPUT_POINTER_SEND_BUDGET: u32 = 2048;
+                        let rem = &mut SEXINPUT_POINTER_SEND_BUDGET;
+                        if *rem > 0 {
+                            *rem -= 1;
+                            serial_println!("[sexinput.pointer.send] class={} a0={} a1={}", arg2, arg0 as i32, arg1 as i32);
+                        }
+                    }
                     // Budgeted marker for EV_REL emission to shell.
                     if arg2 == 2 { // EV_REL
                         unsafe {
@@ -240,9 +371,38 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+                if norm_count == 0 {
+                    unsafe {
+                        static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
+                        let rem = &mut SEXINPUT_POINTER_DROP_BUDGET;
+                        if *rem > 0 {
+                            *rem -= 1;
+                            serial_println!(
+                                "[sexinput.pointer.drop] reason=idle_or_no_edges class={} a0={} a1={}",
+                                EV_REL,
+                                dx as i32,
+                                dy as i32
+                            );
+                        }
+                    }
+                }
                 if send_err == 0 {
                     serial_println!("[sexinput.usb_mouse.shell_send.ok]");
                 } else {
+                    unsafe {
+                        static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
+                        let rem = &mut SEXINPUT_POINTER_DROP_BUDGET;
+                        if *rem > 0 {
+                            *rem -= 1;
+                            serial_println!(
+                                "[sexinput.pointer.drop] reason=shell_send_fail class={} a0={} a1={} err={}",
+                                EV_REL,
+                                dx as i32,
+                                dy as i32,
+                                send_err
+                            );
+                        }
+                    }
                     serial_println!("[sexinput.usb_mouse.shell_send.fail] err={}", send_err);
                 }
             } else if req.type_id == OP_USB_KEYBOARD_REPORT {
@@ -290,6 +450,38 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+                // Forward mapped keys as EV_KEY to silk-shell using HID→PS/2 translation.
+                // Tracks single key (first slot only) for press/release edges.
+                unsafe {
+                    let prev = LAST_USB_KEY;
+                    let cur = keycode;
+                    if cur != prev {
+                        if prev != 0 {
+                            if let Some(sc) = hid_to_ps2(prev) {
+                                pdx_call(SLOT_SHELL, OP_HID_EVENT, sc as u64, 0, EV_KEY);
+                            }
+                        }
+                        if cur != 0 {
+                            if let Some(sc) = hid_to_ps2(cur) {
+                                static mut KBD_EVKEY_BUDGET: u32 = 64;
+                                let rem = &mut KBD_EVKEY_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!("[sexinput.usb_kbd.evkey] hid=0x{:x} sc=0x{:x}", cur, sc);
+                                }
+                                pdx_call(SLOT_SHELL, OP_HID_EVENT, sc as u64, 1, EV_KEY);
+                            } else {
+                                static mut KBD_DROP_BUDGET: u32 = 16;
+                                let rem = &mut KBD_DROP_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!("[sexinput.usb_kbd.drop] hid=0x{:x} reason=unmapped", cur);
+                                }
+                            }
+                        }
+                        LAST_USB_KEY = cur;
+                    }
+                }
             }
         }
 
@@ -299,7 +491,7 @@ pub extern "C" fn _start() -> ! {
             // Kernel RawInput is type 0x201, arg0 = scancode
             if req.type_id == 0x201 {
                 let scancode = req.arg0;
-                // serial_println!("[sexinput] Raw scancode: {:#x}", scancode);
+                serial_println!("[sexinput.ps2.scancode] raw={:#x}", scancode);
 
                 // 2. Normalize and forward to silk-shell (SLOT_SHELL = 6)
                 // Typed event via 0x202: arg0=code(break-bit stripped), arg1=1(press)/0(release), arg2=EV_KEY
@@ -372,14 +564,14 @@ pub extern "C" fn _start() -> ! {
                 0 => {
                     pdx_call(SLOT_SHELL, OP_HID_EVENT, 200, 200, EV_ABS);
                     serial_println!("[sexinput.drag_proof.start]");
-                    HidPointerRawReport { dx: 0, dy: 0, buttons: 0x01, wheel: 0 } // left down edge
+                    HidPointerRawReport { dx: 0, dy: 0, buttons: 0x01, wheel: 0, is_abs: false } // left down edge
                 }
-                1 => HidPointerRawReport { dx: 6, dy: 4, buttons: 0x01, wheel: 0 }, // drag move
+                1 => HidPointerRawReport { dx: 6, dy: 4, buttons: 0x01, wheel: 0, is_abs: false }, // drag move
                 _ => {
                     // Stage 2 (final): button up. Set DONE to prevent wrap/replay.
                     unsafe { SYNTHETIC_DRAG_PROOF_DONE = true; }
                     serial_println!("[sexinput.drag_proof.done]");
-                    HidPointerRawReport { dx: 0, dy: 0, buttons: 0x00, wheel: 0 } // left up edge
+                    HidPointerRawReport { dx: 0, dy: 0, buttons: 0x00, wheel: 0, is_abs: false } // left up edge
                 }
             };
 

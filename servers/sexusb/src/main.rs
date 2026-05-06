@@ -173,6 +173,42 @@ fn decode_tablet_report(buf: &[u8], len: usize) -> Option<TabletReport> {
     })
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum HidRole {
+    Keyboard,
+    PointerTablet,
+    PointerMouse,
+    Unknown,
+}
+
+#[derive(Copy, Clone)]
+struct SingleHidBind {
+    slot_id: u32,
+    port: u64,
+    role: HidRole,
+    ep_addr: u8,
+    ep_dci: u32,
+    max_packet: u16,
+    interval: u8,
+}
+
+#[inline(always)]
+fn classify_single_hid_role(
+    found_hid_keyboard: bool,
+    found_hid_tablet: bool,
+    found_hid_mouse: bool,
+) -> HidRole {
+    if found_hid_keyboard {
+        HidRole::Keyboard
+    } else if found_hid_tablet && !found_hid_mouse {
+        HidRole::PointerTablet
+    } else if found_hid_mouse {
+        HidRole::PointerMouse
+    } else {
+        HidRole::Unknown
+    }
+}
+
 const SLOT_USB_SEXINPUT: u64 = 9;
 const OP_USB_MOUSE_REPORT: u64 = 0x260;
 const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
@@ -691,11 +727,25 @@ pub extern "C" fn _start() -> ! {
     const PORTSC_BASE: u64 = 0x400;
     const PORTSC_STRIDE: u64 = 0x10;
     const PORTSC_CCS: u32 = 1u32 << 0;
+    const PORTSC_PED: u32 = 1u32 << 1;
     let mut target_port: u64 = 0;
     let mut port_speed: u32 = 0;
+    let mut ports_connected: u32 = 0;
     for port in 1..=max_ports {
         let portsc_off = PORTSC_BASE + (port - 1) * PORTSC_STRIDE;
         let portsc = mmio_read32(op_base, portsc_off);
+        let connected = if (portsc & PORTSC_CCS) != 0 { 1 } else { 0 };
+        let enabled = if (portsc & PORTSC_PED) != 0 { 1 } else { 0 };
+        let speed = (portsc >> 10) & 0xF;
+        if connected == 1 {
+            ports_connected = ports_connected.wrapping_add(1);
+        }
+        if port <= 16 {
+            serial_println!(
+                "[sexusb.xhci.port] port={} connected={} enabled={} speed={}",
+                port, connected, enabled, speed
+            );
+        }
         if (portsc & PORTSC_CCS) != 0 {
             target_port = port;
             port_speed = (portsc >> 10) & 0xF;
@@ -1036,6 +1086,7 @@ pub extern "C" fn _start() -> ! {
     let dev_slot_dw3 = unsafe { core::ptr::read_volatile(dev_slot_dw3_ptr) };
     let slot_state = (dev_slot_dw3 >> 27) & 0x1F;
     serial_println!("[sexusb.xhci.address_device.state.ok] slot_state={}", slot_state);
+    serial_println!("[sexusb.xhci.slot] slot={} port={} state={}", en_slot_id, target_port, slot_state);
 
     // EP0 output dequeue pointer from Device Context after Address Device.
     let ep0_deq_dw2 = unsafe { core::ptr::read_volatile((device_ctx_va + ctx_stride + 8) as *const u32) };
@@ -1574,6 +1625,10 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.xhci.full18.device] device={:#x}", full_device);
     serial_println!("[sexusb.xhci.full18.configs] configs={}", full_configs);
     serial_println!("[sexusb.xhci.full18.mps_check] mps={}", full_mps);
+    serial_println!(
+        "[sexusb.dev.desc] slot={} vendor={:#x} product={:#x} class={:#x} subclass={:#x} proto={:#x}",
+        en_slot_id, full_vendor, full_product, full_class, full_subclass, full_proto
+    );
 
     // MPS consistency check: bMaxPacketSize0 should match earlier fetch.
     if u32::from(full_mps) != actual_mps {
@@ -1730,6 +1785,7 @@ pub extern "C" fn _start() -> ! {
     let cfg_total_lo = unsafe { core::ptr::read_volatile(cfg_buf.add(2)) };
     let cfg_total_hi = unsafe { core::ptr::read_volatile(cfg_buf.add(3)) };
     let w_total_length: u64 = ((cfg_total_hi as u64) << 8) | (cfg_total_lo as u64);
+    let cfg_num_interfaces: u32 = unsafe { core::ptr::read_volatile(cfg_buf.add(4)) } as u32;
 
     // Reject wTotalLength < 9 (corrupt). Allow ==9 (valid but no-HID will park).
     if w_total_length < 9 {
@@ -1737,6 +1793,10 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
     serial_println!("[sexusb.xhci.config.header.totallen] len={}", w_total_length);
+    serial_println!(
+        "[sexusb.cfg.desc] slot={} total_len={} num_interfaces={}",
+        en_slot_id, w_total_length, cfg_num_interfaces
+    );
 
     // --- TD2: Full Config (wLength=wTotalLength) ---
     // Read EP0 TR Dequeue Pointer from Device Context after TD1 consumption.
@@ -1889,11 +1949,15 @@ pub extern "C" fn _start() -> ! {
     let mut found_hid_mouse: bool = false;
     let mut found_hid_tablet: bool = false;
     let mut found_hid_keyboard: bool = false;
+    let mut current_hid_role: u8 = 0; // 1=keyboard,2=mouse,3=tablet,4=unknown
     let mut hid_interface_number: u8 = 0;
     let mut hid_report_desc_len: u16 = 0;
     let mut intr_ep_addr: u8 = 0;
     let mut intr_ep_mps: u16 = 0;
     let mut intr_ep_interval: u8 = 0;
+    let mut keyboard_ep_addr: u8 = 0;
+    let mut pointer_ep_addr: u8 = 0;
+    let mut pointer_role: u8 = 0; // 0=none,2=mouse,3=tablet
 
     while walk_off < received_len {
         let b_len = unsafe { core::ptr::read_volatile(walk_buf.add(walk_off as usize)) };
@@ -1916,33 +1980,51 @@ pub extern "C" fn _start() -> ! {
                     let b_class    = unsafe { core::ptr::read_volatile(walk_buf.add(walk_off as usize + 5)) };
                     let b_subclass = unsafe { core::ptr::read_volatile(walk_buf.add(walk_off as usize + 6)) };
                     let b_protocol = unsafe { core::ptr::read_volatile(walk_buf.add(walk_off as usize + 7)) };
+                    unsafe {
+                        static mut IFACE_DIAG_BUDGET: u32 = 16;
+                        let rem = &mut IFACE_DIAG_BUDGET;
+                        if *rem > 0 {
+                            *rem -= 1;
+                            serial_println!(
+                                "[sexusb.hid.iface] idx={} if={} class={:#x} subclass={:#x} proto={:#x}",
+                                walk_off, b_intf_num, b_class, b_subclass, b_protocol
+                            );
+                        }
+                    }
                     let is_hid = b_class == 0x03;
                     if is_hid {
                         inside_hid_iface = true;
                         iface_is_boot_mouse = (b_subclass == 0x01) && (b_protocol == 0x02);
                         let is_boot_keyboard = (b_subclass == 0x01) && (b_protocol == 0x01);
                         if iface_is_boot_mouse {
+                            current_hid_role = 2;
                             found_hid_mouse = true;
                             hid_interface_number = b_intf_num;
                             serial_println!("[sexusb.xhci.config.hid_boot_mouse.found] intf={} off={}",
                                 b_intf_num, walk_off);
                         } else if is_boot_keyboard {
+                            current_hid_role = 1;
                             found_hid_keyboard = true;
                             hid_interface_number = b_intf_num;
                             serial_println!("[sexusb.xhci.config.hid_boot_keyboard.found] intf={} off={}",
                                 b_intf_num, walk_off);
                         } else if b_protocol != 0x01 {
+                            current_hid_role = 3;
                             // Non-keyboard HID interface (tablet/pointer)
                             found_hid_tablet = true;
                             hid_interface_number = b_intf_num;
                             serial_println!("[sexusb.xhci.config.hid_tablet.found] intf={} off={} subclass={} protocol={}",
                                 b_intf_num, walk_off, b_subclass, b_protocol);
+                        } else {
+                            current_hid_role = 4;
                         }
                     } else {
+                        current_hid_role = 0;
                         inside_hid_iface = false;
                         iface_is_boot_mouse = false;
                     }
                 } else {
+                    current_hid_role = 0;
                     inside_hid_iface = false;
                     iface_is_boot_mouse = false;
                 }
@@ -1979,6 +2061,17 @@ pub extern "C" fn _start() -> ! {
                     let b_interval  = unsafe { core::ptr::read_volatile(walk_buf.add(walk_off as usize + 6)) };
                     let dir_in      = (b_endpoint & 0x80) != 0;
                     let intr_type   = (bm_attrs & 0x03) == 0x03;
+                    unsafe {
+                        static mut EP_DIAG_BUDGET: u32 = 24;
+                        let rem = &mut EP_DIAG_BUDGET;
+                        if *rem > 0 {
+                            *rem -= 1;
+                            serial_println!(
+                                "[sexusb.hid.ep] if={} ep={:#x} attr={:#x} maxpkt={} interval={}",
+                                hid_interface_number, b_endpoint, bm_attrs, pkt_size, b_interval
+                            );
+                        }
+                    }
                     if dir_in && intr_type {
                         if pkt_size == 0 {
                             serial_println!("[sexusb.xhci.config.intr_ep_mps.bad] off={} mps={}", walk_off, pkt_size);
@@ -1990,6 +2083,37 @@ pub extern "C" fn _start() -> ! {
                         let ep_which = if iface_is_boot_mouse { "mouse" } else if found_hid_keyboard { "keyboard" } else { "tablet" };
                         serial_println!("[sexusb.xhci.config.intr_ep.{}] off={} addr={:#x} mps={} interval={}",
                             ep_which, walk_off, b_endpoint, pkt_size, b_interval);
+                        match current_hid_role {
+                            1 => {
+                                keyboard_ep_addr = b_endpoint;
+                                serial_println!(
+                                    "[sexusb.hid.bind] role=keyboard if={} ep={:#x} reason=hid_boot_keyboard",
+                                    hid_interface_number, b_endpoint
+                                );
+                            }
+                            2 => {
+                                pointer_ep_addr = b_endpoint;
+                                pointer_role = 2;
+                                serial_println!(
+                                    "[sexusb.hid.bind] role=mouse if={} ep={:#x} reason=hid_boot_mouse",
+                                    hid_interface_number, b_endpoint
+                                );
+                            }
+                            3 => {
+                                pointer_ep_addr = b_endpoint;
+                                pointer_role = 3;
+                                serial_println!(
+                                    "[sexusb.hid.bind] role=tablet if={} ep={:#x} reason=hid_pointer_like_interface",
+                                    hid_interface_number, b_endpoint
+                                );
+                            }
+                            _ => {
+                                serial_println!(
+                                    "[sexusb.hid.bind] role=unknown if={} ep={:#x} reason=unclassified_hid_interface",
+                                    hid_interface_number, b_endpoint
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -2012,13 +2136,48 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
-    let is_tablet_device = found_hid_tablet && !found_hid_mouse;
-    let is_keyboard_device = found_hid_keyboard;
+    let bind_role = classify_single_hid_role(found_hid_keyboard, found_hid_tablet, found_hid_mouse);
+    let is_tablet_device = bind_role == HidRole::PointerTablet;
+    let is_keyboard_device = bind_role == HidRole::Keyboard;
 
     // Boot keyboard diagnostic.
     if found_hid_keyboard {
         serial_println!("[sexusb.kbd.found] intf={} ep=0x{:x}", hid_interface_number, intr_ep_addr);
     }
+    let keyboard_ep_str = if keyboard_ep_addr == 0 { "none" } else { "set" };
+    let pointer_ep_str = if pointer_ep_addr == 0 { "none" } else { "set" };
+    let pointer_role_str = if pointer_role == 2 {
+        "mouse"
+    } else if pointer_role == 3 {
+        "tablet"
+    } else {
+        "none"
+    };
+    serial_println!(
+        "[sexusb.hid.bind.summary] keyboard_ep={} pointer_ep={} pointer_role={}",
+        keyboard_ep_str,
+        pointer_ep_str,
+        pointer_role_str
+    );
+    let single_bind = SingleHidBind {
+        slot_id: en_slot_id,
+        port: target_port,
+        role: bind_role,
+        ep_addr: intr_ep_addr,
+        ep_dci: 3,
+        max_packet: intr_ep_mps,
+        interval: intr_ep_interval,
+    };
+    serial_println!(
+        "[sexusb.dev.hid.summary] slot={} keyboard_ep={} pointer_ep={} pointer_role={}",
+        en_slot_id, keyboard_ep_str, pointer_ep_str, pointer_role_str
+    );
+    let hid_devices: u32 = if found_hid_keyboard || found_hid_mouse || found_hid_tablet { 1 } else { 0 };
+    let pointer_devices: u32 = if pointer_ep_addr != 0 { 1 } else { 0 };
+    serial_println!(
+        "[sexusb.enum.summary] ports_connected={} slots_enabled={} hid_devices={} pointer_devices={}",
+        ports_connected, 1, hid_devices, pointer_devices
+    );
 
     // ===== GET_DESCRIPTOR(HID REPORT) =====
     // Phase: USB_XHCI_HID_REPORT_DESCRIPTOR_PROOF_V1
@@ -2378,9 +2537,9 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
-    const INTR_DCI: u32 = 3; // EP1 IN endpoint context index
+    let intr_dci: u32 = single_bind.ep_dci; // EP1 IN endpoint context index (single-slot path)
     const EP_TYPE_INTERRUPT_IN: u32 = 7;
-    let intr_report_len: u32 = intr_ep_mps as u32;
+    let intr_report_len: u32 = single_bind.max_packet as u32;
 
     let intr_ring_phys = sys_alloc_phys(PAGE_SIZE);
     let intr_report_phys = sys_alloc_phys(PAGE_SIZE);
@@ -2437,15 +2596,15 @@ pub extern "C" fn _start() -> ! {
     }
     // Context Entries (Slot Context DW0 bits 31:27) must cover the highest added DCI.
     let slot_dw0 = unsafe { core::ptr::read_volatile(in_slot_base.add(0)) };
-    let slot_dw0_new = (slot_dw0 & !(0x1Fu32 << 27)) | ((INTR_DCI & 0x1F) << 27);
+    let slot_dw0_new = (slot_dw0 & !(0x1Fu32 << 27)) | ((intr_dci & 0x1F) << 27);
     unsafe { core::ptr::write_volatile(in_slot_base.add(0), slot_dw0_new); }
 
     // Build EP1 IN endpoint context at DCI=3.
-    let in_ep_base = (input_ctx_va + ctx_stride * (1 + INTR_DCI as u64)) as *mut u32;
-    let ep_dw0 = ((intr_ep_interval as u32) << 16); // Interval in bits 23:16
+    let in_ep_base = (input_ctx_va + ctx_stride * (1 + intr_dci as u64)) as *mut u32;
+    let ep_dw0 = ((single_bind.interval as u32) << 16); // Interval in bits 23:16
     let ep_dw1 = (CERR_DEFAULT & 0x3)
         | (EP_TYPE_INTERRUPT_IN << 3)
-        | ((intr_ep_mps as u32) << 16);
+        | ((single_bind.max_packet as u32) << 16);
     let ep_deq = intr_ring_phys | 1u64; // DCS=1
     let ep_dw2 = (ep_deq & 0xFFFF_FFFF) as u32;
     let ep_dw3 = (ep_deq >> 32) as u32;
@@ -2569,18 +2728,25 @@ pub extern "C" fn _start() -> ! {
     // Inner loop waits indefinitely (no POLL_BUDGET timeout) — safe because the
     // xHCI completes (or NAKs-then-completes) the single enqueued TRB before we
     // re-arm. No second TRB is ever enqueued while one is outstanding.
-    let dev_kind = if is_keyboard_device { "keyboard" } else if is_tablet_device { "tablet" } else { "mouse" };
+    let dev_kind = if single_bind.role == HidRole::Keyboard {
+        "keyboard"
+    } else if single_bind.role == HidRole::PointerTablet {
+        "tablet"
+    } else {
+        "mouse"
+    };
     serial_println!("[sexusb.hid.{}.continuous.start] attempts=unbounded", dev_kind);
     let mut saw_nonzero = false;
     let mut i: u32 = 0;
     let mut intr_prod: u64 = 0;
     let mut intr_pcs: u32 = 1;
     loop {
-        // Clear report buffer before each transfer.
+        let mut skip_advance = false;
+        // NOTE: report buffer is NOT cleared here. xHCI overwrites it on TRB
+        // completion. Clearing here would destroy data from a re-arm TRB that
+        // completed during IPC (see keyboard re-arm path). The re-arm path
+        // clears the buffer explicitly before queueing its TRB.
         let clear_len = if intr_report_len > 8 { 8 } else { intr_report_len };
-        unsafe {
-            core::ptr::write_bytes(intr_report_va as *mut u8, 0, clear_len as usize);
-        }
 
         // Queue one interrupt-IN Normal TRB at current ring producer slot.
         // Circular ring (Link TRB at slot INTR_TR_RING_SIZE-1) keeps xHCI dequeue
@@ -2594,7 +2760,7 @@ pub extern "C" fn _start() -> ! {
             (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs, // IOC + current cycle
         );
 
-        mmio_write32(db_base, en_slot_id as u64 * 4, INTR_DCI);
+        mmio_write32(db_base, single_bind.slot_id as u64 * 4, intr_dci);
 
         // Wait indefinitely: xHCI retries interrupt-IN until device sends data.
         let mut intr_ok = false;
@@ -2613,7 +2779,7 @@ pub extern "C" fn _start() -> ! {
                 let slot = (ev_d3 >> 24) & 0xFF;
                 let ep = (ev_d3 >> 16) & 0x1F;
                 if (cc == TRB_CC_SUCCESS || cc == TRB_CC_SHORT_PACKET)
-                    && slot == en_slot_id && ep == INTR_DCI
+                    && slot == single_bind.slot_id && ep == intr_dci
                 {
                     intr_ok = true;
                 } else {
@@ -2645,8 +2811,59 @@ pub extern "C" fn _start() -> ! {
         }
         let intr_actual = intr_report_len - intr_residue;
         let report_ptr = intr_report_va as *const u8;
+        let b0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
+        let b1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
+        let b2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
+        let b3 = unsafe { core::ptr::read_volatile(report_ptr.add(3)) };
+        let b4 = unsafe { core::ptr::read_volatile(report_ptr.add(4)) };
+        let b5 = unsafe { core::ptr::read_volatile(report_ptr.add(5)) };
+        let b6 = unsafe { core::ptr::read_volatile(report_ptr.add(6)) };
+        let b7 = unsafe { core::ptr::read_volatile(report_ptr.add(7)) };
+        let classify_kind = if is_keyboard_device {
+            "keyboard"
+        } else if is_tablet_device {
+            "tablet"
+        } else {
+            "mouse"
+        };
+        unsafe {
+            static mut INTR_RAW_BUDGET: u32 = 16;
+            static mut INTR_RAW_SEQ: u32 = 0;
+            let rem = &mut INTR_RAW_BUDGET;
+            if *rem > 0 {
+                let n = INTR_RAW_SEQ;
+                INTR_RAW_SEQ = INTR_RAW_SEQ.wrapping_add(1);
+                *rem -= 1;
+                serial_println!(
+                    "[sexusb.intr.raw] n={} actual={} dev={} ep={} bytes={:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+                    n,
+                    intr_actual,
+                    classify_kind,
+                    intr_dci,
+                    b0,
+                    b1,
+                    b2,
+                    b3,
+                    b4,
+                    b5,
+                    b6,
+                    b7
+                );
+            }
+        }
 
         if is_keyboard_device {
+            unsafe {
+                static mut INTR_CLASSIFY_BUDGET: u32 = 16;
+                static mut INTR_CLASSIFY_SEQ: u32 = 0;
+                let rem = &mut INTR_CLASSIFY_BUDGET;
+                if *rem > 0 {
+                    let n = INTR_CLASSIFY_SEQ;
+                    INTR_CLASSIFY_SEQ = INTR_CLASSIFY_SEQ.wrapping_add(1);
+                    *rem -= 1;
+                    serial_println!("[sexusb.intr.classify] n={} kind=keyboard action=forward reason=hid_keyboard_interface", n);
+                }
+            }
             // === Keyboard decode path ===
             let kb_b0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
             let kb_b1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
@@ -2658,7 +2875,7 @@ pub extern "C" fn _start() -> ! {
             let kb_b7 = unsafe { core::ptr::read_volatile(report_ptr.add(7)) };
             // Forward keyboard report to sexinput.
             unsafe {
-                static mut KBD_RAW_BUDGET: u32 = 16;
+                static mut KBD_RAW_BUDGET: u32 = 128;
                 let rem = &mut KBD_RAW_BUDGET;
                 if *rem > 0 {
                     *rem -= 1;
@@ -2668,13 +2885,44 @@ pub extern "C" fn _start() -> ! {
             }
             let first_key = kb_b2 as u64;
             unsafe {
-                static mut KBD_FORWARD_BUDGET: u32 = 16;
+                static mut KBD_FORWARD_BUDGET: u32 = 128;
                 let rem = &mut KBD_FORWARD_BUDGET;
                 if *rem > 0 && first_key != 0 {
                     *rem -= 1;
                     serial_println!("[sexusb.kbd.forward] key=0x{:x}", first_key);
                 }
             }
+            // RE-ARM before IPC: queue next interrupt-IN TRB so xHCI keeps
+            // polling during the synchronous pdx_call (which may block sexusb).
+            // Without this, USB polls during IPC are lost → missed short taps.
+            intr_prod += 1;
+            if intr_prod >= INTR_TR_RING_SIZE - 1 {
+                intr_pcs ^= 1;
+                trb_write_volatile(
+                    intr_ring_va,
+                    INTR_TR_RING_SIZE - 1,
+                    (intr_ring_phys & 0xFFFF_FFFF) as u32,
+                    (intr_ring_phys >> 32) as u32,
+                    0u32,
+                    (TRB_TYPE_LINK << 10) | (1u32 << 1) | intr_pcs,
+                );
+                intr_prod = 0;
+            }
+            unsafe {
+                core::ptr::write_bytes(intr_report_va as *mut u8, 0, clear_len as usize);
+            }
+            trb_write_volatile(
+                intr_ring_va,
+                intr_prod,
+                (intr_report_phys & 0xFFFF_FFFF) as u32,
+                (intr_report_phys >> 32) as u32,
+                intr_report_len,
+                (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs,
+            );
+            mmio_write32(db_base, single_bind.slot_id as u64 * 4, intr_dci);
+            // Mark advance done so bottom-of-loop skips it.
+            skip_advance = true;
+
             let _ = pdx_call_checked(
                 SLOT_USB_SEXINPUT,
                 OP_USB_KEYBOARD_REPORT,
@@ -2682,7 +2930,87 @@ pub extern "C" fn _start() -> ! {
                 kb_b0 as u64,  // arg1 = modifiers
                 first_key,     // arg2 = first pressed keycode (0 if none)
             );
+
+            // Lightweight spin on event ring: catch the re-arm TRB completion if it
+            // occurred during IPC. No new TRB is queued here (intr_prod unchanged),
+            // so there is zero risk of overwriting a pending TRB.
+            // Falls through silently if the re-arm TRB has not yet completed.
+            {
+                let mut spin: u32 = 0;
+                loop {
+                    let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+                    if (ev_d3 & 1) == (ev_dcs as u32) {
+                        let ev_type = (ev_d3 >> 10) & 0x3F;
+                        if ev_type == TRB_TYPE_TRANSFER_EVENT {
+                            let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                            let cc = (ev_d2 >> 24) & 0xFF;
+                            let residue = ev_d2 & 0xFFFFFF;
+                            let slot = (ev_d3 >> 24) & 0xFF;
+                            let ep = (ev_d3 >> 16) & 0x1F;
+                            if (cc == TRB_CC_SUCCESS || cc == TRB_CC_SHORT_PACKET)
+                                && slot == single_bind.slot_id && ep == intr_dci
+                            {
+                                // Re-arm TRB completed during IPC. Read and forward.
+                                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                                ev_idx += 1;
+                                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                                let new_erdp = event_ring_phys + ev_idx * 16;
+                                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+
+                                if residue <= intr_report_len {
+                                    let b_actual = intr_report_len - residue;
+                                    let b_b0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
+                                    let b_b2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
+                                    serial_println!("[sexusb.kbd.poll.burst] b2=0x{:x} actual={}", b_b2, b_actual);
+                                    let burst_key = b_b2 as u64;
+                                    let _ = pdx_call_checked(
+                                        SLOT_USB_SEXINPUT,
+                                        OP_USB_KEYBOARD_REPORT,
+                                        0,
+                                        b_b0 as u64,
+                                        burst_key,
+                                    );
+                                }
+                            } else {
+                                // Not our event; consume and continue spinning.
+                                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                                ev_idx += 1;
+                                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                                let new_erdp = event_ring_phys + ev_idx * 16;
+                                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                            }
+                        } else {
+                            // Non-transfer event; consume, continue spinning.
+                            trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                            ev_idx += 1;
+                            if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                            let new_erdp = event_ring_phys + ev_idx * 16;
+                            mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                            mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                        }
+                        // If we get here, we consumed an event. Continue spinning for more.
+                    }
+                    spin += 1;
+                    if spin >= 3000 {
+                        break; // Nothing more right now; main loop will pick it up.
+                    }
+                    core::hint::spin_loop();
+                }
+            }
         } else if is_tablet_device {
+            unsafe {
+                static mut INTR_CLASSIFY_BUDGET: u32 = 16;
+                static mut INTR_CLASSIFY_SEQ: u32 = 0;
+                let rem = &mut INTR_CLASSIFY_BUDGET;
+                if *rem > 0 {
+                    let n = INTR_CLASSIFY_SEQ;
+                    INTR_CLASSIFY_SEQ = INTR_CLASSIFY_SEQ.wrapping_add(1);
+                    *rem -= 1;
+                    serial_println!("[sexusb.intr.classify] n={} kind=tablet action=forward reason=hid_tablet_interface", n);
+                }
+            }
             // === Tablet decode path ===
             let rb0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
             let rb1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
@@ -2697,34 +3025,35 @@ pub extern "C" fn _start() -> ! {
             }
 
             if let Some(td) = decode_tablet_report(&report_bytes, intr_actual as usize) {
-                // Track previous absolute position for delta computation.
-                // Use static mut for simplicity; initialized to first report values.
-                static mut PREV_ABS_X: u16 = 0;
-                static mut PREV_ABS_Y: u16 = 0;
-                static mut FIRST_TABLET_REPORT: bool = true;
-                let first = unsafe { FIRST_TABLET_REPORT };
-                let (dx_i8, dy_i8) = if first {
-                    unsafe {
-                        PREV_ABS_X = td.abs_x;
-                        PREV_ABS_Y = td.abs_y;
-                        FIRST_TABLET_REPORT = false;
+                // Pass absolute coordinates directly. Set bit 32 of packed_axes to indicate absolute.
+                let packed_axes = (td.abs_x as u64) | ((td.abs_y as u64) << 16) | (1u64 << 32);
+                
+                unsafe {
+                    static mut POINTER_CANDIDATE_BUDGET: u32 = 16;
+                    static mut POINTER_CANDIDATE_SEQ: u32 = 0;
+                    let rem = &mut POINTER_CANDIDATE_BUDGET;
+                    if *rem > 0 {
+                        let n = POINTER_CANDIDATE_SEQ;
+                        POINTER_CANDIDATE_SEQ = POINTER_CANDIDATE_SEQ.wrapping_add(1);
+                        *rem -= 1;
+                        serial_println!(
+                            "[sexusb.pointer.candidate] n={} buttons={} x={} y={} mode=abs",
+                            n,
+                            td.buttons,
+                            td.abs_x,
+                            td.abs_y
+                        );
                     }
-                    (0i8, 0i8)
-                } else {
-                    let prev_x = unsafe { PREV_ABS_X };
-                    let prev_y = unsafe { PREV_ABS_Y };
-                    let raw_dx = (td.abs_x as i32) - (prev_x as i32);
-                    let raw_dy = (td.abs_y as i32) - (prev_y as i32);
-                    let dx_clipped = raw_dx.clamp(-128, 127) as i8;
-                    let dy_clipped = raw_dy.clamp(-128, 127) as i8;
-                    unsafe {
-                        PREV_ABS_X = td.abs_x;
-                        PREV_ABS_Y = td.abs_y;
+                }
+                // Required marker: sexusb.tablet.abs x=... y=... buttons=...
+                unsafe {
+                    static mut TABLET_ABS_BUDGET: u32 = 2048;
+                    if TABLET_ABS_BUDGET > 0 {
+                        TABLET_ABS_BUDGET -= 1;
+                        serial_println!("[sexusb.tablet.abs] x={} y={} buttons={}", td.abs_x, td.abs_y, td.buttons);
                     }
-                    (dx_clipped, dy_clipped)
-                };
-                let packed_axes = (dx_i8 as u8 as u64)
-                    | ((dy_i8 as u8 as u64) << 8);
+                }
+                
                 // Budgeted marker for what is forwarded to sexinput.
                 unsafe {
                     static mut FORWARD_MOUSE_BUDGET: u32 = 16;
@@ -2742,33 +3071,39 @@ pub extern "C" fn _start() -> ! {
                     td.buttons as u64,
                     packed_axes,
                 );
-                if td.buttons == 0 && dx_i8 == 0 && dy_i8 == 0 {
-                    if HID_VERBOSE_RING_LOG && (i < 8 || i % 64 == 0) {
-                        serial_println!("[sexusb.hid.tablet.continuous.idle] i={}", i);
-                    }
-                } else {
-                    // Budgeted tablet report liveness marker.
-                    unsafe {
-                        static mut TABLET_LIVE_BUDGET: u32 = 16;
-                        let rem = &mut TABLET_LIVE_BUDGET;
-                        if *rem > 0 {
-                            *rem -= 1;
+                unsafe {
+                    static mut LAST_ABS_X: u16 = 0xFFFF;
+                    static mut LAST_ABS_Y: u16 = 0xFFFF;
+                    if td.buttons == 0 && td.abs_x == LAST_ABS_X && td.abs_y == LAST_ABS_Y {
+                        if HID_VERBOSE_RING_LOG && (i < 8 || i % 64 == 0) {
+                            serial_println!("[sexusb.hid.tablet.continuous.idle] i={}", i);
+                        }
+                    } else {
+                        LAST_ABS_X = td.abs_x;
+                        LAST_ABS_Y = td.abs_y;
+                        // Budgeted tablet report liveness marker.
+                        unsafe {
+                            static mut TABLET_LIVE_BUDGET: u32 = 16;
+                            let rem = &mut TABLET_LIVE_BUDGET;
+                            if *rem > 0 {
+                                *rem -= 1;
+                                serial_println!(
+                                    "[sexusb.tablet.live] n={} x={} y={} buttons=0x{:x}",
+                                    i, td.abs_x, td.abs_y, td.buttons
+                                );
+                            }
+                        }
+                        serial_println!(
+                            "[sexusb.hid.tablet.report] i={} buttons={:#x} x={} y={}",
+                            i, td.buttons, td.abs_x, td.abs_y
+                        );
+                        if !saw_nonzero {
+                            saw_nonzero = true;
                             serial_println!(
-                                "[sexusb.tablet.live] n={} x={} y={} buttons=0x{:x}",
-                                i, td.abs_x, td.abs_y, td.buttons
+                                "[sexusb.hid.tablet.nonzero.ok] i={} buttons={:#x} x={} y={}",
+                                i, td.buttons, td.abs_x, td.abs_y
                             );
                         }
-                    }
-                    serial_println!(
-                        "[sexusb.hid.tablet.report] i={} buttons={:#x} x={} y={} dx={} dy={}",
-                        i, td.buttons, td.abs_x, td.abs_y, dx_i8, dy_i8
-                    );
-                    if !saw_nonzero {
-                        saw_nonzero = true;
-                        serial_println!(
-                            "[sexusb.hid.tablet.nonzero.ok] i={} buttons={:#x} x={} y={} dx={} dy={}",
-                            i, td.buttons, td.abs_x, td.abs_y, dx_i8, dy_i8
-                        );
                     }
                 }
             } else {
@@ -2782,6 +3117,51 @@ pub extern "C" fn _start() -> ! {
             let rb3 = unsafe { core::ptr::read_volatile(report_ptr.add(3)) };
             let report_bytes = [rb0, rb1, rb2, rb3];
             if let Some(decoded) = decode_boot_mouse_report(&report_bytes, intr_actual as usize) {
+                unsafe {
+                    static mut INTR_CLASSIFY_BUDGET: u32 = 16;
+                    static mut INTR_CLASSIFY_SEQ: u32 = 0;
+                    let rem = &mut INTR_CLASSIFY_BUDGET;
+                    if *rem > 0 {
+                        let n = INTR_CLASSIFY_SEQ;
+                        INTR_CLASSIFY_SEQ = INTR_CLASSIFY_SEQ.wrapping_add(1);
+                        *rem -= 1;
+                        serial_println!("[sexusb.intr.classify] n={} kind=mouse action=forward reason=boot_mouse_decode_ok", n);
+                    }
+                }
+                // Route-proof marker: raw pointer report observed at USB ingress.
+                unsafe {
+                    static mut SEXUSB_POINTER_RAW_BUDGET: u32 = 16;
+                    let rem = &mut SEXUSB_POINTER_RAW_BUDGET;
+                    if *rem > 0 {
+                        *rem -= 1;
+                        serial_println!(
+                            "[sexusb.pointer.raw] buttons={:#x} dx={} dy={} wheel={}",
+                            decoded.buttons,
+                            decoded.dx,
+                            decoded.dy,
+                            decoded.wheel
+                        );
+                    }
+                }
+                unsafe {
+                    static mut POINTER_CANDIDATE_BUDGET: u32 = 16;
+                    static mut POINTER_CANDIDATE_SEQ: u32 = 0;
+                    let rem = &mut POINTER_CANDIDATE_BUDGET;
+                    if *rem > 0 {
+                        let n = POINTER_CANDIDATE_SEQ;
+                        POINTER_CANDIDATE_SEQ = POINTER_CANDIDATE_SEQ.wrapping_add(1);
+                        *rem -= 1;
+                        serial_println!(
+                            "[sexusb.pointer.candidate] n={} buttons={} x={} y={} dx={} dy={} mode=rel",
+                            n,
+                            decoded.buttons,
+                            0,
+                            0,
+                            decoded.dx,
+                            decoded.dy
+                        );
+                    }
+                }
                 let packed_axes = (decoded.dx as u8 as u64)
                     | ((decoded.dy as u8 as u64) << 8)
                     | ((decoded.wheel as u8 as u64) << 16);
@@ -2824,27 +3204,41 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             } else {
+                unsafe {
+                    static mut INTR_CLASSIFY_BUDGET: u32 = 16;
+                    static mut INTR_CLASSIFY_SEQ: u32 = 0;
+                    let rem = &mut INTR_CLASSIFY_BUDGET;
+                    if *rem > 0 {
+                        let n = INTR_CLASSIFY_SEQ;
+                        INTR_CLASSIFY_SEQ = INTR_CLASSIFY_SEQ.wrapping_add(1);
+                        *rem -= 1;
+                        serial_println!("[sexusb.intr.classify] n={} kind=unknown action=drop reason=boot_mouse_decode_bad", n);
+                    }
+                }
                 serial_println!("[sexusb.hid.mouse.decode.bad] len={}", intr_actual);
             }
         }
-        // Advance circular ring producer: skip over Link TRB at INTR_TR_RING_SIZE-1.
-        intr_prod += 1;
-        if intr_prod >= INTR_TR_RING_SIZE - 1 {
-            // Wrap: toggle PCS and update Link TRB cycle bit to match new PCS
-            // so xHCI follows it correctly on the next wrap-around.
-            intr_pcs ^= 1;
-            trb_write_volatile(
-                intr_ring_va,
-                INTR_TR_RING_SIZE - 1,
-                (intr_ring_phys & 0xFFFF_FFFF) as u32,
-                (intr_ring_phys >> 32) as u32,
-                0u32,
-                (TRB_TYPE_LINK << 10) | (1u32 << 1) | intr_pcs,
-            );
-            intr_prod = 0;
-        }
-        if HID_VERBOSE_RING_LOG {
-            serial_println!("[sexusb.xhci.intr_ring.advance] next={} cycle={}", intr_prod, intr_pcs);
+        // Advance circular ring producer: skip if we already advanced in the
+        // keyboard re-arm path above.
+        if !skip_advance {
+            intr_prod += 1;
+            if intr_prod >= INTR_TR_RING_SIZE - 1 {
+                // Wrap: toggle PCS and update Link TRB cycle bit to match new PCS
+                // so xHCI follows it correctly on the next wrap-around.
+                intr_pcs ^= 1;
+                trb_write_volatile(
+                    intr_ring_va,
+                    INTR_TR_RING_SIZE - 1,
+                    (intr_ring_phys & 0xFFFF_FFFF) as u32,
+                    (intr_ring_phys >> 32) as u32,
+                    0u32,
+                    (TRB_TYPE_LINK << 10) | (1u32 << 1) | intr_pcs,
+                );
+                intr_prod = 0;
+            }
+            if HID_VERBOSE_RING_LOG {
+                serial_println!("[sexusb.xhci.intr_ring.advance] next={} cycle={}", intr_prod, intr_pcs);
+            }
         }
         i = i.wrapping_add(1);
     }

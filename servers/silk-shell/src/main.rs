@@ -10738,12 +10738,50 @@ pub extern "C" fn _start() -> ! {
 
                         // ── Pointer event state updates (no compositor side effects) ──
                         if event_class == EV_ABS {
-                            POINTER_X = msg.arg0 as i32;
-                            POINTER_Y = msg.arg1 as i32;
+                            unsafe {
+                                static mut SILK_SHELL_POINTER_RECV_BUDGET: u32 = 2048;
+                                let rem = &mut SILK_SHELL_POINTER_RECV_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!("[silk-shell.pointer.recv] class={} a0={} a1={}", event_class, msg.arg0 as i32, msg.arg1 as i32);
+                                }
+                            }
+                            POINTER_X = (msg.arg0 as i32).clamp(0, P.width - 1);
+                            POINTER_Y = (msg.arg1 as i32).clamp(0, P.height - 1);
                             serial_println!("[silk-shell] Pointer ABS ({}, {})", POINTER_X, POINTER_Y);
+                            
+                            // Budgeted marker: shell sends cursor surface update to display.
+                            unsafe {
+                                static mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS: u32 = 16;
+                                let rem = &mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!("[shell.cursor.surface.update] n=0 x={} y={}", POINTER_X, POINTER_Y);
+                                }
+                            }
+                            // Move cursor surface to updated pointer position.
+                            serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
+                            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                            serial_println!("[shell.cursor_surface.move.ok]");
+                            unsafe {
+                                static mut SILK_SHELL_CURSOR_UPDATE_BUDGET_ABS: u32 = 16;
+                                let rem = &mut SILK_SHELL_CURSOR_UPDATE_BUDGET_ABS;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!("[silk-shell.cursor.update] x={} y={}", POINTER_X, POINTER_Y);
+                                }
+                            }
                         } else if event_class == EV_REL {
                             let dx = msg.arg0 as i32;
                             let dy = msg.arg1 as i32;
+                            unsafe {
+                                static mut SILK_SHELL_POINTER_RECV_BUDGET: u32 = 2048;
+                                let rem = &mut SILK_SHELL_POINTER_RECV_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!("[silk-shell.pointer.recv] class={} a0={} a1={}", event_class, dx, dy);
+                                }
+                            }
                             // Budgeted liveness: shell received EV_REL from sexinput.
                             unsafe {
                                 static mut HID_REL_LIVE_BUDGET: u32 = 16;
@@ -10790,6 +10828,14 @@ pub extern "C" fn _start() -> ! {
                             serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
                             pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
                             serial_println!("[shell.cursor_surface.move.ok]");
+                            unsafe {
+                                static mut SILK_SHELL_CURSOR_UPDATE_BUDGET: u32 = 16;
+                                let rem = &mut SILK_SHELL_CURSOR_UPDATE_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!("[silk-shell.cursor.update] x={} y={}", POINTER_X, POINTER_Y);
+                                }
+                            }
                             // Budgeted diagnostic for cursor position after HID REL event (real USB movement).
                             unsafe {
                                 static mut CURSOR_MOVE_BUDGET_REL: u32 = 16;
