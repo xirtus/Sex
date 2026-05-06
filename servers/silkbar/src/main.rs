@@ -128,13 +128,24 @@ pub extern "C" fn _start() -> ! {
                 } else {
                     // SUBSCRIBE reply: arg0 = current generation.
                     let gen = msg.arg0;
-                    unsafe {
-                        static mut BELL_GEN_REPLY_BUDGET: u32 = 8;
-                        let b = &mut BELL_GEN_REPLY_BUDGET;
-                        if *b > 0 {
-                            *b -= 1;
-                            let changed = if gen != bell_gen_cached && gen != u64::MAX { 1 } else { 0 };
-                            sex_pdx::serial_println!("[silkbar.bell.gen.reply] gen={} changed={}", gen, changed);
+                    let changed = if gen != bell_gen_cached && gen != u64::MAX { 1 } else { 0 };
+                    if changed != 0 {
+                        unsafe {
+                            static mut BELL_GEN_REPLY_CHANGED_BUDGET: u32 = 8;
+                            let b = &mut BELL_GEN_REPLY_CHANGED_BUDGET;
+                            if *b > 0 {
+                                *b -= 1;
+                                sex_pdx::serial_println!("[silkbar.bell.gen.reply] gen={} changed={}", gen, changed);
+                            }
+                        }
+                    } else {
+                        unsafe {
+                            static mut BELL_GEN_REPLY_STEADY_BUDGET: u32 = 1;
+                            let b = &mut BELL_GEN_REPLY_STEADY_BUDGET;
+                            if *b > 0 {
+                                *b -= 1;
+                                sex_pdx::serial_println!("[silkbar.bell.gen.reply] gen={} changed={}", gen, changed);
+                            }
                         }
                     }
                     if gen == u64::MAX {

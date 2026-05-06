@@ -939,7 +939,7 @@ pub extern "C" fn _start() -> ! {
                 let gen = unsafe { BELL_GENERATION };
                 pdx_reply(caller_pd, gen);
                 unsafe {
-                    static mut BELL_SUBSCRIBE_REPLY_BUDGET: u32 = 8;
+                    static mut BELL_SUBSCRIBE_REPLY_BUDGET: u32 = 4;
                     let b = &mut BELL_SUBSCRIBE_REPLY_BUDGET;
                     if *b > 0 {
                         *b -= 1;
