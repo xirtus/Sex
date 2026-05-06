@@ -4,6 +4,23 @@
 use sex_pdx::{pdx_listen_raw, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
               OP_BELL_CLEAR, OP_BELL_MUTE_SENDER};
 
+/// Reply to caller via kernel syscall 29 (SYSCALL_PDX_REPLY).
+/// sex-pdx's pdx_reply() uses syscall 1 — unhandled in current kernel. Use 29 directly.
+/// Kernel: rdi=target_pd, rsi=value → pushed to target's incoming_replies buffer.
+/// Caller reads reply via pdx_listen_raw(0) → msg.type_id=1, msg.arg0=value.
+#[inline(always)]
+unsafe fn bell_reply(target_pd: u32, val: u64) {
+    core::arch::asm!(
+        "syscall",
+        in("rax") 29u64,
+        in("rdi") target_pd as u64,
+        in("rsi") val,
+        out("rcx") _,
+        out("r11") _,
+        options(nostack),
+    );
+}
+
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
@@ -569,6 +586,8 @@ pub extern "C" fn _start() -> ! {
                             serial_println!("[bell.readcap.deny] caller_pd={} op=list reason=no_read_cap",
                                 caller_pd);
                         }
+                        // Reply with error so caller does not hang
+                        bell_reply(caller_pd, u64::MAX);
                     }
                     continue;
                 }
@@ -593,10 +612,29 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
 
+                let caller_max_privacy = max_privacy_for_caller(caller_pd);
+
+                // ── Compute aggregate lane counts (full scan, not max_results-limited) ──
+                let mut lane_counts: [u32; 6] = [0; 6];
+                let mut total_visible: u32 = 0;
+                unsafe {
+                    for i in 0..BELL_QUEUE.count as usize {
+                        let idx = (BELL_QUEUE.tail as usize + BELL_QUEUE_CAPACITY - 1 - i)
+                                  % BELL_QUEUE_CAPACITY;
+                        let entry = &BELL_QUEUE.entries[idx];
+                        if entry.dismissed != 0 { continue; }
+                        if entry.privacy_level > caller_max_privacy { continue; }
+                        let lane = entry.final_lane as usize;
+                        if lane < 6 {
+                            lane_counts[lane] += 1;
+                            total_visible += 1;
+                        }
+                    }
+                }
+
                 // ── Read queue (newest-first, no mutation) ──
                 let mut match_count: u32 = 0;
                 let mut redact_count: u32 = 0;
-                let caller_max_privacy = max_privacy_for_caller(caller_pd);
 
                 unsafe {
                     for i in 0..BELL_QUEUE.count as usize {
@@ -671,6 +709,31 @@ pub extern "C" fn _start() -> ! {
                             serial_println!("[bell.list.done] count={}", match_count);
                         }
                     }
+                }
+
+                // ── Reply with packed aggregate counts ──
+                // Packing: [63:56]=redacted [55:48]=lane5 [47:40]=lane4 [39:32]=lane3
+                //          [31:24]=lane2 [23:16]=lane1 [15:8]=lane0 [7:0]=total_visible
+                let packed = (total_visible as u64) & 0xFF
+                           | ((lane_counts[0] as u64) & 0xFF) << 8
+                           | ((lane_counts[1] as u64) & 0xFF) << 16
+                           | ((lane_counts[2] as u64) & 0xFF) << 24
+                           | ((lane_counts[3] as u64) & 0xFF) << 32
+                           | ((lane_counts[4] as u64) & 0xFF) << 40
+                           | ((lane_counts[5] as u64) & 0xFF) << 48
+                           | ((redact_count as u64) & 0xFF) << 56;
+                unsafe {
+                    static mut BELL_LIST_REPLY_BUDGET: u32 = 8;
+                    let b = &mut BELL_LIST_REPLY_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!("[bell.list.reply] total={} lanes=[{} {} {} {} {} {}] redacted={}",
+                            total_visible,
+                            lane_counts[0], lane_counts[1], lane_counts[2],
+                            lane_counts[3], lane_counts[4], lane_counts[5],
+                            redact_count);
+                    }
+                    bell_reply(caller_pd, packed);
                 }
             }
 
