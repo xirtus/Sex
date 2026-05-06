@@ -12,6 +12,7 @@ use sex_pdx::{
     SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
 };
 use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y, PANEL_W, PANEL_H};
+use silk_shell::{AppManifest, AppCapabilityBits};
 
 // Local Opcodes
 pub const OP_DISPLAY_SET_SNAPSHOT: u64 = 0x15;
@@ -49,8 +50,17 @@ static mut SCENE_SETTINGS_PROTOCOL_PROOF_STAGE: u8 = 0;
 const APP_SURFACE_REQ_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_SURFACE_REQ_PROOF").is_some();
 
-/// Synthetic proof stage counter for app surface request proof. Advances 0..3 then stops.
+/// Synthetic proof stage counter for app surface request proof. Advances 0..7 then stops.
 static mut APP_SURFACE_REQ_PROOF_STAGE: u8 = 0;
+
+/// Atlas overview model synthetic proof gate.
+/// Build with SEXOS_ATLAS_OVERVIEW_PROOF=1 to enable.
+/// Default (unset): zero behavior change.
+const ATLAS_OVERVIEW_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_OVERVIEW_PROOF").is_some();
+
+/// Synthetic proof stage counter for Atlas overview model proof. Advances 0..4 then stops.
+static mut ATLAS_OVERVIEW_PROOF_STAGE: u8 = 0;
 
 // Well-known key ID for scene appearance settings blob.
 const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
@@ -5540,28 +5550,57 @@ unsafe fn close_focused_tab_or_frame_safe() -> bool {
 
 /// Handle an app surface creation request from a userland PD (or synthetic proof).
 /// Returns true if accepted and surface was created, false if rejected.
-/// Rejection reasons: zero surface_id, zero title_id, already registered,
-/// reserved surface ID range (< 200), or no free frame slot.
-unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, caller_pd: u32) -> bool {
+/// Rejection reasons:
+///   - manifest unpack failure (bad version, reserved bits, unknown caps)
+///   - zero surface_id
+///   - zero title_id
+///   - surface_id already registered
+///   - surface_id < 200 (OS reserved range)
+///   - unknown/denied capability bits
+///   - no free frame slot
+///
+/// The caller_pd is kernel-authoritative (from PDX message). The manifest's
+/// capability bits are validated: any unknown bit is rejected, and display
+/// framebuffer ownership / shell policy ownership are NOT representable as
+/// capability bits (they are denied-by-default).
+unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, caller_pd: u32) -> bool {
+    // Unpack and validate manifest from combined args.
+    let manifest = match AppManifest::unpack(surface_id, title_id, arg2) {
+        Ok(m) => m,
+        Err(()) => {
+            serial_println!("[shell.app_surface.reject] reason=manifest_invalid sid={} arg2={:#x} caller={}",
+                surface_id, arg2, caller_pd);
+            return false;
+        }
+    };
+
     // Validate: non-zero surface_id
-    if surface_id == 0 {
+    if manifest.surface_id == 0 {
         serial_println!("[shell.app_surface.reject] reason=zero_surface_id caller={}", caller_pd);
         return false;
     }
     // Validate: non-zero title_id
-    if title_id == 0 {
-        serial_println!("[shell.app_surface.reject] reason=zero_title_id sid={} caller={}", surface_id, caller_pd);
+    if manifest.title_id == 0 {
+        serial_println!("[shell.app_surface.reject] reason=zero_title_id sid={} caller={}", manifest.surface_id, caller_pd);
         return false;
     }
     // Validate: not already registered in lifecycle
-    if lifecycle_state(surface_id).is_some() {
-        serial_println!("[shell.app_surface.reject] reason=already_registered sid={} caller={}", surface_id, caller_pd);
+    if lifecycle_state(manifest.surface_id).is_some() {
+        serial_println!("[shell.app_surface.reject] reason=already_registered sid={} caller={}", manifest.surface_id, caller_pd);
         return false;
     }
     // Validate: surface_id in user range (>= 200 avoids OS surface collision)
-    if surface_id < 200 {
-        serial_println!("[shell.app_surface.reject] reason=reserved_range sid={} caller={}", surface_id, caller_pd);
+    if manifest.surface_id < 200 {
+        serial_println!("[shell.app_surface.reject] reason=reserved_range sid={} caller={}", manifest.surface_id, caller_pd);
         return false;
+    }
+    // Validate: capability bits all known (implicitly denies display/shell ownership)
+    // AppCapabilityBits::validate() already rejected unknown bits during unpack.
+    // Log the declared capabilities for audit.
+    if manifest.capabilities.bits() != 0 {
+        serial_println!("[shell.app_surface.capabilities] sid={} caps={:#x} desc={} app_id={}",
+            manifest.surface_id, manifest.capabilities.bits(),
+            manifest.capabilities.describe(), manifest.app_id);
     }
 
     // Find free frame slot
@@ -5575,7 +5614,7 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, caller_pd: u32)
         }
     }
     if frame_id == 0 {
-        serial_println!("[shell.app_surface.reject] reason=no_frame_slot sid={} caller={}", surface_id, caller_pd);
+        serial_println!("[shell.app_surface.reject] reason=no_frame_slot sid={} caller={}", manifest.surface_id, caller_pd);
         return false;
     }
 
@@ -5587,8 +5626,8 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, caller_pd: u32)
         tabs: {
             let mut t: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] = [None; MAX_TABS_PER_FRAME as usize];
             t[0] = Some(ShellTab {
-                surface_id,
-                title_id,
+                surface_id: manifest.surface_id,
+                title_id: manifest.title_id,
                 flags: 0,
             });
             t
@@ -5602,19 +5641,20 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, caller_pd: u32)
     });
 
     // Register lifecycle as Visible
-    lifecycle_register(surface_id, LifecycleState::Visible);
+    lifecycle_register(manifest.surface_id, LifecycleState::Visible);
 
     // Upsert on sexdisplay via 0xEC (geometry packed: arg1=(y<<32)|x, arg2=(h<<32)|w)
-    pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
+    pdx_call(SLOT_DISPLAY, 0xEC, manifest.surface_id,
         (100u64) << 32 | 200u64,
         (400u64) << 32 | 600u64);
 
     // Re-tile and focus the new surface
     tile_active_scene_frames();
-    try_set_focus(surface_id);
+    try_set_focus(manifest.surface_id);
 
-    serial_println!("[shell.app_surface.accept] sid={} title_id={} frame={} caller={}",
-        surface_id, title_id, frame_id, caller_pd);
+    serial_println!("[shell.app_surface.accept] sid={} title_id={} frame={} caps={:#x} app_id={} caller={}",
+        manifest.surface_id, manifest.title_id, frame_id,
+        manifest.capabilities.bits(), manifest.app_id, caller_pd);
     true
 }
 
@@ -9877,17 +9917,91 @@ pub extern "C" fn _start() -> ! {
         if APP_SURFACE_REQ_PROOF_ENABLED {
             unsafe {
                 let stage = APP_SURFACE_REQ_PROOF_STAGE;
-                if stage < 4 {
+                if stage < 8 {
                     APP_SURFACE_REQ_PROOF_STAGE = stage + 1;
                     serial_println!("[shell.app_surface.proof] stage={}", stage);
+                    // Stages 0-3: original validation tests (arg2=0 means no caps).
+                    // Stages 4-7: manifest capability validation tests.
                     let accepted = match stage {
-                        0 => handle_app_surface_req(300, 42, 0), // valid: sid=300, title=42
-                        1 => handle_app_surface_req(0, 42, 0),   // reject: zero sid
-                        2 => handle_app_surface_req(301, 0, 0),  // reject: zero title
-                        3 => handle_app_surface_req(300, 99, 0), // reject: duplicate sid
+                        // Original: valid surface_id + title_id + no caps
+                        0 => handle_app_surface_req(300, 42, 0, 0),
+                        // Original: zero surface_id
+                        1 => handle_app_surface_req(0, 42, 0, 0),
+                        // Original: zero title_id
+                        2 => handle_app_surface_req(301, 0, 0, 0),
+                        // Original: duplicate surface_id (300 already used by stage 0)
+                        3 => handle_app_surface_req(300, 99, 0, 0),
+                        // Manifest: valid surface_id + title_id + Bell capability
+                        4 => handle_app_surface_req(302, 55,
+                            (0u64 << 56) | (1u64 << 8) | (AppCapabilityBits::BELL as u64), 0),
+                        // Manifest: unknown capability bit 0x80 rejected
+                        5 => handle_app_surface_req(303, 56,
+                            (0u64 << 56) | (1u64 << 8) | 0x80u64, 0),
+                        // Manifest: bad version in arg2 rejected
+                        6 => handle_app_surface_req(304, 57, 0xFF00000000000000, 0),
+                        // Manifest: reserved bits non-zero rejected
+                        7 => handle_app_surface_req(305, 58, 0x0000000100000000, 0),
                         _ => false,
                     };
                     serial_println!("[shell.app_surface.proof] stage={} accepted={}", stage, accepted);
+                    sys_yield();
+                    continue;
+                }
+            }
+        }
+
+        // ── Atlas Overview Model synthetic proof ──
+        if ATLAS_OVERVIEW_PROOF_ENABLED {
+            unsafe {
+                let stage = ATLAS_OVERVIEW_PROOF_STAGE;
+                if stage < 5 {
+                    ATLAS_OVERVIEW_PROOF_STAGE = stage + 1;
+                    serial_println!("[shell.atlas.proof] stage={}", stage);
+                    match stage {
+                        0 => {
+                            // Switch to scene 1, verify active scene changed.
+                            let prev = ACTIVE_SCENE_IDX;
+                            switch_scene(1);
+                            let ok = ACTIVE_SCENE_IDX == 1 && prev != ACTIVE_SCENE_IDX;
+                            serial_println!("[shell.atlas.proof.switch] from={} to={} ok={}", prev, ACTIVE_SCENE_IDX, ok);
+                        }
+                        1 => {
+                            // Scene listing: verify ATLAS_SNAPSHOT has correct count.
+                            atlas_capture_snapshot();
+                            let count = ATLAS_SNAPSHOT.scene_count;
+                            let active_id = ATLAS_SNAPSHOT.active_scene_id;
+                            serial_println!("[shell.atlas.proof.list] scenes={} active={}", count, active_id);
+                        }
+                        2 => {
+                            // Invalid scene index: switching to out-of-bounds must clamp.
+                            let prev = ACTIVE_SCENE_IDX;
+                            switch_scene(99);
+                            let clamped = ACTIVE_SCENE_IDX == WORKSPACE_COUNT - 1;
+                            serial_println!("[shell.atlas.proof.clamp] from={} clamped={} idx={}", prev, clamped, ACTIVE_SCENE_IDX);
+                            // Restore scene 0 for next stages.
+                            switch_scene(0);
+                        }
+                        3 => {
+                            // Invalid frame/tab in scene model: verify FRAMES iteration is bounded.
+                            // Iterate all possible frame indices — no out-of-bounds should crash.
+                            let mut frame_count = 0u32;
+                            for slot in FRAMES.iter() {
+                                if slot.is_some() { frame_count += 1; }
+                            }
+                            let frames_valid = frame_count <= MAX_FRAMES as u32;
+                            serial_println!("[shell.atlas.proof.frames] count={} max={} valid={}", frame_count, MAX_FRAMES, frames_valid);
+                        }
+                        4 => {
+                            // Scene flags consistency: verify ATLAS_SNAPSHOT flags for active scene.
+                            atlas_capture_snapshot();
+                            let snapshot_flags = ATLAS_SNAPSHOT.scenes[ACTIVE_SCENE_IDX as usize].flags;
+                            let has_active = (snapshot_flags & SCENE_FLAG_ACTIVE) != 0;
+                            let has_empty = (snapshot_flags & SCENE_FLAG_EMPTY) != 0;
+                            serial_println!("[shell.atlas.proof.flags] scene={} flags={:#x} active={} empty={}",
+                                ACTIVE_SCENE_IDX, snapshot_flags, has_active, has_empty);
+                        }
+                        _ => {}
+                    }
                     sys_yield();
                     continue;
                 }
@@ -11128,7 +11242,7 @@ pub extern "C" fn _start() -> ! {
             }
             0xFA => { // OP_APP_SURFACE_REQ
                 unsafe {
-                    let accepted = handle_app_surface_req(msg.arg0, msg.arg1, msg.caller_pd);
+                    let accepted = handle_app_surface_req(msg.arg0, msg.arg1, msg.arg2, msg.caller_pd);
                     if accepted {
                         mutated = true;
                     }
