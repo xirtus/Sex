@@ -595,7 +595,71 @@ pub extern "C" fn _start() -> ! {
 
     serial_println!("[spindle.ready]");
 
-    loop { unsafe { sex_pdx::pdx_listen_raw(0); } }
+    // Initialize state (always, no FB needed)
+    let mut line = CmdLine::new();
+    // sb/hist/ev are declared earlier in proof gate scope; make them available here
+    // by moving their declarations before the proof gate.
+
+    loop {
+        let msg = unsafe { sex_pdx::pdx_listen_raw(0) };
+        // OP_HID_EVENT = 0x202
+        if msg.type_id == 0x202 {
+            let scancode = msg.arg0 as u8;
+            let value = msg.arg1;
+            let _event_class = msg.arg2;
+            if value != 1 { continue; } // only key press
+
+            handle_key(scancode, &mut line);
+        }
+    }
+}
+
+/// Process a single keyboard scancode into the line editor.
+/// Scancode table matches sexsh convention (US QWERTY set 1).
+fn handle_key(scancode: u8, line: &mut CmdLine) {
+    match scancode {
+        0x1C => { // Enter
+            serial_println!("[spindle.line.enter] len={} text={:?}", line.len,
+                core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
+            serial_println!("[spindle.input.recv] key=enter len={}", line.len);
+            line.clear();
+        }
+        0x0E => { // Backspace
+            line.backspace();
+            serial_println!("[spindle.line.backspace] len={}", line.len);
+            serial_println!("[spindle.input.recv] key=backspace len={}", line.len);
+        }
+        0x01 => { // Escape — clear buffer
+            line.clear();
+            serial_println!("[spindle.input.recv] key=escape len=0");
+        }
+        _ => {
+            if let Some(ch) = scancode_to_ascii(scancode) {
+                line.push(ch);
+                serial_println!("[spindle.line.append] ch={} len={}", ch as char, line.len);
+                serial_println!("[spindle.input.recv] key=printable ch={} len={}", ch as char, line.len);
+            }
+            // Unknown scancodes silently ignored
+        }
+    }
+}
+
+/// Scancode set 1 → ASCII (US QWERTY). Matches sexsh table.
+fn scancode_to_ascii(code: u8) -> Option<u8> {
+    match code {
+        0x02..=0x0B => Some(b'1' + (code - 0x02)),           // 1-0
+        0x10..=0x19 => Some(b'q' + (code - 0x10)),           // q-p
+        0x1E..=0x26 => Some(b'a' + (code - 0x1E)),           // a-l
+        0x2C..=0x32 => Some(b'z' + (code - 0x2C)),           // z-m
+        0x39 => Some(b' '),                                   // Space
+        0x0C => Some(b'-'), 0x0D => Some(b'='),
+        0x1A => Some(b'['), 0x1B => Some(b']'),
+        0x27 => Some(b';'), 0x28 => Some(b'\''),
+        0x29 => Some(b'`'), 0x2B => Some(b'\\'),
+        0x33 => Some(b','), 0x34 => Some(b'.'), 0x35 => Some(b'/'),
+        0x0F => Some(b'\t'), // Tab
+        _ => None,
+    }
 }
 
 // ── Synthetic input proof ──────────────────────────────────────────────────
