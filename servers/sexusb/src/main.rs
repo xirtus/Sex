@@ -2756,6 +2756,355 @@ pub extern "C" fn _start() -> ! {
         }
         cmd_idx += 1;
         serial_println!("[sexusb.slot2.address.ok] slot={} port={}", s2_slot_id, second_port);
+
+        // ===== Second Device Descriptor Fetch (SEXUSB_SECOND_DEVICE_GET_DESCRIPTOR_V1) =====
+        // Shared state: desc_data_va/phys (PAGE_SIZE, allocated at line 1158-1159),
+        // ev_idx/ev_dcs (shared event ring). Independent state: s2_ep0_ring_va/phys,
+        // s2_cycle (starts at 1, separate ring).  No endpoint config, no polling.
+        //
+        // Each TD: (a) read EP0 dequeue from s2_device_va+ctx_stride DW2/DW3,
+        // (b) validate, (c) write 3 TRBs + cycle-stop, (d) doorbell, (e) poll event.
+
+        let mut s2_ep0_idx: u64 = 0;
+        let mut s2_cycle: u32 = 1;
+
+        // --- Descriptor buffer zero ---
+        unsafe { core::ptr::write_bytes(desc_data_va as *mut u8, 0, PAGE_SIZE as usize); }
+
+        // --- TD1: GET_DESCRIPTOR(DEVICE, 8) — read bMaxPacketSize0 ---
+        {
+            let s2_ep0_base = (s2_device_va + ctx_stride) as *const u32;
+            let deq_dw2 = unsafe { core::ptr::read_volatile(s2_ep0_base.add(2)) };
+            let deq_dw3 = unsafe { core::ptr::read_volatile(s2_ep0_base.add(3)) };
+            let deq_ptr = ((deq_dw3 as u64) << 32) | (deq_dw2 as u64);
+            let deq_dcs = deq_ptr & 1;
+            let deq_phys = deq_ptr & !0xFu64;
+            let deq_index = (deq_phys.wrapping_sub(s2_ep0_ring_phys)) / 16;
+            if deq_dcs != 1
+                || deq_phys < s2_ep0_ring_phys
+                || deq_phys >= s2_ep0_ring_phys.wrapping_add(PAGE_SIZE)
+                || deq_phys % 16 != 0
+                || deq_index + 3 >= PAGE_SIZE / TRB_SIZE
+            {
+                serial_println!("[sexusb.slot2.desc8.deq.bad] ptr={:#x} dcs={} idx={}", deq_ptr, deq_dcs, deq_index);
+                loop { sys_yield(); }
+            }
+            // Setup Stage (type=2): TRT=IN, QEMU bit6, s2_cycle
+            let s_setup_d3 = (TRB_TYPE_SETUP_STAGE << 10) | (2u32 << 16) | (1u32 << 6) | s2_cycle;
+            trb_write_volatile(s2_ep0_ring_va, deq_index,
+                0x0100_0680u32, 0x0008_0000u32,
+                (8u32 << 0), s_setup_d3);
+            // Data Stage (type=3): DIR=IN, CH=1
+            let s_data_d3 = (TRB_TYPE_DATA_STAGE << 10) | (1u32 << 16) | s2_cycle;
+            trb_write_volatile(s2_ep0_ring_va, deq_index + 1,
+                (desc_data_phys & 0xFFFF_FFFF) as u32,
+                (desc_data_phys >> 32) as u32,
+                (8u32 << 0) | (1u32 << 18), s_data_d3);
+            // Status Stage (type=4): DIR=OUT, IOC=1
+            let s_status_d3 = (TRB_TYPE_STATUS_STAGE << 10) | (0u32 << 16) | (1u32 << 5) | s2_cycle;
+            trb_write_volatile(s2_ep0_ring_va, deq_index + 2, 0, 0, 0, s_status_d3);
+            // Cycle-stop
+            trb_write_volatile(s2_ep0_ring_va, deq_index + 3, 0, 0, 0, s2_cycle ^ 1);
+            s2_ep0_idx = deq_index + 4;
+            // Doorbell EP0 slot2
+            mmio_write32(db_base, s2_slot_id as u64 * 4, 1u32);
+            // Poll event ring
+            let mut s_desc8_ok = false;
+            for _ in 0..POLL_BUDGET {
+                let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+                if (ev_d3 & 1) == (ev_dcs as u32) {
+                    let ev_type = (ev_d3 >> 10) & 0x3F;
+                    if ev_type == TRB_TYPE_TRANSFER_EVENT {
+                        let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                        let cc = (ev_d2 >> 24) & 0xFF;
+                        let slot = (ev_d3 >> 24) & 0xFF;
+                        let ep   = (ev_d3 >> 16) & 0x1F;
+                        if cc == TRB_CC_SUCCESS && slot == s2_slot_id && ep == 1 {
+                            s_desc8_ok = true;
+                        }
+                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        ev_idx += 1;
+                        if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                        let new_erdp = event_ring_phys + ev_idx * 16;
+                        mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                        mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                    }
+                    break;
+                }
+                sys_yield();
+            }
+            if !s_desc8_ok {
+                serial_println!("[sexusb.slot2.desc8.bad]");
+                loop { sys_yield(); }
+            }
+            let s2_mps0 = unsafe { core::ptr::read_volatile((desc_data_va as *const u8).add(7)) };
+            serial_println!("[sexusb.slot2.desc8.ok] mps={}", s2_mps0);
+        }
+
+        // --- TD2: GET_DESCRIPTOR(DEVICE, 18) — full device descriptor ---
+        {
+            let s2_ep0_base = (s2_device_va + ctx_stride) as *const u32;
+            let deq_dw2 = unsafe { core::ptr::read_volatile(s2_ep0_base.add(2)) };
+            let deq_dw3 = unsafe { core::ptr::read_volatile(s2_ep0_base.add(3)) };
+            let deq_ptr = ((deq_dw3 as u64) << 32) | (deq_dw2 as u64);
+            let deq_dcs = deq_ptr & 1;
+            let deq_phys = deq_ptr & !0xFu64;
+            let deq_index = (deq_phys.wrapping_sub(s2_ep0_ring_phys)) / 16;
+            if deq_dcs != 1
+                || deq_phys < s2_ep0_ring_phys
+                || deq_phys >= s2_ep0_ring_phys.wrapping_add(PAGE_SIZE)
+                || deq_phys % 16 != 0
+                || deq_index + 3 >= PAGE_SIZE / TRB_SIZE
+            {
+                serial_println!("[sexusb.slot2.full18.deq.bad] ptr={:#x} dcs={} idx={}", deq_ptr, deq_dcs, deq_index);
+                loop { sys_yield(); }
+            }
+            unsafe { core::ptr::write_bytes(desc_data_va as *mut u8, 0, 18); }
+            let s_setup_d3 = (TRB_TYPE_SETUP_STAGE << 10) | (2u32 << 16) | (1u32 << 6) | s2_cycle;
+            trb_write_volatile(s2_ep0_ring_va, deq_index,
+                0x0100_0680u32, 0x0012_0000u32,
+                (8u32 << 0), s_setup_d3);
+            let s_data_d3 = (TRB_TYPE_DATA_STAGE << 10) | (1u32 << 16) | s2_cycle;
+            trb_write_volatile(s2_ep0_ring_va, deq_index + 1,
+                (desc_data_phys & 0xFFFF_FFFF) as u32,
+                (desc_data_phys >> 32) as u32,
+                (18u32 << 0) | (1u32 << 18), s_data_d3);
+            let s_status_d3 = (TRB_TYPE_STATUS_STAGE << 10) | (0u32 << 16) | (1u32 << 5) | s2_cycle;
+            trb_write_volatile(s2_ep0_ring_va, deq_index + 2, 0, 0, 0, s_status_d3);
+            trb_write_volatile(s2_ep0_ring_va, deq_index + 3, 0, 0, 0, s2_cycle ^ 1);
+            s2_ep0_idx = deq_index + 4;
+            mmio_write32(db_base, s2_slot_id as u64 * 4, 1u32);
+            let mut s_full_ok = false;
+            for _ in 0..POLL_BUDGET {
+                let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+                if (ev_d3 & 1) == (ev_dcs as u32) {
+                    let ev_type = (ev_d3 >> 10) & 0x3F;
+                    if ev_type == TRB_TYPE_TRANSFER_EVENT {
+                        let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                        let cc = (ev_d2 >> 24) & 0xFF;
+                        let slot = (ev_d3 >> 24) & 0xFF;
+                        let ep   = (ev_d3 >> 16) & 0x1F;
+                        if cc == TRB_CC_SUCCESS && slot == s2_slot_id && ep == 1 {
+                            s_full_ok = true;
+                        }
+                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        ev_idx += 1;
+                        if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                        let new_erdp = event_ring_phys + ev_idx * 16;
+                        mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                        mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                    }
+                    break;
+                }
+                sys_yield();
+            }
+            if !s_full_ok {
+                serial_println!("[sexusb.slot2.full18.bad]");
+                loop { sys_yield(); }
+            }
+            let s_buf = desc_data_va as *const u8;
+            let s_bclass = unsafe { core::ptr::read_volatile(s_buf.add(4)) };
+            let s_bsub   = unsafe { core::ptr::read_volatile(s_buf.add(5)) };
+            let s_bproto = unsafe { core::ptr::read_volatile(s_buf.add(6)) };
+            let s_vid_lo = unsafe { core::ptr::read_volatile(s_buf.add(8)) };
+            let s_vid_hi = unsafe { core::ptr::read_volatile(s_buf.add(9)) };
+            let s_pid_lo = unsafe { core::ptr::read_volatile(s_buf.add(10)) };
+            let s_pid_hi = unsafe { core::ptr::read_volatile(s_buf.add(11)) };
+            let s_vid = ((s_vid_hi as u32) << 8) | (s_vid_lo as u32);
+            let s_pid = ((s_pid_hi as u32) << 8) | (s_pid_lo as u32);
+            serial_println!("[sexusb.slot2.desc.device] class={:#x} subclass={:#x} proto={:#x} vid={:#x} pid={:#x}",
+                s_bclass, s_bsub, s_bproto, s_vid, s_pid);
+        }
+
+        // --- TD3: GET_DESCRIPTOR(CONFIG, 9) — config header for wTotalLength ---
+        let s2_w_total_length: u64;
+        let s2_num_interfaces: u32;
+        {
+            let s2_ep0_base = (s2_device_va + ctx_stride) as *const u32;
+            let deq_dw2 = unsafe { core::ptr::read_volatile(s2_ep0_base.add(2)) };
+            let deq_dw3 = unsafe { core::ptr::read_volatile(s2_ep0_base.add(3)) };
+            let deq_ptr = ((deq_dw3 as u64) << 32) | (deq_dw2 as u64);
+            let deq_dcs = deq_ptr & 1;
+            let deq_phys = deq_ptr & !0xFu64;
+            let deq_index = (deq_phys.wrapping_sub(s2_ep0_ring_phys)) / 16;
+            if deq_dcs != 1
+                || deq_phys < s2_ep0_ring_phys
+                || deq_phys >= s2_ep0_ring_phys.wrapping_add(PAGE_SIZE)
+                || deq_phys % 16 != 0
+                || deq_index + 3 >= PAGE_SIZE / TRB_SIZE
+            {
+                serial_println!("[sexusb.slot2.cfg9.deq.bad] ptr={:#x} dcs={} idx={}", deq_ptr, deq_dcs, deq_index);
+                loop { sys_yield(); }
+            }
+            unsafe { core::ptr::write_bytes(desc_data_va as *mut u8, 0, 9); }
+            let s_setup_d3 = (TRB_TYPE_SETUP_STAGE << 10) | (2u32 << 16) | (1u32 << 6) | s2_cycle;
+            trb_write_volatile(s2_ep0_ring_va, deq_index,
+                0x0200_0680u32, 0x0009_0000u32,
+                (8u32 << 0), s_setup_d3);
+            let s_data_d3 = (TRB_TYPE_DATA_STAGE << 10) | (1u32 << 16) | s2_cycle;
+            trb_write_volatile(s2_ep0_ring_va, deq_index + 1,
+                (desc_data_phys & 0xFFFF_FFFF) as u32,
+                (desc_data_phys >> 32) as u32,
+                (9u32 << 0) | (1u32 << 18), s_data_d3);
+            let s_status_d3 = (TRB_TYPE_STATUS_STAGE << 10) | (0u32 << 16) | (1u32 << 5) | s2_cycle;
+            trb_write_volatile(s2_ep0_ring_va, deq_index + 2, 0, 0, 0, s_status_d3);
+            trb_write_volatile(s2_ep0_ring_va, deq_index + 3, 0, 0, 0, s2_cycle ^ 1);
+            s2_ep0_idx = deq_index + 4;
+            mmio_write32(db_base, s2_slot_id as u64 * 4, 1u32);
+            let mut s_cfg_hdr_ok = false;
+            for _ in 0..POLL_BUDGET {
+                let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+                if (ev_d3 & 1) == (ev_dcs as u32) {
+                    let ev_type = (ev_d3 >> 10) & 0x3F;
+                    if ev_type == TRB_TYPE_TRANSFER_EVENT {
+                        let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                        let cc = (ev_d2 >> 24) & 0xFF;
+                        let slot = (ev_d3 >> 24) & 0xFF;
+                        let ep   = (ev_d3 >> 16) & 0x1F;
+                        if cc == TRB_CC_SUCCESS && slot == s2_slot_id && ep == 1 {
+                            s_cfg_hdr_ok = true;
+                        }
+                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        ev_idx += 1;
+                        if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                        let new_erdp = event_ring_phys + ev_idx * 16;
+                        mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                        mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                    }
+                    break;
+                }
+                sys_yield();
+            }
+            if !s_cfg_hdr_ok {
+                serial_println!("[sexusb.slot2.cfg9.bad]");
+                loop { sys_yield(); }
+            }
+            let s_cfg_buf = desc_data_va as *const u8;
+            let s_tot_lo = unsafe { core::ptr::read_volatile(s_cfg_buf.add(2)) };
+            let s_tot_hi = unsafe { core::ptr::read_volatile(s_cfg_buf.add(3)) };
+            s2_w_total_length = ((s_tot_hi as u64) << 8) | (s_tot_lo as u64);
+            s2_num_interfaces = unsafe { core::ptr::read_volatile(s_cfg_buf.add(4)) } as u32;
+            if s2_w_total_length < 9 {
+                serial_println!("[sexusb.slot2.cfg9.totallen.bad] len={}", s2_w_total_length);
+                loop { sys_yield(); }
+            }
+            serial_println!("[sexusb.slot2.cfg9.ok] wTotalLength={} num_interfaces={}", s2_w_total_length, s2_num_interfaces);
+        }
+
+        // --- TD4: GET_DESCRIPTOR(CONFIG, wTotalLength) — full config descriptor ---
+        {
+            let s2_ep0_base = (s2_device_va + ctx_stride) as *const u32;
+            let deq_dw2 = unsafe { core::ptr::read_volatile(s2_ep0_base.add(2)) };
+            let deq_dw3 = unsafe { core::ptr::read_volatile(s2_ep0_base.add(3)) };
+            let deq_ptr = ((deq_dw3 as u64) << 32) | (deq_dw2 as u64);
+            let deq_dcs = deq_ptr & 1;
+            let deq_phys = deq_ptr & !0xFu64;
+            let deq_index = (deq_phys.wrapping_sub(s2_ep0_ring_phys)) / 16;
+            if deq_dcs != 1
+                || deq_phys < s2_ep0_ring_phys
+                || deq_phys >= s2_ep0_ring_phys.wrapping_add(PAGE_SIZE)
+                || deq_phys % 16 != 0
+                || deq_index + 3 >= PAGE_SIZE / TRB_SIZE
+            {
+                serial_println!("[sexusb.slot2.cfg_full.deq.bad] ptr={:#x} dcs={} idx={}", deq_ptr, deq_dcs, deq_index);
+                loop { sys_yield(); }
+            }
+            // Zero buffer for full config
+            {
+                let zero_base = desc_data_va as *mut u8;
+                let mut zi: u64 = 0;
+                while zi < s2_w_total_length {
+                    unsafe { core::ptr::write_volatile(zero_base.add(zi as usize), 0u8); }
+                    zi += 1;
+                }
+            }
+            let s_setup_d3 = (TRB_TYPE_SETUP_STAGE << 10) | (2u32 << 16) | (1u32 << 6) | s2_cycle;
+            trb_write_volatile(s2_ep0_ring_va, deq_index,
+                0x0200_0680u32,
+                (s2_w_total_length as u32) << 16,
+                (8u32 << 0), s_setup_d3);
+            let s_data_d3 = (TRB_TYPE_DATA_STAGE << 10) | (1u32 << 16) | s2_cycle;
+            trb_write_volatile(s2_ep0_ring_va, deq_index + 1,
+                (desc_data_phys & 0xFFFF_FFFF) as u32,
+                (desc_data_phys >> 32) as u32,
+                (s2_w_total_length as u32) | (1u32 << 18), s_data_d3);
+            let s_status_d3 = (TRB_TYPE_STATUS_STAGE << 10) | (0u32 << 16) | (1u32 << 5) | s2_cycle;
+            trb_write_volatile(s2_ep0_ring_va, deq_index + 2, 0, 0, 0, s_status_d3);
+            trb_write_volatile(s2_ep0_ring_va, deq_index + 3, 0, 0, 0, s2_cycle ^ 1);
+            s2_ep0_idx = deq_index + 4;
+            mmio_write32(db_base, s2_slot_id as u64 * 4, 1u32);
+            let mut s_cfg_full_ok = false;
+            let mut s_cfg_full_residue: u32 = 0;
+            for _ in 0..POLL_BUDGET {
+                let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+                if (ev_d3 & 1) == (ev_dcs as u32) {
+                    let ev_type = (ev_d3 >> 10) & 0x3F;
+                    if ev_type == TRB_TYPE_TRANSFER_EVENT {
+                        let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                        let cc = (ev_d2 >> 24) & 0xFF;
+                        s_cfg_full_residue = ev_d2 & 0xFFFFFF;
+                        let slot = (ev_d3 >> 24) & 0xFF;
+                        let ep   = (ev_d3 >> 16) & 0x1F;
+                        if cc == TRB_CC_SUCCESS && slot == s2_slot_id && ep == 1 {
+                            s_cfg_full_ok = true;
+                        }
+                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        ev_idx += 1;
+                        if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                        let new_erdp = event_ring_phys + ev_idx * 16;
+                        mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                        mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                    }
+                    break;
+                }
+                sys_yield();
+            }
+            if !s_cfg_full_ok {
+                serial_println!("[sexusb.slot2.cfg_full.bad]");
+                loop { sys_yield(); }
+            }
+            if s_cfg_full_residue >= s2_w_total_length as u32 {
+                serial_println!("[sexusb.slot2.cfg_full.residue_full.bad] residue={} total={}",
+                    s_cfg_full_residue, s2_w_total_length);
+                loop { sys_yield(); }
+            }
+            let s2_received_len: u64 = if s_cfg_full_residue > 0 {
+                serial_println!("[sexusb.slot2.cfg_full.residue.warn] residue={}", s_cfg_full_residue);
+                s2_w_total_length - s_cfg_full_residue as u64
+            } else {
+                s2_w_total_length
+            };
+            serial_println!("[sexusb.slot2.cfg_full.ok] received_len={}", s2_received_len);
+
+            // Walk interface descriptors
+            let s_walk_buf = desc_data_va as *const u8;
+            let mut s_walk_off: u64 = 0;
+            while s_walk_off < s2_received_len {
+                let b_len = unsafe { core::ptr::read_volatile(s_walk_buf.add(s_walk_off as usize)) };
+                let b_type = unsafe { core::ptr::read_volatile(s_walk_buf.add(s_walk_off as usize + 1)) };
+                if b_len == 0 {
+                    serial_println!("[sexusb.slot2.desc.zero_len.bad] off={}", s_walk_off);
+                    break;
+                }
+                if (b_len as u64) > (s2_received_len - s_walk_off) {
+                    serial_println!("[sexusb.slot2.desc.truncated.bad] off={} len={} remain={}",
+                        s_walk_off, b_len, s2_received_len - s_walk_off);
+                    break;
+                }
+                if b_type == 4 && b_len >= 8 {
+                    let b_intf = unsafe { core::ptr::read_volatile(s_walk_buf.add(s_walk_off as usize + 2)) };
+                    let b_class = unsafe { core::ptr::read_volatile(s_walk_buf.add(s_walk_off as usize + 5)) };
+                    let b_sub   = unsafe { core::ptr::read_volatile(s_walk_buf.add(s_walk_off as usize + 6)) };
+                    let b_proto = unsafe { core::ptr::read_volatile(s_walk_buf.add(s_walk_off as usize + 7)) };
+                    serial_println!("[sexusb.slot2.desc.iface] idx={} if={} class={:#x} subclass={:#x} proto={:#x}",
+                        s_walk_off, b_intf, b_class, b_sub, b_proto);
+                }
+                s_walk_off += b_len as u64;
+            }
+            serial_println!("[sexusb.slot2.desc.config] wTotalLength={} interfaces={} hid=check",
+                s2_w_total_length, s2_num_interfaces);
+        }
+        serial_println!("[sexusb.slot2.desc.complete] slot={} port={}", s2_slot_id, second_port);
     }
 
     // ===== Configure Endpoint + Interrupt-IN Poll =====
