@@ -595,6 +595,8 @@ pub extern "C" fn _start() -> ! {
 
                 // ── Read queue (newest-first, no mutation) ──
                 let mut match_count: u32 = 0;
+                let mut redact_count: u32 = 0;
+                let caller_max_privacy = max_privacy_for_caller(caller_pd);
 
                 unsafe {
                     for i in 0..BELL_QUEUE.count as usize {
@@ -604,6 +606,15 @@ pub extern "C" fn _start() -> ! {
 
                         // Skip dismissed entries
                         if entry.dismissed != 0 {
+                            continue;
+                        }
+
+                        // ── Privacy gate: skip entries above caller's max privacy level ──
+                        if entry.privacy_level > caller_max_privacy {
+                            if entry.privacy_level == 3 {
+                                // FullHidden: count but don't reveal
+                                redact_count += 1;
+                            }
                             continue;
                         }
 
@@ -624,6 +635,19 @@ pub extern "C" fn _start() -> ! {
                             if match_count >= max_results as u32 {
                                 break;
                             }
+                        }
+                    }
+                }
+
+                // ── Emit redact marker if FullHidden entries were filtered ──
+                if redact_count > 0 {
+                    unsafe {
+                        static mut BELL_LIST_REDACT_BUDGET: u32 = 8;
+                        let b = &mut BELL_LIST_REDACT_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.list.redact] reason=full_hidden count={} caller_pd={}",
+                                redact_count, caller_pd);
                         }
                     }
                 }
