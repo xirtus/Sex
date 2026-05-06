@@ -82,11 +82,63 @@ impl BellQueue {
         self.count >= BELL_QUEUE_CAPACITY as u16
     }
 
-    /// Push a new entry, assigning event_id. Returns Ok(event_id) or Err("queue_full").
+    /// Find the lowest-priority active entry's index in the ring buffer.
+    /// Returns None if no active entries exist.
+    /// Low priority = lowest final_lane value. Ties broken by oldest (smallest distance from head).
+    fn find_lowest_priority_index(&self) -> Option<u16> {
+        let mut lowest_idx: Option<u16> = None;
+        let mut lowest_lane: u8 = 6; // higher than any valid lane
+        let mut lowest_dist: u16 = 0; // distance from head
+
+        for i in 0..self.count as usize {
+            let idx = (self.head as usize + i) % BELL_QUEUE_CAPACITY;
+            let entry = &self.entries[idx];
+            if entry.dismissed != 0 {
+                continue;
+            }
+            if entry.final_lane < lowest_lane
+                || (entry.final_lane == lowest_lane && lowest_idx.map_or(true, |_| i as u16 > lowest_dist))
+            {
+                lowest_lane = entry.final_lane;
+                lowest_dist = i as u16;
+                lowest_idx = Some(idx as u16);
+            }
+        }
+
+        lowest_idx
+    }
+
+    /// Push a new entry, assigning event_id.
+    /// If queue is full, drops the lowest-priority active entry to make room.
+    /// Returns Ok with (event_id, Option<dropped_lane>) or Err("queue_full").
     fn push(&mut self, caller_pd: u32, category: u8, requested_lane: u8,
             final_lane: u8, final_urgency: u8, privacy_level: u8,
-            redaction_class: u8) -> Result<u64, &'static str> {
+            redaction_class: u8) -> Result<(u64, Option<u8>), &'static str> {
         if self.is_full() {
+            // Try to drop lowest-priority entry
+            if let Some(drop_idx) = self.find_lowest_priority_index() {
+                let dropped_lane = self.entries[drop_idx as usize].final_lane;
+                self.entries[drop_idx as usize].event_id = 0;
+                self.entries[drop_idx as usize].dismissed = 1;
+                // Write new entry into the freed slot
+                let event_id = self.next_event_id;
+                self.next_event_id = if event_id == u64::MAX { 1 } else { event_id + 1 };
+                self.entries[drop_idx as usize] = BellQueueEntry {
+                    event_id,
+                    caller_pd,
+                    category,
+                    requested_lane,
+                    final_lane,
+                    final_urgency,
+                    privacy_level,
+                    redaction_class,
+                    action_count: 0,
+                    object_ref_count: 0,
+                    dismissed: 0,
+                    _pad: [0; 5],
+                };
+                return Ok((event_id, Some(dropped_lane)));
+            }
             return Err("queue_full");
         }
 
@@ -113,7 +165,7 @@ impl BellQueue {
         self.tail = (self.tail + 1) % BELL_QUEUE_CAPACITY as u16;
         self.count += 1;
 
-        Ok(event_id)
+        Ok((event_id, None)) // None = no drop occurred
     }
 }
 
@@ -183,6 +235,65 @@ fn remove_mute(caller_pd: u32) -> bool {
         }
     }
     false
+}
+
+// ── Spam Budget ──────────────────────────────────────────────────────
+
+/// Per-PD spam budget: max events per tick window.
+const SPAM_WINDOW_TICKS: u64 = 62;      // ~1 second at typical tick rate
+const SPAM_MAX_PER_WINDOW: u32 = 8;     // max events per window per PD
+const SPAM_BUDGET_SLOTS: usize = 16;    // tracked sender slots
+
+struct SpamBudget {
+    slots: [(u32, u32, u64); SPAM_BUDGET_SLOTS], // (caller_pd, count, window_start_tick)
+}
+
+static mut SPAM_BUDGET: SpamBudget = SpamBudget {
+    slots: [(0, 0, 0); SPAM_BUDGET_SLOTS],
+};
+
+/// Check and record a notify event for a caller PD.
+/// Returns true if allowed, false if rate-limited (spam_budget_exceeded).
+fn check_spam_budget(caller_pd: u32) -> bool {
+    let now = sex_pdx::get_ticks();
+    unsafe {
+        // Find existing slot for this PD
+        for i in 0..SPAM_BUDGET_SLOTS {
+            let (pd, count, window_start) = &mut SPAM_BUDGET.slots[i];
+            if *pd == caller_pd {
+                // Check if window has expired
+                if now.saturating_sub(*window_start) >= SPAM_WINDOW_TICKS {
+                    // New window: reset
+                    *window_start = now;
+                    *count = 1;
+                    return true;
+                }
+                // Within window: check limit
+                if *count >= SPAM_MAX_PER_WINDOW {
+                    return false; // rate-limited
+                }
+                *count += 1;
+                return true;
+            }
+        }
+        // No existing slot: find an empty one or reuse oldest
+        let mut oldest_idx = 0;
+        let mut oldest_tick = u64::MAX;
+        for i in 0..SPAM_BUDGET_SLOTS {
+            if SPAM_BUDGET.slots[i].0 == 0 {
+                // Empty slot: use it
+                SPAM_BUDGET.slots[i] = (caller_pd, 1, now);
+                return true;
+            }
+            if SPAM_BUDGET.slots[i].2 < oldest_tick {
+                oldest_tick = SPAM_BUDGET.slots[i].2;
+                oldest_idx = i;
+            }
+        }
+        // All slots full: evict oldest
+        SPAM_BUDGET.slots[oldest_idx] = (caller_pd, 1, now);
+        true
+    }
 }
 
 // ── Enum Validation ──────────────────────────────────────────────────
@@ -304,6 +415,20 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
 
+                // ── Spam budget check ───────────────────────────────────
+                if !check_spam_budget(caller_pd) {
+                    unsafe {
+                        static mut BELL_SPAM_REJECT_BUDGET: u32 = 8;
+                        let b = &mut BELL_SPAM_REJECT_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.notify.reject] caller_pd={} reason=spam_budget_exceeded window=64 max=8",
+                                caller_pd);
+                        }
+                    }
+                    continue;
+                }
+
                 // ── Push to queue ────────────────────────────────────
                 let push_result = unsafe {
                     BELL_QUEUE.push(caller_pd, category, urgency_hint,
@@ -312,7 +437,20 @@ pub extern "C" fn _start() -> ! {
                 };
 
                 match push_result {
-                    Ok(event_id) => {
+                    Ok((event_id, drop_info)) => {
+                        // ── Emit drop marker if a lowest-priority entry was displaced ──
+                        if let Some(dropped_lane) = drop_info {
+                            unsafe {
+                                static mut BELL_QUEUE_DROP_BUDGET: u32 = 16;
+                                let b = &mut BELL_QUEUE_DROP_BUDGET;
+                                if *b > 0 {
+                                    *b -= 1;
+                                    serial_println!("[bell.queue.drop] reason=lowest_priority lane={} dropped_lane={} event_id={}",
+                                        final_lane, dropped_lane, event_id);
+                                }
+                            }
+                        }
+
                         unsafe {
                             static mut BELL_QUEUE_PUSH_BUDGET: u32 = 64;
                             let b = &mut BELL_QUEUE_PUSH_BUDGET;
