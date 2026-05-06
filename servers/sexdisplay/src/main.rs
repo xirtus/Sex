@@ -835,6 +835,7 @@ pub extern "C" fn _start() -> ! {
 
     // 1. Render immediately with fallback — visible before any IPC
     unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+    serial_println!("[sexdisplay.ready]");
 
     // 2. Listen for runtime FB handoff and SilkBar updates
     loop {

@@ -65,6 +65,9 @@ impl HardwareAbstractionLayer for X86Hal {
             serial_println!("X86Hal: Initializing APIC and Timer...");
             crate::apic::init_apic(rsdp_addr, x86_64::VirtAddr::new(hhdm_offset));
             crate::apic::init_timer();
+            // Route PS/2 keyboard IRQ1 → IDT vector 0x21 (keyboard_interrupt_handler).
+            // IOAPIC is enumerated by init_apic; handler installed at idt[0x21] in interrupts::init_idt.
+            unsafe { crate::apic::map_irq(1, 0x21, 0, x86_64::VirtAddr::new(hhdm_offset)); }
         } else {
             serial_println!("X86Hal: WARNING - RSDP not found, skipping APIC/Timer.");
         }

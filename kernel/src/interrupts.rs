@@ -7,6 +7,11 @@ use lazy_static::lazy_static;
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use crate::ipc::messages::MessageType;
 static TIMER_TICK_LOG_BUDGET: AtomicU64 = AtomicU64::new(64);
+static PS2_IRQ1_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+static PS2_PORT60_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+static PS2_ENQUEUE_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+static PS2_DROP_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+static PS2_EOI_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// The event structure for a page fault.
 #[derive(Debug, Clone, Copy)]
@@ -683,10 +688,34 @@ extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame,
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    let irq_n = PS2_IRQ1_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if irq_n <= 16 {
+        serial_println!("[ps2.irq1.entry] n={}", irq_n);
+    }
+
     let scancode = crate::keyboard::read_scancode();
+    let read_n = PS2_PORT60_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if read_n <= 16 {
+        serial_println!("[ps2.port60.read] n={} sc={:#x}", read_n, scancode);
+    }
+
     // Push into lock-free global queue; discard if full (to prevent blocking Ring-0)
-    let _ = INPUT_RING.enqueue(scancode);
+    if INPUT_RING.enqueue(scancode).is_ok() {
+        let enq_n = PS2_ENQUEUE_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if enq_n <= 16 {
+            serial_println!("[ps2.input_ring.enqueue] n={} type=0x201 sc={:#x}", enq_n, scancode);
+        }
+    } else {
+        let drop_n = PS2_DROP_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if drop_n <= 16 {
+            serial_println!("[ps2.input_ring.drop] reason=ring_full sc={:#x}", scancode);
+        }
+    }
     
+    let eoi_n = PS2_EOI_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if eoi_n <= 16 {
+        serial_println!("[ps2.eoi] n={}", eoi_n);
+    }
     unsafe { send_eoi(); }
 }
 extern "x86-interrupt" fn generic_irq_handler(_stack_frame: InterruptStackFrame) { route_interrupt(0x22); }
