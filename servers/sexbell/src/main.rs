@@ -307,7 +307,7 @@ fn find_policy(target_pd: u32) -> Option<&'static PolicyEntry> {
 /// Check if a target PD has an active mute policy.
 fn is_policy_muted(target_pd: u32) -> bool {
     if let Some(entry) = find_policy(target_pd) {
-        entry.active_flags & 2 != 0 && entry.force_mute != 0
+        entry.active_flags & (1 << 2) != 0 && entry.force_mute != 0
     } else {
         false
     }
