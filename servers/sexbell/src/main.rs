@@ -207,6 +207,7 @@ static mut BELL_QUEUE: BellQueue = BellQueue::new();
 /// V1: only silk-shell (domain 3). Extended in future phases.
 const BELL_LIST_ALLOWLIST: &[u32] = &[
     3,  // silk-shell (domain 3, policy owner)
+    6,  // silkbar (domain 6, privacy-safe aggregate poller)
 ];
 
 /// Check if a caller PD is authorized to call OP_BELL_LIST.

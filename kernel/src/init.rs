@@ -148,6 +148,13 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(silkbar_id) {
             pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
             serial_println!("✓ SilkBar v8: Capability SLOT_DISPLAY granted");
+            // Bell polling cap: SilkBar needs SLOT_BELL for OP_BELL_LIST.
+            // This is a read-only LIST capability — SilkBar has no NOTIFY/CLOSE/ACTION.
+            // Bell server-side allowlist (BELL_LIST_ALLOWLIST) provides second gate.
+            if sexbell_id != 0 {
+                pd.grant_capability(sex_pdx::SLOT_BELL, CapabilityData::Domain(sexbell_id));
+                serial_println!("[kernel.sexbell.cap.silkbar] silkbar→bell slot=12");
+            }
         }
     }
 
