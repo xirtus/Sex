@@ -1,25 +1,12 @@
 #![no_std]
 #![no_main]
 
-use sex_pdx::{pdx_listen_raw, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
+use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
               OP_BELL_CLEAR, OP_BELL_MUTE_SENDER};
 
-/// Reply to caller via kernel syscall 29 (SYSCALL_PDX_REPLY).
-/// sex-pdx's pdx_reply() uses syscall 1 — unhandled in current kernel. Use 29 directly.
-/// Kernel: rdi=target_pd, rsi=value → pushed to target's incoming_replies buffer.
-/// Caller reads reply via pdx_listen_raw(0) → msg.type_id=1, msg.arg0=value.
-#[inline(always)]
-unsafe fn bell_reply(target_pd: u32, val: u64) {
-    core::arch::asm!(
-        "syscall",
-        in("rax") 29u64,
-        in("rdi") target_pd as u64,
-        in("rsi") val,
-        out("rcx") _,
-        out("r11") _,
-        options(nostack),
-    );
-}
+// Replaced local bell_reply helper with shared sex_pdx::pdx_reply(target_pd, value).
+// Kernel: syscall 29 (SYSCALL_PDX_REPLY), rdi=target_pd, rsi=value.
+// Reply received by caller as pdx_listen_raw(0) → msg.type_id=1, msg.arg0=value.
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -588,7 +575,7 @@ pub extern "C" fn _start() -> ! {
                                 caller_pd);
                         }
                         // Reply with error so caller does not hang
-                        bell_reply(caller_pd, u64::MAX);
+                        pdx_reply(caller_pd, u64::MAX);
                     }
                     continue;
                 }
@@ -695,7 +682,7 @@ pub extern "C" fn _start() -> ! {
                             lane_counts[3], lane_counts[4], lane_counts[5],
                             redact_count);
                     }
-                    bell_reply(caller_pd, packed);
+                    pdx_reply(caller_pd, packed);
                 }
             }
 
