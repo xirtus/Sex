@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![allow(static_mut_refs)]
 
 mod session;
 
@@ -35,6 +36,8 @@ const OP_LINEN_GET_OBJECT: u64 = 0x43;
 
 /// Maximum display name length (matches RamFS max name).
 const LINEN_MAX_NAME: usize = 24;
+/// Current create opcode wire payload can carry only 16 name bytes (arg1 + arg2).
+const LINEN_CREATE_WIRE_MAX_NAME: usize = 16;
 
 /// Maximum Linen objects in session table.
 const LINEN_MAX_OBJECTS: usize = 16;
@@ -50,7 +53,7 @@ const KIND_UNKNOWN: u8 = 2;
 // ── Proof flag ──────────────────────────────────────────────────────────────
 /// Build with LINEN_SESSION_PROOF=1 to enable startup proof.
 const LINEN_SESSION_PROOF_ENABLED: bool =
-    option_env!("LINEN_SESSION_PROOF").is_some();
+    option_env!("SEXOS_LINEN_SESSION_PROOF").is_some();
 static mut LINEN_SESSION_PROOF_STAGE: u8 = 0;
 
 #[no_mangle]
@@ -138,9 +141,8 @@ fn handle_hid_event(scancode: u64, value: u64) {
 ///
 /// arg0 = packed: kind (bits 0-7), name_len (bits 8-15)
 /// arg1 = first 8 bytes of display name
-/// arg2 = next 8 bytes of display name  (max 16 bytes; 24-byte names use
-///        remaining 8 bytes from arg1 bits 16-23, but for simplicity
-///        name is packed into arg1 (lo) + arg2 (hi) for up to 16 bytes)
+/// arg2 = next 8 bytes of display name
+/// NOTE: current wire payload supports up to 16 bytes total for create.
 /// caller_pd = owner
 ///
 /// Reply: object_id on success, error code (negative) on failure.
@@ -167,12 +169,18 @@ unsafe fn handle_create_object(arg0: u64, arg1: u64, arg2: u64, caller_pd: u32) 
         pdx_reply(caller_pd, 0xFFFF_FFFF_FFFF_FFFE); // ERR_SERVICE_NOT_READY equivalent
         return;
     }
+    if name_len as usize > LINEN_CREATE_WIRE_MAX_NAME {
+        serial_println!("[linen.session.reject] reason=wire_name_len len={} wire_max={} caller={}",
+            name_len, LINEN_CREATE_WIRE_MAX_NAME, caller_pd);
+        pdx_reply(caller_pd, 0xFFFF_FFFF_FFFF_FFFE);
+        return;
+    }
 
     // Pack name from arg1 (bytes 0-7) and arg2 (bytes 8-15).
     let mut name = [0u8; LINEN_MAX_NAME];
     let arg1_bytes = arg1.to_le_bytes();
     let arg2_bytes = arg2.to_le_bytes();
-    let copy_len = core::cmp::min(name_len as usize, 16);
+    let copy_len = core::cmp::min(name_len as usize, LINEN_CREATE_WIRE_MAX_NAME);
     name[..8].copy_from_slice(&arg1_bytes);
     if copy_len > 8 {
         let remaining = core::cmp::min(copy_len - 8, 8);
@@ -218,6 +226,8 @@ unsafe fn handle_list_objects(arg0: u64, caller_pd: u32) {
                       | ((obj.name_len as u64) << 40);
             serial_println!("[linen.session.list] id={} kind={} name_len={} owner={}",
                 obj.object_id, obj.kind as u8, obj.name_len, obj.owner_pd);
+            serial_println!("[linen.session.proof.list] id={} kind={} name_len={} ramfs={}",
+                obj.object_id, obj.kind as u8, obj.name_len, obj.ramfs_handle);
             pdx_reply(caller_pd, reply);
         }
         None => {
@@ -243,6 +253,8 @@ unsafe fn handle_get_object(arg0: u64, caller_pd: u32) {
             let reply_name = name_lo; // first 8 bytes of name as reply value
             serial_println!("[linen.session.get] id={} kind={} name_len={} owner={}",
                 obj.object_id, obj.kind as u8, obj.name_len, obj.owner_pd);
+            serial_println!("[linen.session.proof.get] id={} owner={} ramfs={}",
+                obj.object_id, obj.owner_pd, obj.ramfs_handle);
             pdx_reply(caller_pd, reply_name);
         }
         Err(e) => {
@@ -256,8 +268,7 @@ unsafe fn handle_get_object(arg0: u64, caller_pd: u32) {
 // ── Synthetic Proof ─────────────────────────────────────────────────────────
 
 /// Run session object model proof stages at boot.
-/// 6 stages: create owned object, list owned, list non-owned, bad kind rejected,
-/// oversized name rejected, non-owner get rejected.
+/// Stages cover owner create/list/get, bounds, invalid id, and table-full behavior.
 unsafe fn run_session_proof() {
     let stage = &mut LINEN_SESSION_PROOF_STAGE;
     serial_println!("[linen.session.proof] begin");
@@ -268,7 +279,10 @@ unsafe fn run_session_proof() {
         let name_len: u8 = 12;
         let result = SESSION.create(session::ObjectKind::Document, &name[..name_len as usize], 42);
         match result {
-            Ok(id) => serial_println!("[linen.session.proof] stage=0 create_doc id={} accepted=true", id),
+            Ok(id) => {
+                serial_println!("[linen.session.proof] stage=0 create_doc id={} accepted=true", id);
+                serial_println!("[linen.session.proof.create] id={} owner=42", id);
+            }
             Err(e) => serial_println!("[linen.session.proof] stage=0 create_doc accepted=false err={}", e),
         }
     }
@@ -278,7 +292,10 @@ unsafe fn run_session_proof() {
     {
         let list_result = SESSION.list(42, 0);
         match list_result {
-            Some(obj) => serial_println!("[linen.session.proof] stage=1 list_owned id={} accepted=true", obj.object_id),
+            Some(obj) => {
+                serial_println!("[linen.session.proof] stage=1 list_owned id={} accepted=true", obj.object_id);
+                serial_println!("[linen.session.proof.list] id={} owner={} kind={}", obj.object_id, obj.owner_pd, obj.kind as u8);
+            }
             None => serial_println!("[linen.session.proof] stage=1 list_owned accepted=false"),
         }
     }
@@ -317,10 +334,14 @@ unsafe fn run_session_proof() {
 
     // Stage 4: Create with oversized name (> 24 bytes).
     {
-        let name_len: u8 = 48;
-        // Use PDX handler path to validate: we handle this in handle_create_object
-        serial_println!("[linen.session.proof] stage=4 oversized_name len={} max={}",
-            name_len, LINEN_MAX_NAME);
+        let long_name = [b'X'; LINEN_MAX_NAME + 1];
+        let result = SESSION.create(session::ObjectKind::Document, &long_name, 42);
+        serial_println!("[linen.session.proof] stage=4 oversized_name max={}", LINEN_MAX_NAME);
+        match result {
+            Ok(id) => serial_println!("[linen.session.proof] stage=4 oversized_name accepted=true id={} (UNEXPECTED)", id),
+            Err(e) => serial_println!("[linen.session.proof] stage=4 oversized_name accepted=false err={}", e),
+        }
+        serial_println!("[linen.session.proof.bounds] max_name={} max_objects={}", LINEN_MAX_NAME, LINEN_MAX_OBJECTS);
     }
     *stage += 1;
 
@@ -329,10 +350,44 @@ unsafe fn run_session_proof() {
         let get_result = SESSION.get(1, 99);
         match get_result {
             Ok(_) => serial_println!("[linen.session.proof] stage=5 non_owner_get accepted=true (UNEXPECTED)"),
-            Err(e) => serial_println!("[linen.session.proof] stage=5 non_owner_get accepted=false err={}", e),
+            Err(e) => {
+                serial_println!("[linen.session.proof] stage=5 non_owner_get accepted=false err={}", e);
+                serial_println!("[linen.session.proof.owner_deny] object_id=1 caller=99 err={}", e);
+            }
         }
     }
     *stage += 1;
+
+    // Stage 6: Invalid object_id get should be rejected.
+    {
+        let get_result = SESSION.get(0xFFFF_FFFF_FFFF_FFFF, 42);
+        match get_result {
+            Ok(_) => serial_println!("[linen.session.proof] stage=6 invalid_id accepted=true (UNEXPECTED)"),
+            Err(e) => serial_println!("[linen.session.proof] stage=6 invalid_id accepted=false err={}", e),
+        }
+    }
+    *stage += 1;
+
+    // Stage 7: Fill remaining slots then verify table-full rejection.
+    {
+        let fill_name = b"fill";
+        let mut fill_ok: u8 = 0;
+        loop {
+            match SESSION.create(session::ObjectKind::Document, fill_name, 42) {
+                Ok(_) => {
+                    fill_ok = fill_ok.saturating_add(1);
+                }
+                Err(e) => {
+                    serial_println!("[linen.session.proof.bounds] table_full_err={} fill_ok={}", e, fill_ok);
+                    break;
+                }
+            }
+        }
+    }
+    *stage += 1;
+
+    serial_println!("[linen.session.proof.count] total={} owned_42={}",
+        SESSION.count(), SESSION.count_owned(42));
 
     serial_println!("[linen.session.proof] end");
 }
