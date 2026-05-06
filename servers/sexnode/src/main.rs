@@ -78,11 +78,13 @@ pub extern "C" fn _start() -> ! {
             MessageType::TranslatorCall { command, path_ptr, code_cap } => {
                 let (status, translated_entry) = handle_translation(command, path_ptr, code_cap);
                 let reply = MessageType::TranslatorReply { status, translated_entry };
+                // DO NOT ENABLE: pointer reply lifetime invalid under current PDX model.
                 pdx_reply(req.caller_pd, &reply as *const _ as u64);
             },
             MessageType::DriverLoadCall { command, driver_name_ptr } => {
                 let (status, driver_pd_id) = handle_driver_load(command, driver_name_ptr);
                 let reply = MessageType::DriverLoadReply { status, driver_pd_id };
+                // DO NOT ENABLE: pointer reply lifetime invalid under current PDX model.
                 pdx_reply(req.caller_pd, &reply as *const _ as u64);
             },
             _ => {

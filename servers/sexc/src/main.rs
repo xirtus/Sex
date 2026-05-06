@@ -65,11 +65,13 @@ fn create_root_window() -> i64 {
             MessageType::PipeCall { command, pipe_cap, buffer_cap, size } => {
                 let (status, res_size, new_cap) = handle_pipe_call(command, pipe_cap, buffer_cap, size);
                 let reply = MessageType::PipeReply { status, size: res_size, pipe_cap: new_cap };
+                // DO NOT ENABLE: pointer reply lifetime invalid under current PDX model.
                 pdx_reply(req.caller_pd, &reply as *const _ as u64);
             },
             MessageType::ProcCall { command, path_ptr, arg_ptr, page_handover } => {
                 let (status, pd_id) = handle_proc_call(command, path_ptr, arg_ptr, page_handover);
                 let reply = MessageType::ProcReply { status, pd_id };
+                // DO NOT ENABLE: pointer reply lifetime invalid under current PDX model.
                 pdx_reply(req.caller_pd, &reply as *const _ as u64);
             },
             _ => {

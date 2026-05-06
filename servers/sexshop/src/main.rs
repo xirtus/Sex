@@ -19,6 +19,8 @@ pub extern "C" fn _start() -> ! {
     unsafe { pdx_call(0, PDX_DISCOVER_SERVICE as u64, name.as_ptr() as u64, 0, 0) };
 
     loop {
+        // NOTE: Stale API — PdxMessage has .type_id not .num. Does not compile.
+        // DO NOT ENABLE: requires sexshop protocol redesign before it can build.
         let event = unsafe { pdx_listen_raw(0) };
 
         if event.num == 0 {

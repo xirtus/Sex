@@ -29,6 +29,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::boxed::Box;
 
+// NOTE: Stale API — Message::from_u64 and Message::msg_type do not exist in sex-pdx.
+// DO NOT ENABLE: requires sext protocol redesign before it can build.
 use sex_pdx::{pdx_listen_raw, pdx_reply, Message, MessageType};
 
 #[no_mangle]

@@ -50,7 +50,8 @@ pub extern "C" fn _start() -> ! {
         
         let mut reply = PdxReply { status: 0, size: 0 };
         handle_ld_message(&msg, &mut reply);
-        
+
+        // DO NOT ENABLE: pointer reply lifetime invalid under current PDX model.
         pdx_reply(req.caller_pd, &reply as *const _ as u64);
     }
 }
