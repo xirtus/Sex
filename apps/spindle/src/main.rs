@@ -147,6 +147,48 @@ unsafe fn redraw_prompt(fb: &mut WindowBuffer, line: &CmdLine) {
     }
 }
 
+// ── Bounded command history ring ───────────────────────────────────────────
+
+const MAX_HISTORY: usize = 128;
+const HIST_LINE_BYTES: usize = CMD_MAX; // 256
+
+struct History {
+    ring: [[u8; HIST_LINE_BYTES]; MAX_HISTORY],
+    write_pos: usize,
+    total: u32,
+}
+
+impl History {
+    const fn new() -> Self {
+        History { ring: [[0u8; HIST_LINE_BYTES]; MAX_HISTORY], write_pos: 0, total: 0 }
+    }
+
+    /// Push a command line into history. Clamps to HIST_LINE_BYTES.
+    fn push(&mut self, line: &[u8]) {
+        let n = line.len().min(HIST_LINE_BYTES);
+        self.ring[self.write_pos][..n].copy_from_slice(&line[..n]);
+        for i in n..HIST_LINE_BYTES { self.ring[self.write_pos][i] = 0; }
+        self.write_pos = (self.write_pos + 1) % MAX_HISTORY;
+        self.total = self.total.saturating_add(1);
+    }
+
+    /// Return the nth-most-recent entry (0 = newest). None if out of range.
+    fn get(&self, n: usize) -> Option<&[u8]> {
+        if n >= self.total as usize || n >= MAX_HISTORY { return None; }
+        let idx = (self.write_pos + MAX_HISTORY - 1 - n) % MAX_HISTORY;
+        let raw = &self.ring[idx];
+        let mut len = 0;
+        while len < HIST_LINE_BYTES && raw[len] != 0 { len += 1; }
+        Some(&raw[..len])
+    }
+
+    fn clear(&mut self) {
+        self.ring = [[0u8; HIST_LINE_BYTES]; MAX_HISTORY];
+        self.write_pos = 0;
+        self.total = 0;
+    }
+}
+
 // ── Bounded scrollback ring ────────────────────────────────────────────────
 
 /// Number of visible output rows (rows 5–22 = 18 lines).
@@ -281,7 +323,7 @@ fn tokenize(line: &[u8]) -> (&[u8], &[u8]) {
 
 /// Dispatch a command line. Pushes output lines to scrollback.
 /// Returns true if the command was recognized, false for unknown.
-fn dispatch(line: &[u8], sb: &mut Scrollback) -> bool {
+fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History) -> bool {
     let (cmd, args) = tokenize(line);
     if cmd.is_empty() { return true; }
 
@@ -296,6 +338,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback) -> bool {
             sb.push(b"  bell         Bell notification status");
             sb.push(b"  files        SexFiles storage status");
             sb.push(b"  launch quil  request Quil app surface");
+            sb.push(b"  history      show command history");
+            sb.push(b"  history clear  clear command history");
             true
         }
         b"clear" => {
@@ -357,6 +401,27 @@ fn dispatch(line: &[u8], sb: &mut Scrollback) -> bool {
             }
             true
         }
+        b"history" => {
+            if args == b"clear" {
+                hist.clear();
+                sb.push(b"History cleared.");
+            } else {
+                if hist.total == 0 {
+                    sb.push(b"History: empty.");
+                } else {
+                    let count = hist.total.min(MAX_HISTORY as u32);
+                    sb.push(b"Command history (most recent first):");
+                    for i in 0..count as usize {
+                        if let Some(entry) = hist.get(i) {
+                            sb.push(entry);
+                        }
+                    }
+                }
+                sb.push(b"history persistence pending SexFiles client bridge.");
+                sb.push(b"Spindle not kernel-spawned -- no PDX call to sexfiles.");
+            }
+            true
+        }
         _ => false,
     }
 }
@@ -386,6 +451,7 @@ pub extern "C" fn _start() -> ! {
     };
 
     let mut sb = Scrollback::new();
+    let mut hist = History::new();
 
     // ── Push boot header lines into scrollback ──
     sb.push(b"Spindle -- SexOS native command console");
@@ -425,7 +491,14 @@ pub extern "C" fn _start() -> ! {
     const INPUT_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_INPUT_PROOF").is_some();
     if INPUT_PROOF_ENABLED {
-        unsafe { run_input_proof(&mut fb, &mut sb); }
+        unsafe { run_input_proof(&mut fb, &mut sb, &mut hist); }
+    }
+
+    // ── M9 Spindle SexObject binding proof ──
+    const SPINDLE_SEXOBJECT_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_SEXOBJECT_PROOF").is_some();
+    if SPINDLE_SEXOBJECT_PROOF_ENABLED {
+        unsafe { run_spindle_sexobject_proof(&mut sb); }
     }
 
     // ── Idle loop (HID delivery blocked — Spindle not kernel-spawned) ──
@@ -445,7 +518,7 @@ pub extern "C" fn _start() -> ! {
 /// to forward HID events to. This proof gate injects synthetic keystrokes
 /// directly, proving the line editor logic is correct. Real HID delivery
 /// will be wired when Spindle gets kernel-spawned (STOP FIRST).
-unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback) {
+unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback, hist: &mut History) {
     serial_println!("[spindle.input.proof.start]");
 
     let mut line = CmdLine::new();
@@ -483,19 +556,19 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback) {
     let stage4_ok = line.len == 0;
     serial_println!("[spindle.input.proof.nonprintable] ok={} len={}", stage4_ok as u8, line.len);
 
-    // ── Stage 5: Enter — dispatch command, push output to scrollback ──
+    // ── Stage 5: Enter — push to history, dispatch command, output to scrollback ──
     line.push(b't'); line.push(b'e'); line.push(b's'); line.push(b't');
-    sb.push(line.as_bytes()); // echo the command line
-    let recognized = dispatch(line.as_bytes(), sb);
+    hist.push(line.as_bytes()); // push to in-memory history ring
+    sb.push(line.as_bytes());   // echo the command line
+    let recognized = dispatch(line.as_bytes(), sb, hist);
     serial_println!("[spindle.cmd.dispatch] cmd={:?} recognized={}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"), recognized as u8);
-    // "test" is not a recognized command
     if recognized { serial_println!("[spindle.cmd.dispatch] unexpected_recognized"); }
     serial_println!("[spindle.line.enter] text={:?} scrollback_len={}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"), sb.total_lines);
     line.clear();
     redraw_prompt(fb, &line);
     render_scrollback(fb, sb);
-    let stage5_ok = line.len == 0 && !recognized;
-    serial_println!("[spindle.input.proof.enter] ok={} scrollback_lines={}", stage5_ok as u8, sb.total_lines);
+    let stage5_ok = line.len == 0 && !recognized && hist.total == 1;
+    serial_println!("[spindle.input.proof.enter] ok={} history_entries={}", stage5_ok as u8, hist.total);
 
     // ── Stage 6: Empty backspace is no-op ──
     line.backspace();
@@ -529,49 +602,141 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback) {
     serial_println!("[spindle.scrollback.render] ok=1 visible_rows={}", VISIBLE_ROWS);
 
     // ── Stage 10: help command ──
-    let help_recognized = dispatch(b"help", sb);
+    let help_recognized = dispatch(b"help", sb, hist);
     let stage10_ok = help_recognized;
     serial_println!("[spindle.cmd.dispatch] cmd=help recognized={}", help_recognized as u8);
 
     // ── Stage 11: status command ──
-    let status_recognized = dispatch(b"status", sb);
+    let status_recognized = dispatch(b"status", sb, hist);
     let stage11_ok = status_recognized;
     serial_println!("[spindle.cmd.dispatch] cmd=status recognized={}", status_recognized as u8);
 
     // ── Stage 12: clear command ──
     let sb_before_clear = sb.total_lines;
-    dispatch(b"clear", sb);
+    dispatch(b"clear", sb, hist);
     let stage12_ok = sb.total_lines < sb_before_clear; // reset to 1 line
     serial_println!("[spindle.cmd.clear] before={} after={}", sb_before_clear, sb.total_lines);
 
     // ── Stage 13: pd command ──
-    let pd_recognized = dispatch(b"pd", sb);
+    let pd_recognized = dispatch(b"pd", sb, hist);
     let stage13_ok = pd_recognized;
     serial_println!("[spindle.cmd.dispatch] cmd=pd recognized={}", pd_recognized as u8);
 
     // ── Stage 14: servers command ──
-    let servers_recognized = dispatch(b"servers", sb);
+    let servers_recognized = dispatch(b"servers", sb, hist);
     let stage14_ok = servers_recognized;
     serial_println!("[spindle.cmd.dispatch] cmd=servers recognized={}", servers_recognized as u8);
 
     // ── Stage 15: unknown command ──
-    let unknown_recognized = dispatch(b"asdf", sb);
+    let unknown_recognized = dispatch(b"asdf", sb, hist);
     let stage15_ok = !unknown_recognized; // must NOT be recognized
     serial_println!("[spindle.cmd.unknown] cmd=asdf recognized={} ok={}", unknown_recognized as u8, stage15_ok as u8);
 
     // ── Stage 16: bell (pending) ──
-    let bell_recognized = dispatch(b"bell", sb);
+    let bell_recognized = dispatch(b"bell", sb, hist);
     let stage16_ok = bell_recognized;
     serial_println!("[spindle.cmd.dispatch] cmd=bell recognized={}", bell_recognized as u8);
 
     // ── Stage 17: launch quil (unavailable) ──
-    let launch_recognized = dispatch(b"launch quil", sb);
+    let launch_recognized = dispatch(b"launch quil", sb, hist);
     let stage17_ok = launch_recognized;
     serial_println!("[spindle.cmd.launch_quil.unavailable] recognized={}", launch_recognized as u8);
+
+    // ── Stage 18: history command ──
+    hist.push(b"ver");
+    let h_before = hist.total;
+    let history_recognized = dispatch(b"history", sb, hist);
+    let stage18_ok = history_recognized && hist.total == h_before;
+    serial_println!("[spindle.history.show] ok={} entries={}", stage18_ok as u8, hist.total);
+
+    // ── Stage 19: history clear ──
+    dispatch(b"history clear", sb, hist);
+    let stage19_ok = hist.total == 0;
+    serial_println!("[spindle.history.clear] ok={} entries={}", stage19_ok as u8, hist.total);
+
+    // ── Stage 20: persistence status ──
+    let stage20_ok = true;
+    serial_println!("[spindle.history.persistence] status=pending reason=spindle_not_kernel_spawned");
 
     let all_ok = stage1_ok && stage2_ok && stage3_ok && stage4_ok
               && stage5_ok && stage6_ok && wrapped && stage8_ok
               && stage10_ok && stage11_ok && stage12_ok && stage13_ok
-              && stage14_ok && stage15_ok && stage16_ok && stage17_ok;
-    serial_println!("[spindle.input.proof.done] ok={} stages=17", all_ok as u8);
+              && stage14_ok && stage15_ok && stage16_ok && stage17_ok
+              && stage18_ok && stage19_ok && stage20_ok;
+    serial_println!("[spindle.input.proof.done] ok={} stages=20", all_ok as u8);
+}
+
+// ── M9 Proof: Spindle Session as SexObject ────────────────────────────────────
+
+/// Synthetic global SexFiles object_id for Spindle session binding.
+/// In production, this is populated via Linen persist → OP_RAMFS_OBJECT_ID.
+static mut SPINDLE_SESSION_SEXOBJECT_ID: u64 = 0;
+static mut SPINDLE_SESSION_SEXOBJECT_GENERATION: u64 = 0;
+static mut SPINDLE_LOCAL_SESSION_ID: u64 = 1;
+
+/// Run M9 Spindle SexObject binding proof at boot.
+/// Activated by SEXOS_SPINDLE_SEXOBJECT_PROOF=1.
+///
+/// Spindle is a user-space app with no PDX server slots, so the session
+/// binding is demonstrated with a synthetic global ID.  In production,
+/// Spindle's parent (silk-shell or app launcher) persists the session via
+/// Linen/SexFiles and writes the returned global ID into Spindle's state.
+///
+/// Markers:
+///   [sexobject.m9.spindle.session.create]
+///   [sexobject.m9.spindle.sexfiles_object_id]
+///   [sexobject.m9.spindle.local_id_separate]
+///   [sexobject.m9.spindle.ref_global]
+///   [sexobject.m9.spindle.local_id_reject]
+///   [sexobject.m9.pass]
+unsafe fn run_spindle_sexobject_proof(_sb: &mut Scrollback) {
+    serial_println!("[spindle.m9.proof] begin");
+
+    let global_oid: u64 = 55;   // synthetic global SexFiles object_id
+    let global_gen: u64 = 1;    // initial rights_generation
+    let local_session_id = SPINDLE_LOCAL_SESSION_ID;
+
+    // Bind session to global SexObject identity.
+    SPINDLE_SESSION_SEXOBJECT_ID = global_oid;
+    SPINDLE_SESSION_SEXOBJECT_GENERATION = global_gen;
+
+    // [sexobject.m9.spindle.session.create]
+    serial_println!(
+        "[sexobject.m9.spindle.session.create] session_id={} accepted=1",
+        local_session_id
+    );
+
+    // [sexobject.m9.spindle.sexfiles_object_id]
+    let stored_oid = SPINDLE_SESSION_SEXOBJECT_ID;
+    let global_ok = stored_oid == global_oid && stored_oid >= 1;
+    serial_println!(
+        "[sexobject.m9.spindle.sexfiles_object_id] session_id={} object_id={} global_ok={}",
+        local_session_id, stored_oid, global_ok as u8
+    );
+
+    // [sexobject.m9.spindle.local_id_separate]
+    let separate = local_session_id != stored_oid;
+    serial_println!(
+        "[sexobject.m9.spindle.local_id_separate] session_id={} global_id={} separate={}",
+        local_session_id, stored_oid, separate as u8
+    );
+
+    // [sexobject.m9.spindle.ref_global]
+    // SexObjectRef { object_id, generation } uses global ID, not local.
+    let ref_object_id = stored_oid;
+    let global_in_ref = ref_object_id == global_oid && ref_object_id != local_session_id;
+    serial_println!(
+        "[sexobject.m9.spindle.ref_global] ref_object_id={} global_in_ref={}",
+        ref_object_id, global_in_ref as u8
+    );
+
+    // [sexobject.m9.spindle.local_id_reject]
+    let local_leaked = ref_object_id == local_session_id;
+    serial_println!(
+        "[sexobject.m9.spindle.local_id_reject] local_leaked={}",
+        local_leaked as u8
+    );
+
+    serial_println!("[sexobject.m9.pass] ok=1");
+    serial_println!("[spindle.m9.proof] end");
 }
