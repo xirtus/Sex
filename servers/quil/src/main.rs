@@ -23,26 +23,42 @@ const OP_HID_EVENT: u64 = 0x202;
 const SURFACE_ID_QUIL: u64 = 201;
 
 const QUIL_ROWS: u8 = 5;
-const QUIL_BG_COLOR: u64 = 0x001F2A44;
+const QUIL_BG_COLOR: u64 = 0x00151D31;
+const QUIL_PANEL_COLOR: u64 = 0x001D2842;
 const QUIL_ROW_INACTIVE: u64 = 0x00253556;
 const QUIL_ROW_SELECTED: u64 = 0x004B6FD3;
 const QUIL_ACCENT_COLOR: u64 = 0x00E9D36A;
 
-const QUIL_ROW_X: u64 = 40;
-const QUIL_ROW_Y0: u64 = 90;
-const QUIL_ROW_W: u64 = 520;
+const QUIL_PANEL_X: u64 = 24;
+const QUIL_PANEL_Y: u64 = 24;
+const QUIL_PANEL_W: u64 = 760;
+const QUIL_PANEL_H: u64 = 520;
+const QUIL_PANEL_PAD_X: u64 = 20;
+const QUIL_PANEL_PAD_Y: u64 = 30;
+
+const QUIL_ROW_X: u64 = QUIL_PANEL_X + QUIL_PANEL_PAD_X;
+const QUIL_ROW_Y0: u64 = QUIL_PANEL_Y + QUIL_PANEL_PAD_Y;
+const QUIL_ROW_W: u64 = QUIL_PANEL_W - (QUIL_PANEL_PAD_X * 2);
 const QUIL_ROW_H: u64 = 46;
 const QUIL_ROW_GAP: u64 = 14;
 const QUIL_ACCENT_W: u64 = 8;
 
 fn draw_palette(selected: u8) {
-    // Fill base. Oversized fill is safe and reused by existing Quil path.
+    // Fill bounded base to avoid a giant flat fullscreen look inside tiled boot layout.
     pdx_call(
         SLOT_DISPLAY,
         0xEF,
         SURFACE_ID_QUIL,
         0u64,
-        (QUIL_BG_COLOR << 32) | (2000u64 << 16) | 2000u64,
+        (QUIL_BG_COLOR << 32) | (620u64 << 16) | 960u64,
+    );
+    // Inner panel area where palette rows live.
+    pdx_call(
+        SLOT_DISPLAY,
+        0xEF,
+        SURFACE_ID_QUIL,
+        (QUIL_PANEL_Y << 32) | QUIL_PANEL_X,
+        (QUIL_PANEL_COLOR << 32) | (QUIL_PANEL_H << 16) | QUIL_PANEL_W,
     );
 
     unsafe {
@@ -52,6 +68,24 @@ fn draw_palette(selected: u8) {
             *b -= 1;
             serial_println!("[quil.palette.draw] rows={} selected={}", QUIL_ROWS, selected);
         }
+        static mut PALETTE_PANEL_BUDGET: u32 = 8;
+        let pb = &mut PALETTE_PANEL_BUDGET;
+        if *pb > 0 {
+            *pb -= 1;
+            serial_println!(
+                "[quil.palette.panel] x={} y={} w={} h={}",
+                QUIL_PANEL_X,
+                QUIL_PANEL_Y,
+                QUIL_PANEL_W,
+                QUIL_PANEL_H
+            );
+        }
+    }
+
+    // Guard against row overflow in the bounded panel.
+    let rows_bottom = QUIL_ROW_Y0 + QUIL_ROWS as u64 * QUIL_ROW_H + (QUIL_ROWS as u64 - 1) * QUIL_ROW_GAP;
+    if rows_bottom > (QUIL_PANEL_Y + QUIL_PANEL_H) {
+        serial_println!("[quil.palette.reject] action=draw reason=row_overflow");
     }
 
     let mut row = 0u8;
@@ -215,7 +249,7 @@ pub extern "C" fn _start() -> ! {
                                     0xEF,
                                     SURFACE_ID_QUIL,
                                     0u64,
-                                    (QUIL_BG_COLOR << 32) | (2000u64 << 16) | 2000u64,
+                                    (QUIL_BG_COLOR << 32) | (620u64 << 16) | 960u64,
                                 );
                                 serial_println!("[quil.palette.action] kind=esc clear=1");
                             } else {
