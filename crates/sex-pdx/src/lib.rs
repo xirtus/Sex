@@ -374,6 +374,7 @@ pub const SLOT_SEXSTORE: u64 = 10; // sexstore K/V service (slot 9 = kernel-loca
 pub const SLOT_QUIL: u64 = 11;    // Quil app surface server (shell→Quil route, no display caps)
 pub const SLOT_BELL: u64 = 12;   // Bell attention/event service (domain 10, namespace audited)
 pub const SLOT_LINEN: u64 = 13;  // Linen app surface server
+pub const SLOT_SPINDLE: u64 = 14; // Spindle command console (domain 12)
 
 // Capability invocation trap numbers (ring-3 → ring-0 transition only).
 // These are sex-pdx implementation details, NOT POSIX-style syscall numbers.
