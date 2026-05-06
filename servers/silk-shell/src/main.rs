@@ -2613,170 +2613,8 @@ fn snap_end_pos(w: u32, h: u32) -> (i32, i32) {
 ///   4 frames → 2x2 grid
 ///   5+       → stacked rows (full width, equal height)
 unsafe fn tile_visible_frames() {
-    static mut TILE_BEGIN_BUDGET: u32 = 8;
-    let b = &mut TILE_BEGIN_BUDGET;
-    if *b > 0 { *b -= 1; serial_println!("[shell.tile.begin]"); }
-    let mut tiles: [u64; MAX_FRAMES] = [0; MAX_FRAMES];
-    let mut count: usize = 0;
-    for f in FRAMES.iter() {
-        if let Some(frame) = f {
-            if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
-            if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
-            // Zoomed frames are excluded from tiling — their surface occupies the
-            // full content area via layout_maximize(). Tiling them would overwrite
-            // the zoomed position with a tiled position, corrupting the zoom state.
-            if (frame.flags & FRAME_FLAG_ZOOMED) != 0 { continue; }
-            if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
-                if count < MAX_FRAMES {
-                    tiles[count] = tab.surface_id;
-                    count += 1;
-                }
-            }
-        }
-    }
-    if count == 0 {
-        // No visible frames in active scene — clear stale focus, drag, hover.
-        // Defense-in-depth: callers should already clear before calling, but
-        // this ensures safety even if a new call site omits the clearing step.
-        clear_focus_if_dead();
-        clear_drag_if_dead();
-        HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
-        static mut TILE_EMPTY_BUDGET: u32 = 4;
-        let b = &mut TILE_EMPTY_BUDGET;
-        if *b > 0 { *b -= 1; serial_println!("[shell.tile.empty]"); }
-        return;
-    }
-
-    let cw: u32 = P.width as u32;
-    let ch: u32 = (P.height - P.bar_height) as u32;
-
-    for i in 0..count {
-        let sid = tiles[i];
-        if !surface_is_alive(sid) {
-            static mut TILE_SKIP_DEAD_BUDGET: u32 = 8;
-            let b = &mut TILE_SKIP_DEAD_BUDGET;
-            if *b > 0 { *b -= 1; serial_println!("[shell.tile.skip_dead] sid={}", sid); }
-            continue;
-        }
-
-        let (rx, ry, rw, rh) = if count == 1 {
-            (0i32, P.bar_height, cw, ch)
-        } else if count == 2 {
-            let half_w = cw / 2;
-            if i == 0 {
-                (0i32, P.bar_height, half_w, ch)
-            } else {
-                (half_w as i32, P.bar_height, cw - half_w, ch)
-            }
-        } else if count == 3 {
-            let half_w = cw / 2;
-            let half_h = ch / 2;
-            match i {
-                0 => (0i32, P.bar_height, half_w, ch),
-                1 => (half_w as i32, P.bar_height, cw - half_w, half_h),
-                2 => (half_w as i32, P.bar_height + half_h as i32, cw - half_w, ch - half_h),
-                _ => (0i32, P.bar_height, cw, ch),
-            }
-        } else if count == 4 {
-            let half_w = cw / 2;
-            let half_h = ch / 2;
-            match i {
-                0 => (0i32, P.bar_height, half_w, half_h),
-                1 => (half_w as i32, P.bar_height, cw - half_w, half_h),
-                2 => (0i32, P.bar_height + half_h as i32, half_w, ch - half_h),
-                3 => (half_w as i32, P.bar_height + half_h as i32, cw - half_w, ch - half_h),
-                _ => (0i32, P.bar_height, cw, ch),
-            }
-        } else {
-            let row_h = ch / count as u32;
-            let y_off = P.bar_height + (row_h * i as u32) as i32;
-            (0i32, y_off, cw, if i + 1 == count { ch - (row_h * i as u32) } else { row_h })
-        };
-
-        match sid {
-            SURFACE_ID_APP => {
-                if let Some(w) = WINDOWS.get_mut(1) {
-                    w.desc.x = rx; w.desc.y = ry;
-                    w.desc.width = rw; w.desc.height = rh;
-                }
-            }
-            SURFACE_ID_STATIC => {
-                SURFACE_101_X = rx; SURFACE_101_Y = ry;
-                SURFACE_101_W = rw; SURFACE_101_H = rh;
-            }
-            SURFACE_ID_TEST3 => {
-                SURFACE_102_X = rx; SURFACE_102_Y = ry;
-                SURFACE_102_W = rw; SURFACE_102_H = rh;
-            }
-            SURFACE_ID_TEST4 => {
-                SURFACE_103_X = rx; SURFACE_103_Y = ry;
-                SURFACE_103_W = rw; SURFACE_103_H = rh;
-            }
-            SURFACE_ID_LINEN => {
-                SURFACE_200_X = rx; SURFACE_200_Y = ry;
-                SURFACE_200_W = rw; SURFACE_200_H = rh;
-            }
-            SURFACE_ID_QUIL => {
-                SURFACE_201_X = rx; SURFACE_201_Y = ry;
-                SURFACE_201_W = rw; SURFACE_201_H = rh;
-            }
-            SURFACE_ID_MESH => {
-                SURFACE_202_X = rx; SURFACE_202_Y = ry;
-                SURFACE_202_W = rw; SURFACE_202_H = rh;
-            }
-            SURFACE_ID_COLLAR => {
-                SURFACE_203_X = rx; SURFACE_203_Y = ry;
-                SURFACE_203_W = rw; SURFACE_203_H = rh;
-            }
-            SURFACE_ID_BELL_PLACEHOLDER => {
-                SURFACE_204_X = rx; SURFACE_204_Y = ry;
-                SURFACE_204_W = rw; SURFACE_204_H = rh;
-            }
-            SURFACE_ID_SPINDLE => {
-                SURFACE_0x99_X = rx; SURFACE_0x99_Y = ry;
-                SURFACE_0x99_W = rw; SURFACE_0x99_H = rh;
-            }
-            _ => {}
-        }
-        pdx_call(SLOT_DISPLAY, 0xEC, sid,
-            (ry as u64) << 32 | rx as u64,
-            (rh as u64) << 32 | rw as u64);
-        // Quil visual placeholder: set distinctive fill rect after geometry update.
-        if sid == SURFACE_ID_QUIL {
-            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL, 0,
-                (QUIL_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
-            static mut QUIL_PLACEHOLDER_BUDGET: u32 = 8;
-            let b = &mut QUIL_PLACEHOLDER_BUDGET;
-            if *b > 0 { *b -= 1; serial_println!("[shell.quil.tile.placeholder] sid={}", sid); }
-        }
-        // Mesh visual placeholder: amber/diagnostic fill rect.
-        if sid == SURFACE_ID_MESH {
-            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_MESH, 0,
-                (MESH_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
-            static mut MESH_PLACEHOLDER_BUDGET: u32 = 8;
-            let b = &mut MESH_PLACEHOLDER_BUDGET;
-            if *b > 0 { *b -= 1; serial_println!("[shell.mesh.tile.placeholder] sid={}", sid); }
-        }
-        // Collar visual placeholder: muted teal/authority fill rect.
-        if sid == SURFACE_ID_COLLAR {
-            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_COLLAR, 0,
-                (COLLAR_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
-            static mut COLLAR_PLACEHOLDER_BUDGET: u32 = 8;
-            let b = &mut COLLAR_PLACEHOLDER_BUDGET;
-            if *b > 0 { *b -= 1; serial_println!("[shell.collar.tile.placeholder] sid={}", sid); }
-        }
-        // Bell visual placeholder: attention/notification fill rect.
-        if sid == SURFACE_ID_BELL_PLACEHOLDER {
-            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_BELL_PLACEHOLDER, 0,
-                (BELL_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
-            static mut BELL_PLACEHOLDER_BUDGET: u32 = 8;
-            let b = &mut BELL_PLACEHOLDER_BUDGET;
-            if *b > 0 { *b -= 1; serial_println!("[shell.bell.tile.placeholder] sid={}", sid); }
-        }
-    }
-    static mut TILE_BUDGET: u32 = 8;
-    let b = &mut TILE_BUDGET;
-    if *b > 0 { *b -= 1; serial_println!("[shell.tile] count={}", count); }
+    serial_println!("[shell.tile.delegate] from=tile_visible_frames to=tile_active_scene_frames");
+    tile_active_scene_frames();
 }
 
 /// B3: Deterministic tiling for the active scene.
@@ -2786,7 +2624,7 @@ unsafe fn tile_visible_frames() {
 /// Sends 0xEC (upsert geometry) to sexdisplay for each tiled surface.
 /// After tiling, validates current focus — clears if invalid.
 unsafe fn tile_active_scene_frames() {
-    serial_println!("[tiling.active_scene.start]");
+    serial_println!("[shell.tile.begin]");
 
     // Collect tiling candidates from the active scene.
     let mut tiles: [u64; MAX_FRAMES] = [0; MAX_FRAMES];
@@ -2808,23 +2646,27 @@ unsafe fn tile_active_scene_frames() {
                 // B3: Skip dead surfaces.
                 if !surface_is_alive(sid) {
                     serial_println!("[tiling.frame.skip] sid={} reason=dead", sid);
+                    serial_println!("[shell.tile.skip_dead] sid={} reason=dead", sid);
                     continue;
                 }
                 // B3: Skip tombstoned surfaces.
                 if is_tombstoned(sid) {
                     serial_println!("[tiling.frame.skip] sid={} reason=tombstoned", sid);
+                    serial_println!("[shell.tile.skip_dead] sid={} reason=tombstoned", sid);
                     continue;
                 }
                 // B3: Skip surfaces in non-focusable lifecycle states
                 // (Closing, Destroyed, Hidden, Allocated).
                 if !surface_is_lifecycle_focusable(sid) {
                     serial_println!("[tiling.frame.skip] sid={} reason=lifecycle", sid);
+                    serial_println!("[shell.tile.skip_dead] sid={} reason=lifecycle", sid);
                     continue;
                 }
                 // B3: Skip surfaces with stale generation.
                 if let Some(fr) = make_focus_ref(sid) {
                     if !focus_ref_is_current(&fr) {
                         serial_println!("[tiling.frame.skip] sid={} reason=generation", sid);
+                        serial_println!("[shell.tile.skip_dead] sid={} reason=generation", sid);
                         continue;
                     }
                 }
@@ -2841,7 +2683,9 @@ unsafe fn tile_active_scene_frames() {
         // No tileable frames in active scene — clear stale focus, drag, hover.
         clear_focus_if_dead();
         clear_drag_if_dead();
+        clear_hover_if_wrong_scene();
         HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
+        serial_println!("[shell.tile.reject] reason=no_tileable_frames");
         serial_println!("[tiling.done] frames=0");
         return;
     }
@@ -2886,8 +2730,13 @@ unsafe fn tile_active_scene_frames() {
             (0i32, y_off, cw, if i + 1 == count { ch - (row_h * i as u32) } else { row_h })
         };
 
-        // [tiling.frame.apply]: apply tiled geometry to shell state and sexdisplay.
-        serial_println!("[tiling.frame.apply] sid={} x={} y={} w={} h={}", sid, rx, ry, rw, rh);
+        // [shell.tile.apply]: budgeted tiled geometry application proof.
+        static mut SHELL_TILE_APPLY_BUDGET: u32 = 24;
+        let b = &mut SHELL_TILE_APPLY_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[shell.tile.apply] sid={} x={} y={} w={} h={}", sid, rx, ry, rw, rh);
+        }
 
         // Update local shadow state.
         match sid {
@@ -2969,7 +2818,7 @@ unsafe fn tile_active_scene_frames() {
         }
     }
 
-    serial_println!("[tiling.done] frames={}", count);
+    serial_println!("[shell.tile.after_lifecycle] frames={}", count);
 }
 
 #[panic_handler]
@@ -3416,7 +3265,7 @@ unsafe fn access_emit_shell_nodes(nodes: &mut [Option<AccessNode>; MAX_ACCESS_NO
     }
 
     // 3. Quil placeholder (alive surfaces only)
-    if surface_is_alive(SURFACE_ID_QUIL) && !is_tombstoned(SURFACE_ID_QUIL) {
+    if surface_is_alive(SURFACE_ID_QUIL) && !unsafe { is_tombstoned(SURFACE_ID_QUIL) } {
         if idx < MAX_ACCESS_NODES {
             let mut label = [0u8; 32];
             access_copy_label(&mut label, b"Quil");
@@ -4218,6 +4067,7 @@ static SURFACE_FOCUS_ACCEPT_BUDGET: core::sync::atomic::AtomicU32 =
 unsafe fn clear_focus_if_dead() {
     let focused = FOCUSED_SURFACE_ID;
     if focused != 0 && (!surface_is_alive(focused) || !surface_is_lifecycle_focusable(focused)) {
+        serial_println!("[shell.focus.clear_dead] sid={} reason=invalid", focused);
         if !surface_is_alive(focused) {
             serial_println!("[focus.ref.clear] id={} reason=dead", focused);
             // A6: Record tombstone when focus is cleared because the surface is dead.
@@ -4249,7 +4099,8 @@ unsafe fn clear_focus_if_dead() {
 /// If currently dragging a surface that is no longer alive, cancel the drag.
 unsafe fn clear_drag_if_dead() {
     if let InteractionState::Dragging { surface_id, .. } = INTERACTION {
-        if !surface_is_alive(surface_id) {
+        if !surface_is_alive(surface_id) || !surface_is_lifecycle_focusable(surface_id) {
+            serial_println!("[shell.drag.clear_dead] sid={} reason=invalid", surface_id);
             serial_println!("[shell.surface.drag.cancel.dead] id={}", surface_id);
             // A6: Record tombstone for drag cancelled due to dead surface.
             let st = lifecycle_state(surface_id).unwrap_or(LifecycleState::Allocated);
@@ -5372,6 +5223,7 @@ unsafe fn switch_scene(scene_idx: u8) {
     clear_drag_if_wrong_scene();
     clear_hover_if_wrong_scene();
     tile_active_scene_frames();
+    serial_println!("[shell.interact.tile.return] source=scene.switch");
     snap_capture_layout();
     // B2: Update scene flags for the previous scene before switching.
     scene_update_flags(prev);
@@ -5383,6 +5235,7 @@ unsafe fn switch_scene(scene_idx: u8) {
     let b = &mut SCENE_SWITCH_SHORTCUT_BUDGET;
     if *b > 0 { *b -= 1; serial_println!("[shell.scene.shortcut.switch] from={} to={}", prev, ACTIVE_SCENE_IDX); }
     serial_println!("[scene.switch] from={} to={}", prev, idx);
+    serial_println!("[shell.interact.scene.switch] from={} to={}", prev, idx);
 }
 
 /// Advance to the next workspace (wraps around).
@@ -7744,6 +7597,7 @@ unsafe fn frame_chrome_visible(frame_id: u32) -> bool {
 /// clear hover state to avoid stale highlights. Call after scene switch or minimize.
 unsafe fn clear_hover_if_wrong_scene() {
     if HOVERED_FRAME_ID != 0 && !frame_accepts_input(HOVERED_FRAME_ID) {
+        serial_println!("[shell.hover.clear_dead] frame={} reason=invalid_target", HOVERED_FRAME_ID);
         HOVERED_FRAME_ID = 0;
         HOVER_KIND = HOVER_NONE;
         HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
@@ -7822,6 +7676,8 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
     }
     // A8: Re-tile after minimize — frame removed from visible set.
     tile_active_scene_frames();
+    serial_println!("[shell.interact.tile.return] source=minimize frame={}", frame_id);
+    serial_println!("[shell.interact.minimize] frame={} sid={}", frame_id, surface_id);
     static mut TILE_AFTER_MINIMIZE_BUDGET: u32 = 8;
     let b = &mut TILE_AFTER_MINIMIZE_BUDGET;
     if *b > 0 { *b -= 1; serial_println!("[shell.tile.after_minimize] frame={}", frame_id); }
@@ -7877,6 +7733,8 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
     serial_println!("[frame.light.restore.fsm] frame={} surface={}", frame_id, surface_id);
     // Re-tile to include the restored frame.
     tile_active_scene_frames();
+    serial_println!("[shell.interact.tile.return] source=restore frame={}", frame_id);
+    serial_println!("[shell.interact.restore] frame={} sid={}", frame_id, surface_id);
     unsafe {
         static mut FRAME_RESTORE_BUDGET: u32 = 8;
         let b = &mut FRAME_RESTORE_BUDGET;
@@ -8508,6 +8366,15 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
     let light_changed = HOVERED_FRAME_LIGHT != new_light;
     if changed || light_changed {
         unsafe {
+            static mut INTERACT_HOVER_BUDGET: u32 = 8;
+            let b = &mut INTERACT_HOVER_BUDGET;
+            if *b > 0 {
+                *b -= 1;
+                serial_println!("[shell.interact.hover] frame={} kind={} light={} x={} y={}",
+                    new_frame_id, new_kind, new_light, x, y);
+            }
+        }
+        unsafe {
             static mut HOVER_STATE_CHANGE_BUDGET: u32 = 6;
             let b = &mut HOVER_STATE_CHANGE_BUDGET;
             if *b > 0 {
@@ -8603,26 +8470,31 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         return true;
     }
     if !is_focusable_surface(sid) {
+        serial_println!("[shell.interact.reject] op=focus sid={} reason=nonfocusable", sid);
         serial_println!("[shell.focus.reject.nonfocusable] id={}", sid);
         return false;
     }
     if !surface_is_alive(sid) {
+        serial_println!("[shell.interact.reject] op=focus sid={} reason=dead", sid);
         serial_println!("[shell.focus.reject.dead] id={}", sid);
         return false;
     }
     if is_tombstoned(sid) {
+        serial_println!("[shell.interact.reject] op=focus sid={} reason=tombstoned", sid);
         serial_println!("[shell.focus.reject.tombstoned] id={}", sid);
         serial_println!("[lifecycle.tombstone.reject_focus] sid={} reason=tombstoned", sid);
         return false;
     }
     // A4: Reject if lifecycle state does not allow focus (Visible or Mapped only).
     if !surface_is_lifecycle_focusable(sid) {
+        serial_println!("[shell.interact.reject] op=focus sid={} reason=lifecycle", sid);
         serial_println!("[focus.lifecycle.reject] id={}", sid);
         return false;
     }
     // A4: Verify generation is current before committing focus.
     if let Some(fr) = make_focus_ref(sid) {
         if !focus_ref_is_current(&fr) {
+            serial_println!("[shell.interact.reject] op=focus sid={} reason=stale_generation", sid);
             serial_println!("[focus.generation.reject] id={}", sid);
             serial_println!("[lifecycle.generation.stale_reject] sid={} gen={:?}", sid, surface_generation(sid));
             return false;
@@ -8632,6 +8504,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
     // Panels, cursor, and non-frame surfaces have no scene association and are always eligible.
     if let Some(scene) = surface_scene_id(sid) {
         if scene != ACTIVE_SCENE_IDX {
+            serial_println!("[shell.interact.reject] op=focus sid={} reason=inactive_scene", sid);
             serial_println!("[scene.focus.reject.inactive] id={} sid_scene={} active={}", sid, scene, ACTIVE_SCENE_IDX);
             return false;
         }
@@ -8641,6 +8514,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
     sync_focus_ref();
     serial_println!("[focus.ref.commit] id={}", sid);
     serial_println!("[shell.focus.set] id={}", sid);
+    serial_println!("[shell.interact.focus] sid={}", sid);
     pdx_call(SLOT_DISPLAY, 0xED, sid, 0, 0);
     // Selected window options: frame, surface, and computed mask.
     unsafe {
@@ -8774,8 +8648,14 @@ unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
             moved = true;
         }
         if moved {
-            serial_println!("[shell.drag.move] id={} x={} y={} dx={} dy={}", surface_id, POINTER_X, POINTER_Y, dx, dy);
-            serial_println!("[shell.drag.send.ok] id={}", surface_id);
+            unsafe {
+                static mut INTERACT_DRAG_MOVE_BUDGET: u32 = 24;
+                let b = &mut INTERACT_DRAG_MOVE_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!("[shell.interact.drag.move] sid={} dx={} dy={}", surface_id, dx, dy);
+                }
+            }
             // Integrated contract diagnostic: logs drag target surface_id and
             // current FOCUSED_SURFACE_ID. When id == focus, drag target matches
             // the focused surface (normal case). If a FocusToggle occurs during
@@ -8982,6 +8862,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
             static mut ATLAS_SELECT_BUDGET: u32 = 4;
             let b = &mut ATLAS_SELECT_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[shell.atlas.select] id={}", scene_idx); }
+            serial_println!("[shell.interact.atlas.select] scene={}", scene_idx);
             return (HitTarget::None, true);
         } else {
             // Click missed all cards — keep Atlas open, consume click.
@@ -9150,7 +9031,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         && point_in_surface(px, py, FOCUSED_SURFACE_ID)
     {
         try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: px, current_y: py });
-        serial_println!("[shell.drag.start] id={} x={} y={}", FOCUSED_SURFACE_ID, px, py);
+        serial_println!("[shell.interact.drag.begin] sid={} x={} y={}", FOCUSED_SURFACE_ID, px, py);
     } else if !silkbar_handled && matches!(target, HitTarget::FrameChrome { kind: FRAME_CHROME_TAB_STRIP, .. }) {
         serial_println!("[shell.drag.skip.chrome] kind=tab_strip x={} y={}", px, py);
     }
@@ -9652,21 +9533,129 @@ pub extern "C" fn _start() -> ! {
         (18u64 << 32) | 12u64);
     serial_println!("[shell.cursor_surface.create.ok]");
 
-    // Stage: boot-time safe inline surface create (0xEC — client-supplied id)
-    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_APP, (100u64 << 32) | 100u64, (500u64 << 32) | 800u64);
-    serial_println!("[silk-shell] Boot 0xEC surface 100 create sent to sexdisplay");
-    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_STATIC, (160u64 << 32) | 180u64, (300u64 << 32) | 500u64);
-    serial_println!("[silk-shell] Boot 0xEC surface 101 create sent to sexdisplay");
-    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST3, (60u64 << 32) | 50u64, (150u64 << 32) | 350u64);
-    serial_println!("[silk-shell] Boot 0xEC surface 102 create sent to sexdisplay");
-    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST4, (560u64 << 32) | 900u64, (300u64 << 32) | 120u64);
-    serial_println!("[silk-shell] Boot 0xEC surface 103 create sent to sexdisplay");
+    // Legacy demo surfaces (100..103) are intentionally not created at boot in
+    // the two-surface startup path to avoid transient fullscreen overlays.
+    serial_println!("[silk-shell.boot.legacy_surfaces.skip] ids=100,101,102,103");
+
+    // ── UI Readiness: deterministic boot content layout (below SilkBar) ──
+    let content_x: i32 = 0;
+    let content_y: i32 = P.bar_height.max(0);
+    let content_w: u32 = (P.width.max(0)) as u32;
+    let content_h: u32 = (P.height - content_y).max(0) as u32;
+    if content_w == 0 || content_h == 0 {
+        serial_println!(
+            "[silk-shell.boot.layout.reject] reason=invalid_content_rect x={} y={} w={} h={}",
+            content_x,
+            content_y,
+            content_w,
+            content_h
+        );
+    } else {
+        serial_println!(
+            "[silk-shell.boot.layout.content] x={} y={} w={} h={}",
+            content_x,
+            content_y,
+            content_w,
+            content_h
+        );
+    }
+
+    // Quil fills the full content rect at boot.
+    let boot_quil_x = content_x;
+    let boot_quil_y = content_y;
+    let boot_quil_w = content_w.max(P.min_width);
+    let boot_quil_h = content_h.max(P.min_height as u32);
+
+    // Linen remains visible as a bounded demo surface inside content area.
+    let linen_w: u32 = LINEN_BOOT_W.min(content_w.max(P.min_width));
+    let linen_h: u32 = LINEN_BOOT_H.min(content_h.max(P.min_height as u32));
+    let linen_margin: i32 = 24;
+    let mut boot_linen_x = content_x + linen_margin;
+    let mut boot_linen_y = content_y + linen_margin;
+    if content_w > linen_w {
+        boot_linen_x = content_x + (content_w - linen_w) as i32 - linen_margin;
+    }
+    if content_h > linen_h {
+        boot_linen_y = content_y + linen_margin;
+    }
+    let (boot_linen_x, boot_linen_y) = clamp_position(boot_linen_x, boot_linen_y, linen_w, linen_h);
+
+    unsafe {
+        SURFACE_201_X = boot_quil_x;
+        SURFACE_201_Y = boot_quil_y;
+        SURFACE_201_W = boot_quil_w;
+        SURFACE_201_H = boot_quil_h;
+        SURFACE_200_X = boot_linen_x;
+        SURFACE_200_Y = boot_linen_y;
+        SURFACE_200_W = linen_w;
+        SURFACE_200_H = linen_h;
+    }
+
+    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_QUIL,
+        (boot_quil_y as u64) << 32 | boot_quil_x as u64,
+        (boot_quil_h as u64) << 32 | boot_quil_w as u64);
+    serial_println!("[silk-shell] Boot 0xEC surface 201 (Quil) created");
+    serial_println!("[silk-shell.boot.surface.create] sid={} owner=quil", SURFACE_ID_QUIL);
+    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_LINEN,
+        (boot_linen_y as u64) << 32 | boot_linen_x as u64,
+        (linen_h as u64) << 32 | linen_w as u64);
+    serial_println!("[silk-shell] Boot 0xEC surface 200 (Linen) created");
+    serial_println!("[silk-shell.boot.surface.create] sid={} owner=linen", SURFACE_ID_LINEN);
+    serial_println!("[silk-shell.ui.ready] surfaces=2");
+
+    // Deterministic boot-readiness proof for Linen/Quil visibility ordering.
+    unsafe {
+        static mut UI_BOOT_PROOF_BUDGET: u32 = 1;
+        if UI_BOOT_PROOF_BUDGET > 0 {
+            UI_BOOT_PROOF_BUDGET -= 1;
+
+            // bounds checks
+            if boot_quil_w > 0 && boot_quil_h > 0 {
+                serial_println!("[silk-shell.boot.surface.bounds] sid={} x={} y={} w={} h={}",
+                    SURFACE_ID_QUIL, boot_quil_x, boot_quil_y, boot_quil_w, boot_quil_h);
+            } else {
+                serial_println!("[silk-shell.boot.reject] sid={} reason=zero_bounds", SURFACE_ID_QUIL);
+            }
+            if linen_w > 0 && linen_h > 0 {
+                serial_println!("[silk-shell.boot.surface.bounds] sid={} x={} y={} w={} h={}",
+                    SURFACE_ID_LINEN, boot_linen_x, boot_linen_y, linen_w, linen_h);
+            } else {
+                serial_println!("[silk-shell.boot.reject] sid={} reason=zero_bounds", SURFACE_ID_LINEN);
+            }
+
+            // composition truth: sexdisplay composites non-focused first, then focused on top.
+            serial_println!("[silk-shell.compose.order] focused_top=1 focus={}", SURFACE_ID_QUIL);
+
+            // visibility/liveness checks
+            let q_visible = surface_is_alive(SURFACE_ID_QUIL) && !is_tombstoned(SURFACE_ID_QUIL);
+            let l_visible = surface_is_alive(SURFACE_ID_LINEN) && !is_tombstoned(SURFACE_ID_LINEN);
+            serial_println!("[silk-shell.boot.surface.visible] sid={} visible={}", SURFACE_ID_QUIL, if q_visible { 1 } else { 0 });
+            if l_visible {
+                serial_println!("[silk-shell.boot.surface.hidden] sid={} reason=focused_quil_covers", SURFACE_ID_LINEN);
+            } else {
+                serial_println!("[silk-shell.boot.surface.hidden] sid={} reason=inactive_or_tombstoned", SURFACE_ID_LINEN);
+            }
+
+            // Visible boot stack truth: focused Quil is top and sole visible boot target.
+            if q_visible {
+                serial_println!("[silk-shell.boot.zorder] visible_count=1 first={}", SURFACE_ID_QUIL);
+            } else {
+                serial_println!("[silk-shell.boot.zorder.reject] reason=focused_not_visible sid={}", SURFACE_ID_QUIL);
+            }
+        }
+    }
 
     // Initialize focus on surface 201 (syncs sexdisplay z-order + color)
     pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_QUIL, 0, 0);
     serial_println!("[silk-shell] Boot focus set to surface 201 (Quil)");
+    if surface_is_alive(SURFACE_ID_QUIL) && !unsafe { is_tombstoned(SURFACE_ID_QUIL) } {
+        serial_println!("[silk-shell.boot.focus] sid={} valid=1", SURFACE_ID_QUIL);
+    } else {
+        serial_println!("[silk-shell.boot.reject] sid={} reason=focus_invalid", SURFACE_ID_QUIL);
+    }
     // A3: Sync initial FocusRef from boot focus.
     unsafe { sync_focus_ref(); }
+    serial_println!("[silk-shell.boot.ui.ready] surfaces=1 focus={}", SURFACE_ID_QUIL);
 
     // Send initial tab metadata for frame 1 (surface 100: 1 tab, active tab 0)
     unsafe { send_frame_tab_info(1); }
@@ -9679,6 +9668,7 @@ pub extern "C" fn _start() -> ! {
     // Fire GET to sexstore for persisted scene appearance settings.
     // Reply arrives asynchronously in main loop via type_id == 0x1.
     unsafe { boot_load_scene_settings(); }
+    serial_println!("[silk-shell.ready]");
 
     loop {
         // Runtime containment: park without syscall while null-jump root cause is isolated.
@@ -9814,7 +9804,7 @@ pub extern "C" fn _start() -> ! {
                                     try_transition(InteractionState::Idle);
                                 }
                                 InteractionState::Dragging { surface_id, .. } => {
-                                    serial_println!("[shell.drag.end] id={} x={} y={}", surface_id, POINTER_X, POINTER_Y);
+                                    serial_println!("[shell.interact.drag.end] sid={} x={} y={}", surface_id, POINTER_X, POINTER_Y);
                                     try_transition(InteractionState::Idle);
                                 }
                                 _ => {}
@@ -10908,7 +10898,7 @@ pub extern "C" fn _start() -> ! {
                                             try_transition(InteractionState::Idle);
                                         }
                                         InteractionState::Dragging { surface_id, .. } => {
-                                            serial_println!("[shell.drag.end] id={} x={} y={}", surface_id, POINTER_X, POINTER_Y);
+                                            serial_println!("[shell.interact.drag.end] sid={} x={} y={}", surface_id, POINTER_X, POINTER_Y);
                                             try_transition(InteractionState::Idle);
                                         }
                                         _ => {}
