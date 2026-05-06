@@ -713,6 +713,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[spindle.sexfiles.persist.pending] reason=no_storage_cap");
     serial_println!("[spindle.bell.pending] reason=no_bell_cap");
     serial_println!("[spindle.linen.spn.pending] reason=no_linen_cap kind=SpindleSession ext=.spn");
+    serial_println!("[spindle.fb.proof.disabled] surface=0x99 route=silk-shell fb=gated_proof_only");
 
     serial_println!("[spindle.ready]");
 
