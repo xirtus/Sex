@@ -1,7 +1,8 @@
 #![no_std]
 #![no_main]
 
-use sex_pdx::{pdx_listen_raw, serial_println, OP_BELL_NOTIFY};
+use sex_pdx::{pdx_listen_raw, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_CLEAR,
+              OP_BELL_MUTE_SENDER};
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -34,8 +35,10 @@ struct BellQueueEntry {
     action_count:     u8,
     /// Always 0 in V1 (reserved).
     object_ref_count: u8,
+    /// 0 = active, 1 = dismissed by CLOSE or CLEAR. Skipped in LIST.
+    dismissed:        u8,
     /// Padding.
-    _pad:             [u8; 6],
+    _pad:             [u8; 5],
 }
 
 struct BellQueue {
@@ -69,7 +72,8 @@ impl BellQueue {
                 redaction_class: 0,
                 action_count: 0,
                 object_ref_count: 0,
-                _pad: [0; 6],
+                dismissed: 0,
+                _pad: [0; 5],
             }; BELL_QUEUE_CAPACITY],
         }
     }
@@ -101,7 +105,8 @@ impl BellQueue {
             redaction_class,
             action_count: 0,
             object_ref_count: 0,
-            _pad: [0; 6],
+            dismissed: 0,
+            _pad: [0; 5],
         };
 
         self.entries[self.tail as usize] = entry;
@@ -127,6 +132,57 @@ const BELL_LIST_ALLOWLIST: &[u32] = &[
 /// Check if a caller PD is authorized to call OP_BELL_LIST.
 fn is_list_reader_allowed(caller_pd: u32) -> bool {
     BELL_LIST_ALLOWLIST.contains(&caller_pd)
+}
+
+// ── Mute List ────────────────────────────────────────────────────────
+
+/// Static mute list of sender PDs. Muted senders' NOTIFY is rejected.
+const MUTE_LIST_CAPACITY: usize = 16;
+static mut MUTE_LIST: [u32; MUTE_LIST_CAPACITY] = [0; MUTE_LIST_CAPACITY];
+static mut MUTE_COUNT: usize = 0;
+
+/// Check if a caller PD is muted.
+fn is_muted(caller_pd: u32) -> bool {
+    unsafe {
+        for i in 0..MUTE_COUNT {
+            if MUTE_LIST[i] == caller_pd {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Add a PD to the mute list. Returns Ok(()) if added or already present.
+fn add_mute(caller_pd: u32) -> Result<(), &'static str> {
+    unsafe {
+        if is_muted(caller_pd) {
+            return Ok(()); // idempotent
+        }
+        if MUTE_COUNT >= MUTE_LIST_CAPACITY {
+            return Err("mute_list_full");
+        }
+        MUTE_LIST[MUTE_COUNT] = caller_pd;
+        MUTE_COUNT += 1;
+    }
+    Ok(())
+}
+
+/// Remove a PD from the mute list. Returns true if found and removed, false if not present.
+fn remove_mute(caller_pd: u32) -> bool {
+    unsafe {
+        for i in 0..MUTE_COUNT {
+            if MUTE_LIST[i] == caller_pd {
+                // Shift remaining entries left
+                for j in i..MUTE_COUNT - 1 {
+                    MUTE_LIST[j] = MUTE_LIST[j + 1];
+                }
+                MUTE_COUNT -= 1;
+                return true;
+            }
+        }
+    }
+    false
 }
 
 // ── Enum Validation ──────────────────────────────────────────────────
@@ -176,6 +232,20 @@ pub extern "C" fn _start() -> ! {
                 let action_count    = (msg.arg1 & 0xFF) as u8;
                 let object_refs     = (msg.arg2 & 0xFF) as u8;
                 let caller_pd       = msg.caller_pd;
+
+                // ── Mute check (reject before any processing) ───────────
+                if is_muted(caller_pd) {
+                    unsafe {
+                        static mut BELL_MUTED_REJECT_BUDGET: u32 = 8;
+                        let b = &mut BELL_MUTED_REJECT_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.notify.reject] caller_pd={} reason=muted",
+                                caller_pd);
+                        }
+                    }
+                    continue;
+                }
 
                 // ── Validate enum ranges ─────────────────────────────
                 let mut reject_reason: Option<&'static str> = None;
@@ -368,6 +438,11 @@ pub extern "C" fn _start() -> ! {
                                   % BELL_QUEUE_CAPACITY;
                         let entry = &BELL_QUEUE.entries[idx];
 
+                        // Skip dismissed entries
+                        if entry.dismissed != 0 {
+                            continue;
+                        }
+
                         if lane_filter == 0xFF || entry.final_lane == lane_filter {
                             // ── Emit item marker ──
                             static mut BELL_LIST_ITEM_BUDGET: u32 = 16;
@@ -405,6 +480,174 @@ pub extern "C" fn _start() -> ! {
                         if *b > 0 {
                             *b -= 1;
                             serial_println!("[bell.list.done] count={}", match_count);
+                        }
+                    }
+                }
+            }
+
+            OP_BELL_CLOSE => {
+                // ── Parse ──
+                let event_id   = msg.arg0;
+                let caller_pd  = msg.caller_pd;
+
+                // ── Search queue for matching event_id, mark dismissed ──
+                let mut found = false;
+                unsafe {
+                    for i in 0..BELL_QUEUE.count as usize {
+                        let idx = (BELL_QUEUE.head as usize + i) % BELL_QUEUE_CAPACITY;
+                        if BELL_QUEUE.entries[idx].event_id == event_id
+                            && BELL_QUEUE.entries[idx].dismissed == 0
+                        {
+                            BELL_QUEUE.entries[idx].dismissed = 1;
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+
+                if found {
+                    unsafe {
+                        static mut BELL_CLOSE_OK_BUDGET: u32 = 8;
+                        let b = &mut BELL_CLOSE_OK_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.close.ok] event_id={}", event_id);
+                        }
+                    }
+                } else {
+                    unsafe {
+                        static mut BELL_CLOSE_REJECT_BUDGET: u32 = 4;
+                        let b = &mut BELL_CLOSE_REJECT_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.close.reject] reason=not_found event_id={} caller_pd={}",
+                                event_id, caller_pd);
+                        }
+                    }
+                }
+            }
+
+            OP_BELL_CLEAR => {
+                // ── Parse ──
+                let lane_filter = ((msg.arg0 >> 0) & 0xFF) as u8;
+                let caller_pd   = msg.caller_pd;
+
+                if lane_filter == 0xFF {
+                    // ── Clear all lanes: reset queue ──
+                    unsafe {
+                        BELL_QUEUE.head = 0;
+                        BELL_QUEUE.tail = 0;
+                        BELL_QUEUE.count = 0;
+                    }
+                    unsafe {
+                        static mut BELL_CLEAR_OK_BUDGET: u32 = 4;
+                        let b = &mut BELL_CLEAR_OK_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.clear.ok] lane=all caller_pd={}", caller_pd);
+                        }
+                    }
+                } else if lane_filter <= 5 {
+                    // ── Clear specific lane: mark matching entries as dismissed ──
+                    let mut dismiss_count: u32 = 0;
+                    unsafe {
+                        for i in 0..BELL_QUEUE.count as usize {
+                            let idx = (BELL_QUEUE.head as usize + i) % BELL_QUEUE_CAPACITY;
+                            if BELL_QUEUE.entries[idx].final_lane == lane_filter
+                                && BELL_QUEUE.entries[idx].dismissed == 0
+                            {
+                                BELL_QUEUE.entries[idx].dismissed = 1;
+                                dismiss_count += 1;
+                            }
+                        }
+                    }
+                    unsafe {
+                        static mut BELL_CLEAR_OK_BUDGET: u32 = 4;
+                        let b = &mut BELL_CLEAR_OK_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.clear.ok] lane={} count={} caller_pd={}",
+                                lane_filter, dismiss_count, caller_pd);
+                        }
+                    }
+                } else {
+                    unsafe {
+                        static mut BELL_CLEAR_REJECT_BUDGET: u32 = 4;
+                        let b = &mut BELL_CLEAR_REJECT_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.clear.reject] reason=invalid_lane lane={} caller_pd={}",
+                                lane_filter, caller_pd);
+                        }
+                    }
+                }
+            }
+
+            OP_BELL_MUTE_SENDER => {
+                // ── Parse ──
+                let mute_pd   = (msg.arg0 & 0xFFFFFFFF) as u32;
+                let action    = ((msg.arg0 >> 32) & 0xFF) as u8;
+                let caller_pd = msg.caller_pd;
+
+                match action {
+                    0 => {
+                        match add_mute(mute_pd) {
+                            Ok(()) => {
+                                unsafe {
+                                    static mut BELL_MUTE_ADD_BUDGET: u32 = 8;
+                                    let b = &mut BELL_MUTE_ADD_BUDGET;
+                                    if *b > 0 {
+                                        *b -= 1;
+                                        serial_println!("[bell.mute.add] mute_pd={} caller_pd={}",
+                                            mute_pd, caller_pd);
+                                    }
+                                }
+                            }
+                            Err(reason) => {
+                                unsafe {
+                                    static mut BELL_MUTE_REJECT_BUDGET: u32 = 4;
+                                    let b = &mut BELL_MUTE_REJECT_BUDGET;
+                                    if *b > 0 {
+                                        *b -= 1;
+                                        serial_println!("[bell.mute.reject] reason={} mute_pd={} caller_pd={}",
+                                            reason, mute_pd, caller_pd);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    1 => {
+                        if remove_mute(mute_pd) {
+                            unsafe {
+                                static mut BELL_MUTE_REMOVE_BUDGET: u32 = 8;
+                                let b = &mut BELL_MUTE_REMOVE_BUDGET;
+                                if *b > 0 {
+                                    *b -= 1;
+                                    serial_println!("[bell.mute.remove] mute_pd={} caller_pd={}",
+                                        mute_pd, caller_pd);
+                                }
+                            }
+                        } else {
+                            unsafe {
+                                static mut BELL_MUTE_REJECT_BUDGET: u32 = 4;
+                                let b = &mut BELL_MUTE_REJECT_BUDGET;
+                                if *b > 0 {
+                                    *b -= 1;
+                                    serial_println!("[bell.mute.reject] reason=not_found mute_pd={} caller_pd={}",
+                                        mute_pd, caller_pd);
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        unsafe {
+                            static mut BELL_MUTE_REJECT_BUDGET: u32 = 4;
+                            let b = &mut BELL_MUTE_REJECT_BUDGET;
+                            if *b > 0 {
+                                *b -= 1;
+                                serial_println!("[bell.mute.reject] reason=invalid_action action={} caller_pd={}",
+                                    action, caller_pd);
+                            }
                         }
                     }
                 }
