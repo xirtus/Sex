@@ -37,7 +37,8 @@ crates = [
   "servers/silkbar/Cargo.toml",
   "servers/linen/Cargo.toml",
   "servers/quil/Cargo.toml",
-  "servers/sexstore/Cargo.toml"
+  "servers/sexstore/Cargo.toml",
+  "servers/sexfiles/Cargo.toml"
 ]
 
 [[stage]]
@@ -138,6 +139,13 @@ action = "cargo_manifest"
 manifest = "servers/sexbell/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexbell"
 dest_artifact = "iso_root/servers/sexbell"
+
+[[stage]]
+id = "build_sexfiles"
+action = "cargo_manifest"
+manifest = "servers/sexfiles/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sexfiles"
+dest_artifact = "iso_root/servers/sexfiles"
 
 [[stage]]
 id = "copy_limine_cfg"
