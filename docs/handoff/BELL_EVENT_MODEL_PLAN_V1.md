@@ -173,6 +173,19 @@ consume).
 | `invalid_lane` | Lane filter > 5 and not 0xFF | `[bell.list.reject] reason=invalid_lane` |
 | `invalid_count` | max_results 0 or > 4 | `[bell.list.reject] reason=invalid_count` |
 
+### Additional rejection cases (implemented in Phases A-D)
+
+| Reason | Condition | Marker |
+|--------|-----------|--------|
+| `muted` | `caller_pd` is in mute list | `[bell.notify.reject] reason=muted` |
+| `spam_budget_exceeded` | Sender exceeded 8 events/62 ticks | `[bell.notify.reject] reason=spam_budget_exceeded` |
+| `action_count_invalid` | `action_count > 1` | `[bell.notify.reject] reason=action_count_invalid` |
+| `action_id_zero` | `action_count == 1 && action_id == 0` | `[bell.notify.reject] reason=action_id_zero` |
+| `object_refs_invalid` | `object_refs > 1` | `[bell.notify.reject] reason=object_refs_invalid` |
+| `action_not_found` | OP_BELL_ACTION: event_id+action_id not found | `[bell.action.reject] reason=not_found` |
+| `close_not_found` | OP_BELL_CLOSE: event_id not found | `[bell.close.reject] reason=not_found` |
+| `mute_list_full` | Mute list at capacity (16) | `[bell.mute.reject] reason=mute_list_full` |
+
 ### Planned rejection cases (future)
 
 | Reason | Condition | Marker |
@@ -180,7 +193,6 @@ consume).
 | `unknown_sender` | `caller_pd` not found in Collar registry | `[bell.notify.reject] reason=unknown_sender` |
 | `missing_cap` | Sender lacks `passive_notify` cap | `[bell.notify.reject] reason=missing_cap` |
 | `privacy_mismatch` | Sender's `max_privacy` < requested privacy | `[bell.notify.reject] reason=privacy_mismatch` |
-| `spam_budget_exceeded` | Sender exceeded events/ticks quota | `[bell.notify.reject] reason=spam_budget_exceeded` |
 | `invalid_action_mask` | Action callback ID out of range | `[bell.notify.reject] reason=invalid_action` |
 | `stale_object_ref` | Object ref points to dead/destroyed Linen object | `[bell.notify.reject] reason=stale_object_ref` |
 | `expired` | `expires_tick` is in the past | `[bell.notify.reject] reason=expired` |
