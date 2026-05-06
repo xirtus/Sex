@@ -4,6 +4,8 @@
 use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
               OP_BELL_CLEAR, OP_BELL_MUTE_SENDER, OP_BELL_LIST, OP_BELL_SUBSCRIBE, OP_BELL_SET_POLICY};
 
+const BELL_DELIVERY_PROOF_ENABLED: bool = option_env!("SEXOS_BELL_DELIVERY_PROOF").is_some();
+
 // Replaced local bell_reply helper with shared sex_pdx::pdx_reply(target_pd, value).
 // Kernel: syscall 29 (SYSCALL_PDX_REPLY), rdi=target_pd, rsi=value.
 // Reply received by caller as pdx_listen_raw(0) → msg.type_id=1, msg.arg0=value.
@@ -517,6 +519,9 @@ pub extern "C" fn _start() -> ! {
                 }
 
                 if let Some(reason) = reject_reason {
+                    if BELL_DELIVERY_PROOF_ENABLED {
+                        serial_println!("[bell.event.reject] caller_pd={} reason={}", caller_pd, reason);
+                    }
                     unsafe {
                         static mut BELL_REJECT_BUDGET: u32 = 4;
                         let b = &mut BELL_REJECT_BUDGET;
@@ -586,6 +591,9 @@ pub extern "C" fn _start() -> ! {
 
                 match push_result {
                     Ok((event_id, drop_info)) => {
+                        if BELL_DELIVERY_PROOF_ENABLED {
+                            serial_println!("[bell.event.accept] caller_pd={} event_id={} lane={}", caller_pd, event_id, effective_lane);
+                        }
                         // ── Emit drop marker if a lowest-priority entry was displaced ──
                         if let Some(dropped_lane) = drop_info {
                             unsafe {
@@ -621,6 +629,9 @@ pub extern "C" fn _start() -> ! {
                         bump_generation();
                     }
                     Err(reason) => {
+                        if BELL_DELIVERY_PROOF_ENABLED {
+                            serial_println!("[bell.event.reject] caller_pd={} reason={}", caller_pd, reason);
+                        }
                         unsafe {
                             static mut BELL_QUEUE_FULL_BUDGET: u32 = 16;
                             let b = &mut BELL_QUEUE_FULL_BUDGET;

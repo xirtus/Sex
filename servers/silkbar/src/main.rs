@@ -8,6 +8,8 @@ use silkbar_model::{
 };
 use sex_pdx::{OP_BELL_LIST, OP_BELL_SUBSCRIBE, SLOT_BELL};
 
+const BELL_DELIVERY_PROOF_ENABLED: bool = option_env!("SEXOS_BELL_DELIVERY_PROOF").is_some();
+
 fn send_update(update: SilkBarUpdate) {
     let result = sex_pdx::pdx_call_checked(
         sex_pdx::SLOT_DISPLAY,
@@ -130,6 +132,10 @@ pub extern "C" fn _start() -> ! {
                     send_update(SilkBarUpdate::new(
                         UpdateKind::SetBellPresence as u32, 0, a, 0,
                     ));
+                    if BELL_DELIVERY_PROOF_ENABLED {
+                        sex_pdx::serial_println!("[bell.poll.ok] total={} redacted={} flags={:#x}", total, redacted, flags);
+                        sex_pdx::serial_println!("[silkbar.bell.state] total={} redacted={} flags={:#x}", total, redacted, flags);
+                    }
                 } else {
                     // SUBSCRIBE reply: arg0 = current generation.
                     let gen = msg.arg0;
