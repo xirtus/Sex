@@ -46,7 +46,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 use sex_pdx::{
     pdx_call, serial_println,
-    OP_WINDOW_CREATE, SLOT_DISPLAY,
+    OP_WINDOW_CREATE, SLOT_DISPLAY, SLOT_STORAGE,
 };
 use sex_graphics::{WindowBuffer, font};
 
@@ -62,6 +62,17 @@ struct WindowCreateParams {
     height: u32,
     pfn_base: u64,
 }
+
+// ── RamFS opcodes (local; defined in servers/sexfiles/src/messages.rs) ────
+const OP_RAMFS_OPEN: u64 = 0x30;
+const OP_RAMFS_WRITE: u64 = 0x32;
+const OP_RAMFS_READ: u64 = 0x31;
+const OP_RAMFS_CLOSE: u64 = 0x33;
+const OP_RAMFS_OBJECT_ID: u64 = 0x37;
+
+const RAMFS_O_CREATE: u64 = 0x01;
+const HISTORY_FILE: &[u8] = b"spindle_history";
+const HISTORY_PATH: &[u8] = b"/tmp/spindle/history.log";
 
 // ── Spindle surface geometry ───────────────────────────────────────────────
 
@@ -549,6 +560,104 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
     recognized
 }
 
+// ── SexFiles persistence (best-effort, graceful fallback) ──────────────────
+
+/// Try to persist command history to SexFiles RamFS.
+/// Returns true on success, false if SexFiles unavailable.
+unsafe fn persist_history(hist: &History) -> bool {
+    // Pack file name (≤ 24 bytes) into 3 u64 args per sexfiles protocol
+    let mut n0: u64 = 0; let mut n1: u64 = 0; let mut n2: u64 = 0;
+    let name = HISTORY_FILE;
+    for (i, &b) in name.iter().enumerate() {
+        match i {
+            0..=7  => n0 |= (b as u64) << (i * 8),
+            8..=15 => n1 |= (b as u64) << ((i - 8) * 8),
+            16..=23 => n2 |= (b as u64) << ((i - 16) * 8),
+            _ => break,
+        }
+    }
+    let flags = (RAMFS_O_CREATE as u64) << 24;
+    let (status, handle) = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, n0, n1, n2 | flags);
+    if status != 0 || (handle as i64) < 0 {
+        serial_println!("[spindle.sexfiles.open] status={} handle={} — persistence unavailable", status, handle as i64);
+        return false;
+    }
+    serial_println!("[spindle.sexfiles.open] handle={} file={:?}", handle, core::str::from_utf8(name).unwrap_or("?"));
+    serial_println!("[spindle.sexfiles.persist] handle={} entries={}", handle, hist.total);
+
+    // Write most recent entries in 8-byte chunks
+    let count = hist.total.min(128);
+    for i in 0..count as usize {
+        if let Some(entry) = hist.get(i) {
+            let mut offset = 0u64;
+            let data = entry;
+            let chunks = (data.len() + 7) / 8;
+            for c in 0..chunks {
+                let mut chunk: u64 = 0;
+                let base = c * 8;
+                for j in 0..8.min(data.len().saturating_sub(base)) {
+                    chunk |= (data[base + j] as u64) << (j * 8);
+                }
+                let (ws, _) = pdx_call(SLOT_STORAGE, OP_RAMFS_WRITE, handle, offset, chunk);
+                if ws != 0 { break; }
+                offset += 8;
+            }
+        }
+    }
+
+    let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
+    serial_println!("[spindle.sexfiles.write] entries={}", count);
+    true
+}
+
+/// Try to restore command history from SexFiles RamFS on boot.
+/// Returns number of entries restored (0 if unavailable).
+unsafe fn restore_history(hist: &mut History) -> u32 {
+    let mut n0: u64 = 0; let mut n1: u64 = 0; let mut n2: u64 = 0;
+    let name = HISTORY_FILE;
+    for (i, &b) in name.iter().enumerate() {
+        match i {
+            0..=7  => n0 |= (b as u64) << (i * 8),
+            8..=15 => n1 |= (b as u64) << ((i - 8) * 8),
+            _ => break,
+        }
+    }
+    let (status, handle) = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, n0, n1, n2);
+    if status != 0 || (handle as i64) < 0 {
+        serial_println!("[spindle.sexfiles.read] status={} — history restore unavailable", status);
+        return 0;
+    }
+    serial_println!("[spindle.history.restore] handle={}", handle);
+
+    // Read history entries (bounded: max 128 entries × 256 bytes = 32 KiB)
+    let mut buf = [0u8; 256];
+    let mut offset = 0u64;
+    let mut restored = 0u32;
+    for _ in 0..128 {
+        let mut line_buf = [0u8; 256];
+        let mut line_len = 0usize;
+        for c in 0..32 {
+            let (rs, data) = pdx_call(SLOT_STORAGE, OP_RAMFS_READ, handle, offset, 8);
+            if rs != 0 { break; }
+            let bytes = data.to_le_bytes();
+            let mut done = false;
+            for j in 0..8 {
+                let b = bytes[j];
+                if b == 0 || b == b'\n' { done = true; break; }
+                if line_len < 256 { line_buf[line_len] = b; line_len += 1; }
+            }
+            offset += 8;
+            if done { break; }
+        }
+        if line_len == 0 { break; }
+        hist.push(&line_buf[..line_len]);
+        restored += 1;
+    }
+    let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
+    serial_println!("[spindle.history.restore] restored={}", restored);
+    restored
+}
+
 // ── Entry ──────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -593,22 +702,30 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
-    serial_println!("[spindle.ready]");
-
     // Initialize state (always, no FB needed)
+    let mut sb = Scrollback::new();
+    let mut hist = History::new();
+    let mut ev = EventRing::new();
     let mut line = CmdLine::new();
-    // sb/hist/ev are declared earlier in proof gate scope; make them available here
-    // by moving their declarations before the proof gate.
+
+    // Best-effort restore from SexFiles (guarded: needs cap grant)
+    sb.push(b"SexFiles persistence pending (capability grant needed).");
+    serial_println!("[spindle.sexfiles.persist.pending] reason=no_storage_cap");
+
+    serial_println!("[spindle.ready]");
 
     loop {
         let msg = unsafe { sex_pdx::pdx_listen_raw(0) };
-        // OP_HID_EVENT = 0x202
         if msg.type_id == 0x202 {
             let scancode = msg.arg0 as u8;
             let value = msg.arg1;
-            let _event_class = msg.arg2;
-            if value != 1 { continue; } // only key press
+            if value != 1 { continue; }
 
+            // On Enter, record command in local history before clearing
+            if scancode == 0x1C && line.len > 0 {
+                hist.push(line.as_bytes());
+                // Persist to SexFiles when cap grant available
+            }
             handle_key(scancode, &mut line);
         }
     }
