@@ -24,6 +24,7 @@ pub const BG_COLOR: u32 = 0xFF1E1E2E;
 // Local Opcodes
 pub const OP_WINDOW_CREATE: u64 = 0xE4; // Legacy stub for lib.rs compilation
 pub const OP_APP_SURFACE_REQ: u64 = 0xFA; // App surface request contract
+pub const APP_RUNTIME_ABI_VERSION: u8 = 1;
 pub const OP_SET_BG: u64 = 0x100;
 pub const OP_RENDER_BAR: u64 = 0x101;
 
