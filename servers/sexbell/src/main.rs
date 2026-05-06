@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
 
-use sex_pdx::{pdx_listen_raw, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_CLEAR,
-              OP_BELL_MUTE_SENDER};
+use sex_pdx::{pdx_listen_raw, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
+              OP_BELL_CLEAR, OP_BELL_MUTE_SENDER};
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -31,14 +31,18 @@ struct BellQueueEntry {
     privacy_level:    u8,
     /// Redaction class (0=StructuralMeta .. 3=SecretContent).
     redaction_class:  u8,
-    /// Always 0 in V1 (reserved).
+    /// Number of action callbacks attached (V1: 0 or 1).
     action_count:     u8,
-    /// Always 0 in V1 (reserved).
+    /// First action ID (valid when action_count >= 1). Marker-only in V1.
+    action_id:        u8,
+    /// Number of object references attached (V1: 0 or 1).
     object_ref_count: u8,
+    /// First object reference ID (valid when object_ref_count >= 1). Marker-only in V1.
+    object_ref:       u8,
     /// 0 = active, 1 = dismissed by CLOSE or CLEAR. Skipped in LIST.
     dismissed:        u8,
     /// Padding.
-    _pad:             [u8; 5],
+    _pad:             [u8; 2],
 }
 
 struct BellQueue {
@@ -71,9 +75,11 @@ impl BellQueue {
                 privacy_level: 0,
                 redaction_class: 0,
                 action_count: 0,
+                action_id: 0,
                 object_ref_count: 0,
+                object_ref: 0,
                 dismissed: 0,
-                _pad: [0; 5],
+                _pad: [0; 2],
             }; BELL_QUEUE_CAPACITY],
         }
     }
@@ -113,7 +119,8 @@ impl BellQueue {
     /// Returns Ok with (event_id, Option<dropped_lane>) or Err("queue_full").
     fn push(&mut self, caller_pd: u32, category: u8, requested_lane: u8,
             final_lane: u8, final_urgency: u8, privacy_level: u8,
-            redaction_class: u8) -> Result<(u64, Option<u8>), &'static str> {
+            redaction_class: u8, action_count: u8, action_id: u8,
+            object_ref_count: u8, object_ref: u8) -> Result<(u64, Option<u8>), &'static str> {
         if self.is_full() {
             // Try to drop lowest-priority entry
             if let Some(drop_idx) = self.find_lowest_priority_index() {
@@ -132,10 +139,12 @@ impl BellQueue {
                     final_urgency,
                     privacy_level,
                     redaction_class,
-                    action_count: 0,
-                    object_ref_count: 0,
+                    action_count,
+                    action_id,
+                    object_ref_count,
+                    object_ref,
                     dismissed: 0,
-                    _pad: [0; 5],
+                    _pad: [0; 2],
                 };
                 return Ok((event_id, Some(dropped_lane)));
             }
@@ -155,10 +164,12 @@ impl BellQueue {
             final_urgency,
             privacy_level,
             redaction_class,
-            action_count: 0,
-            object_ref_count: 0,
+            action_count,
+            action_id,
+            object_ref_count,
+            object_ref,
             dismissed: 0,
-            _pad: [0; 5],
+            _pad: [0; 2],
         };
 
         self.entries[self.tail as usize] = entry;
@@ -341,7 +352,9 @@ pub extern "C" fn _start() -> ! {
                 let privacy_level   = ((msg.arg0 >> 16) & 0xFF) as u8;
                 let redaction_class = ((msg.arg0 >> 24) & 0xFF) as u8;
                 let action_count    = (msg.arg1 & 0xFF) as u8;
-                let object_refs     = (msg.arg2 & 0xFF) as u8;
+                let action_id       = ((msg.arg1 >> 8) & 0xFF) as u8;
+                let object_ref_count = (msg.arg2 & 0xFF) as u8;
+                let object_ref      = ((msg.arg2 >> 8) & 0xFF) as u8;
                 let caller_pd       = msg.caller_pd;
 
                 // ── Mute check (reject before any processing) ───────────
@@ -369,10 +382,12 @@ pub extern "C" fn _start() -> ! {
                     reject_reason = Some("invalid_redaction");
                 } else if urgency_hint > 3 {
                     reject_reason = Some("invalid_urgency");
-                } else if action_count != 0 {
-                    reject_reason = Some("action_count_not_zero");
-                } else if object_refs != 0 {
-                    reject_reason = Some("object_refs_not_zero");
+                } else if action_count > 1 {
+                    reject_reason = Some("action_count_invalid");
+                } else if action_count == 1 && action_id == 0 {
+                    reject_reason = Some("action_id_zero");
+                } else if object_ref_count > 1 {
+                    reject_reason = Some("object_refs_invalid");
                 }
 
                 if let Some(reason) = reject_reason {
@@ -433,7 +448,8 @@ pub extern "C" fn _start() -> ! {
                 let push_result = unsafe {
                     BELL_QUEUE.push(caller_pd, category, urgency_hint,
                                     final_lane, final_urgency, privacy_level,
-                                    redaction_class)
+                                    redaction_class, action_count, action_id,
+                                    object_ref_count, object_ref)
                 };
 
                 match push_result {
@@ -588,9 +604,10 @@ pub extern "C" fn _start() -> ! {
                             if *b > 0 {
                                 *b -= 1;
                                 serial_println!("[bell.list.item] event_id={} final_lane={} \
-                                    category={} privacy={} redaction={}",
+                                    category={} privacy={} redaction={} actions={} refs={}",
                                     entry.event_id, entry.final_lane, entry.category,
-                                    entry.privacy_level, entry.redaction_class);
+                                    entry.privacy_level, entry.redaction_class,
+                                    entry.action_count, entry.object_ref_count);
                             }
 
                             match_count += 1;
@@ -660,6 +677,54 @@ pub extern "C" fn _start() -> ! {
                             *b -= 1;
                             serial_println!("[bell.close.reject] reason=not_found event_id={} caller_pd={}",
                                 event_id, caller_pd);
+                        }
+                    }
+                }
+            }
+
+            OP_BELL_ACTION => {
+                // ── Parse ──
+                let event_id   = msg.arg0;
+                let action_id  = (msg.arg1 & 0xFF) as u8;
+                let caller_pd  = msg.caller_pd;
+
+                // ── Search queue for matching event_id with matching action_id ──
+                let mut found = false;
+                let mut action_final_lane: u8 = 0;
+                unsafe {
+                    for i in 0..BELL_QUEUE.count as usize {
+                        let idx = (BELL_QUEUE.head as usize + i) % BELL_QUEUE_CAPACITY;
+                        let entry = &BELL_QUEUE.entries[idx];
+                        if entry.event_id == event_id
+                            && entry.dismissed == 0
+                            && entry.action_count > 0
+                            && entry.action_id == action_id
+                        {
+                            action_final_lane = entry.final_lane;
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+
+                if found {
+                    unsafe {
+                        static mut BELL_ACTION_DISPATCH_BUDGET: u32 = 8;
+                        let b = &mut BELL_ACTION_DISPATCH_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.action.dispatch] event_id={} action_id={} lane={}",
+                                event_id, action_id, action_final_lane);
+                        }
+                    }
+                } else {
+                    unsafe {
+                        static mut BELL_ACTION_REJECT_BUDGET: u32 = 4;
+                        let b = &mut BELL_ACTION_REJECT_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.action.reject] reason=not_found event_id={} action_id={} caller_pd={}",
+                                event_id, action_id, caller_pd);
                         }
                     }
                 }
