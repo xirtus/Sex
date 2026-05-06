@@ -12,7 +12,8 @@ pub static RAMFS: RamFs = RamFs::new();
 
 /// Route a PDX message to the appropriate backend handler.
 /// Called from the trampoline message loop.
-pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
+/// `caller_pd` is the PD of the requesting process (from PDX message).
+pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_pd: u32) -> u64 {
     IPC_OPS_TOTAL.fetch_add(1, Ordering::Relaxed);
 
     // All operations currently route to RamFS.
@@ -24,7 +25,7 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 
         messages::OP_RAMFS_OPEN => {
             let name_bytes = unpack_name(arg0, arg1, arg2);
             let flags = (arg2 >> 24) as u32;
-            match backend.open(&name_bytes, flags, 0) {
+            match backend.open(&name_bytes, flags, 0, caller_pd) {
                 Ok(handle) => handle,
                 Err(e) => e as u64,
             }
@@ -38,7 +39,7 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 
             let max_len = (arg2 as usize).min(messages::RAMFS_MAX_FILE_SIZE);
             let mut buf = [0u8; 8]; // Return up to 8 bytes in the reply
             let to_read = max_len.min(buf.len());
-            match backend.read(handle, offset, &mut buf[..to_read]) {
+            match backend.read(handle, offset, &mut buf[..to_read], caller_pd) {
                 Ok(n) => {
                     // Pack read data into reply u64
                     let mut reply = 0u64;
@@ -57,7 +58,7 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 
             let handle = arg0;
             let offset = arg1;
             let data = arg2.to_le_bytes(); // 8 bytes of data
-            match backend.write(handle, offset, &data) {
+            match backend.write(handle, offset, &data, caller_pd) {
                 Ok(n) => n,
                 Err(e) => e as u64,
             }
@@ -67,7 +68,7 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 
         // arg0 = handle
         messages::OP_RAMFS_CLOSE => {
             let handle = arg0;
-            match backend.close(handle) {
+            match backend.close(handle, caller_pd) {
                 Ok(_) => 0,
                 Err(e) => e as u64,
             }
@@ -76,10 +77,10 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 
         // ── OP_RAMFS_LIST ──
         // arg0 = index
         // Returns: packed { handle: u64, name_len: u32 } in upper/lower bits,
-        // or 0 if no more entries.
+        // or 0 if no more entries. Only returns entries owned by caller_pd.
         messages::OP_RAMFS_LIST => {
             let index = arg0 as usize;
-            match backend.list_at(index) {
+            match backend.list_at(index, caller_pd) {
                 Some((handle, name_len)) => {
                     (handle << 32) | (name_len as u64)
                 }
@@ -91,7 +92,7 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 
         // arg0 = handle
         messages::OP_RAMFS_STAT => {
             let handle = arg0;
-            match backend.stat(handle) {
+            match backend.stat(handle, caller_pd) {
                 Ok((size, name_len)) => {
                     (size << 32) | name_len as u64
                 }

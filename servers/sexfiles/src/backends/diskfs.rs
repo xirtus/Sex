@@ -14,31 +14,31 @@ impl DiskFs {
 }
 
 impl FsBackend for DiskFs {
-    fn open(&self, _name: &[u8], _flags: u32, _mode: u32) -> Result<u64, i64> {
+    fn open(&self, _name: &[u8], _flags: u32, _mode: u32, _caller_pd: u32) -> Result<u64, i64> {
         Err(messages::ERR_NOT_FOUND)
     }
 
-    fn read(&self, _handle: u64, _offset: u64, _buf: &mut [u8]) -> Result<u64, i64> {
+    fn read(&self, _handle: u64, _offset: u64, _buf: &mut [u8], _caller_pd: u32) -> Result<u64, i64> {
         Err(messages::ERR_NOT_FOUND)
     }
 
-    fn write(&self, _handle: u64, _offset: u64, _data: &[u8]) -> Result<u64, i64> {
+    fn write(&self, _handle: u64, _offset: u64, _data: &[u8], _caller_pd: u32) -> Result<u64, i64> {
         Err(messages::ERR_NOT_FOUND)
     }
 
-    fn close(&self, _handle: u64) -> Result<(), i64> {
+    fn close(&self, _handle: u64, _caller_pd: u32) -> Result<(), i64> {
         Err(messages::ERR_NOT_FOUND)
     }
 
-    fn stat(&self, _handle: u64) -> Result<(u64, u32), i64> {
+    fn stat(&self, _handle: u64, _caller_pd: u32) -> Result<(u64, u32), i64> {
         Err(messages::ERR_NOT_FOUND)
     }
 
-    fn list_at(&self, _index: usize) -> Option<(u64, u32)> {
+    fn list_at(&self, _index: usize, _caller_pd: u32) -> Option<(u64, u32)> {
         None
     }
 
-    fn len(&self) -> usize {
+    fn len(&self, _caller_pd: u32) -> usize {
         0
     }
 }

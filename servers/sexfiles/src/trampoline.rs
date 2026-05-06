@@ -18,8 +18,8 @@ pub extern "C" fn trampoline_main() {
         let msg = pdx_listen_raw(0);
         let caller = msg.caller_pd;
 
-        // Route message type_id to VFS handler
-        let reply = vfs::handle_vfs_message(msg.type_id, msg.arg0, msg.arg1, msg.arg2);
+        // Route message type_id to VFS handler, passing caller PD for namespace/cap check
+        let reply = vfs::handle_vfs_message(msg.type_id, msg.arg0, msg.arg1, msg.arg2, caller);
 
         // If type_id was 0 (empty/spurious), skip reply
         if msg.type_id != 0 {

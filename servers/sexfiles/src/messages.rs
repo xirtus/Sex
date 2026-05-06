@@ -44,6 +44,7 @@ pub const ERR_NAME_TOO_LONG: i64 = -2;
 pub const ERR_NOT_FOUND: i64 = -3;
 pub const ERR_OVERFLOW: i64 = -4;
 pub const ERR_FULL: i64 = -5;
+pub const ERR_PERM_DENIED: i64 = -6;
 
 // ── Bounds ──
 pub const RAMFS_MAX_FILES: usize = 64;
