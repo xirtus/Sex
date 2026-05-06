@@ -63,3 +63,6 @@ upstream-linux/
 upstream-mesa/
 upstream-wlroots/
 sex-packages/sexbuild/recipes/redox-os/
+
+# Local 0.2 gate runtime artifacts
+.gate_0_2/
