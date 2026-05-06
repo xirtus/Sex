@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::alloc::{GlobalAlloc, Layout};
-use sex_pdx::{pdx_call, sys_yield, serial_println, SLOT_DISPLAY};
+use sex_pdx::{pdx_call, pdx_listen_raw, serial_println, SLOT_DISPLAY};
 
 struct DummyAllocator;
 unsafe impl GlobalAlloc for DummyAllocator {
@@ -16,6 +16,7 @@ static ALLOCATOR: DummyAllocator = DummyAllocator;
 fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }
 
 const SURFACE_ID_LINEN: u64 = 200;
+const OP_HID_EVENT: u64 = 0x202;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -36,6 +37,39 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[linen] Fill rect 0xEF sent to sexdisplay");
 
     loop {
-        sys_yield();
+        let msg = pdx_listen_raw(0);
+        
+        match msg.type_id {
+            OP_HID_EVENT => {
+                let scancode = msg.arg0;
+                let value = msg.arg1;
+                unsafe {
+                    static mut LINEN_KEY_BUDGET: u32 = 16;
+                    let b = &mut LINEN_KEY_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!("[linen.key.recv] scancode={:#x} val={}", scancode, value);
+                    }
+
+                    // Track C3: visible proof
+                    static mut LINEN_COLOR_TOGGLE: bool = false;
+                    if value == 1 { // On key press
+                        LINEN_COLOR_TOGGLE = !LINEN_COLOR_TOGGLE;
+                        let color = if LINEN_COLOR_TOGGLE { 0x0000FF00 } else { 0x00FF6464 }; // Green/Coral toggle
+                        pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN, 
+                            (20u64 << 32) | 20u64, 
+                            (color << 32) | (60u64 << 16) | 80u64);
+                        
+                        static mut LINEN_VISUAL_BUDGET: u32 = 16;
+                        let vb = &mut LINEN_VISUAL_BUDGET;
+                        if *vb > 0 {
+                            *vb -= 1;
+                            serial_println!("[linen.focus.visual_update] color={:#x}", color);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }

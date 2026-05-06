@@ -159,6 +159,13 @@ pub fn init() {
             pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
             serial_println!("✓ Phase 25: Capability SLOT_DISPLAY granted to linen");
         }
+        
+        if silkshell_id != 0 {
+            if let Some(pd) = DOMAIN_REGISTRY.get(silkshell_id) {
+                pd.grant_capability(sex_pdx::SLOT_LINEN, CapabilityData::Domain(linen_id));
+                serial_println!("[kernel.cap.linen.route] shell->linen slot={}", sex_pdx::SLOT_LINEN);
+            }
+        }
     }
 
     // Quil route: grant silk-shell capability to ping Quil (no display caps).

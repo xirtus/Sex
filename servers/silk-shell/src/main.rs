@@ -9865,6 +9865,17 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                                 mutated = true;
+                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
+                                unsafe {
+                                    static mut KEY_ROUTE_BUDGET_LINEN: u32 = 16;
+                                    let b = &mut KEY_ROUTE_BUDGET_LINEN;
+                                    if *b > 0 {
+                                        *b -= 1;
+                                        serial_println!("[silk-shell.key.route] owner=linen sid={} scancode={:#x}", SURFACE_ID_LINEN, scancode);
+                                    }
+                                }
+                                pdx_call(sex_pdx::SLOT_LINEN, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+                                mutated = true;
                             }
 
                             // ── Scene Settings panel key intercept ──────────────
