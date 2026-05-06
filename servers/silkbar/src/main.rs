@@ -6,6 +6,7 @@ use silkbar_model::{
     SILKBAR_ABI_VERSION, SILKBAR_WORKSPACE_COUNT, SILKBAR_CHIP_COUNT,
     SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX, SILKBAR_WORKSPACE_IDX_MAX,
 };
+use sex_pdx::{OP_BELL_LIST, SLOT_BELL};
 
 fn send_update(update: SilkBarUpdate) {
     let result = sex_pdx::pdx_call_checked(
@@ -99,6 +100,26 @@ pub extern "C" fn _start() -> ! {
                     ));
                     sex_pdx::serial_println!("[silkbar.selected.options.forward] mask={:#x}", options_mask);
                 }
+            } else if msg.type_id == 1 && msg.caller_pd == 1 {
+                // ── Pending reply from a previous pdx_call ──
+                // Bell OP_BELL_LIST reply: arg0 = packed lane counts.
+                // Forward to sexdisplay as SetBellPresence.
+                let packed = msg.arg0 as u32;
+                unsafe {
+                    static mut BELL_REPLY_BUDGET: u32 = 8;
+                    let b = &mut BELL_REPLY_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        let total = packed as u8;
+                        let redacted = (packed >> 8) as u8;
+                        let flags = (packed >> 16) as u8;
+                        sex_pdx::serial_println!("[silkbar.bell.poll.reply] total={} redacted={} flags={:#x}",
+                            total, redacted, flags);
+                    }
+                }
+                send_update(SilkBarUpdate::new(
+                    UpdateKind::SetBellPresence as u32, 0, packed, 0,
+                ));
             } else {
                 sex_pdx::serial_println!("[pdx.opcode.unknown] silkbar type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
             }
@@ -137,6 +158,45 @@ pub extern "C" fn _start() -> ! {
         let hh = ((uptime_seconds / 3600) % 24) as u8;
         let mm = ((uptime_seconds / 60) % 60) as u8;
         let ss = (uptime_seconds % 60) as u8;
+
+        // ── Bell presence poll (every ~2 seconds) ──────────────────────────
+        // V1: SilkBar lacks SLOT_BELL grant in kernel init. Poll will return
+        // ERR_CAP_INVALID, which is handled as "Bell unavailable" (dim dot).
+        // When the grant is added, this poll will work without code changes.
+        if uptime_seconds % 2 == 0 {
+            // OP_BELL_LIST: lane_filter=0xFF (all), max_results=0 (no items, counts only)
+            let list_args = 0xFFu64; // lane_filter=0xFF, max_results=0 in upper bits
+            let result = sex_pdx::pdx_call_checked(SLOT_BELL, OP_BELL_LIST, list_args, 0, 0);
+            match result {
+                Ok(_val) => {
+                    // Call enqueued successfully. Reply arrives asynchronously
+                    // via pdx_try_listen_raw(0) with type_id=1, caller_pd=1.
+                    unsafe {
+                        static mut BELL_POLL_BUDGET: u32 = 8;
+                        let b = &mut BELL_POLL_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            sex_pdx::serial_println!("[silkbar.bell.poll] sent");
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Bell unavailable (no SLOT_BELL grant or Bell not running).
+                    // Send dim state: total_visible=0, redacted=0, flags=0.
+                    unsafe {
+                        static mut BELL_POLL_REJECT_BUDGET: u32 = 8;
+                        let b = &mut BELL_POLL_REJECT_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            sex_pdx::serial_println!("[silkbar.bell.reject] err={:#x}", e);
+                        }
+                    }
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetBellPresence as u32, 0, 0, 0,
+                    ));
+                }
+            }
+        }
 
         // Stage 2C: bounded internal status-chip stub (no new ABI, no floods).
         // Slow cadence: every 120 seconds.

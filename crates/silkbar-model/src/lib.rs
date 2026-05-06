@@ -170,6 +170,23 @@ pub struct SilkBar {
     /// Bitmask of selected-window options (OPTION_CLOSE|ZOOM|MINIMIZE|MOVE).
     /// Display-only — no action behavior in V1.
     pub selected_options_mask: u32,
+    /// Bell event presence state (V1: aggregate counts from OP_BELL_LIST poll).
+    pub bell_state: BellState,
+}
+
+/// Aggregate Bell event state for privacy-safe SilkBar presence display.
+/// Populated by SilkBar polling OP_BELL_LIST; consumed by sexdisplay renderer.
+/// All counts are clamped to 0..255 (queue max is 16, so this is generous).
+#[derive(Clone, Copy)]
+pub struct BellState {
+    /// Total visible (non-dismissed, non-redacted) events across all lanes.
+    pub total_visible: u8,
+    /// FullHidden events skipped by privacy gate at poll time.
+    pub redacted_count: u8,
+    /// Bit 0: bell_available (1 = Bell responded, 0 = unreachable/timeout).
+    /// Bits 1-7: reserved (future: mute indicator, overflow flag, etc.).
+    pub flags: u8,
+    _pad: u8,
 }
 
 // ── Theme (v2: 10 semantic tokens) ─────────────────────────────────────────
@@ -296,6 +313,8 @@ pub enum UpdateKind {
     /// a = options bitmask (OPTION_CLOSE|ZOOM|MINIMIZE|MOVE).
     /// Display-only — no action behavior in V1.
     SetSelectedOptions = 6,
+    /// Bell presence: a=packed (total_visible|redacted<<8|flags<<16), b=0.
+    SetBellPresence = 7,
 }
 
 /// ABI-stable update message for mutating a `SilkBar` from a PDX caller.
@@ -412,6 +431,13 @@ pub fn apply_update(bar: &mut SilkBar, update: SilkBarUpdate) -> bool {
         6 => {
             // SetSelectedOptions: a = options bitmask (display-only, no action).
             bar.selected_options_mask = update.a;
+            true
+        }
+        7 => {
+            // SetBellPresence: a = packed (total_visible|redacted_count<<8|flags<<16)
+            bar.bell_state.total_visible = update.a as u8;
+            bar.bell_state.redacted_count = (update.a >> 8) as u8;
+            bar.bell_state.flags = (update.a >> 16) as u8;
             true
         }
         _ => false,
@@ -706,6 +732,12 @@ pub const DEFAULT_SILK_BAR: SilkBar = SilkBar {
     clock_mm: 42,
     clock_ss: 0,
     selected_options_mask: 0,
+    bell_state: BellState {
+        total_visible: 0,
+        redacted_count: 0,
+        flags: 0,
+        _pad: 0,
+    },
 };
 
 pub const DEFAULT_THEME: Theme = Theme {

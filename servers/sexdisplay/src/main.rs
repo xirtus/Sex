@@ -422,10 +422,24 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
     if let Some(c) = workspace_color(x, y, bar) { return c; }
     // Status chip backgrounds
     if let Some(c) = chip_color(x, y, bar) { return c; }
-    // Bell indicator (gold bell between Battery and Clock)
+    // Bell indicator (privacy-safe presence dot between Battery and Clock)
     let (bx, by, bw, bh) = module_rect(bar, ModuleSlot::Bell);
     if in_rect(x, y, bx, by, bw, bh) {
-        return 0x00FFD700; // gold bell
+        let s = &bar.bell_state;
+        if s.flags & 1 == 0 {
+            // Bell unavailable (no SLOT_BELL grant or server not running) → dim dot
+            return DEFAULT_THEME.muted;
+        }
+        if s.total_visible == 0 {
+            // No events → dim/inactive dot
+            return DEFAULT_THEME.muted;
+        }
+        if s.redacted_count > 0 {
+            // Events with privacy-redacted content → warm tint
+            return 0x00FFAA44; // amber
+        }
+        // Active events → bright dot
+        return 0x00FFD700; // gold
     }
     // Launcher button with rounded-illusion border (model position)
     let (lx, ly, lw, lh) = module_rect(bar, ModuleSlot::Launcher);
@@ -507,6 +521,48 @@ fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     None
 }
 
+/// Returns `Some(fg)` if pixel (x, y) is a Bell count badge foreground pixel,
+/// or `None` if it is background / not in the badge area.
+/// Uses the same 5×7 FONT as the clock digits.
+/// Badge is positioned at the right side of the Bell module slot.
+fn bell_badge_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+    let n = bar.bell_state.total_visible;
+    if n == 0 || bar.bell_state.flags & 1 == 0 {
+        return None; // no badge when empty or Bell unavailable
+    }
+    // Clamp to 99 (two digits max)
+    let n = n.min(99);
+    let tens = n / 10;
+    let ones = n % 10;
+
+    let (bx, by, _, bh) = module_rect(bar, ModuleSlot::Bell);
+    let badge_y = by + (bh / 2) - 3; // vertically centered, FONT is 7px tall
+    if y < badge_y || y >= badge_y + 7 {
+        return None;
+    }
+    let row = y - badge_y;
+
+    // Two-digit badge: tens at bx+9, ones at bx+14 (within 18px slot)
+    let left = if tens > 0 { bx + 9 } else { bx + 11 }; // single digit offset if <10
+    let right = bx + 14;
+
+    for (di, digit_x) in [(0, left), (1, right)].iter() {
+        let digit = if *di == 0 { tens } else { ones };
+        if *di == 0 && tens == 0 {
+            continue; // skip leading zero
+        }
+        if x < *digit_x || x >= *digit_x + 5 {
+            continue;
+        }
+        let col = x - *digit_x;
+        if (FONT[digit as usize][row] >> (4 - col)) & 1 != 0 {
+            return Some(DEFAULT_THEME.text); // use same color as clock
+        }
+        return None;
+    }
+    None
+}
+
 fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     let fb_addr = fb as u64;
     if fb_addr < HIGH_HALF_BASE {
@@ -539,6 +595,8 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
             let c: u32 = if y < 50 {
                 // SilkBar/top strip always on top (layer 3)
                 if let Some(fg) = clock_fg_at(x, y, bar) {
+                    fg
+                } else if let Some(fg) = bell_badge_at(x, y, bar) {
                     fg
                 } else {
                     bar_color(x, y, bar)
@@ -580,6 +638,8 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         for x in 0..w {
             let c: u32 = if y < 50 {
                 if let Some(fg) = clock_fg_at(x, y, bar) {
+                    fg
+                } else if let Some(fg) = bell_badge_at(x, y, bar) {
                     fg
                 } else {
                     bar_color(x, y, bar)
@@ -809,6 +869,18 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> 
             if *b > 0 {
                 *b -= 1;
                 serial_println!("[sexdisplay.selected.options.update] mask={:#x}", bar.selected_options_mask);
+            }
+        }
+    }
+    // Budgeted marker for Bell presence update.
+    if ok && kind == UpdateKind::SetBellPresence as u32 {
+        unsafe {
+            static mut BELL_RENDER_BUDGET: u32 = 8;
+            let b = &mut BELL_RENDER_BUDGET;
+            if *b > 0 {
+                *b -= 1;
+                serial_println!("[sexdisplay.bell.render] total={} redacted={} flags={:#x}",
+                    bar.bell_state.total_visible, bar.bell_state.redacted_count, bar.bell_state.flags);
             }
         }
     }
