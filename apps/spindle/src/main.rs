@@ -12,7 +12,7 @@
 //!   • No terminal emulation (Spindle is NOT sexsh)
 //!
 //! Contract: docs/handoff/SPINDLE_APP_CONTRACT_V1.md
-//! Next: SPINDLE_APP_LAUNCH_COMMANDS_V1
+//! Next: SPINDLE_PROOF_COMMANDS_V1
 
 #![no_std]
 #![no_main]
@@ -357,7 +357,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  servers      list known servers");
             sb.push(b"  bell         Bell notification status");
             sb.push(b"  files        SexFiles storage status");
-            sb.push(b"  launch quil  request Quil app surface");
+            sb.push(b"  apps         list available apps");
+            sb.push(b"  launch <app> request app surface");
             sb.push(b"  history      show command history");
             sb.push(b"  history clear  clear command history");
             sb.push(b"  events       show event log");
@@ -414,13 +415,25 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"In-memory scaffold only -- no real block device route.");
             true
         }
+        b"apps" => {
+            sb.push(b"Available apps (static):");
+            sb.push(b"  quil     text editor");
+            sb.push(b"  linen    object browser");
+            sb.push(b"  mesh     device topology");
+            sb.push(b"  collar   authority wallet");
+            sb.push(b"All targets unavailable: Spindle not kernel-spawned.");
+            true
+        }
         b"launch" => {
-            if args == b"quil" {
-                sb.push(b"launch.quil: unavailable in V1.");
+            let known = args == b"quil" || args == b"linen" || args == b"mesh" || args == b"collar";
+            if known {
+                sb.push(b"launch: all targets unavailable in V1.");
                 sb.push(b"Spindle not kernel-spawned -- cannot PDX-call silk-shell.");
-                sb.push(b"Requires: kernel spawn, SLOT_SHELL access, OP_APP_SURFACE_REQ.");
+                sb.push(b"Requires: kernel spawn, SLOT_SHELL, OP_APP_SURFACE_REQ.");
+            } else if args.is_empty() {
+                sb.push(b"launch: specify an app. Use 'apps' to list.");
             } else {
-                sb.push(b"launch: unknown target. Use 'launch quil'.");
+                sb.push(b"launch: unknown target. Use 'apps' to list.");
             }
             true
         }
