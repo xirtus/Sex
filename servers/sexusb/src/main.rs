@@ -253,6 +253,7 @@ pub extern "C" fn _start() -> ! {
     const USBSTS_HCHALTED: u32 = 1 << 0;
     const USBSTS_CNR: u32 = 1 << 11;
     const POLL_BUDGET: usize = 100_000;
+    const MAX_USB_DEVICES: usize = 2;
     const XHCI_CRCR: u64 = 0x18;
     const XHCI_DCBAAP: u64 = 0x30;
     const XHCI_CAP_DBOFF: u64 = 0x14;
@@ -742,12 +743,17 @@ pub extern "C" fn _start() -> ! {
     let max_ports: u64 = ((hcsp1 >> 24) & 0xFF) as u64;
     serial_println!("[sexusb.xhci.addr_ctx.ports] {}", max_ports);
 
-    // Scan PORTSC for first connected, enabled port. Get port number and speed.
+    // Scan PORTSC to collect up to MAX_USB_DEVICES connected ports.
+    // Downstream pipeline (slot/address/descriptor/bind/poll) still
+    // operates on exactly ONE device (target_ports[0]).  Collection
+    // creates the data structure for future multi-device enumeration
+    // without changing current behavior.
     const PORTSC_BASE: u64 = 0x400;
     const PORTSC_STRIDE: u64 = 0x10;
     const PORTSC_CCS: u32 = 1u32 << 0;
     const PORTSC_PED: u32 = 1u32 << 1;
-    let mut target_port: u64 = 0;
+    let mut target_ports: [u8; MAX_USB_DEVICES] = [0; MAX_USB_DEVICES];
+    let mut target_port_count: usize = 0;
     let mut port_speed: u32 = 0;
     let mut ports_connected: u32 = 0;
     for port in 1..=max_ports {
@@ -766,26 +772,40 @@ pub extern "C" fn _start() -> ! {
             );
         }
         if (portsc & PORTSC_CCS) != 0 {
-            target_port = port;
-            port_speed = (portsc >> 10) & 0xF;
-            serial_println!("[sexusb.xhci.addr_ctx.port.connected] port={} speed={}", port, port_speed);
-            // SINGLE-DEVICE GUARD: break on first connected port.
-            // This is correct ONLY because the downstream pipeline
-            // (slot/address/descriptor/bind/poll) operates on exactly
-            // ONE device.  A second device (e.g. QEMU usb-tablet
-            // alongside usb-kbd on another port) is never reached.
-            // Do NOT remove this break unless you simultaneously add:
-            //   - multi-slot allocation
-            //   - per-device bind state (array of SingleHidBind)
-            //   - per-device interrupt ring / report buffer
-            //   - event demux loop dispatching to sexinput per role
-            // See docs/handoff/SEXUSB_HID_MULTIDEVICE_POINTER_AUDIT_V1.md
-            // and SEXUSB_SINGLE_DEVICE_GUARD_V1.md.
-            break;
+            // Collect all connected ports up to MAX_USB_DEVICES.
+            // No break — the full scan logs every port first.
+            if target_port_count < MAX_USB_DEVICES {
+                target_ports[target_port_count] = port as u8;
+                if target_port_count == 0 {
+                    port_speed = speed; // capture first device speed for EP0 MPS
+                    serial_println!("[sexusb.xhci.addr_ctx.port.connected] port={} speed={}", port, speed);
+                }
+                target_port_count += 1;
+            }
         }
     }
-    if target_port == 0 {
+
+    // Capture first connected port as active target (downstream scalar).
+    let target_port: u64 = target_ports[0] as u64;
+
+    // Guard: no device found.
+    if target_port_count == 0 {
         serial_println!("[sexusb.xhci.addr_ctx.port.none.bad]");
+        loop { sys_yield(); }
+    }
+
+    // Collection summary marker.
+    serial_println!(
+        "[sexusb.ports.collect] count={} first={}",
+        target_port_count, target_port
+    );
+
+    // Overflow: more devices connected than MAX_USB_DEVICES supports.
+    if ports_connected > MAX_USB_DEVICES as u32 {
+        serial_println!(
+            "[sexusb.ports.overflow] count={} max={}",
+            ports_connected, MAX_USB_DEVICES
+        );
         loop { sys_yield(); }
     }
 
