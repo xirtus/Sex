@@ -12,7 +12,7 @@
 //!   • No terminal emulation (Spindle is NOT sexsh)
 //!
 //! Contract: docs/handoff/SPINDLE_APP_CONTRACT_V1.md
-//! Next: SPINDLE_CLOSE_RELAUNCH_RESTORE_V1
+//! Next: SPINDLE_COMPLETE_V1_AUDIT
 
 #![no_std]
 #![no_main]
@@ -473,6 +473,16 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 sb.push(b"  faults:    0 observed");
                 sb.push(b"Proof commands: proof boot/input/display/storage");
             }
+            true
+        }
+        b"close" => {
+            serial_println!("[spindle.lifecycle.close]");
+            sb.push(b"Spindle session closing.");
+            sb.push(b"  state:      in-memory only (no SexFiles persistence)");
+            sb.push(b"  surface:    WindowBuffer released on PD exit");
+            sb.push(b"  history:    not persisted (SexFiles bridge pending)");
+            sb.push(b"  relaunch:   fresh state, no restore available");
+            sb.push(b"Close/relaunch requires kernel spawn + lifecycle integration.");
             true
         }
         b"faults" => {
