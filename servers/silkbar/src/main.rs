@@ -164,8 +164,8 @@ pub extern "C" fn _start() -> ! {
         // ERR_CAP_INVALID, which is handled as "Bell unavailable" (dim dot).
         // When the grant is added, this poll will work without code changes.
         if uptime_seconds % 2 == 0 {
-            // OP_BELL_LIST: lane_filter=0xFF (all), max_results=0 (no items, counts only)
-            let list_args = 0xFFu64; // lane_filter=0xFF, max_results=0 in upper bits
+            // OP_BELL_LIST: lane_filter=0xFF (all), max_results=1 (one item to satisfy Bell validator)
+            let list_args = 0xFFu64 | (1u64 << 8); // lane_filter=0xFF, max_results=1
             let result = sex_pdx::pdx_call_checked(SLOT_BELL, OP_BELL_LIST, list_args, 0, 0);
             match result {
                 Ok(_val) => {
