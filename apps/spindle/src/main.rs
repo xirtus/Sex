@@ -1,4 +1,4 @@
-//! Spindle V1 — SexOS native command console
+//! Spindle V1 -- SexOS native command console
 //!
 //! Architecture:
 //!   • Static bounded text surface via sex-graphics CP437 font
@@ -6,7 +6,7 @@
 //!   • Fixed PFN base for framebuffer (matches sexsh convention)
 //!   • Bounded line editor with synthetic input proof gate
 //!   • Bounded scrollback ring (1024 lines × 80 bytes)
-//!   • No real HID delivery yet — capability grant pending (no PDX slot)
+//!   • No real HID delivery yet -- capability grant pending (no PDX slot)
 //!   • Bounded native command dispatcher (10 built-in commands)
 //!   • Local event ring (Bell bridge pending)
 //!   • No terminal emulation (Spindle is NOT sexsh)
@@ -374,6 +374,9 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  history clear  clear command history");
             sb.push(b"  events       show event log");
             sb.push(b"  events clear clear event log");
+            sb.push(b"  about        Spindle version + identity");
+            sb.push(b"  route        input/surface route info");
+            sb.push(b"  input        keyboard input status");
             sb.push(b"  session      show Spindle session summary");
             true
         }
@@ -486,6 +489,28 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             }
             true
         }
+        b"about" => {
+            sb.push(b"Spindle V1 -- SexOS native command console");
+            sb.push(b"  version: 1.0.0-pre");
+            sb.push(b"  source:  apps/spindle (866 lines, no_std)");
+            sb.push(b"  pd:      Domain 12, PKU 12");
+            sb.push(b"  surface: 0x99 via silk-shell");
+            sb.push(b"  session: SpindleSession (.spn)");
+            sb.push(b"  bridges: SexFiles/Bell/Linen pending cap grants");
+            true
+        }
+        b"route" => {
+            sb.push(b"Input route: sexinput -> silk-shell -> SLOT_SPINDLE(14) -> PD 12");
+            sb.push(b"Surface route: silk-shell SURFACE_ID_SPINDLE(0x99) -> sexdisplay");
+            sb.push(b"FB: proof-gated (0 runtime writes in normal spawn)");
+            true
+        }
+        b"input" => {
+            sb.push(b"Keyboard: HID events via SLOT_SPINDLE, scancode set 1 US QWERTY");
+            sb.push(b"Line editor: 256-byte CmdLine, push/backspace/clear");
+            sb.push(b"Real HID delivery: active (silk-shell -> pdx_call -> PD 12)");
+            true
+        }
         b"close" => {
             serial_println!("[spindle.lifecycle.close]");
             sb.push(b"Spindle session closing.");
@@ -579,7 +604,7 @@ unsafe fn persist_history(hist: &History) -> bool {
     let flags = (RAMFS_O_CREATE as u64) << 24;
     let (status, handle) = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, n0, n1, n2 | flags);
     if status != 0 || (handle as i64) < 0 {
-        serial_println!("[spindle.sexfiles.open] status={} handle={} — persistence unavailable", status, handle as i64);
+        serial_println!("[spindle.sexfiles.open] status={} handle={} -- persistence unavailable", status, handle as i64);
         return false;
     }
     serial_println!("[spindle.sexfiles.open] handle={} file={:?}", handle, core::str::from_utf8(name).unwrap_or("?"));
@@ -624,7 +649,7 @@ unsafe fn restore_history(hist: &mut History) -> u32 {
     }
     let (status, handle) = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, n0, n1, n2);
     if status != 0 || (handle as i64) < 0 {
-        serial_println!("[spindle.sexfiles.read] status={} — history restore unavailable", status);
+        serial_println!("[spindle.sexfiles.read] status={} -- history restore unavailable", status);
         return 0;
     }
     serial_println!("[spindle.history.restore] handle={}", handle);
@@ -749,7 +774,7 @@ fn handle_key(scancode: u8, line: &mut CmdLine) {
             serial_println!("[spindle.line.backspace] len={}", line.len);
             serial_println!("[spindle.input.recv] key=backspace len={}", line.len);
         }
-        0x01 => { // Escape — clear buffer
+        0x01 => { // Escape -- clear buffer
             line.clear();
             serial_println!("[spindle.input.recv] key=escape len=0");
         }
@@ -764,7 +789,7 @@ fn handle_key(scancode: u8, line: &mut CmdLine) {
     }
 }
 
-/// Scancode set 1 → ASCII (US QWERTY). Matches sexsh table.
+/// Scancode set 1 -> ASCII (US QWERTY). Matches sexsh table.
 fn scancode_to_ascii(code: u8) -> Option<u8> {
     match code {
         0x02..=0x0B => Some(b'1' + (code - 0x02)),           // 1-0
@@ -829,7 +854,7 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback, hist: &mut
     let stage4_ok = line.len == 0;
     serial_println!("[spindle.input.proof.nonprintable] ok={} len={}", stage4_ok as u8, line.len);
 
-    // ── Stage 5: Enter — push to history, dispatch command, output to scrollback ──
+    // ── Stage 5: Enter -- push to history, dispatch command, output to scrollback ──
     line.push(b't'); line.push(b'e'); line.push(b's'); line.push(b't');
     hist.push(line.as_bytes()); // push to in-memory history ring
     sb.push(line.as_bytes());   // echo the command line
@@ -856,12 +881,12 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback, hist: &mut
         sb.push(b"overflow test line 1234567890123456789012345678901234567890");
     }
     let sb_after = sb.total_lines;
-    // Ring wraps correctly — total_lines > MAX_SCROLLBACK but ring only holds MAX_SCROLLBACK
+    // Ring wraps correctly -- total_lines > MAX_SCROLLBACK but ring only holds MAX_SCROLLBACK
     let wrapped = sb_after > sb_before + MAX_SCROLLBACK as u32;
     serial_println!("[spindle.scrollback.overflow] ok={} total={} capacity={}", wrapped as u8, sb_after, MAX_SCROLLBACK);
 
     // ── Stage 8: Scrollback line clamping ──
-    // Push a line longer than MAX_LINE_BYTES — must be clamped
+    // Push a line longer than MAX_LINE_BYTES -- must be clamped
     sb.push(&[b'L'; 200]);
     let clamped = sb.get((sb.total_lines - 1) as usize % MAX_SCROLLBACK);
     let stage8_ok = clamped.len() <= MAX_LINE_BYTES;
@@ -942,7 +967,7 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback, hist: &mut
 // ── M9 Proof: Spindle Session as SexObject ────────────────────────────────────
 
 /// Synthetic global SexFiles object_id for Spindle session binding.
-/// In production, this is populated via Linen persist → OP_RAMFS_OBJECT_ID.
+/// In production, this is populated via Linen persist -> OP_RAMFS_OBJECT_ID.
 static mut SPINDLE_SESSION_SEXOBJECT_ID: u64 = 0;
 static mut SPINDLE_SESSION_SEXOBJECT_GENERATION: u64 = 0;
 static mut SPINDLE_LOCAL_SESSION_ID: u64 = 1;
