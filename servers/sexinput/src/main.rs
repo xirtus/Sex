@@ -33,7 +33,7 @@ const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
 /// # Interactive visual mode: proofs disabled
 /// SEXOS_PROOFS_DISABLED=1 ./scripts/entrypoint_build.sh
 /// ```
-const SYNTHETIC_INPUT_PROOFS_DISABLED: bool = true; // FORCED OFF
+const SYNTHETIC_INPUT_PROOFS_DISABLED: bool = option_env!("SEXOS_PROOFS_DISABLED").is_some();
 /// Dev-only keyboard cursor fallback. When enabled, arrow keys and WASD
 /// emit EV_REL events to move the cursor, bypassing broken QEMU USB HID input.
 /// Set env var `SEXOS_KEYBOARD_CURSOR=1` at build time to enable.

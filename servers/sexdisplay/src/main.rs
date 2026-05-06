@@ -326,11 +326,11 @@ fn fill_rect_color(surf: &Surface, x: usize, y: usize, base_color: u32) -> u32 {
 }
 
 fn bg(y: usize) -> u32 {
-    if      y < 200 { 0x00081424 }  // deep navy
-    else if y < 350 { 0x00102038 }  // deep blue
-    else if y < 500 { 0x00182850 }  // violet blue
-    else if y < 650 { 0x00281848 }  // warm purple
-    else            { 0x00281848 }  // warm purple
+    if      y < 200 { DEFAULT_THEME.bg_top }    // deep navy
+    else if y < 350 { 0x00102038 }               // deep blue
+    else if y < 500 { 0x00182850 }               // violet blue
+    else if y < 650 { DEFAULT_THEME.bg_bottom }  // warm purple
+    else            { DEFAULT_THEME.bg_bottom }  // warm purple
 }
 
 #[inline]
@@ -893,6 +893,7 @@ pub extern "C" fn _start() -> ! {
     let contract_err = validate_silkbar_contract();
     if contract_err != 0 {
         serial_println!("[silk.contract.validate.fail] reason={}", contract_err);
+        loop { core::hint::spin_loop(); }
     } else {
         serial_println!("[silk.contract.validate.ok] version={}", SILKBAR_ABI_VERSION);
     }
@@ -979,7 +980,10 @@ pub extern "C" fn _start() -> ! {
                     fb_live = true;
                     serial_println!("[pdx.identity.accept] display owner_pd validation active");
                     // Coalesce startup repaints into one clean first frame.
-                    unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+                    unsafe {
+                        render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar);
+                        serial_println!("[sexdisplay.render.live.ok] fb_w={} fb_h={}", FB_W, FB_H);
+                    }
                     if !render_proof_done {
                         render_proof_done = true;
                         unsafe { top_strip_render_proof(FB_PTR as *const u32, FB_W as usize, FB_H as usize); }

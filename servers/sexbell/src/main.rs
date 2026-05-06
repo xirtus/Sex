@@ -450,6 +450,23 @@ fn derive_lane_first_proof(urgency_hint: u8) -> (u8, u8, Option<&'static str>) {
 pub extern "C" fn _start() -> ! {
     serial_println!("[bell.boot]");
 
+    // ── Demo self-notify (V1): push one notification to exercise Bell→SilkBar→sexdisplay pipe ──
+    // caller_pd=0 marks internal Bell event. No sender validation needed for self-generated events.
+    // category=0 (Info), urgency=0 (PASSIVE), lane=0 (PASSIVE), privacy=0 (Public).
+    // SilkBar polls LIST every ~2s and forwards packed counts to sexdisplay.
+    // Sexdisplay renders gold dot + count badge in the Bell layout slot.
+    unsafe {
+        match BELL_QUEUE.push(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) {
+            Ok((event_id, _)) => {
+                bump_generation();
+                serial_println!("[bell.demo.boot] event_id={}", event_id);
+            }
+            Err(reason) => {
+                serial_println!("[bell.demo.boot.reject] reason={}", reason);
+            }
+        }
+    }
+
     loop {
         let msg = pdx_listen_raw(0);
 

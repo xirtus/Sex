@@ -1,139 +1,123 @@
-use crate::messages::VfsProtocol;
-use sex_pdx::ring::PdxReply;
-use core::sync::atomic::{AtomicU64, Ordering};
-use crate::backends::FsBackend;
+extern crate alloc;
 use crate::backends::ramfs::RamFs;
-use crate::backends::diskfs::DiskFs;
+use crate::backends::FsBackend;
+use crate::messages;
+use core::sync::atomic::{AtomicU64, Ordering};
 
-/// Phase 19: Handover Trampoline Architecture.
-
+/// VFS operation counters (diagnostic only).
 pub static IPC_OPS_TOTAL: AtomicU64 = AtomicU64::new(0);
-pub static ZERO_COPY_HANDOVERS: AtomicU64 = AtomicU64::new(0);
-pub static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
-pub static PKU_FLIPS: AtomicU64 = AtomicU64::new(0);
 
+/// The single RamFS instance backing all VFS operations.
 pub static RAMFS: RamFs = RamFs::new();
-pub static DISKFS: DiskFs = DiskFs::new();
 
-pub struct MountEntry {
-    pub prefix: &'static str,
-    pub backend: &'static dyn FsBackend,
-}
-
-pub struct MountTable {
-    pub entries: [Option<MountEntry>; 4],
-}
-
-pub static MOUNT_TABLE: MountTable = MountTable {
-    entries: [
-        Some(MountEntry { prefix: "/dev", backend: &DISKFS }),
-        Some(MountEntry { prefix: "/", backend: &RAMFS }),
-        None, None,
-    ],
-};
-
-impl MountTable {
-    pub fn route<'a>(&self, path: &'a str) -> Option<(&'static dyn FsBackend, &'a str)> {
-        for entry in self.entries.iter().flatten() {
-            if path.starts_with(entry.prefix) {
-                return Some((entry.backend, &path[entry.prefix.len()..]));
-            }
-        }
-        None
-    }
-}
-
-#[inline(always)]
-pub unsafe fn pku_grant_temporary(key: u8) -> u32 {
-    PKU_FLIPS.fetch_add(1, Ordering::Relaxed);
-    let old_pkru: u32;
-    let shift = key * 2;
-    core::arch::asm!(
-        "rdpkru",
-        "mov {tmp:e}, eax",
-        "and eax, {mask:e}",
-        "xor edx, edx",
-        "xor ecx, ecx",
-        "wrpkru",
-        mask = in(reg) !(0b11 << shift),
-        tmp = out(reg) old_pkru,
-        out("eax") _,
-        in("ecx") 0,
-    );
-    old_pkru
-}
-
-#[inline(always)]
-pub unsafe fn pku_restore(old_pkru: u32) {
-    PKU_FLIPS.fetch_add(1, Ordering::Relaxed);
-    core::arch::asm!(
-        "xor edx, edx",
-        "xor ecx, ecx",
-        "wrpkru",
-        in("eax") old_pkru,
-        in("ecx") 0,
-        in("edx") 0,
-    );
-}
-
-#[inline(always)]
-pub fn handle_vfs_message(msg: &VfsProtocol, reply: &mut PdxReply) {
+/// Route a PDX message to the appropriate backend handler.
+/// Called from the trampoline message loop.
+pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
     IPC_OPS_TOTAL.fetch_add(1, Ordering::Relaxed);
-    match msg {
-        VfsProtocol::Open { path, flags, mode } => {
-            let path_str = core::str::from_utf8(path).unwrap_or("").trim_matches('\0');
-            if let Some((backend, subpath)) = MOUNT_TABLE.route(path_str) {
-                match backend.open(subpath, *flags, *mode) {
-                    Ok(inode) => {
-                        reply.status = 0;
-                        reply.size = inode;
-                    },
-                    Err(e) => reply.status = e,
+
+    // All operations currently route to RamFS.
+    let backend: &dyn FsBackend = &RAMFS;
+
+    match type_id {
+        // ── OP_RAMFS_OPEN ──
+        // arg0 = name[0..7], arg1 = name[8..15], arg2 = name[16..23] | (flags << 24)
+        messages::OP_RAMFS_OPEN => {
+            let name_bytes = unpack_name(arg0, arg1, arg2);
+            let flags = (arg2 >> 24) as u32;
+            match backend.open(&name_bytes, flags, 0) {
+                Ok(handle) => handle,
+                Err(e) => e as u64,
+            }
+        }
+
+        // ── OP_RAMFS_READ ──
+        // arg0 = handle, arg1 = offset, arg2 = max_len
+        messages::OP_RAMFS_READ => {
+            let handle = arg0;
+            let offset = arg1;
+            let max_len = (arg2 as usize).min(messages::RAMFS_MAX_FILE_SIZE);
+            let mut buf = [0u8; 8]; // Return up to 8 bytes in the reply
+            let to_read = max_len.min(buf.len());
+            match backend.read(handle, offset, &mut buf[..to_read]) {
+                Ok(n) => {
+                    // Pack read data into reply u64
+                    let mut reply = 0u64;
+                    for i in 0..n.min(8) as usize {
+                        reply |= (buf[i] as u64) << (i * 8);
+                    }
+                    reply
                 }
-            } else {
-                reply.status = -2; // ENOENT
-            }
-        },
-        VfsProtocol::HandoverRead { page, offset: _, len } => {
-            ZERO_COPY_HANDOVERS.fetch_add(1, Ordering::Relaxed);
-            // In a real system, we would use the inode/fd to call the backend
-            // Here we simulate the 3-cycle PKU dance
-            unsafe {
-                let old_pkru = pku_grant_temporary(page.pku_key);
-                // backend.read(...) logic here
-                pku_restore(old_pkru);
-            }
-            reply.status = 0;
-            reply.size = *len as u64;
-        },
-        VfsProtocol::HandoverWrite { page, offset: _, len } => {
-            ZERO_COPY_HANDOVERS.fetch_add(1, Ordering::Relaxed);
-            unsafe {
-                let old_pkru = pku_grant_temporary(page.pku_key);
-                // backend.write(...) logic here
-                pku_restore(old_pkru);
-            }
-            reply.status = 0;
-            reply.size = *len as u64;
-        },
-        VfsProtocol::Stats => {
-            reply.status = IPC_OPS_TOTAL.load(Ordering::Relaxed) as i64;
-            reply.size = ZERO_COPY_HANDOVERS.load(Ordering::Relaxed);
-        }
-        VfsProtocol::Fsync { fd } => {
-            // Mock: Map fd to inode and route to backend
-            // For now, route all sync to DISKFS if it's potentially a disk file
-            match DISKFS.sync(*fd) {
-                Ok(_) => {
-                    reply.status = 0;
-                    reply.size = 0;
-                },
-                Err(e) => reply.status = e,
+                Err(e) => e as u64,
             }
         }
-        _ => {
-            reply.status = -1;
-            reply.size = 0;
+
+        // ── OP_RAMFS_WRITE ──
+        // arg0 = handle, arg1 = offset, arg2 = packed data (8 bytes)
+        messages::OP_RAMFS_WRITE => {
+            let handle = arg0;
+            let offset = arg1;
+            let data = arg2.to_le_bytes(); // 8 bytes of data
+            match backend.write(handle, offset, &data) {
+                Ok(n) => n,
+                Err(e) => e as u64,
+            }
         }
+
+        // ── OP_RAMFS_CLOSE ──
+        // arg0 = handle
+        messages::OP_RAMFS_CLOSE => {
+            let handle = arg0;
+            match backend.close(handle) {
+                Ok(_) => 0,
+                Err(e) => e as u64,
+            }
+        }
+
+        // ── OP_RAMFS_LIST ──
+        // arg0 = index
+        // Returns: packed { handle: u64, name_len: u32 } in upper/lower bits,
+        // or 0 if no more entries.
+        messages::OP_RAMFS_LIST => {
+            let index = arg0 as usize;
+            match backend.list_at(index) {
+                Some((handle, name_len)) => {
+                    (handle << 32) | (name_len as u64)
+                }
+                None => 0,
+            }
+        }
+
+        // ── OP_RAMFS_STAT ──
+        // arg0 = handle
+        messages::OP_RAMFS_STAT => {
+            let handle = arg0;
+            match backend.stat(handle) {
+                Ok((size, name_len)) => {
+                    (size << 32) | name_len as u64
+                }
+                Err(e) => e as u64,
+            }
+        }
+
+        _ => messages::ERR_NOT_FOUND as u64,
     }
+}
+
+/// Unpack a name from three u64 args.
+/// Name is stored little-endian in arg0..arg2, up to 24 bytes,
+/// zero-padded. Returns the actual name slice (strips trailing zeros).
+fn unpack_name(arg0: u64, arg1: u64, arg2: u64) -> alloc::vec::Vec<u8> {
+    let mut name = alloc::vec::Vec::with_capacity(messages::RAMFS_MAX_NAME);
+    let bytes0 = arg0.to_le_bytes();
+    let bytes1 = arg1.to_le_bytes();
+    let bytes2 = arg2.to_le_bytes();
+    name.extend_from_slice(&bytes0);
+    name.extend_from_slice(&bytes1);
+    // First 24 bytes of arg2 are name; rest may be flags
+    name.extend_from_slice(&bytes2[..8]);
+    // Strip trailing zeros (but preserve embedded zeros as valid name bytes)
+    while name.last() == Some(&0) {
+        name.pop();
+    }
+    name
 }

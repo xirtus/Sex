@@ -1,9 +1,4 @@
-pub use sex_pdx::{pdx_call, pdx_listen, pdx_reply, MessageType, PdxRequest};
+//! Thin wrappers over sex-pdx for sexfiles server.
+//! Uses standard pdx_listen_raw(0) / pdx_reply pattern.
 
-/// Simplified wrapper for VFS PDX calls
-// WARNING: DO NOT USE with stack-local MessageType — pointer lifetime invalid
-// under current PDX model. Only safe if msg is static/owned and outlives the
-// caller's pdx_listen read.
-pub fn vfs_pdx_reply(caller: u32, msg: &MessageType) {
-    pdx_reply(caller, msg as *const _ as u64);
-}
+pub use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println};

@@ -43,6 +43,15 @@ const SCENE_SETTINGS_PROTOCOL_PROOF_ENABLED: bool =
 /// Synthetic proof stage counter. Advances 0..4 then stops forever.
 static mut SCENE_SETTINGS_PROTOCOL_PROOF_STAGE: u8 = 0;
 
+/// App surface request protocol synthetic proof gate.
+/// Build with SEXOS_APP_SURFACE_REQ_PROOF=1 to enable.
+/// Default (unset): zero behavior change.
+const APP_SURFACE_REQ_PROOF_ENABLED: bool =
+    option_env!("SEXOS_APP_SURFACE_REQ_PROOF").is_some();
+
+/// Synthetic proof stage counter for app surface request proof. Advances 0..3 then stops.
+static mut APP_SURFACE_REQ_PROOF_STAGE: u8 = 0;
+
 // Well-known key ID for scene appearance settings blob.
 const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
 
@@ -54,6 +63,15 @@ pub const OP_HID_EVENT: u64 = 0x202;
 pub const OP_USB_MOUSE_REPORT: u64 = 0x260;
 const SHELL_USB_MOUSE_RECEIVE_UNPARK_PROOF_V1: bool = true;
 pub const OP_SURFACE_UPDATE: u64 = 0xEB;
+
+/// App surface request: app-like PD → silk-shell via SLOT_SHELL (6).
+/// arg0 = surface_id (must be >= 200 for user surfaces, non-zero)
+/// arg1 = title_id (opaque u64 for tab title, must be non-zero)
+/// arg2 = reserved (future: packed geometry)
+/// Shell validates and if accepted: creates Frame+Tab, registers lifecycle,
+/// and upserts on sexdisplay via 0xEC. App never writes framebuffer.
+pub const OP_APP_SURFACE_REQ: u64 = 0xFA;
+
 pub const SURFACE_ID_APP: u64 = 100;
 pub const SURFACE_ID_STATIC: u64 = 101;
 pub const SURFACE_ID_TEST3: u64 = 102;
@@ -2683,6 +2701,7 @@ unsafe fn tile_active_scene_frames() {
         // No tileable frames in active scene — clear stale focus, drag, hover.
         clear_focus_if_dead();
         clear_drag_if_dead();
+        clear_hover_if_dead();
         clear_hover_if_wrong_scene();
         HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
         serial_println!("[shell.tile.reject] reason=no_tileable_frames");
@@ -4119,6 +4138,21 @@ unsafe fn clear_drag_if_dead() {
     }
 }
 
+/// If the hovered frame's active surface is dead or tombstoned, clear hover.
+/// Emits [shell.hover.clear.dead] with frame and surface id.
+unsafe fn clear_hover_if_dead() {
+    if HOVERED_FRAME_ID != 0 {
+        if let Some(sid) = active_surface_for_frame(HOVERED_FRAME_ID) {
+            if !surface_is_alive(sid) || is_tombstoned(sid) {
+                serial_println!("[shell.hover.clear.dead] frame={} surface={} reason=dead", HOVERED_FRAME_ID, sid);
+                HOVERED_FRAME_ID = 0;
+                HOVER_KIND = HOVER_NONE;
+                HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
+            }
+        }
+    }
+}
+
 /// If currently dragging a surface that belongs to a non-active scene,
 /// cancel the drag. Call after scene switch.
 unsafe fn clear_drag_if_wrong_scene() {
@@ -4870,6 +4904,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 sync_scene_visibility();
                 clear_focus_if_dead();
                 clear_drag_if_dead();
+                clear_hover_if_dead();
                 clear_hover_if_wrong_scene();
                 tile_active_scene_frames();
                 snap_capture_layout();
@@ -4957,6 +4992,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 sync_scene_visibility();
                 clear_focus_if_dead();
                 clear_drag_if_dead();
+                clear_hover_if_dead();
                 clear_hover_if_wrong_scene();
                 tile_active_scene_frames();
                 snap_capture_layout();
@@ -5252,6 +5288,7 @@ unsafe fn atlas_clear_stub() {
     sync_scene_visibility();
     clear_focus_if_dead();
     clear_drag_if_dead();
+    clear_hover_if_dead();
     clear_hover_if_wrong_scene();
     tile_active_scene_frames();
     snap_capture_layout();
@@ -5493,6 +5530,92 @@ unsafe fn close_focused_tab_or_frame_safe() -> bool {
     } else {
         false
     }
+}
+
+// ── App Surface Request Handler (APP_SURFACE_LAUNCH_CONTRACT_V1) ────────────
+// Contract: a userland app-like PD requests one surface via IPC to silk-shell.
+// Silk-shell validates, creates ShellFrame+ShellTab, registers lifecycle,
+// and upserts on sexdisplay via 0xEC. App never writes framebuffer.
+// Focus ownership remains shell-only.
+
+/// Handle an app surface creation request from a userland PD (or synthetic proof).
+/// Returns true if accepted and surface was created, false if rejected.
+/// Rejection reasons: zero surface_id, zero title_id, already registered,
+/// reserved surface ID range (< 200), or no free frame slot.
+unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, caller_pd: u32) -> bool {
+    // Validate: non-zero surface_id
+    if surface_id == 0 {
+        serial_println!("[shell.app_surface.reject] reason=zero_surface_id caller={}", caller_pd);
+        return false;
+    }
+    // Validate: non-zero title_id
+    if title_id == 0 {
+        serial_println!("[shell.app_surface.reject] reason=zero_title_id sid={} caller={}", surface_id, caller_pd);
+        return false;
+    }
+    // Validate: not already registered in lifecycle
+    if lifecycle_state(surface_id).is_some() {
+        serial_println!("[shell.app_surface.reject] reason=already_registered sid={} caller={}", surface_id, caller_pd);
+        return false;
+    }
+    // Validate: surface_id in user range (>= 200 avoids OS surface collision)
+    if surface_id < 200 {
+        serial_println!("[shell.app_surface.reject] reason=reserved_range sid={} caller={}", surface_id, caller_pd);
+        return false;
+    }
+
+    // Find free frame slot
+    let mut frame_id: u32 = 0;
+    let mut slot_idx: usize = 0;
+    for (idx, slot) in FRAMES.iter_mut().enumerate() {
+        if slot.is_none() {
+            frame_id = (idx + 10) as u32; // dynamic frame IDs start at 10 to avoid collision with boot frames
+            slot_idx = idx;
+            break;
+        }
+    }
+    if frame_id == 0 {
+        serial_println!("[shell.app_surface.reject] reason=no_frame_slot sid={} caller={}", surface_id, caller_pd);
+        return false;
+    }
+
+    // Create the frame with one tab
+    FRAMES[slot_idx] = Some(ShellFrame {
+        frame_id,
+        active_tab: 0,
+        tab_count: 1,
+        tabs: {
+            let mut t: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] = [None; MAX_TABS_PER_FRAME as usize];
+            t[0] = Some(ShellTab {
+                surface_id,
+                title_id,
+                flags: 0,
+            });
+            t
+        },
+        scene_id: ACTIVE_SCENE_IDX,
+        flags: FRAME_FLAG_TOP_BAR, // top bar ON for app surfaces
+        normal_x: 200,
+        normal_y: 100,
+        normal_w: 600,
+        normal_h: 400,
+    });
+
+    // Register lifecycle as Visible
+    lifecycle_register(surface_id, LifecycleState::Visible);
+
+    // Upsert on sexdisplay via 0xEC (geometry packed: arg1=(y<<32)|x, arg2=(h<<32)|w)
+    pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
+        (100u64) << 32 | 200u64,
+        (400u64) << 32 | 600u64);
+
+    // Re-tile and focus the new surface
+    tile_active_scene_frames();
+    try_set_focus(surface_id);
+
+    serial_println!("[shell.app_surface.accept] sid={} title_id={} frame={} caller={}",
+        surface_id, title_id, frame_id, caller_pd);
+    true
 }
 
 // ── Linen Surface Control Helpers (LINEN_SURFACE_CONTROL_V1) ──────────────
@@ -7566,6 +7689,8 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     // Focus fallback: clear remaining stale focus and drag.
     clear_focus_if_dead();
     clear_drag_if_dead();
+    clear_hover_if_dead();
+    clear_hover_if_wrong_scene();
     // Clear hover if the closed surface's frame is no longer valid.
     clear_hover_if_wrong_scene();
     // Re-tile remaining visible frames.
@@ -8905,6 +9030,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                 sync_scene_visibility();
                 clear_focus_if_dead();
                 clear_drag_if_dead();
+                clear_hover_if_dead();
                 clear_hover_if_wrong_scene();
                 tile_active_scene_frames();
                 snap_capture_layout();
@@ -9747,6 +9873,27 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
+        // ── App Surface Request synthetic proof ──
+        if APP_SURFACE_REQ_PROOF_ENABLED {
+            unsafe {
+                let stage = APP_SURFACE_REQ_PROOF_STAGE;
+                if stage < 4 {
+                    APP_SURFACE_REQ_PROOF_STAGE = stage + 1;
+                    serial_println!("[shell.app_surface.proof] stage={}", stage);
+                    let accepted = match stage {
+                        0 => handle_app_surface_req(300, 42, 0), // valid: sid=300, title=42
+                        1 => handle_app_surface_req(0, 42, 0),   // reject: zero sid
+                        2 => handle_app_surface_req(301, 0, 0),  // reject: zero title
+                        3 => handle_app_surface_req(300, 99, 0), // reject: duplicate sid
+                        _ => false,
+                    };
+                    serial_println!("[shell.app_surface.proof] stage={} accepted={}", stage, accepted);
+                    sys_yield();
+                    continue;
+                }
+            }
+        }
+
         let mut mutated = false;
 
         let msg = pdx_listen_raw(0);
@@ -9797,6 +9944,8 @@ pub extern "C" fn _start() -> ! {
                         // Surface-lifetime safety guards before any focus/drag operation
                         clear_focus_if_dead();
                         clear_drag_if_dead();
+                        clear_hover_if_dead();
+                        clear_hover_if_wrong_scene();
                         if !POINTER_USB_STATE_INIT {
                             POINTER_X = P.width / 2;
                             POINTER_Y = P.height / 2;
@@ -10921,6 +11070,8 @@ pub extern "C" fn _start() -> ! {
                             // Surface-lifetime safety guards before any focus/drag operation
                             clear_focus_if_dead();
                             clear_drag_if_dead();
+                            clear_hover_if_dead();
+                            clear_hover_if_wrong_scene();
 
                             // ── Click-to-focus: left-button press edge (0→1 transition only) ──
                             if button == 1 {
@@ -10973,6 +11124,14 @@ pub extern "C" fn _start() -> ! {
                         handle_sexstore_get_reply(msg.arg0);
                     }
                     // PUT acks are fire-and-forget — ignored.
+                }
+            }
+            0xFA => { // OP_APP_SURFACE_REQ
+                unsafe {
+                    let accepted = handle_app_surface_req(msg.arg0, msg.arg1, msg.caller_pd);
+                    if accepted {
+                        mutated = true;
+                    }
                 }
             }
             _ => {

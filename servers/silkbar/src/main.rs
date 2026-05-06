@@ -107,23 +107,28 @@ pub extern "C" fn _start() -> ! {
             } else if msg.type_id == 1 && msg.caller_pd == 1 {
                 // ── Bell reply (SUBSCRIBE generation or LIST packed counts) ──
                 if bell_pending_list {
-                    // LIST reply: arg0 = packed lane counts. Forward to sexdisplay.
+                    // LIST reply: arg0 = packed lane counts from Bell.
+                    // Repack for sexdisplay SetBellPresence format:
+                    //   bits 7:0   = total_visible
+                    //   bits 15:8  = redacted_count (from Bell's bits 63:56)
+                    //   bits 23:16 = flags (bit 0 = bell_available since LIST succeeded)
                     bell_pending_list = false;
-                    let packed = msg.arg0 as u32;
+                    let packed = msg.arg0;
+                    let total = (packed & 0xFF) as u8;
+                    let redacted = ((packed >> 56) & 0xFF) as u8;
+                    let flags: u8 = 1; // bit 0 = bell_available
+                    let a = (total as u32) | ((redacted as u32) << 8) | ((flags as u32) << 16);
                     unsafe {
                         static mut BELL_REPLY_BUDGET: u32 = 8;
                         let b = &mut BELL_REPLY_BUDGET;
                         if *b > 0 {
                             *b -= 1;
-                            let total = packed as u8;
-                            let redacted = (packed >> 8) as u8;
-                            let flags = (packed >> 16) as u8;
                             sex_pdx::serial_println!("[silkbar.bell.poll.reply] total={} redacted={} flags={:#x}",
                                 total, redacted, flags);
                         }
                     }
                     send_update(SilkBarUpdate::new(
-                        UpdateKind::SetBellPresence as u32, 0, packed, 0,
+                        UpdateKind::SetBellPresence as u32, 0, a, 0,
                     ));
                 } else {
                     // SUBSCRIBE reply: arg0 = current generation.

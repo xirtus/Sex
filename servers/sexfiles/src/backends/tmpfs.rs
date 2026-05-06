@@ -1,27 +1,36 @@
 use crate::backends::FsBackend;
-use crate::messages::PageHandover;
+use crate::messages;
 
-/// TmpFs: Stub Tmp filesystem.
+/// TmpFs: Stub temp filesystem (not yet implemented).
+#[allow(dead_code)]
 pub struct TmpFs;
 
 impl FsBackend for TmpFs {
-    fn open(&self, _path: &str, _flags: u32, _mode: u32) -> Result<u64, i64> {
-        Err(-1)
+    fn open(&self, _name: &[u8], _flags: u32, _mode: u32) -> Result<u64, i64> {
+        Err(messages::ERR_NOT_FOUND)
     }
 
-    fn read(&self, _inode: u64, _offset: u64, _len: u32) -> Result<PageHandover, i64> {
-        Err(-1)
+    fn read(&self, _handle: u64, _offset: u64, _buf: &mut [u8]) -> Result<u64, i64> {
+        Err(messages::ERR_NOT_FOUND)
     }
 
-    fn write(&self, _inode: u64, _offset: u64, _len: u32, _page: PageHandover) -> Result<u32, i64> {
-        Err(-1)
+    fn write(&self, _handle: u64, _offset: u64, _data: &[u8]) -> Result<u64, i64> {
+        Err(messages::ERR_NOT_FOUND)
     }
 
-    fn sync(&self, _inode: u64) -> Result<(), i64> {
-        Err(-1)
+    fn close(&self, _handle: u64) -> Result<(), i64> {
+        Err(messages::ERR_NOT_FOUND)
     }
 
-    fn close(&self, _inode: u64) -> Result<(), i64> {
-        Err(-1)
+    fn stat(&self, _handle: u64) -> Result<(u64, u32), i64> {
+        Err(messages::ERR_NOT_FOUND)
+    }
+
+    fn list_at(&self, _index: usize) -> Option<(u64, u32)> {
+        None
+    }
+
+    fn len(&self) -> usize {
+        0
     }
 }
