@@ -6,7 +6,7 @@
 //!   • Fixed PFN base for framebuffer (matches sexsh convention)
 //!   • Bounded line editor with synthetic input proof gate
 //!   • Bounded scrollback ring (1024 lines × 80 bytes)
-//!   • No real HID delivery yet — Spindle not kernel-spawned (no PDX slot)
+//!   • No real HID delivery yet — capability grant pending (no PDX slot)
 //!   • Bounded native command dispatcher (10 built-in commands)
 //!   • Local event ring (Bell bridge pending)
 //!   • No terminal emulation (Spindle is NOT sexsh)
@@ -403,7 +403,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  PD  9  quil           app launcher");
             sb.push(b"  PD 10  sexbell        notifications");
             sb.push(b"  PD 11  sexfiles       virtual filesystem");
-            sb.push(b"Live PD query unavailable in V1 (Spindle not kernel-spawned).");
+            sb.push(b"Live PD query unavailable in V1 (capability grant pending).");
             true
         }
         b"servers" => {
@@ -432,14 +432,14 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  linen    object browser");
             sb.push(b"  mesh     device topology");
             sb.push(b"  collar   authority wallet");
-            sb.push(b"All targets unavailable: Spindle not kernel-spawned.");
+            sb.push(b"All targets unavailable: capability grant pending.");
             true
         }
         b"launch" => {
             let known = args == b"quil" || args == b"linen" || args == b"mesh" || args == b"collar";
             if known {
                 sb.push(b"launch: all targets unavailable in V1.");
-                sb.push(b"Spindle not kernel-spawned -- cannot PDX-call silk-shell.");
+                sb.push(b"capability grant pending -- cannot PDX-call silk-shell.");
                 sb.push(b"Requires: kernel spawn, SLOT_SHELL, OP_APP_SURFACE_REQ.");
             } else if args.is_empty() {
                 sb.push(b"launch: specify an app. Use 'apps' to list.");
@@ -520,7 +520,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                     }
                 }
                 sb.push(b"history persistence pending SexFiles client bridge.");
-                sb.push(b"Spindle not kernel-spawned -- no PDX call to sexfiles.");
+                sb.push(b"capability grant pending -- no PDX call to sexfiles.");
             }
             true
         }
@@ -530,7 +530,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  commands:    Spindle native command console");
             sb.push(b"  history:     pending (SexFiles bridge)");
             sb.push(b"  events:      pending (Bell bridge)");
-            sb.push(b"Linen bridge pending (Spindle not kernel-spawned).");
+            sb.push(b"Linen bridge pending (capability grant pending).");
             true
         }
         b"events" => {
@@ -550,7 +550,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                         }
                     }
                 }
-                sb.push(b"Bell bridge pending (Spindle not kernel-spawned).");
+                sb.push(b"Bell bridge pending (capability grant pending).");
             }
             true
         }
@@ -711,6 +711,7 @@ pub extern "C" fn _start() -> ! {
     // Best-effort restore from SexFiles (guarded: needs cap grant)
     sb.push(b"SexFiles persistence pending (capability grant needed).");
     serial_println!("[spindle.sexfiles.persist.pending] reason=no_storage_cap");
+    serial_println!("[spindle.bell.pending] reason=no_bell_cap");
 
     serial_println!("[spindle.ready]");
 
