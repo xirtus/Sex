@@ -218,6 +218,28 @@ pub fn init() {
         }
     }
 
+    // Spindle capability grants: terminal console bridges (PD 12).
+    if spindle_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::capability::CapabilityData;
+        if let Some(pd) = DOMAIN_REGISTRY.get(spindle_id) {
+            if sexfiles_id != 0 {
+                pd.grant_capability(sex_pdx::SLOT_STORAGE, CapabilityData::Domain(sexfiles_id));
+                serial_println!("[kernel.cap.storage.spindle] spindle->sexfiles slot={}", sex_pdx::SLOT_STORAGE);
+            }
+            if sexbell_id != 0 {
+                pd.grant_capability(sex_pdx::SLOT_BELL, CapabilityData::Domain(sexbell_id));
+                serial_println!("[kernel.cap.bell.spindle] spindle->sexbell slot={}", sex_pdx::SLOT_BELL);
+            }
+            if linen_id != 0 {
+                pd.grant_capability(sex_pdx::SLOT_LINEN, CapabilityData::Domain(linen_id));
+                serial_println!("[kernel.cap.linen.spindle] spindle->linen slot={}", sex_pdx::SLOT_LINEN);
+            }
+            serial_println!("[kernel.cap.spindle] storage={} bell={} linen={}",
+                sexfiles_id != 0, sexbell_id != 0, linen_id != 0);
+        }
+    }
+
     // Hand framebuffer to sexdisplay: Limine fb.address is ALREADY VIRTUAL.
     if sexdisp_id != 0 {
         use crate::ipc::DOMAIN_REGISTRY;
