@@ -1,16 +1,16 @@
 # MASTER_RUNTIME_GATE_V1
 
-- date: 2026-05-06T09:25:08+02:00
-- git commit: 7907135
+- date: 2026-05-06T11:27:00+02:00
+- git commit: 45070a8
 - log_path: /home/xirtus_arch/Documents/microkernel/.gate_master/serial.log
-- probe_seconds: 30
+- probe_seconds: 25
 - qemu: qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku -cdrom sexos-v1.0.0.iso -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0 -serial file:$LOG -display none -no-reboot -no-shutdown
 
 ## Gate Results
 
 | Gate | Status |
 |------|--------|
-| BUILD_GATE | SKIP |
+| BUILD_GATE | PASS |
 | SPAWN_GATE | PASS |
 | CLOCK_GATE | PASS |
 | SCHED_GATE | PASS |

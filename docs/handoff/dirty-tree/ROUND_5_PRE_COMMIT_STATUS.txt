@@ -1,0 +1,46 @@
+ M docs/handoff/MASTER_RUNTIME_GATE_V1.md
+ M servers/linen/src/main.rs
+ M servers/quil/src/main.rs
+ M servers/sexfiles/src/backends/diskfs.rs
+ M servers/sexfiles/src/backends/mod.rs
+ M servers/sexfiles/src/backends/ramfs.rs
+ M servers/sexfiles/src/backends/tmpfs.rs
+ M servers/sexfiles/src/messages.rs
+ M servers/sexfiles/src/proof.rs
+ M servers/sexfiles/src/trampoline.rs
+ M servers/sexfiles/src/vfs.rs
+ M servers/sexusb/src/main.rs
+ M servers/silk-shell/src/lib.rs
+ M servers/silk-shell/src/main.rs
+ M sex-src/targets/x86_64-unknown-sexos.json
+ ? tools/qemu
+?? crates/sex-pdx/src/lib.rs.bak
+?? docs/handoff/APP_LIFECYCLE_CONTRACT_V1.md
+?? docs/handoff/APP_MANIFEST_CAP_CONTRACT_V1.md
+?? docs/handoff/ATLAS_SCENE_OVERVIEW_RENDER_TOKENS_V1.md
+?? docs/handoff/COLLAR_CAPABILITY_REVIEW_MODEL_V1.md
+?? docs/handoff/LINEN_SESSION_OBJECTS_V1.md
+?? docs/handoff/REAL_HARDWARE_BOOT_AUDIT_V1.md
+?? docs/handoff/ROUND_3_FINAL_AUDIT_V1.md
+?? docs/handoff/SEXFILES_NAMESPACE_CAPS_V1.md
+?? docs/handoff/SEXUSB_SECOND_DEVICE_CONFIGURE_ENDPOINT_V1.md
+?? docs/handoff/dirty-tree/
+?? scripts/real_hardware_preflight.sh
+?? servers/linen/src/main.rs.bak
+?? servers/linen/src/session.rs
+?? servers/quil/src/main.rs.bak.pre_save_load
+?? servers/sexfiles/src/backends/diskfs.rs.bak.namespace_caps_v1
+?? servers/sexfiles/src/backends/mod.rs.bak.namespace_caps_v1
+?? servers/sexfiles/src/backends/ramfs.rs.bak.namespace_caps_v1
+?? servers/sexfiles/src/backends/tmpfs.rs.bak.namespace_caps_v1
+?? servers/sexfiles/src/messages.rs.bak.namespace_caps_v1
+?? servers/sexfiles/src/proof.rs.bak.namespace_caps_v1
+?? servers/sexfiles/src/trampoline.rs.bak.namespace_caps_v1
+?? servers/sexfiles/src/vfs.rs.bak.namespace_caps_v1
+?? servers/sexusb/src/main.rs.bak.slot2_configure_ep
+?? servers/sexusb/src/main.rs.bak.slot2_desc
+?? servers/sexusb/src/main.rs.bak.slot2_hid_role
+?? servers/sexusb/src/main.rs.bak.slot2_set_config
+?? servers/silk-shell/src/lib.rs.bak
+?? servers/silk-shell/src/main.rs.bak
+?? servers/silk-shell/src/main.rs.bak.app_surface_launch_contract
