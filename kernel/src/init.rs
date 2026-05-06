@@ -35,9 +35,10 @@ pub fn init() {
     let mut quil_id = 0;
     let mut sexbell_id = 0;
     let mut sexfiles_id = 0;
+    let mut spindle_id = 0;
 
     // Fixed Spawn Order (Deterministic IDs)
-    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell", "sexfiles"];
+    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell", "sexfiles", "spindle"];
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -84,6 +85,9 @@ pub fn init() {
                         } else if domain_id == 11 {
                             sexfiles_id = id;
                             serial_println!("[kernel.spawn.sexfiles] id={} path={}", id, path);
+                        } else if domain_id == 12 {
+                            spindle_id = id;
+                            serial_println!("[kernel.spawn.spindle] id={} path={}", id, path);
                         }
                     }
                     Err(e) => {

@@ -554,83 +554,48 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[spindle.boot]");
+    serial_println!("[spindle.surface.req] pd=12 kernel_spawned=1");
 
-    // ── Create window on sexdisplay ──
-    let params = WindowCreateParams {
-        x: 40, y: 200,          // below silkbar, above bottom
-        width: WIN_W,
-        height: WIN_H,
-        pfn_base: FB_PFN_BASE,
-    };
-    unsafe {
-        pdx_call(SLOT_DISPLAY, OP_WINDOW_CREATE,
-            &params as *const _ as u64, 0, 0);
-    }
-    serial_println!("[spindle.surface.req] w={} h={}", WIN_W, WIN_H);
-
-    // ── Draw static content ──
-    let mut fb = unsafe {
-        WindowBuffer::new((FB_PFN_BASE << 12) as u64, WIN_W, WIN_H, WIN_W)
-    };
-
-    let mut sb = Scrollback::new();
-    let mut hist = History::new();
-    let mut ev = EventRing::new();
-
-    // ── Push boot header lines into scrollback ──
-    sb.push(b"Spindle -- SexOS native command console");
-    sb.push(b"");
-    sb.push(b"Type help for commands. V1.0.0-pre");
-    sb.push(b"");
-
-    unsafe {
-        fb.clear(BG);
-
-        // Title row (row 0)
-        font::draw_str(&mut fb, 4, 4, b"Spindle", ACCENT, None);
-
-        // Separator (row 1)
-        for col in 0..COLS {
-            fb.draw_pixel(col * CELL_W, (CELL_H * 1) + (CELL_H / 2) - 1, ACCENT);
-        }
-
-        // Info lines (rows 2-3)
-        font::draw_str(&mut fb, 4, CELL_H * 2 + 4, b"SexOS native command console", FG, None);
-        font::draw_str(&mut fb, 4, CELL_H * 3 + 4, b"Type help for commands.", FG, None);
-
-        // Separator (row 4)
-        for col in 0..COLS {
-            fb.draw_pixel(col * CELL_W, (CELL_H * 4) + (CELL_H / 2) - 1, ACCENT);
-        }
-
-        // Output area (rows 5-22) — rendered from scrollback
-        render_scrollback(&mut fb, &sb);
-
-        // Bottom row (row 23): prompt line
-        font::draw_str(&mut fb, 4, CELL_H * 23 + 4, b"sex> ", GREEN, None);
-    }
-    serial_println!("[spindle.surface.ok] boot_lines={}", sb.total_lines);
-
-    // ── Input proof gate (compile-time, synthetic input) ──
+    // ── Input proof gate (compile-time; guards framebuffer access) ──
     const INPUT_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_INPUT_PROOF").is_some();
     if INPUT_PROOF_ENABLED {
-        unsafe { run_input_proof(&mut fb, &mut sb, &mut hist, &mut ev); }
-    }
-
-    // ── M9 Spindle SexObject binding proof ──
-    const SPINDLE_SEXOBJECT_PROOF_ENABLED: bool =
-        option_env!("SEXOS_SPINDLE_SEXOBJECT_PROOF").is_some();
-    if SPINDLE_SEXOBJECT_PROOF_ENABLED {
-        unsafe { run_spindle_sexobject_proof(&mut sb); }
-    }
-
-    // ── Idle loop (HID delivery blocked — Spindle not kernel-spawned) ──
-    loop {
         unsafe {
-            sex_pdx::pdx_listen_raw(0);
+            let params = WindowCreateParams {
+                x: 40, y: 200, width: WIN_W, height: WIN_H, pfn_base: FB_PFN_BASE,
+            };
+            pdx_call(SLOT_DISPLAY, OP_WINDOW_CREATE, &params as *const _ as u64, 0, 0);
+            serial_println!("[spindle.surface.req] w={} h={}", WIN_W, WIN_H);
+
+            let mut fb = WindowBuffer::new((FB_PFN_BASE << 12) as u64, WIN_W, WIN_H, WIN_W);
+            let mut sb = Scrollback::new();
+            let mut hist = History::new();
+            let mut ev = EventRing::new();
+
+            sb.push(b"Spindle -- SexOS native command console");
+            sb.push(b""); sb.push(b"Type help for commands. V1.0.0-pre"); sb.push(b"");
+
+            fb.clear(BG);
+            font::draw_str(&mut fb, 4, 4, b"Spindle", ACCENT, None);
+            for col in 0..COLS { fb.draw_pixel(col * CELL_W, CELL_H + CELL_H / 2 - 1, ACCENT); }
+            font::draw_str(&mut fb, 4, CELL_H * 2 + 4, b"SexOS native command console", FG, None);
+            font::draw_str(&mut fb, 4, CELL_H * 3 + 4, b"Type help for commands.", FG, None);
+            for col in 0..COLS { fb.draw_pixel(col * CELL_W, CELL_H * 4 + CELL_H / 2 - 1, ACCENT); }
+            render_scrollback(&mut fb, &sb);
+            font::draw_str(&mut fb, 4, CELL_H * 23 + 4, b"sex> ", GREEN, None);
+            serial_println!("[spindle.surface.ok] boot_lines={}", sb.total_lines);
+
+            run_input_proof(&mut fb, &mut sb, &mut hist, &mut ev);
+
+            const SEXOBJECT_PROOF_ENABLED: bool =
+                option_env!("SEXOS_SPINDLE_SEXOBJECT_PROOF").is_some();
+            if SEXOBJECT_PROOF_ENABLED { run_spindle_sexobject_proof(&mut sb); }
         }
     }
+
+    serial_println!("[spindle.ready]");
+
+    loop { unsafe { sex_pdx::pdx_listen_raw(0); } }
 }
 
 // ── Synthetic input proof ──────────────────────────────────────────────────
