@@ -291,14 +291,21 @@ pub fn pdx_try_listen() -> Option<PdxMessage> {
 }
 
 #[inline(always)]
-pub fn pdx_reply(target_pd: u64) {
+pub fn pdx_reply(target_pd: u32, value: u64) -> u64 {
+    let ret: u64;
     unsafe {
         core::arch::asm!(
             "syscall",
-            in("rax") 1,
-            in("rdi") target_pd,
+            in("rax") 29u64,
+            in("rdi") target_pd as u64,
+            in("rsi") value,
+            out("rcx") _,
+            out("r11") _,
+            lateout("rax") ret,
+            options(nostack),
         );
     }
+    ret
 }
 
 pub fn sys_yield() {
