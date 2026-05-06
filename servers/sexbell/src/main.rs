@@ -2,7 +2,7 @@
 #![no_main]
 
 use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
-              OP_BELL_CLEAR, OP_BELL_MUTE_SENDER, OP_BELL_LIST, OP_BELL_SUBSCRIBE};
+              OP_BELL_CLEAR, OP_BELL_MUTE_SENDER, OP_BELL_LIST, OP_BELL_SUBSCRIBE, OP_BELL_SET_POLICY};
 
 // Replaced local bell_reply helper with shared sex_pdx::pdx_reply(target_pd, value).
 // Kernel: syscall 29 (SYSCALL_PDX_REPLY), rdi=target_pd, rsi=value.
@@ -264,6 +264,89 @@ fn remove_mute(caller_pd: u32) -> bool {
     false
 }
 
+// ── Policy Table (volatile RAM) ───────────────────────────────────────
+
+/// Per-target PD policy entry.
+/// target_pd == 0 marks an unused slot.
+const POLICY_TABLE_CAPACITY: usize = 8;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct PolicyEntry {
+    target_pd:     u32,
+    /// bit 0 = privacy_override active, bit 1 = lane_override active, bit 2 = force_mute active
+    active_flags:  u8,
+    /// Privacy override (0=Public .. 3=FullHidden). Only valid if active_flags bit 0 set.
+    privacy_level: u8,
+    /// Lane override (0=PASSIVE .. 5=SECURITY). Only valid if active_flags bit 1 set.
+    lane_override: u8,
+    /// Mute override (0=unmuted, 1=muted). Only valid if active_flags bit 2 set.
+    force_mute:    u8,
+}
+
+/// Static policy table. Entries may be updated or removed by SET_POLICY.
+/// Volatile — lost on Bell restart.
+static mut POLICY_TABLE: [PolicyEntry; POLICY_TABLE_CAPACITY] = [PolicyEntry {
+    target_pd: 0, active_flags: 0, privacy_level: 0, lane_override: 0, force_mute: 0,
+}; POLICY_TABLE_CAPACITY];
+static mut POLICY_COUNT: usize = 0;
+
+/// Look up policy for a target PD. Returns Some(&entry) if found.
+fn find_policy(target_pd: u32) -> Option<&'static PolicyEntry> {
+    unsafe {
+        for i in 0..POLICY_COUNT {
+            if POLICY_TABLE[i].target_pd == target_pd {
+                return Some(&POLICY_TABLE[i]);
+            }
+        }
+    }
+    None
+}
+
+/// Find mutable policy slot for a target PD. Returns index or None.
+/// Check if a target PD has an active mute policy.
+fn is_policy_muted(target_pd: u32) -> bool {
+    if let Some(entry) = find_policy(target_pd) {
+        entry.active_flags & 2 != 0 && entry.force_mute != 0
+    } else {
+        false
+    }
+}
+
+/// Apply policy privacy override: effective = max(event_privacy, policy_min_privacy).
+/// Policy can only increase restriction, never decrease it.
+fn apply_policy_privacy(caller_pd: u32, event_privacy: u8) -> u8 {
+    if let Some(entry) = find_policy(caller_pd) {
+        if entry.active_flags & 1 != 0 {
+            return core::cmp::max(event_privacy, entry.privacy_level);
+        }
+    }
+    event_privacy
+}
+
+/// Apply policy lane override.
+fn apply_policy_lane(caller_pd: u32, derived_lane: u8) -> u8 {
+    if let Some(entry) = find_policy(caller_pd) {
+        if entry.active_flags & (1 << 1) != 0 {
+            return entry.lane_override;
+        }
+    }
+    derived_lane
+}
+
+// ── Policy Author Allowlist ──────────────────────────────────────────
+
+/// Static allowlist of PDs authorized to call OP_BELL_SET_POLICY.
+/// Default-deny: only silk-shell (domain 3) may set policy.
+/// SilkBar (PD 6) is explicitly excluded — it is a reader, not an authority.
+const BELL_POLICY_AUTHOR_ALLOWLIST: &[u32] = &[
+    3,  // silk-shell (domain 3, policy owner)
+];
+
+fn is_policy_author_allowed(caller_pd: u32) -> bool {
+    BELL_POLICY_AUTHOR_ALLOWLIST.contains(&caller_pd)
+}
+
 // ── Spam Budget ──────────────────────────────────────────────────────
 
 /// Per-PD spam budget: max events per tick window.
@@ -384,7 +467,7 @@ pub extern "C" fn _start() -> ! {
                 let caller_pd       = msg.caller_pd;
 
                 // ── Mute check (reject before any processing) ───────────
-                if is_muted(caller_pd) {
+                if is_muted(caller_pd) || is_policy_muted(caller_pd) {
                     unsafe {
                         static mut BELL_MUTED_REJECT_BUDGET: u32 = 8;
                         let b = &mut BELL_MUTED_REJECT_BUDGET;
@@ -470,10 +553,16 @@ pub extern "C" fn _start() -> ! {
                     continue;
                 }
 
-                // ── Push to queue ────────────────────────────────────
+                // ── Apply policy overrides (volatile policy table) ────
+                // Policy can only increase privacy restriction, never reduce it.
+                // Lane override replaces derived lane if policy has one set.
+                let effective_privacy = apply_policy_privacy(caller_pd, privacy_level);
+                let effective_lane = apply_policy_lane(caller_pd, final_lane);
+
+                // ── Push to queue (with policy-applied values) ─────────
                 let push_result = unsafe {
                     BELL_QUEUE.push(caller_pd, category, urgency_hint,
-                                    final_lane, final_urgency, privacy_level,
+                                    effective_lane, final_urgency, effective_privacy,
                                     redaction_class, action_count, action_id,
                                     object_ref_count, object_ref)
                 };
@@ -919,6 +1008,164 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+            }
+
+            OP_BELL_SET_POLICY => {
+                // ── Parse ──
+                let target_pd  = msg.arg0 as u32;
+                let packed     = msg.arg1;
+                let caller_pd  = msg.caller_pd;
+
+                // ── Author check: only allowlisted PDs may set policy ──
+                if !is_policy_author_allowed(caller_pd) {
+                    unsafe {
+                        static mut BELL_POLICY_DENY_BUDGET: u32 = 8;
+                        let b = &mut BELL_POLICY_DENY_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.policy.deny] caller_pd={} target_pd={}",
+                                caller_pd, target_pd);
+                        }
+                    }
+                    pdx_reply(caller_pd, u64::MAX);
+                    continue;
+                }
+
+                // ── Decode policy payload ──
+                // bit 0: privacy_override active
+                // bit 1: lane_override active
+                // bit 2: force_mute active
+                // bits 8-9: privacy_override value (0=Public .. 3=FullHidden)
+                // bits 16-18: lane_override value (0=PASSIVE .. 5=SECURITY)
+                // bit 24: force_mute value (0=unmuted, 1=muted)
+                let active_flags  = (packed & 0x7) as u8;
+                let privacy_val   = ((packed >> 8) & 0x3) as u8;
+                let lane_val      = ((packed >> 16) & 0x7) as u8;
+                let mute_val      = ((packed >> 24) & 0x1) as u8;
+
+                // ── Validate fields ──
+                let mut reject = false;
+                if active_flags & 1 != 0 && privacy_val > 3 {
+                    reject = true;
+                }
+                if active_flags & (1 << 1) != 0 && lane_val > 5 {
+                    reject = true;
+                }
+                if reject {
+                    unsafe {
+                        static mut BELL_POLICY_REJECT_BUDGET: u32 = 8;
+                        let b = &mut BELL_POLICY_REJECT_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.policy.reject] reason=invalid_field caller_pd={} target_pd={}",
+                                caller_pd, target_pd);
+                        }
+                    }
+                    pdx_reply(caller_pd, u64::MAX);
+                    continue;
+                }
+
+                // ── Apply policy: find or create entry ──
+                // Privacy invariant: policy can only INCREASE restriction.
+                // Compare against existing override if present.
+                let mut changed = false;
+                let new_entry = PolicyEntry {
+                    target_pd,
+                    active_flags,
+                    privacy_level: privacy_val,
+                    lane_override: lane_val,
+                    force_mute: mute_val,
+                };
+
+                // If all flags cleared, remove the entry entirely.
+                if active_flags == 0 {
+                    unsafe {
+                        for i in 0..POLICY_COUNT {
+                            if POLICY_TABLE[i].target_pd == target_pd {
+                                // Shift remaining entries left
+                                for j in i..POLICY_COUNT - 1 {
+                                    POLICY_TABLE[j] = POLICY_TABLE[j + 1];
+                                }
+                                POLICY_TABLE[POLICY_COUNT - 1].target_pd = 0;
+                                POLICY_COUNT -= 1;
+                                changed = true;
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // Check privacy invariant: new override must not reduce restriction.
+                    if active_flags & 1 != 0 {
+                        if let Some(existing) = find_policy(target_pd) {
+                            if existing.active_flags & 1 != 0 && privacy_val < existing.privacy_level {
+                                // Cannot reduce privacy restriction
+                                unsafe {
+                                    static mut BELL_POLICY_REJECT_BUDGET: u32 = 8;
+                                    let b = &mut BELL_POLICY_REJECT_BUDGET;
+                                    if *b > 0 {
+                                        *b -= 1;
+                                        serial_println!("[bell.policy.reject] reason=privacy_reduction \
+                                            caller_pd={} target_pd={} old={} new={}",
+                                            caller_pd, target_pd, existing.privacy_level, privacy_val);
+                                    }
+                                }
+                                pdx_reply(caller_pd, u64::MAX);
+                                continue;
+                            }
+                        }
+                    }
+
+                    unsafe {
+                        // Find existing entry
+                        let mut found = false;
+                        for i in 0..POLICY_COUNT {
+                            if POLICY_TABLE[i].target_pd == target_pd {
+                                let old = &POLICY_TABLE[i];
+                                changed = old.active_flags != new_entry.active_flags
+                                    || old.privacy_level != new_entry.privacy_level
+                                    || old.lane_override != new_entry.lane_override
+                                    || old.force_mute != new_entry.force_mute;
+                                POLICY_TABLE[i] = new_entry;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if !found {
+                            if POLICY_COUNT < POLICY_TABLE_CAPACITY {
+                                POLICY_TABLE[POLICY_COUNT] = new_entry;
+                                POLICY_COUNT += 1;
+                                changed = true;
+                            } else {
+                                // Table full
+                                static mut BELL_POLICY_REJECT_BUDGET: u32 = 8;
+                                let b = &mut BELL_POLICY_REJECT_BUDGET;
+                                if *b > 0 {
+                                    *b -= 1;
+                                    serial_println!("[bell.policy.reject] reason=table_full \
+                                        caller_pd={} target_pd={}",
+                                        caller_pd, target_pd);
+                                }
+                                pdx_reply(caller_pd, u64::MAX);
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                if changed {
+                    bump_generation();
+                }
+
+                unsafe {
+                    static mut BELL_POLICY_SET_BUDGET: u32 = 8;
+                    let b = &mut BELL_POLICY_SET_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!("[bell.policy.set] caller_pd={} target_pd={} flags={} privacy={} lane={} mute={}",
+                            caller_pd, target_pd, active_flags, privacy_val, lane_val, mute_val);
+                    }
+                }
+                pdx_reply(caller_pd, 0);
             }
 
             OP_BELL_SUBSCRIBE => {
