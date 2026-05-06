@@ -6,7 +6,7 @@ use silkbar_model::{
     SILKBAR_ABI_VERSION, SILKBAR_WORKSPACE_COUNT, SILKBAR_CHIP_COUNT,
     SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX, SILKBAR_WORKSPACE_IDX_MAX,
 };
-use sex_pdx::{OP_BELL_LIST, SLOT_BELL};
+use sex_pdx::{OP_BELL_LIST, OP_BELL_SUBSCRIBE, SLOT_BELL};
 
 fn send_update(update: SilkBarUpdate) {
     let result = sex_pdx::pdx_call_checked(
@@ -52,6 +52,10 @@ pub extern "C" fn _start() -> ! {
     // SetClock(ss=0) and waits until uptime_seconds advances to 1.
     // Sexdisplay's fallback clock handles the first second.
     let mut last_uptime_seconds: u64 = 0;
+    /// Cached Bell generation counter. 0 forces first LIST poll.
+    let mut bell_gen_cached: u64 = 0;
+    /// True when OP_BELL_LIST is enqueued and reply not yet received.
+    let mut bell_pending_list: bool = false;
 
     /// Approximate LAPIC timer ticks per second (divide=16, init_count=1_000_000).
     /// Not calibrated — yields monotonic uptime, not wall-clock accuracy.
@@ -101,25 +105,66 @@ pub extern "C" fn _start() -> ! {
                     sex_pdx::serial_println!("[silkbar.selected.options.forward] mask={:#x}", options_mask);
                 }
             } else if msg.type_id == 1 && msg.caller_pd == 1 {
-                // ── Pending reply from a previous pdx_call ──
-                // Bell OP_BELL_LIST reply: arg0 = packed lane counts.
-                // Forward to sexdisplay as SetBellPresence.
-                let packed = msg.arg0 as u32;
-                unsafe {
-                    static mut BELL_REPLY_BUDGET: u32 = 8;
-                    let b = &mut BELL_REPLY_BUDGET;
-                    if *b > 0 {
-                        *b -= 1;
-                        let total = packed as u8;
-                        let redacted = (packed >> 8) as u8;
-                        let flags = (packed >> 16) as u8;
-                        sex_pdx::serial_println!("[silkbar.bell.poll.reply] total={} redacted={} flags={:#x}",
-                            total, redacted, flags);
+                // ── Bell reply (SUBSCRIBE generation or LIST packed counts) ──
+                if bell_pending_list {
+                    // LIST reply: arg0 = packed lane counts. Forward to sexdisplay.
+                    bell_pending_list = false;
+                    let packed = msg.arg0 as u32;
+                    unsafe {
+                        static mut BELL_REPLY_BUDGET: u32 = 8;
+                        let b = &mut BELL_REPLY_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            let total = packed as u8;
+                            let redacted = (packed >> 8) as u8;
+                            let flags = (packed >> 16) as u8;
+                            sex_pdx::serial_println!("[silkbar.bell.poll.reply] total={} redacted={} flags={:#x}",
+                                total, redacted, flags);
+                        }
                     }
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetBellPresence as u32, 0, packed, 0,
+                    ));
+                } else {
+                    // SUBSCRIBE reply: arg0 = current generation.
+                    let gen = msg.arg0;
+                    unsafe {
+                        static mut BELL_GEN_REPLY_BUDGET: u32 = 8;
+                        let b = &mut BELL_GEN_REPLY_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            let changed = if gen != bell_gen_cached && gen != u64::MAX { 1 } else { 0 };
+                            sex_pdx::serial_println!("[silkbar.bell.gen.reply] gen={} changed={}", gen, changed);
+                        }
+                    }
+                    if gen == u64::MAX {
+                        // Denied — fall back to LIST.
+                        unsafe {
+                            static mut BELL_GEN_FALLBACK_BUDGET: u32 = 8;
+                            let b = &mut BELL_GEN_FALLBACK_BUDGET;
+                            if *b > 0 {
+                                *b -= 1;
+                                sex_pdx::serial_println!("[silkbar.bell.gen.fallback] reason=denied");
+                            }
+                        }
+                        let list_args = 0xFFu64 | (1u64 << 8);
+                        if let Ok(_) = sex_pdx::pdx_call_checked(SLOT_BELL, OP_BELL_LIST, list_args, 0, 0) {
+                            bell_pending_list = true;
+                        } else {
+                            send_update(SilkBarUpdate::new(
+                                UpdateKind::SetBellPresence as u32, 0, 0, 0,
+                            ));
+                        }
+                    } else if gen != bell_gen_cached {
+                        bell_gen_cached = gen;
+                        // Generation changed — call LIST.
+                        let list_args = 0xFFu64 | (1u64 << 8);
+                        if let Ok(_) = sex_pdx::pdx_call_checked(SLOT_BELL, OP_BELL_LIST, list_args, 0, 0) {
+                            bell_pending_list = true;
+                        }
+                    }
+                    // If gen == bell_gen_cached: no change, skip update.
                 }
-                send_update(SilkBarUpdate::new(
-                    UpdateKind::SetBellPresence as u32, 0, packed, 0,
-                ));
             } else {
                 sex_pdx::serial_println!("[pdx.opcode.unknown] silkbar type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
             }
@@ -160,34 +205,34 @@ pub extern "C" fn _start() -> ! {
         let ss = (uptime_seconds % 60) as u8;
 
         // ── Bell presence poll (every ~2 seconds) ──────────────────────────
-        // V1: SilkBar lacks SLOT_BELL grant in kernel init. Poll will return
-        // ERR_CAP_INVALID, which is handled as "Bell unavailable" (dim dot).
-        // When the grant is added, this poll will work without code changes.
-        if uptime_seconds % 2 == 0 {
-            // OP_BELL_LIST: lane_filter=0xFF (all), max_results=1 (one item to satisfy Bell validator)
-            let list_args = 0xFFu64 | (1u64 << 8); // lane_filter=0xFF, max_results=1
-            let result = sex_pdx::pdx_call_checked(SLOT_BELL, OP_BELL_LIST, list_args, 0, 0);
-            match result {
-                Ok(_val) => {
-                    // Call enqueued successfully. Reply arrives asynchronously
-                    // via pdx_try_listen_raw(0) with type_id=1, caller_pd=1.
-                }
-                Err(e) => {
-                    // Bell unavailable (no SLOT_BELL grant or Bell not running).
-                    // Send dim state: total_visible=0, redacted=0, flags=0.
-                    unsafe {
-                        static mut BELL_POLL_REJECT_BUDGET: u32 = 8;
-                        let b = &mut BELL_POLL_REJECT_BUDGET;
-                        if *b > 0 {
-                            *b -= 1;
-                            sex_pdx::serial_println!("[silkbar.bell.reject] err={:#x}", e);
-                        }
+        // V2: Poll OP_BELL_SUBSCRIBE for generation counter.
+        // If generation changed since last poll, call OP_BELL_LIST.
+        // If SUBSCRIBE fails (no cap or Bell down), fall back to LIST.
+        // Existing LIST reply handler (type_id=1, caller_pd=1) covers both paths.
+        if uptime_seconds % 2 == 0 && !bell_pending_list {
+            let result = sex_pdx::pdx_call_checked(SLOT_BELL, OP_BELL_SUBSCRIBE, 0, 0, 0);
+            if let Err(e) = result {
+                // SUBSCRIBE failed — fall back to LIST.
+                unsafe {
+                    static mut BELL_GEN_FALLBACK_BUDGET: u32 = 8;
+                    let b = &mut BELL_GEN_FALLBACK_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        sex_pdx::serial_println!("[silkbar.bell.gen.fallback] reason=cap_err err={:#x}", e);
                     }
+                }
+                let list_args = 0xFFu64 | (1u64 << 8);
+                if let Ok(_) = sex_pdx::pdx_call_checked(SLOT_BELL, OP_BELL_LIST, list_args, 0, 0) {
+                    bell_pending_list = true;
+                } else {
                     send_update(SilkBarUpdate::new(
                         UpdateKind::SetBellPresence as u32, 0, 0, 0,
                     ));
                 }
             }
+            // If Ok: SUBSCRIBE enqueued. Reply with generation arrives
+            // asynchronously via pdx_try_listen_raw(0). Handled above
+            // in the type_id=1, caller_pd=1 branch (else: SUBSCRIBE).
         }
 
         // Stage 2C: bounded internal status-chip stub (no new ABI, no floods).
