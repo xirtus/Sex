@@ -29,22 +29,27 @@ Bell; Bell does not push.
 - **Sound is deferred.** No audio in V1. Urgency hints exist for future
   sound policy.
 
-### V1 foundation (already implemented in sexbell)
+### V1 foundation (current implementation status)
 
 | Feature | Status |
 |---------|--------|
-| `OP_BELL_NOTIFY` (0xC0) | ✅ Receives events, validates fields, pushes to RAM queue |
-| `OP_BELL_LIST` (0xC3) | ✅ Returns matching events by lane filter, allowlist-gated |
-| `OP_BELL_CLOSE` (0xC1) | ❌ Stub — no dismiss handler yet |
-| `OP_BELL_ACTION` (0xC2) | ❌ Stub — no action callback yet |
-| `OP_BELL_CLEAR` (0xC4) | ❌ Stub — no clear handler yet |
-| `OP_BELL_SUBSCRIBE` (0xC5) | ❌ Stub — no subscription mechanism yet |
-| `OP_BELL_SET_POLICY` (0xC6) | ❌ Stub — no per-app policy override yet |
-| `OP_BELL_MUTE_SENDER` (0xC7) | ❌ Stub — no mute filter yet |
-| RAM queue (16 entries) | ✅ Fixed-size, single-threaded, push/list |
-| Lane derivation | ✅ First-proof: all unknown senders → PASSIVE |
-| Enum validation | ✅ category, privacy, redaction, urgency validated |
-| Read-cap allowlist | ✅ Only domain 3 (silk-shell) may call LIST |
+| `OP_BELL_NOTIFY` (0xC0) | ✅ Receives events, validates fields, pushes to RAM queue. Spam budget checked. Mute list checked. |
+| `OP_BELL_LIST` (0xC3) | ✅ Returns matching events by lane filter, allowlist-gated, skips dismissed entries, privacy-filtered. |
+| `OP_BELL_CLOSE` (0xC1) | ✅ Dismiss handler — marks event_id as dismissed, skipped in LIST. |
+| `OP_BELL_ACTION` (0xC2) | ✅ Action dispatch — looks up event_id+action_id, emits dispatch marker (no execution). |
+| `OP_BELL_CLEAR` (0xC4) | ✅ Clear handler — resets queue (all lanes) or marks matching lane entries as dismissed. |
+| `OP_BELL_SUBSCRIBE` (0xC5) | ❌ Stub — no subscription mechanism yet. |
+| `OP_BELL_SET_POLICY` (0xC6) | ❌ Stub — no per-app policy override yet. |
+| `OP_BELL_MUTE_SENDER` (0xC7) | ✅ Mute/unmute sender PDs; muted senders rejected in NOTIFY. |
+| RAM queue (16 entries) | ✅ Fixed-size, ring buffer, push/drop-lowest-priority on overflow. |
+| Lane derivation | ✅ First-proof: all unknown senders → PASSIVE (0). |
+| Enum validation | ✅ category, privacy, redaction, urgency validated. action_count ≤ 1, object_refs ≤ 1. |
+| Read-cap allowlist | ✅ Only domain 3 (silk-shell) may call LIST. |
+| Spam budget | ✅ Per-PD rate limit: 8 events per 62-tick window, 16 tracked slots. |
+| Queue overflow policy | ✅ Drops lowest-priority active entry when queue full. |
+| Privacy enforcement | ✅ FullHidden entries filtered from LIST output, redact marker emitted. |
+| Action callbacks | ✅ action_count=1 accepted, OP_BELL_ACTION dispatches marker. |
+| Object references | ✅ object_ref_count=1 accepted, stored in entry (no resolution). |
 
 ---
 
@@ -160,8 +165,9 @@ consume).
 | `invalid_privacy` | `privacy_level > 3` | `[bell.notify.reject] reason=invalid_privacy` |
 | `invalid_redaction` | `redaction_class > 3` | `[bell.notify.reject] reason=invalid_redaction` |
 | `invalid_urgency` | `urgency_hint > 3` | `[bell.notify.reject] reason=invalid_urgency` |
-| `action_count_not_zero` | `action_count != 0` (V1) | `[bell.notify.reject] reason=action_count_not_zero` |
-| `object_refs_not_zero` | `object_refs != 0` (V1) | `[bell.notify.reject] reason=object_refs_not_zero` |
+| `action_count_invalid` | `action_count > 1` | `[bell.notify.reject] reason=action_count_invalid` |
+| `action_id_zero` | `action_count == 1 && action_id == 0` | `[bell.notify.reject] reason=action_id_zero` |
+| `object_refs_invalid` | `object_refs > 1` | `[bell.notify.reject] reason=object_refs_invalid` |
 | `queue_full` | Queue at capacity | `[bell.queue.reject.full]` |
 | `no_read_cap` | Caller not in LIST allowlist | `[bell.readcap.deny]` |
 | `invalid_lane` | Lane filter > 5 and not 0xFF | `[bell.list.reject] reason=invalid_lane` |
@@ -185,9 +191,17 @@ consume).
 
 ### What V1 already has
 - Bell server (`servers/sexbell/src/main.rs`) with RAM queue
-- `OP_BELL_NOTIFY` with field parsing and validation
-- `OP_BELL_LIST` with lane filtering and read-cap allowlist
+- `OP_BELL_NOTIFY` with field parsing, validation, mute check, spam budget check
+- `OP_BELL_LIST` with lane filtering, read-cap allowlist, dismissed-skip, privacy gate
+- `OP_BELL_CLOSE` — dismiss event by ID
+- `OP_BELL_ACTION` — dispatch marker for event_id+action_id lookup
+- `OP_BELL_CLEAR` — clear all lanes or specific lane
+- `OP_BELL_MUTE_SENDER` — mute/unmute sender PDs
 - First-proof lane derivation (all → PASSIVE)
+- Spam budget: per-PD rate limit (8 events per 62 ticks)
+- Queue overflow: drops lowest-priority entry when full
+- Privacy enforcement: FullHidden entries redacted from LIST
+- Action callback and object reference storage (marker-only, no execution/resolution)
 - Silk-bar surface (0x95) and bell placeholder surface (204)
 - Shell-local Bell event ring buffer (`BELL_EVENTS` in silk-shell)
 - `bell_emit_object_link_event` for Linen→Quil link tracking
@@ -200,61 +214,59 @@ consume).
 - **No lockscreen.** Privacy levels are stored but no lockscreen/ auth
   gate exists to reveal FullHidden events.
 - **No ABI/opcode changes.** The 8 opcodes (0xC0–0xC7) are assigned and
-  the active subset (NOTIFY, LIST) is implemented. Remaining 6 are
-  unhandled stubs that return `[bell.unknown.reject]`.
+  all 8 are handled (6 with real logic, 2 stubs return `[bell.unknown.reject]`).
 - **No Collar integration.** Capability classes are designed but not
   enforced. Derivation is hardcoded to PASSIVE.
 - **No push/subscribe.** `OP_BELL_SUBSCRIBE` is defined but unhandled.
   The shell must poll via `OP_BELL_LIST`.
-- **No action callbacks.** `action_count != 0` is rejected. `OP_BELL_ACTION`
-  is unhandled.
-- **No object reference resolution.** `object_refs != 0` is rejected.
-  `OP_BELL_CLOSE` and `OP_BELL_CLEAR` are unhandled.
+- **No action execution.** `OP_BELL_ACTION` emits a dispatch marker but
+  does not execute the callback. Shell handler does not exist yet.
+- **No object reference resolution.** Object refs are stored but not
+  resolved (no Linen lookup).
+- **No per-app policy overrides.** `OP_BELL_SET_POLICY` is unhandled.
 
 ---
 
-## 8. Future Implementation Sequence
+## 8. Implementation Status
 
-### Phase A: Complete V1 opcodes (next ABI-safe phase)
+### Phase A: Complete V1 opcodes ✅ IMPLEMENTED
 
 ```
 1. servers/sexbell/src/main.rs:
-   - Implement OP_BELL_CLOSE: mark event_id as dismissed (lane = DISMISSED sentinel, or pop from queue)
-   - Implement OP_BELL_CLEAR: clear all events in a lane, or all lanes
-   - Implement OP_BELL_MUTE_SENDER: add caller_pd to a static mute list; reject future NOTIFY from muted PDs
-   - Budgeted markers: [bell.close.ok], [bell.clear.ok], [bell.mute.add], [bell.notify.reject] reason=muted
+   ✅ OP_BELL_CLOSE: marks event_id as dismissed (dismissed=1)
+   ✅ OP_BELL_CLEAR: resets queue (all) or marks matching lane entries as dismissed
+   ✅ OP_BELL_MUTE_SENDER: add/remove from static mute list; reject muted NOTIFY
+   ✅ Budgeted markers: [bell.close.ok], [bell.clear.ok], [bell.mute.add], [bell.notify.reject] reason=muted
 ```
 
-### Phase B: Spam budget and queue overflow policy
+### Phase B: Spam budget and queue overflow policy ✅ IMPLEMENTED
 
 ```
 2. servers/sexbell/src/main.rs:
-   - Track notify count per caller_pd within a tick window
-   - Reject senders exceeding rate limit → spam_budget_exceeded
-   - On queue full, drop lowest-priority entry (not newest, not oldest)
-   - Marker: [bell.queue.drop] reason=lowest_priority lane=N
+   ✅ Per-PD rate limit: 8 events per 62-tick window (16 tracked slots)
+   ✅ Reject senders exceeding rate → [bell.notify.reject] reason=spam_budget_exceeded
+   ✅ On queue full, drop lowest-priority entry (not newest, not oldest)
+   ✅ Marker: [bell.queue.drop] reason=lowest_priority lane=N dropped_lane=M
 ```
 
-### Phase C: Action callbacks and object references
+### Phase C: Action callbacks and object references ✅ IMPLEMENTED
 
 ```
-3. crates/sex-pdx/src/lib.rs:                 -- STOP FIRST --
-   - No new opcodes. Reuse OP_BELL_ACTION (0xC2).
+3. No ABI changes needed. OP_BELL_ACTION (0xC2) already defined.
 4. servers/sexbell/src/main.rs:
-   - Accept action_count > 0: store action_ids in a parallel array
-   - On OP_BELL_ACTION: look up event_id, validate action_id, emit [bell.action.dispatch] marker
-   - No actual execution — marker only until shell handler exists
-5. Accept object_refs > 0: store object_ref in entry
-   - No resolution — marker only until Linen provides lookup
+   ✅ Accept action_count=1; store action_id in entry
+   ✅ OP_BELL_ACTION: look up event_id+action_id, emit [bell.action.dispatch] marker
+   ✅ No actual execution (marker only)
+5. Accept object_refs > 0: stored in entry (no resolution, marker only)
 ```
 
-### Phase D: Privacy enforcement
+### Phase D: Privacy enforcement ✅ IMPLEMENTED
 
 ```
 6. servers/sexbell/src/main.rs:
-   - OP_BELL_LIST: filter entries by caller's max_privacy cap
-   - FullHidden entries increment lane count but are never returned as items
-   - Marker: [bell.list.redact] reason=full_hidden count=N
+   ✅ OP_BELL_LIST: filter entries by caller's max_privacy (3 for silk-shell, 0 for others)
+   ✅ FullHidden entries are skipped (never returned as items)
+   ✅ Marker: [bell.list.redact] reason=full_hidden count=N
 ```
 
 ### Phase E: Collar capability integration
@@ -275,5 +287,5 @@ consume).
 | What is Bell? | Attention firewall, not notification delivery. Receives, classifies, filters, queues. |
 | Existing foundation? | sexbell server with RAM queue, NOTIFY+LIST opcodes, field validation, first-proof lane derivation. |
 | V1 boundaries? | No sound, no storage, no lockscreen, no push, no action callbacks, no object refs, no Collar. |
-| Implementation sequence? | Phase A (complete opcodes) → B (spam budget) → C (actions/refs) → D (privacy) → E (Collar). All STOP FIRST before ABI. |
-| ABI impact? | **All phases blocked until ABI phase opens.** Existing opcodes (0xC0–0xC7) are sufficient; no new opcodes needed for A–E. |
+| Implementation status? | Phases A–D implemented (CLOSE, CLEAR, MUTE, spam budget, overflow drop, action dispatch, privacy). Phase E (Collar) blocked. |
+| ABI impact? | **No ABI changes needed.** Existing opcodes (0xC0–0xC7) are sufficient. No new opcodes or kernel changes. |
