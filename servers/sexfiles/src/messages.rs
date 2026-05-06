@@ -38,6 +38,23 @@ pub const OP_RAMFS_LIST: u64 = 0x34;
 /// Returns: packed { size: u32, name_len: u32 } or error code (negative).
 pub const OP_RAMFS_STAT: u64 = 0x35;
 
+/// Opcode: Create a file with an explicit owner PD (proxy create for Linen bridge).
+/// arg0 = name bytes 0..7  (little-endian u64)
+/// arg1 = name bytes 8..15 (little-endian u64)
+/// arg2 = name bytes 16..23 (lower 24 bits) | (owner_pd << 32)
+/// Always creates (O_CREATE implicit). Fails with ERR_NOT_FOUND if exists.
+/// Returns: file handle (u64) on success, error code (negative) on failure.
+pub const OP_RAMFS_CREATE_OWNER: u64 = 0x36;
+
+/// Opcode: Return the global RamFS object_id for an open handle.
+/// arg0 = handle
+/// arg1 = 0 (reserved)
+/// arg2 = 0 (reserved)
+/// Returns: object_id (u64, ≥1) on success, error code (negative) on failure.
+/// Closes the OQ5 namespace gap: callers obtain a SexFiles-assigned ID, not
+/// a client-local ID.
+pub const OP_RAMFS_OBJECT_ID: u64 = 0x37;
+
 // ── Error constants ──
 pub const ERR_INVALID_HANDLE: i64 = -1;
 pub const ERR_NAME_TOO_LONG: i64 = -2;

@@ -31,6 +31,17 @@ pub trait FsBackend: Send + Sync {
 
     /// Total number of open files owned by caller_pd (or all if caller_pd == 0).
     fn len(&self, caller_pd: u32) -> usize;
+
+    /// Create a file with an explicit owner PD (proxy-create for metadata bridges).
+    /// `caller_pd` must be 0 (server-internal) or match the existing ACL gate.
+    /// The file is created with `owner_pd` as the recorded owner.
+    /// Always creates (O_CREATE implicit). Fails if name already exists.
+    fn create_with_owner(
+        &self,
+        name: &[u8],
+        owner_pd: u32,
+        caller_pd: u32,
+    ) -> Result<u64, i64>;
 }
 
 pub mod ramfs;

@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 sex-pdx = { path = "../../crates/sex-pdx" }
+sex-object-model = { path = "../../crates/sex-object-model" }

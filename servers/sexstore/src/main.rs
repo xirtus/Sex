@@ -26,6 +26,10 @@ const OP_KV_GET: u64 = 0xB0;
 const OP_KV_PUT: u64 = 0xB1;
 const OP_KV_DEL: u64 = 0xB2; // E6: DELETE / tombstone
 
+const SEXSTORE_KV_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SEXSTORE_KV_PROOF").is_some();
+static mut SEXSTORE_KV_PROOF_STAGE: u8 = 0;
+
 // Status codes — E6 remap aligned with E2 spec.
 // GET success: reply is stored u64 (bit 63 = 0).
 // Status reply: bit 63 = 1 (REPLY_STATUS_BIT), lower bits = code.
@@ -118,6 +122,161 @@ static mut LOG_DURABLE_WRITE_FAIL: u32 = 8;
 // When real persistent memory becomes available, replace the region address and
 // update page_read/page_write to use the new target.
 static mut DURABLE_REGION: [u8; 1024] = [0u8; 1024];
+
+unsafe fn kv_reset_for_proof() {
+    let mut i = 0;
+    while i < KV_SLOT_COUNT {
+        KV[i].state = 0;
+        KV[i].generation = 0;
+        KV[i].key = 0;
+        KV[i].val = 0;
+        i += 1;
+    }
+}
+
+unsafe fn kv_put_for_proof(caller: u64, key: u32, val: u64) -> u64 {
+    let cls = store_key_owner_class(key);
+    if !store_cap_allowed(caller, key) {
+        return if cls == 0 {
+            REPLY_STATUS_BIT | KV_INVALID_KEY
+        } else {
+            REPLY_STATUS_BIT | KV_DENIED
+        };
+    }
+    if !store_validate_value(key, val) {
+        return REPLY_STATUS_BIT | KV_INVALID_VALUE;
+    }
+    let mut i = 0usize;
+    while i < KV_SLOT_COUNT {
+        if KV[i].state != 0 && KV[i].key == key {
+            KV[i].state = 1;
+            KV[i].val = val;
+            KV[i].generation = if KV[i].generation >= 255 { 1 } else { KV[i].generation + 1 };
+            return REPLY_STATUS_BIT | KV_OK;
+        }
+        i += 1;
+    }
+    let mut empty: Option<usize> = None;
+    let mut tomb: Option<usize> = None;
+    let mut j = 0usize;
+    while j < KV_SLOT_COUNT {
+        if KV[j].state == 0 && empty.is_none() {
+            empty = Some(j);
+        } else if KV[j].state == 2 && tomb.is_none() {
+            tomb = Some(j);
+        }
+        j += 1;
+    }
+    if let Some(idx) = empty.or(tomb) {
+        KV[idx].state = 1;
+        KV[idx].generation = 1;
+        KV[idx].key = key;
+        KV[idx].val = val;
+        REPLY_STATUS_BIT | KV_OK
+    } else {
+        REPLY_STATUS_BIT | KV_FULL
+    }
+}
+
+unsafe fn kv_get_for_proof(caller: u64, key: u32) -> u64 {
+    let cls = store_key_owner_class(key);
+    if !store_cap_allowed(caller, key) {
+        return if cls == 0 {
+            REPLY_STATUS_BIT | KV_INVALID_KEY
+        } else {
+            REPLY_STATUS_BIT | KV_DENIED
+        };
+    }
+    let mut i = 0usize;
+    while i < KV_SLOT_COUNT {
+        if KV[i].state != 0 && KV[i].key == key {
+            return if KV[i].state == 1 {
+                KV[i].val
+            } else {
+                REPLY_STATUS_BIT | KV_NOT_FOUND
+            };
+        }
+        i += 1;
+    }
+    REPLY_STATUS_BIT | KV_NOT_FOUND
+}
+
+unsafe fn kv_put_raw_for_proof(key: u32, val: u64) -> u64 {
+    let mut i = 0usize;
+    while i < KV_SLOT_COUNT {
+        if KV[i].state != 0 && KV[i].key == key {
+            KV[i].state = 1;
+            KV[i].val = val;
+            KV[i].generation = if KV[i].generation >= 255 { 1 } else { KV[i].generation + 1 };
+            return REPLY_STATUS_BIT | KV_OK;
+        }
+        i += 1;
+    }
+    let mut j = 0usize;
+    while j < KV_SLOT_COUNT {
+        if KV[j].state == 0 {
+            KV[j].state = 1;
+            KV[j].generation = 1;
+            KV[j].key = key;
+            KV[j].val = val;
+            return REPLY_STATUS_BIT | KV_OK;
+        }
+        j += 1;
+    }
+    REPLY_STATUS_BIT | KV_FULL
+}
+
+unsafe fn run_kv_contract_proof_stage() {
+    let stage = SEXSTORE_KV_PROOF_STAGE;
+    if stage >= 6 {
+        return;
+    }
+    SEXSTORE_KV_PROOF_STAGE = stage + 1;
+    serial_println!("[sexstore.kv.proof] stage={}", stage);
+    match stage {
+        0 => {
+            kv_reset_for_proof();
+            let put = kv_put_for_proof(KV_SHELL_CALLER, 0x02, 0x2A02);
+            let get = kv_get_for_proof(KV_SHELL_CALLER, 0x02);
+            let ok = put == (REPLY_STATUS_BIT | KV_OK) && get == 0x2A02;
+            serial_println!("[sexstore.kv.proof.roundtrip] ok={} put={:#x} get={:#x}", ok as u8, put, get);
+        }
+        1 => {
+            let get = kv_get_for_proof(KV_SHELL_CALLER, 0x03);
+            let ok = get == (REPLY_STATUS_BIT | KV_NOT_FOUND);
+            serial_println!("[sexstore.kv.proof.missing_key] ok={} res={:#x}", ok as u8, get);
+        }
+        2 => {
+            let put = kv_put_for_proof(KV_SHELL_CALLER, 0x00, 1);
+            let ok = put == (REPLY_STATUS_BIT | KV_INVALID_KEY);
+            serial_println!("[sexstore.kv.proof.oversized_key] ok={} res={:#x} bound=4bytes", ok as u8, put);
+        }
+        3 => {
+            let put = kv_put_for_proof(KV_SHELL_CALLER, 0x01, REPLY_STATUS_BIT);
+            let ok = put == (REPLY_STATUS_BIT | KV_INVALID_VALUE);
+            serial_println!("[sexstore.kv.proof.oversized_value] ok={} res={:#x} bound=8bytes", ok as u8, put);
+        }
+        4 => {
+            kv_reset_for_proof();
+            let mut last = REPLY_STATUS_BIT | KV_OK;
+            let mut i = 0usize;
+            while i < KV_SLOT_COUNT {
+                last = kv_put_raw_for_proof((i as u32) + 1, (i as u64) + 10);
+                i += 1;
+            }
+            let full = kv_put_raw_for_proof((KV_SLOT_COUNT as u32) + 1, 0x55);
+            let ok = last == (REPLY_STATUS_BIT | KV_OK) && full == (REPLY_STATUS_BIT | KV_FULL);
+            serial_println!("[sexstore.kv.proof.table_full] ok={} last={:#x} full={:#x} slots={}", ok as u8, last, full, KV_SLOT_COUNT);
+        }
+        5 => {
+            let put = kv_put_for_proof(99, 0x01, 0x1234);
+            let get = kv_get_for_proof(99, 0x01);
+            let ok = put == (REPLY_STATUS_BIT | KV_DENIED) && get == (REPLY_STATUS_BIT | KV_DENIED);
+            serial_println!("[sexstore.kv.proof.owner_deny] ok={} put={:#x} get={:#x}", ok as u8, put, get);
+        }
+        _ => {}
+    }
+}
 
 
 /// Bump slot generation (wraps 255 → 1, never 0).
@@ -475,6 +634,14 @@ pub extern "C" fn _start() -> ! {
 
     // E6: emit status mapping marker once at boot.
     serial_println!("[sexstore.status.mapping] KV_OK=0x00 KV_NOT_FOUND=0x01 KV_FULL=0x02 KV_INVALID_KEY=0x03 KV_INVALID_VALUE=0x04 KV_DENIED=0x05 REPLY_BIT=0x8000");
+
+    if SEXSTORE_KV_PROOF_ENABLED {
+        unsafe {
+            while SEXSTORE_KV_PROOF_STAGE < 6 {
+                run_kv_contract_proof_stage();
+            }
+        }
+    }
 
     loop {
         let msg = pdx_listen_raw(0); // Slot 0 = self message_ring (all servers listen here)

@@ -23,7 +23,9 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
         // ── OP_RAMFS_OPEN ──
         // arg0 = name[0..7], arg1 = name[8..15], arg2 = name[16..23] | (flags << 24)
         messages::OP_RAMFS_OPEN => {
-            let name_bytes = unpack_name(arg0, arg1, arg2);
+            // Mask flag byte (bits 24-31) from name portion per protocol spec:
+            //   arg2 = name[16..23] | (flags << 24)
+            let name_bytes = unpack_name(arg0, arg1, arg2 & !(0xFFu64 << 24));
             let flags = (arg2 >> 24) as u32;
             match backend.open(&name_bytes, flags, 0, caller_pd) {
                 Ok(handle) => handle,
@@ -85,6 +87,33 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
                     (handle << 32) | (name_len as u64)
                 }
                 None => 0,
+            }
+        }
+
+        // ── OP_RAMFS_CREATE_OWNER ──
+        // arg0 = name bytes 0..7
+        // arg1 = name bytes 8..15
+        // arg2 = name bytes 16..23 (lower 24 bits) | (owner_pd << 32)
+        messages::OP_RAMFS_CREATE_OWNER => {
+            let name_bytes =
+                unpack_name(arg0, arg1, arg2 & !(0xFFFF_FFFFu64 << 32));
+            let owner_pd = (arg2 >> 32) as u32;
+            match backend.create_with_owner(&name_bytes, owner_pd, caller_pd) {
+                Ok(handle) => handle,
+                Err(e) => e as u64,
+            }
+        }
+
+        // ── OP_RAMFS_OBJECT_ID ──
+        // arg0 = handle
+        // Returns: RamFS-assigned object_id (≥1) for the open handle.
+        // Caller must own the file (or caller_pd=0 for server-internal).
+        // Use to resolve OQ5: obtain SexFiles-assigned global ID from a handle.
+        messages::OP_RAMFS_OBJECT_ID => {
+            let handle = arg0;
+            match RAMFS.object_id_for_handle(handle, caller_pd) {
+                Ok(id) => id,
+                Err(e) => e as u64,
             }
         }
 

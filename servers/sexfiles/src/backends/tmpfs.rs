@@ -33,4 +33,13 @@ impl FsBackend for TmpFs {
     fn len(&self, _caller_pd: u32) -> usize {
         0
     }
+
+    fn create_with_owner(
+        &self,
+        _name: &[u8],
+        _owner_pd: u32,
+        _caller_pd: u32,
+    ) -> Result<u64, i64> {
+        Err(messages::ERR_NOT_FOUND)
+    }
 }

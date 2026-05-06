@@ -125,6 +125,7 @@ action = "cargo_manifest"
 manifest = "servers/quil/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/quil"
 dest_artifact = "iso_root/servers/quil"
+rustflags = "--cfg sexfiles_quil_persistence_proof"
 
 [[stage]]
 id = "build_sexstore"

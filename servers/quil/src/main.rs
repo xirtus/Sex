@@ -348,9 +348,46 @@ fn decode_palette_key(scancode: u64) -> u8 {
     }
 }
 
+// ── Synchronous PDX Call Wrapper ──────────────────────────────────────────────
+//
+// inter-PD pdx_call is fire-and-forget (kernel ipc::traverse_edge AsyncEnqueue
+// returns Ok(0u64) always). The server reply lands in the incoming_replies queue
+// and surfaces via pdx_listen_raw(0) as type_id=0x1 with arg0=reply_value.
+// This wrapper sends the call then blocks for the matching reply.
+//
+// During boot proof (before the main input loop starts), no HID events or pings
+// will interfere with the reply channel.
+fn pdx_call_and_reply(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> (u64, u64) {
+    let (status, _) = pdx_call(slot, opcode, arg0, arg1, arg2);
+    if status != 0 {
+        return (status, 0);
+    }
+    // Spin for the reply (server processes and calls pdx_reply).
+    loop {
+        let msg = pdx_listen_raw(0);
+        if msg.type_id == 0x1 {
+            return (0, msg.arg0);
+        }
+        // Non-reply message before reply arrived — log and keep waiting.
+        serial_println!("[quil.sync.skip] type_id={:#x}", msg.type_id);
+    }
+}
+
+/// Like pdx_call_and_reply but returns a Result for ergonomic error handling.
+fn pdx_storage_call(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64, i64> {
+    let (status, value) = pdx_call_and_reply(SLOT_STORAGE, opcode, arg0, arg1, arg2);
+    if status != 0 {
+        return Err(status as i64);
+    }
+    if (value as i64) < 0 {
+        return Err(value as i64);
+    }
+    Ok(value)
+}
+
 // ── RamFS Save/Load Helpers ──────────────────────────────────────────────────
 //
-// All operations use PDX calls to SLOT_STORAGE (sexfiles RamFS backend).
+// All operations use pdx_storage_call (synchronous wrapper around SLOT_STORAGE).
 // Protocol per SEXFILES_RAMFS_CONTRACT_LOCK_V1.
 // Name: QUIL_DOC_NAME (≤ 24 bytes). Write/read 8 bytes per call.
 
@@ -391,19 +428,11 @@ fn quil_save() -> Result<(), i64> {
         let (n0, n1) = pack_name(QUIL_DOC_NAME);
         let flags_arg = (RAMFS_O_CREATE as u64) << 24;
 
-        // Open (create if not exists)
-        let (status, value) = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, n0, n1, flags_arg);
-        if status != 0 {
-            serial_println!("[quil.save.fail] open status={}", status);
-            return Err(status as i64);
-        }
-        if (value as i64) < 0 {
-            serial_println!("[quil.save.fail] open error={}", value as i64);
-            return Err(value as i64);
-        }
-        let handle = value;
+        // Open (create if not exists) — sync reply
+        let handle = pdx_storage_call(OP_RAMFS_OPEN, n0, n1, flags_arg)
+            .map_err(|e| { serial_println!("[quil.save.fail] open error={}", e); e })?;
 
-        // Write in 8-byte chunks
+        // Write in 8-byte chunks — sync reply
         let chunks = (buf_len + 7) / 8;
         for chunk in 0..chunks {
             let offset = chunk * 8;
@@ -413,25 +442,17 @@ fn quil_save() -> Result<(), i64> {
                     data |= (QUIL_BUFFER[offset + i] as u64) << (i * 8);
                 }
             }
-            let (status, value) = pdx_call(SLOT_STORAGE, OP_RAMFS_WRITE, handle, offset as u64, data);
-            if status != 0 {
-                serial_println!("[quil.save.fail] write offset={} status={}", offset, status);
-                let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
-                return Err(status as i64);
-            }
-            if (value as i64) < 0 {
-                serial_println!("[quil.save.fail] write offset={} error={}", offset, value as i64);
-                let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
-                return Err(value as i64);
-            }
+            pdx_storage_call(OP_RAMFS_WRITE, handle, offset as u64, data)
+                .map_err(|e| {
+                    serial_println!("[quil.save.fail] write offset={} error={}", offset, e);
+                    let _ = pdx_storage_call(OP_RAMFS_CLOSE, handle, 0, 0);
+                    e
+                })?;
         }
 
-        // Close
-        let (status, value) = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
-        if status != 0 || (value as i64) < 0 {
-            serial_println!("[quil.save.fail] close error={}", value as i64);
-            return Err((value as i64).min(status as i64));
-        }
+        // Close — sync reply
+        pdx_storage_call(OP_RAMFS_CLOSE, handle, 0, 0)
+            .map_err(|e| { serial_println!("[quil.save.fail] close error={}", e); e })?;
 
         serial_println!("[quil.save.ok] bytes={}", buf_len);
         Ok(())
@@ -443,85 +464,67 @@ fn quil_save() -> Result<(), i64> {
 fn quil_load() -> Result<(), i64> {
     let (n0, n1) = pack_name(QUIL_DOC_NAME);
 
-    // Open (no O_CREATE — file must already exist)
-    let (status, value) = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, n0, n1, 0);
-    if status != 0 {
-        serial_println!("[quil.load.fail] open status={}", status);
-        return Err(status as i64);
-    }
-    if (value as i64) < 0 {
-        serial_println!("[quil.load.fail] open error={}", value as i64);
-        return Err(value as i64);
-    }
-    let handle = value;
+    // Open (no O_CREATE — file must already exist) — sync reply
+    let handle = pdx_storage_call(OP_RAMFS_OPEN, n0, n1, 0)
+        .map_err(|e| { serial_println!("[quil.load.fail] open error={}", e); e })?;
 
     // Read in 8-byte chunks up to QUIL_BUFFER_MAX_LEN
     let mut total_read = 0usize;
-    let mut buf = [0u8; 8];
-    // Packed read data from RamFS — use Result to handle error codes
     loop {
-        let (status, value) = pdx_call(SLOT_STORAGE, OP_RAMFS_READ, handle, total_read as u64, 8);
-        if status != 0 {
-            serial_println!("[quil.load.fail] read offset={} status={}", total_read, status);
-            let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
-            return Err(status as i64);
+        let raw = pdx_storage_call(OP_RAMFS_READ, handle, total_read as u64, 8)
+            .map_err(|e| {
+                serial_println!("[quil.load.fail] read offset={} error={}", total_read, e);
+                let _ = pdx_storage_call(OP_RAMFS_CLOSE, handle, 0, 0);
+                e
+            })?;
+
+        // Unpack data (8 bytes from reply u64)
+        let mut buf = [0u8; 8];
+        for i in 0..8 {
+            buf[i] = ((raw >> (i * 8)) & 0xFF) as u8;
         }
-        // value < 0 as i64 means server error (never valid packed data for our ASCII content)
-        if (value as i64) < 0 {
-            serial_println!("[quil.load.fail] read offset={} error={}", total_read, value as i64);
-            let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
-            return Err(value as i64);
-        }
-        // Unpack data
-        let bytes_avail = 8usize;
-        for i in 0..bytes_avail {
-            buf[i] = ((value >> (i * 8)) & 0xFF) as u8;
-        }
-        // If all 8 bytes are zero, assume end (our ASCII content has no null bytes,
-        // but RamFS may pad with zeros). Check first byte only for EOF detection.
+
+        // If first chunk is all zeros, file is empty
         if total_read == 0 && buf[0] == 0 {
-            // Empty file
             unsafe { QUIL_BUFFER_LEN = 0; }
-            let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
+            let _ = pdx_storage_call(OP_RAMFS_CLOSE, handle, 0, 0);
             serial_println!("[quil.load.empty]");
             return Ok(());
         }
-        // Find actual data length in this chunk (anything non-zero or stop at zeros)
+
+        // Find actual data length in this chunk
         let mut chunk_len = 0usize;
         for i in 0..8 {
             if buf[i] != 0 {
                 chunk_len = i + 1;
-            } else if total_read + i >= total_read {
-                // Stop at first zero in trailing bytes
-                break;
+            } else {
+                break; // Stop at first trailing zero
             }
         }
         if chunk_len == 0 {
             break; // All zeros — end of file
         }
+
         // Bound check
         if total_read + chunk_len > QUIL_BUFFER_MAX_LEN {
             serial_println!("[quil.load.reject] reason=overflow max={}", QUIL_BUFFER_MAX_LEN);
-            let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
-            return Err(-4); // ERR_OVERFLOW
+            let _ = pdx_storage_call(OP_RAMFS_CLOSE, handle, 0, 0);
+            return Err(-4);
         }
+
         // Copy into buffer
         unsafe {
             QUIL_BUFFER[total_read..total_read + chunk_len].copy_from_slice(&buf[..chunk_len]);
         }
         total_read += chunk_len;
 
-        // Stop if we read less than 8 bytes (short read = last chunk)
         if chunk_len < 8 {
-            break;
+            break; // Short read = last chunk
         }
     }
 
     // Close
-    let (status, _) = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
-    if status != 0 {
-        serial_println!("[quil.load.warn] close status={}", status);
-    }
+    let _ = pdx_storage_call(OP_RAMFS_CLOSE, handle, 0, 0);
 
     unsafe {
         QUIL_BUFFER_LEN = total_read;
@@ -582,39 +585,86 @@ pub extern "C" fn _start() -> ! {
     draw_palette(selected_row);
     serial_println!("[quil.boot.draw.ok]");
 
-    // ── Boot-time save/load proof ─────────────────────────────────────────
-    // Save initial buffer to RamFS, then load and verify roundtrip.
-    serial_println!("[quil.save_load.proof.start]");
-    if let Err(e) = quil_save() {
-        serial_println!("[quil.save_load.proof.save_fail] error={}", e);
-    } else {
-        serial_println!("[quil.save_load.proof.save_ok]");
-        // Clear buffer, then load back
-        unsafe {
-            QUIL_BUFFER_LEN = 0;
-        }
-        if let Err(e) = quil_load() {
-            serial_println!("[quil.save_load.proof.load_fail] error={}", e);
-        } else {
-            // Verify roundtrip
-            unsafe {
-                let loaded = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
-                let orig = QUIL_TEXT_INIT;
-                let match_len = loaded.len().min(orig.len());
-                let mut mismatch = false;
-                for i in 0..match_len {
-                    if loaded[i] != orig[i] {
-                        mismatch = true;
-                        serial_println!("[quil.save_load.proof.mismatch] offset={} expected={:#02x} got={:#02x}",
-                            i, orig[i], loaded[i]);
-                        break;
+    // ── Boot-time sexfiles persistence proof ──────────────────────────────
+    // SEXFILES_QUIL_REBOOT_PERSISTENCE_PROOF_V1
+    // Proves: open, write, read, match, deny.
+    // Replay_match not yet available (disk persistence blocker — see handoff).
+    const PERSISTENCE_PROOF_ENABLED: bool =
+        cfg!(sexfiles_quil_persistence_proof);
+
+    if PERSISTENCE_PROOF_ENABLED {
+        serial_println!("[quil.sexfiles.proof.start]");
+
+        // ── Proof A: Save ──
+        serial_println!("[quil.sexfiles.proof.open]");
+        match quil_save() {
+            Err(e) => serial_println!("[quil.sexfiles.proof.save_fail] error={}", e),
+            Ok(()) => {
+                serial_println!("[quil.sexfiles.proof.write] ok");
+
+                // Clear buffer, then load back
+                unsafe { QUIL_BUFFER_LEN = 0; }
+
+                // ── Proof B: Load ──
+                match quil_load() {
+                    Err(e) => serial_println!("[quil.sexfiles.proof.load_fail] error={}", e),
+                    Ok(()) => {
+                        serial_println!("[quil.sexfiles.proof.read] ok");
+
+                        // ── Proof C: Roundtrip match ──
+                        unsafe {
+                            let loaded = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+                            let orig = QUIL_TEXT_INIT;
+                            if loaded.len() == orig.len() && loaded == orig {
+                                serial_println!("[quil.sexfiles.proof.match] {} bytes", loaded.len());
+                            } else {
+                                serial_println!("[quil.sexfiles.proof.mismatch] loaded={} orig={}",
+                                    loaded.len(), orig.len());
+                            }
+                        }
                     }
                 }
-                if !mismatch && loaded.len() == orig.len() {
-                    serial_println!("[quil.save_load.proof.ok] roundtrip verified bytes={}", loaded.len());
-                } else {
-                    serial_println!("[quil.save_load.proof.fail] roundtrip length mismatch loaded={} orig={}",
-                        loaded.len(), orig.len());
+            }
+        }
+
+        // ── Proof D: Deny — invalid handle must be rejected ──
+        let deny_result = pdx_storage_call(OP_RAMFS_READ, 0xDEAD_BEEF, 0, 8);
+        match deny_result {
+            Err(e) if e == -1 => {
+                serial_println!("[quil.sexfiles.proof.deny] invalid_handle error={}", e);
+            }
+            Err(e) => {
+                serial_println!("[quil.sexfiles.proof.deny] unexpected_error={}", e);
+            }
+            Ok(_) => {
+                serial_println!("[quil.sexfiles.proof.deny] FAIL expected ERR_INVALID_HANDLE");
+            }
+        }
+
+        // No replay_match: disk persistence / journal replay not yet implemented.
+        // See docs/handoff/SEXFILES_QUIL_REBOOT_PERSISTENCE_PROOF_V1.md
+
+        serial_println!("[quil.sexfiles.proof.done]");
+    } else {
+        // Legacy save/load proof (non-gated, best-effort)
+        serial_println!("[quil.save_load.proof.start]");
+        if let Err(e) = quil_save() {
+            serial_println!("[quil.save_load.proof.save_fail] error={}", e);
+        } else {
+            serial_println!("[quil.save_load.proof.save_ok]");
+            unsafe { QUIL_BUFFER_LEN = 0; }
+            if let Err(e) = quil_load() {
+                serial_println!("[quil.save_load.proof.load_fail] error={}", e);
+            } else {
+                unsafe {
+                    let loaded = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+                    let orig = QUIL_TEXT_INIT;
+                    if loaded.len() == orig.len() && loaded == orig {
+                        serial_println!("[quil.save_load.proof.ok] roundtrip verified bytes={}", loaded.len());
+                    } else {
+                        serial_println!("[quil.save_load.proof.fail] roundtrip length mismatch loaded={} orig={}",
+                            loaded.len(), orig.len());
+                    }
                 }
             }
         }

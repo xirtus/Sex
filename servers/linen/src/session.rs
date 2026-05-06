@@ -38,6 +38,15 @@ pub struct LinenObject {
     /// Optional SexFiles/RamFS handle (0 = unlinked).
     /// Set when a RamFS file is created for this object's content.
     pub ramfs_handle: u64,
+    /// Global SexFiles-assigned object_id (0 = not yet bound).
+    /// Obtained via OP_RAMFS_OBJECT_ID after create. Authoritative for
+    /// SexObjectRef — NOT the same as the Linen-local object_id above.
+    pub sexfiles_object_id: u64,
+    /// Metadata generation. Incremented on each metadata update.
+    /// Synced with SexFiles object record generation.
+    pub generation: u64,
+    /// Flags byte. Bit 0 = persisted (1 if backed by SexFiles).
+    pub flags: u8,
 }
 
 /// Session manager: fixed-size, no-heap object table.
@@ -95,6 +104,9 @@ impl Session {
             name: name_buf,
             name_len: name.len() as u8,
             ramfs_handle: 0,
+            sexfiles_object_id: 0,
+            generation: 1,
+            flags: 0,
         });
 
         Ok(object_id)
@@ -156,5 +168,49 @@ impl Session {
             }
         }
         c
+    }
+
+    /// Mark an object as persisted with a RamFS handle.
+    /// Sets flags bit 0 and stores the handle.
+    pub fn set_persisted(&mut self, object_id: u64, ramfs_handle: u64) -> Result<(), i64> {
+        for slot in self.objects.iter_mut() {
+            if let Some(obj) = slot {
+                if obj.object_id == object_id {
+                    obj.ramfs_handle = ramfs_handle;
+                    obj.flags |= 0x01;
+                    return Ok(());
+                }
+            }
+        }
+        Err(-3) // not found
+    }
+
+    /// Bind the global SexFiles-assigned object_id to a Linen object.
+    /// Called after OP_RAMFS_OBJECT_ID resolves the authoritative global ID.
+    /// 0 is not a valid sexfiles_object_id (RamFS assigns ≥1).
+    pub fn set_sexfiles_object_id(&mut self, object_id: u64, sexfiles_id: u64) -> Result<(), i64> {
+        for slot in self.objects.iter_mut() {
+            if let Some(obj) = slot {
+                if obj.object_id == object_id {
+                    obj.sexfiles_object_id = sexfiles_id;
+                    return Ok(());
+                }
+            }
+        }
+        Err(-3)
+    }
+
+    /// Bump the generation counter for an object.
+    /// Called when metadata is updated.
+    pub fn bump_generation(&mut self, object_id: u64) -> Result<u64, i64> {
+        for slot in self.objects.iter_mut() {
+            if let Some(obj) = slot {
+                if obj.object_id == object_id {
+                    obj.generation = obj.generation.saturating_add(1);
+                    return Ok(obj.generation);
+                }
+            }
+        }
+        Err(-3)
     }
 }

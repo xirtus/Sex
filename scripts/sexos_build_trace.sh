@@ -75,12 +75,13 @@ run_stage() {
       cp "$src" "$dst"
       ;;
     cargo_manifest)
-      local manifest src dst
+      local manifest src dst extra_rustflags
       manifest="$(rg -n '^manifest\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       src="$(rg -n '^source_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       dst="$(rg -n '^dest_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
+      extra_rustflags="$(rg -n '^rustflags\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       is_allowed_crate "$manifest" || { echo "[FAIL] manifest not in whitelist: $manifest"; exit 1; }
-      RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie" cargo build \
+      RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie ${extra_rustflags:-}" cargo build \
         -Z build-std=core,compiler_builtins,alloc \
         -Z build-std-features=compiler-builtins-mem \
         --manifest-path "$manifest" \

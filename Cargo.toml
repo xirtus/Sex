@@ -18,6 +18,7 @@ members = [
     "crates/sex-pdx",
     "crates/sex-graphics",
     "crates/silkbar-model",
+    "crates/sex-object-model",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

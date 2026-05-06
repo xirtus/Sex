@@ -19,6 +19,8 @@ use spin::RwLock;
 /// - Server-internal (caller_pd == 0) bypasses owner checks
 pub struct RamFs {
     files: RwLock<Vec<FileEntry>>,
+    caps: RwLock<Vec<CapRecord>>,
+    next_object_id: AtomicU64,
     next_handle: AtomicU64,
 }
 
@@ -26,17 +28,40 @@ pub struct RamFs {
 /// but name+data persists for reopen-by-name.
 struct FileEntry {
     handle: u64,
+    object_id: u64,
     active: bool,
     owner_pd: u32,
+    cap_generation: u64,
     name: [u8; messages::RAMFS_MAX_NAME],
     name_len: u8,
     data: Vec<u8>,
 }
 
+#[derive(Clone, Copy)]
+struct CapRecord {
+    object_id: u64,
+    subject_pd: u32,
+    rights: u8,
+    generation: u64,
+    valid: bool,
+}
+
+pub const CAP_RIGHT_READ: u8 = 1 << 0;
+pub const CAP_RIGHT_WRITE: u8 = 1 << 1;
+pub const CAP_RIGHT_APPEND: u8 = 1 << 2;
+pub const CAP_RIGHT_LIST: u8 = 1 << 3;
+pub const CAP_RIGHT_DELETE: u8 = 1 << 4;
+pub const CAP_RIGHT_GRANT: u8 = 1 << 5;
+const CAP_RIGHT_OPEN_EXISTING: u8 =
+    CAP_RIGHT_READ | CAP_RIGHT_WRITE | CAP_RIGHT_APPEND | CAP_RIGHT_DELETE | CAP_RIGHT_GRANT;
+const CAP_MAX_RECORDS: usize = 256;
+
 impl RamFs {
     pub const fn new() -> Self {
         Self {
             files: RwLock::new(Vec::new()),
+            caps: RwLock::new(Vec::new()),
+            next_object_id: AtomicU64::new(1),
             next_handle: AtomicU64::new(1),
         }
     }
@@ -79,8 +104,10 @@ impl RamFs {
 
         files.push(FileEntry {
             handle,
+            object_id: self.next_object_id.fetch_add(1, Ordering::SeqCst),
             active: true,
             owner_pd,
+            cap_generation: 1,
             name: name_buf,
             name_len: name.len() as u8,
             data: Vec::new(),
@@ -88,14 +115,172 @@ impl RamFs {
         Ok(handle)
     }
 
-    /// Check whether `caller_pd` is allowed to access an entry.
-    /// caller_pd == 0 (server-internal) bypasses check.
-    fn check_owner(caller_pd: u32, entry: &FileEntry) -> Result<(), i64> {
+    /// Check whether `caller_pd` is allowed to access an entry for all bits in `required`.
+    /// caller_pd == 0 (server-internal) and owner are both fast-path allows.
+    fn check_access(
+        caps: &[CapRecord],
+        caller_pd: u32,
+        entry: &FileEntry,
+        required: u8,
+    ) -> Result<(), i64> {
         if caller_pd == 0 || caller_pd == entry.owner_pd {
             Ok(())
         } else {
+            let mut i = 0usize;
+            while i < caps.len() {
+                let cap = caps[i];
+                if cap.valid
+                    && cap.object_id == entry.object_id
+                    && cap.subject_pd == caller_pd
+                    && cap.generation == entry.cap_generation
+                    && (cap.rights & required) == required
+                {
+                    return Ok(());
+                }
+                i += 1;
+            }
             Err(messages::ERR_PERM_DENIED)
         }
+    }
+
+    /// Check whether `caller_pd` has at least one right from `required_any`.
+    fn check_access_any(
+        caps: &[CapRecord],
+        caller_pd: u32,
+        entry: &FileEntry,
+        required_any: u8,
+    ) -> Result<(), i64> {
+        if caller_pd == 0 || caller_pd == entry.owner_pd {
+            return Ok(());
+        }
+        let mut i = 0usize;
+        while i < caps.len() {
+            let cap = caps[i];
+            if cap.valid
+                && cap.object_id == entry.object_id
+                && cap.subject_pd == caller_pd
+                && cap.generation == entry.cap_generation
+                && (cap.rights & required_any) != 0
+            {
+                return Ok(());
+            }
+            i += 1;
+        }
+        Err(messages::ERR_PERM_DENIED)
+    }
+
+    fn grant_cap_internal(
+        caps: &mut Vec<CapRecord>,
+        entry: &FileEntry,
+        subject_pd: u32,
+        rights: u8,
+    ) -> Result<(), i64> {
+        if rights == 0 {
+            return Err(messages::ERR_PERM_DENIED);
+        }
+        let mut i = 0usize;
+        while i < caps.len() {
+            let rec = &mut caps[i];
+            if rec.object_id == entry.object_id && rec.subject_pd == subject_pd {
+                rec.rights = rights;
+                rec.generation = entry.cap_generation;
+                rec.valid = true;
+                return Ok(());
+            }
+            i += 1;
+        }
+        if caps.len() >= CAP_MAX_RECORDS {
+            return Err(messages::ERR_FULL);
+        }
+        caps.push(CapRecord {
+            object_id: entry.object_id,
+            subject_pd,
+            rights,
+            generation: entry.cap_generation,
+            valid: true,
+        });
+        Ok(())
+    }
+
+    fn revoke_caps_internal(caps: &mut Vec<CapRecord>, object_id: u64) {
+        let mut i = 0usize;
+        while i < caps.len() {
+            if caps[i].object_id == object_id {
+                caps[i].valid = false;
+            }
+            i += 1;
+        }
+    }
+
+    /// Proof helper: grant capabilities on an object by name.
+    pub fn proof_grant_caps_by_name(
+        &self,
+        owner_pd: u32,
+        name: &[u8],
+        subject_pd: u32,
+        rights: u8,
+    ) -> Result<(), i64> {
+        let files = self.files.read();
+        let entry = Self::find_any_by_name(&files, name).ok_or(messages::ERR_NOT_FOUND)?;
+        if owner_pd != 0 && owner_pd != entry.owner_pd {
+            return Err(messages::ERR_PERM_DENIED);
+        }
+        let mut caps = self.caps.write();
+        Self::grant_cap_internal(&mut caps, entry, subject_pd, rights)
+    }
+
+    /// Proof helper: revoke all caps for an object by name by bumping generation.
+    pub fn proof_revoke_caps_by_name(&self, owner_pd: u32, name: &[u8]) -> Result<(), i64> {
+        let mut files = self.files.write();
+        let entry = Self::find_any_by_name_mut(&mut files, name).ok_or(messages::ERR_NOT_FOUND)?;
+        if owner_pd != 0 && owner_pd != entry.owner_pd {
+            return Err(messages::ERR_PERM_DENIED);
+        }
+        entry.cap_generation = entry.cap_generation.saturating_add(1);
+        let object_id = entry.object_id;
+        drop(files);
+        let mut caps = self.caps.write();
+        Self::revoke_caps_internal(&mut caps, object_id);
+        Ok(())
+    }
+
+    /// Proof helper: stale generation cap insertion.
+    pub fn proof_inject_stale_generation_cap(
+        &self,
+        name: &[u8],
+        subject_pd: u32,
+        rights: u8,
+        stale_generation: u64,
+    ) -> Result<(), i64> {
+        let files = self.files.read();
+        let entry = Self::find_any_by_name(&files, name).ok_or(messages::ERR_NOT_FOUND)?;
+        let mut caps = self.caps.write();
+        if caps.len() >= CAP_MAX_RECORDS {
+            return Err(messages::ERR_FULL);
+        }
+        caps.push(CapRecord {
+            object_id: entry.object_id,
+            subject_pd,
+            rights,
+            generation: stale_generation,
+            valid: true,
+        });
+        Ok(())
+    }
+
+    /// Return the global RamFS object_id for an open handle.
+    ///
+    /// Implements OP_RAMFS_OBJECT_ID (0x37). Caller must own the file or
+    /// use caller_pd=0 (server-internal). Closes the OQ5 namespace gap:
+    /// returns a SexFiles-assigned ID, not a client-local ID.
+    pub fn object_id_for_handle(&self, handle: u64, caller_pd: u32) -> Result<u64, i64> {
+        let files = self.files.read();
+        let entry = Self::find_active_by_handle(&files, handle)
+            .ok_or(messages::ERR_INVALID_HANDLE)?;
+        if caller_pd != 0 && caller_pd != entry.owner_pd {
+            return Err(messages::ERR_PERM_DENIED);
+        }
+        Ok(entry.object_id)
     }
 }
 
@@ -109,14 +294,15 @@ impl FsBackend for RamFs {
         }
 
         let mut files = self.files.write();
+        let caps = self.caps.read();
 
         // Check if file exists by name (any state)
         if let Some(existing) = Self::find_any_by_name_mut(&mut files, name) {
             if flags & messages::RAMFS_O_EXCL != 0 {
                 return Err(messages::ERR_NOT_FOUND);
             }
-            // NAMESPACE_CAPS_V1: reopening requires matching owner
-            Self::check_owner(caller_pd, existing)?;
+            // Existing object open: owner fast-path or capability record allow.
+            Self::check_access_any(&caps, caller_pd, existing, CAP_RIGHT_OPEN_EXISTING)?;
             // Reactivate if inactive
             if !existing.active {
                 existing.active = true;
@@ -135,9 +321,10 @@ impl FsBackend for RamFs {
 
     fn read(&self, handle: u64, offset: u64, buf: &mut [u8], caller_pd: u32) -> Result<u64, i64> {
         let files = self.files.read();
+        let caps = self.caps.read();
         let entry = Self::find_active_by_handle(&files, handle)
             .ok_or(messages::ERR_INVALID_HANDLE)?;
-        Self::check_owner(caller_pd, entry)?;
+        Self::check_access(&caps, caller_pd, entry, CAP_RIGHT_READ)?;
 
         if offset as usize >= entry.data.len() {
             return Ok(0);
@@ -152,9 +339,15 @@ impl FsBackend for RamFs {
 
     fn write(&self, handle: u64, offset: u64, data: &[u8], caller_pd: u32) -> Result<u64, i64> {
         let mut files = self.files.write();
+        let caps = self.caps.read();
         let entry = Self::find_active_by_handle_mut(&mut files, handle)
             .ok_or(messages::ERR_INVALID_HANDLE)?;
-        Self::check_owner(caller_pd, entry)?;
+        let required = if offset as usize >= entry.data.len() {
+            CAP_RIGHT_APPEND
+        } else {
+            CAP_RIGHT_WRITE
+        };
+        Self::check_access(&caps, caller_pd, entry, required)?;
 
         let start = offset as usize;
         let end = start + data.len();
@@ -173,27 +366,34 @@ impl FsBackend for RamFs {
 
     fn close(&self, handle: u64, caller_pd: u32) -> Result<(), i64> {
         let mut files = self.files.write();
+        let caps = self.caps.read();
         let entry = Self::find_active_by_handle_mut(&mut files, handle)
             .ok_or(messages::ERR_INVALID_HANDLE)?;
-        Self::check_owner(caller_pd, entry)?;
+        // Close requires at least read access for non-owner.
+        Self::check_access(&caps, caller_pd, entry, CAP_RIGHT_READ)?;
         entry.active = false; // Release handle, keep name+data
         Ok(())
     }
 
     fn stat(&self, handle: u64, caller_pd: u32) -> Result<(u64, u32), i64> {
         let files = self.files.read();
+        let caps = self.caps.read();
         let entry = Self::find_active_by_handle(&files, handle)
             .ok_or(messages::ERR_INVALID_HANDLE)?;
-        Self::check_owner(caller_pd, entry)?;
+        Self::check_access(&caps, caller_pd, entry, CAP_RIGHT_READ)?;
         Ok((entry.data.len() as u64, entry.name_len as u32))
     }
 
     fn list_at(&self, index: usize, caller_pd: u32) -> Option<(u64, u32)> {
         let files = self.files.read();
+        let caps = self.caps.read();
         let mut count = 0;
         for entry in files.iter() {
             if entry.active {
-                if caller_pd == 0 || caller_pd == entry.owner_pd {
+                let allow = caller_pd == 0
+                    || caller_pd == entry.owner_pd
+                    || Self::check_access(&caps, caller_pd, entry, CAP_RIGHT_LIST).is_ok();
+                if allow {
                     if count == index {
                         return Some((entry.handle, entry.name_len as u32));
                     }
@@ -206,11 +406,64 @@ impl FsBackend for RamFs {
 
     fn len(&self, caller_pd: u32) -> usize {
         let files = self.files.read();
+        let caps = self.caps.read();
         if caller_pd == 0 {
             files.iter().filter(|e| e.active).count()
         } else {
-            files.iter().filter(|e| e.active && e.owner_pd == caller_pd).count()
+            files
+                .iter()
+                .filter(|e| {
+                    e.active
+                        && (e.owner_pd == caller_pd
+                            || Self::check_access(&caps, caller_pd, e, CAP_RIGHT_LIST).is_ok())
+                })
+                .count()
         }
     }
-}
 
+    /// Create a file with an explicit owner PD.
+    /// `caller_pd` must be 0 (server-internal) or the same as owner_pd.
+    /// The file is created with `owner_pd` as the recorded owner.
+    /// Always creates (O_CREATE implicit). Fails if name already exists.
+    fn create_with_owner(
+        &self,
+        name: &[u8],
+        owner_pd: u32,
+        caller_pd: u32,
+    ) -> Result<u64, i64> {
+        // Gate: caller must be server-internal (0) or the owner themselves.
+        if caller_pd != 0 && caller_pd != owner_pd {
+            return Err(messages::ERR_PERM_DENIED);
+        }
+        if name.len() > messages::RAMFS_MAX_NAME {
+            return Err(messages::ERR_NAME_TOO_LONG);
+        }
+        if name.is_empty() {
+            return Err(messages::ERR_NOT_FOUND);
+        }
+
+        let mut files = self.files.write();
+
+        // Reject if name already exists.
+        if Self::find_any_by_name(&files, name).is_some() {
+            return Err(messages::ERR_NOT_FOUND);
+        }
+
+        // Allocate with explicit owner.
+        let mut name_buf = [0u8; messages::RAMFS_MAX_NAME];
+        name_buf[..name.len()].copy_from_slice(name);
+
+        let handle = self.next_handle.fetch_add(1, Ordering::SeqCst);
+        files.push(FileEntry {
+            handle,
+            object_id: self.next_object_id.fetch_add(1, Ordering::SeqCst),
+            active: true,
+            owner_pd,
+            cap_generation: 1,
+            name: name_buf,
+            name_len: name.len() as u8,
+            data: Vec::new(),
+        });
+        Ok(handle)
+    }
+}

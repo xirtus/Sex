@@ -11,6 +11,7 @@ mod pdx;
 mod trampoline;
 mod backends;
 mod proof;
+mod sexobject;
 
 use crate::trampoline::trampoline_main;
 

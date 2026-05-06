@@ -15,6 +15,57 @@ pub extern "C" fn trampoline_main() {
     if DISKFS_OBJECT_TABLE_PROOF_ENABLED {
         crate::proof::run_diskfs_object_table_proofs();
     }
+    const SEXFILES_JOURNAL_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SEXFILES_JOURNAL_PROOF").is_some();
+    if SEXFILES_JOURNAL_PROOF_ENABLED {
+        crate::proof::run_sexfiles_journal_proofs();
+    }
+    const SEXFILES_REPLAY_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SEXFILES_REPLAY_PROOF").is_some();
+    if SEXFILES_REPLAY_PROOF_ENABLED {
+        crate::proof::run_sexfiles_replay_proofs();
+    }
+    const SEXFILES_CAP_RECORD_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SEXFILES_CAP_RECORD_PROOF").is_some();
+    if SEXFILES_CAP_RECORD_PROOF_ENABLED {
+        crate::proof::run_sexfiles_cap_record_proofs();
+    }
+    const LINEN_SEXFILES_METADATA_PROOF_ENABLED: bool =
+        option_env!("SEXOS_LINEN_SEXFILES_METADATA_PROOF").is_some();
+    if LINEN_SEXFILES_METADATA_PROOF_ENABLED {
+        crate::proof::run_linen_sexfiles_metadata_proofs();
+    }
+    const SEXFILES_FAULT_INJECTION_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SEXFILES_FAULT_INJECTION_PROOF").is_some();
+    if SEXFILES_FAULT_INJECTION_PROOF_ENABLED {
+        crate::proof::run_sexfiles_fault_injection_proofs();
+    }
+    const SEXFILES_REAL_BLOCK_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SEXFILES_REAL_BLOCK_PROOF").is_some();
+    if SEXFILES_REAL_BLOCK_PROOF_ENABLED {
+        crate::proof::run_sexfiles_real_block_proofs();
+    }
+    const SEXFILES_REBOOT_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SEXFILES_REBOOT_PROOF").is_some();
+    if SEXFILES_REBOOT_PROOF_ENABLED {
+        crate::proof::run_sexfiles_reboot_proofs();
+    }
+    const SEXFILES_EXTENT_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SEXFILES_EXTENT_PROOF").is_some();
+    if SEXFILES_EXTENT_PROOF_ENABLED {
+        crate::proof::run_sexfiles_extent_proofs();
+    }
+    const SEXFILES_CHECKPOINT_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SEXFILES_CHECKPOINT_PROOF").is_some();
+    if SEXFILES_CHECKPOINT_PROOF_ENABLED {
+        crate::proof::run_sexfiles_checkpoint_proofs();
+    }
+
+    const SEXOBJECT_VIEW_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SEXOBJECT_VIEW_PROOF").is_some();
+    if SEXOBJECT_VIEW_PROOF_ENABLED {
+        crate::proof::run_sexobject_view_proof();
+    }
 
     serial_println!("[sexfiles.ready]");
 

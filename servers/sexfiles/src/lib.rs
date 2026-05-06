@@ -12,3 +12,4 @@ pub mod backends;
 /// RamFS proof module: built-in contract validation tests.
 /// Compile with SEXFILES_RAMFS_PROOF=1 to enable startup proof.
 pub mod proof;
+pub mod sexobject;
