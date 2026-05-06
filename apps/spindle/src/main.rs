@@ -712,6 +712,7 @@ pub extern "C" fn _start() -> ! {
     sb.push(b"SexFiles persistence pending (capability grant needed).");
     serial_println!("[spindle.sexfiles.persist.pending] reason=no_storage_cap");
     serial_println!("[spindle.bell.pending] reason=no_bell_cap");
+    serial_println!("[spindle.linen.spn.pending] reason=no_linen_cap kind=SpindleSession ext=.spn");
 
     serial_println!("[spindle.ready]");
 
