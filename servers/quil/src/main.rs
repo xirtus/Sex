@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::alloc::{GlobalAlloc, Layout};
-use sex_pdx::{pdx_call, pdx_listen_raw, serial_println, OP_QUIL_PING, SLOT_DISPLAY};
+use sex_pdx::{pdx_call, pdx_listen_raw, serial_println, OP_QUIL_PING, SLOT_DISPLAY, SLOT_STORAGE};
 
 struct DummyAllocator;
 unsafe impl GlobalAlloc for DummyAllocator {
@@ -35,7 +35,7 @@ const SURFACE_H: u64 = 480;
 // Bounded, inline, no heap. Demo content for text surface V1.
 const QUIL_TITLE: &str = "Quil";
 const QUIL_TITLE_MAX_LEN: usize = 32;
-const QUIL_TEXT_BUFFER: &[u8] = b"This is the Quil text surface.\n\
+const QUIL_TEXT_INIT: &[u8] = b"This is the Quil text surface.\n\
 A minimal no_std editor prototype.\n\
 Built on the Sex Microkernel.\n\
 No text rendering available yet.\n\
@@ -44,6 +44,23 @@ Buffer capacity: bounded static array.\n\
 Press arrows to navigate, ESC for cmds.";
 const QUIL_BUFFER_MAX_LEN: usize = 512;
 const QUIL_MAX_VISIBLE_LINES: usize = 6;
+
+/// Mutable text buffer — initialized from QUIL_TEXT_INIT at boot.
+/// Updated by quil_load(). Read by draw_text_lines().
+static mut QUIL_BUFFER: [u8; QUIL_BUFFER_MAX_LEN] = [0u8; QUIL_BUFFER_MAX_LEN];
+static mut QUIL_BUFFER_LEN: usize = 0;
+
+// ── RamFS / SexFiles Protocol Constants ─────────────────────────────────────
+// SEXFILES_RAMFS_CONTRACT_LOCK_V1: bounded flat namespace.
+// Name <= 24 bytes, file <= 4096 bytes, 8-byte per PDX write/read.
+const OP_RAMFS_OPEN: u64 = 0x30;
+const OP_RAMFS_WRITE: u64 = 0x32;
+const OP_RAMFS_READ: u64 = 0x31;
+const OP_RAMFS_CLOSE: u64 = 0x33;
+const RAMFS_O_CREATE: u32 = 0x01;
+
+/// Fixed document name (fits RamFS 24-byte bound).
+const QUIL_DOC_NAME: &[u8] = b"quil_doc_01";
 
 // ── Title bar (rect_index=1, persists independently from palette rect0) ─────
 const QUIL_TITLE_BAR_H: u64 = 32;
@@ -79,10 +96,10 @@ const QUIL_ROW_INACTIVE: u64 = 0x00253556;
 const QUIL_ROW_SELECTED: u64 = 0x004B6FD3;
 const QUIL_ACCENT_COLOR: u64 = 0x00E9D36A;
 
-/// Palette command IDs. No execution — marker stubs only.
+/// Palette command IDs. Rows 1-2 now wired to RamFS save/load.
 const CMD_NEW_BUFFER_STUB: u8 = 1;
-const CMD_OPEN_OBJECT_STUB: u8 = 2;
-const CMD_AGENT_REVIEW_STUB: u8 = 3;
+const CMD_SAVE_DOCUMENT: u8 = 2;   // Save Quil buffer to RamFS
+const CMD_LOAD_DOCUMENT: u8 = 3;   // Load Quil buffer from RamFS
 const CMD_RUN_CHECK_STUB: u8 = 4;
 const CMD_SETTINGS_STUB: u8 = 5;
 
@@ -90,8 +107,8 @@ const CMD_SETTINGS_STUB: u8 = 5;
 /// Row 0 is top (index 0), row 4 is bottom.
 const PALETTE_COMMANDS: [u8; QUIL_ROWS as usize] = [
     CMD_NEW_BUFFER_STUB,    // row 0
-    CMD_OPEN_OBJECT_STUB,   // row 1
-    CMD_AGENT_REVIEW_STUB,  // row 2
+    CMD_SAVE_DOCUMENT,      // row 1
+    CMD_LOAD_DOCUMENT,      // row 2
     CMD_RUN_CHECK_STUB,     // row 3
     CMD_SETTINGS_STUB,      // row 4
 ];
@@ -315,11 +332,201 @@ fn decode_palette_key(scancode: u64) -> u8 {
     }
 }
 
+// ── RamFS Save/Load Helpers ──────────────────────────────────────────────────
+//
+// All operations use PDX calls to SLOT_STORAGE (sexfiles RamFS backend).
+// Protocol per SEXFILES_RAMFS_CONTRACT_LOCK_V1.
+// Name: QUIL_DOC_NAME (≤ 24 bytes). Write/read 8 bytes per call.
+
+/// Initialize the mutable buffer from QUIL_TEXT_INIT.
+fn init_buffer() {
+    unsafe {
+        let len = QUIL_TEXT_INIT.len().min(QUIL_BUFFER_MAX_LEN);
+        QUIL_BUFFER[..len].copy_from_slice(&QUIL_TEXT_INIT[..len]);
+        QUIL_BUFFER_LEN = len;
+    }
+}
+
+/// Pack a byte slice name into two u64 args for OP_RAMFS_OPEN.
+fn pack_name(name: &[u8]) -> (u64, u64) {
+    let mut a0 = 0u64;
+    let mut a1 = 0u64;
+    for i in 0..name.len().min(8) {
+        a0 |= (name[i] as u64) << (i * 8);
+    }
+    if name.len() > 8 {
+        for i in 8..name.len().min(16) {
+            a1 |= (name[i] as u64) << ((i - 8) * 8);
+        }
+    }
+    (a0, a1)
+}
+
+/// Save the current QUIL_BUFFER to RamFS as QUIL_DOC_NAME.
+/// Returns Ok(()) on success, Err(i64) with server error code on failure.
+fn quil_save() -> Result<(), i64> {
+    unsafe {
+        let buf_len = QUIL_BUFFER_LEN;
+        if buf_len == 0 || buf_len > QUIL_BUFFER_MAX_LEN {
+            serial_println!("[quil.save.reject] reason=invalid_len len={}", buf_len);
+            return Err(-1);
+        }
+
+        let (n0, n1) = pack_name(QUIL_DOC_NAME);
+        let flags_arg = (RAMFS_O_CREATE as u64) << 24;
+
+        // Open (create if not exists)
+        let (status, value) = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, n0, n1, flags_arg);
+        if status != 0 {
+            serial_println!("[quil.save.fail] open status={}", status);
+            return Err(status as i64);
+        }
+        if (value as i64) < 0 {
+            serial_println!("[quil.save.fail] open error={}", value as i64);
+            return Err(value as i64);
+        }
+        let handle = value;
+
+        // Write in 8-byte chunks
+        let chunks = (buf_len + 7) / 8;
+        for chunk in 0..chunks {
+            let offset = chunk * 8;
+            let mut data = 0u64;
+            for i in 0..8 {
+                if offset + i < buf_len {
+                    data |= (QUIL_BUFFER[offset + i] as u64) << (i * 8);
+                }
+            }
+            let (status, value) = pdx_call(SLOT_STORAGE, OP_RAMFS_WRITE, handle, offset as u64, data);
+            if status != 0 {
+                serial_println!("[quil.save.fail] write offset={} status={}", offset, status);
+                let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
+                return Err(status as i64);
+            }
+            if (value as i64) < 0 {
+                serial_println!("[quil.save.fail] write offset={} error={}", offset, value as i64);
+                let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
+                return Err(value as i64);
+            }
+        }
+
+        // Close
+        let (status, value) = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
+        if status != 0 || (value as i64) < 0 {
+            serial_println!("[quil.save.fail] close error={}", value as i64);
+            return Err((value as i64).min(status as i64));
+        }
+
+        serial_println!("[quil.save.ok] bytes={}", buf_len);
+        Ok(())
+    }
+}
+
+/// Load QUIL_DOC_NAME from RamFS into QUIL_BUFFER.
+/// Returns Ok(()) on success, Err(i64) with server error code on failure.
+fn quil_load() -> Result<(), i64> {
+    let (n0, n1) = pack_name(QUIL_DOC_NAME);
+
+    // Open (no O_CREATE — file must already exist)
+    let (status, value) = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, n0, n1, 0);
+    if status != 0 {
+        serial_println!("[quil.load.fail] open status={}", status);
+        return Err(status as i64);
+    }
+    if (value as i64) < 0 {
+        serial_println!("[quil.load.fail] open error={}", value as i64);
+        return Err(value as i64);
+    }
+    let handle = value;
+
+    // Read in 8-byte chunks up to QUIL_BUFFER_MAX_LEN
+    let mut total_read = 0usize;
+    let mut buf = [0u8; 8];
+    // Packed read data from RamFS — use Result to handle error codes
+    loop {
+        let (status, value) = pdx_call(SLOT_STORAGE, OP_RAMFS_READ, handle, total_read as u64, 8);
+        if status != 0 {
+            serial_println!("[quil.load.fail] read offset={} status={}", total_read, status);
+            let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
+            return Err(status as i64);
+        }
+        // value < 0 as i64 means server error (never valid packed data for our ASCII content)
+        if (value as i64) < 0 {
+            serial_println!("[quil.load.fail] read offset={} error={}", total_read, value as i64);
+            let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
+            return Err(value as i64);
+        }
+        // Unpack data
+        let bytes_avail = 8usize;
+        for i in 0..bytes_avail {
+            buf[i] = ((value >> (i * 8)) & 0xFF) as u8;
+        }
+        // If all 8 bytes are zero, assume end (our ASCII content has no null bytes,
+        // but RamFS may pad with zeros). Check first byte only for EOF detection.
+        if total_read == 0 && buf[0] == 0 {
+            // Empty file
+            unsafe { QUIL_BUFFER_LEN = 0; }
+            let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
+            serial_println!("[quil.load.empty]");
+            return Ok(());
+        }
+        // Find actual data length in this chunk (anything non-zero or stop at zeros)
+        let mut chunk_len = 0usize;
+        for i in 0..8 {
+            if buf[i] != 0 {
+                chunk_len = i + 1;
+            } else if total_read + i >= total_read {
+                // Stop at first zero in trailing bytes
+                break;
+            }
+        }
+        if chunk_len == 0 {
+            break; // All zeros — end of file
+        }
+        // Bound check
+        if total_read + chunk_len > QUIL_BUFFER_MAX_LEN {
+            serial_println!("[quil.load.reject] reason=overflow max={}", QUIL_BUFFER_MAX_LEN);
+            let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
+            return Err(-4); // ERR_OVERFLOW
+        }
+        // Copy into buffer
+        unsafe {
+            QUIL_BUFFER[total_read..total_read + chunk_len].copy_from_slice(&buf[..chunk_len]);
+        }
+        total_read += chunk_len;
+
+        // Stop if we read less than 8 bytes (short read = last chunk)
+        if chunk_len < 8 {
+            break;
+        }
+    }
+
+    // Close
+    let (status, _) = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, handle, 0, 0);
+    if status != 0 {
+        serial_println!("[quil.load.warn] close status={}", status);
+    }
+
+    unsafe {
+        QUIL_BUFFER_LEN = total_read;
+    }
+    serial_println!("[quil.load.ok] bytes={}", total_read);
+
+    // Redraw text lines with loaded content
+    unsafe {
+        draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+    }
+    Ok(())
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[quil.boot]");
     serial_println!("[quil.no_fb_write]");
     serial_println!("[quil.text.surface] title={}", QUIL_TITLE);
+
+    // ── Initialize mutable buffer ─────────────────────────────────────────
+    init_buffer();
 
     // ── Text Surface Validation V1 ────────────────────────────────────────
     if !validate_title(QUIL_TITLE) {
@@ -328,15 +535,18 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[quil.text.title] title={} len={}", QUIL_TITLE, QUIL_TITLE.len());
     }
 
-    if !validate_buffer(QUIL_TEXT_BUFFER) {
-        serial_println!("[quil.text.buffer.invalid] max_bytes={}", QUIL_BUFFER_MAX_LEN);
-    } else {
-        let lines = text_buffer_line_count(QUIL_TEXT_BUFFER);
-        serial_println!("[quil.text.buffer] bytes={} lines={} max_bytes={}",
-            QUIL_TEXT_BUFFER.len(), lines, QUIL_BUFFER_MAX_LEN);
-        if lines > QUIL_MAX_VISIBLE_LINES {
-            serial_println!("[quil.text.buffer.overflow] lines={} visible={}",
-                lines, QUIL_MAX_VISIBLE_LINES);
+    unsafe {
+        let buf = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+        if !validate_buffer(buf) {
+            serial_println!("[quil.text.buffer.invalid] max_bytes={}", QUIL_BUFFER_MAX_LEN);
+        } else {
+            let lines = text_buffer_line_count(buf);
+            serial_println!("[quil.text.buffer] bytes={} lines={} max_bytes={}",
+                buf.len(), lines, QUIL_BUFFER_MAX_LEN);
+            if lines > QUIL_MAX_VISIBLE_LINES {
+                serial_println!("[quil.text.buffer.overflow] lines={} visible={}",
+                    lines, QUIL_MAX_VISIBLE_LINES);
+            }
         }
     }
 
@@ -347,12 +557,52 @@ pub extern "C" fn _start() -> ! {
         SURFACE_W, QUIL_TITLE_BAR_H, QUIL_TITLE_BAR_COLOR);
 
     // Text buffer lines (rect_indices 2..7).
-    draw_text_lines(QUIL_TEXT_BUFFER);
+    unsafe {
+        draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+    }
 
     // Palette (rect_index=0, redrawn on each keypress).
     let mut selected_row: u8 = 0;
     draw_palette(selected_row);
     serial_println!("[quil.boot.draw.ok]");
+
+    // ── Boot-time save/load proof ─────────────────────────────────────────
+    // Save initial buffer to RamFS, then load and verify roundtrip.
+    serial_println!("[quil.save_load.proof.start]");
+    if let Err(e) = quil_save() {
+        serial_println!("[quil.save_load.proof.save_fail] error={}", e);
+    } else {
+        serial_println!("[quil.save_load.proof.save_ok]");
+        // Clear buffer, then load back
+        unsafe {
+            QUIL_BUFFER_LEN = 0;
+        }
+        if let Err(e) = quil_load() {
+            serial_println!("[quil.save_load.proof.load_fail] error={}", e);
+        } else {
+            // Verify roundtrip
+            unsafe {
+                let loaded = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+                let orig = QUIL_TEXT_INIT;
+                let match_len = loaded.len().min(orig.len());
+                let mut mismatch = false;
+                for i in 0..match_len {
+                    if loaded[i] != orig[i] {
+                        mismatch = true;
+                        serial_println!("[quil.save_load.proof.mismatch] offset={} expected={:#02x} got={:#02x}",
+                            i, orig[i], loaded[i]);
+                        break;
+                    }
+                }
+                if !mismatch && loaded.len() == orig.len() {
+                    serial_println!("[quil.save_load.proof.ok] roundtrip verified bytes={}", loaded.len());
+                } else {
+                    serial_println!("[quil.save_load.proof.fail] roundtrip length mismatch loaded={} orig={}",
+                        loaded.len(), orig.len());
+                }
+            }
+        }
+    }
 
     let mut palette_active = true;
 
@@ -429,6 +679,21 @@ pub extern "C" fn _start() -> ! {
                             if palette_active {
                                 let cmd = palette_command_for_row(selected_row);
                                 serial_println!("[quil.palette.action] row={} cmd={}", selected_row, cmd);
+                                match cmd {
+                                    CMD_SAVE_DOCUMENT => {
+                                        if let Err(e) = quil_save() {
+                                            serial_println!("[quil.palette.save.fail] error={}", e);
+                                        }
+                                    }
+                                    CMD_LOAD_DOCUMENT => {
+                                        if let Err(e) = quil_load() {
+                                            serial_println!("[quil.palette.load.fail] error={}", e);
+                                        }
+                                    }
+                                    _ => {
+                                        serial_println!("[quil.palette.stub] cmd={}", cmd);
+                                    }
+                                }
                             } else {
                                 serial_println!("[quil.palette.reject] action=enter reason=inactive");
                             }

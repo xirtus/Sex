@@ -53,6 +53,14 @@ const APP_SURFACE_REQ_PROOF_ENABLED: bool =
 /// Synthetic proof stage counter for app surface request proof. Advances 0..7 then stops.
 static mut APP_SURFACE_REQ_PROOF_STAGE: u8 = 0;
 
+/// Collar review model synthetic proof gate.
+/// Build with SEXOS_COLLAR_REVIEW_PROOF=1 to enable.
+const COLLAR_REVIEW_PROOF_ENABLED: bool =
+    option_env!("SEXOS_COLLAR_REVIEW_PROOF").is_some();
+
+/// Synthetic proof stage counter for Collar review proof. Advances 0..4 then stops.
+static mut COLLAR_REVIEW_PROOF_STAGE: u8 = 0;
+
 /// Atlas overview model synthetic proof gate.
 /// Build with SEXOS_ATLAS_OVERVIEW_PROOF=1 to enable.
 /// Default (unset): zero behavior change.
@@ -61,6 +69,15 @@ const ATLAS_OVERVIEW_PROOF_ENABLED: bool =
 
 /// Synthetic proof stage counter for Atlas overview model proof. Advances 0..4 then stops.
 static mut ATLAS_OVERVIEW_PROOF_STAGE: u8 = 0;
+
+/// App lifecycle synthetic proof gate.
+/// Build with SEXOS_LIFECYCLE_PROOF=1 to enable.
+/// Default (unset): zero behavior change.
+const LIFECYCLE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LIFECYCLE_PROOF").is_some();
+
+/// Synthetic proof stage counter for app lifecycle proof. Advances 0..5 then stops.
+static mut LIFECYCLE_PROOF_STAGE: u8 = 0;
 
 // Well-known key ID for scene appearance settings blob.
 const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
@@ -1037,7 +1054,7 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
     // 2.5 C2: Check Collar gate before linking.
     // Grant table lookup replaces AllowStub with Allow/Deny.
     // Caller identity derived from FOCUSED_SURFACE_ID inside gate.
-    let decision = collar_check_operation_stub(CollarOperation::LinkObjectToBuffer, object_id, 0);
+    let decision = collar_check_operation(CollarOperation::LinkObjectToBuffer, object_id, 0);
     if decision != CollarDecision::Allow {
         serial_println!("[linen.quil.open.reject.collar] decision={}", decision as u8);
         return false;
@@ -1145,7 +1162,7 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
 // See docs/handoff/C2_COLLAR_POLICY_TABLE_V2.md
 
 /// Operation kinds that may require Collar authority.
-/// J5 stub — no real authority checks, just proof markers.
+/// V3: includes system capability operations for the review model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum CollarOperation {
@@ -1156,6 +1173,14 @@ enum CollarOperation {
     BuildTarget = 4,
     RunTarget = 5,
     LinkObjectToBuffer = 6,
+    /// System capability: may access Bell notification service.
+    AccessBell = 7,
+    /// System capability: may access SexFiles VFS storage.
+    AccessSexFiles = 8,
+    /// Raw framebuffer/display-policy authority — always denied.
+    AccessDisplay = 9,
+    /// Shell policy ownership — always denied.
+    AccessShellPolicy = 10,
 }
 
 /// Decision from the Collar operation gate.
@@ -1186,7 +1211,7 @@ enum CollarDecision {
 /// - If object_id != 0 and not found in LINEN_OBJECTS → DenyMissingObject
 /// - If buffer_id != 0 and not found in QUIL_BUFFERS → DenyMissingBuffer
 /// - Caller identity derived from FOCUSED_SURFACE_ID (single-threaded dispatch)
-unsafe fn collar_check_operation_stub(
+unsafe fn collar_check_operation(
     op: CollarOperation,
     object_id: u64,
     buffer_id: u64,
@@ -1263,6 +1288,39 @@ unsafe fn collar_check_operation_stub(
             serial_println!("[collar.gate.needs_grant] op={}", op as u8);
             let d = CollarDecision::NeedsGrantLater;
             record_collar_audit(op, object_id, caller_sid, d, 0, 5);
+            d
+        }
+        // V3: System capability operations — grant table lookup.
+        CollarOperation::AccessBell | CollarOperation::AccessSexFiles => {
+            let target_id = object_id;
+            let mut found_grant = false;
+            for slot in COLLAR_GRANTS.iter() {
+                if let Some(grant) = slot {
+                    if grant.state != CollarGrantState::Active { continue; }
+                    if grant.subject_id != caller_sid { continue; }
+                    if grant.object_id != target_id { continue; }
+                    if (grant.operation_mask & (1 << (op as u64))) == 0 { continue; }
+                    found_grant = true;
+                    serial_println!("[collar.grant.match] grant_id={} subject={} object={} op={}",
+                        grant.grant_id, grant.subject_id, grant.object_id, op as u8);
+                    serial_println!("[collar.policy.allow] op={} object={} caller={} grant={}",
+                        op as u8, target_id, caller_sid, grant.grant_id);
+                    record_collar_audit(op, target_id, caller_sid, CollarDecision::Allow, grant.grant_id, 0);
+                    return CollarDecision::Allow;
+                }
+            }
+            serial_println!("[collar.grant.reject] reason=no_grant op={} object={} caller={}",
+                op as u8, target_id, caller_sid);
+            serial_println!("[collar.policy.deny] op={} object={} caller={} reason=no_grant",
+                op as u8, target_id, caller_sid);
+            record_collar_audit(op, target_id, caller_sid, CollarDecision::Deny, 0, 3);
+            CollarDecision::Deny
+        }
+        // V3: Display/shell-policy authority — always denied.
+        CollarOperation::AccessDisplay | CollarOperation::AccessShellPolicy => {
+            serial_println!("[collar.gate.reject] reason=always_deny op={}", op as u8);
+            let d = CollarDecision::Deny;
+            record_collar_audit(op, object_id, caller_sid, d, 0, 6);
             d
         }
     }
@@ -1388,6 +1446,86 @@ unsafe fn collar_init_grants() {
         count += 1;
     }
     serial_println!("[collar.grant.init] count={} generation={}", count, COLLAR_GRANT_GENERATION);
+}
+
+// ── V3: Collar Manifest Review Model ──────────────────────────────────────────
+// Connects AppManifest capability bits to Collar grants.
+// Always denies raw framebuffer, display-policy, and shell-policy authority.
+// See docs/handoff/COLLAR_CAPABILITY_REVIEW_MODEL_V1.md
+
+/// Auto-create Collar grants from an accepted AppManifest's capability bits.
+/// Called after handle_app_surface_req() accepts a manifest.
+unsafe fn collar_auto_grant_from_manifest(manifest: &AppManifest) {
+    let mut count = 0u64;
+    let caps = manifest.capabilities.bits();
+
+    if caps & AppCapabilityBits::BELL != 0 {
+        let gen = COLLAR_GRANT_GENERATION;
+        COLLAR_GRANT_GENERATION = COLLAR_GRANT_GENERATION.wrapping_add(1);
+        let idx = (gen as usize).wrapping_sub(1) % COLLAR_GRANT_CAP;
+        COLLAR_GRANTS[idx] = Some(CollarGrant {
+            grant_id: gen,
+            subject_id: manifest.surface_id,
+            object_id: manifest.surface_id,
+            operation_mask: 1 << (CollarOperation::AccessBell as u64),
+            generation: gen,
+            state: CollarGrantState::Active,
+        });
+        count += 1;
+        serial_println!("[collar.grant.manifest] grant_id={} sid={} cap=BELL op=AccessBell",
+            gen, manifest.surface_id);
+    }
+
+    if caps & AppCapabilityBits::SEXFILES != 0 {
+        let gen = COLLAR_GRANT_GENERATION;
+        COLLAR_GRANT_GENERATION = COLLAR_GRANT_GENERATION.wrapping_add(1);
+        let idx = (gen as usize).wrapping_sub(1) % COLLAR_GRANT_CAP;
+        COLLAR_GRANTS[idx] = Some(CollarGrant {
+            grant_id: gen,
+            subject_id: manifest.surface_id,
+            object_id: manifest.surface_id,
+            operation_mask: 1 << (CollarOperation::AccessSexFiles as u64),
+            generation: gen,
+            state: CollarGrantState::Active,
+        });
+        count += 1;
+        serial_println!("[collar.grant.manifest] grant_id={} sid={} cap=SEXFILES op=AccessSexFiles",
+            gen, manifest.surface_id);
+    }
+
+    serial_println!("[collar.grant.manifest.done] sid={} grants_created={}", manifest.surface_id, count);
+}
+
+/// Result of a Collar manifest capability review.
+#[derive(Debug, Clone, Copy)]
+struct CollarReview {
+    /// Whether all requested capabilities are granted.
+    allowed: bool,
+    /// Bitmask of granted capabilities.
+    granted_caps: u8,
+    /// Bitmask of denied capabilities.
+    denied_caps: u8,
+}
+
+/// Review an AppManifest against Collar policy without creating grants.
+/// Returns what would be granted vs denied.
+unsafe fn collar_review_manifest(manifest: &AppManifest) -> CollarReview {
+    let requested = manifest.capabilities.bits();
+
+    // Only BELL and SEXFILES are known/approvable.
+    const KNOWN: u8 = AppCapabilityBits::BELL | AppCapabilityBits::SEXFILES;
+    let denied_caps = requested & !KNOWN;
+    let granted_caps = requested & KNOWN;
+    let allowed = granted_caps == requested;
+
+    serial_println!("[collar.review] sid={} app_id={} requested={:#x} granted={:#x} denied={:#x} allowed={}",
+        manifest.surface_id, manifest.app_id, requested, granted_caps, denied_caps, allowed);
+
+    CollarReview {
+        allowed,
+        granted_caps,
+        denied_caps,
+    }
 }
 // Shell-local fact ring for topology/relationship data. Replaces proof-marker-only
 // diagnostics with real bounded Mesh fact memory. No Mesh PD, no IPC/ABI changes,
@@ -5648,6 +5786,9 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
         (100u64) << 32 | 200u64,
         (400u64) << 32 | 600u64);
 
+    // V3 Collar: auto-create grants from manifest capability bits.
+    collar_auto_grant_from_manifest(&manifest);
+
     // Re-tile and focus the new surface
     tile_active_scene_frames();
     try_set_focus(manifest.surface_id);
@@ -7666,6 +7807,10 @@ unsafe fn is_closeable_surface(surface_id: u64) -> bool {
                 serial_println!("[shell.app_registry.lookup] closeable sid={} val={}", surface_id, spec.closeable);
                 return spec.closeable;
             }
+            // Fallback: dynamically registered app surfaces (via lifecycle) are closeable
+            if lifecycle_state(surface_id).is_some() {
+                return true;
+            }
             surface_is_alive(surface_id)
         }
     }
@@ -7676,7 +7821,8 @@ unsafe fn is_closeable_surface(surface_id: u64) -> bool {
 /// Reuses the same destroy mechanism as keyboard SurfaceAction::DestroyFocused.
 /// Returns true if the surface was actually destroyed.
 unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
-    if !surface_is_alive(surface_id) {
+    // Must be closeable (checks registry, lifecycle registration, or alive flags).
+    if !is_closeable_surface(surface_id) {
         return false;
     }
     // A6: Reject close if surface already in Closing/Tombstoned/Destroyed state.
@@ -7709,7 +7855,7 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
         SURFACE_ID_STATIC => SURFACE_101_ALIVE = false,
         SURFACE_ID_TEST3  => SURFACE_102_ALIVE = false,
         SURFACE_ID_TEST4  => SURFACE_103_ALIVE = false,
-        _ => return false, // unknown or non-closeable surface
+        _ => {} // dynamic surfaces: lifecycle state is authority; no alive flag needed
     }
     // A3/A6: Track lifecycle state transition: live -> Closing -> Tombstoned.
     // Record tombstone events for each stage.
@@ -9950,6 +10096,95 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
+        // ── Collar Review Model synthetic proof ──
+        if COLLAR_REVIEW_PROOF_ENABLED {
+            unsafe {
+                let stage = COLLAR_REVIEW_PROOF_STAGE;
+                if stage < 5 {
+                    COLLAR_REVIEW_PROOF_STAGE = stage + 1;
+                    serial_println!("[collar.review.proof] stage={}", stage);
+                    match stage {
+                        0 => {
+                            // Proof 1: Valid SEXFILES cap request → review allowed.
+                            let manifest = AppManifest {
+                                surface_id: 400,
+                                title_id: 80,
+                                app_id: 1,
+                                capabilities: AppCapabilityBits::validate(AppCapabilityBits::SEXFILES).unwrap(),
+                            };
+                            let review = collar_review_manifest(&manifest);
+                            if review.allowed && review.granted_caps == AppCapabilityBits::SEXFILES && review.denied_caps == 0 {
+                                serial_println!("[collar.review.proof.1] sexfiles_cap_allowed=true");
+                            } else {
+                                serial_println!("[collar.review.proof.1] FAIL allowed={} granted={:#x} denied={:#x}",
+                                    review.allowed, review.granted_caps, review.denied_caps);
+                            }
+                        }
+                        1 => {
+                            // Proof 2: Valid BELL + SEXFILES caps → review allowed.
+                            let manifest = AppManifest {
+                                surface_id: 401,
+                                title_id: 81,
+                                app_id: 2,
+                                capabilities: AppCapabilityBits::validate(AppCapabilityBits::BELL | AppCapabilityBits::SEXFILES).unwrap(),
+                            };
+                            let review = collar_review_manifest(&manifest);
+                            if review.allowed && review.granted_caps == (AppCapabilityBits::BELL | AppCapabilityBits::SEXFILES) {
+                                serial_println!("[collar.review.proof.2] bell_sexfiles_allowed=true");
+                            } else {
+                                serial_println!("[collar.review.proof.2] FAIL");
+                            }
+                        }
+                        2 => {
+                            // Proof 3: Unknown cap bit → rejected at unpack AND at review.
+                            let manifest = AppManifest::unpack(402, 82, (0u64 << 56) | (1u64 << 8) | 0x80u64);
+                            if manifest.is_err() {
+                                serial_println!("[collar.review.proof.3] unknown_cap_rejected=true");
+                            } else {
+                                serial_println!("[collar.review.proof.3] FAIL: unknown cap not rejected at unpack");
+                            }
+                            // Also verify via review directly with unknown bits.
+                            let unknown = AppCapabilityBits::validate(0x80);
+                            if unknown.is_err() {
+                                serial_println!("[collar.review.proof.3b] validate_rejects_unknown=true");
+                            } else {
+                                serial_println!("[collar.review.proof.3b] FAIL: validate accepted unknown");
+                            }
+                        }
+                        3 => {
+                            // Proof 4: No caps → allowed (trivially).
+                            let manifest = AppManifest {
+                                surface_id: 403,
+                                title_id: 83,
+                                app_id: 0,
+                                capabilities: AppCapabilityBits::validate(0).unwrap(),
+                            };
+                            let review = collar_review_manifest(&manifest);
+                            if review.allowed && review.granted_caps == 0 && review.denied_caps == 0 {
+                                serial_println!("[collar.review.proof.4] no_caps_allowed=true");
+                            } else {
+                                serial_println!("[collar.review.proof.4] FAIL");
+                            }
+                        }
+                        4 => {
+                            // Proof 5: Display/shell-policy authority always denied.
+                            let review_display = collar_check_operation(CollarOperation::AccessDisplay, 0, 0);
+                            let review_policy = collar_check_operation(CollarOperation::AccessShellPolicy, 0, 0);
+                            if review_display == CollarDecision::Deny && review_policy == CollarDecision::Deny {
+                                serial_println!("[collar.review.proof.5] display_policy_always_denied=true");
+                            } else {
+                                serial_println!("[collar.review.proof.5] FAIL display={:?} policy={:?}",
+                                    review_display, review_policy);
+                            }
+                        }
+                        _ => {}
+                    }
+                    sys_yield();
+                    continue;
+                }
+            }
+        }
+
         // ── Atlas Overview Model synthetic proof ──
         if ATLAS_OVERVIEW_PROOF_ENABLED {
             unsafe {
@@ -9999,6 +10234,69 @@ pub extern "C" fn _start() -> ! {
                             let has_empty = (snapshot_flags & SCENE_FLAG_EMPTY) != 0;
                             serial_println!("[shell.atlas.proof.flags] scene={} flags={:#x} active={} empty={}",
                                 ACTIVE_SCENE_IDX, snapshot_flags, has_active, has_empty);
+                        }
+                        _ => {}
+                    }
+                    sys_yield();
+                    continue;
+                }
+            }
+        }
+
+        // ── App Lifecycle synthetic proof ──
+        // Exercises launch, focus, minimize, restore, close, and stale-focus rejection.
+        if LIFECYCLE_PROOF_ENABLED {
+            unsafe {
+                let stage = LIFECYCLE_PROOF_STAGE;
+                if stage < 6 {
+                    LIFECYCLE_PROOF_STAGE = stage + 1;
+                    serial_println!("[shell.lifecycle.proof] stage={}", stage);
+                    match stage {
+                        0 => {
+                            // Launch/register a demo app surface via handler.
+                            let accepted = handle_app_surface_req(310, 77, 0, 0);
+                            serial_println!("[shell.lifecycle.proof.launch] sid=310 accepted={}", accepted);
+                        }
+                        1 => {
+                            // Focus the launched surface.
+                            let focused = try_set_focus(310);
+                            let actual_focus = FOCUSED_SURFACE_ID;
+                            serial_println!("[shell.lifecycle.proof.focus] sid=310 result={} actual={}", focused, actual_focus);
+                        }
+                        2 => {
+                            // Minimize the launched surface's frame.
+                            if let Some(fid) = frame_for_surface(310) {
+                                let minimized = minimize_frame(fid);
+                                let state = lifecycle_state(310);
+                                serial_println!("[shell.lifecycle.proof.minimize] frame={} result={} state={:?}",
+                                    fid, minimized, state);
+                            } else {
+                                serial_println!("[shell.lifecycle.proof.minimize] error=no_frame_for_sid=310");
+                            }
+                        }
+                        3 => {
+                            // Restore the minimized surface.
+                            if let Some(fid) = frame_for_surface(310) {
+                                let restored = restore_minimized_frame(fid);
+                                let state = lifecycle_state(310);
+                                serial_println!("[shell.lifecycle.proof.restore] frame={} result={} state={:?}",
+                                    fid, restored, state);
+                            } else {
+                                serial_println!("[shell.lifecycle.proof.restore] error=no_frame_for_sid=310");
+                            }
+                        }
+                        4 => {
+                            // Close/tombstone the surface.
+                            let closed = close_surface_from_frame_light(310);
+                            let state = lifecycle_state(310);
+                            serial_println!("[shell.lifecycle.proof.close] sid=310 result={} state={:?}", closed, state);
+                        }
+                        5 => {
+                            // Stale focus rejection: try to focus the tombstoned surface.
+                            let focus_result = try_set_focus(310);
+                            let actual_focus = FOCUSED_SURFACE_ID;
+                            serial_println!("[shell.lifecycle.proof.stale] sid=310 focus_rejected={} actual_focus={}",
+                                !focus_result, actual_focus);
                         }
                         _ => {}
                     }

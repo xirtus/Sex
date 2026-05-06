@@ -1,25 +1,24 @@
 {
-    "llvm-target": "x86_64-unknown-none",
-    "data-layout": "e-m:e-i64:64-f80:128-n8:16:32:64-S128",
-    "arch": "x86_64",
-    "target-endian": "little",
-    "target-pointer-width": 64,
-    "target-c-int-width": 32,
-    "os": "sexos",
-    "env": "relibc",
-    "vendor": "unknown",
-    "executables": true,
-    "linker-flavor": "ld.lld",
-    "linker": "rust-lld",
-    "panic-strategy": "abort",
-    "disable-redzone": true,
-    "features": "-mmx,-sse,+pku",
-    "stack-probes": {
-        "kind": "inline"
-    },
-    "dynamic-linking": true,
-    "has-rpath": true,
-    "position-independent-executables": true,
-    "exe-suffix": ".sex",
-    "abi-return-struct-as-int": true
+  "llvm-target": "x86_64-unknown-none",
+  "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
+  "arch": "x86_64",
+  "target-endian": "little",
+  "target-pointer-width": 64,
+  "target-c-int-width": 32,
+  "os": "redox",
+  "env": "relibc",
+  "vendor": "unknown",
+  "executables": true,
+  "linker-flavor": "ld.lld",
+  "linker": "rust-lld",
+  "panic-strategy": "abort",
+  "disable-redzone": true,
+  "features": "-mmx,-sse,-sse2,+soft-float",
+  "has-rpath": false,
+  "rustc-abi": "x86-softfloat",
+  "relocation-model": "static",
+  "code-model": "kernel",
+  "target-family": [
+    "unix"
+  ]
 }
