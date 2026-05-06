@@ -3681,6 +3681,15 @@ const ATLAS_PIN_COLOR: u32 = 0x00FFDD44;
 /// Muted rim for inactive scene cards (very dim).
 const ATLAS_CARD_INACTIVE_RIM_COLOR: u32 = 0x00204060;
 
+/// ── Atlas Scene Tile Preview Polish (ATLAS_SCENE_TILE_PREVIEW_POLISH_V1) ──
+/// Small visual distinctions for active/tiled/focused scenes.
+/// Bright green dot on cards whose scene contains the focused surface.
+const ATLAS_FOCUS_MARKER_COLOR: u32 = 0x0080FF80;
+const ATLAS_FOCUS_MARKER_SIZE: u32 = 6;
+/// Light violet accent bar below card top for scenes with >1 visible frame.
+const ATLAS_TILE_COUNT_BAR_COLOR: u32 = 0x00C0C0FF;
+const ATLAS_TILE_COUNT_BAR_H: u32 = 3;
+
 /// Describes one Scene for the Atlas overview.
 /// Derived from current shell state, not independently mutable.
 #[derive(Debug, Clone, Copy)]
@@ -5148,9 +5157,9 @@ unsafe fn atlas_render_stub() {
                 (cy as u64) << 32 | (cx + card_w as i32 - border) as u64,
                 (ATLAS_COLOR_SELECT as u64) << 32 | (card_h as u64) << 16 | border as u64);
         } else if (sd.flags & SCENE_FLAG_ACTIVE) != 0 {
-            // Active scene card gets a thin muted neon rim.
+            // Active scene card gets a stronger neon rim (2px, matching selected border).
             serial_println!("[atlas.visual.active] scene={}", scene_idx);
-            let rim = 1i32;
+            let rim = 2i32;
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
                 (cy as u64) << 32 | cx as u64,
                 (ATLAS_CARD_ACTIVE_RIM_COLOR as u64) << 32 | (rim as u64) << 16 | card_w as u64);
@@ -5178,6 +5187,48 @@ unsafe fn atlas_render_stub() {
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
                 (cy as u64) << 32 | (cx + card_w as i32 - rim) as u64,
                 (ATLAS_CARD_INACTIVE_RIM_COLOR as u64) << 32 | (card_h as u64) << 16 | rim as u64);
+        }
+
+        // ── Atlas Scene/Frame Polish (ATLAS_SCENE_TILE_PREVIEW_POLISH_V1) ──
+        // Focus marker: bright green dot if scene contains focused surface.
+        if (sd.flags & SCENE_FLAG_HAS_FOCUS) != 0 {
+            let ms = ATLAS_FOCUS_MARKER_SIZE as i32;
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                (cy as u64 + 4) << 32 | (cx as u64 + 4),
+                (ATLAS_FOCUS_MARKER_COLOR as u64) << 32 | (ms as u64) << 16 | ms as u64);
+            static mut ATLAS_FOCUS_MARKER_BUDGET: u32 = 8;
+            if ATLAS_FOCUS_MARKER_BUDGET > 0 {
+                ATLAS_FOCUS_MARKER_BUDGET -= 1;
+                serial_println!("[atlas.preview.focus_marker] scene={}", scene_idx);
+            }
+        }
+        // Tile-count accent bar: thin bright bar when scene has >1 visible frame.
+        if fc > 1 {
+            let bar_y = cy + ATLAS_CARD_TOP_H as i32 + 2;
+            let bar_margin = 16i32;
+            let bar_w = card_w as i32 - 2 * bar_margin;
+            if bar_w > 0 {
+                pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_ATLAS_OVERLAY,
+                    (bar_y as u64) << 32 | (cx as u64 + bar_margin as u64),
+                    (ATLAS_TILE_COUNT_BAR_COLOR as u64) << 32
+                        | (ATLAS_TILE_COUNT_BAR_H as u64) << 16
+                        | bar_w as u64);
+                static mut ATLAS_TILE_COUNT_BUDGET: u32 = 8;
+                if ATLAS_TILE_COUNT_BUDGET > 0 {
+                    ATLAS_TILE_COUNT_BUDGET -= 1;
+                    serial_println!("[atlas.preview.tile_count] scene={} frames={}", scene_idx, fc);
+                }
+            }
+        }
+        // Polish live marker (budgeted — per-card-per-render).
+        static mut ATLAS_POLISH_BUDGET: u32 = 8;
+        if ATLAS_POLISH_BUDGET > 0 {
+            ATLAS_POLISH_BUDGET -= 1;
+            serial_println!("[atlas.preview.polish] scene={} active={} focus={} frames={}",
+                scene_idx,
+                if (sd.flags & SCENE_FLAG_ACTIVE) != 0 { 1 } else { 0 },
+                if (sd.flags & SCENE_FLAG_HAS_FOCUS) != 0 { 1 } else { 0 },
+                fc);
         }
     }
 
