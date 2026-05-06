@@ -12,7 +12,7 @@
 //!   • No terminal emulation (Spindle is NOT sexsh)
 //!
 //! Contract: docs/handoff/SPINDLE_APP_CONTRACT_V1.md
-//! Next: SPINDLE_SEXFILES_HISTORY_V1
+//! Next: SPINDLE_APP_LAUNCH_COMMANDS_V1
 
 #![no_std]
 #![no_main]
@@ -362,6 +362,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  history clear  clear command history");
             sb.push(b"  events       show event log");
             sb.push(b"  events clear clear event log");
+            sb.push(b"  session      show Spindle session summary");
             true
         }
         b"clear" => {
@@ -442,6 +443,15 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 sb.push(b"history persistence pending SexFiles client bridge.");
                 sb.push(b"Spindle not kernel-spawned -- no PDX call to sexfiles.");
             }
+            true
+        }
+        b"session" => {
+            sb.push(b"Spindle session summary:");
+            sb.push(b"  session id:  1 (local)");
+            sb.push(b"  commands:    Spindle native command console");
+            sb.push(b"  history:     pending (SexFiles bridge)");
+            sb.push(b"  events:      pending (Bell bridge)");
+            sb.push(b"Linen bridge pending (Spindle not kernel-spawned).");
             true
         }
         b"events" => {
