@@ -10,6 +10,11 @@ pub extern "C" fn trampoline_main() {
     if RAMFS_PROOF_ENABLED {
         crate::proof::run_all_proofs();
     }
+    const DISKFS_OBJECT_TABLE_PROOF_ENABLED: bool =
+        option_env!("SEXOS_DISKFS_OBJECT_TABLE_PROOF").is_some();
+    if DISKFS_OBJECT_TABLE_PROOF_ENABLED {
+        crate::proof::run_diskfs_object_table_proofs();
+    }
 
     serial_println!("[sexfiles.ready]");
 

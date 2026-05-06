@@ -6,13 +6,13 @@ use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use sex_pdx::{
     pdx_call, pdx_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
-    SLOT_DISPLAY, SLOT_SILKBAR, SLOT_SEXSTORE, SLOT_QUIL, OP_QUIL_PING,
+    SLOT_DISPLAY, SLOT_SILKBAR, SLOT_SEXSTORE, SLOT_QUIL, SLOT_STORAGE, OP_QUIL_PING,
     OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
     OP_SURFACE_TAB_INFO, OP_APPEARANCE_TOKENS,
     SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
 };
 use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y, PANEL_W, PANEL_H};
-use silk_shell::{AppManifest, AppCapabilityBits};
+use silk_shell::{AppManifest, AppCapabilityBits, APP_RUNTIME_ABI_VERSION};
 
 // Local Opcodes
 pub const OP_DISPLAY_SET_SNAPSHOT: u64 = 0x15;
@@ -53,6 +53,12 @@ const APP_SURFACE_REQ_PROOF_ENABLED: bool =
 /// Synthetic proof stage counter for app surface request proof. Advances 0..7 then stops.
 static mut APP_SURFACE_REQ_PROOF_STAGE: u8 = 0;
 
+/// App runtime minimal ABI lock proof gate.
+/// Build with SEXOS_APP_RUNTIME_ABI_PROOF=1 to enable.
+const APP_RUNTIME_ABI_PROOF_ENABLED: bool =
+    option_env!("SEXOS_APP_RUNTIME_ABI_PROOF").is_some();
+static mut APP_RUNTIME_ABI_PROOF_STAGE: u8 = 0;
+
 /// Collar review model synthetic proof gate.
 /// Build with SEXOS_COLLAR_REVIEW_PROOF=1 to enable.
 const COLLAR_REVIEW_PROOF_ENABLED: bool =
@@ -60,6 +66,23 @@ const COLLAR_REVIEW_PROOF_ENABLED: bool =
 
 /// Synthetic proof stage counter for Collar review proof. Advances 0..4 then stops.
 static mut COLLAR_REVIEW_PROOF_STAGE: u8 = 0;
+
+/// Collar enforce model synthetic proof gate.
+/// Build with SEXOS_COLLAR_ENFORCE_PROOF=1 to enable.
+const COLLAR_ENFORCE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_COLLAR_ENFORCE_PROOF").is_some();
+
+/// Synthetic proof stage counter for Collar enforce proof. Advances 0..5 then stops.
+static mut COLLAR_ENFORCE_PROOF_STAGE: u8 = 0;
+
+/// Storage capability proof gate.
+/// Build with SEXOS_STORAGE_CAP_PROOF=1 to enable.
+const STORAGE_CAP_PROOF_ENABLED: bool =
+    option_env!("SEXOS_STORAGE_CAP_PROOF").is_some();
+static mut STORAGE_CAP_PROOF_STAGE: u8 = 0;
+
+// Local RamFS open opcode (matches sexfiles route; no sex-pdx ABI edit).
+const OP_RAMFS_OPEN: u64 = 0x30;
 
 /// Atlas overview model synthetic proof gate.
 /// Build with SEXOS_ATLAS_OVERVIEW_PROOF=1 to enable.
@@ -1051,6 +1074,14 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
         serial_println!("[linen.quil.open.no_grant] id={} kind={}", object_id, obj.kind as u8);
     }
 
+    // 2.25 C4: enforce AccessSexFiles capability for the active app surface.
+    // Target is the caller subject surface, not the Linen object id.
+    let cap_decision = collar_check_operation(CollarOperation::AccessSexFiles, FOCUSED_SURFACE_ID, 0);
+    if cap_decision != CollarDecision::Allow {
+        serial_println!("[linen.quil.open.reject.cap] op=AccessSexFiles decision={}", cap_decision as u8);
+        return false;
+    }
+
     // 2.5 C2: Check Collar gate before linking.
     // Grant table lookup replaces AllowStub with Allow/Deny.
     // Caller identity derived from FOCUSED_SURFACE_ID inside gate.
@@ -1220,8 +1251,15 @@ unsafe fn collar_check_operation(
     serial_println!("[collar.policy.check] op={} object_id={} buffer_id={} caller_sid={}",
         op as u8, object_id, buffer_id, caller_sid);
 
-    // Validate object_id if non-zero.
-    if object_id != 0 {
+    let object_ref_required = matches!(
+        op,
+        CollarOperation::OpenObject
+            | CollarOperation::LinkObjectToBuffer
+            | CollarOperation::RenameObject
+            | CollarOperation::ArchiveObject
+    );
+    // Validate object_id only for object-ref operations.
+    if object_ref_required && object_id != 0 {
         let mut found = false;
         for slot in LINEN_OBJECTS.iter() {
             if let Some(obj) = slot {
@@ -1239,8 +1277,8 @@ unsafe fn collar_check_operation(
         }
     }
 
-    // Validate buffer_id if non-zero.
-    if buffer_id != 0 {
+    // Validate buffer_id only for link-like operations.
+    if matches!(op, CollarOperation::LinkObjectToBuffer) && buffer_id != 0 {
         let buf = quil_buffer_by_id(buffer_id);
         if buf.is_none() {
             serial_println!("[collar.gate.reject] reason=missing_buffer op={} buffer_id={}", op as u8, buffer_id);
@@ -1292,20 +1330,31 @@ unsafe fn collar_check_operation(
         }
         // V3: System capability operations — grant table lookup.
         CollarOperation::AccessBell | CollarOperation::AccessSexFiles => {
+            // Deny-by-default: unknown/non-app surfaces cannot request system caps.
+            if caller_sid < 300 {
+                serial_println!("[collar.gate.reject] reason=unknown_app op={} caller={}", op as u8, caller_sid);
+                record_collar_audit(op, object_id, caller_sid, CollarDecision::Deny, 0, 7);
+                if COLLAR_ENFORCE_PROOF_ENABLED {
+                    serial_println!("[collar.enforce.deny] op={} caller={} target={} reason=unknown_app", op as u8, caller_sid, object_id);
+                }
+                return CollarDecision::Deny;
+            }
             let target_id = object_id;
-            let mut found_grant = false;
             for slot in COLLAR_GRANTS.iter() {
                 if let Some(grant) = slot {
                     if grant.state != CollarGrantState::Active { continue; }
                     if grant.subject_id != caller_sid { continue; }
                     if grant.object_id != target_id { continue; }
                     if (grant.operation_mask & (1 << (op as u64))) == 0 { continue; }
-                    found_grant = true;
                     serial_println!("[collar.grant.match] grant_id={} subject={} object={} op={}",
                         grant.grant_id, grant.subject_id, grant.object_id, op as u8);
                     serial_println!("[collar.policy.allow] op={} object={} caller={} grant={}",
                         op as u8, target_id, caller_sid, grant.grant_id);
                     record_collar_audit(op, target_id, caller_sid, CollarDecision::Allow, grant.grant_id, 0);
+                    if COLLAR_ENFORCE_PROOF_ENABLED {
+                        serial_println!("[collar.enforce.allow] op={} caller={} target={} grant={}",
+                            op as u8, caller_sid, target_id, grant.grant_id);
+                    }
                     return CollarDecision::Allow;
                 }
             }
@@ -1314,6 +1363,10 @@ unsafe fn collar_check_operation(
             serial_println!("[collar.policy.deny] op={} object={} caller={} reason=no_grant",
                 op as u8, target_id, caller_sid);
             record_collar_audit(op, target_id, caller_sid, CollarDecision::Deny, 0, 3);
+            if COLLAR_ENFORCE_PROOF_ENABLED {
+                serial_println!("[collar.enforce.deny] op={} caller={} target={} reason=missing_cap",
+                    op as u8, caller_sid, target_id);
+            }
             CollarDecision::Deny
         }
         // V3: Display/shell-policy authority — always denied.
@@ -1321,6 +1374,10 @@ unsafe fn collar_check_operation(
             serial_println!("[collar.gate.reject] reason=always_deny op={}", op as u8);
             let d = CollarDecision::Deny;
             record_collar_audit(op, object_id, caller_sid, d, 0, 6);
+            if COLLAR_ENFORCE_PROOF_ENABLED {
+                serial_println!("[collar.enforce.deny] op={} caller={} target={} reason=dangerous_cap",
+                    op as u8, caller_sid, object_id);
+            }
             d
         }
     }
@@ -1401,6 +1458,10 @@ unsafe fn record_collar_audit(
     }
     serial_println!("[collar.audit.write] event_id={} op={} object={} subject={} decision={} grant={} reason={}",
         prev_event_id, op as u8, object_id, subject_id, decision as u8, grant_ref, reason);
+    if COLLAR_ENFORCE_PROOF_ENABLED {
+        serial_println!("[collar.audit] event_id={} op={} object={} subject={} decision={} grant={} reason={}",
+            prev_event_id, op as u8, object_id, subject_id, decision as u8, grant_ref, reason);
+    }
 }
 
 /// Initialize Collar auto-grants at boot.
@@ -7242,6 +7303,11 @@ unsafe fn focus_or_open_bell() -> bool {
 
 /// Toggle Bell visibility. Minimize if visible, open if not.
 unsafe fn toggle_bell() -> bool {
+    let access = collar_check_operation(CollarOperation::AccessBell, FOCUSED_SURFACE_ID, 0);
+    if access != CollarDecision::Allow {
+        serial_println!("[shell.bell.access.reject] decision={} caller={}", access as u8, FOCUSED_SURFACE_ID);
+        return false;
+    }
     for f in FRAMES.iter() {
         if let Some(frame) = f {
             if frame.frame_id == BELL_FRAME_ID
@@ -9517,7 +9583,12 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
         }
         Action::OpenBell => {
             serial_println!("[shell.silkbar.click] target=bell x={} y={}", ux, uy);
-            unsafe { toggle_os_panel(&mut BELL_ACTIVE, PanelKind::Bell, SURFACE_ID_BELL, "bell", 600, 55, 240, 300); }
+            unsafe {
+                if !toggle_bell() {
+                    serial_println!("[shell.silkbar.click.reject] target=bell reason=collar_deny");
+                    return false;
+                }
+            }
             true
         }
     }
@@ -10096,6 +10167,66 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
+        // ── App Runtime ABI synthetic proof ──
+        if APP_RUNTIME_ABI_PROOF_ENABLED {
+            unsafe {
+                let stage = APP_RUNTIME_ABI_PROOF_STAGE;
+                if stage < 6 {
+                    APP_RUNTIME_ABI_PROOF_STAGE = stage + 1;
+                    serial_println!("[app.abi.proof] stage={} abi_v={}", stage, APP_RUNTIME_ABI_VERSION);
+                    match stage {
+                        0 => {
+                            // V1 happy path: valid manifest accepted.
+                            let m = AppManifest {
+                                surface_id: 320,
+                                title_id: 70,
+                                app_id: 1,
+                                capabilities: AppCapabilityBits::validate(AppCapabilityBits::BELL).unwrap(),
+                            };
+                            let (a0, a1, a2) = m.pack();
+                            let accepted = handle_app_surface_req(a0, a1, a2, 0);
+                            serial_println!("[app.abi.proof.accept.v1] ok={}", accepted as u8);
+                        }
+                        1 => {
+                            // Compatibility: pack/unpack roundtrip stable.
+                            let m = AppManifest {
+                                surface_id: 321,
+                                title_id: 71,
+                                app_id: 2,
+                                capabilities: AppCapabilityBits::validate(AppCapabilityBits::SEXFILES).unwrap(),
+                            };
+                            let (a0, a1, a2) = m.pack();
+                            let ok = AppManifest::unpack(a0, a1, a2).is_ok();
+                            serial_println!("[app.abi.proof.roundtrip] ok={}", ok as u8);
+                        }
+                        2 => {
+                            // Reserved bits are rejected.
+                            let accepted = handle_app_surface_req(322, 72, 0x0000_0001_0000_0000, 0);
+                            serial_println!("[app.abi.proof.reject.reserved] ok={}", (!accepted) as u8);
+                        }
+                        3 => {
+                            // Unknown capability bits are rejected.
+                            let accepted = handle_app_surface_req(323, 73, 0x80, 0);
+                            serial_println!("[app.abi.proof.reject.unknown_cap] ok={}", (!accepted) as u8);
+                        }
+                        4 => {
+                            // Bad manifest version is rejected.
+                            let accepted = handle_app_surface_req(324, 74, 0xFF00_0000_0000_0000, 0);
+                            serial_println!("[app.abi.proof.reject.version] ok={}", (!accepted) as u8);
+                        }
+                        5 => {
+                            // Deterministic surface bounds policy: reserved SID rejected.
+                            let accepted = handle_app_surface_req(199, 75, 0, 0);
+                            serial_println!("[app.abi.proof.reject.sid_range] ok={}", (!accepted) as u8);
+                        }
+                        _ => {}
+                    }
+                    sys_yield();
+                    continue;
+                }
+            }
+        }
+
         // ── Collar Review Model synthetic proof ──
         if COLLAR_REVIEW_PROOF_ENABLED {
             unsafe {
@@ -10175,6 +10306,149 @@ pub extern "C" fn _start() -> ! {
                             } else {
                                 serial_println!("[collar.review.proof.5] FAIL display={:?} policy={:?}",
                                     review_display, review_policy);
+                            }
+                        }
+                        _ => {}
+                    }
+                    sys_yield();
+                    continue;
+                }
+            }
+        }
+
+        // ── Collar Enforce synthetic proof ──
+        if COLLAR_ENFORCE_PROOF_ENABLED {
+            unsafe {
+                let stage = COLLAR_ENFORCE_PROOF_STAGE;
+                if stage < 6 {
+                    COLLAR_ENFORCE_PROOF_STAGE = stage + 1;
+                    serial_println!("[collar.enforce.proof] stage={}", stage);
+                    match stage {
+                        0 => {
+                            // Bell-cap app allowed.
+                            let manifest = AppManifest {
+                                surface_id: 410,
+                                title_id: 90,
+                                app_id: 10,
+                                capabilities: AppCapabilityBits::validate(AppCapabilityBits::BELL).unwrap(),
+                            };
+                            collar_auto_grant_from_manifest(&manifest);
+                            let prev = FOCUSED_SURFACE_ID;
+                            FOCUSED_SURFACE_ID = manifest.surface_id;
+                            let d = collar_check_operation(CollarOperation::AccessBell, manifest.surface_id, 0);
+                            FOCUSED_SURFACE_ID = prev;
+                            serial_println!("[collar.enforce.proof.bell.allow] sid={} ok={}", manifest.surface_id, (d == CollarDecision::Allow) as u8);
+                        }
+                        1 => {
+                            // Missing Bell cap denied.
+                            let manifest = AppManifest {
+                                surface_id: 411,
+                                title_id: 91,
+                                app_id: 11,
+                                capabilities: AppCapabilityBits::validate(0).unwrap(),
+                            };
+                            let prev = FOCUSED_SURFACE_ID;
+                            FOCUSED_SURFACE_ID = manifest.surface_id;
+                            let d = collar_check_operation(CollarOperation::AccessBell, manifest.surface_id, 0);
+                            FOCUSED_SURFACE_ID = prev;
+                            serial_println!("[collar.enforce.proof.bell.deny] sid={} ok={}", manifest.surface_id, (d != CollarDecision::Allow) as u8);
+                        }
+                        2 => {
+                            // SexFiles-cap app allowed.
+                            let manifest = AppManifest {
+                                surface_id: 412,
+                                title_id: 92,
+                                app_id: 12,
+                                capabilities: AppCapabilityBits::validate(AppCapabilityBits::SEXFILES).unwrap(),
+                            };
+                            collar_auto_grant_from_manifest(&manifest);
+                            let prev = FOCUSED_SURFACE_ID;
+                            FOCUSED_SURFACE_ID = manifest.surface_id;
+                            let d = collar_check_operation(CollarOperation::AccessSexFiles, manifest.surface_id, 0);
+                            FOCUSED_SURFACE_ID = prev;
+                            serial_println!("[collar.enforce.proof.sexfiles.allow] sid={} ok={}", manifest.surface_id, (d == CollarDecision::Allow) as u8);
+                        }
+                        3 => {
+                            // Missing SexFiles cap denied.
+                            let manifest = AppManifest {
+                                surface_id: 413,
+                                title_id: 93,
+                                app_id: 13,
+                                capabilities: AppCapabilityBits::validate(0).unwrap(),
+                            };
+                            let prev = FOCUSED_SURFACE_ID;
+                            FOCUSED_SURFACE_ID = manifest.surface_id;
+                            let d = collar_check_operation(CollarOperation::AccessSexFiles, manifest.surface_id, 0);
+                            FOCUSED_SURFACE_ID = prev;
+                            serial_println!("[collar.enforce.proof.sexfiles.deny] sid={} ok={}", manifest.surface_id, (d != CollarDecision::Allow) as u8);
+                        }
+                        4 => {
+                            // Dangerous caps always denied.
+                            let prev = FOCUSED_SURFACE_ID;
+                            FOCUSED_SURFACE_ID = 410;
+                            let d0 = collar_check_operation(CollarOperation::AccessDisplay, 410, 0);
+                            let d1 = collar_check_operation(CollarOperation::AccessShellPolicy, 410, 0);
+                            FOCUSED_SURFACE_ID = prev;
+                            serial_println!("[collar.enforce.proof.dangerous.deny] display={} policy={}",
+                                (d0 != CollarDecision::Allow) as u8, (d1 != CollarDecision::Allow) as u8);
+                        }
+                        5 => {
+                            // Unknown app surface denied.
+                            let prev = FOCUSED_SURFACE_ID;
+                            FOCUSED_SURFACE_ID = SURFACE_ID_LINEN;
+                            let d = collar_check_operation(CollarOperation::AccessBell, SURFACE_ID_LINEN, 0);
+                            FOCUSED_SURFACE_ID = prev;
+                            serial_println!("[collar.enforce.proof.unknown.deny] sid={} ok={}", SURFACE_ID_LINEN, (d != CollarDecision::Allow) as u8);
+                        }
+                        _ => {}
+                    }
+                    sys_yield();
+                    continue;
+                }
+            }
+        }
+
+        // ── Storage capability synthetic proof ──
+        if STORAGE_CAP_PROOF_ENABLED {
+            unsafe {
+                let stage = STORAGE_CAP_PROOF_STAGE;
+                if stage < 3 {
+                    STORAGE_CAP_PROOF_STAGE = stage + 1;
+                    match stage {
+                        0 => {
+                            let manifest = AppManifest {
+                                surface_id: 420,
+                                title_id: 100,
+                                app_id: 20,
+                                capabilities: AppCapabilityBits::validate(AppCapabilityBits::SEXFILES).unwrap(),
+                            };
+                            collar_auto_grant_from_manifest(&manifest);
+                            let prev = FOCUSED_SURFACE_ID;
+                            FOCUSED_SURFACE_ID = manifest.surface_id;
+                            let d = collar_check_operation(CollarOperation::AccessSexFiles, manifest.surface_id, 0);
+                            FOCUSED_SURFACE_ID = prev;
+                            serial_println!("[sexfiles.cap.proof.grant] sid={} ok={}", manifest.surface_id, (d == CollarDecision::Allow) as u8);
+                        }
+                        1 => {
+                            let manifest = AppManifest {
+                                surface_id: 421,
+                                title_id: 101,
+                                app_id: 21,
+                                capabilities: AppCapabilityBits::validate(0).unwrap(),
+                            };
+                            let prev = FOCUSED_SURFACE_ID;
+                            FOCUSED_SURFACE_ID = manifest.surface_id;
+                            let d = collar_check_operation(CollarOperation::AccessSexFiles, manifest.surface_id, 0);
+                            FOCUSED_SURFACE_ID = prev;
+                            serial_println!("[sexfiles.cap.proof.deny] sid={} ok={}", manifest.surface_id, (d != CollarDecision::Allow) as u8);
+                        }
+                        2 => {
+                            // shell intentionally has no SLOT_STORAGE authority.
+                            let (status, _) = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, 0, 0, 0);
+                            if status == ERR_CAP_INVALID {
+                                serial_println!("[linen.storage.cap.blocker] reason=no_linen_storage_route shell_status={:#x}", status);
+                            } else {
+                                serial_println!("[linen.storage.cap.blocker] reason=unexpected_shell_storage_access shell_status={:#x}", status);
                             }
                         }
                         _ => {}

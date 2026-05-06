@@ -34,9 +34,10 @@ pub fn init() {
     let mut sexstore_id = 0;
     let mut quil_id = 0;
     let mut sexbell_id = 0;
+    let mut sexfiles_id = 0;
 
     // Fixed Spawn Order (Deterministic IDs)
-    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell"];
+    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell", "sexfiles"];
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -80,6 +81,9 @@ pub fn init() {
                         } else if domain_id == 10 {
                             sexbell_id = id;
                             serial_println!("[kernel.spawn.sexbell] id={} path={}", id, path);
+                        } else if domain_id == 11 {
+                            sexfiles_id = id;
+                            serial_println!("[kernel.spawn.sexfiles] id={} path={}", id, path);
                         }
                     }
                     Err(e) => {
@@ -165,6 +169,10 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(linen_id) {
             pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
             serial_println!("✓ Phase 25: Capability SLOT_DISPLAY granted to linen");
+            if sexfiles_id != 0 {
+                pd.grant_capability(sex_pdx::SLOT_STORAGE, CapabilityData::Domain(sexfiles_id));
+                serial_println!("[kernel.cap.storage.linen] linen->sexfiles slot={}", sex_pdx::SLOT_STORAGE);
+            }
         }
         
         if silkshell_id != 0 {
@@ -188,6 +196,10 @@ pub fn init() {
             if let Some(pd) = DOMAIN_REGISTRY.get(quil_id) {
                 pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
                 serial_println!("✓ Capability SLOT_DISPLAY granted to quil");
+                if sexfiles_id != 0 {
+                    pd.grant_capability(sex_pdx::SLOT_STORAGE, CapabilityData::Domain(sexfiles_id));
+                    serial_println!("[kernel.cap.storage.quil] quil->sexfiles slot={}", sex_pdx::SLOT_STORAGE);
+                }
             }
         }
     }

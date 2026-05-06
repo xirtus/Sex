@@ -14,6 +14,7 @@ use alloc::vec::Vec;
 use alloc::format;
 
 use crate::backends::FsBackend;
+use crate::backends::diskfs::{DiskFs, DISKFS_MAX_OBJECTS};
 use crate::messages;
 use crate::pdx::serial_println;
 use crate::vfs;
@@ -51,6 +52,40 @@ pub fn run_all_proofs() {
     proof_non_owner_denied();
 
     serial_println!("[sexfiles.ramfs.proof.done] ALL CHECKS PASSED");
+}
+
+/// Run DiskFS object-table scaffold proof checks.
+/// Activated by SEXOS_DISKFS_OBJECT_TABLE_PROOF.
+pub fn run_diskfs_object_table_proofs() {
+    let disk = DiskFs::new();
+
+    disk.format_init_empty().expect("[diskfs.proof] format failed");
+    serial_println!("[diskfs.proof.format] ok=1");
+
+    let sb = disk.mount().expect("[diskfs.proof] mount failed");
+    let ok_mount = sb.version_major == 1 && sb.block_size == 4096 && sb.object_table_entry_count == DISKFS_MAX_OBJECTS as u32;
+    serial_println!("[diskfs.proof.mount] ok={} gen={}", ok_mount as u8, sb.fs_generation);
+
+    let oid = disk.create_object_entry(1, 9).expect("[diskfs.proof] create failed");
+    serial_println!("[diskfs.proof.create_object] id={} owner=9 kind=1", oid);
+
+    let st = disk.stat_object_entry(oid).expect("[diskfs.proof] stat failed");
+    let ok_stat = st.object_id == oid && st.owner_pd == 9 && st.kind == 1;
+    serial_println!("[diskfs.proof.stat_object] ok={} id={} owner={}", ok_stat as u8, st.object_id, st.owner_pd);
+
+    let invalid = disk.stat_object_entry(u64::MAX);
+    let ok_invalid = matches!(invalid, Err(e) if e == messages::ERR_INVALID_HANDLE);
+    serial_println!("[diskfs.proof.invalid_object] ok={}", ok_invalid as u8);
+
+    // Fill remaining table slots, then one more create must fail with ERR_FULL.
+    let mut i = 1usize;
+    while i < DISKFS_MAX_OBJECTS {
+        let _ = disk.create_object_entry(2, 9).expect("[diskfs.proof] fill failed");
+        i += 1;
+    }
+    let full = disk.create_object_entry(2, 9);
+    let ok_full = matches!(full, Err(e) if e == messages::ERR_FULL);
+    serial_println!("[diskfs.proof.table_full] ok={} slots={}", ok_full as u8, DISKFS_MAX_OBJECTS);
 }
 
 fn proof_create_write_read() {

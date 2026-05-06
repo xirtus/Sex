@@ -42,7 +42,9 @@ SPAWN_GATE="FAIL"
 CLOCK_GATE="FAIL"
 SCHED_GATE="FAIL"
 FAULT_GATE="FAIL"
+SEXFILES_GATE="FAIL"
 FINAL_SCORE="RED_MASTER"
+SEXFILES_BOOT_PROOF="${SEXOS_SEXFILES_BOOT_PROOF:-0}"
 
 # ---- arg parse ----
 while [[ $# -gt 0 ]]; do
@@ -261,7 +263,39 @@ else
 fi
 echo ""
 
-# ---- 4. SCORE ----
+# --- SEXFILES GATE: sexfiles must boot and emit ready marker ---
+echo "--- SEXFILES CHECK ---"
+SEXFILES_READY=$(has_marker '\[sexfiles\.ready\]')
+SEXFILES_KSPAWN=$(has_marker '\[kernel\.spawn\.sexfiles\]')
+SEXFILES_TASK_COUNT=$(count_marker 'task\.running.*pd_id=11')
+
+if [ "$SEXFILES_READY" -eq 1 ]; then
+    print_gate "  v sexfiles.ready" "FOUND"
+else
+    print_gate "  x sexfiles.ready" "MISSING"
+fi
+
+if [ "$SEXFILES_KSPAWN" -eq 1 ]; then
+    print_gate "  v kernel.spawn.sexfiles" "FOUND"
+else
+    print_gate "  x kernel.spawn.sexfiles" "MISSING"
+fi
+
+if [ "$SEXFILES_TASK_COUNT" -ge 1 ]; then
+    print_gate "  v sexfiles (PD 11)" "running (${SEXFILES_TASK_COUNT}x)"
+else
+    print_gate "  x sexfiles (PD 11)" "NO task.running"
+fi
+
+if [ "$SEXFILES_READY" -eq 1 ] && [ "$SEXFILES_TASK_COUNT" -ge 1 ]; then
+    SEXFILES_GATE="PASS"
+elif [ "$SEXFILES_BOOT_PROOF" != "1" ]; then
+    SEXFILES_GATE="SKIP"
+    echo "  (i) SEXOS_SEXFILES_BOOT_PROOF not set — sexfiles gate skipped"
+else
+    SEXFILES_GATE="FAIL"
+fi
+echo ""
 echo "============================================"
 echo " MASTER RUNTIME GATE V1 - RESULTS"
 echo "============================================"
@@ -272,11 +306,16 @@ print_gate "SPAWN_GATE" "$SPAWN_GATE"
 print_gate "CLOCK_GATE" "$CLOCK_GATE"
 print_gate "SCHED_GATE" "$SCHED_GATE"
 print_gate "FAULT_GATE" "$FAULT_GATE"
+print_gate "SEXFILES_GATE" "$SEXFILES_GATE"
 
 if [ "$BUILD_GATE" = "PASS" ] || [ "$BUILD_GATE" = "SKIP" ]; then
     if [ "$SPAWN_GATE" = "PASS" ] && [ "$CLOCK_GATE" = "PASS" ] \
         && [ "$SCHED_GATE" = "PASS" ] && [ "$FAULT_GATE" = "PASS" ]; then
-        FINAL_SCORE="GREEN_MASTER"
+        if [ "$SEXFILES_GATE" = "PASS" ] || [ "$SEXFILES_GATE" = "SKIP" ]; then
+            FINAL_SCORE="GREEN_MASTER"
+        else
+            FINAL_SCORE="YELLOW_MASTER"
+        fi
     elif [ "$SPAWN_GATE" = "PASS" ] && [ "$CLOCK_GATE" = "PASS" ] \
         && [ "$SCHED_GATE" = "PASS" ]; then
         FINAL_SCORE="YELLOW_MASTER"
@@ -316,6 +355,7 @@ cat > docs/handoff/MASTER_RUNTIME_GATE_V1.md << MDEOF
 | CLOCK_GATE | $CLOCK_GATE |
 | SCHED_GATE | $SCHED_GATE |
 | FAULT_GATE | $FAULT_GATE |
+| SEXFILES_GATE | $SEXFILES_GATE |
 | **FINAL_SCORE** | **$FINAL_SCORE** |
 
 ## Marker Counts
@@ -335,12 +375,16 @@ $(for pd in "${PD_LIST[@]}"; do
     fi
 done)
 
+- sexfiles: SEXFILES_GATE=$SEXFILES_GATE ready=$SEXFILES_READY kspawn=$SEXFILES_KSPAWN
+
 $(for entry in "${PD_ID_MAP[@]}"; do
     pd_id="${entry%%:*}"
     pd_name="${entry##*:}"
     count=$(count_marker "task\.running.*pd_id=${pd_id}")
     echo "- $pd_name (PD $pd_id): task.running ${count}x"
 done)
+
+- sexfiles (PD 11): task.running ${SEXFILES_TASK_COUNT}x
 
 ## Clock Liveness
 

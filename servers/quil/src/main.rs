@@ -58,9 +58,25 @@ const OP_RAMFS_WRITE: u64 = 0x32;
 const OP_RAMFS_READ: u64 = 0x31;
 const OP_RAMFS_CLOSE: u64 = 0x33;
 const RAMFS_O_CREATE: u32 = 0x01;
+const STORAGE_CAP_PROOF_ENABLED: bool = option_env!("SEXOS_STORAGE_CAP_PROOF").is_some();
 
 /// Fixed document name (fits RamFS 24-byte bound).
 const QUIL_DOC_NAME: &[u8] = b"quil_doc_01";
+
+fn quil_storage_cap_probe() {
+    // Probe with a bounded fixed name and create flag.
+    let (n0, n1) = pack_name(QUIL_DOC_NAME);
+    let flags_arg = (RAMFS_O_CREATE as u64) << 24;
+    let (status, value) = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, n0, n1, flags_arg);
+    if status == 0 {
+        serial_println!("[quil.storage.cap.ok] status=0 handle={}", value);
+        let _ = pdx_call(SLOT_STORAGE, OP_RAMFS_CLOSE, value, 0, 0);
+    } else if status == sex_pdx::ERR_CAP_INVALID {
+        serial_println!("[quil.storage.cap.blocker] reason=cap_invalid status={:#x}", status);
+    } else {
+        serial_println!("[quil.storage.cap.blocker] reason=route_or_backend status={:#x} value={:#x}", status, value);
+    }
+}
 
 // ── Title bar (rect_index=1, persists independently from palette rect0) ─────
 const QUIL_TITLE_BAR_H: u64 = 32;
@@ -602,6 +618,10 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
+    }
+
+    if STORAGE_CAP_PROOF_ENABLED {
+        quil_storage_cap_probe();
     }
 
     let mut palette_active = true;

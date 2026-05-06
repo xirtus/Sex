@@ -1,7 +1,7 @@
 # MASTER_RUNTIME_GATE_V1
 
-- date: 2026-05-06T11:27:00+02:00
-- git commit: 45070a8
+- date: 2026-05-06T12:43:05+02:00
+- git commit: fc8c04a
 - log_path: /home/xirtus_arch/Documents/microkernel/.gate_master/serial.log
 - probe_seconds: 25
 - qemu: qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku -cdrom sexos-v1.0.0.iso -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0 -serial file:$LOG -display none -no-reboot -no-shutdown
@@ -15,13 +15,14 @@
 | CLOCK_GATE | PASS |
 | SCHED_GATE | PASS |
 | FAULT_GATE | PASS |
+| SEXFILES_GATE | PASS |
 | **FINAL_SCORE** | **GREEN_MASTER** |
 
 ## Marker Counts
 
-- Spawned PDs: 10
+- Spawned PDs: 11
 - Clock ticks (silkbar.clock.send): 12
-- task.running total: 97
+- task.running total: 99
 - Fault/panic hits: 0
 0
 
@@ -34,12 +35,16 @@
 - v silkbar: spawned
 - v linen: spawned
 
-- sexdisplay (PD 1): task.running 19x
-- sexdrive (PD 2): task.running 10x
-- silk-shell (PD 3): task.running 10x
-- sexinput (PD 4): task.running 10x
-- silkbar (PD 6): task.running 10x
-- linen (PD 7): task.running 10x
+- sexfiles: SEXFILES_GATE=PASS ready=1 kspawn=1
+
+- sexdisplay (PD 1): task.running 27x
+- sexdrive (PD 2): task.running 9x
+- silk-shell (PD 3): task.running 9x
+- sexinput (PD 4): task.running 9x
+- silkbar (PD 6): task.running 9x
+- linen (PD 7): task.running 9x
+
+- sexfiles (PD 11): task.running 9x
 
 ## Clock Liveness
 
