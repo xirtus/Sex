@@ -1,6 +1,20 @@
 #![no_std]
 #![no_main]
 
+// SEXUSB SINGLE-DEVICE LIMITATION (see SEXUSB_SINGLE_DEVICE_GUARD_V1.md):
+// sexusb currently enumerates exactly ONE HID device per boot.  The port
+// scan (fn:port_scan) selects the first connected port and breaks, then
+// the entire slot/address/descriptor/bind/poll pipeline operates on that
+// single device.  A second device (e.g. QEMU usb-tablet alongside
+// usb-kbd) is invisible because:
+//   (a) the port scan break skips all ports after the first CCS=1;
+//   (b) only one XHCI slot is ever enabled;
+//   (c) SingleHidBind can hold only one device binding;
+//   (d) the continuous poll loop dispatches to one endpoint.
+// Do NOT remove the break or add a second port without simultaneously
+// adding multi-slot allocation, per-device bind/ring state, and an event
+// demux loop.
+
 use sex_pdx::{serial_println, sys_yield, SLOT_USB_HOST, pdx_call_checked};
 
 const SEXUSB_SYNTHETIC: bool = false; // FORCED OFF
@@ -183,6 +197,11 @@ enum HidRole {
 
 #[derive(Copy, Clone)]
 struct SingleHidBind {
+    // Single-device only.  To support a second HID device this must
+    // become an array (or small Vec) of bindings, each with its own
+    // slot_id, port, and per-device transfer ring / report buffer
+    // (intr_ring_phys, intr_ring_va, intr_report_phys, intr_report_va,
+    //  intr_prod, intr_pcs).  See SEXUSB_SINGLE_DEVICE_GUARD_V1.md.
     slot_id: u32,
     port: u64,
     role: HidRole,
@@ -750,6 +769,18 @@ pub extern "C" fn _start() -> ! {
             target_port = port;
             port_speed = (portsc >> 10) & 0xF;
             serial_println!("[sexusb.xhci.addr_ctx.port.connected] port={} speed={}", port, port_speed);
+            // SINGLE-DEVICE GUARD: break on first connected port.
+            // This is correct ONLY because the downstream pipeline
+            // (slot/address/descriptor/bind/poll) operates on exactly
+            // ONE device.  A second device (e.g. QEMU usb-tablet
+            // alongside usb-kbd on another port) is never reached.
+            // Do NOT remove this break unless you simultaneously add:
+            //   - multi-slot allocation
+            //   - per-device bind state (array of SingleHidBind)
+            //   - per-device interrupt ring / report buffer
+            //   - event demux loop dispatching to sexinput per role
+            // See docs/handoff/SEXUSB_HID_MULTIDEVICE_POINTER_AUDIT_V1.md
+            // and SEXUSB_SINGLE_DEVICE_GUARD_V1.md.
             break;
         }
     }
@@ -2136,6 +2167,16 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
+    // SINGLE-DEVICE HID ROLE CLASSIFICATION
+    // classify_single_hid_role implements priority: keyboard > tablet > mouse.
+    // When only one device is enumerated (the single-device limitation), this
+    // priority selects exactly one role for the entire sexusb session.  If the
+    // first connected device is a keyboard with no pointer interface, the
+    // pointer tablet decoder (below at `is_tablet_device`) compiles but is
+    // unreachable at runtime.  A QEMU usb-tablet on a second port is never
+    // seen because the port scan (fn:port_scan) breaks on the first CCS=1.
+    // See SEXUSB_SINGLE_DEVICE_GUARD_V1.md and
+    // SEXUSB_HID_MULTIDEVICE_POINTER_AUDIT_V1.md.
     let bind_role = classify_single_hid_role(found_hid_keyboard, found_hid_tablet, found_hid_mouse);
     let is_tablet_device = bind_role == HidRole::PointerTablet;
     let is_keyboard_device = bind_role == HidRole::Keyboard;
@@ -2159,6 +2200,11 @@ pub extern "C" fn _start() -> ! {
         pointer_ep_str,
         pointer_role_str
     );
+    // SINGLE-DEVICE BIND: exactly one SingleHidBind is created.  Multi-device
+    // support requires an array of bindings, each with its own slot, transfer
+    // ring, report buffer, and event demux.  This field must become array or
+    // Vec<HidDevice> when Phase 3+4 of SEXUSB_HID_MULTIDEVICE_POINTER_AUDIT
+    // is implemented.
     let single_bind = SingleHidBind {
         slot_id: en_slot_id,
         port: target_port,
@@ -2728,6 +2774,20 @@ pub extern "C" fn _start() -> ! {
     // Inner loop waits indefinitely (no POLL_BUDGET timeout) — safe because the
     // xHCI completes (or NAKs-then-completes) the single enqueued TRB before we
     // re-arm. No second TRB is ever enqueued while one is outstanding.
+    //
+    // SINGLE-DEVICE POLL LOOP: dispatches to ONE role per session (keyboard,
+    // tablet, or mouse — determined by classify_single_hid_role).  The loop
+    // serves exactly one interrupt endpoint on exactly one slot.  A second
+    // HID device (e.g. QEMU usb-tablet on a different port) has no interrupt
+    // ring and no event handler.
+    //
+    // Multi-device support requires:
+    //   - per-device intr_ring_va/phys, intr_report_va/phys, intr_prod, pcs
+    //   - an event demux that matches Transfer Event slot+ep against each
+    //     device's endpoint, dispatching to the appropriate decode/forward
+    //   - re-arm ordering that does not starve one device while another's
+    //     pdx_call IPC is in flight (see keyboard re-arm at line ~2941)
+    // See docs/handoff/SEXUSB_HID_MULTIDEVICE_POINTER_AUDIT_V1.md.
     let dev_kind = if single_bind.role == HidRole::Keyboard {
         "keyboard"
     } else if single_bind.role == HidRole::PointerTablet {
@@ -2999,6 +3059,14 @@ pub extern "C" fn _start() -> ! {
                     core::hint::spin_loop();
                 }
             }
+        // SINGLE-DEVICE GUARD: tablet decode is COMPLETE and CORRECT for
+        // QEMU usb-tablet, but it is REACHABLE ONLY IF the single enumerated
+        // device is classified as tablet (i.e. no boot keyboard interface
+        // found on that device).  When usb-kbd is on the first port, the
+        // port scan selects the keyboard first, classify_single_hid_role
+        // returns Keyboard, and this branch is dead code.  A QEMU usb-tablet
+        // on a second port is never enumerated.  The fix is multi-device
+        // support (see SEXUSB_HID_MULTIDEVICE_POINTER_AUDIT_V1.md).
         } else if is_tablet_device {
             unsafe {
                 static mut INTR_CLASSIFY_BUDGET: u32 = 16;
@@ -3110,7 +3178,10 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[sexusb.hid.tablet.decode.bad] len={}", intr_actual);
             }
         } else {
-            // === Mouse decode path (unchanged) ===
+            // === Mouse decode path ===
+            // Same single-device limitation: reachable only when no keyboard
+            // or tablet interface is found on the single enumerated device.
+            // See SEXUSB_SINGLE_DEVICE_GUARD_V1.md.
             let rb0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
             let rb1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
             let rb2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
