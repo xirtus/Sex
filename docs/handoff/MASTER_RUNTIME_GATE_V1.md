@@ -1,9 +1,9 @@
 # MASTER_RUNTIME_GATE_V1
 
-- date: 2026-05-06T12:43:05+02:00
-- git commit: fc8c04a
+- date: 2026-05-06T15:42:20+02:00
+- git commit: eaf521c
 - log_path: /home/xirtus_arch/Documents/microkernel/.gate_master/serial.log
-- probe_seconds: 25
+- probe_seconds: 15
 - qemu: qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku -cdrom sexos-v1.0.0.iso -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0 -serial file:$LOG -display none -no-reboot -no-shutdown
 
 ## Gate Results
@@ -21,7 +21,7 @@
 ## Marker Counts
 
 - Spawned PDs: 11
-- Clock ticks (silkbar.clock.send): 12
+- Clock ticks (silkbar.clock.send): 11
 - task.running total: 99
 - Fault/panic hits: 0
 0
@@ -48,7 +48,7 @@
 
 ## Clock Liveness
 
-- silkbar.clock.send ticks: 12
+- silkbar.clock.send ticks: 11
 - Minimum required: 2
 
 ## Expected Pass Criteria

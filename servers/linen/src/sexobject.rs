@@ -3,12 +3,14 @@
 // No mutation. No allocation. No I/O. No PDX op. No behavior change.
 // Lives here, not in sex-object-model, so the model crate stays dependency-free.
 //
-// V1 GAPS (documented, not bugs):
-//   object_id      — Linen-local monotonic ID; NOT the same space as SexFiles NEXT_OBJECT_ID.
-//                    These two namespaces unify in a future migration step.
+// OQ5 RESOLVED: object_id field now uses sexfiles_object_id (global) when bound,
+// not the Linen-local monotonic id. Linen-local id remains for session/UI indexing
+// but is NEVER authority-bearing in a SexObjectRef.
+//
+// REMAINING GAPS (documented, not bugs):
 //   first_block    — LinenObject.ramfs_handle is a RamFS file handle, not a block ref.
 //                    Set to 0 until Linen objects bind to SexFiles block addresses.
-//   rights_generation — 0 until Collar is bound (M3).
+//   rights_generation — 0 until Collar is bound (M6).
 //   checksum       — 0; Linen does not compute XOR checksums (SexFiles does).
 //   flags          — 0; LinenObject.flags:u8 bit semantics differ from SexObjectHeader.flags:u32.
 //
@@ -31,16 +33,21 @@ pub const fn linen_kind_to_sex(kind: ObjectKind) -> SexObjectKind {
     }
 }
 
-#[allow(dead_code)]
 /// Construct a logical SexObjectHeader view from a LinenObject.
 ///
-/// V1 gaps: object_id is Linen-local, first_block = 0, rights_generation = 0,
-/// checksum = 0. See module doc for full gap table.
+/// OQ5 RESOLVED: object_id uses sexfiles_object_id (global, authoritative) when
+/// bound (≥1). If not yet bound, object_id=0 (invalid/unbound indicator).
+/// Linen-local object_id is NEVER used as the authority-bearing object_id.
+///
+/// Remaining gaps: first_block = 0, rights_generation = 0, checksum = 0.
+/// See module doc for full gap table.
+#[allow(dead_code)]
 pub fn sexobject_header_from_linen(obj: &LinenObject) -> SexObjectHeader {
     SexObjectHeader {
-        object_id:           obj.object_id,           // Linen-local; not SexFiles object_id
+        // [sexobject.oq5.ref_global] — use global SexFiles id, not Linen-local
+        object_id:           obj.sexfiles_object_id,  // OQ5: global SexFiles ID (0 if unbound)
         content_generation:  obj.generation,           // LinenObject tracks this already
-        rights_generation:   0,                        // V1: Collar not bound yet (M3)
+        rights_generation:   0,                        // V1: Collar not bound yet (M6)
         metadata_generation: obj.generation,
         object_size_bytes:   0,                        // V1: Linen doesn't track content size
         first_block:         0,                        // V1: ramfs_handle ≠ block ref
@@ -53,11 +60,17 @@ pub fn sexobject_header_from_linen(obj: &LinenObject) -> SexObjectHeader {
     }
 }
 
+/// Build a SexObjectRef from a LinenObject.
+///
+/// OQ5 RESOLVED: object_id field uses sexfiles_object_id (global, authoritative).
+/// Linen-local object_id is NEVER used as the authority-bearing id in a SexObjectRef.
+/// If sexfiles_object_id is 0 (not yet bound), the ref carries 0 as a sentinel.
+///
+/// [sexobject.oq5.local_id_reject] — local id excluded from authority ref
+/// [sexobject.oq5.ref_global] — global SexFiles id used in ref
 #[allow(dead_code)]
-/// Build a SexObjectRef from a LinenObject using its local generation.
-/// Note: object_id is Linen-local — not interchangeable with SexFiles refs.
 pub fn linen_object_ref(obj: &LinenObject) -> SexObjectRef {
-    SexObjectRef::new(obj.object_id, obj.generation)
+    SexObjectRef::new(obj.sexfiles_object_id, obj.generation)
 }
 
 // Compile-time size assertions from linen build context.
