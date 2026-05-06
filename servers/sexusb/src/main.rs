@@ -2591,6 +2591,173 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
+    // ===== Second Device Slot Enable =====
+    // If a second connected port was collected by the initial scan
+    // (target_ports[1]), enable an XHCI slot for it and address the
+    // device.  No endpoint configuration, HID descriptor fetch, or
+    // interrupt polling yet — the device is merely detected and
+    // addressed so that future phases can complete enumeration.
+    if target_port_count > 1 {
+        let second_port: u64 = target_ports[1] as u64;
+        serial_println!("[sexusb.slot2.enable.start] port={}", second_port);
+
+        // --- Enable Slot ---
+        let s2_enable_d3 = (TRB_TYPE_ENABLE_SLOT_CMD << 10) | cmd_cycle;
+        trb_write_volatile(cmd_ring_va, cmd_idx, 0, 0, 0, s2_enable_d3);
+        trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle ^ 1);
+        mmio_write32(db_base, 0, 0u32);
+
+        let mut s2_slot_id: u32 = 0;
+        let mut s2_en_ok = false;
+        for _ in 0..POLL_BUDGET {
+            let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+            if (ev_d3 & 1) == (ev_dcs as u32) {
+                let ev_type = (ev_d3 >> 10) & 0x3F;
+                if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
+                    let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                    let cc = (ev_d2 >> 24) & 0xFF;
+                    s2_en_ok = cc == TRB_CC_SUCCESS;
+                    s2_slot_id = (ev_d3 >> 24) & 0xFF;
+                    trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                    ev_idx += 1;
+                    if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                    mmio_write32(intr_base, XHCI_INTR_ERDP, (event_ring_phys + ev_idx * 16) as u32);
+                    mmio_write32(intr_base, XHCI_INTR_ERDP + 4, ((event_ring_phys + ev_idx * 16) >> 32) as u32);
+                }
+                break;
+            }
+            sys_yield();
+        }
+        if !s2_en_ok || s2_slot_id == 0 {
+            serial_println!("[sexusb.slot2.enable.bad]");
+            loop { sys_yield(); }
+        }
+        serial_println!("[sexusb.slot2.enable.ok] slot={}", s2_slot_id);
+        cmd_idx += 1;
+
+        // --- Allocate second device context pages ---
+        let s2_input_phys = sys_alloc_phys(PAGE_SIZE);
+        let s2_device_phys = sys_alloc_phys(PAGE_SIZE);
+        let s2_ep0_ring_phys = sys_alloc_phys(PAGE_SIZE);
+        if s2_input_phys == 0 || s2_input_phys == u64::MAX
+            || s2_device_phys == 0 || s2_device_phys == u64::MAX
+            || s2_ep0_ring_phys == 0 || s2_ep0_ring_phys == u64::MAX
+        {
+            serial_println!("[sexusb.slot2.alloc.bad]");
+            loop { sys_yield(); }
+        }
+        let s2_input_va = sys_map_phys(s2_input_phys, PAGE_SIZE);
+        let s2_device_va = sys_map_phys(s2_device_phys, PAGE_SIZE);
+        let s2_ep0_ring_va = sys_map_phys(s2_ep0_ring_phys, PAGE_SIZE);
+        if s2_input_va == 0 || s2_input_va == u64::MAX
+            || s2_device_va == 0 || s2_device_va == u64::MAX
+            || s2_ep0_ring_va == 0 || s2_ep0_ring_va == u64::MAX
+        {
+            serial_println!("[sexusb.slot2.map.bad]");
+            loop { sys_yield(); }
+        }
+        if (s2_input_phys % 64 != 0) || (s2_device_phys % 64 != 0) || (s2_ep0_ring_phys % 64 != 0) {
+            serial_println!("[sexusb.slot2.align.bad]");
+            loop { sys_yield(); }
+        }
+        unsafe {
+            core::ptr::write_bytes(s2_input_va as *mut u8, 0, PAGE_SIZE as usize);
+            core::ptr::write_bytes(s2_device_va as *mut u8, 0, PAGE_SIZE as usize);
+            core::ptr::write_bytes(s2_ep0_ring_va as *mut u8, 0, PAGE_SIZE as usize);
+        }
+
+        // --- DCBAA entry for second slot ---
+        let s2_dcbaa_ptr = (dcbaa_va + (s2_slot_id as u64) * 8) as *mut u64;
+        unsafe { core::ptr::write_volatile(s2_dcbaa_ptr, s2_device_phys); }
+
+        // --- Read second port speed from PORTSC ---
+        let s2_portsc = mmio_read32(op_base, PORTSC_BASE + (second_port - 1) * PORTSC_STRIDE);
+        let s2_speed: u32 = (s2_portsc >> 10) & 0xF;
+        let s2_mps: u32 = match s2_speed {
+            0 => 8,   // Full Speed
+            1 => 8,   // Low Speed
+            2 => 64,  // High Speed
+            3 => 512, // Super Speed
+            _ => {
+                serial_println!("[sexusb.slot2.speed.bad] speed={}", s2_speed);
+                loop { sys_yield(); }
+            }
+        };
+
+        // --- Build input context: ICC + Slot + EP0 ---
+        // ICC: add slot (bit 0) + EP0 (bit 1)
+        unsafe {
+            core::ptr::write_volatile(s2_input_va as *mut u32, 0u32);        // Drop none
+            core::ptr::write_volatile((s2_input_va + 4) as *mut u32, 3u32);  // Add slot+EP0
+        }
+        // Slot context DW0: context_entries=1, speed
+        let s2_slot_dw0 = (1u32 << SLOT_CTX_ENTRIES_SHIFT) | (s2_speed << SLOT_SPEED_SHIFT);
+        // Slot context DW1: port number at bits 23:16 (QEMU layout)
+        let s2_slot_dw1 = (second_port as u32) << 16;
+        unsafe {
+            let in_slot = (s2_input_va + ctx_stride) as *mut u32;
+            core::ptr::write_volatile(in_slot.add(0), s2_slot_dw0);
+            core::ptr::write_volatile(in_slot.add(1), s2_slot_dw1);
+            let dev_slot = s2_device_va as *mut u32;
+            core::ptr::write_volatile(dev_slot.add(0), s2_slot_dw0);
+            core::ptr::write_volatile(dev_slot.add(1), s2_slot_dw1);
+        }
+        // EP0 context: MPS, Control type, dequeue = ep0_ring_phys | DCS=1
+        let s2_ep0_deq = s2_ep0_ring_phys | DCS_INITIAL;
+        unsafe {
+            let in_ep0 = (s2_input_va + ctx_stride * 2) as *mut u32;
+            core::ptr::write_volatile(in_ep0.add(0), s2_mps << 16);
+            core::ptr::write_volatile(in_ep0.add(1), (EP_TYPE_CTRL_VAL << EP_TYPE_CTRL_SHIFT) | CERR_DEFAULT);
+            core::ptr::write_volatile(in_ep0.add(2), (s2_ep0_deq & 0xFFFF_FFFF) as u32);
+            core::ptr::write_volatile(in_ep0.add(3), (s2_ep0_deq >> 32) as u32);
+            let dev_ep0 = (s2_device_va + ctx_stride) as *mut u32;
+            core::ptr::write_volatile(dev_ep0.add(0), s2_mps << 16);
+            core::ptr::write_volatile(dev_ep0.add(1), (EP_TYPE_CTRL_VAL << EP_TYPE_CTRL_SHIFT) | CERR_DEFAULT);
+            core::ptr::write_volatile(dev_ep0.add(2), (s2_ep0_deq & 0xFFFF_FFFF) as u32);
+            core::ptr::write_volatile(dev_ep0.add(3), (s2_ep0_deq >> 32) as u32);
+        }
+
+        // --- Address Device ---
+        serial_println!("[sexusb.slot2.address.start] port={}", second_port);
+        let s2_addr_d0 = (s2_input_phys & 0xFFFF_FFFF) as u32;
+        let s2_addr_d1 = (s2_input_phys >> 32) as u32;
+        let s2_addr_d3 = (s2_slot_id << 24)
+            | (TRB_TYPE_ADDRESS_DEVICE_CMD << 10)
+            | cmd_cycle;
+        trb_write_volatile(cmd_ring_va, cmd_idx, s2_addr_d0, s2_addr_d1, 0u32, s2_addr_d3);
+        trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle ^ 1);
+        mmio_write32(db_base, 0, 0u32);
+
+        let mut s2_addr_ok = false;
+        for _ in 0..POLL_BUDGET {
+            let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+            if (ev_d3 & 1) == (ev_dcs as u32) {
+                let ev_type = (ev_d3 >> 10) & 0x3F;
+                if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
+                    let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                    let cc = (ev_d2 >> 24) & 0xFF;
+                    let ev_slot = (ev_d3 >> 24) & 0xFF;
+                    if cc == TRB_CC_SUCCESS && ev_slot == s2_slot_id {
+                        s2_addr_ok = true;
+                    }
+                    trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                    ev_idx += 1;
+                    if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                    mmio_write32(intr_base, XHCI_INTR_ERDP, (event_ring_phys + ev_idx * 16) as u32);
+                    mmio_write32(intr_base, XHCI_INTR_ERDP + 4, ((event_ring_phys + ev_idx * 16) >> 32) as u32);
+                }
+                break;
+            }
+            sys_yield();
+        }
+        if !s2_addr_ok {
+            serial_println!("[sexusb.slot2.address.bad]");
+            loop { sys_yield(); }
+        }
+        cmd_idx += 1;
+        serial_println!("[sexusb.slot2.address.ok] slot={} port={}", s2_slot_id, second_port);
+    }
+
     // ===== Configure Endpoint + Interrupt-IN Poll =====
     // Phase: USB_XHCI_INTERRUPT_IN_POLL_PROOF_V1
     if intr_ep_addr == 0 || (intr_ep_addr & 0x80) == 0 || intr_ep_mps == 0 || intr_ep_mps > 16 {
