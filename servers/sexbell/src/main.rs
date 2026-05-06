@@ -2,7 +2,7 @@
 #![no_main]
 
 use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
-              OP_BELL_CLEAR, OP_BELL_MUTE_SENDER, OP_BELL_SUBSCRIBE};
+              OP_BELL_CLEAR, OP_BELL_MUTE_SENDER, OP_BELL_LIST, OP_BELL_SUBSCRIBE};
 
 // Replaced local bell_reply helper with shared sex_pdx::pdx_reply(target_pd, value).
 // Kernel: syscall 29 (SYSCALL_PDX_REPLY), rdi=target_pd, rsi=value.
