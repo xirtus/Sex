@@ -9777,7 +9777,6 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                     mutated = true;
-                    pdx_reply(0);
                 }
                 OP_USB_MOUSE_REPORT => {
                     let buttons = msg.arg1 as u8;
@@ -9882,7 +9881,6 @@ pub extern "C" fn _start() -> ! {
                             mutated = true;
                         }
                     }
-                    pdx_reply(0);
                 }
                 OP_HID_EVENT => {
                     let scancode = msg.arg0 as u8;
@@ -10963,7 +10961,6 @@ pub extern "C" fn _start() -> ! {
                 unsafe {
                     handle_scene_settings_cmd(msg.arg0, msg.arg1, msg.arg2);
                 }
-                pdx_reply(0);
                 mutated = true;
             }
             0x1 => {
