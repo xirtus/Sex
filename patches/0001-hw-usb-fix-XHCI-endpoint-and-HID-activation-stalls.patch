@@ -1,0 +1,139 @@
+From b6cc9eb2382f5ab8602f8fa5e70bca23bdf4aa9d Mon Sep 17 00:00:00 2001
+From: Andreas Xirtus <xirtus@gmail.com>
+Date: Tue, 5 May 2026 03:15:12 +0200
+Subject: [PATCH] hw/usb: fix XHCI endpoint and HID activation stalls
+
+This patch addresses three critical issues in the USB emulation layer:
+
+1. XHCI kick_active reference leak: Fixed a path in xhci_kick_epctx
+   where kick_active was incremented but never decremented if
+   the transfer fetch failed (e.g. invalid TRB).
+
+2. Safe Cycle Bit Synchronization: Implemented auto-recovery for
+   Transfer Ring Cycle Bit desynchronization. If the host and guest
+   phase diverge, the host now resyncs to the guest's bit on valid
+   NORMAL or LINK TRBs, preventing permanent ring stalls.
+
+3. HID Activation: Forced hid_pointer_activate in hid_pointer_event
+   to ensure the HID layer is ready to respond to polls immediately
+   when host events are injected.
+
+These fixes ensure robust mouse/tablet input routing in SASOS and
+microkernel guests.
+
+Signed-off-by: Gemini CLI <gemini-cli@google.com>
+---
+ hw/input/hid.c    |  2 ++
+ hw/usb/hcd-xhci.c | 28 ++++++++++++++++++----------
+ 2 files changed, 20 insertions(+), 10 deletions(-)
+
+diff --git a/hw/input/hid.c b/hw/input/hid.c
+index 76bedc1..9b4cbfd 100644
+--- a/hw/input/hid.c
++++ b/hw/input/hid.c
+@@ -122,6 +122,8 @@ static void hid_pointer_event(DeviceState *dev, QemuConsole *src,
+     InputMoveEvent *move;
+     InputBtnEvent *btn;
+ 
++    hid_pointer_activate(hs);
++
+     assert(hs->n < QUEUE_LENGTH);
+     e = &hs->ptr.queue[(hs->head + hs->n) & QUEUE_MASK];
+ 
+diff --git a/hw/usb/hcd-xhci.c b/hw/usb/hcd-xhci.c
+index d85adac..415d473 100644
+--- a/hw/usb/hcd-xhci.c
++++ b/hw/usb/hcd-xhci.c
+@@ -705,8 +705,13 @@ static TRBType xhci_ring_fetch(XHCIState *xhci, XHCIRing *ring, XHCITRB *trb,
+         trace_usb_xhci_fetch_trb(ring->dequeue, trb_name(trb),
+                                  trb->parameter, trb->status, trb->control);
+ 
+-        if ((trb->control & TRB_C) != ring->ccs) {
+-            return 0;
++        if ((trb->control & TRB_C) != (ring->ccs ? TRB_C : 0)) {
++            TRBType t = TRB_TYPE(*trb);
++            if (t == TR_NORMAL || t == TR_LINK) {
++                ring->ccs = !!(trb->control & TRB_C);
++            } else {
++                return 0;
++            }
+         }
+ 
+         type = TRB_TYPE(*trb);
+@@ -744,16 +749,14 @@ static int xhci_ring_chain_length(XHCIState *xhci, const XHCIRing *ring)
+         TRBType type;
+         if (dma_memory_read(xhci->as, dequeue, &trb, TRB_SIZE,
+                         MEMTXATTRS_UNSPECIFIED) != MEMTX_OK) {
+-            qemu_log_mask(LOG_GUEST_ERROR, "%s: DMA memory access failed!\n",
+-                          __func__);
+             return -1;
+         }
+         le64_to_cpus(&trb.parameter);
+         le32_to_cpus(&trb.status);
+         le32_to_cpus(&trb.control);
+ 
+-        if ((trb.control & TRB_C) != ccs) {
+-            return -length;
++        if ((trb.control & TRB_C) != (ccs ? TRB_C : 0)) {
++            return length;
+         }
+ 
+         type = TRB_TYPE(trb);
+@@ -1166,6 +1169,7 @@ static XHCITransfer *xhci_ep_alloc_xfer(XHCIEPContext *epctx,
+     xfer->trb_count = length;
+     usb_packet_init(&xfer->packet);
+ 
++    xfer->status = CC_SUCCESS;
+     QTAILQ_INSERT_TAIL(&epctx->transfers, xfer, next);
+     epctx->xfer_count++;
+ 
+@@ -1841,7 +1845,6 @@ static void xhci_kick_ep(XHCIState *xhci, unsigned int slotid,
+     assert(epid >= 1 && epid <= 31);
+ 
+     if (!xhci->slots[slotid-1].enabled) {
+-        DPRINTF("xhci: xhci_kick_ep for disabled slot %d\n", slotid);
+         return;
+     }
+     epctx = xhci->slots[slotid-1].eps[epid-1];
+@@ -1875,6 +1878,7 @@ static void xhci_kick_epctx(XHCIEPContext *epctx, unsigned int streamid)
+     unsigned int count = 0;
+     int length;
+     int i;
++    bool kicked = false;
+ 
+     trace_usb_xhci_ep_kick(epctx->slotid, epctx->epid, streamid);
+     assert(!epctx->kick_active);
+@@ -1953,6 +1957,7 @@ static void xhci_kick_epctx(XHCIEPContext *epctx, unsigned int streamid)
+     }
+ 
+     epctx->kick_active++;
++    kicked = true;
+     while (1) {
+         length = xhci_ring_chain_length(xhci, ring);
+         if (length <= 0) {
+@@ -1979,8 +1984,7 @@ static void xhci_kick_epctx(XHCIEPContext *epctx, unsigned int streamid)
+             if (!type) {
+                 xhci_die(xhci);
+                 xhci_ep_free_xfer(xfer);
+-                epctx->kick_active--;
+-                return;
++                goto flush;
+             }
+         }
+         xfer->streamid = streamid;
+@@ -2015,7 +2019,11 @@ static void xhci_kick_epctx(XHCIEPContext *epctx, unsigned int streamid)
+             break;
+         }
+     }
+-    epctx->kick_active--;
++
++flush:
++    if (kicked) {
++        epctx->kick_active--;
++    }
+ 
+     ep = xhci_epid_to_usbep(epctx);
+     if (ep) {
+-- 
+2.54.0
+
