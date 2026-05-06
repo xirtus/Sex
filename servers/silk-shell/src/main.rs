@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use sex_pdx::{
     pdx_call, pdx_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
-    SLOT_DISPLAY, SLOT_SILKBAR, SLOT_SEXSTORE, SLOT_QUIL, SLOT_STORAGE, OP_QUIL_PING,
+    SLOT_DISPLAY, SLOT_SILKBAR, SLOT_SEXSTORE, SLOT_QUIL, SLOT_SPINDLE, SLOT_STORAGE, OP_QUIL_PING,
     OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
     OP_SURFACE_TAB_INFO, OP_APPEARANCE_TOKENS,
     SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
@@ -9883,6 +9883,7 @@ pub extern "C" fn _start() -> ! {
 
         // A3: Initialize lifecycle metadata for all known surfaces.
         lifecycle_init_all();
+        serial_println!("[silk-shell.spindle.route.ready] slot={} surface={}", SLOT_SPINDLE, SURFACE_ID_SPINDLE);
 
         // B1: Initialize scene metadata array from FRAMES state.
         scene_init_all();
@@ -10887,6 +10888,8 @@ pub extern "C" fn _start() -> ! {
                                     || scancode == 0x2F || scancode == 0x30 || scancode == 0x31
                                     || scancode == 0x32)
                             {
+                                // Forward key event to Spindle PD 12 via SLOT_SPINDLE
+                                pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, 1, EV_KEY);
                                 match scancode {
                                     0x1C => { // Enter — dispatch command
                                         serial_println!("[spindle.enter] len={}", YARN.cmd_len);
