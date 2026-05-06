@@ -309,6 +309,16 @@ fn check_spam_budget(caller_pd: u32) -> bool {
 
 // ── Enum Validation ──────────────────────────────────────────────────
 
+/// Look up the maximum privacy level a caller PD may view.
+/// Default-deny: unknown PDs get 0 (Public only).
+/// V1: only silk-shell (domain 3) may view all levels.
+fn max_privacy_for_caller(caller_pd: u32) -> u8 {
+    match caller_pd {
+        3 => 3, // silk-shell: may view FullHidden
+        _ => 0, // default: Public only
+    }
+}
+
 /// Validate a BellCategory enum value (0=Info .. 5=Error).
 fn valid_category(v: u8) -> bool {
     v <= 5
