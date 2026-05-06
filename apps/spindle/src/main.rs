@@ -7,11 +7,11 @@
 //!   • Bounded line editor with synthetic input proof gate
 //!   • Bounded scrollback ring (1024 lines × 80 bytes)
 //!   • No real HID delivery yet — Spindle not kernel-spawned (no PDX slot)
-//!   • No command execution yet
+//!   • Bounded native command dispatcher (8 built-in commands)
 //!   • No terminal emulation (Spindle is NOT sexsh)
 //!
 //! Contract: docs/handoff/SPINDLE_APP_CONTRACT_V1.md
-//! Next: SPINDLE_NATIVE_COMMAND_DISPATCH_V1
+//! Next: SPINDLE_SEXFILES_HISTORY_V1
 
 #![no_std]
 #![no_main]
@@ -247,6 +247,120 @@ unsafe fn render_scrollback(fb: &mut WindowBuffer, sb: &Scrollback) {
     }
 }
 
+// ── Command tokenizer ──────────────────────────────────────────────────────
+
+/// Split a command line into (command_name, args_rest).
+/// Command name is the first whitespace-delimited token.
+/// Args is the remainder after the space (trimmed of leading spaces).
+fn tokenize(line: &[u8]) -> (&[u8], &[u8]) {
+    // Skip leading whitespace
+    let mut start = 0;
+    while start < line.len() && line[start] == b' ' {
+        start += 1;
+    }
+    let line = &line[start..];
+
+    // Find end of command name (space or EOL)
+    let mut cmd_end = 0;
+    while cmd_end < line.len() && line[cmd_end] != b' ' {
+        cmd_end += 1;
+    }
+    let cmd = &line[..cmd_end];
+
+    // Args: skip spaces after command name
+    let mut args_start = cmd_end;
+    while args_start < line.len() && line[args_start] == b' ' {
+        args_start += 1;
+    }
+    let args = &line[args_start..];
+
+    (cmd, args)
+}
+
+// ── Command dispatch ───────────────────────────────────────────────────────
+
+/// Dispatch a command line. Pushes output lines to scrollback.
+/// Returns true if the command was recognized, false for unknown.
+fn dispatch(line: &[u8], sb: &mut Scrollback) -> bool {
+    let (cmd, args) = tokenize(line);
+    if cmd.is_empty() { return true; }
+
+    match cmd {
+        b"help" => {
+            sb.push(b"Built-in commands:");
+            sb.push(b"  help         list commands");
+            sb.push(b"  clear        clear scrollback");
+            sb.push(b"  status       show Spindle status");
+            sb.push(b"  pd           list protection domains");
+            sb.push(b"  servers      list known servers");
+            sb.push(b"  bell         Bell notification status");
+            sb.push(b"  files        SexFiles storage status");
+            sb.push(b"  launch quil  request Quil app surface");
+            true
+        }
+        b"clear" => {
+            // Reset scrollback to empty
+            *sb = Scrollback::new();
+            sb.push(b"Scrollback cleared.");
+            true
+        }
+        b"status" => {
+            sb.push(b"Spindle V1 native console");
+            sb.push(b"SexOS 0.1.0-silk x86_64");
+            sb.push(b"Surface: 80x24, scrollback: 1024 lines");
+            sb.push(b"Commands: 8 built-in, no external dispatch");
+            true
+        }
+        b"pd" => {
+            sb.push(b"Protection domains (static baseline):");
+            sb.push(b"  PD  1  sexdisplay     compositor");
+            sb.push(b"  PD  2  sexdrive       XHCI/NVMe");
+            sb.push(b"  PD  3  silk-shell     window manager");
+            sb.push(b"  PD  4  sexinput       input router");
+            sb.push(b"  PD  5  sexusb         USB host");
+            sb.push(b"  PD  6  silkbar        status bar");
+            sb.push(b"  PD  7  linen          object browser");
+            sb.push(b"  PD  8  sexstore       key-value store");
+            sb.push(b"  PD  9  quil           app launcher");
+            sb.push(b"  PD 10  sexbell        notifications");
+            sb.push(b"  PD 11  sexfiles       virtual filesystem");
+            sb.push(b"Live PD query unavailable in V1 (Spindle not kernel-spawned).");
+            true
+        }
+        b"servers" => {
+            sb.push(b"Known servers (baseline):");
+            sb.push(b"  sexdisplay  sexdrive  silk-shell  sexinput");
+            sb.push(b"  sexusb      silkbar   linen       sexstore");
+            sb.push(b"  quil        sexbell   sexfiles    spindle");
+            true
+        }
+        b"bell" => {
+            sb.push(b"Bell notification bridge: pending.");
+            sb.push(b"Bell server is PD 10, routing not wired from Spindle.");
+            sb.push(b"Requires: kernel spawn + PDX slot + silk-shell routing.");
+            true
+        }
+        b"files" => {
+            sb.push(b"SexFiles storage bridge: pending.");
+            sb.push(b"SexFiles server is PD 11, RamFS backend active.");
+            sb.push(b"Requires: kernel spawn + PDX slot for Spindle.");
+            sb.push(b"In-memory scaffold only -- no real block device route.");
+            true
+        }
+        b"launch" => {
+            if args == b"quil" {
+                sb.push(b"launch.quil: unavailable in V1.");
+                sb.push(b"Spindle not kernel-spawned -- cannot PDX-call silk-shell.");
+                sb.push(b"Requires: kernel spawn, SLOT_SHELL access, OP_APP_SURFACE_REQ.");
+            } else {
+                sb.push(b"launch: unknown target. Use 'launch quil'.");
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 // ── Entry ──────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -369,15 +483,18 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback) {
     let stage4_ok = line.len == 0;
     serial_println!("[spindle.input.proof.nonprintable] ok={} len={}", stage4_ok as u8, line.len);
 
-    // ── Stage 5: Enter — push to scrollback, clear buffer ──
+    // ── Stage 5: Enter — dispatch command, push output to scrollback ──
     line.push(b't'); line.push(b'e'); line.push(b's'); line.push(b't');
-    // Push the command line into scrollback (prefixed as user input)
-    sb.push(line.as_bytes());
+    sb.push(line.as_bytes()); // echo the command line
+    let recognized = dispatch(line.as_bytes(), sb);
+    serial_println!("[spindle.cmd.dispatch] cmd={:?} recognized={}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"), recognized as u8);
+    // "test" is not a recognized command
+    if recognized { serial_println!("[spindle.cmd.dispatch] unexpected_recognized"); }
     serial_println!("[spindle.line.enter] text={:?} scrollback_len={}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"), sb.total_lines);
     line.clear();
     redraw_prompt(fb, &line);
     render_scrollback(fb, sb);
-    let stage5_ok = line.len == 0 && sb.total_lines >= 5; // 4 boot + 1 test
+    let stage5_ok = line.len == 0 && !recognized;
     serial_println!("[spindle.input.proof.enter] ok={} scrollback_lines={}", stage5_ok as u8, sb.total_lines);
 
     // ── Stage 6: Empty backspace is no-op ──
@@ -411,7 +528,50 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback) {
     render_scrollback(fb, sb);
     serial_println!("[spindle.scrollback.render] ok=1 visible_rows={}", VISIBLE_ROWS);
 
+    // ── Stage 10: help command ──
+    let help_recognized = dispatch(b"help", sb);
+    let stage10_ok = help_recognized;
+    serial_println!("[spindle.cmd.dispatch] cmd=help recognized={}", help_recognized as u8);
+
+    // ── Stage 11: status command ──
+    let status_recognized = dispatch(b"status", sb);
+    let stage11_ok = status_recognized;
+    serial_println!("[spindle.cmd.dispatch] cmd=status recognized={}", status_recognized as u8);
+
+    // ── Stage 12: clear command ──
+    let sb_before_clear = sb.total_lines;
+    dispatch(b"clear", sb);
+    let stage12_ok = sb.total_lines < sb_before_clear; // reset to 1 line
+    serial_println!("[spindle.cmd.clear] before={} after={}", sb_before_clear, sb.total_lines);
+
+    // ── Stage 13: pd command ──
+    let pd_recognized = dispatch(b"pd", sb);
+    let stage13_ok = pd_recognized;
+    serial_println!("[spindle.cmd.dispatch] cmd=pd recognized={}", pd_recognized as u8);
+
+    // ── Stage 14: servers command ──
+    let servers_recognized = dispatch(b"servers", sb);
+    let stage14_ok = servers_recognized;
+    serial_println!("[spindle.cmd.dispatch] cmd=servers recognized={}", servers_recognized as u8);
+
+    // ── Stage 15: unknown command ──
+    let unknown_recognized = dispatch(b"asdf", sb);
+    let stage15_ok = !unknown_recognized; // must NOT be recognized
+    serial_println!("[spindle.cmd.unknown] cmd=asdf recognized={} ok={}", unknown_recognized as u8, stage15_ok as u8);
+
+    // ── Stage 16: bell (pending) ──
+    let bell_recognized = dispatch(b"bell", sb);
+    let stage16_ok = bell_recognized;
+    serial_println!("[spindle.cmd.dispatch] cmd=bell recognized={}", bell_recognized as u8);
+
+    // ── Stage 17: launch quil (unavailable) ──
+    let launch_recognized = dispatch(b"launch quil", sb);
+    let stage17_ok = launch_recognized;
+    serial_println!("[spindle.cmd.launch_quil.unavailable] recognized={}", launch_recognized as u8);
+
     let all_ok = stage1_ok && stage2_ok && stage3_ok && stage4_ok
-              && stage5_ok && stage6_ok && wrapped && stage8_ok;
-    serial_println!("[spindle.input.proof.done] ok={}", all_ok as u8);
+              && stage5_ok && stage6_ok && wrapped && stage8_ok
+              && stage10_ok && stage11_ok && stage12_ok && stage13_ok
+              && stage14_ok && stage15_ok && stage16_ok && stage17_ok;
+    serial_println!("[spindle.input.proof.done] ok={} stages=17", all_ok as u8);
 }
