@@ -2,7 +2,7 @@
 #![no_main]
 
 use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
-              OP_BELL_CLEAR, OP_BELL_MUTE_SENDER};
+              OP_BELL_CLEAR, OP_BELL_MUTE_SENDER, OP_BELL_SUBSCRIBE};
 
 // Replaced local bell_reply helper with shared sex_pdx::pdx_reply(target_pd, value).
 // Kernel: syscall 29 (SYSCALL_PDX_REPLY), rdi=target_pd, rsi=value.
@@ -186,6 +186,17 @@ impl BellQueue {
 
 /// Static queue instance. Safe for single-threaded use (sexbell has one thread).
 static mut BELL_QUEUE: BellQueue = BellQueue::new();
+
+/// Generation counter bumped on every queue/mute-visible state change.
+/// Subscribers (OP_BELL_SUBSCRIBE) compare cached generation to detect changes
+/// without scanning the queue. Wrapping is safe: false positive → extra LIST poll.
+static mut BELL_GENERATION: u64 = 1;
+
+/// Bump generation counter (wrapping-safe).
+#[inline(always)]
+fn bump_generation() {
+    unsafe { BELL_GENERATION = BELL_GENERATION.wrapping_add(1); }
+}
 
 // ── Read-Cap Allowlist ──────────────────────────────────────────────
 
@@ -501,6 +512,7 @@ pub extern "C" fn _start() -> ! {
                                     caller_pd, final_lane, event_id);
                             }
                         }
+                        bump_generation();
                     }
                     Err(reason) => {
                         unsafe {
@@ -715,6 +727,7 @@ pub extern "C" fn _start() -> ! {
                             serial_println!("[bell.close.ok] event_id={}", event_id);
                         }
                     }
+                    bump_generation();
                 } else {
                     unsafe {
                         static mut BELL_CLOSE_REJECT_BUDGET: u32 = 4;
@@ -796,6 +809,7 @@ pub extern "C" fn _start() -> ! {
                             serial_println!("[bell.clear.ok] lane=all caller_pd={}", caller_pd);
                         }
                     }
+                    bump_generation();
                 } else if lane_filter <= 5 {
                     // ── Clear specific lane: mark matching entries as dismissed ──
                     let mut dismiss_count: u32 = 0;
@@ -818,6 +832,9 @@ pub extern "C" fn _start() -> ! {
                             serial_println!("[bell.clear.ok] lane={} count={} caller_pd={}",
                                 lane_filter, dismiss_count, caller_pd);
                         }
+                    }
+                    if dismiss_count > 0 {
+                        bump_generation();
                     }
                 } else {
                     unsafe {
@@ -851,6 +868,7 @@ pub extern "C" fn _start() -> ! {
                                             mute_pd, caller_pd);
                                     }
                                 }
+                                bump_generation();
                             }
                             Err(reason) => {
                                 unsafe {
@@ -876,6 +894,7 @@ pub extern "C" fn _start() -> ! {
                                         mute_pd, caller_pd);
                                 }
                             }
+                            bump_generation();
                         } else {
                             unsafe {
                                 static mut BELL_MUTE_REJECT_BUDGET: u32 = 4;
@@ -898,6 +917,33 @@ pub extern "C" fn _start() -> ! {
                                     action, caller_pd);
                             }
                         }
+                    }
+                }
+            }
+
+            OP_BELL_SUBSCRIBE => {
+                let caller_pd = msg.caller_pd;
+                // Same allowlist as OP_BELL_LIST: default-deny.
+                if !is_list_reader_allowed(caller_pd) {
+                    unsafe {
+                        static mut BELL_SUBSCRIBE_DENY_BUDGET: u32 = 8;
+                        let b = &mut BELL_SUBSCRIBE_DENY_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!("[bell.subscribe.deny] caller_pd={}", caller_pd);
+                        }
+                    }
+                    pdx_reply(caller_pd, u64::MAX);
+                    continue;
+                }
+                let gen = unsafe { BELL_GENERATION };
+                pdx_reply(caller_pd, gen);
+                unsafe {
+                    static mut BELL_SUBSCRIBE_REPLY_BUDGET: u32 = 8;
+                    let b = &mut BELL_SUBSCRIBE_REPLY_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!("[bell.subscribe.reply] gen={}", gen);
                     }
                 }
             }
