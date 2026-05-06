@@ -171,14 +171,6 @@ pub extern "C" fn _start() -> ! {
                 Ok(_val) => {
                     // Call enqueued successfully. Reply arrives asynchronously
                     // via pdx_try_listen_raw(0) with type_id=1, caller_pd=1.
-                    unsafe {
-                        static mut BELL_POLL_BUDGET: u32 = 8;
-                        let b = &mut BELL_POLL_BUDGET;
-                        if *b > 0 {
-                            *b -= 1;
-                            sex_pdx::serial_println!("[silkbar.bell.poll] sent");
-                        }
-                    }
                 }
                 Err(e) => {
                     // Bell unavailable (no SLOT_BELL grant or Bell not running).

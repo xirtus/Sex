@@ -593,25 +593,7 @@ pub extern "C" fn _start() -> ! {
                     continue;
                 }
 
-                unsafe {
-                    static mut BELL_READCAP_ALLOW_BUDGET: u32 = 8;
-                    let b = &mut BELL_READCAP_ALLOW_BUDGET;
-                    if *b > 0 {
-                        *b -= 1;
-                        serial_println!("[bell.readcap.allow] caller_pd={} op=list", caller_pd);
-                    }
-                }
-
                 // ── Emit recv marker ──
-                unsafe {
-                    static mut BELL_LIST_RECV_BUDGET: u32 = 8;
-                    let b = &mut BELL_LIST_RECV_BUDGET;
-                    if *b > 0 {
-                        *b -= 1;
-                        serial_println!("[bell.list.recv] lane_filter={:#x} max_results={} caller_pd={}",
-                            lane_filter, max_results, caller_pd);
-                    }
-                }
 
                 let caller_max_privacy = max_privacy_for_caller(caller_pd);
 
@@ -659,7 +641,7 @@ pub extern "C" fn _start() -> ! {
 
                         if lane_filter == 0xFF || entry.final_lane == lane_filter {
                             // ── Emit item marker ──
-                            static mut BELL_LIST_ITEM_BUDGET: u32 = 16;
+                            static mut BELL_LIST_ITEM_BUDGET: u32 = 8;
                             let b = &mut BELL_LIST_ITEM_BUDGET;
                             if *b > 0 {
                                 *b -= 1;
@@ -687,27 +669,6 @@ pub extern "C" fn _start() -> ! {
                             *b -= 1;
                             serial_println!("[bell.list.redact] reason=full_hidden count={} caller_pd={}",
                                 redact_count, caller_pd);
-                        }
-                    }
-                }
-
-                // ── Emit empty or done ──
-                if match_count == 0 {
-                    unsafe {
-                        static mut BELL_LIST_EMPTY_BUDGET: u32 = 4;
-                        let b = &mut BELL_LIST_EMPTY_BUDGET;
-                        if *b > 0 {
-                            *b -= 1;
-                            serial_println!("[bell.list.empty]");
-                        }
-                    }
-                } else {
-                    unsafe {
-                        static mut BELL_LIST_DONE_BUDGET: u32 = 8;
-                        let b = &mut BELL_LIST_DONE_BUDGET;
-                        if *b > 0 {
-                            *b -= 1;
-                            serial_println!("[bell.list.done] count={}", match_count);
                         }
                     }
                 }
