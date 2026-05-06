@@ -43,6 +43,31 @@ const QUIL_ROW_H: u64 = 46;
 const QUIL_ROW_GAP: u64 = 14;
 const QUIL_ACCENT_W: u64 = 8;
 
+/// Palette command IDs. No execution — marker stubs only.
+const CMD_NEW_BUFFER_STUB: u8 = 1;
+const CMD_OPEN_OBJECT_STUB: u8 = 2;
+const CMD_AGENT_REVIEW_STUB: u8 = 3;
+const CMD_RUN_CHECK_STUB: u8 = 4;
+const CMD_SETTINGS_STUB: u8 = 5;
+
+/// Map palette row index to command ID.
+/// Row 0 is top (index 0), row 4 is bottom.
+const PALETTE_COMMANDS: [u8; QUIL_ROWS as usize] = [
+    CMD_NEW_BUFFER_STUB,    // row 0
+    CMD_OPEN_OBJECT_STUB,   // row 1
+    CMD_AGENT_REVIEW_STUB,  // row 2
+    CMD_RUN_CHECK_STUB,     // row 3
+    CMD_SETTINGS_STUB,      // row 4
+];
+
+fn palette_command_for_row(row: u8) -> u8 {
+    if row < QUIL_ROWS {
+        PALETTE_COMMANDS[row as usize]
+    } else {
+        0
+    }
+}
+
 fn draw_palette(selected: u8) {
     // Fill bounded base to avoid a giant flat fullscreen look inside tiled boot layout.
     pdx_call(
@@ -236,7 +261,8 @@ pub extern "C" fn _start() -> ! {
                         }
                         3 => {
                             if palette_active {
-                                serial_println!("[quil.palette.action] kind=enter row={}", selected_row);
+                                let cmd = palette_command_for_row(selected_row);
+                                serial_println!("[quil.palette.action] row={} cmd={}", selected_row, cmd);
                             } else {
                                 serial_println!("[quil.palette.reject] action=enter reason=inactive");
                             }
