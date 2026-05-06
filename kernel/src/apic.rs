@@ -84,6 +84,14 @@ lazy_static! {
 pub static LAPIC_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 pub fn init_apic(rsdp_addr: u64, physical_memory_offset: VirtAddr) {
+    unsafe {
+        use x86_64::instructions::port::Port;
+        let mut pic1_data: Port<u8> = Port::new(0x21);
+        let mut pic2_data: Port<u8> = Port::new(0xA1);
+        pic1_data.write(0xFF);
+        pic2_data.write(0xFF);
+    }
+
     let handler = SexAcpiHandler { physical_memory_offset };
     let tables = unsafe { AcpiTables::from_rsdp(handler, rsdp_addr as usize).expect("ACPI: Failed to parse tables") };
 
@@ -165,7 +173,7 @@ pub unsafe fn map_irq(irq: u8, vector: u8, dest_lapic_id: u8, physical_memory_of
     let io_apic_ptr = io_apic_virt.as_u64() as *mut u32;
 
     let reg_sel = io_apic_ptr;
-    let reg_win = io_apic_ptr.offset(4 / 4);
+    let reg_win = io_apic_ptr.offset(0x10 / 4);
 
     // Redirection table entry for this IRQ (starts at 0x10, 2 registers per IRQ)
     let relative_irq = gsi - io_apic.global_system_interrupt_base;

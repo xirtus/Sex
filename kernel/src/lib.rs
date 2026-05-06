@@ -121,6 +121,9 @@ pub fn kernel_init() {
 
     hal::init_advanced(rsdp_phys as u64, hhdm.offset);
 
+    // Initialize PS/2 Keyboard
+    keyboard::init();
+
     // 4. PD bootstrap (PKU enabled, heap ready)
     init::init();
 
