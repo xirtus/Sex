@@ -1,0 +1,48 @@
+From b6cc9eb2382f5ab8602f8fa5e70bca23bdf4aa9d Mon Sep 17 00:00:00 2001
+From: Andreas Xirtus <xirtus@gmail.com>
+Date: Tue, 5 May 2026 03:15:12 +0200
+Subject: [PATCH] hw/input/hid: re-report held keys and enable tablet REL events
+
+Two fixes for USB HID input reliability:
+
+1. hid_has_events() now returns true while keyboard keys are held
+   (hs->kbd.keys > 0). Without this, the USB interrupt-IN endpoint
+   NAKs while keys are pressed, causing the guest to miss key repeat
+   or release events.
+
+2. The tablet handler mask now includes INPUT_EVENT_MASK_REL in
+   addition to BTN and ABS. This allows relative mouse motion events
+   to reach the tablet device, which is required for hybrid
+   absolute+relative pointer input in microkernel guests.
+
+Signed-off-by: Andreas Xirtus <xirtus@gmail.com>
+---
+ hw/input/hid.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/hw/input/hid.c b/hw/input/hid.c
+index 9b4cbfd..4bcc736 100644
+--- a/hw/input/hid.c
++++ b/hw/input/hid.c
+@@ -74,6 +74,10 @@ static const uint8_t hid_usage_keys[0x100] = {
+ 
+ bool hid_has_events(HIDState *hs)
+ {
++    /* Re-report held keys so interrupt-IN does not NAK while keys are pressed. */
++    if (hs->kind == HID_KEYBOARD && hs->kbd.keys > 0) {
++        return true;
++    }
+     return hs->n > 0 || hs->idle_pending;
+ }
+ 
+@@ -527,7 +531,7 @@ static const QemuInputHandler hid_mouse_handler = {
+ 
+ static const QemuInputHandler hid_tablet_handler = {
+     .name  = "QEMU HID Tablet",
+-    .mask  = INPUT_EVENT_MASK_BTN | INPUT_EVENT_MASK_ABS,
++    .mask  = INPUT_EVENT_MASK_BTN | INPUT_EVENT_MASK_ABS | INPUT_EVENT_MASK_REL,
+     .event = hid_pointer_event,
+     .sync  = hid_pointer_sync,
+ };
+-- 
+2.48.1
