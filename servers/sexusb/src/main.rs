@@ -187,7 +187,7 @@ fn decode_tablet_report(buf: &[u8], len: usize) -> Option<TabletReport> {
     })
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum HidRole {
     Keyboard,
     PointerTablet,
@@ -3076,9 +3076,13 @@ pub extern "C" fn _start() -> ! {
             };
             serial_println!("[sexusb.slot2.cfg_full.ok] received_len={}", s2_received_len);
 
-            // Walk interface descriptors
+            // Walk interface descriptors, classify HID role for slot2
             let s_walk_buf = desc_data_va as *const u8;
             let mut s_walk_off: u64 = 0;
+            let mut s2_found_hid_keyboard: bool = false;
+            let mut s2_found_hid_tablet: bool = false;
+            let mut s2_found_hid_mouse: bool = false;
+            let mut s2_hid_iface: u8 = 0;
             while s_walk_off < s2_received_len {
                 let b_len = unsafe { core::ptr::read_volatile(s_walk_buf.add(s_walk_off as usize)) };
                 let b_type = unsafe { core::ptr::read_volatile(s_walk_buf.add(s_walk_off as usize + 1)) };
@@ -3098,11 +3102,41 @@ pub extern "C" fn _start() -> ! {
                     let b_proto = unsafe { core::ptr::read_volatile(s_walk_buf.add(s_walk_off as usize + 7)) };
                     serial_println!("[sexusb.slot2.desc.iface] idx={} if={} class={:#x} subclass={:#x} proto={:#x}",
                         s_walk_off, b_intf, b_class, b_sub, b_proto);
+                    // HID classification (same logic as first device)
+                    let is_hid = b_class == 0x03;
+                    if is_hid {
+                        let is_boot_mouse = (b_sub == 0x01) && (b_proto == 0x02);
+                        let is_boot_keyboard = (b_sub == 0x01) && (b_proto == 0x01);
+                        if is_boot_mouse {
+                            s2_found_hid_mouse = true;
+                            s2_hid_iface = b_intf;
+                            serial_println!("[sexusb.slot2.hid.classify] iface={} role=mouse", b_intf);
+                        } else if is_boot_keyboard {
+                            s2_found_hid_keyboard = true;
+                            s2_hid_iface = b_intf;
+                            serial_println!("[sexusb.slot2.hid.classify] iface={} role=keyboard", b_intf);
+                        } else if b_proto != 0x01 {
+                            // Non-boot HID: QEMU usb-tablet (subclass=0x00, proto=0x00) lands here
+                            s2_found_hid_tablet = true;
+                            s2_hid_iface = b_intf;
+                            serial_println!("[sexusb.slot2.hid.classify] iface={} role=tablet subclass={:#x} proto={:#x}",
+                                b_intf, b_sub, b_proto);
+                        } else {
+                            serial_println!("[sexusb.slot2.hid.classify] iface={} role=unknown_hid", b_intf);
+                        }
+                    }
                 }
                 s_walk_off += b_len as u64;
             }
-            serial_println!("[sexusb.slot2.desc.config] wTotalLength={} interfaces={} hid=check",
-                s2_w_total_length, s2_num_interfaces);
+            let s2_hid_role: HidRole = classify_single_hid_role(
+                s2_found_hid_keyboard, s2_found_hid_tablet, s2_found_hid_mouse);
+            serial_println!("[sexusb.slot2.hid.role] role={:?} iface={}",
+                s2_hid_role, s2_hid_iface);
+            if s2_hid_role == HidRole::PointerTablet || s2_hid_role == HidRole::PointerMouse {
+                serial_println!("[sexusb.slot2.hid.pointer.ready] iface={}", s2_hid_iface);
+            }
+            serial_println!("[sexusb.slot2.desc.config] wTotalLength={} interfaces={} hid_role={:?}",
+                s2_w_total_length, s2_num_interfaces, s2_hid_role);
         }
         serial_println!("[sexusb.slot2.desc.complete] slot={} port={}", s2_slot_id, second_port);
     }
