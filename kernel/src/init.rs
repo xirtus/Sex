@@ -169,6 +169,13 @@ pub fn init() {
             pd.grant_capability(sex_pdx::SLOT_QUIL, CapabilityData::Domain(quil_id));
             serial_println!("[kernel.cap.quil.route] shell->quil slot={}", sex_pdx::SLOT_QUIL);
         }
+        
+        if sexdisp_id != 0 {
+            if let Some(pd) = DOMAIN_REGISTRY.get(quil_id) {
+                pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
+                serial_println!("✓ Capability SLOT_DISPLAY granted to quil");
+            }
+        }
     }
 
     // Bell self-cap: grant SLOT_BELL to sexbell for listen (no external caps).

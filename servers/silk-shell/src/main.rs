@@ -3898,7 +3898,7 @@ static mut HOVERED_FRAME_ID: u32 = 0;
 static mut HOVER_KIND: u32 = HOVER_NONE;
 static mut HOVERED_FRAME_LIGHT: u32 = FRAME_LIGHT_NONE;
 static mut FOCUS_ID: u64 = 0;
-static mut FOCUSED_SURFACE_ID: u64 = SURFACE_ID_APP;
+static mut FOCUSED_SURFACE_ID: u64 = SURFACE_ID_QUIL;
 /// Active workspace/scene index (0..WORKSPACE_COUNT-1).
 static mut ACTIVE_SCENE_IDX: u8 = 0;
 /// Atlas snapshot: derived overview of all Scenes.
@@ -9662,9 +9662,9 @@ pub extern "C" fn _start() -> ! {
     pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST4, (560u64 << 32) | 900u64, (300u64 << 32) | 120u64);
     serial_println!("[silk-shell] Boot 0xEC surface 103 create sent to sexdisplay");
 
-    // Initialize focus on surface 100 (syncs sexdisplay z-order + color)
-    pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_APP, 0, 0);
-    serial_println!("[silk-shell] Boot focus set to surface 100");
+    // Initialize focus on surface 201 (syncs sexdisplay z-order + color)
+    pdx_call(SLOT_DISPLAY, 0xED, SURFACE_ID_QUIL, 0, 0);
+    serial_println!("[silk-shell] Boot focus set to surface 201 (Quil)");
     // A3: Sync initial FocusRef from boot focus.
     unsafe { sync_focus_ref(); }
 
@@ -9853,6 +9853,20 @@ pub extern "C" fn _start() -> ! {
                     unsafe {
                         // ── Event-class dispatch ──
                         if event_class == EV_KEY && value == 1 {
+                            // Track C2: key routing proof
+                            if FOCUSED_SURFACE_ID == SURFACE_ID_QUIL {
+                                unsafe {
+                                    static mut KEY_ROUTE_BUDGET: u32 = 16;
+                                    let b = &mut KEY_ROUTE_BUDGET;
+                                    if *b > 0 {
+                                        *b -= 1;
+                                        serial_println!("[silk-shell.key.route] owner=quil sid={} scancode={:#x}", SURFACE_ID_QUIL, scancode);
+                                    }
+                                }
+                                pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+                                mutated = true;
+                            }
+
                             // ── Scene Settings panel key intercept ──────────────
                             // When panel visible, route 1/2/3/Esc to panel commands.
                             // [shell.scene.settings.panel.key] budget 16.
