@@ -9560,25 +9560,24 @@ pub extern "C" fn _start() -> ! {
         );
     }
 
-    // Quil fills the full content rect at boot.
+    // Dynamic non-overlapping tiled demo layout for boot:
+    // Quil = left/main tile, Linen = right/secondary tile.
+    let gutter: u32 = 16;
+    let min_w = P.min_width as u32;
+    let min_h = P.min_height as u32;
+    let tile_h: u32 = content_h.max(min_h);
+    let main_w_target = content_w.saturating_mul(72) / 100;
+    let side_w_target = content_w.saturating_sub(main_w_target).saturating_sub(gutter);
+    let side_w: u32 = side_w_target.max(min_w).min(content_w.saturating_sub(min_w).saturating_sub(gutter));
+    let main_w: u32 = content_w.saturating_sub(side_w).saturating_sub(gutter).max(min_w);
     let boot_quil_x = content_x;
     let boot_quil_y = content_y;
-    let boot_quil_w = content_w.max(P.min_width);
-    let boot_quil_h = content_h.max(P.min_height as u32);
-
-    // Linen remains visible as a bounded demo surface inside content area.
-    let linen_w: u32 = LINEN_BOOT_W.min(content_w.max(P.min_width));
-    let linen_h: u32 = LINEN_BOOT_H.min(content_h.max(P.min_height as u32));
-    let linen_margin: i32 = 24;
-    let mut boot_linen_x = content_x + linen_margin;
-    let mut boot_linen_y = content_y + linen_margin;
-    if content_w > linen_w {
-        boot_linen_x = content_x + (content_w - linen_w) as i32 - linen_margin;
-    }
-    if content_h > linen_h {
-        boot_linen_y = content_y + linen_margin;
-    }
-    let (boot_linen_x, boot_linen_y) = clamp_position(boot_linen_x, boot_linen_y, linen_w, linen_h);
+    let boot_quil_w = main_w;
+    let boot_quil_h = tile_h;
+    let boot_linen_x = content_x + boot_quil_w as i32 + gutter as i32;
+    let boot_linen_y = content_y;
+    let linen_w: u32 = side_w;
+    let linen_h: u32 = tile_h;
 
     unsafe {
         SURFACE_201_X = boot_quil_x;
@@ -9602,6 +9601,8 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk-shell] Boot 0xEC surface 200 (Linen) created");
     serial_println!("[silk-shell.boot.surface.create] sid={} owner=linen", SURFACE_ID_LINEN);
     serial_println!("[silk-shell.ui.ready] surfaces=2");
+    serial_println!("[silk-shell.boot.layout.tiled] mode=2pane main_sid={} side_sid={} gutter={}",
+        SURFACE_ID_QUIL, SURFACE_ID_LINEN, gutter);
 
     // Deterministic boot-readiness proof for Linen/Quil visibility ordering.
     unsafe {
@@ -9630,17 +9631,14 @@ pub extern "C" fn _start() -> ! {
             let q_visible = surface_is_alive(SURFACE_ID_QUIL) && !is_tombstoned(SURFACE_ID_QUIL);
             let l_visible = surface_is_alive(SURFACE_ID_LINEN) && !is_tombstoned(SURFACE_ID_LINEN);
             serial_println!("[silk-shell.boot.surface.visible] sid={} visible={}", SURFACE_ID_QUIL, if q_visible { 1 } else { 0 });
-            if l_visible {
-                serial_println!("[silk-shell.boot.surface.hidden] sid={} reason=focused_quil_covers", SURFACE_ID_LINEN);
-            } else {
-                serial_println!("[silk-shell.boot.surface.hidden] sid={} reason=inactive_or_tombstoned", SURFACE_ID_LINEN);
-            }
+            serial_println!("[silk-shell.boot.surface.visible] sid={} visible={}", SURFACE_ID_LINEN, if l_visible { 1 } else { 0 });
 
-            // Visible boot stack truth: focused Quil is top and sole visible boot target.
-            if q_visible {
-                serial_println!("[silk-shell.boot.zorder] visible_count=1 first={}", SURFACE_ID_QUIL);
+            // Visible boot stack truth: focused Quil is top, Linen remains visible (non-overlap).
+            if q_visible && l_visible {
+                serial_println!("[silk-shell.boot.zorder] visible_count=2 first={} second={}", SURFACE_ID_QUIL, SURFACE_ID_LINEN);
             } else {
-                serial_println!("[silk-shell.boot.zorder.reject] reason=focused_not_visible sid={}", SURFACE_ID_QUIL);
+                serial_println!("[silk-shell.boot.zorder.reject] reason=boot_pair_not_visible q={} l={}",
+                    if q_visible { 1 } else { 0 }, if l_visible { 1 } else { 0 });
             }
         }
     }
@@ -9655,7 +9653,7 @@ pub extern "C" fn _start() -> ! {
     }
     // A3: Sync initial FocusRef from boot focus.
     unsafe { sync_focus_ref(); }
-    serial_println!("[silk-shell.boot.ui.ready] surfaces=1 focus={}", SURFACE_ID_QUIL);
+    serial_println!("[silk-shell.boot.ui.ready] surfaces=2 focus={}", SURFACE_ID_QUIL);
 
     // Send initial tab metadata for frame 1 (surface 100: 1 tab, active tab 0)
     unsafe { send_frame_tab_info(1); }
