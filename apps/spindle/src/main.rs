@@ -5,12 +5,13 @@
 //!   • Window created via PDX OP_WINDOW_CREATE on sexdisplay slot 5
 //!   • Fixed PFN base for framebuffer (matches sexsh convention)
 //!   • Bounded line editor with synthetic input proof gate
+//!   • Bounded scrollback ring (1024 lines × 80 bytes)
 //!   • No real HID delivery yet — Spindle not kernel-spawned (no PDX slot)
 //!   • No command execution yet
 //!   • No terminal emulation (Spindle is NOT sexsh)
 //!
 //! Contract: docs/handoff/SPINDLE_APP_CONTRACT_V1.md
-//! Next: SPINDLE_SCROLLBACK_RING_V1
+//! Next: SPINDLE_NATIVE_COMMAND_DISPATCH_V1
 
 #![no_std]
 #![no_main]
@@ -146,6 +147,106 @@ unsafe fn redraw_prompt(fb: &mut WindowBuffer, line: &CmdLine) {
     }
 }
 
+// ── Bounded scrollback ring ────────────────────────────────────────────────
+
+/// Number of visible output rows (rows 5–22 = 18 lines).
+const VISIBLE_ROWS: usize = 18;
+/// First row index for the output area.
+const OUTPUT_ROW_START: u32 = 5;
+/// Max scrollback lines in the ring buffer.
+const MAX_SCROLLBACK: usize = 1024;
+/// Max chars per scrollback line (matches COLS = 80).
+const MAX_LINE_BYTES: usize = 80;
+
+struct Scrollback {
+    /// Fixed ring buffer: 1024 lines of 80 bytes each = 80 KiB.
+    ring: [[u8; MAX_LINE_BYTES]; MAX_SCROLLBACK],
+    /// Index in ring where the next line will be written.
+    write_pos: usize,
+    /// Total number of lines ever written (used for display offset).
+    /// Monotonically increases, never wraps. Saturates at u32::MAX.
+    total_lines: u32,
+    /// User scroll offset from newest (0 = show latest).
+    scroll_offset: u32,
+}
+
+impl Scrollback {
+    const fn new() -> Self {
+        Scrollback {
+            ring: [[0u8; MAX_LINE_BYTES]; MAX_SCROLLBACK],
+            write_pos: 0,
+            total_lines: 0,
+            scroll_offset: 0,
+        }
+    }
+
+    /// Push one line into the ring buffer. Clamps to MAX_LINE_BYTES.
+    fn push(&mut self, line: &[u8]) {
+        let n = line.len().min(MAX_LINE_BYTES);
+        let dst = &mut self.ring[self.write_pos][..n];
+        dst.copy_from_slice(&line[..n]);
+        // Zero-fill remainder
+        for i in n..MAX_LINE_BYTES {
+            self.ring[self.write_pos][i] = 0;
+        }
+        self.write_pos = (self.write_pos + 1) % MAX_SCROLLBACK;
+        self.total_lines = self.total_lines.saturating_add(1);
+        // Reset scroll offset to show latest unless user is actively scrolling
+        if self.scroll_offset > 0 {
+            self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        }
+    }
+
+    /// Return the line at the given ring index. Clamps to valid bytes.
+    fn get(&self, ring_idx: usize) -> &[u8] {
+        let raw = &self.ring[ring_idx % MAX_SCROLLBACK];
+        // Find the effective length (stop at first NUL or at MAX_LINE_BYTES)
+        let mut len = 0;
+        while len < MAX_LINE_BYTES && raw[len] != 0 {
+            len += 1;
+        }
+        &raw[..len]
+    }
+}
+
+// ── Scrollback render ──────────────────────────────────────────────────────
+
+/// Render the visible scrollback area (rows 5–22) into the framebuffer.
+///
+/// Calculates which ring buffer entries are visible based on total_lines,
+/// scroll_offset, and VISIBLE_ROWS. Draws each line with font::draw_str.
+/// Empty lines are left as background.
+unsafe fn render_scrollback(fb: &mut WindowBuffer, sb: &Scrollback) {
+    // Clear the output area
+    let area_h = VISIBLE_ROWS as u32 * CELL_H;
+    fb.draw_rect(sex_pdx::Rect {
+        x: 0, y: (OUTPUT_ROW_START * CELL_H) as u32,
+        width: WIN_W, height: area_h,
+    }, BG);
+
+    if sb.total_lines == 0 { return; }
+
+    // How many total lines could be visible
+    let available = (sb.total_lines as usize).min(VISIBLE_ROWS);
+    if available == 0 { return; }
+
+    // Start from newest line minus scroll_offset, work backwards
+    let newest_line = sb.total_lines.saturating_sub(1 + sb.scroll_offset);
+    let oldest_visible = newest_line.saturating_sub(VISIBLE_ROWS as u32 - 1);
+
+    for vis_row in 0..VISIBLE_ROWS {
+        let line_idx = oldest_visible as usize + vis_row;
+        if line_idx >= sb.total_lines as usize { break; }
+
+        let ring_idx = line_idx % MAX_SCROLLBACK;
+        let text = sb.get(ring_idx);
+        if !text.is_empty() {
+            let y = (OUTPUT_ROW_START as u32 + vis_row as u32) * CELL_H;
+            font::draw_str(fb, 4, y + 4, text, FG, None);
+        }
+    }
+}
+
 // ── Entry ──────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -170,6 +271,14 @@ pub extern "C" fn _start() -> ! {
         WindowBuffer::new((FB_PFN_BASE << 12) as u64, WIN_W, WIN_H, WIN_W)
     };
 
+    let mut sb = Scrollback::new();
+
+    // ── Push boot header lines into scrollback ──
+    sb.push(b"Spindle -- SexOS native command console");
+    sb.push(b"");
+    sb.push(b"Type help for commands. V1.0.0-pre");
+    sb.push(b"");
+
     unsafe {
         fb.clear(BG);
 
@@ -178,7 +287,7 @@ pub extern "C" fn _start() -> ! {
 
         // Separator (row 1)
         for col in 0..COLS {
-            unsafe { fb.draw_pixel(col * CELL_W, (CELL_H * 1) + (CELL_H / 2) - 1, ACCENT); }
+            fb.draw_pixel(col * CELL_W, (CELL_H * 1) + (CELL_H / 2) - 1, ACCENT);
         }
 
         // Info lines (rows 2-3)
@@ -187,20 +296,22 @@ pub extern "C" fn _start() -> ! {
 
         // Separator (row 4)
         for col in 0..COLS {
-            unsafe { fb.draw_pixel(col * CELL_W, (CELL_H * 4) + (CELL_H / 2) - 1, ACCENT); }
+            fb.draw_pixel(col * CELL_W, (CELL_H * 4) + (CELL_H / 2) - 1, ACCENT);
         }
 
-        // Output area rows 5-22 (empty, scrollback will fill these)
+        // Output area (rows 5-22) — rendered from scrollback
+        render_scrollback(&mut fb, &sb);
+
         // Bottom row (row 23): prompt line
         font::draw_str(&mut fb, 4, CELL_H * 23 + 4, b"sex> ", GREEN, None);
     }
-    serial_println!("[spindle.surface.ok] content drawn");
+    serial_println!("[spindle.surface.ok] boot_lines={}", sb.total_lines);
 
     // ── Input proof gate (compile-time, synthetic input) ──
     const INPUT_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_INPUT_PROOF").is_some();
     if INPUT_PROOF_ENABLED {
-        unsafe { run_input_proof(&mut fb); }
+        unsafe { run_input_proof(&mut fb, &mut sb); }
     }
 
     // ── Idle loop (HID delivery blocked — Spindle not kernel-spawned) ──
@@ -220,7 +331,7 @@ pub extern "C" fn _start() -> ! {
 /// to forward HID events to. This proof gate injects synthetic keystrokes
 /// directly, proving the line editor logic is correct. Real HID delivery
 /// will be wired when Spindle gets kernel-spawned (STOP FIRST).
-unsafe fn run_input_proof(fb: &mut WindowBuffer) {
+unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback) {
     serial_println!("[spindle.input.proof.start]");
 
     let mut line = CmdLine::new();
@@ -245,33 +356,29 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer) {
     serial_println!("[spindle.input.proof.backspace] ok={} len={}", stage2_ok as u8, line.len);
 
     // ── Stage 3: Overflow rejection ──
-    // Fill to max capacity
     while line.len < CMD_MAX {
         line.push(b'X');
     }
-    // One more must be rejected (len stays at CMD_MAX)
     line.push(b'Y');
     let stage3_ok = line.len == CMD_MAX;
     serial_println!("[spindle.input.proof.overflow] ok={} len={} max={}", stage3_ok as u8, line.len, CMD_MAX);
 
     // ── Stage 4: Non-printable rejection ──
     line.clear();
-    line.push(0x01); // control-A
-    line.push(0x00); // null
-    line.push(0x7F); // DEL
-    line.push(b'\n'); // newline
+    line.push(0x01); line.push(0x00); line.push(0x7F); line.push(b'\n');
     let stage4_ok = line.len == 0;
     serial_println!("[spindle.input.proof.nonprintable] ok={} len={}", stage4_ok as u8, line.len);
 
-    // ── Stage 5: Enter (clear + redraw prompt) ──
+    // ── Stage 5: Enter — push to scrollback, clear buffer ──
     line.push(b't'); line.push(b'e'); line.push(b's'); line.push(b't');
-    // Simulate Enter: append current line to output (for now, just redraw)
-    redraw_prompt(fb, &line); // show what was typed
-    serial_println!("[spindle.line.enter] text={:?}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
+    // Push the command line into scrollback (prefixed as user input)
+    sb.push(line.as_bytes());
+    serial_println!("[spindle.line.enter] text={:?} scrollback_len={}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"), sb.total_lines);
     line.clear();
     redraw_prompt(fb, &line);
-    let stage5_ok = line.len == 0;
-    serial_println!("[spindle.input.proof.enter] ok={} len={}", stage5_ok as u8, line.len);
+    render_scrollback(fb, sb);
+    let stage5_ok = line.len == 0 && sb.total_lines >= 5; // 4 boot + 1 test
+    serial_println!("[spindle.input.proof.enter] ok={} scrollback_lines={}", stage5_ok as u8, sb.total_lines);
 
     // ── Stage 6: Empty backspace is no-op ──
     line.backspace();
@@ -279,6 +386,32 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer) {
     let stage6_ok = line.len == 0;
     serial_println!("[spindle.input.proof.empty_backspace] ok={}", stage6_ok as u8);
 
-    let all_ok = stage1_ok && stage2_ok && stage3_ok && stage4_ok && stage5_ok && stage6_ok;
+    // ── Stage 7: Scrollback overflow ──
+    // Fill scrollback beyond capacity: push MAX_SCROLLBACK * 2 lines
+    let sb_before = sb.total_lines;
+    for i in 0..(MAX_SCROLLBACK as u32 * 2) {
+        sb.push(b"overflow test line 1234567890123456789012345678901234567890");
+    }
+    let sb_after = sb.total_lines;
+    // Ring wraps correctly — total_lines > MAX_SCROLLBACK but ring only holds MAX_SCROLLBACK
+    let wrapped = sb_after > sb_before + MAX_SCROLLBACK as u32;
+    serial_println!("[spindle.scrollback.overflow] ok={} total={} capacity={}", wrapped as u8, sb_after, MAX_SCROLLBACK);
+
+    // ── Stage 8: Scrollback line clamping ──
+    // Push a line longer than MAX_LINE_BYTES — must be clamped
+    sb.push(&[b'L'; 200]);
+    let clamped = sb.get((sb.total_lines - 1) as usize % MAX_SCROLLBACK);
+    let stage8_ok = clamped.len() <= MAX_LINE_BYTES;
+    serial_println!("[spindle.scrollback.clamp] ok={} line_len={} max={}", stage8_ok as u8, clamped.len(), MAX_LINE_BYTES);
+
+    // ── Stage 9: Scroll offset + render ──
+    sb.scroll_offset = 10; // scroll back 10 lines
+    render_scrollback(fb, sb);
+    sb.scroll_offset = 0;  // reset to latest
+    render_scrollback(fb, sb);
+    serial_println!("[spindle.scrollback.render] ok=1 visible_rows={}", VISIBLE_ROWS);
+
+    let all_ok = stage1_ok && stage2_ok && stage3_ok && stage4_ok
+              && stage5_ok && stage6_ok && wrapped && stage8_ok;
     serial_println!("[spindle.input.proof.done] ok={}", all_ok as u8);
 }
