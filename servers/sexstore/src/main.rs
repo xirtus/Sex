@@ -18,7 +18,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-use sex_pdx::{pdx_listen_raw, serial_println, SLOT_SEXSTORE};
+use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println, SLOT_SEXSTORE};
 
 // Local opcode definitions — promoted to sex-pdx when silk-shell integration lands.
 // Kept local to avoid sex-pdx change and ABI hash update this phase.
@@ -119,28 +119,6 @@ static mut LOG_DURABLE_WRITE_FAIL: u32 = 8;
 // update page_read/page_write to use the new target.
 static mut DURABLE_REGION: [u8; 1024] = [0u8; 1024];
 
-// Reply to caller via kernel syscall 29 (SYSCALL_PDX_REPLY).
-// sex-pdx's pdx_reply() uses syscall 1 — unhandled in current kernel. Use 29 directly.
-// Kernel: rdi=target_pd, rsi=value → pushed to target's incoming_replies buffer.
-// Caller reads reply via pdx_listen_raw(0) → msg.arg0 = this value.
-#[inline(always)]
-unsafe fn kv_reply(target_pd: u64, val: u64) {
-    core::arch::asm!(
-        "syscall",
-        in("rax") 29u64,
-        in("rdi") target_pd,
-        in("rsi") val,
-        out("rcx") _,
-        out("r11") _,
-        options(nostack),
-    );
-}
-
-// Reply with status code (sets bit 63 to distinguish from stored value).
-#[inline(always)]
-unsafe fn kv_reply_status(target_pd: u64, status: u64) {
-    kv_reply(target_pd, REPLY_STATUS_BIT | status);
-}
 
 /// Bump slot generation (wraps 255 → 1, never 0).
 #[inline(always)]
@@ -536,9 +514,9 @@ pub extern "C" fn _start() -> ! {
                             }
                         }
                         if cls == 0 {
-                            kv_reply_status(caller, KV_INVALID_KEY);
+                            pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_INVALID_KEY);
                         } else {
-                            kv_reply_status(caller, KV_DENIED);
+                            pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_DENIED);
                         }
                         continue;
                     }
@@ -557,7 +535,7 @@ pub extern "C" fn _start() -> ! {
                             LOG_PUT_REJECT -= 1;
                             serial_println!("[sexstore.put.reject] caller={} key={} status=invalid_value reason=envelope_fail", caller, key);
                         }
-                        kv_reply_status(caller, KV_INVALID_VALUE);
+                        pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_INVALID_VALUE);
                         continue;
                     }
 
@@ -603,7 +581,7 @@ pub extern "C" fn _start() -> ! {
                         // E13: durable write after RAM commit.
                         let kv_ref: &[KvSlot; 16] = &*(core::ptr::addr_of!(KV) as *const [KvSlot; 16]);
                         durable_write_all(kv_ref);
-                        kv_reply_status(caller, KV_OK);
+                        pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_OK);
                     } else {
                         // Pass 2: find empty slot or reclaim tombstoned slot.
                         let mut inserted = false;
@@ -667,7 +645,7 @@ pub extern "C" fn _start() -> ! {
                                 serial_println!("[sexstore.put.reject] caller={} key={} status=full reason=table_full", caller, key);
                             }
                         }
-                        kv_reply_status(caller, status);
+                        pdx_reply(caller as u32, REPLY_STATUS_BIT | status);
                     }
 
                     if LOG_PUT > 0 {
@@ -703,9 +681,9 @@ pub extern "C" fn _start() -> ! {
                             }
                         }
                         if cls == 0 {
-                            kv_reply_status(caller, KV_INVALID_KEY);
+                            pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_INVALID_KEY);
                         } else {
-                            kv_reply_status(caller, KV_DENIED);
+                            pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_DENIED);
                         }
                         continue;
                     }
@@ -740,7 +718,7 @@ pub extern "C" fn _start() -> ! {
                                 LOG_GET_ALLOW -= 1;
                                 serial_println!("[sexstore.get.allow] caller={} key={} status=ok state=1 gen={}", caller, key, slot_gen);
                             }
-                            kv_reply(caller, result);
+                            pdx_reply(caller as u32, result);
                         }
                         2 => {
                             // Tombstoned — return NOT_FOUND with marker.
@@ -752,7 +730,7 @@ pub extern "C" fn _start() -> ! {
                                 LOG_GET_REJECT -= 1;
                                 serial_println!("[sexstore.get.reject] caller={} key={} status=not_found reason=tombstoned", caller, key);
                             }
-                            kv_reply_status(caller, KV_NOT_FOUND);
+                            pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_NOT_FOUND);
                         }
                         _ => {
                             // Not found.
@@ -760,7 +738,7 @@ pub extern "C" fn _start() -> ! {
                                 LOG_GET_REJECT -= 1;
                                 serial_println!("[sexstore.get.reject] caller={} key={} status=not_found reason=missing", caller, key);
                             }
-                            kv_reply_status(caller, KV_NOT_FOUND);
+                            pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_NOT_FOUND);
                         }
                     }
 
@@ -800,9 +778,9 @@ pub extern "C" fn _start() -> ! {
                             }
                         }
                         if cls == 0 {
-                            kv_reply_status(caller, KV_INVALID_KEY);
+                            pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_INVALID_KEY);
                         } else {
-                            kv_reply_status(caller, KV_DENIED);
+                            pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_DENIED);
                         }
                         continue;
                     }
@@ -849,7 +827,7 @@ pub extern "C" fn _start() -> ! {
                             // E13: durable write after tombstone.
                             let kv_ref: &[KvSlot; 16] = &*(core::ptr::addr_of!(KV) as *const [KvSlot; 16]);
                             durable_write_all(kv_ref);
-                            kv_reply_status(caller, KV_OK);
+                            pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_OK);
                         }
                         2 => {
                             // Already tombstoned — idempotent.
@@ -864,7 +842,7 @@ pub extern "C" fn _start() -> ! {
                             // E13: durable write after idempotent delete (tombstone state already persisted).
                             let kv_ref: &[KvSlot; 16] = &*(core::ptr::addr_of!(KV) as *const [KvSlot; 16]);
                             durable_write_all(kv_ref);
-                            kv_reply_status(caller, KV_OK);
+                            pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_OK);
                         }
                         _ => {
                             // Not found.
@@ -872,7 +850,7 @@ pub extern "C" fn _start() -> ! {
                                 LOG_DELETE_REJECT -= 1;
                                 serial_println!("[sexstore.delete.reject] caller={} key={} status=not_found reason=missing", caller, key);
                             }
-                            kv_reply_status(caller, KV_NOT_FOUND);
+                            pdx_reply(caller as u32, REPLY_STATUS_BIT | KV_NOT_FOUND);
                         }
                     }
                 }
@@ -883,7 +861,7 @@ pub extern "C" fn _start() -> ! {
                         LOG_REPLY_ERROR -= 1;
                         serial_println!("[sexstore.reply.error] caller={} op={:#x}", caller, msg.type_id);
                     }
-                    kv_reply(caller, 0);
+                    pdx_reply(caller as u32, 0);
                 }
             }
         }
