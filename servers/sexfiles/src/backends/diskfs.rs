@@ -2,8 +2,9 @@ use crate::backends::FsBackend;
 use crate::messages;
 use core::sync::atomic::{AtomicU64, Ordering};
 use sex_pdx::{
-    pdx_call, serial_println, SLOT_BLOCK,
-    BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC,
+    pdx_call, pdx_listen_raw, sys_yield, serial_println, SLOT_BLOCK,
+    SLOT_BUF_LEND, sys_grant_mem_lend,
+    BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC, BLOCK_SECTOR_SIZE, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
 };
 use spin::RwLock;
 
@@ -25,6 +26,24 @@ pub const DISKFS_EXTENT_BLOCK_COUNT: usize = 1024;
 pub const DISKFS_EXTENT_BITMAP_WORDS: usize = DISKFS_EXTENT_BLOCK_COUNT / 64; // 16
 pub const DISKFS_EXTENT_JOURNAL_CAPACITY: usize = 32;
 const DISKFS_EXTENT_JOURNAL_KIND: u16 = 10; // JournalRecordKind discriminator for extent ops
+pub const DISKFS_MANIFEST_LBA: u64 = 2046;
+pub const DISKFS_WRITE_PROOF_LBA: u64 = 2047;
+pub const DISKFS_PROOF_OBJECT_START_LBA: u64 = 2038;
+pub const DISKFS_PROOF_OBJECT_SECTORS: u64 = 8;
+pub const DISKFS_MANIFEST_MAGIC: u64 = 0x3156_4D4B_5349_4453; // "SDISKMV1" LE
+pub const DISKFS_MANIFEST_VERSION: u16 = 1;
+pub const DISKFS_MANIFEST_ENTRY_MAX: u16 = 15;
+pub const DISKFS_MANIFEST_FLAG_READ: u16 = 0x1;
+pub const DISKFS_MANIFEST_FLAG_WRITE: u16 = 0x2;
+pub const DISKFS_MANIFEST_OBJECT_PATH: &[u8] = b"/disk/sexfiles-proof-v1";
+
+#[derive(Clone, Copy)]
+pub struct DiskManifestEntryV1 {
+    pub name_hash: u64,
+    pub start_lba: u64,
+    pub len_bytes: u32,
+    pub flags: u16,
+}
 
 #[derive(Clone, Copy)]
 pub struct SexfilesSuperblock {
@@ -229,12 +248,28 @@ impl DiskFs {
             "[sexfiles.diskfs.call] slot={} opcode={:#x} arg0={:#x} arg1={:#x} arg2={:#x}",
             SLOT_BLOCK, opcode, arg0, arg1, arg2
         );
-        let (status, value) = pdx_call(SLOT_BLOCK, opcode, arg0, arg1, arg2);
-        serial_println!(
-            "[sexfiles.diskfs.reply] status={:#x} value={:#x}",
-            status, value
-        );
-        value
+        // SLOT_BLOCK is a Domain capability → AsyncEnqueue: enqueues to sexdrive's
+        // ring and returns (0,0) immediately. Must call pdx_listen_raw(0) to collect
+        // sexdrive's reply via the incoming_replies priority queue (send_reply path).
+        let (send_status, _) = pdx_call(SLOT_BLOCK, opcode, arg0, arg1, arg2);
+        if send_status != 0 {
+            serial_println!("[sexfiles.diskfs.reply] status={:#x} value=0 err=enqueue_fail", send_status);
+            return send_status;
+        }
+        // Loop until we get the IPC reply (type_id=0x1) from sexdrive.
+        // type_id=0x1 = kernel IPC reply; incoming_replies has priority in pdx_listen_raw(0).
+        // Non-reply messages (type_id != 0x1) are stale ring messages from before the proof;
+        // safe to discard during startup (no VFS clients yet).
+        loop {
+            let msg = pdx_listen_raw(0);
+            if msg.type_id == 0x1 {
+                let reply_val = msg.arg0;
+                serial_println!("[sexfiles.diskfs.reply] status=0x0 value={:#x}", reply_val);
+                return reply_val;
+            }
+            // Stale ring message; yield and retry
+            sys_yield();
+        }
     }
 
     /// [sexfiles.diskfs.typed.call] [sexfiles.diskfs.typed.reply]
@@ -255,6 +290,57 @@ impl DiskFs {
             reply
         );
         reply
+    }
+
+    /// [sexfiles.diskfs.payload.read.begin]
+    /// DiskFS-level block payload proof path (block-level, not file-level).
+    /// Allocates a MemLend buffer, issues typed BLOCK_READ, and verifies overwrite.
+    #[allow(dead_code)]
+    pub fn proof_diskfs_read_payload_block() -> Result<(u8, u64), u64> {
+        serial_println!("[sexfiles.diskfs.payload.read.begin] offset=0x0 size=512");
+        let buf_va = sys_grant_mem_lend(SLOT_BLOCK, 4096, SLOT_BUF_LEND);
+        if buf_va == 0 || buf_va == u64::MAX {
+            serial_println!(
+                "[sexfiles.diskfs.payload.err] reason=grant_failed buf_va={:#x}",
+                buf_va
+            );
+            return Err(u64::MAX);
+        }
+        serial_println!("[sexfiles.diskfs.payload.bufcap.grant.ok] buf_va={:#x} slot={}", buf_va, SLOT_BUF_LEND);
+
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), 0xA5u8);
+                i += 1;
+            }
+        }
+
+        serial_println!("[sexfiles.diskfs.payload.block.call] cmd=BLOCK_READ offset=0x0 size=512 buf_cap={:#x}", SLOT_BUF_LEND);
+        let reply = Self::diskfs_block_read(0, 512, SLOT_BUF_LEND);
+        if reply != 0 {
+            serial_println!(
+                "[sexfiles.diskfs.payload.err] reason=reply_fail status={}",
+                reply
+            );
+            return Err(reply);
+        }
+        serial_println!("[sexfiles.diskfs.payload.reply.ok] status=0");
+
+        let first_byte = unsafe { core::ptr::read_volatile(buf_va as *const u8) };
+        if first_byte == 0xA5u8 {
+            serial_println!(
+                "[sexfiles.diskfs.payload.err] reason=sentinel_not_overwritten first_byte={:#x}",
+                first_byte
+            );
+            return Err(u64::MAX);
+        }
+        serial_println!(
+            "[sexfiles.diskfs.payload.verify.ok] overwritten=1 first_byte={:#x}",
+            first_byte
+        );
+        Ok((first_byte, reply))
     }
 
     /// [sexfiles.diskfs.typed.call] [sexfiles.diskfs.typed.reply]
@@ -286,6 +372,207 @@ impl DiskFs {
             reply
         );
         reply
+    }
+
+    pub fn proof_manifest_name_hash(name: &[u8]) -> u64 {
+        // FNV-1a 64-bit, deterministic and bounded.
+        let mut hash = 0xcbf29ce484222325u64;
+        let mut i = 0usize;
+        while i < name.len() {
+            hash ^= name[i] as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+            i += 1;
+        }
+        hash
+    }
+
+    pub fn proof_manifest_build_single_entry_sector() -> [u8; 512] {
+        let mut sector = [0u8; 512];
+        let entry = DiskManifestEntryV1 {
+            name_hash: Self::proof_manifest_name_hash(DISKFS_MANIFEST_OBJECT_PATH),
+            start_lba: DISKFS_PROOF_OBJECT_START_LBA,
+            len_bytes: (DISKFS_PROOF_OBJECT_SECTORS * BLOCK_SECTOR_SIZE) as u32,
+            flags: DISKFS_MANIFEST_FLAG_READ | DISKFS_MANIFEST_FLAG_WRITE,
+        };
+
+        sector[0..8].copy_from_slice(&DISKFS_MANIFEST_MAGIC.to_le_bytes());
+        sector[8..10].copy_from_slice(&DISKFS_MANIFEST_VERSION.to_le_bytes());
+        sector[10..12].copy_from_slice(&(1u16).to_le_bytes());
+        sector[12..16].copy_from_slice(&(0u32).to_le_bytes()); // header flags
+        sector[16..24].copy_from_slice(&(0u64).to_le_bytes()); // reserved0
+        sector[24..28].copy_from_slice(&(0u32).to_le_bytes()); // header crc32 (deferred)
+        sector[28..32].copy_from_slice(&(0u32).to_le_bytes()); // reserved1
+
+        // Single entry at offset 32.
+        let off = 32usize;
+        sector[off..off + 8].copy_from_slice(&entry.name_hash.to_le_bytes());
+        sector[off + 8..off + 16].copy_from_slice(&entry.start_lba.to_le_bytes());
+        sector[off + 16..off + 20].copy_from_slice(&entry.len_bytes.to_le_bytes());
+        sector[off + 20..off + 22].copy_from_slice(&entry.flags.to_le_bytes());
+        sector[off + 22..off + 24].copy_from_slice(&(0u16).to_le_bytes());
+        sector[off + 24..off + 28].copy_from_slice(&(0u32).to_le_bytes()); // entry crc32 (deferred)
+        sector[off + 28..off + 32].copy_from_slice(&(0u32).to_le_bytes());
+        sector
+    }
+
+    pub fn proof_manifest_parse_single_entry(sector: &[u8; 512]) -> Result<DiskManifestEntryV1, u64> {
+        let mut tmp8 = [0u8; 8];
+        let mut tmp4 = [0u8; 4];
+        let mut tmp2 = [0u8; 2];
+
+        tmp8.copy_from_slice(&sector[0..8]);
+        let magic = u64::from_le_bytes(tmp8);
+        if magic != DISKFS_MANIFEST_MAGIC {
+            return Err(messages::ERR_PERM_DENIED as u64);
+        }
+        tmp2.copy_from_slice(&sector[8..10]);
+        let version = u16::from_le_bytes(tmp2);
+        if version != DISKFS_MANIFEST_VERSION {
+            return Err(messages::ERR_PERM_DENIED as u64);
+        }
+        tmp2.copy_from_slice(&sector[10..12]);
+        let entry_count = u16::from_le_bytes(tmp2);
+        if entry_count == 0 || entry_count > DISKFS_MANIFEST_ENTRY_MAX {
+            return Err(messages::ERR_OVERFLOW as u64);
+        }
+
+        let off = 32usize;
+        tmp8.copy_from_slice(&sector[off..off + 8]);
+        let name_hash = u64::from_le_bytes(tmp8);
+        tmp8.copy_from_slice(&sector[off + 8..off + 16]);
+        let start_lba = u64::from_le_bytes(tmp8);
+        tmp4.copy_from_slice(&sector[off + 16..off + 20]);
+        let len_bytes = u32::from_le_bytes(tmp4);
+        tmp2.copy_from_slice(&sector[off + 20..off + 22]);
+        let flags = u16::from_le_bytes(tmp2);
+        let entry = DiskManifestEntryV1 {
+            name_hash,
+            start_lba,
+            len_bytes,
+            flags,
+        };
+
+        if entry.len_bytes == 0 {
+            return Err(BLOCK_ERR_BAD_LEN);
+        }
+        if (entry.len_bytes as u64) > DISKFS_PROOF_OBJECT_SECTORS * BLOCK_SECTOR_SIZE {
+            return Err(BLOCK_ERR_BAD_LEN);
+        }
+        let sectors = (entry.len_bytes as u64 + (BLOCK_SECTOR_SIZE - 1)) / BLOCK_SECTOR_SIZE;
+        if sectors == 0 {
+            return Err(BLOCK_ERR_BAD_LEN);
+        }
+        let end_lba = entry.start_lba.saturating_add(sectors.saturating_sub(1));
+        if entry.start_lba <= DISKFS_MANIFEST_LBA && end_lba >= DISKFS_MANIFEST_LBA {
+            return Err(messages::ERR_OVERFLOW as u64);
+        }
+        if entry.start_lba <= DISKFS_WRITE_PROOF_LBA && end_lba >= DISKFS_WRITE_PROOF_LBA {
+            return Err(messages::ERR_OVERFLOW as u64);
+        }
+        let expected_hash = Self::proof_manifest_name_hash(DISKFS_MANIFEST_OBJECT_PATH);
+        if entry.name_hash != expected_hash {
+            return Err(messages::ERR_PERM_DENIED as u64);
+        }
+        if entry.start_lba != DISKFS_PROOF_OBJECT_START_LBA {
+            return Err(messages::ERR_OVERFLOW as u64);
+        }
+        Ok(entry)
+    }
+
+    pub fn proof_manifest_write_sector(sector: &[u8; 512]) -> Result<(), u64> {
+        let buf_va = sys_grant_mem_lend(SLOT_BLOCK, 4096, SLOT_BUF_LEND);
+        if buf_va == 0 || buf_va == u64::MAX {
+            return Err(BLOCK_ERR_NO_DEVICE);
+        }
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), sector[i]);
+                i += 1;
+            }
+        }
+        let status = Self::diskfs_block_write(DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+        if status == 0 { Ok(()) } else { Err(status) }
+    }
+
+    pub fn proof_manifest_read_sector(out: &mut [u8; 512]) -> Result<(), u64> {
+        let buf_va = sys_grant_mem_lend(SLOT_BLOCK, 4096, SLOT_BUF_LEND);
+        if buf_va == 0 || buf_va == u64::MAX {
+            return Err(BLOCK_ERR_NO_DEVICE);
+        }
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), 0u8);
+                i += 1;
+            }
+        }
+        let status = Self::diskfs_block_read(DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+        if status != 0 {
+            return Err(status);
+        }
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 512 {
+                out[i] = core::ptr::read_volatile(p.add(i));
+                i += 1;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn proof_object_write_sector(lba: u64, sector: &[u8; 512]) -> Result<(), u64> {
+        if lba < DISKFS_PROOF_OBJECT_START_LBA || lba >= (DISKFS_PROOF_OBJECT_START_LBA + DISKFS_PROOF_OBJECT_SECTORS) {
+            return Err(messages::ERR_OVERFLOW as u64);
+        }
+        let buf_va = sys_grant_mem_lend(SLOT_BLOCK, 4096, SLOT_BUF_LEND);
+        if buf_va == 0 || buf_va == u64::MAX {
+            return Err(BLOCK_ERR_NO_DEVICE);
+        }
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), sector[i]);
+                i += 1;
+            }
+        }
+        let status = Self::diskfs_block_write(lba * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+        if status == 0 { Ok(()) } else { Err(status) }
+    }
+
+    pub fn proof_object_read_sector(lba: u64, out: &mut [u8; 512]) -> Result<(), u64> {
+        if lba < DISKFS_PROOF_OBJECT_START_LBA || lba >= (DISKFS_PROOF_OBJECT_START_LBA + DISKFS_PROOF_OBJECT_SECTORS) {
+            return Err(messages::ERR_OVERFLOW as u64);
+        }
+        let buf_va = sys_grant_mem_lend(SLOT_BLOCK, 4096, SLOT_BUF_LEND);
+        if buf_va == 0 || buf_va == u64::MAX {
+            return Err(BLOCK_ERR_NO_DEVICE);
+        }
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), 0u8);
+                i += 1;
+            }
+        }
+        let status = Self::diskfs_block_read(lba * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+        if status != 0 {
+            return Err(status);
+        }
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 512 {
+                out[i] = core::ptr::read_volatile(p.add(i));
+                i += 1;
+            }
+        }
+        Ok(())
     }
 
     fn checksum_superblock(sb: &SexfilesSuperblock) -> u32 {
@@ -1623,6 +1910,291 @@ impl DiskFs {
             0,
         );
         Self::append_journal_record(&mut st, rec)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  File-like operations over the fixed manifest entry.
+    //  Minimal path→LBA resolution with byte-range read/write.
+    //  No directory tree, no allocator, no POSIX semantics.
+    //
+    //  All methods accept a pre-granted buf_va (MemLend buffer VA) to avoid
+    //  re-granting through the same slot. The caller grants once and reuses.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// [sexfiles.disk.file.lookup] — Resolve a named path to its manifest entry.
+    /// Uses the caller-provided buf_va for the read operation.
+    pub fn diskfs_lookup_path(path: &[u8], buf_va: u64) -> Result<DiskManifestEntryV1, u64> {
+        let arg_hash = Self::proof_manifest_name_hash(path);
+        let expected_hash = Self::proof_manifest_name_hash(DISKFS_MANIFEST_OBJECT_PATH);
+        if arg_hash != expected_hash {
+            serial_println!(
+                "[sexfiles.disk.file.lookup.err] reason=unknown_path arg_hash={:#x}",
+                arg_hash
+            );
+            return Err(messages::ERR_NOT_FOUND as u64);
+        }
+        // Clear buffer.
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), 0u8);
+                i += 1;
+            }
+        }
+        let status = Self::diskfs_block_read(
+            DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if status != 0 {
+            serial_println!(
+                "[sexfiles.disk.file.lookup.err] reason=manifest_read code={}",
+                status
+            );
+            return Err(messages::ERR_NOT_FOUND as u64);
+        }
+        let mut sector = [0u8; 512];
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 512 {
+                sector[i] = core::ptr::read_volatile(p.add(i));
+                i += 1;
+            }
+        }
+        let entry = match Self::proof_manifest_parse_single_entry(&sector) {
+            Ok(e) => e,
+            Err(e) => {
+                serial_println!(
+                    "[sexfiles.disk.file.lookup.err] reason=manifest_parse code={}",
+                    e
+                );
+                return Err(messages::ERR_NOT_FOUND as u64);
+            }
+        };
+        serial_println!(
+            "[sexfiles.disk.file.lookup.ok] start_lba={} len={} flags={:#x}",
+            entry.start_lba,
+            entry.len_bytes,
+            entry.flags
+        );
+        Ok(entry)
+    }
+
+    /// [sexfiles.disk.file.write] — Write bytes to a named object at a byte offset.
+    /// Uses read-modify-write per affected sector via buf_va.
+    pub fn diskfs_write_object(
+        path: &[u8],
+        offset: u64,
+        data: &[u8],
+        buf_va: u64,
+    ) -> Result<u64, u64> {
+        serial_println!(
+            "[sexfiles.disk.file.write.begin] offset={} len={}",
+            offset,
+            data.len()
+        );
+        let entry = Self::diskfs_lookup_path(path, buf_va)?;
+
+        if offset >= entry.len_bytes as u64 {
+            serial_println!(
+                "[sexfiles.disk.file.bounds.err] reason=offset_past_end offset={} max={}",
+                offset,
+                entry.len_bytes
+            );
+            return Err(messages::ERR_OVERFLOW as u64);
+        }
+        let end = offset + data.len() as u64;
+        if end > entry.len_bytes as u64 {
+            serial_println!(
+                "[sexfiles.disk.file.bounds.err] reason=end_past_max offset={} len={} max={}",
+                offset,
+                data.len(),
+                entry.len_bytes
+            );
+            return Err(messages::ERR_OVERFLOW as u64);
+        }
+        if data.is_empty() {
+            return Ok(0);
+        }
+
+        let max_lba =
+            DISKFS_PROOF_OBJECT_START_LBA + (end.saturating_sub(1)) / BLOCK_SECTOR_SIZE;
+        if max_lba >= DISKFS_WRITE_PROOF_LBA {
+            serial_println!(
+                "[sexfiles.disk.file.bounds.err] reason=lba_collision max_lba={}",
+                max_lba
+            );
+            return Err(messages::ERR_OVERFLOW as u64);
+        }
+
+        let mut byte_off = offset;
+        let mut data_off: usize = 0;
+        let mut written: u64 = 0;
+
+        while data_off < data.len() {
+            let lba = DISKFS_PROOF_OBJECT_START_LBA + byte_off / BLOCK_SECTOR_SIZE;
+            let sector_off = (byte_off % BLOCK_SECTOR_SIZE) as usize;
+            let space = (BLOCK_SECTOR_SIZE as usize).saturating_sub(sector_off);
+            let chunk = (data.len() - data_off).min(space);
+
+            // Read existing sector into buf_va, then copy to local.
+            unsafe {
+                let p = buf_va as *mut u8;
+                let mut i = 0usize;
+                while i < 512 {
+                    core::ptr::write_volatile(p.add(i), 0u8);
+                    i += 1;
+                }
+            }
+            let status = Self::diskfs_block_read(lba * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+            if status != 0 {
+                return Err(status);
+            }
+            let mut sector = [0u8; 512];
+            unsafe {
+                let p = buf_va as *const u8;
+                let mut i = 0usize;
+                while i < 512 {
+                    sector[i] = core::ptr::read_volatile(p.add(i));
+                    i += 1;
+                }
+            }
+
+            // Modify local copy.
+            let mut j: usize = 0;
+            while j < chunk {
+                sector[sector_off + j] = data[data_off + j];
+                j += 1;
+            }
+
+            // Write modified sector back via buf_va.
+            unsafe {
+                let p = buf_va as *mut u8;
+                let mut i = 0usize;
+                while i < 512 {
+                    core::ptr::write_volatile(p.add(i), sector[i]);
+                    i += 1;
+                }
+            }
+            let status = Self::diskfs_block_write(lba * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+            if status != 0 {
+                return Err(status);
+            }
+
+            written += chunk as u64;
+            byte_off += chunk as u64;
+            data_off += chunk;
+        }
+
+        serial_println!(
+            "[sexfiles.disk.file.write.ok] offset={} written={}",
+            offset,
+            written
+        );
+        Ok(written)
+    }
+
+    /// [sexfiles.disk.file.read] — Read bytes from a named object at a byte offset.
+    /// Uses the caller-provided buf_va. Returns the number of bytes read.
+    pub fn diskfs_read_object(
+        path: &[u8],
+        offset: u64,
+        out: &mut [u8],
+        buf_va: u64,
+    ) -> Result<u64, u64> {
+        serial_println!(
+            "[sexfiles.disk.file.read.begin] offset={} len={}",
+            offset,
+            out.len()
+        );
+        let entry = Self::diskfs_lookup_path(path, buf_va)?;
+
+        if offset >= entry.len_bytes as u64 {
+            serial_println!(
+                "[sexfiles.disk.file.bounds.err] reason=offset_past_end offset={} max={}",
+                offset,
+                entry.len_bytes
+            );
+            return Err(messages::ERR_OVERFLOW as u64);
+        }
+        let end = offset + out.len() as u64;
+        if end > entry.len_bytes as u64 {
+            serial_println!(
+                "[sexfiles.disk.file.bounds.err] reason=end_past_max offset={} len={} max={}",
+                offset,
+                out.len(),
+                entry.len_bytes
+            );
+            return Err(messages::ERR_OVERFLOW as u64);
+        }
+        if out.is_empty() {
+            return Ok(0);
+        }
+
+        let mut byte_off = offset;
+        let mut out_off: usize = 0;
+        let mut total_read: u64 = 0;
+
+        while out_off < out.len() {
+            let lba = DISKFS_PROOF_OBJECT_START_LBA + byte_off / BLOCK_SECTOR_SIZE;
+            let sector_off = (byte_off % BLOCK_SECTOR_SIZE) as usize;
+            let space = (BLOCK_SECTOR_SIZE as usize).saturating_sub(sector_off);
+            let chunk = (out.len() - out_off).min(space);
+
+            unsafe {
+                let p = buf_va as *mut u8;
+                let mut i = 0usize;
+                while i < 512 {
+                    core::ptr::write_volatile(p.add(i), 0u8);
+                    i += 1;
+                }
+            }
+            let status = Self::diskfs_block_read(lba * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+            if status != 0 {
+                return Err(status);
+            }
+
+            let mut sector = [0u8; 512];
+            unsafe {
+                let p = buf_va as *const u8;
+                let mut i = 0usize;
+                while i < 512 {
+                    sector[i] = core::ptr::read_volatile(p.add(i));
+                    i += 1;
+                }
+            }
+
+            let mut j: usize = 0;
+            while j < chunk {
+                out[out_off + j] = sector[sector_off + j];
+                j += 1;
+            }
+
+            total_read += chunk as u64;
+            byte_off += chunk as u64;
+            out_off += chunk;
+        }
+
+        serial_println!(
+            "[sexfiles.disk.file.read.ok] offset={} read={}",
+            offset,
+            total_read
+        );
+        Ok(total_read)
+    }
+
+    /// [sexfiles.disk.fsync] — Issue BLOCK_SYNC via sexdrive.
+    /// Maps to NVMe FLUSH when the backend is wired. Returns 0 on success,
+    /// or the block error code on failure.
+    pub fn diskfs_fsync() -> u64 {
+        serial_println!("[sexfiles.disk.fsync.begin]");
+        let status = Self::diskfs_block_sync();
+        if status == 0 {
+            serial_println!("[sexfiles.disk.fsync.reply.ok]");
+        } else {
+            serial_println!("[sexfiles.disk.fsync.err] status={}", status);
+        }
+        status
     }
 }
 

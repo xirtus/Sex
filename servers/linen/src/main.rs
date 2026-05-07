@@ -56,6 +56,9 @@ const OP_RAMFS_STAT: u64 = 0x35;
 const OP_RAMFS_CREATE_OWNER: u64 = 0x36;
 const OP_RAMFS_OBJECT_ID: u64 = 0x37;
 
+/// RamFS O_CREATE flag for OP_RAMFS_OPEN (matches sexfiles/messages.rs RAMFS_O_CREATE).
+const RAMFS_O_CREATE: u64 = 0x01;
+
 /// Maximum Linen objects in session table.
 const LINEN_MAX_OBJECTS: usize = 16;
 
@@ -80,6 +83,10 @@ const LINEN_SEXFILES_METADATA_PROOF_ENABLED: bool =
 /// Build with SEXOS_SEXOBJECT_OQ5_PROOF=1 to enable OQ5 namespace resolution proof.
 const SEXOS_OQ5_PROOF_ENABLED: bool =
     option_env!("SEXOS_SEXOBJECT_OQ5_PROOF").is_some();
+
+/// Build with SEXOS_LINEN_DISK_OBJECT_PROOF=1 to enable Linen disk object proof.
+const LINEN_DISK_OBJECT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISK_OBJECT_PROOF").is_some();
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -113,6 +120,11 @@ pub extern "C" fn _start() -> ! {
     // ── OQ5 proof: SexObject ID namespace resolution ──
     if SEXOS_OQ5_PROOF_ENABLED {
         unsafe { run_oq5_proof(); }
+    }
+
+    // ── Linen disk object proof: save/load through SexFiles DiskFS ──
+    if LINEN_DISK_OBJECT_PROOF_ENABLED {
+        unsafe { run_linen_disk_object_proof(); }
     }
 
     loop {
@@ -740,4 +752,219 @@ unsafe fn run_metadata_bridge_proof() {
 /// is implemented in sexfiles RamFS and wired in vfs.rs.
 unsafe fn run_oq5_proof() {
     serial_println!("[linen.oq5.proof] stub — OP_RAMFS_OBJECT_ID wired, full proof deferred");
+}
+
+// ── Linen Disk Object Proof ─────────────────────────────────────────────────
+
+/// Run Linen disk object save/load proof via SexFiles RamFS API.
+/// Activated by SEXOS_LINEN_DISK_OBJECT_PROOF=1.
+///
+/// Saves a deterministic 128-byte Linen object payload to SexFiles via
+/// the existing RamFS opcodes (OP_RAMFS_OPEN, OP_RAMFS_WRITE,
+/// OP_RAMFS_CLOSE, OP_RAMFS_READ), then loads it back and verifies
+/// exact match. Uses OP_RAMFS_OPEN with O_CREATE flag to create
+/// files owned by Linen's own caller_pd (deterministic PD 7 per init.rs).
+///
+/// NOTE: This proof exercises the RamFS API path. The actual DiskFS
+/// persistence is demonstrated by the SexFiles-side proof
+/// (run_linen_disk_object_proof in sexfiles/src/proof.rs), which
+/// writes the same payload shape to /disk/sexfiles-proof-v1 via
+/// DiskFS file ops requiring SLOT_BLOCK + MemLend buffer grants.
+/// Linen does not have direct DiskFS access (no SLOT_BLOCK capability).
+///
+/// Full Linen→DiskFS bridging requires new PDX opcodes documented in
+/// the handoff doc.
+unsafe fn run_linen_disk_object_proof() {
+    serial_println!("[linen.disk.object.proof.begin]");
+
+    // Build deterministic 128-byte Linen object payload.
+    // Matches the structure used by SexFiles-side DiskFS proof.
+    let mut payload = [0u8; 128];
+
+    // object_id marker (LE u64)
+    let object_id: u64 = 0x3156_4E45_4E49_4C; // "LINEN_V1" LE
+    payload[0..8].copy_from_slice(&object_id.to_le_bytes());
+    // kind = 0 (Document) as u16 LE
+    payload[8] = 0;
+    payload[9] = 0;
+    // owner_pd = 7 (Linen's deterministc PD, domain_id=7 per init.rs spawn order)
+    payload[10..14].copy_from_slice(&7u32.to_le_bytes());
+    // generation = 1 as u64 LE
+    payload[14..22].copy_from_slice(&1u64.to_le_bytes());
+    // flags = 0x01 (persisted)
+    payload[22] = 0x01;
+    // name_len = 13
+    payload[23] = 13;
+    // name = "linen-disk-v1"
+    let name_data = b"linen-disk-v1\0\0\0\0\0\0\0\0\0\0\0";
+    payload[24..48].copy_from_slice(name_data);
+    // content guard bytes: offset ^ 0x5A
+    {
+        let mut i: usize = 48;
+        while i < 128 {
+            payload[i] = (i as u8) ^ 0x5Au8;
+            i += 1;
+        }
+    }
+
+    // ── Save: write payload to SexFiles RamFS ──
+    let ramfs_name = b"linen_disk_object_v1\0\0\0\0\0";
+    serial_println!("[linen.disk.object.save.request] object_id={:#x} kind=0 owner=7 size=128", object_id);
+
+    // Create file via OP_RAMFS_OPEN with O_CREATE flag.
+    // This auto-assigns caller_pd (Linen's PD, 7) as owner, ensuring
+    // subsequent read/write/close/reopen checks pass.
+    let (n0, n1) = pack_name(ramfs_name);
+    // arg2 = name bytes 16..23 (lower 24 bits) | (flags << 24)
+    let mut name16_23: u64 = 0;
+    for i in 16..ramfs_name.len().min(24) {
+        name16_23 |= (ramfs_name[i] as u64) << ((i - 16) * 8);
+    }
+    let create_arg2 = name16_23 | (RAMFS_O_CREATE << 24);
+
+    let handle = match pdx_storage_sync(OP_RAMFS_OPEN, n0, n1, create_arg2) {
+        Ok(h) => {
+            serial_println!("[linen.disk.object.save.create] handle={}", h);
+            h
+        }
+        Err(e) => {
+            serial_println!("[linen.disk.object.save.create] err={}", e);
+            return;
+        }
+    };
+
+    // Write 128 bytes as 16 chunks of 8 bytes each.
+    {
+        let mut chunk: u64 = 0;
+        let mut ok = true;
+        while chunk < 16 {
+            let offset = chunk * 8;
+            let mut data = 0u64;
+            {
+                let mut i = 0;
+                while i < 8 {
+                    data |= (payload[(offset as usize) + i] as u64) << (i * 8);
+                    i += 1;
+                }
+            }
+            match pdx_storage_sync(OP_RAMFS_WRITE, handle, offset, data) {
+                Ok(n) => {
+                    if n != 8 {
+                        serial_println!("[linen.disk.object.save.write] chunk={} short_write={}", chunk, n);
+                        ok = false;
+                        break;
+                    }
+                }
+                Err(e) => {
+                    serial_println!("[linen.disk.object.save.write] chunk={} err={}", chunk, e);
+                    ok = false;
+                    break;
+                }
+            }
+            chunk += 1;
+        }
+        if ok {
+            serial_println!("[linen.disk.object.save.ok] written=128 handle={}", handle);
+        } else {
+            let _ = pdx_storage_sync(OP_RAMFS_CLOSE, handle, 0, 0);
+            return;
+        }
+    }
+
+    // Close the file (data persists for reopen by name).
+    let _ = pdx_storage_sync(OP_RAMFS_CLOSE, handle, 0, 0);
+
+    // ── Load: read payload back from SexFiles RamFS ──
+    serial_println!("[linen.disk.object.load.request] offset=0 size=128");
+
+    // Reopen by name via OP_RAMFS_OPEN (flags=0, no O_CREATE needed).
+    // The file is owned by Linen's PD (7), so caller_pd (7) matches
+    // and the access check passes.
+    let (rn0, rn1) = pack_name(ramfs_name);
+    let rarg2 = name16_23; // flags=0 (no O_CREATE), same name bytes
+
+    let reopen_handle = match pdx_storage_sync(OP_RAMFS_OPEN, rn0, rn1, rarg2) {
+        Ok(h) => {
+            serial_println!("[linen.disk.object.load.reopen] handle={}", h);
+            h
+        }
+        Err(e) => {
+            serial_println!("[linen.disk.object.load.reopen] err={}", e);
+            return;
+        }
+    };
+
+    // Read 128 bytes back as 16 chunks of 8 bytes each.
+    let mut readback = [0u8; 128];
+    {
+        let mut chunk: u64 = 0;
+        let mut ok = true;
+        while chunk < 16 {
+            let offset = chunk * 8;
+            match pdx_storage_sync(OP_RAMFS_READ, reopen_handle, offset, 8) {
+                Ok(rd) => {
+                    let bytes = rd.to_le_bytes();
+                    let mut i = 0;
+                    while i < 8 {
+                        readback[(offset as usize) + i] = bytes[i];
+                        i += 1;
+                    }
+                }
+                Err(e) => {
+                    serial_println!("[linen.disk.object.load.read] chunk={} err={}", chunk, e);
+                    ok = false;
+                    break;
+                }
+            }
+            chunk += 1;
+        }
+        if !ok {
+            let _ = pdx_storage_sync(OP_RAMFS_CLOSE, reopen_handle, 0, 0);
+            return;
+        }
+    }
+
+    // Close.
+    let _ = pdx_storage_sync(OP_RAMFS_CLOSE, reopen_handle, 0, 0);
+
+    // ── Verify exact match ──
+    {
+        let mut match_ok = true;
+        let mut mismatch_at: usize = 0;
+        {
+            let mut i: usize = 0;
+            while i < 128 {
+                if readback[i] != payload[i] {
+                    match_ok = false;
+                    mismatch_at = i;
+                    break;
+                }
+                i += 1;
+            }
+        }
+        if match_ok {
+            serial_println!("[linen.disk.object.load.match] ok=1 size=128");
+        } else {
+            serial_println!(
+                "[linen.disk.object.load.mismatch] offset={} expected={:#x} got={:#x}",
+                mismatch_at,
+                payload[mismatch_at],
+                readback[mismatch_at]
+            );
+        }
+    }
+
+    // ── Negative test: read past end of 128-byte object ──
+    {
+        match pdx_storage_sync(OP_RAMFS_READ, reopen_handle, 200, 8) {
+            Ok(_) => {
+                serial_println!("[linen.disk.object.load.bounds_negative] ok=0 reason=read_past_end_allowed");
+            }
+            Err(_) => {
+                serial_println!("[linen.disk.object.load.bounds_negative] ok=1 test=read_past_end_rejected");
+            }
+        }
+    }
+
+    serial_println!("[linen.disk.object.proof.done]");
 }

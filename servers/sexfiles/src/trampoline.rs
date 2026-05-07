@@ -67,6 +67,12 @@ pub extern "C" fn trampoline_main() {
         crate::proof::run_sexobject_view_proof();
     }
 
+    const LINEN_DISK_OBJECT_PROOF_ENABLED: bool =
+        option_env!("SEXOS_LINEN_DISK_OBJECT_PROOF").is_some();
+    if LINEN_DISK_OBJECT_PROOF_ENABLED {
+        crate::proof::run_linen_disk_object_proof();
+    }
+
     serial_println!("[sexfiles.ready]");
 
     loop {

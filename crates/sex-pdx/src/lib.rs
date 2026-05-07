@@ -278,6 +278,9 @@ pub fn pdx_try_listen_raw(slot: u64) -> Option<PdxMessage> {
         );
     }
     if type_id == 0 {
+        // Cooperative yield when idle — ensures other PDs get CPU time
+        // even when the preemptive LAPIC timer is unavailable.
+        sys_yield();
         None
     } else {
         Some(PdxMessage {
@@ -386,6 +389,46 @@ pub const SLOT_BELL: u64 = 12;   // Bell attention/event service (domain 10, nam
 pub const SLOT_LINEN: u64 = 13;  // Linen app surface server
 pub const SLOT_SPINDLE: u64 = 14; // Spindle command console (domain 12)
 pub const SLOT_BLOCK:   u64 = 15; // sexdrive block/DMA service (sexfiles→sexdrive route)
+pub const SLOT_BUF_LEND: u64 = 17; // kernel-allocated MemLend buffer cap (sexfiles→sexdrive, Phase A)
+
+// ── MemLend buffer cap ABI (SEXBLOCK_BUFFER_LEND_CAP_IMPLEMENT_PHASE_A_V1) ──
+pub const SYS_GRANT_MEM_LEND: u64 = 50; // rdi=domain_slot rsi=length(4096) rdx=lend_slot → producer_va
+pub const SYS_MAP_MEM_LEND:   u64 = 51; // rdi=cap_slot → consumer_va
+pub const MEM_LEND_PERM_RW:   u64 = 0x3;
+
+pub fn sys_grant_mem_lend(domain_slot: u64, length: u64, lend_slot: u64) -> u64 {
+    let ret: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYS_GRANT_MEM_LEND,
+            in("rdi") domain_slot,
+            in("rsi") length,
+            in("rdx") lend_slot,
+            lateout("rax") ret,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    ret
+}
+
+pub fn sys_map_mem_lend(cap_slot: u64) -> u64 {
+    let ret: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYS_MAP_MEM_LEND,
+            in("rdi") cap_slot,
+            lateout("rax") ret,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    ret
+}
 
 // ── Block DMA protocol (SLOT_BLOCK, namespace B0-BF assigned) ──
 // Commands: sent as pdx_call opcode (rsi), decoded by sexdrive as msg.type_id.

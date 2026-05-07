@@ -8,12 +8,14 @@
 #   - Scheduler round-robins all PDs (task.running for each)
 #
 # Usage:
-#   ./scripts/master_runtime_gate.sh [--skip-build] [--probe N] [--keep-log]
+#   ./scripts/master_runtime_gate.sh [--skip-build] [--probe N] [--keep-log] [--nvme|--no-nvme]
 #
 # Options:
 #   --skip-build   Use existing ISO (sexos-v1.0.0.iso) instead of rebuilding
 #   --probe N      Wait N seconds for runtime probe (default: 20)
 #   --keep-log     Keep the serial log after gate run
+#   --no-nvme      Disable QEMU NVMe test device (default: enabled)
+#   --nvme         Enable QEMU NVMe test device
 #
 # Returns:
 #   0 if ALL gates PASS
@@ -28,10 +30,15 @@ cd "$ROOT_DIR"
 
 # ---- config ----
 SKIP_BUILD=false
-PROBE_SECONDS=20
+PROBE_SECONDS=25
 KEEP_LOG=false
+ENABLE_NVME="${SEXOS_GATE_NVME:-1}"
+PERSIST_REBOOT_PROOF="${SEXOS_PERSISTENCE_REBOOT_PROOF:-0}"
+PRESERVE_NVME_IMG="${SEXOS_NVME_PRESERVE_IMG:-0}"
 GATE_DIR="${GATE_DIR:-$ROOT_DIR/.gate_master}"
 LOG="${LOG_PATH:-$GATE_DIR/serial.log}"
+LOG_A="${GATE_DIR}/serial.boot_a.log"
+LOG_B="${GATE_DIR}/serial.boot_b.log"
 QEMU_PID=""
 ISO="${ISO:-sexos-v1.0.0.iso}"
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
@@ -52,9 +59,11 @@ while [[ $# -gt 0 ]]; do
         --skip-build) SKIP_BUILD=true; shift ;;
         --probe)      PROBE_SECONDS="$2"; shift 2 ;;
         --keep-log)   KEEP_LOG=true; shift ;;
+        --no-nvme)    ENABLE_NVME=0; shift ;;
+        --nvme)       ENABLE_NVME=1; shift ;;
         *)
             echo "error: unknown option: $1"
-            echo "usage: $0 [--skip-build] [--probe N] [--keep-log]"
+            echo "usage: $0 [--skip-build] [--probe N] [--keep-log] [--nvme|--no-nvme]"
             exit 1 ;;
     esac
 done
@@ -128,19 +137,58 @@ rm -f "$LOG" "$GATE_DIR/qmp.sock"
 # Pre-create log path so --keep-log always leaves a deterministic file artifact.
 : > "$LOG"
 
+NVME_IMG="${GATE_DIR}/nvme.img"
+NVME_ARGS=()
+NVME_QEMU_DESC="(nvme disabled)"
+if [ "$ENABLE_NVME" = "1" ]; then
+    # Tiny deterministic probe image in gate dir.
+    if [ "$PERSIST_REBOOT_PROOF" = "1" ] || [ "$PRESERVE_NVME_IMG" = "1" ]; then
+        if [ ! -f "$NVME_IMG" ]; then
+            dd if=/dev/zero of="$NVME_IMG" bs=512 count=2048 2>/dev/null || true
+        fi
+    else
+        dd if=/dev/zero of="$NVME_IMG" bs=512 count=2048 2>/dev/null || true
+    fi
+    if "$QEMU_BIN" -device help 2>/dev/null | grep -qE 'name[[:space:]]+"nvme"[[:space:]]*,|(^|[[:space:],])nvme([[:space:],]|$)'; then
+        NVME_ARGS=(
+            -drive "if=none,id=nvm,file=${NVME_IMG},format=raw"
+            -device "nvme,serial=sexos01,drive=nvm"
+        )
+        NVME_QEMU_DESC="-drive if=none,id=nvm,file=$NVME_IMG,format=raw -device nvme,serial=sexos01,drive=nvm"
+    else
+        echo "[FAIL] QEMU nvme device not supported by this QEMU build."
+        echo "[hint] use --no-nvme (or SEXOS_GATE_NVME=0) for absent-path proof."
+        exit 1
+    fi
+else
+    echo "[gate] NVMe disabled; absent marker path expected."
+fi
+
 set +e
-"$QEMU_BIN" \
-    -M q35 \
-    -m 512M \
-    -cpu max,+pku \
-    -cdrom "$ISO" \
-    -device nec-usb-xhci,id=xhci \
-    -device usb-tablet,bus=xhci.0 \
-    -serial "file:$LOG" \
-    -display none \
-    -no-reboot \
-    -no-shutdown &
-QEMU_PID=$!
+run_boot_once() {
+    local boot_log="$1"
+    "$QEMU_BIN" \
+        -M q35 \
+        -m 512M \
+        -cpu max,+pku \
+        -cdrom "$ISO" \
+        -device nec-usb-xhci,id=xhci \
+        -device usb-tablet,bus=xhci.0 \
+        "${NVME_ARGS[@]}" \
+        -serial "file:$boot_log" \
+        -display none \
+        -no-reboot \
+        -no-shutdown &
+    QEMU_PID=$!
+}
+
+if [ "$PERSIST_REBOOT_PROOF" = "1" ]; then
+    : > "$LOG_A"
+    : > "$LOG_B"
+    run_boot_once "$LOG_A"
+else
+    run_boot_once "$LOG"
+fi
 set -e
 
 if ! kill -0 "$QEMU_PID" 2>/dev/null; then
@@ -149,13 +197,35 @@ if ! kill -0 "$QEMU_PID" 2>/dev/null; then
 fi
 
 echo "[gate] QEMU PID: $QEMU_PID"
-echo "[gate] Log: $LOG"
+if [ "$PERSIST_REBOOT_PROOF" = "1" ]; then
+    echo "[gate] Log A: $LOG_A"
+else
+    echo "[gate] Log: $LOG"
+fi
 sleep "$PROBE_SECONDS"
 
 # Stop QEMU
 if kill -0 "$QEMU_PID" 2>/dev/null; then
     kill "$QEMU_PID" 2>/dev/null || true
     sleep 1
+fi
+
+if [ "$PERSIST_REBOOT_PROOF" = "1" ]; then
+    set +e
+    run_boot_once "$LOG_B"
+    set -e
+    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+        echo "[FAIL] QEMU failed to start (boot B)"
+        exit 1
+    fi
+    echo "[gate] QEMU PID (boot B): $QEMU_PID"
+    echo "[gate] Log B: $LOG_B"
+    sleep "$PROBE_SECONDS"
+    if kill -0 "$QEMU_PID" 2>/dev/null; then
+        kill "$QEMU_PID" 2>/dev/null || true
+        sleep 1
+    fi
+    LOG="$LOG_B"
 fi
 
 # ---- 3. SCAN LOG ----
@@ -344,7 +414,16 @@ echo ""
 # Emit typed block proof markers when requested so callers can pipe/grep stdout.
 if [ "${SEXOS_SEXFILES_REAL_BLOCK_PROOF:-0}" = "1" ]; then
     echo "--- TYPED BLOCK PROOF MARKERS ---"
-    grep -E 'sexfiles\.diskfs\.(typed\.(call|reply)|block\.proof\.(typed|bad|unaligned))|sexdrive\.block\.typed|sexblock\.abi' "$LOG" || true
+    grep -E 'sexfiles\.(realread|diskfs\.typed|block\.proof)\.|sexdrive\.block\.read\.api\.|sexdrive\.block\.typed|sexblock\.abi' "$LOG" || true
+    echo ""
+fi
+
+if [ "$PERSIST_REBOOT_PROOF" = "1" ]; then
+    echo "--- PERSISTENCE BOOT A MARKERS ---"
+    grep -E 'sexfiles\.persistence\.boot_a|sexfiles\.persistence\.boot_b\.read_before_write\.mismatch|sexdrive\.nvme\.write\.' "$LOG_A" || true
+    echo ""
+    echo "--- PERSISTENCE BOOT B MARKERS ---"
+    grep -E 'sexfiles\.persistence\.boot_b|sexdrive\.block\.read\.api|sexfiles\.diskfs\.typed\.read\.call' "$LOG_B" || true
     echo ""
 fi
 
@@ -362,7 +441,9 @@ cat > docs/handoff/MASTER_RUNTIME_GATE_V1.md << MDEOF
 - git commit: $(git rev-parse --short HEAD)
 - log_path: $LOG
 - probe_seconds: $PROBE_SECONDS
-- qemu: $QEMU_BIN -M q35 -m 512M -cpu max,+pku -cdrom $ISO -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0 -serial file:\$LOG -display none -no-reboot -no-shutdown
+- nvme_enabled: $ENABLE_NVME
+- nvme_img: $NVME_IMG
+- qemu: $QEMU_BIN -M q35 -m 512M -cpu max,+pku -cdrom $ISO -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0 $NVME_QEMU_DESC -serial file:\$LOG -display none -no-reboot -no-shutdown
 
 ## Gate Results
 

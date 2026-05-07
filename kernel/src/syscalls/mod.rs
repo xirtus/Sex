@@ -297,9 +297,16 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             }
         },
 
-        32 => { // SYSCALL_YIELD
-            crate::scheduler::yield_now();
-            0
+        32 => { // SYSCALL_YIELD — cooperative scheduling fallback
+            // When the preemptive LAPIC timer does not fire (QEMU limitation),
+            // perform a full context switch to the next runnable PD here.
+            // yield_and_switch saves the current user context from the syscall
+            // entry stub's saved registers, then calls tick()+switch_to().
+            // This function never returns; the current PD resumes only when
+            // the scheduler round-robins back to it.
+            unsafe {
+                crate::scheduler::yield_and_switch(regs as *const _);
+            }
         },
 
         43 => { // MAP_PCI_BAR(cap_slot, bar_index, map_size)
@@ -333,8 +340,10 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                     let subclass_id = (class_rev >> 16) as u8;
                     let prog_if = (class_rev >> 8) as u8;
 
-                    // Strictly gate this syscall to XHCI-only capabilities.
-                    if class_id != 0x0c || subclass_id != 0x03 || prog_if != 0x30 {
+                    // Gate: allow XHCI (0x0c/0x03/0x30) or NVMe (0x01/0x08).
+                    let is_xhci = class_id == 0x0c && subclass_id == 0x03 && prog_if == 0x30;
+                    let is_nvme = class_id == 0x01 && subclass_id == 0x08;
+                    if !is_xhci && !is_nvme {
                         u64::MAX
                     } else {
                         let bar_raw = dev.read_u32(0x10 + bar_index * 4);
@@ -403,6 +412,121 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                     Ok(va) => va,
                     Err(_) => 0,
                 }
+            }
+        },
+
+        50 => { // SYS_GRANT_MEM_LEND(domain_slot, length=4096, lend_slot)
+            // Kernel allocates a page, maps it for caller, installs MemLend cap in target.
+            // Ownership is provable: kernel allocs the page here, not from userland.
+            use crate::capability::{CapabilityData, MemLendCapData};
+            use crate::ipc::DOMAIN_REGISTRY;
+
+            let domain_slot = rdi as u32;
+            let length = rsi;
+            let lend_slot = rdx;
+
+            let core_local = crate::core_local::CoreLocal::get();
+            let caller_pd = core_local.current_pd_ref();
+            let caller_pd_id = caller_pd.id;
+            let caller_pku_key = caller_pd.pku_key;
+
+            if length != 4096 {
+                crate::serial_println!("[kernel.memlend.grant.err] reason=bad_len len={}", length);
+                u64::MAX
+            } else {
+                match caller_pd.find_capability(domain_slot) {
+                    Some(cap) if matches!(cap.data, CapabilityData::Domain(_)) => {
+                        let target_pd_id = if let CapabilityData::Domain(id) = cap.data { id } else { 0 };
+                        match DOMAIN_REGISTRY.get(target_pd_id) {
+                            Some(target_pd) => {
+                                if target_pd.find_capability(lend_slot as u32).is_some() {
+                                    crate::serial_println!("[kernel.memlend.grant.err] reason=slot_occupied slot={}", lend_slot);
+                                    u64::MAX
+                                } else {
+                                    crate::serial_println!("[kernel.memlend.grant.begin] caller_pd={} target_pd={} slot={}", caller_pd_id, target_pd_id, lend_slot);
+                                    let order = size_to_order(4096);
+                                    match crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(order) {
+                                        Some(phys) => {
+                                            match crate::memory::va_allocator::allocate_va(4096) {
+                                                Some(va) => {
+                                                    let mut gvas_lock = crate::memory::manager::GLOBAL_VAS.lock();
+                                                    if let Some(ref mut gvas) = *gvas_lock {
+                                                        let flags = PageTableFlags::PRESENT
+                                                            | PageTableFlags::WRITABLE
+                                                            | PageTableFlags::USER_ACCESSIBLE;
+                                                        if gvas.map_physical_range(VirtAddr::new(va), phys, 4096, flags, caller_pku_key).is_ok() {
+                                                            target_pd.grant_capability(lend_slot, CapabilityData::MemLend(MemLendCapData {
+                                                                base: phys,
+                                                                length: 4096,
+                                                                pku_key: caller_pku_key,
+                                                                permissions: 0x3,
+                                                                source_pd_id: caller_pd_id,
+                                                            }));
+                                                            crate::serial_println!("[kernel.memlend.grant.ok] va={:#x} phys={:#x} len=4096", va, phys);
+                                                            va
+                                                        } else {
+                                                            crate::serial_println!("[kernel.memlend.grant.err] reason=map_fail");
+                                                            u64::MAX
+                                                        }
+                                                    } else { u64::MAX }
+                                                }
+                                                None => { crate::serial_println!("[kernel.memlend.grant.err] reason=no_va"); u64::MAX }
+                                            }
+                                        }
+                                        None => { crate::serial_println!("[kernel.memlend.grant.err] reason=no_phys"); u64::MAX }
+                                    }
+                                }
+                            }
+                            None => { crate::serial_println!("[kernel.memlend.grant.err] reason=no_target_pd"); u64::MAX }
+                        }
+                    }
+                    _ => { crate::serial_println!("[kernel.memlend.grant.err] reason=no_domain_cap slot={}", domain_slot); u64::MAX }
+                }
+            }
+        },
+
+        51 => { // SYS_MAP_MEM_LEND(cap_slot) → consumer_va
+            use crate::capability::CapabilityData;
+
+            let cap_slot = rdi as u32;
+
+            let core_local = crate::core_local::CoreLocal::get();
+            let caller_pd = core_local.current_pd_ref();
+            let caller_pku_key = caller_pd.pku_key;
+
+            crate::serial_println!("[kernel.memlend.map.begin] cap_slot={}", cap_slot);
+            match caller_pd.find_capability(cap_slot) {
+                Some(cap) => {
+                    if let CapabilityData::MemLend(data) = cap.data {
+                        if data.permissions & 0x2 == 0 {
+                            crate::serial_println!("[kernel.memlend.map.err] reason=no_write_perm");
+                            u64::MAX
+                        } else {
+                            match crate::memory::va_allocator::allocate_va(data.length as usize) {
+                                Some(va) => {
+                                    let mut gvas_lock = crate::memory::manager::GLOBAL_VAS.lock();
+                                    if let Some(ref mut gvas) = *gvas_lock {
+                                        let flags = PageTableFlags::PRESENT
+                                            | PageTableFlags::WRITABLE
+                                            | PageTableFlags::USER_ACCESSIBLE;
+                                        if gvas.map_physical_range(VirtAddr::new(va), data.base, data.length, flags, caller_pku_key).is_ok() {
+                                            crate::serial_println!("[kernel.memlend.map.ok] va={:#x} len={}", va, data.length);
+                                            va
+                                        } else {
+                                            crate::serial_println!("[kernel.memlend.map.err] reason=map_fail");
+                                            u64::MAX
+                                        }
+                                    } else { u64::MAX }
+                                }
+                                None => { crate::serial_println!("[kernel.memlend.map.err] reason=no_va"); u64::MAX }
+                            }
+                        }
+                    } else {
+                        crate::serial_println!("[kernel.memlend.map.err] reason=wrong_kind slot={}", cap_slot);
+                        u64::MAX
+                    }
+                }
+                None => { crate::serial_println!("[kernel.memlend.map.err] reason=no_cap slot={}", cap_slot); u64::MAX }
             }
         },
 
