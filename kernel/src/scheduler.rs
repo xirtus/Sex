@@ -491,3 +491,89 @@ pub fn yield_now() {
         }
     }
 }
+
+/// Cooperative yield + context switch for runtime reachability proof.
+/// Saves current PD context from syscall stack, picks next runnable PD,
+/// and switches to it. Never returns to caller.
+pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) -> ! {
+    let sched = &SCHEDULERS[0];
+    let current = sched.current_task.load(Ordering::Acquire);
+    if !current.is_null() && (*current).state.load(Ordering::Acquire) == TaskState::Running as u32 {
+        let ctx = &mut (*current).context;
+        let base = regs_ptr as u64 + 72u64;
+
+        let saved_r15   = *(base.wrapping_add(0)   as *const u64);
+        let saved_r14   = *(base.wrapping_add(8)   as *const u64);
+        let saved_r13   = *(base.wrapping_add(16)  as *const u64);
+        let saved_r12   = *(base.wrapping_add(24)  as *const u64);
+        let saved_rbx   = *(base.wrapping_add(32)  as *const u64);
+        let saved_rbp   = *(base.wrapping_add(40)  as *const u64);
+        let saved_pkru  = *(base.wrapping_add(48)  as *const u64);
+        let saved_r9    = *(base.wrapping_add(56)  as *const u64);
+        let saved_r8    = *(base.wrapping_add(64)  as *const u64);
+        let saved_r10   = *(base.wrapping_add(72)  as *const u64);
+        let saved_rdx   = *(base.wrapping_add(80)  as *const u64);
+        let saved_rsi   = *(base.wrapping_add(88)  as *const u64);
+        let saved_rdi   = *(base.wrapping_add(96)  as *const u64);
+        let saved_rax   = *(base.wrapping_add(104) as *const u64);
+        let user_rip    = *(base.wrapping_add(112) as *const u64);
+        let user_rflags = *(base.wrapping_add(120) as *const u64);
+
+        let user_rsp: u64;
+        core::arch::asm!("mov {}, gs:[24]", out(reg) user_rsp);
+        // User SS is always 0x23 (GDT index 4, RPL 3: user data segment).
+        let user_ss: u64 = 0x23u64;
+
+        // (*current).kstack_top = kstack_alloc_top (Task struct field, fixed at alloc).
+        // ctx.kstack_top = last saved ksp (changes each yield — NOT the stable top).
+        // Using ctx.kstack_top here would drift ksp_base by -168 per yield → overflow ~97s.
+        // LAYOUT DEPENDENCY: base = regs_ptr + 72 = rbp in syscall_entry's frame.
+        // If syscall_entry push order changes, all base+N offsets below must be reaudited.
+        let ksp_base = (*current).kstack_top.wrapping_sub(168);
+        let ksp = ksp_base as *mut u64;
+        let iret = ksp.add(16);
+        *iret.add(0) = user_rip;
+        *iret.add(1) = 0x2Bu64;
+        *iret.add(2) = user_rflags;
+        *iret.add(3) = user_rsp;
+        *iret.add(4) = user_ss;
+        *ksp.add(0)  = saved_rax;
+        *ksp.add(1)  = saved_rbx;
+        *ksp.add(2)  = user_rip;
+        *ksp.add(3)  = saved_rdx;
+        *ksp.add(4)  = saved_rbp;
+        *ksp.add(5)  = saved_rsi;
+        *ksp.add(6)  = saved_rdi;
+        *ksp.add(7)  = saved_r8;
+        *ksp.add(8)  = saved_r9;
+        *ksp.add(9)  = saved_r10;
+        *ksp.add(10) = user_rflags;
+        *ksp.add(11) = saved_r12;
+        *ksp.add(12) = saved_r13;
+        *ksp.add(13) = saved_r14;
+        *ksp.add(14) = saved_r15;
+        *ksp.add(15) = 0u64;
+        ctx.r15 = saved_r15; ctx.r14 = saved_r14; ctx.r13 = saved_r13; ctx.r12 = saved_r12;
+        ctx.r11 = user_rflags; ctx.r10 = saved_r10; ctx.r9 = saved_r9; ctx.r8 = saved_r8;
+        ctx.rdi = saved_rdi; ctx.rsi = saved_rsi; ctx.rbp = saved_rbp; ctx.rdx = saved_rdx;
+        ctx.rcx = user_rip; ctx.rbx = saved_rbx; ctx.rax = saved_rax;
+        ctx.rip = user_rip; ctx.cs = 0x2Bu64; ctx.rflags = user_rflags;
+        ctx.rsp = user_rsp; ctx.ss = user_ss; ctx.pkru = saved_pkru;
+        ctx.kstack_top = ksp_base;
+        serial_println!("scheduler.yield_and_switch.saved pd_id={}", ctx.pd_id);
+
+        (*current).state.store(TaskState::Ready as u32, Ordering::Release);
+        sched.runqueue.push(current);
+        sched.current_task.store(ptr::null_mut(), Ordering::Release);
+    }
+    if let Some((_old, next)) = sched.tick() {
+        let kstack_top = (*next).kstack_top;
+        // kstack_top = Task.kstack_top = kstack_alloc_top (one-past-end, correct RSP0).
+        // Do NOT add 168 here: that sets RSP0 past the buffer (timer path uses ctx.kstack_top+168
+        // which is correct because ctx.kstack_top = rax-push addr; Task.kstack_top is already the top).
+        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top));
+        Scheduler::switch_to(core::ptr::null_mut(), next);
+    }
+    serial_println!("scheduler.yield_and_switch.no_runnable");
+    loop { x86_64::instructions::hlt(); }
+}
