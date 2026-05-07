@@ -15,5 +15,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+    - name: Enforce root allowlist
+      run: bash scripts/dev/check_root_allowlist.sh --strict
     - name: Build via single entrypoint (mandatory)
       run: bash scripts/entrypoint_build.sh
