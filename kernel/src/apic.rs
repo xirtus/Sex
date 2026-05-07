@@ -293,9 +293,12 @@ pub fn init_timer() {
 
         interrupts::disable();
 
-        // Set LAPIC timer to one-shot with max count
-        lapic_ptr.offset(0x320 / 4).write_volatile(0x20);
+        // Mask LAPIC timer during calibration to prevent spurious IRQ.
+        lapic_ptr.offset(0x320 / 4).write_volatile(0x10000 | 0x20); // masked, one-shot
+        // Init count to max for calibration
         lapic_ptr.offset(0x380 / 4).write_volatile(0xFFFF_FFFF);
+        // Re-write LVT unmasked one-shot so timer actually counts for calibration
+        lapic_ptr.offset(0x320 / 4).write_volatile(0x20);
 
         // Program PIT ch2 -> mode 0 (one-shot), lo+hi byte
         pit_cmd.write(0xB0u8);
@@ -342,6 +345,10 @@ pub fn init_timer() {
         }
 
         serial_println!("APIC: LAPIC Timer initialized at Vector 0x20.");
-        serial_println!("timer.init.done lapic={:#x} vector=0x20 ticks={}", lapic_vaddr, ticks_per_ms);
+        // Runtime reachability proof v1: dump LAPIC timer registers to verify delivery path.
+        let lvt_val = lapic_ptr.offset(0x320 / 4).read_volatile();
+        let cur_cnt = lapic_ptr.offset(0x390 / 4).read_volatile();
+        serial_println!("timer.init.done lapic={:#x} vector=0x20 ticks={} lvt={:#x} cur_count={}",
+            lapic_vaddr, ticks_per_ms, lvt_val, cur_cnt);
     }
 }

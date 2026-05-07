@@ -57,6 +57,10 @@ target_debug/
 .codex/
 .gemini/
 .openclaw/
+CLAUDE.md
+SOUL.md
+TOOLS.md
+USER.md
 .sexos_snapshot/
 sexos/
 milestone1/

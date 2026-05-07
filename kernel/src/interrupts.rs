@@ -87,9 +87,13 @@ pub fn init_idt() {
         ).expect("Failed to write STAR MSR");
 
         serial_println!("→ STAR MSR locked");
-        SFMask::write(x86_64::registers::rflags::RFlags::INTERRUPT_FLAG);
+        // Runtime reachability proof v1: do NOT mask IF during syscalls.
+        // With IF cleared, the LAPIC timer interrupt cannot be delivered
+        // during the tight pdx_listen→yield loop that keeps IF=0
+        // continuously, starving PD2–PD12 of CPU time.
+        SFMask::write(x86_64::registers::rflags::RFlags::empty());
         Efer::write(Efer::read() | EferFlags::SYSTEM_CALL_EXTENSIONS);
-        serial_println!("   → Syscall setup COMPLETE");    }
+        serial_println!("   → Syscall setup COMPLETE (IF unmasked for timer delivery)");    }
 }
 
 #[repr(C)]
@@ -366,6 +370,15 @@ pub unsafe extern "C" fn general_protection_fault_stub() {
 
 #[no_mangle]
 pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame) {
+    // Runtime reachability proof v1: unconditional unbudgeted marker.
+    // Fires on every timer interrupt to prove LAPIC → IDT → handler path.
+    unsafe {
+        static mut TIMER_FIRE_COUNT: u64 = 0;
+        TIMER_FIRE_COUNT += 1;
+        if TIMER_FIRE_COUNT <= 5 {
+            serial_println!("timer.fire.count={}", TIMER_FIRE_COUNT);
+        }
+    }
     if TIMER_TICK_LOG_BUDGET
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
         .is_ok()
