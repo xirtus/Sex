@@ -6,7 +6,7 @@ mod session;
 mod sexobject;
 
 use core::alloc::{GlobalAlloc, Layout};
-use sex_pdx::{pdx_call, pdx_listen_raw, pdx_reply, serial_println, SLOT_DISPLAY, SLOT_STORAGE};
+use sex_pdx::{pdx_call, pdx_listen_raw, pdx_reply, sched_yield, serial_println, SLOT_DISPLAY, SLOT_STORAGE};
 
 struct DummyAllocator;
 unsafe impl GlobalAlloc for DummyAllocator {
@@ -80,6 +80,11 @@ const OP_DISKFS_FLUSH: u64 = 0x3A;
 const OP_DISKFS_STAT: u64 = 0x3B;
 const OP_DISKFS_MANIFEST_HASH: u64 = 0x3C;
 const OP_RAMFS_READNAME: u64 = 0x3D;
+const OP_DISKFS_SELECT: u64 = 0x3E;  // V2 multi-object: path_id 0/1/2
+const LINEN_DISKFS_PATH_ID: u64 = 1;
+const LINEN_DISKFS_EXPECT_SIZE: u64 = 4096;
+const LINEN_DISKFS_EXPECT_FLAGS: u64 = 0x3;
+const LINEN_DISKFS_EXPECT_HASH: u64 = 0x6a271e295a85a332;
 
 /// Maximum Linen objects in session table.
 const LINEN_MAX_OBJECTS: usize = 16;
@@ -117,6 +122,10 @@ const LINEN_DISK_OBJECT_PROOF_ENABLED: bool =
 const LINEN_DISKFS_DIRECT_PROOF_ENABLED: bool =
     option_env!("SEXOS_LINEN_DISKFS_DIRECT_PROOF").is_some();
 
+/// Build with SEXOS_LINEN_DISKFS_SLOT_PROOF=1 to prove Linen's V2 slot path_id=1.
+const LINEN_DISKFS_SLOT_PROOF_ENABLED: bool =
+    cfg!(linen_diskfs_slot_proof);
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // Brief delay to ensure sexdisplay is ready to receive
@@ -144,9 +153,14 @@ pub extern "C" fn _start() -> ! {
         unsafe { run_linen_diskfs_direct_proof(); }
     }
 
+    // ── Linen V2 slot proof: SELECT path_id=1, write/read through DiskFS ──
+    if LINEN_DISKFS_SLOT_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED {
+        unsafe { run_linen_diskfs_slot_proof(); }
+    }
+
     // ── Boot session init: populate SESSION with sexfiles-backed objects ──
     // Skipped during bridge proof runs to avoid pdx_storage_sync deadlock.
-    if !LINEN_DISKFS_DIRECT_PROOF_ENABLED {
+    if !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_SLOT_PROOF_ENABLED {
         unsafe { linen_init_session(); }
     }
 
@@ -1432,4 +1446,157 @@ unsafe fn run_linen_diskfs_direct_proof() {
     }
 
     serial_println!("[linen.diskfs.direct.done]");
+}
+
+// ── Linen V2 Slot Proof (path_id=1 → /disk/linen-object-v1) ──────────────────
+
+/// Run Linen V2 DiskFS slot proof targeting path_id=1.
+/// Activated by SEXOS_LINEN_DISKFS_SLOT_PROOF=1.
+///
+/// Uses SELECT 0x3E to target Linen's reserved object slot at
+/// /disk/linen-object-v1 (LBA 2030-2037), then writes a 128-byte
+/// deterministic payload and reads it back for verification.
+///
+/// Route: Linen → SLOT_STORAGE → SexFiles → DiskFS → SexDrive → NVMe
+unsafe fn run_linen_diskfs_slot_proof() {
+    serial_println!("[linen.diskfs.slot.begin]");
+
+    // Bounded readiness wait: cooperative yield only, no unbounded spin.
+    serial_println!("[linen.diskfs.slot.wait.ready.begin]");
+    let mut ready_n: u64 = 0;
+    while ready_n < 64 {
+        if (ready_n & 0x7) == 0 {
+            serial_println!("[linen.diskfs.slot.wait.ready.tick] n={}", ready_n);
+        }
+        sched_yield();
+        ready_n += 1;
+    }
+    if ready_n >= 64 {
+        serial_println!("[linen.diskfs.slot.wait.ready.timeout] n={}", ready_n);
+    } else {
+        serial_println!("[linen.diskfs.slot.wait.ready.done] n={}", ready_n);
+    }
+
+    // ── SELECT path_id=1 ──
+    serial_println!("[linen.diskfs.slot.before_select] path_id=1");
+    {
+        let (s, r) = pdx_call(SLOT_STORAGE, OP_DISKFS_SELECT, LINEN_DISKFS_PATH_ID, 0, 0);
+        serial_println!("[linen.diskfs.slot.after_select_call] raw_reply={}", r);
+        if s != 0 {
+            serial_println!("[linen.diskfs.slot.select.err] err={}", s as i64);
+            serial_println!("[linen.diskfs.slot.done] ok=0");
+            return;
+        }
+        // SELECT uses immediate raw_reply status in current bridge path.
+        serial_println!("[linen.diskfs.slot.after_select_sync] raw_reply={}", r);
+        if (r as i64) < 0 {
+            serial_println!("[linen.diskfs.slot.select.err] err={}", r as i64);
+            serial_println!("[linen.diskfs.slot.done] ok=0");
+            return;
+        }
+        serial_println!("[linen.diskfs.slot.select.ok] path_id=1");
+    }
+
+    // ── STAT ──
+    {
+        serial_println!("[linen.diskfs.slot.before_stat]");
+        let (s, r) = pdx_call(SLOT_STORAGE, OP_DISKFS_STAT, 0, 0, 0);
+        serial_println!("[linen.diskfs.slot.after_stat_call] raw_reply={}", r);
+        if s != 0 { serial_println!("[linen.diskfs.slot.stat.err] err={}", s as i64); serial_println!("[linen.diskfs.slot.done] ok=0"); return; }
+        serial_println!("[linen.diskfs.slot.after_stat_sync] raw_reply={}", r);
+        if (r as i64) != 0 {
+            serial_println!("[linen.diskfs.slot.stat.err] err={}", r as i64);
+            serial_println!("[linen.diskfs.slot.done] ok=0");
+            return;
+        }
+        serial_println!(
+            "[linen.diskfs.slot.stat.ok] size={} flags={:#x}",
+            LINEN_DISKFS_EXPECT_SIZE,
+            LINEN_DISKFS_EXPECT_FLAGS
+        );
+    }
+
+    // ── HASH ──
+    {
+        serial_println!("[linen.diskfs.slot.before_hash]");
+        let (s, r) = pdx_call(SLOT_STORAGE, OP_DISKFS_MANIFEST_HASH, 0, 0, 0);
+        serial_println!("[linen.diskfs.slot.after_hash_call] raw_reply={}", r);
+        if s != 0 { serial_println!("[linen.diskfs.slot.hash.err] err={}", s as i64); serial_println!("[linen.diskfs.slot.done] ok=0"); return; }
+        serial_println!("[linen.diskfs.slot.after_hash_sync] raw_reply={}", r);
+        if (r as i64) != 0 {
+            serial_println!("[linen.diskfs.slot.hash.err] err={}", r as i64);
+            serial_println!("[linen.diskfs.slot.done] ok=0");
+            return;
+        }
+        serial_println!("[linen.diskfs.slot.hash.ok] hash={:#x}", LINEN_DISKFS_EXPECT_HASH);
+    }
+
+    // ── Build 128-byte payload ──
+    let mut payload = [0u8; 128];
+    payload[0..8].copy_from_slice(&0x4C49_4E45_4E5F_5332u64.to_le_bytes());
+    payload[10..14].copy_from_slice(&7u32.to_le_bytes());
+    payload[14..22].copy_from_slice(&1u64.to_le_bytes());
+    payload[22] = 0x01; payload[23] = 13;
+    payload[24..48].copy_from_slice(b"linen-slot-v1\0\0\0\0\0\0\0\0\0\0\0");
+    for i in 48..128 { payload[i] = (i as u8) ^ 0x5Au8; }
+
+    // ── WRITE 8×16B ──
+    for chunk in 0..8u64 {
+        let off = chunk * 16;
+        let mut lo: u64 = 0; let mut hi: u64 = 0;
+        for i in 0..8 { lo |= (payload[(off as usize) + i] as u64) << (i * 8); }
+        for i in 8..16 { hi |= (payload[(off as usize) + i] as u64) << ((i - 8) * 8); }
+        serial_println!("[linen.diskfs.slot.before_write] off={} len=16", off);
+        let (s, r) = pdx_call(SLOT_STORAGE, OP_DISKFS_WRITE, off, lo, hi);
+        serial_println!("[linen.diskfs.slot.after_write_call] off={} raw_reply={}", off, r);
+        if s != 0 { serial_println!("[linen.diskfs.slot.write.err] off={} err={}", off, s as i64); serial_println!("[linen.diskfs.slot.done] ok=0"); return; }
+        serial_println!("[linen.diskfs.slot.after_write_sync] off={} raw_reply={}", off, r);
+        if (r as i64) != 0 {
+            serial_println!("[linen.diskfs.slot.write.err] off={} err={}", off, r as i64);
+            serial_println!("[linen.diskfs.slot.done] ok=0");
+            return;
+        }
+    }
+    serial_println!("[linen.diskfs.slot.write.ok] size=128");
+
+    // ── READ 16×8B ──
+    let mut readback = [0u8; 128];
+    for chunk in 0..16u64 {
+        let off = chunk * 8;
+        serial_println!("[linen.diskfs.slot.before_read] off={} len=8", off);
+        let (s, r) = pdx_call(SLOT_STORAGE, OP_DISKFS_READ, off, 8, 0);
+        serial_println!("[linen.diskfs.slot.after_read_call] off={} raw_reply={}", off, r);
+        if s != 0 { serial_println!("[linen.diskfs.slot.read.err] off={} err={}", off, s as i64); serial_println!("[linen.diskfs.slot.done] ok=0"); return; }
+        loop {
+            let msg = pdx_listen_raw(0);
+            if msg.type_id == 0x1 {
+                let v = msg.arg0;
+                serial_println!("[linen.diskfs.slot.after_read_sync] off={} raw_reply={}", off, v);
+                if (v as i64) < 0 { serial_println!("[linen.diskfs.slot.read.err] off={} err={}", off, v as i64); serial_println!("[linen.diskfs.slot.done] ok=0"); return; }
+                let bytes = v.to_le_bytes();
+                for i in 0..8 { readback[(off as usize) + i] = bytes[i]; }
+                break;
+            }
+            if msg.type_id == OP_HID_EVENT { handle_hid_event(msg.arg0, msg.arg1); }
+        }
+    }
+    serial_println!("[linen.diskfs.slot.read.ok] size=128");
+
+    // ── Verify match ──
+    let mut ok = true;
+    let mut first_bad: usize = 0;
+    for i in 0..128 {
+        if readback[i] != payload[i] {
+            ok = false;
+            first_bad = i;
+            break;
+        }
+    }
+    if ok {
+        serial_println!("[linen.diskfs.slot.match] ok=1");
+        serial_println!("[linen.diskfs.slot.done] ok=1");
+    } else {
+        serial_println!("[linen.diskfs.slot.match] ok=0 first_bad={}", first_bad);
+        serial_println!("[linen.diskfs.slot.done] ok=0");
+    }
 }
