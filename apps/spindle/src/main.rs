@@ -47,6 +47,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 use sex_pdx::{
     pdx_call, serial_println,
     OP_WINDOW_CREATE, SLOT_DISPLAY, SLOT_STORAGE,
+    SLOT_BELL, SLOT_LINEN, OP_BELL_NOTIFY,
 };
 use sex_graphics::{WindowBuffer, font};
 
@@ -62,6 +63,9 @@ struct WindowCreateParams {
     height: u32,
     pfn_base: u64,
 }
+
+// ── Linen opcodes (local; OP_LINEN_CREATE_OBJECT matches linen server) ───
+const OP_LINEN_CREATE_OBJECT: u64 = 0x41;
 
 // ── RamFS opcodes (local; defined in servers/sexfiles/src/messages.rs) ────
 const OP_RAMFS_OPEN: u64 = 0x30;
@@ -733,11 +737,12 @@ pub extern "C" fn _start() -> ! {
     let mut ev = EventRing::new();
     let mut line = CmdLine::new();
 
-    // Best-effort restore from SexFiles (guarded: needs cap grant)
-    sb.push(b"SexFiles persistence pending (capability grant needed).");
-    serial_println!("[spindle.sexfiles.persist.pending] reason=no_storage_cap");
-    serial_println!("[spindle.bell.pending] reason=no_bell_cap");
-    serial_println!("[spindle.linen.spn.pending] reason=no_linen_cap kind=SpindleSession ext=.spn");
+    // Best-effort restore from SexFiles (cap granted via 8ce251e).
+    let restored = unsafe { restore_history(&mut hist) };
+    serial_println!("[spindle.history.restore] count={}", restored);
+    // Best-effort Linen .spn session object create (non-fatal if nonzero).
+    let (ls, _) = pdx_call(SLOT_LINEN, OP_LINEN_CREATE_OBJECT, 0, 0, 0);
+    serial_println!("[spindle.linen.spn.create] status={}", ls);
     serial_println!("[spindle.fb.proof.disabled] surface=0x99 route=silk-shell fb=gated_proof_only");
 
     serial_println!("[spindle.ready]");
@@ -749,10 +754,16 @@ pub extern "C" fn _start() -> ! {
             let value = msg.arg1;
             if value != 1 { continue; }
 
-            // On Enter, record command in local history before clearing
+            // On Enter, record command, persist, dispatch, and optionally Bell-notify.
             if scancode == 0x1C && line.len > 0 {
                 hist.push(line.as_bytes());
-                // Persist to SexFiles when cap grant available
+                unsafe { persist_history(&hist); }
+                serial_println!("[spindle.sexfiles.persist] ok");
+                let recognized = dispatch(line.as_bytes(), &mut sb, &mut hist, &mut ev);
+                if recognized {
+                    let (bs, _) = pdx_call(SLOT_BELL, OP_BELL_NOTIFY, 0, 0, 0);
+                    serial_println!("[spindle.bell.notify] status={}", bs);
+                }
             }
             handle_key(scancode, &mut line);
         }
