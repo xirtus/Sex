@@ -3415,27 +3415,19 @@ pub extern "C" fn _start() -> ! {
             s2_slot_id, s2_intr_ep_addr, s2_intr_dci);
 
         // ===== SEXUSB_SLOT2_POLL_START_V1: queue first interrupt-IN TRB =====
-        // Queue exactly one Normal TRB on slot2's interrupt ring at index 0.
-        // This proves the ring and endpoint are correctly configured.
-        // The main poll loop (below) is unchanged — slot2 event, if produced,
-        // will appear as an unrelated event consumed silently by the slot1 loop.
         {
-            let s2_intr_pcs: u32 = 1; // DCS=1 from Configure Endpoint dequeue
+            let s2_intr_pcs: u32 = 1;
             trb_write_volatile(
-                s2_intr_ring_va,
-                0, // index 0
+                s2_intr_ring_va, 0,
                 (s2_intr_report_phys & 0xFFFF_FFFF) as u32,
                 (s2_intr_report_phys >> 32) as u32,
                 s2_intr_report_len,
-                (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | s2_intr_pcs, // IOC + cycle=1
+                (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | s2_intr_pcs,
             );
             mmio_write32(db_base, s2_slot_id as u64 * 4, s2_intr_dci as u32);
             serial_println!(
                 "[sexusb.slot2.poll.start] slot={} dci={} buf={:#x} len={}",
-                s2_slot_id,
-                s2_intr_dci,
-                s2_intr_report_phys,
-                s2_intr_report_len
+                s2_slot_id, s2_intr_dci, s2_intr_report_phys, s2_intr_report_len
             );
         }
     }
