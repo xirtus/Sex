@@ -6994,12 +6994,44 @@ const YARN_OUTPUT_LINES: usize = 20;
 const YARN_OUTPUT_LINE_CAP: usize = 32;
 /// Maximum command history entries.
 const YARN_HISTORY_CAP: usize = 16;
+// ── Catppuccin Mocha palette (0x00RRGGBB — no alpha; sexdisplay ignores alpha) ──
+// Font plan: JetBrains Mono WOFF2 → offline bitmap converter → u8 table in sex-graphics.
+// Current font: 5×7 ASCII bitmap (safe, no TTF parser needed).
+const CAT_TEXT:      u64 = 0x00CDD6F4;
+const CAT_SUBTEXT1:  u64 = 0x00BAC2DE;
+const CAT_OVERLAY2:  u64 = 0x009399B2;
+const CAT_ROSEWATER: u64 = 0x00F5E0DC;
+const CAT_RED:       u64 = 0x00F38BA8;
+const CAT_PEACH:     u64 = 0x00FAB387;
+const CAT_YELLOW:    u64 = 0x00F9E2AF;
+const CAT_GREEN:     u64 = 0x00A6E3A1;
+const CAT_BLUE:      u64 = 0x0089B4FA;
+const CAT_MAUVE:     u64 = 0x00CBA6F7;
+
 // ── Spindle vi-mode state (bounded, no heap) ──────────────────────────────
 static mut SPINDLE_VI_NORMAL: bool = false;
 static mut SPINDLE_VI_CUR: usize = 0;
 static mut SPINDLE_VI_PREV_BUF: [u8; YARN_CMD_BUF_CAP] = [0u8; YARN_CMD_BUF_CAP];
 static mut SPINDLE_VI_PREV_LEN: usize = 0;
 static mut SPINDLE_VI_PENDING_D: bool = false;
+/// Last command status: true=recognized, false=unknown. Used by Stargate status segment.
+static mut SPINDLE_LAST_CMD_OK: bool = true;
+/// Ctrl key held (tracked for Spiderweb chord activation).
+static mut SPINDLE_CTRL_DOWN: bool = false;
+// ── Spiderweb fuzzy finder state (bounded, no heap) ───────────────────────
+const SPIDERWEB_QUERY_CAP: usize = 64;
+const SPIDERWEB_RESULT_CAP: usize = 7; // matches available display band slots
+#[derive(Clone, Copy, PartialEq)]
+enum SpiderwebMode { History, Command }
+static mut SPIDERWEB_OPEN: bool = false;
+static mut SPIDERWEB_MODE: SpiderwebMode = SpiderwebMode::History;
+static mut SPIDERWEB_QUERY: [u8; SPIDERWEB_QUERY_CAP] = [0u8; SPIDERWEB_QUERY_CAP];
+static mut SPIDERWEB_QUERY_LEN: usize = 0;
+static mut SPIDERWEB_RESULTS: [[u8; YARN_CMD_BUF_CAP]; SPIDERWEB_RESULT_CAP] =
+    [[0u8; YARN_CMD_BUF_CAP]; SPIDERWEB_RESULT_CAP];
+static mut SPIDERWEB_RESULT_LENS: [usize; SPIDERWEB_RESULT_CAP] = [0; SPIDERWEB_RESULT_CAP];
+static mut SPIDERWEB_RESULT_COUNT: usize = 0;
+static mut SPIDERWEB_SELECTED: usize = 0;
 // ── Scrollback ring (bounded, no heap) ──
 /// Max scrollback lines in the ring buffer.
 const SPINDLE_SB_LINES: usize = 1024;
@@ -7323,6 +7355,216 @@ fn trim_ascii(s: &[u8]) -> &[u8] {
 }
 
 /// Yarn session: dispatch a command from cmd_buf.
+/// Bounded subsequence matcher: every byte of `query` must appear in `candidate` in order.
+fn spiderweb_match(query: &[u8], candidate: &[u8]) -> bool {
+    if query.is_empty() { return true; }
+    let mut qi = 0usize;
+    for &b in candidate {
+        if b == query[qi] { qi += 1; if qi == query.len() { return true; } }
+    }
+    false
+}
+
+/// Rebuild Spiderweb result list from history or command table against current query.
+unsafe fn spiderweb_search() {
+    SPIDERWEB_RESULT_COUNT = 0;
+    SPIDERWEB_SELECTED = 0;
+    let q = &SPIDERWEB_QUERY[..SPIDERWEB_QUERY_LEN];
+
+    match SPIDERWEB_MODE {
+        SpiderwebMode::History => {
+            // Walk YARN history newest-first.
+            let count = YARN.history_count;
+            let mut filled = 0usize;
+            let mut i = count;
+            while i > 0 && filled < SPIDERWEB_RESULT_CAP {
+                i -= 1;
+                let entry = &YARN.history[i];
+                let entry_len = entry.iter().position(|&b| b == 0).unwrap_or(YARN_CMD_BUF_CAP);
+                if entry_len == 0 { continue; }
+                if spiderweb_match(q, &entry[..entry_len]) {
+                    SPIDERWEB_RESULTS[filled] = *entry;
+                    SPIDERWEB_RESULT_LENS[filled] = entry_len;
+                    filled += 1;
+                }
+            }
+            SPIDERWEB_RESULT_COUNT = filled;
+        }
+        SpiderwebMode::Command => {
+            // Static command table.
+            const CMDS: &[&[u8]] = &[
+                b"help", b"clear", b"echo", b"about", b"time",
+                b"pd", b"scene", b"routes", b"faults",
+            ];
+            let mut filled = 0usize;
+            for &cmd in CMDS {
+                if filled >= SPIDERWEB_RESULT_CAP { break; }
+                if spiderweb_match(q, cmd) {
+                    let n = cmd.len().min(YARN_CMD_BUF_CAP);
+                    SPIDERWEB_RESULTS[filled] = [0u8; YARN_CMD_BUF_CAP];
+                    SPIDERWEB_RESULTS[filled][..n].copy_from_slice(&cmd[..n]);
+                    SPIDERWEB_RESULT_LENS[filled] = n;
+                    filled += 1;
+                }
+            }
+            SPIDERWEB_RESULT_COUNT = filled;
+        }
+    }
+    serial_println!("[spindle.spiderweb.query] len={} results={}", SPIDERWEB_QUERY_LEN, SPIDERWEB_RESULT_COUNT);
+}
+
+/// Render Spiderweb overlay: repurposes band rects 1-7 for result items.
+/// Rect 0 (header) kept. Query in header text, results as text on bands.
+unsafe fn spiderweb_render() {
+    let w = SURFACE_0x99_W;
+    let h = SURFACE_0x99_H;
+    if w == 0 || h == 0 { return; }
+
+    let mode_prefix: &[u8] = match SPIDERWEB_MODE {
+        SpiderwebMode::History => b"^R ",
+        SpiderwebMode::Command => b"^P ",
+    };
+
+    // Draw result bands (rects 1-7): selected=mauve, others=overlay.
+    for i in 0..SPIDERWEB_RESULT_CAP {
+        let rect_index = (i + 1) as u64; // band slots 1-7
+        let row_y = SPINDLE_HEADER_H + (i as u32) * (SPINDLE_ROW_H + SPINDLE_ROW_GAP);
+        let color = if i == SPIDERWEB_SELECTED && i < SPIDERWEB_RESULT_COUNT {
+            CAT_MAUVE
+        } else if i < SPIDERWEB_RESULT_COUNT {
+            CAT_OVERLAY2
+        } else {
+            0x00181825u64 // CAT_MANTLE — empty slot
+        };
+        pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_SPINDLE,
+            ((row_y as u64) << 32) | 0u64,
+            (rect_index << 56) | (color << 32) | ((SPINDLE_ROW_H as u64) << 16) | (w as u64));
+    }
+
+    // Clear text then render query + results via 0xFB.
+    pdx_call(SLOT_DISPLAY, 0xFA, SURFACE_ID_SPINDLE, 0, 0);
+
+    // Pack: mode_prefix + query into header text area.
+    let mut buf = [0u8; 40];
+    let mut ti = 0usize;
+    for &b in mode_prefix { if ti < 40 { buf[ti] = b; ti += 1; } }
+    for i in 0..SPIDERWEB_QUERY_LEN { if ti < 40 { buf[ti] = SPIDERWEB_QUERY[i]; ti += 1; } }
+
+    let mut offset = 0usize;
+    while offset < ti {
+        let chunk = 8.min(ti - offset);
+        let mut word: u64 = 0;
+        for i in 0..chunk { word |= (buf[offset + i] as u64) << (i * 8); }
+        pdx_call(SLOT_DISPLAY, 0xFB, SURFACE_ID_SPINDLE, word,
+            (offset as u64) | ((chunk as u64) << 8) | (CAT_PEACH << 32));
+        offset += chunk;
+    }
+
+    // Render result text in band rows (text row offset = band row offset / char height).
+    for i in 0..SPIDERWEB_RESULT_COUNT.min(SPIDERWEB_RESULT_CAP) {
+        let text_offset = (mode_prefix.len() + SPIDERWEB_QUERY_LEN + 1) + i * 40;
+        // Bounds: limit to avoid overflowing text buffer.
+        if text_offset >= 255 { break; }
+        let entry_len = SPIDERWEB_RESULT_LENS[i].min(38);
+        let entry = &SPIDERWEB_RESULTS[i][..entry_len];
+        let text_color = if i == SPIDERWEB_SELECTED { 0x001E1E2Eu64 } else { CAT_TEXT };
+        let mut roff = 0usize;
+        while roff < entry_len {
+            let chunk = 8.min(entry_len - roff);
+            let mut word: u64 = 0;
+            for j in 0..chunk { word |= (entry[roff + j] as u64) << (j * 8); }
+            pdx_call(SLOT_DISPLAY, 0xFB, SURFACE_ID_SPINDLE, word,
+                ((text_offset + roff) as u64) | ((chunk as u64) << 8) | (text_color << 32));
+            roff += chunk;
+        }
+    }
+
+    // Cursor: stays at query end position.
+    let cursor_y = SPINDLE_HEADER_H
+        + SPINDLE_ROW_RECTS as u32 * (SPINDLE_ROW_H + SPINDLE_ROW_GAP)
+        + SPINDLE_ROW_GAP;
+    let cursor_w = 8u32;
+    let cursor_h = SPINDLE_ROW_H;
+    let cursor_x = (4u32 + (mode_prefix.len() as u32 + SPIDERWEB_QUERY_LEN as u32) * 8u32)
+        .min(w.saturating_sub(cursor_w));
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_SPINDLE,
+        ((cursor_y as u64) << 32) | (cursor_x as u64),
+        (7u64 << 56) | (CAT_PEACH << 32) | ((cursor_h as u64) << 16) | (cursor_w as u64));
+}
+
+/// Open Spiderweb overlay in given mode.
+unsafe fn spiderweb_open(mode: SpiderwebMode) {
+    SPIDERWEB_OPEN = true;
+    SPIDERWEB_MODE = mode;
+    SPIDERWEB_QUERY = [0u8; SPIDERWEB_QUERY_CAP];
+    SPIDERWEB_QUERY_LEN = 0;
+    SPIDERWEB_RESULT_COUNT = 0;
+    SPIDERWEB_SELECTED = 0;
+    spiderweb_search();
+    spiderweb_render();
+    serial_println!("[spindle.spiderweb.open] mode={}", if mode == SpiderwebMode::History { b'R' } else { b'P' } as char);
+}
+
+/// Accept selected Spiderweb result: copy to YARN cmd_buf and close.
+unsafe fn spiderweb_accept() {
+    if SPIDERWEB_RESULT_COUNT > 0 {
+        let sel = SPIDERWEB_SELECTED.min(SPIDERWEB_RESULT_COUNT - 1);
+        let len = SPIDERWEB_RESULT_LENS[sel].min(YARN_CMD_BUF_CAP - 1);
+        YARN.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
+        YARN.cmd_buf[..len].copy_from_slice(&SPIDERWEB_RESULTS[sel][..len]);
+        YARN.cmd_len = len;
+        SPINDLE_VI_CUR = len; // cursor to end
+        serial_println!("[spindle.spiderweb.accept] len={}", len);
+    }
+    SPIDERWEB_OPEN = false;
+    spindle_render();
+}
+
+/// Cancel Spiderweb: close without modifying cmd_buf.
+unsafe fn spiderweb_cancel() {
+    SPIDERWEB_OPEN = false;
+    serial_println!("[spindle.spiderweb.cancel]");
+    spindle_render();
+}
+
+/// Route a key event while Spiderweb is open.
+unsafe fn spiderweb_handle_key(scancode: u8) {
+    match scancode {
+        0x1C => { spiderweb_accept(); } // Enter — accept
+        0x01 => { spiderweb_cancel(); } // Escape — cancel
+        0x0E => { // Backspace — delete from query
+            if SPIDERWEB_QUERY_LEN > 0 {
+                SPIDERWEB_QUERY_LEN -= 1;
+                SPIDERWEB_QUERY[SPIDERWEB_QUERY_LEN] = 0;
+                spiderweb_search();
+                spiderweb_render();
+            }
+        }
+        // j / down-arrow equivalent: next result
+        s if spindle_scan_to_char(s) == Some(b'j') => {
+            if SPIDERWEB_SELECTED + 1 < SPIDERWEB_RESULT_COUNT {
+                SPIDERWEB_SELECTED += 1;
+            }
+            spiderweb_render();
+        }
+        // k / up: prev result
+        s if spindle_scan_to_char(s) == Some(b'k') => {
+            if SPIDERWEB_SELECTED > 0 { SPIDERWEB_SELECTED -= 1; }
+            spiderweb_render();
+        }
+        _ => { // Any printable: append to query
+            if let Some(ch) = spindle_scan_to_char(scancode) {
+                if SPIDERWEB_QUERY_LEN < SPIDERWEB_QUERY_CAP - 1 {
+                    SPIDERWEB_QUERY[SPIDERWEB_QUERY_LEN] = ch;
+                    SPIDERWEB_QUERY_LEN += 1;
+                    spiderweb_search();
+                    spiderweb_render();
+                }
+            }
+        }
+    }
+}
+
 fn spindle_scan_to_char(s: u8) -> Option<u8> {
     static ROW1: [u8; 10] = [b'q',b'w',b'e',b'r',b't',b'y',b'u',b'i',b'o',b'p'];
     static ROW2: [u8; 9]  = [b'a',b's',b'd',b'f',b'g',b'h',b'j',b'k',b'l'];
@@ -7462,21 +7704,23 @@ unsafe fn spindle_dispatch() {
     let token = &args[..first_space];
     let rest = if first_space < args.len() { &args[first_space + 1..] } else { &[] };
 
-    match token {
-        b"help" => yarn_cmd_help(),
-        b"clear" => yarn_cmd_clear(),
-        b"echo" => yarn_cmd_echo(rest),
-        b"about" => yarn_cmd_about(),
-        b"time" => yarn_cmd_time(),
-        b"pd" => yarn_cmd_pd(),
-        b"scene" => yarn_cmd_scene(),
-        b"routes" => yarn_cmd_routes(),
-        b"faults" => yarn_cmd_faults(),
+    SPINDLE_LAST_CMD_OK = match token {
+        b"help"   => { yarn_cmd_help();          true }
+        b"clear"  => { yarn_cmd_clear();         true }
+        b"echo"   => { yarn_cmd_echo(rest);      true }
+        b"about"  => { yarn_cmd_about();         true }
+        b"time"   => { yarn_cmd_time();          true }
+        b"pd"     => { yarn_cmd_pd();            true }
+        b"scene"  => { yarn_cmd_scene();         true }
+        b"routes" => { yarn_cmd_routes();        true }
+        b"faults" => { yarn_cmd_faults();        true }
         _ => {
             serial_println!("[spindle.command.unknown] cmd={:?}", token);
             yarn_append_output(b"Unknown command. Type 'help'.");
+            false
         }
-    }
+    };
+    serial_println!("[spindle.stargate.segment] kind=status ok={}", SPINDLE_LAST_CMD_OK as u8);
 
     // Clear command buffer after dispatch.
     yarn.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
@@ -7541,45 +7785,63 @@ unsafe fn spindle_render() {
     serial_println!("[spindle.render.done] lines={}", visible_count);
 }
 
-/// Render Spindle command line: vi mode tag + prompt + input + block cursor at vi position.
+/// Stargate prompt renderer: [OK/!!] [I/N] sex> <cmd> + block cursor.
+/// Segments: status (green/red) → vi-mode (green/yellow) → prompt → cmd text.
+/// Font: 5×7 ASCII bitmap (safe, no TTF). JetBrains Mono planned via offline converter.
 unsafe fn spindle_render_cmdline() {
     let w = SURFACE_0x99_W;
     let h = SURFACE_0x99_H;
     if w == 0 || h == 0 { return; }
 
     let yarn = &YARN;
-    // Mode tag: [I] insert (Catppuccin Green) or [N] normal (Catppuccin Yellow).
-    let mode_tag: &[u8] = if SPINDLE_VI_NORMAL { b"[N]" } else { b"[I]" };
-    let mode_color: u64   = if SPINDLE_VI_NORMAL { 0x00F9E2AFu64 } else { 0x00A6E3A1u64 };
-    const PROMPT_BYTES: &[u8] = b"sex> ";
-    let header_len = mode_tag.len() + PROMPT_BYTES.len(); // 3 + 5 = 8
 
-    // Clear text buffer.
+    // ── Segment 1: status [OK] / [!!] ───────────────────────────────────────
+    let status_tag:   &[u8] = if SPINDLE_LAST_CMD_OK { b"[OK]" } else { b"[!!]" };
+    let status_color: u64   = if SPINDLE_LAST_CMD_OK { CAT_GREEN  } else { CAT_RED };
+    serial_println!("[spindle.stargate.segment] kind=status tag={:?}", status_tag);
+
+    // ── Segment 2: vi mode [I] / [N] ────────────────────────────────────────
+    let mode_tag:   &[u8] = if SPINDLE_VI_NORMAL { b"[N]" } else { b"[I]" };
+    let mode_color: u64   = if SPINDLE_VI_NORMAL { CAT_YELLOW } else { CAT_GREEN };
+    serial_println!("[spindle.stargate.segment] kind=mode tag={:?}", mode_tag);
+
+    // ── Segment 3: prompt ───────────────────────────────────────────────────
+    const PROMPT_BYTES: &[u8] = b"sex> ";
+    let header_len = status_tag.len() + mode_tag.len() + PROMPT_BYTES.len(); // 4+3+5=12
+
+    // Clear text buffer then pack all segments + cmd into one 0xFB stream.
     pdx_call(SLOT_DISPLAY, 0xFA, SURFACE_ID_SPINDLE, 0, 0);
 
-    // Pack mode tag + prompt + cmd into 40-byte buffer, submit as 0xFB chunks.
     let max_chars = 40usize;
     let mut packed_buf = [0u8; 40];
+    let mut seg_ends = [0usize; 3]; // end byte offsets of each colored segment
     let mut ti = 0usize;
-    for &b in mode_tag    { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
+    for &b in status_tag   { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
+    seg_ends[0] = ti; // end of status segment
+    for &b in mode_tag     { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
+    seg_ends[1] = ti; // end of mode segment
     for &b in PROMPT_BYTES { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
+    seg_ends[2] = ti; // end of prompt segment
     for i in 0..yarn.cmd_len {
         if ti < max_chars { packed_buf[ti] = yarn.cmd_buf[i]; ti += 1; }
     }
 
-    // Mode tag (0..3) in mode color, rest in Catppuccin Text.
     let mut offset = 0usize;
     while offset < ti {
         let chunk = 8.min(ti - offset);
         let mut word: u64 = 0;
         for i in 0..chunk { word |= (packed_buf[offset + i] as u64) << (i * 8); }
-        let color: u64 = if offset < mode_tag.len() { mode_color } else { 0x00CDD6F4u64 };
+        // Color by segment: status → mode → prompt (subtext) → cmd text.
+        let color: u64 = if offset < seg_ends[0]      { status_color }
+                         else if offset < seg_ends[1] { mode_color }
+                         else if offset < seg_ends[2] { CAT_SUBTEXT1 }
+                         else                          { CAT_TEXT };
         pdx_call(SLOT_DISPLAY, 0xFB, SURFACE_ID_SPINDLE, word,
             (offset as u64) | ((chunk as u64) << 8) | (color << 32));
         offset += chunk;
     }
 
-    // Block cursor at vi cursor position (clamped to surface width).
+    // ── Cursor: amber in normal mode, rosewater in insert ───────────────────
     let cursor_y = SPINDLE_HEADER_H
         + SPINDLE_ROW_RECTS as u32 * (SPINDLE_ROW_H + SPINDLE_ROW_GAP)
         + SPINDLE_ROW_GAP;
@@ -7588,15 +7850,14 @@ unsafe fn spindle_render_cmdline() {
     let vi_cur = SPINDLE_VI_CUR.min(yarn.cmd_len);
     let cursor_x = (4u32 + (header_len as u32 + vi_cur as u32) * 8u32)
         .min(w.saturating_sub(cursor_w));
-    // Normal mode: amber cursor; insert mode: rosewater cursor.
-    let cursor_color: u64 = if SPINDLE_VI_NORMAL { 0x00F9E2AFu64 } else { 0x00F5E0DCu64 };
+    let cursor_color = if SPINDLE_VI_NORMAL { CAT_YELLOW } else { CAT_ROSEWATER };
 
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_SPINDLE,
         ((cursor_y as u64) << 32) | (cursor_x as u64),
         (7u64 << 56) | (cursor_color << 32) | ((cursor_h as u64) << 16) | (cursor_w as u64));
 
-    serial_println!("[spindle.render.submit] cmd_len={} vi_cur={} mode={} cursor_x={}",
-        yarn.cmd_len, vi_cur, if SPINDLE_VI_NORMAL { b'N' } else { b'I' } as char, cursor_x);
+    serial_println!("[spindle.stargate.render] cmd_len={} vi_cur={} cursor_x={} ok={}",
+        yarn.cmd_len, vi_cur, cursor_x, SPINDLE_LAST_CMD_OK as u8);
 }
 
 // ── Bell Surface Control Helpers ─────────────────────────────────────────────
@@ -11192,6 +11453,10 @@ pub extern "C" fn _start() -> ! {
                         if event_class == EV_KEY && scancode == 0x43 && value == 0 {
                             F9_TOGGLE_DOWN = false;
                         }
+                        // Track Ctrl modifier for Spiderweb chords (Ctrl+R / Ctrl+P).
+                        if event_class == EV_KEY && scancode == 0x1D {
+                            SPINDLE_CTRL_DOWN = value == 1;
+                        }
 
                         // KEYBOARD_EDGE_PROOF_V1: budgeted receive marker for any EV_KEY.
                         if event_class == EV_KEY {
@@ -11369,8 +11634,14 @@ pub extern "C" fn _start() -> ! {
                                 // Forward key event to Spindle PD 12 via SLOT_SPINDLE
                                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, 1, EV_KEY);
                                 serial_println!("[spindle.input.recv] scancode={:#x}", scancode);
-                                // Normal vi mode: route to vi handler (Enter always dispatches).
-                                if SPINDLE_VI_NORMAL && scancode != 0x1C {
+                                // Priority: Ctrl chords → Spiderweb → vi-normal → insert.
+                                if SPINDLE_CTRL_DOWN && scancode == 0x13 { // Ctrl+R
+                                    spiderweb_open(SpiderwebMode::History);
+                                } else if SPINDLE_CTRL_DOWN && scancode == 0x19 { // Ctrl+P
+                                    spiderweb_open(SpiderwebMode::Command);
+                                } else if SPIDERWEB_OPEN {
+                                    spiderweb_handle_key(scancode);
+                                } else if SPINDLE_VI_NORMAL && scancode != 0x1C {
                                     spindle_vi_normal_key(scancode);
                                 } else { match scancode {
                                     0x1C => { // Enter — dispatch command

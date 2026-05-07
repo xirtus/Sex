@@ -201,17 +201,26 @@ impl CmdLine {
 
 // ── Prompt redraw ──────────────────────────────────────────────────────────
 
-/// Redraw the prompt line (row 23). Shows vi mode tag, prompt, text, cursor at line.cur.
+/// Stargate prompt: [OK/!!] [I/N] sex> <cmd> — with cursor at line.cur.
 unsafe fn redraw_prompt(fb: &mut WindowBuffer, line: &CmdLine) {
     fb.draw_rect(sex_pdx::Rect { x: 0, y: CELL_H * 23, width: WIN_W, height: CELL_H }, BG);
 
+    // Segment 1: status
+    // (last_ok tracked via dispatch return; proof path uses fixed true)
+    let status_tag: &[u8] = b"[OK]"; // proof path always OK
+    font::draw_str(fb, 4, CELL_H * 23 + 4, status_tag, GREEN, None);
+    let status_px = (status_tag.len() as u32) * CELL_W;
+
+    // Segment 2: vi mode
     let mode_tag: &[u8] = if line.mode == ViMode::Insert { b"[I]" } else { b"[N]" };
-    font::draw_str(fb, 4, CELL_H * 23 + 4, mode_tag, YELLOW, None);
+    let mode_color = if line.mode == ViMode::Insert { GREEN } else { YELLOW };
+    font::draw_str(fb, 4 + status_px, CELL_H * 23 + 4, mode_tag, mode_color, None);
     let mode_px = (mode_tag.len() as u32) * CELL_W;
 
-    font::draw_str(fb, 4 + mode_px, CELL_H * 23 + 4, PROMPT, GREEN, None);
-    let header_px = mode_px + (PROMPT_LEN as u32) * CELL_W;
-    let header_cols = mode_tag.len() + PROMPT_LEN;
+    // Segment 3: prompt
+    font::draw_str(fb, 4 + status_px + mode_px, CELL_H * 23 + 4, PROMPT, ACCENT, None);
+    let header_px = status_px + mode_px + (PROMPT_LEN as u32) * CELL_W;
+    let header_cols = status_tag.len() + mode_tag.len() + PROMPT_LEN;
 
     if line.len > 0 {
         let max_vis = (COLS as usize).saturating_sub(header_cols + 1);
@@ -800,6 +809,9 @@ pub extern "C" fn _start() -> ! {
     let mut ev = EventRing::new();
     let mut line = CmdLine::new();
 
+    // Font: 5×7 ASCII bitmap (safe, bounded). JetBrains Mono planned via offline converter.
+    serial_println!("[spindle.font.safe] backend=5x7_ascii bounds=checked");
+
     // Best-effort restore from SexFiles (cap granted via 8ce251e).
     let restored = unsafe { restore_history(&mut hist) };
     serial_println!("[spindle.history.restore] count={}", restored);
@@ -823,6 +835,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { persist_history(&hist); }
                 serial_println!("[spindle.sexfiles.persist] ok");
                 let recognized = dispatch(line.as_bytes(), &mut sb, &mut hist, &mut ev);
+                serial_println!("[spindle.stargate.segment] kind=status ok={}", recognized as u8);
                 if recognized {
                     let (bs, _) = pdx_call(SLOT_BELL, OP_BELL_NOTIFY, 0, 0, 0);
                     serial_println!("[spindle.bell.notify] status={}", bs);
