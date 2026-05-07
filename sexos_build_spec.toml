@@ -8,7 +8,7 @@
 
 [spec]
 version = "1.0.0"
-abi_version_hash = "f7d28624177e9f903515c633cc0266d39077afc16aab539f26a87c127ed477b4"
+abi_version_hash = "930adcce70a2767c02d05df30b66ab5c468a1ed6ff9b0098a905fc9b04051cd6"
 contract_sha256 = "38b8af8c5c837952abab12659c66f0d3bfd31db36c1c5cc6c0a55474b7a372d1"
 target = "/home/xirtus_arch/x86_64-sex.json"
 
