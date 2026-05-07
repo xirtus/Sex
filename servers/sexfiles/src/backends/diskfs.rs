@@ -2196,6 +2196,138 @@ impl DiskFs {
         }
         status
     }
+
+    /// [sexfiles.bridge.diskfs.manifest.ensure]
+    /// Idempotent manifest bootstrap for the DiskFS bridge.
+    ///
+    /// Reads LBA 2046, parses the manifest. If the manifest is valid
+    /// (correct magic, version, entry_count, and the single expected
+    /// entry for /disk/sexfiles-proof-v1), returns Ok without writing.
+    ///
+    /// If invalid (garbage, uninitialized NVMe, wrong format), builds
+    /// the known fixed manifest sector and writes it to LBA 2046.
+    ///
+    /// V1: single-entry manifest only. Does NOT require
+    /// SEXOS_SEXFILES_REAL_BLOCK_PROOF.
+    ///
+    /// buf_va: pre-granted MemLend buffer VA (caller provides).
+    pub fn diskfs_ensure_manifest(buf_va: u64) -> Result<(), u64> {
+        serial_println!("[sexfiles.bridge.diskfs.manifest.ensure.begin]");
+
+        // ── Step 1: Read LBA 2046 ──
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), 0u8);
+                i += 1;
+            }
+        }
+        let status = Self::diskfs_block_read(
+            DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if status != 0 {
+            serial_println!(
+                "[sexfiles.bridge.diskfs.manifest.ensure.err] reason=read_failed status={}",
+                status
+            );
+            // Read failed — attempt bootstrap write anyway.
+        }
+
+        // ── Step 2: Try to parse the manifest ──
+        let mut sector = [0u8; 512];
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 512 {
+                sector[i] = core::ptr::read_volatile(p.add(i));
+                i += 1;
+            }
+        }
+
+        match Self::proof_manifest_parse_single_entry(&sector) {
+            Ok(entry) => {
+                // Manifest already valid.
+                serial_println!(
+                    "[sexfiles.bridge.diskfs.manifest.ensure.valid] hash={:#x} start_lba={} len={}",
+                    entry.name_hash, entry.start_lba, entry.len_bytes
+                );
+                return Ok(());
+            }
+            Err(_) => {
+                // Manifest invalid or not present — bootstrap.
+                serial_println!(
+                    "[sexfiles.bridge.diskfs.manifest.ensure.bootstrap] reason=invalid_or_missing"
+                );
+            }
+        }
+
+        // ── Step 3: Build and write the known manifest ──
+        let manifest_sector = Self::proof_manifest_build_single_entry_sector();
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), manifest_sector[i]);
+                i += 1;
+            }
+        }
+        let write_status = Self::diskfs_block_write(
+            DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if write_status != 0 {
+            serial_println!(
+                "[sexfiles.bridge.diskfs.manifest.ensure.err] reason=write_failed status={}",
+                write_status
+            );
+            return Err(write_status);
+        }
+
+        // ── Step 4: Verify by reading back ──
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), 0u8);
+                i += 1;
+            }
+        }
+        let verify_status = Self::diskfs_block_read(
+            DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if verify_status != 0 {
+            serial_println!(
+                "[sexfiles.bridge.diskfs.manifest.ensure.err] reason=verify_read_failed status={}",
+                verify_status
+            );
+            return Err(verify_status);
+        }
+        let mut verify_sector = [0u8; 512];
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 512 {
+                verify_sector[i] = core::ptr::read_volatile(p.add(i));
+                i += 1;
+            }
+        }
+        match Self::proof_manifest_parse_single_entry(&verify_sector) {
+            Ok(entry) => {
+                serial_println!(
+                    "[sexfiles.bridge.diskfs.manifest.ensure.ok] hash={:#x} start_lba={} len={}",
+                    entry.name_hash, entry.start_lba, entry.len_bytes
+                );
+                Ok(())
+            }
+            Err(e) => {
+                serial_println!(
+                    "[sexfiles.bridge.diskfs.manifest.ensure.err] reason=verify_parse_failed code={}",
+                    e
+                );
+                Err(e)
+            }
+        }
+    }
 }
 
 impl FsBackend for DiskFs {

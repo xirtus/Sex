@@ -35,6 +35,19 @@ const OP_LINEN_LIST_OBJECTS: u64 = 0x42;
 /// Returns: packed object data or error (negative).
 const OP_LINEN_GET_OBJECT: u64 = 0x43;
 
+/// Public snapshot: arg0=slot_idx (0..16). Returns entry at that slot or 0 if empty.
+/// bits 0-31=object_id, bits 32-39=kind, bits 40-47=name_len. No owner filter.
+const OP_LINEN_GET_PUBLIC_SNAPSHOT: u64 = 0x44;
+
+/// Public name read: arg0=object_id, arg1=byte_offset, arg2=max_len (≤8).
+/// Returns up to 8 name bytes LE-packed. 0=EOF. No owner filter.
+const OP_LINEN_GET_PUBLIC_NAME: u64 = 0x45;
+
+/// Open intent: arg0=object_id, arg1=selected_index, arg2=intent_flags (V1=0).
+/// Stub — no app launch, no caps, no authority grants.
+/// Reply: 0 = accepted/stubbed, negative = error (not found / invalid).
+const OP_LINEN_OPEN_INTENT: u64 = 0x46;
+
 /// Maximum display name length (matches RamFS max name).
 const LINEN_MAX_NAME: usize = 24;
 /// Current create opcode wire payload can carry only 16 name bytes (arg1 + arg2).
@@ -59,8 +72,20 @@ const OP_RAMFS_OBJECT_ID: u64 = 0x37;
 /// RamFS O_CREATE flag for OP_RAMFS_OPEN (matches sexfiles/messages.rs RAMFS_O_CREATE).
 const RAMFS_O_CREATE: u64 = 0x01;
 
+// ── DiskFS bridge opcodes (SEXFILES_RAMFS_DISKFS_BRIDGE_ABI_PLAN_V1) ──
+// Route: Linen → SLOT_STORAGE → SexFiles → DiskFS → SLOT_BLOCK → SexDrive → NVMe
+const OP_DISKFS_WRITE: u64 = 0x38;
+const OP_DISKFS_READ: u64 = 0x39;
+const OP_DISKFS_FLUSH: u64 = 0x3A;
+const OP_DISKFS_STAT: u64 = 0x3B;
+const OP_DISKFS_MANIFEST_HASH: u64 = 0x3C;
+const OP_RAMFS_READNAME: u64 = 0x3D;
+
 /// Maximum Linen objects in session table.
 const LINEN_MAX_OBJECTS: usize = 16;
+
+/// Kernel PD ID assigned to Linen. Deterministic per init.rs spawn order (domain 7).
+const LINEN_OWN_PD: u32 = 7;
 
 /// Session manager instance. Initialized at boot.
 static mut SESSION: session::Session = session::Session::new();
@@ -88,6 +113,10 @@ const SEXOS_OQ5_PROOF_ENABLED: bool =
 const LINEN_DISK_OBJECT_PROOF_ENABLED: bool =
     option_env!("SEXOS_LINEN_DISK_OBJECT_PROOF").is_some();
 
+/// Build with SEXOS_LINEN_DISKFS_DIRECT_PROOF=1 to enable direct DiskFS bridge proof.
+const LINEN_DISKFS_DIRECT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISKFS_DIRECT_PROOF").is_some();
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // Brief delay to ensure sexdisplay is ready to receive
@@ -107,23 +136,37 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[linen] Fill rect 0xEF sent to sexdisplay");
     serial_println!("[linen.ready]");
 
+    // ── Linen direct DiskFS bridge proof: save/load through DiskFS opcodes ──
+    // Runs BEFORE session init and RamFS proofs to avoid blocking on
+    // pdx_storage_sync before SexFiles reaches its message loop.
+    // Contains a long spin delay to cover SexFiles startup time.
+    if LINEN_DISKFS_DIRECT_PROOF_ENABLED {
+        unsafe { run_linen_diskfs_direct_proof(); }
+    }
+
+    // ── Boot session init: populate SESSION with sexfiles-backed objects ──
+    // Skipped during bridge proof runs to avoid pdx_storage_sync deadlock.
+    if !LINEN_DISKFS_DIRECT_PROOF_ENABLED {
+        unsafe { linen_init_session(); }
+    }
+
     // ── Synthetic proof: Linen session object model ──
-    if LINEN_SESSION_PROOF_ENABLED {
+    if LINEN_SESSION_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED {
         unsafe { run_session_proof(); }
     }
 
     // ── Metadata bridge proof: Linen↔SexFiles persistence ──
-    if LINEN_SEXFILES_METADATA_PROOF_ENABLED {
+    if LINEN_SEXFILES_METADATA_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED {
         unsafe { run_metadata_bridge_proof(); }
     }
 
     // ── OQ5 proof: SexObject ID namespace resolution ──
-    if SEXOS_OQ5_PROOF_ENABLED {
+    if SEXOS_OQ5_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED {
         unsafe { run_oq5_proof(); }
     }
 
-    // ── Linen disk object proof: save/load through SexFiles DiskFS ──
-    if LINEN_DISK_OBJECT_PROOF_ENABLED {
+    // ── Linen disk object proof: save/load through SexFiles RamFS ──
+    if LINEN_DISK_OBJECT_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED {
         unsafe { run_linen_disk_object_proof(); }
     }
 
@@ -147,6 +190,21 @@ pub extern "C" fn _start() -> ! {
             OP_LINEN_GET_OBJECT => {
                 unsafe {
                     handle_get_object(msg.arg0, msg.caller_pd);
+                }
+            }
+            OP_LINEN_GET_PUBLIC_SNAPSHOT => {
+                unsafe {
+                    handle_get_public_snapshot(msg.arg0, msg.caller_pd);
+                }
+            }
+            OP_LINEN_GET_PUBLIC_NAME => {
+                unsafe {
+                    handle_get_public_name(msg.arg0, msg.arg1, msg.arg2, msg.caller_pd);
+                }
+            }
+            OP_LINEN_OPEN_INTENT => {
+                unsafe {
+                    handle_open_intent(msg.arg0, msg.caller_pd);
                 }
             }
             _ => {}
@@ -335,6 +393,78 @@ unsafe fn handle_get_object(arg0: u64, caller_pd: u32) {
     }
 }
 
+/// Handle OP_LINEN_GET_PUBLIC_SNAPSHOT.
+///
+/// arg0 = slot_idx (0..LINEN_MAX_OBJECTS). Returns the object at that exact slot,
+/// or 0 if the slot is empty. No owner filter — public view for shell rendering.
+/// Reply packing: bits 0-31=object_id, bits 32-39=kind, bits 40-47=name_len.
+unsafe fn handle_get_public_snapshot(arg0: u64, caller_pd: u32) {
+    let slot = (arg0 & 0xFF) as usize;
+    match SESSION.get_at_slot(slot) {
+        Some(obj) => {
+            let packed = (obj.object_id & 0xFFFF_FFFF)
+                       | ((obj.kind as u8 as u64) << 32)
+                       | ((obj.name_len as u64) << 40);
+            serial_println!("[linen.snapshot.slot] slot={} id={} kind={} name_len={}",
+                slot, obj.object_id, obj.kind as u8, obj.name_len);
+            pdx_reply(caller_pd, packed);
+        }
+        None => {
+            pdx_reply(caller_pd, 0);
+        }
+    }
+}
+
+/// Handle OP_LINEN_GET_PUBLIC_NAME.
+///
+/// arg0=object_id, arg1=byte_offset, arg2=max_len (clamped to 8).
+/// Returns up to 8 name bytes LE-packed. 0=EOF. No owner filter.
+unsafe fn handle_get_public_name(arg0: u64, arg1: u64, arg2: u64, caller_pd: u32) {
+    let object_id = arg0;
+    let byte_offset = arg1 as usize;
+    let max_len = (arg2 as usize).min(8);
+    match SESSION.get(object_id, 0) {
+        Ok(obj) => {
+            let name_len = obj.name_len as usize;
+            if byte_offset >= name_len {
+                pdx_reply(caller_pd, 0);
+                return;
+            }
+            let take = max_len.min(name_len - byte_offset);
+            let mut packed = 0u64;
+            for i in 0..take {
+                packed |= (obj.name[byte_offset + i] as u64) << (i * 8);
+            }
+            serial_println!("[linen.snapshot.name] id={} off={} len={}", object_id, byte_offset, take);
+            pdx_reply(caller_pd, packed);
+        }
+        Err(e) => {
+            serial_println!("[linen.snapshot.name.err] id={} off={} err={}", object_id, byte_offset, e);
+            pdx_reply(caller_pd, e as u64);
+        }
+    }
+}
+
+/// Handle OP_LINEN_OPEN_INTENT.
+///
+/// arg0 = object_id. arg1/arg2 reserved (ignored V1).
+/// Looks up the object in SESSION with server-internal access (caller_pd=0).
+/// No caps granted, no app launch, no authority transfer.
+/// Reply: 0 = accepted/stubbed, -3 = not found, -6 = (reserved, not used V1).
+unsafe fn handle_open_intent(object_id: u64, caller_pd: u32) {
+    match SESSION.get(object_id, 0) {
+        Ok(obj) => {
+            serial_println!("[linen.open_intent.recv] id={} kind={} ok=1",
+                object_id, obj.kind as u8);
+            pdx_reply(caller_pd, 0);
+        }
+        Err(e) => {
+            serial_println!("[linen.open_intent.recv] id={} ok=0", object_id);
+            pdx_reply(caller_pd, e as u64);
+        }
+    }
+}
+
 // ── SexFiles Storage Bridge Helpers ──────────────────────────────────────────
 
 /// Pack a byte slice name into two u64 args for OP_RAMFS_OPEN.
@@ -491,6 +621,110 @@ unsafe fn linen_persist_object(
     serial_println!("[linen.sexfiles.persist] id={} handle={} sexfiles_object_id={} owner={} kind={} gen={}",
         object_id, handle, sexfiles_oid, owner_pd, kind, generation);
     Ok((handle, sexfiles_oid))
+}
+
+/// Populate SESSION with fixed boot entries and persist each to SexFiles RamFS.
+/// Objects are owned by Linen PD (LINEN_OWN_PD). Falls back to local-only on persist error.
+/// Called unconditionally at boot before the event loop.
+unsafe fn linen_init_session() {
+    serial_println!("[linen.sexfiles.list.begin]");
+
+    let entries: [(&[u8], session::ObjectKind); 5] = [
+        (b"SexOS Kernel",  session::ObjectKind::Document),
+        (b"Silk Shell",    session::ObjectKind::Document),
+        (b"SexDisplay",    session::ObjectKind::Document),
+        (b"Sessions",      session::ObjectKind::Session),
+        (b"SexFiles Root", session::ObjectKind::Document),
+    ];
+
+    let mut count: u8 = 0;
+    for (name_bytes, kind) in &entries {
+        let name_len = name_bytes.len().min(LINEN_MAX_NAME);
+        match SESSION.create(*kind, &name_bytes[..name_len], LINEN_OWN_PD) {
+            Ok(id) => {
+                match linen_persist_object(
+                    id, *kind as u8, LINEN_OWN_PD,
+                    &name_bytes[..name_len], name_len as u8, 1, 0,
+                ) {
+                    Ok((handle, sfid)) => {
+                        let _ = SESSION.set_persisted(id, handle);
+                        let _ = SESSION.set_sexfiles_object_id(id, sfid);
+                        serial_println!("[linen.sexfiles.init.object] id={} kind={} handle={} sfid={}",
+                            id, *kind as u8, handle, sfid);
+                        serial_println!("[linen.sexfiles.readback.begin] id={}", id);
+                        linen_readback_verify(id);
+                    }
+                    Err(e) => {
+                        serial_println!("[linen.sexfiles.init.warn] id={} persist_err={} local_only=true",
+                            id, e);
+                    }
+                }
+                count += 1;
+            }
+            Err(e) => {
+                serial_println!("[linen.sexfiles.init.reject] name_len={} err={}", name_len, e);
+            }
+        }
+    }
+
+    if count > 0 {
+        serial_println!("[linen.sexfiles.list.ok] count={}", count);
+    } else {
+        serial_println!("[linen.sexfiles.list.fallback] reason=session_full");
+    }
+}
+
+/// Reopen Linen meta-file by name and verify filename bytes via OP_RAMFS_READNAME.
+/// Reopens because linen_persist_object closes the handle on return.
+/// Meta filename: "lo.{object_id:016x}" (19 bytes). Reads in 8-byte chunks.
+unsafe fn linen_readback_verify(object_id: u64) {
+    const META_LEN: usize = 19; // "lo." + 16 hex chars
+    let meta = make_linen_meta_name(object_id);
+    let (n0, n1) = pack_name(&meta);
+    // arg2 for OP_RAMFS_OPEN: name bytes 16-18, flags=0 (open existing, no create)
+    let mut name16_23: u64 = 0;
+    for i in 16..META_LEN {
+        name16_23 |= (meta[i] as u64) << ((i - 16) * 8);
+    }
+    let handle = match pdx_storage_sync(OP_RAMFS_OPEN, n0, n1, name16_23) {
+        Ok(h) => h,
+        Err(e) => {
+            serial_println!("[linen.sexfiles.readback.err] id={} err={} stage=open", object_id, e);
+            return;
+        }
+    };
+    let mut buf = [0u8; 24];
+    let mut bad = false;
+    let mut chunk: u64 = 0;
+    loop {
+        let off = chunk * 8;
+        if off >= META_LEN as u64 { break; }
+        let remaining = META_LEN as u64 - off;
+        let max_len = remaining.min(8);
+        match pdx_storage_sync(OP_RAMFS_READNAME, handle, off, max_len) {
+            Ok(0) => break, // EOF
+            Ok(packed) => {
+                let bytes = packed.to_le_bytes();
+                let copy = max_len as usize;
+                buf[off as usize..off as usize + copy].copy_from_slice(&bytes[..copy]);
+            }
+            Err(e) => {
+                serial_println!("[linen.sexfiles.readback.err] id={} err={} stage=readname off={}",
+                    object_id, e, off);
+                bad = true;
+                break;
+            }
+        }
+        chunk += 1;
+    }
+    let _ = pdx_storage_sync(OP_RAMFS_CLOSE, handle, 0, 0);
+    if bad { return; }
+    if &buf[..META_LEN] == &meta[..META_LEN] {
+        serial_println!("[linen.sexfiles.readback.ok] id={} len={}", object_id, META_LEN);
+    } else {
+        serial_println!("[linen.sexfiles.readback.err] id={} err=name_mismatch stage=compare",
+            object_id);
+    }
 }
 
 // ── Synthetic Proof ─────────────────────────────────────────────────────────
@@ -967,4 +1201,235 @@ unsafe fn run_linen_disk_object_proof() {
     }
 
     serial_println!("[linen.disk.object.proof.done]");
+}
+
+// ── Linen Direct DiskFS Bridge Proof ─────────────────────────────────────────
+
+/// Run Linen direct DiskFS bridge proof.
+/// Activated by SEXOS_LINEN_DISKFS_DIRECT_PROOF=1.
+///
+/// Uses the new DiskFS bridge opcodes (0x38-0x3C) via SLOT_STORAGE to
+/// save and load a 128-byte deterministic payload directly through the
+/// DiskFS fixed object at /disk/sexfiles-proof-v1.
+///
+/// Unlike the RamFS proof, this path goes through the DiskFS backend:
+///   Linen → SLOT_STORAGE → SexFiles VFS → DiskFS file ops → SLOT_BLOCK → SexDrive → NVMe
+///
+/// Write: 8 calls × 16 bytes via OP_DISKFS_WRITE (0x38)
+/// Read:  16 calls × 8 bytes via OP_DISKFS_READ (0x39)
+/// Flush: OP_DISKFS_FLUSH (0x3A), honest ERR_NO_DEVICE on QEMU
+/// Stat:  OP_DISKFS_STAT (0x3B) — verify object size
+unsafe fn run_linen_diskfs_direct_proof() {
+    serial_println!("[linen.diskfs.direct.begin]");
+
+    // Delay to ensure SexFiles has finished its startup proofs and entered
+    // the message dispatch loop. SexFiles boots slowly: NVMe admin init +
+    // IO queue setup + block proofs + disk file ops proof + persistence.
+    // 200M iterations ≈ ~15-20s on QEMU without KVM.
+    for _ in 0..10_000_000 { core::hint::spin_loop(); }
+    serial_println!("[linen.diskfs.direct.ready]");
+
+    // Query object stat to verify the bridge is alive.
+    match pdx_storage_sync(OP_DISKFS_STAT, 0, 0, 0) {
+        Ok(packed) => {
+            let size = packed & 0xFFFF_FFFF;
+            let flags = (packed >> 32) & 0xFFFF_FFFF;
+            serial_println!(
+                "[linen.diskfs.direct.stat] size={} flags={:#x}",
+                size, flags
+            );
+            if size != 4096 {
+                serial_println!(
+                    "[linen.diskfs.direct.stat] unexpected_size={}",
+                    size
+                );
+            }
+        }
+        Err(e) => {
+            serial_println!("[linen.diskfs.direct.stat] err={}", e);
+            return;
+        }
+    }
+
+    // Query manifest hash.
+    match pdx_storage_sync(OP_DISKFS_MANIFEST_HASH, 0, 0, 0) {
+        Ok(hash) => {
+            serial_println!("[linen.diskfs.direct.manifest_hash] hash={:#x}", hash);
+        }
+        Err(e) => {
+            serial_println!("[linen.diskfs.direct.manifest_hash] err={}", e);
+        }
+    }
+
+    // ── Build deterministic 128-byte payload ──
+    let mut payload = [0u8; 128];
+    let object_id: u64 = 0x3156_4E45_4E49_4C; // "LINEN_V1" LE
+    payload[0..8].copy_from_slice(&object_id.to_le_bytes());
+    payload[8] = 0;    // kind = Document
+    payload[9] = 0;
+    payload[10..14].copy_from_slice(&7u32.to_le_bytes()); // owner_pd = Linen's PD
+    payload[14..22].copy_from_slice(&1u64.to_le_bytes()); // generation = 1
+    payload[22] = 0x01; // flags = persisted
+    payload[23] = 13;   // name_len
+    let name_data = b"linen-disk-v1\0\0\0\0\0\0\0\0\0\0\0";
+    payload[24..48].copy_from_slice(name_data);
+    {
+        let mut i: usize = 48;
+        while i < 128 {
+            payload[i] = (i as u8) ^ 0x5Au8;
+            i += 1;
+        }
+    }
+
+    // ── Write: 128 bytes as 8 chunks of 16 bytes each ──
+    serial_println!(
+        "[linen.diskfs.direct.save.request] object_id={:#x} size=128",
+        object_id
+    );
+    {
+        let mut chunk: u64 = 0;
+        let mut ok = true;
+        while chunk < 8 {
+            let offset = chunk * 16;
+            // Pack 16 bytes into data_lo (bytes 0-7) and data_hi (bytes 8-15).
+            let mut data_lo: u64 = 0;
+            let mut data_hi: u64 = 0;
+            {
+                let mut i: usize = 0;
+                while i < 8 {
+                    data_lo |= (payload[(offset as usize) + i] as u64) << (i * 8);
+                    i += 1;
+                }
+                while i < 16 {
+                    data_hi |= (payload[(offset as usize) + i] as u64) << ((i - 8) * 8);
+                    i += 1;
+                }
+            }
+            match pdx_storage_sync(OP_DISKFS_WRITE, offset, data_lo, data_hi) {
+                Ok(n) => {
+                    if n != 16 {
+                        serial_println!(
+                            "[linen.diskfs.direct.write.err] chunk={} short_write={}",
+                            chunk, n
+                        );
+                        ok = false;
+                        break;
+                    }
+                }
+                Err(e) => {
+                    serial_println!(
+                        "[linen.diskfs.direct.write.err] chunk={} err={}",
+                        chunk, e
+                    );
+                    ok = false;
+                    break;
+                }
+            }
+            chunk += 1;
+        }
+        if ok {
+            serial_println!("[linen.diskfs.direct.write.ok] written=128");
+        } else {
+            return;
+        }
+    }
+
+    // ── Flush (honest ERR_NO_DEVICE on QEMU) ──
+    match pdx_storage_sync(OP_DISKFS_FLUSH, 0, 0, 0) {
+        Ok(_) => {
+            serial_println!("[linen.diskfs.direct.flush.ok]");
+        }
+        Err(e) => {
+            serial_println!(
+                "[linen.diskfs.direct.flush.err] status={} honest=expected_on_qemu",
+                e
+            );
+        }
+    }
+
+    // ── Read: 128 bytes as 16 chunks of 8 bytes each ──
+    serial_println!("[linen.diskfs.direct.load.request] offset=0 size=128");
+    let mut readback = [0u8; 128];
+    {
+        let mut chunk: u64 = 0;
+        let mut ok = true;
+        while chunk < 16 {
+            let offset = chunk * 8;
+            match pdx_storage_sync(OP_DISKFS_READ, offset, 8, 0) {
+                Ok(rd) => {
+                    let bytes = rd.to_le_bytes();
+                    let mut i = 0;
+                    while i < 8 {
+                        readback[(offset as usize) + i] = bytes[i];
+                        i += 1;
+                    }
+                }
+                Err(e) => {
+                    serial_println!(
+                        "[linen.diskfs.direct.read.err] chunk={} offset={} err={}",
+                        chunk, offset, e
+                    );
+                    ok = false;
+                    break;
+                }
+            }
+            chunk += 1;
+        }
+        if !ok {
+            return;
+        }
+    }
+
+    // ── Verify exact match ──
+    {
+        let mut match_ok = true;
+        let mut mismatch_at: usize = 0;
+        {
+            let mut i: usize = 0;
+            while i < 128 {
+                if readback[i] != payload[i] {
+                    match_ok = false;
+                    mismatch_at = i;
+                    break;
+                }
+                i += 1;
+            }
+        }
+        if match_ok {
+            serial_println!("[linen.diskfs.direct.read.match] ok=1 size=128");
+        } else {
+            serial_println!(
+                "[linen.diskfs.direct.read.mismatch] offset={} expected={:#x} got={:#x}",
+                mismatch_at,
+                payload[mismatch_at],
+                readback[mismatch_at]
+            );
+        }
+    }
+
+    // ── Negative: write past end ──
+    {
+        match pdx_storage_sync(OP_DISKFS_WRITE, 4096, 0, 0) {
+            Err(_) => {
+                serial_println!("[linen.diskfs.direct.bounds_negative] ok=1 test=write_past_end");
+            }
+            Ok(_) => {
+                serial_println!("[linen.diskfs.direct.bounds_negative] ok=0 reason=write_past_end_allowed");
+            }
+        }
+    }
+
+    // ── Negative: read past end ──
+    {
+        match pdx_storage_sync(OP_DISKFS_READ, 4096, 1, 0) {
+            Err(_) => {
+                serial_println!("[linen.diskfs.direct.bounds_negative] ok=1 test=read_past_end");
+            }
+            Ok(_) => {
+                serial_println!("[linen.diskfs.direct.bounds_negative] ok=0 reason=read_past_end_allowed");
+            }
+        }
+    }
+
+    serial_println!("[linen.diskfs.direct.done]");
 }

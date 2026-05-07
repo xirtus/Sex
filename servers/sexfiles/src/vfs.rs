@@ -1,6 +1,7 @@
 extern crate alloc;
 use crate::backends::ramfs::RamFs;
 use crate::backends::FsBackend;
+use crate::backends::diskfs::{DiskFs, DISKFS_MANIFEST_OBJECT_PATH, DISKFS_MANIFEST_FLAG_READ, DISKFS_MANIFEST_FLAG_WRITE};
 use crate::messages;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -9,6 +10,246 @@ pub static IPC_OPS_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 /// The single RamFS instance backing all VFS operations.
 pub static RAMFS: RamFs = RamFs::new();
+
+// ── DiskFS bridge buffer state ──────────────────────────────────────────────
+/// One-time granted MemLend buffer VA for DiskFS bridge ops.
+/// Granted via sys_grant_mem_lend(SLOT_BLOCK, 4096, SLOT_BUF_LEND) on first use.
+/// SexFiles owns this buffer for its lifetime; Linen never sees it.
+static DISKFS_BRIDGE_BUF_VA: AtomicU64 = AtomicU64::new(0);
+
+/// Whether the manifest at LBA 2046 has been validated (or bootstrapped).
+/// Set to true after the first successful diskfs_ensure_manifest() call.
+/// Avoids redundant NVMe manifest reads on every bridge WRITE/READ.
+static DISKFS_MANIFEST_READY: AtomicU64 = AtomicU64::new(0);
+
+fn diskfs_bridge_get_buf_va() -> u64 {
+    let va = DISKFS_BRIDGE_BUF_VA.load(Ordering::Relaxed);
+    if va != 0 && va != u64::MAX {
+        return va;
+    }
+    let new_va = sex_pdx::sys_grant_mem_lend(
+        sex_pdx::SLOT_BLOCK, 4096, sex_pdx::SLOT_BUF_LEND,
+    );
+    if new_va != 0 && new_va != u64::MAX {
+        DISKFS_BRIDGE_BUF_VA.store(new_va, Ordering::Relaxed);
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.buf.ready] buf_va={:#x}",
+            new_va
+        );
+    }
+    new_va
+}
+
+// ── DiskFS bridge inline handlers ───────────────────────────────────────────
+
+fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64) -> u64 {
+    crate::pdx::serial_println!(
+        "[sexfiles.bridge.diskfs.recv] op=0x38 offset={}",
+        byte_offset
+    );
+
+    if byte_offset >= messages::DISKFS_OBJECT_SIZE {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.write.err] reason=offset_past_end offset={}",
+            byte_offset
+        );
+        return messages::ERR_OVERFLOW as u64;
+    }
+
+    let max_write = (messages::DISKFS_OBJECT_SIZE - byte_offset) as usize;
+    if max_write < messages::DISKFS_MAX_WRITE {
+        // Boundary: reject writes that would cross the 4096-byte boundary.
+        // Preferred for V1 simplicity (option A from plan).
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.write.err] reason=boundary_write offset={} max={}",
+            byte_offset, max_write
+        );
+        return messages::ERR_OVERFLOW as u64;
+    }
+
+    let buf_va = diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.write.err] reason=grant_failed buf_va={:#x}",
+            buf_va
+        );
+        return messages::ERR_NOT_FOUND as u64;
+    }
+
+    // Ensure manifest exists on NVMe before attempting write.
+    // Cached: only performs NVMe read on first bridge operation.
+    if DISKFS_MANIFEST_READY.load(Ordering::Relaxed) == 0 {
+        if let Err(e) = DiskFs::diskfs_ensure_manifest(buf_va) {
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.write.err] reason=manifest_ensure_failed code={}",
+                e
+            );
+            return e;
+        }
+        DISKFS_MANIFEST_READY.store(1, Ordering::Relaxed);
+    }
+
+    // Pack 16 bytes inline from data_lo + data_hi.
+    let mut inline_data = [0u8; 16];
+    {
+        let lo = data_lo.to_le_bytes();
+        let hi = data_hi.to_le_bytes();
+        let mut i = 0;
+        while i < 8 {
+            inline_data[i] = lo[i];
+            inline_data[i + 8] = hi[i];
+            i += 1;
+        }
+    }
+
+    match DiskFs::diskfs_write_object(
+        DISKFS_MANIFEST_OBJECT_PATH,
+        byte_offset,
+        &inline_data,
+        buf_va,
+    ) {
+        Ok(n) => {
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.write.ok] offset={} written={}",
+                byte_offset, n
+            );
+            n
+        }
+        Err(e) => {
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.write.err] offset={} code={}",
+                byte_offset, e
+            );
+            e
+        }
+    }
+}
+
+fn handle_diskfs_read(byte_offset: u64, max_len: u64) -> u64 {
+    crate::pdx::serial_println!(
+        "[sexfiles.bridge.diskfs.recv] op=0x39 offset={} max_len={}",
+        byte_offset, max_len
+    );
+
+    if max_len == 0 || max_len > messages::DISKFS_MAX_READ as u64 {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.read.err] reason=bad_max_len max_len={}",
+            max_len
+        );
+        return messages::ERR_OVERFLOW as u64;
+    }
+
+    if byte_offset >= messages::DISKFS_OBJECT_SIZE {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.read.err] reason=offset_past_end offset={}",
+            byte_offset
+        );
+        return messages::ERR_OVERFLOW as u64;
+    }
+
+    if byte_offset + max_len > messages::DISKFS_OBJECT_SIZE {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.read.err] reason=read_past_end offset={} max_len={}",
+            byte_offset, max_len
+        );
+        return messages::ERR_OVERFLOW as u64;
+    }
+
+    let buf_va = diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.read.err] reason=grant_failed buf_va={:#x}",
+            buf_va
+        );
+        return messages::ERR_NOT_FOUND as u64;
+    }
+
+    // Ensure manifest exists on NVMe before attempting read.
+    // Cached: only performs NVMe read on first bridge operation.
+    if DISKFS_MANIFEST_READY.load(Ordering::Relaxed) == 0 {
+        if let Err(e) = DiskFs::diskfs_ensure_manifest(buf_va) {
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.read.err] reason=manifest_ensure_failed code={}",
+                e
+            );
+            return e;
+        }
+        DISKFS_MANIFEST_READY.store(1, Ordering::Relaxed);
+    }
+
+    let rlen = max_len as usize;
+    let mut rbuf = [0u8; 8];
+    match DiskFs::diskfs_read_object(
+        DISKFS_MANIFEST_OBJECT_PATH,
+        byte_offset,
+        &mut rbuf[..rlen],
+        buf_va,
+    ) {
+        Ok(n) => {
+            // Pack up to 8 bytes into reply u64 (LE).
+            let mut reply: u64 = 0;
+            let mut i = 0;
+            while i < n as usize && i < 8 {
+                reply |= (rbuf[i] as u64) << (i * 8);
+                i += 1;
+            }
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.read.ok] offset={} read={}",
+                byte_offset, n
+            );
+            reply
+        }
+        Err(e) => {
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.read.err] offset={} code={}",
+                byte_offset, e
+            );
+            e
+        }
+    }
+}
+
+fn handle_diskfs_flush() -> u64 {
+    crate::pdx::serial_println!(
+        "[sexfiles.bridge.diskfs.recv] op=0x3A flush"
+    );
+    let status = DiskFs::diskfs_fsync();
+    if status == 0 {
+        crate::pdx::serial_println!("[sexfiles.bridge.diskfs.flush.ok]");
+    } else {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.flush.err] status={} honest=flush_not_emulated_by_qemu_nvme",
+            status
+        );
+    }
+    status
+}
+
+fn handle_diskfs_stat() -> u64 {
+    crate::pdx::serial_println!(
+        "[sexfiles.bridge.diskfs.recv] op=0x3B stat"
+    );
+    let flags: u64 = (DISKFS_MANIFEST_FLAG_READ | DISKFS_MANIFEST_FLAG_WRITE) as u64;
+    let size: u64 = messages::DISKFS_OBJECT_SIZE;
+    let packed = (flags << 32) | (size & 0xFFFF_FFFF);
+    crate::pdx::serial_println!(
+        "[sexfiles.bridge.diskfs.stat.ok] size={} flags={:#x}",
+        size, flags
+    );
+    packed
+}
+
+fn handle_diskfs_manifest_hash() -> u64 {
+    crate::pdx::serial_println!(
+        "[sexfiles.bridge.diskfs.recv] op=0x3C manifest_hash"
+    );
+    let hash = DiskFs::proof_manifest_name_hash(DISKFS_MANIFEST_OBJECT_PATH);
+    crate::pdx::serial_println!(
+        "[sexfiles.bridge.diskfs.manifest_hash.ok] hash={:#x}",
+        hash
+    );
+    hash
+}
 
 /// Route a PDX message to the appropriate backend handler.
 /// Called from the trampoline message loop.
@@ -127,6 +368,52 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
                 }
                 Err(e) => e as u64,
             }
+        }
+
+        // ── OP_RAMFS_READNAME ──
+        // arg0 = handle, arg1 = byte_offset, arg2 = max_len (clamped to 8)
+        // Returns: up to 8 filename bytes LE. 0 = EOF. negative = error.
+        messages::OP_RAMFS_READNAME => {
+            let handle = arg0;
+            let byte_offset = arg1;
+            let max_len = arg2.min(8);
+            match RAMFS.readname(handle, byte_offset, max_len, caller_pd) {
+                Ok(packed) => {
+                    crate::pdx::serial_println!(
+                        "[sexfiles.ramfs.readname.ok] handle={} off={} len={}",
+                        handle, byte_offset, max_len
+                    );
+                    packed
+                }
+                Err(e) => {
+                    crate::pdx::serial_println!(
+                        "[sexfiles.ramfs.readname.deny] handle={} err={}",
+                        handle, e
+                    );
+                    e as u64
+                }
+            }
+        }
+
+        // ── DiskFS bridge opcodes (0x38-0x3C) ──
+        // Route: Linen → SLOT_STORAGE → SexFiles → DiskFS → SLOT_BLOCK → SexDrive → NVMe
+        // Fixed-object bridge: /disk/sexfiles-proof-v1
+        messages::OP_DISKFS_WRITE => {
+            // arg0 = byte_offset, arg1 = data_lo, arg2 = data_hi
+            handle_diskfs_write(arg0, arg1, arg2)
+        }
+        messages::OP_DISKFS_READ => {
+            // arg0 = byte_offset, arg1 = max_len, arg2 = 0 (reserved)
+            handle_diskfs_read(arg0, arg1)
+        }
+        messages::OP_DISKFS_FLUSH => {
+            handle_diskfs_flush()
+        }
+        messages::OP_DISKFS_STAT => {
+            handle_diskfs_stat()
+        }
+        messages::OP_DISKFS_MANIFEST_HASH => {
+            handle_diskfs_manifest_hash()
         }
 
         _ => messages::ERR_NOT_FOUND as u64,

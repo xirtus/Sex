@@ -55,6 +55,58 @@ pub const OP_RAMFS_CREATE_OWNER: u64 = 0x36;
 /// a client-local ID.
 pub const OP_RAMFS_OBJECT_ID: u64 = 0x37;
 
+/// Opcode: Read filename bytes for an open file handle.
+/// arg0 = handle
+/// arg1 = byte_offset into filename (0 = start)
+/// arg2 = max_len (server clamps to 8)
+/// Returns: up to 8 filename bytes packed little-endian.
+///   0  = EOF (byte_offset >= name_len) — not an error.
+///   negative = error (invalid handle or permission denied).
+/// Caller must own the file (owner_pd match) or hold CAP_RIGHT_READ.
+/// No allocation. Reads only from the fixed-size name storage.
+pub const OP_RAMFS_READNAME: u64 = 0x3D;
+
+// ── DiskFS bridge opcodes (SEXFILES_RAMFS_DISKFS_BRIDGE_ABI_PLAN_V1) ──
+// Route: Linen → SLOT_STORAGE → SexFiles → DiskFS → SLOT_BLOCK → SexDrive → NVMe
+// Fixed-object only: /disk/sexfiles-proof-v1
+
+/// Opcode: Write up to 16 bytes at a byte offset into the fixed DiskFS object.
+/// arg0 = byte_offset (0..4080, must be 16-byte aligned for full write)
+/// arg1 = data bytes 0..7  (little-endian u64)
+/// arg2 = data bytes 8..15 (little-endian u64)
+/// Returns: bytes written (16) on success, error code (negative) on failure.
+pub const OP_DISKFS_WRITE: u64 = 0x38;
+
+/// Opcode: Read up to 8 bytes at a byte offset from the fixed DiskFS object.
+/// arg0 = byte_offset (0..4095)
+/// arg1 = max_len (1..8)
+/// arg2 = 0 (reserved)
+/// Returns: packed data (u64, bytes 0..max_len-1 LE) or error (negative).
+pub const OP_DISKFS_READ: u64 = 0x39;
+
+/// Opcode: Issue BLOCK_SYNC (NVMe FLUSH) for the DiskFS object.
+/// arg0 = 0, arg1 = 0, arg2 = 0
+/// Returns: 0 on success, BLOCK_ERR_NO_DEVICE (4) on QEMU, or error (negative).
+pub const OP_DISKFS_FLUSH: u64 = 0x3A;
+
+/// Opcode: Query fixed DiskFS object metadata.
+/// arg0 = 0, arg1 = 0, arg2 = 0
+/// Returns: packed { flags: u32 in bits 32..63, size: u32 in bits 0..31 }
+///   or error (negative). size=4096, flags bit0=exists, bit1=writeable.
+pub const OP_DISKFS_STAT: u64 = 0x3B;
+
+/// Opcode: Return the FNV-1a 64-bit hash of the fixed DiskFS object path.
+/// arg0 = 0, arg1 = 0, arg2 = 0
+/// Returns: name_hash (u64) on success, or error (negative).
+pub const OP_DISKFS_MANIFEST_HASH: u64 = 0x3C;
+
+/// Maximum bytes per DISKFS_WRITE call (2 u64 args = 16 bytes).
+pub const DISKFS_MAX_WRITE: usize = 16;
+/// Maximum bytes per DISKFS_READ call (reply u64 = 8 bytes).
+pub const DISKFS_MAX_READ: usize = 8;
+/// Fixed DiskFS object size in bytes.
+pub const DISKFS_OBJECT_SIZE: u64 = 4096;
+
 // ── Error constants ──
 pub const ERR_INVALID_HANDLE: i64 = -1;
 pub const ERR_NAME_TOO_LONG: i64 = -2;
