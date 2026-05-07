@@ -2,7 +2,13 @@
 #![no_main]
 
 use core::alloc::{GlobalAlloc, Layout};
-use sex_pdx::{pdx_call, serial_println, SLOT_SHELL, SLOT_USB_HOST};
+use sex_pdx::{
+    pdx_call, pdx_reply, pdx_try_listen_raw, serial_println,
+    SLOT_SHELL, SLOT_USB_HOST,
+    BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC,
+    BLOCK_ERR_BAD_CMD, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
+    BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER,
+};
 
 struct DummyAllocator;
 unsafe impl GlobalAlloc for DummyAllocator {
@@ -119,6 +125,68 @@ pub extern "C" fn _start() -> ! {
 
     let mut frame: u32 = 0;
     loop {
+        // [sexdrive.block.typed.recv] [sexdrive.block.typed.reply]
+        // Typed block command dispatch — decodes SLOT_BLOCK messages.
+        // Honest status: ERR_NO_DEVICE for all commands (no real NVMe/AHCI).
+        // No fake read success. Returns ERR_BAD_CMD for unknown commands.
+        if let Some(msg) = pdx_try_listen_raw(0) {
+            let cmd = msg.type_id;
+            let offset = msg.arg0;
+            let size = msg.arg1;
+            let _buf_cap = msg.arg2;
+
+            serial_println!(
+                "[sexdrive.block.typed.recv] cmd={} offset={:#x} size={} buf_cap={:#x} caller={}",
+                cmd, offset, size, _buf_cap, msg.caller_pd
+            );
+
+            // [sexblock.abi.request.decode] — dispatch on typed command
+            let reply_val: u64 = match cmd {
+                BLOCK_READ | BLOCK_WRITE | BLOCK_SYNC => {
+                    // Validate bounds on read/write
+                    if (cmd == BLOCK_READ || cmd == BLOCK_WRITE) && size > BLOCK_MAX_XFER {
+                        serial_println!(
+                            "[sexdrive.block.typed] cmd={} ERR_BAD_LEN size={} max={}",
+                            cmd, size, BLOCK_MAX_XFER
+                        );
+                        BLOCK_ERR_BAD_LEN
+                    } else if (cmd == BLOCK_READ || cmd == BLOCK_WRITE)
+                        && (offset % BLOCK_SECTOR_SIZE != 0)
+                    {
+                        serial_println!(
+                            "[sexdrive.block.typed] cmd={} ERR_BAD_LEN offset={:#x} sector={}",
+                            cmd, offset, BLOCK_SECTOR_SIZE
+                        );
+                        BLOCK_ERR_BAD_LEN
+                    } else {
+                        // Valid command, no real device backend
+                        serial_println!(
+                            "[sexdrive.block.typed] cmd={} ERR_NO_DEVICE honest=no_nvme_ahci_backend",
+                            cmd
+                        );
+                        BLOCK_ERR_NO_DEVICE
+                    }
+                }
+                _ => {
+                    serial_println!(
+                        "[sexdrive.block.typed] cmd={} ERR_BAD_CMD unknown",
+                        cmd
+                    );
+                    BLOCK_ERR_BAD_CMD
+                }
+            };
+
+            serial_println!(
+                "[sexblock.abi.reply.encode] caller={} status={}",
+                msg.caller_pd, reply_val
+            );
+            pdx_reply(msg.caller_pd, reply_val);
+            serial_println!(
+                "[sexdrive.block.typed.reply] cmd={} caller={} status={}",
+                cmd, msg.caller_pd, reply_val
+            );
+        }
+
         frame += 1;
         let ptr = shared_addr as *mut u32;
         for y in 0..768 {

@@ -1,6 +1,10 @@
 use crate::backends::FsBackend;
 use crate::messages;
 use core::sync::atomic::{AtomicU64, Ordering};
+use sex_pdx::{
+    pdx_call, serial_println, SLOT_BLOCK,
+    BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC,
+};
 use spin::RwLock;
 
 pub const DISKFS_BLOCK_SIZE: u32 = 4096;
@@ -211,6 +215,77 @@ impl DiskFs {
     #[allow(dead_code)]
     pub const fn new() -> Self {
         Self
+    }
+
+    /// [sexfiles.diskfs.call] [sexfiles.diskfs.reply]
+    /// Route proof: send a block/DMA call to sexdrive via SLOT_BLOCK.
+    /// opcode: block operation (e.g. read/write/flush).
+    /// arg0-arg2: operation-specific parameters (block offset, length, buffer).
+    /// Returns the sexdrive reply value, or 0 on error.
+    /// Proof markers emitted: call, reply — validated via serial_println trace.
+    #[allow(dead_code)]
+    pub fn diskfs_block_call(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
+        serial_println!(
+            "[sexfiles.diskfs.call] slot={} opcode={:#x} arg0={:#x} arg1={:#x} arg2={:#x}",
+            SLOT_BLOCK, opcode, arg0, arg1, arg2
+        );
+        let (status, value) = pdx_call(SLOT_BLOCK, opcode, arg0, arg1, arg2);
+        serial_println!(
+            "[sexfiles.diskfs.reply] status={:#x} value={:#x}",
+            status, value
+        );
+        value
+    }
+
+    /// [sexfiles.diskfs.typed.call] [sexfiles.diskfs.typed.reply]
+    /// Typed block read: send BLOCK_READ command to sexdrive.
+    /// offset: sector-aligned byte offset in block device.
+    /// size: transfer size in bytes (≤ BLOCK_MAX_XFER, sector-aligned).
+    /// buffer_cap: placeholder capability token (0 = no DMA buffer yet).
+    /// Returns block status code (BLOCK_OK on success, error code on failure).
+    #[allow(dead_code)]
+    pub fn diskfs_block_read(offset: u64, size: u64, buffer_cap: u64) -> u64 {
+        serial_println!(
+            "[sexfiles.diskfs.typed.call] cmd=BLOCK_READ offset={:#x} size={} buf_cap={:#x}",
+            offset, size, buffer_cap
+        );
+        let reply = Self::diskfs_block_call(BLOCK_READ, offset, size, buffer_cap);
+        serial_println!(
+            "[sexfiles.diskfs.typed.reply] cmd=BLOCK_READ status={}",
+            reply
+        );
+        reply
+    }
+
+    /// [sexfiles.diskfs.typed.call] [sexfiles.diskfs.typed.reply]
+    /// Typed block write: send BLOCK_WRITE command to sexdrive.
+    #[allow(dead_code)]
+    pub fn diskfs_block_write(offset: u64, size: u64, buffer_cap: u64) -> u64 {
+        serial_println!(
+            "[sexfiles.diskfs.typed.call] cmd=BLOCK_WRITE offset={:#x} size={} buf_cap={:#x}",
+            offset, size, buffer_cap
+        );
+        let reply = Self::diskfs_block_call(BLOCK_WRITE, offset, size, buffer_cap);
+        serial_println!(
+            "[sexfiles.diskfs.typed.reply] cmd=BLOCK_WRITE status={}",
+            reply
+        );
+        reply
+    }
+
+    /// [sexfiles.diskfs.typed.call] [sexfiles.diskfs.typed.reply]
+    /// Typed block sync: send BLOCK_SYNC command to sexdrive (flush/barrier).
+    #[allow(dead_code)]
+    pub fn diskfs_block_sync() -> u64 {
+        serial_println!(
+            "[sexfiles.diskfs.typed.call] cmd=BLOCK_SYNC"
+        );
+        let reply = Self::diskfs_block_call(BLOCK_SYNC, 0, 0, 0);
+        serial_println!(
+            "[sexfiles.diskfs.typed.reply] cmd=BLOCK_SYNC status={}",
+            reply
+        );
+        reply
     }
 
     fn checksum_superblock(sb: &SexfilesSuperblock) -> u32 {

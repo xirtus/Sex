@@ -77,7 +77,16 @@ has_marker() {
 
 count_marker() {
     local pattern="$1"
-    grep -cE "$pattern" "$LOG" 2>/dev/null || echo 0
+    local count
+    count="$(grep -cE "$pattern" "$LOG" 2>/dev/null || true)"
+    # grep -c returns exit=1 for zero matches but still prints "0";
+    # normalize to a single numeric token for arithmetic tests.
+    count="${count//$'\n'/}"
+    if [[ -z "$count" ]]; then
+        echo 0
+    else
+        echo "$count"
+    fi
 }
 
 print_gate() {
@@ -116,6 +125,8 @@ echo ""
 echo "[gate] BOOT+PROBE phase (${PROBE_SECONDS}s)..."
 mkdir -p "$GATE_DIR"
 rm -f "$LOG" "$GATE_DIR/qmp.sock"
+# Pre-create log path so --keep-log always leaves a deterministic file artifact.
+: > "$LOG"
 
 set +e
 "$QEMU_BIN" \
@@ -329,6 +340,13 @@ fi
 echo ""
 print_gate "FINAL_SCORE" "$FINAL_SCORE"
 echo ""
+
+# Emit typed block proof markers when requested so callers can pipe/grep stdout.
+if [ "${SEXOS_SEXFILES_REAL_BLOCK_PROOF:-0}" = "1" ]; then
+    echo "--- TYPED BLOCK PROOF MARKERS ---"
+    grep -E 'sexfiles\.diskfs\.(typed\.(call|reply)|block\.proof\.(typed|bad|unaligned))|sexdrive\.block\.typed|sexblock\.abi' "$LOG" || true
+    echo ""
+fi
 
 # Marker summary
 m_spawn_total=$(count_marker "Spawned PD")

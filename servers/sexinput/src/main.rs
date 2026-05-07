@@ -244,6 +244,15 @@ pub extern "C" fn _start() -> ! {
                 // Compatibility path: if producer already sends normalized HID event
                 // tuples in OP_USB_MOUSE_REPORT (class in arg0), forward as-is.
                 if cls == EV_REL || cls == EV_ABS || cls == EV_BTN {
+                    // ── Button edge proof markers ──
+                    if cls == EV_BTN {
+                        let pressed = req.arg1 != 0;
+                        if pressed {
+                            serial_println!("[sexinput.pointer.button.down] btn={} pressed=1", req.arg0);
+                        } else {
+                            serial_println!("[sexinput.pointer.button.up] btn={} pressed=0", req.arg0);
+                        }
+                    }
                     unsafe {
                         static mut SEXINPUT_POINTER_SEND_BUDGET: u32 = 2048;
                         let rem = &mut SEXINPUT_POINTER_SEND_BUDGET;

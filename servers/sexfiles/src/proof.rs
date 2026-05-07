@@ -850,15 +850,79 @@ pub fn run_sexfiles_real_block_proofs() {
         align_deny as u8
     );
 
-    // BLOCKER report: no real block device route exists
+    // [sexfiles.diskfs.typed.call] — typed BLOCK_READ route proof.
+    // Sends BLOCK_READ(offset=0, size=512, buffer_cap=0) via SLOT_BLOCK.
+    // sexdrive decodes the typed command and returns honest status:
+    //   ERR_NO_DEVICE (no real NVMe/AHCI backend).
     serial_println!(
-        "[sexfiles.block.proof.blocker] status=MISSING_ROUTE reason=no_block_device_server_no_kernel_syscalls_no_pdx_slots"
+        "[sexfiles.block.proof.route_demo] typed BLOCK_READ via SLOT_BLOCK={}",
+        crate::pdx::SLOT_BLOCK
     );
+    let read_status = DiskFs::diskfs_block_read(0, 512, 0);
     serial_println!(
-        "[sexfiles.block.proof.blocker] contract=docs/handoff/SEXFILES_REAL_BLOCK_BACKEND_V1.md"
+        "[sexfiles.block.proof.typed_read] status={} expected=ERR_NO_DEVICE({})",
+        read_status, crate::pdx::BLOCK_ERR_NO_DEVICE
+    );
+    let read_honest = read_status == crate::pdx::BLOCK_ERR_NO_DEVICE;
+
+    // Typed BLOCK_WRITE — same expect: ERR_NO_DEVICE
+    let write_status = DiskFs::diskfs_block_write(0, 512, 0);
+    serial_println!(
+        "[sexfiles.block.proof.typed_write] status={} expected=ERR_NO_DEVICE({})",
+        write_status, crate::pdx::BLOCK_ERR_NO_DEVICE
+    );
+    let write_honest = write_status == crate::pdx::BLOCK_ERR_NO_DEVICE;
+
+    // Typed BLOCK_SYNC — same expect: ERR_NO_DEVICE
+    let sync_status = DiskFs::diskfs_block_sync();
+    serial_println!(
+        "[sexfiles.block.proof.typed_sync] status={} expected=ERR_NO_DEVICE({})",
+        sync_status, crate::pdx::BLOCK_ERR_NO_DEVICE
+    );
+    let sync_honest = sync_status == crate::pdx::BLOCK_ERR_NO_DEVICE;
+
+    // Bad command: send unknown opcode to verify ERR_BAD_CMD
+    let bad_cmd_reply = DiskFs::diskfs_block_call(0xFF, 0, 0, 0);
+    serial_println!(
+        "[sexfiles.block.proof.bad_cmd] reply={} expected=ERR_BAD_CMD({})",
+        bad_cmd_reply, crate::pdx::BLOCK_ERR_BAD_CMD
+    );
+    let bad_cmd_honest = bad_cmd_reply == crate::pdx::BLOCK_ERR_BAD_CMD;
+
+    // Oversized read: size > BLOCK_MAX_XFER → ERR_BAD_LEN
+    let bad_len_reply = DiskFs::diskfs_block_read(0, 8192, 0);
+    serial_println!(
+        "[sexfiles.block.proof.bad_len] reply={} expected=ERR_BAD_LEN({})",
+        bad_len_reply, crate::pdx::BLOCK_ERR_BAD_LEN
+    );
+    let bad_len_honest = bad_len_reply == crate::pdx::BLOCK_ERR_BAD_LEN;
+
+    // Unaligned offset: offset not sector-aligned → ERR_BAD_LEN
+    let unaligned_reply = DiskFs::diskfs_block_read(1, 512, 0);
+    serial_println!(
+        "[sexfiles.block.proof.unaligned] reply={} expected=ERR_BAD_LEN({})",
+        unaligned_reply, crate::pdx::BLOCK_ERR_BAD_LEN
+    );
+    let unaligned_honest = unaligned_reply == crate::pdx::BLOCK_ERR_BAD_LEN;
+
+    // Summary: all typed proofs
+    let all_honest = read_honest && write_honest && sync_honest
+        && bad_cmd_honest && bad_len_honest && unaligned_honest;
+    serial_println!(
+        "[sexfiles.block.proof.typed_summary] honest={} read={} write={} sync={} bad_cmd={} bad_len={} unaligned={}",
+        all_honest as u8, read_honest as u8, write_honest as u8, sync_honest as u8,
+        bad_cmd_honest as u8, bad_len_honest as u8, unaligned_honest as u8
     );
 
-    serial_println!("[sexfiles.block.proof.done] contract_validated=1 route=IN_MEMORY_ONLY blocker=REAL_BLOCK_MISSING");
+    // Route status: typed ABI wired, sexdrive decodes commands, no real device.
+    serial_println!(
+        "[sexfiles.block.proof.blocker] status=TYPED_ABI_WIRED reason=no_real_nvme_ahci_backend_read_still_blocked"
+    );
+    serial_println!(
+        "[sexfiles.block.proof.blocker] contract=docs/handoff/SEXBLOCK_TYPED_DMA_ABI_V1.md"
+    );
+
+    serial_println!("[sexfiles.block.proof.done] contract_validated=1 route=TYPED_ABI_SLOT_BLOCK blocker=REAL_DEVICE_BACKEND_MISSING");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -693,7 +693,14 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
         serial_println!("[ps2.irq1.entry] n={}", irq_n);
     }
 
-    let scancode = crate::keyboard::read_scancode();
+    let scancode = match crate::keyboard::read_scancode() {
+        Some(sc) => sc,
+        None => {
+            // Keyboard not initialized (i8042 absent on this machine).
+            // Silently drop the spurious interrupt (IRQ1 may fire from ghost controller).
+            return;
+        }
+    };
     let read_n = PS2_PORT60_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if read_n <= 16 {
         serial_println!("[ps2.port60.read] n={} sc={:#x}", read_n, scancode);

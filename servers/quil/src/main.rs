@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::alloc::{GlobalAlloc, Layout};
-use sex_pdx::{pdx_call, pdx_listen_raw, serial_println, OP_QUIL_PING, SLOT_DISPLAY, SLOT_STORAGE};
+use sex_pdx::{pdx_call, pdx_listen_raw, serial_println, OP_QUIL_PING, OP_TEXT_DRAW, OP_TEXT_CLEAR, SLOT_DISPLAY, SLOT_STORAGE};
 
 struct DummyAllocator;
 unsafe impl GlobalAlloc for DummyAllocator {
@@ -92,6 +92,26 @@ const QUIL_LINE_BG: u64 = 0x000C1420;   // dark slate
 const QUIL_LINE_COLOR: u64 = 0x00304058; // muted blue-gray
 const QUIL_LINE_ACCENT_W: u64 = 4;
 const QUIL_LINE_ACCENT_COLOR: u64 = 0x00506080;
+
+/// Characters per line for sexdisplay's 5×7 grid renderer (FONT_ASCII_5X7).
+const QUIL_TEXT_CHARS_PER_LINE: usize = 20;
+
+/// Pad a logical line to QUIL_TEXT_CHARS_PER_LINE with trailing spaces so the
+/// sexdisplay renderer places each logical line on its own raster row.
+fn pad_text_line(line: &[u8], out: &mut [u8], max_out: usize) -> usize {
+    let copy_len = line.len().min(QUIL_TEXT_CHARS_PER_LINE);
+    let mut w = 0usize;
+    while w < copy_len && w < max_out {
+        out[w] = line[w];
+        w += 1;
+    }
+    while w < QUIL_TEXT_CHARS_PER_LINE && w < max_out {
+        out[w] = b' ';
+        w += 1;
+    }
+    w
+}
+
 const QUIL_GLYPH_COLOR: u64 = 0x00D4FF7A;
 const QUIL_RECT_SLOT_MIN: u64 = 2;
 const QUIL_RECT_SLOT_MAX: u64 = 7;
@@ -189,59 +209,74 @@ fn draw_title_bar() {
     );
 }
 
-/// Draw text buffer lines as visual fill rects (rect_indices 2..7).
+/// Draw text buffer lines as actual glyphs via OP_TEXT_DRAW (0xFB) to sexdisplay.
+/// Lines are split on \n, padded to QUIL_TEXT_CHARS_PER_LINE, and sent in 8-byte chunks.
+/// Text color: bright cyan (0x00E0F0FF) over the dark slate background.
 fn draw_text_lines(buf: &[u8]) {
+    const TEXT_LINE_COLOR: u64 = 0x00E0F0FF; // bright cyan on dark background
+    const MAX_CHUNK: usize = 8;              // bytes per OP_TEXT_DRAW call
+
+    // Clear previous text on this surface.
+    pdx_call(SLOT_DISPLAY, OP_TEXT_CLEAR, SURFACE_ID_QUIL, 0, 0);
+
     let line_count = text_buffer_line_count(buf);
-    serial_println!("[quil.text.lines] count={} bytes={}", line_count, buf.len());
-
-    let text_area_h = QUIL_MAX_VISIBLE_LINES as u64 * (QUIL_LINE_H + QUIL_LINE_GAP);
-    // Text area background (rect_index=2).
-    pdx_call(
-        SLOT_DISPLAY,
-        0xEF,
-        SURFACE_ID_QUIL,
-        ((QUIL_TEXT_AREA_Y as u64) << 32) | 0u64,
-        (2u64 << 56)
-            | (QUIL_LINE_BG << 32)
-            | (text_area_h << 16)
-            | SURFACE_W,
-    );
-    serial_println!("[quil.text.bg] y={} h={}", QUIL_TEXT_AREA_Y, text_area_h);
-
     let show_lines = line_count.min(QUIL_MAX_VISIBLE_LINES);
-    for i in 0..show_lines {
-        if i >= 4 { // keep rect_index=7 reserved for static proof badge
-            serial_println!("[quil.text.line.skip] index={} reason=max_rects", i);
-            break;
+    serial_println!("[quil.text.draw.v2] lines={} bytes={} visible={}",
+        line_count, buf.len(), show_lines);
+
+    if buf.is_empty() || show_lines == 0 { return; }
+
+    // Pad each logical line to QUIL_TEXT_CHARS_PER_LINE so the renderer
+    // places each on its own raster row.
+    let mut line_buf: [u8; 256] = [0u8; 256];
+    let mut total_written: usize = 0;
+    let mut line_start: usize = 0;
+
+    for _line_idx in 0..show_lines {
+        // Find end of this logical line (next \n or end of buf)
+        let mut line_end = line_start;
+        while line_end < buf.len() && buf[line_end] != b'\n' {
+            line_end += 1;
         }
-        let rect_index = (3 + i) as u64; // bits 56-59: 3, 4, 5, 6, 7
-        let y = QUIL_TEXT_AREA_Y + (i as u64) * (QUIL_LINE_H + QUIL_LINE_GAP);
+        let logical_line = &buf[line_start..line_end];
 
-        // Line fill.
-        pdx_call(
-            SLOT_DISPLAY,
-            0xEF,
-            SURFACE_ID_QUIL,
-            (y << 32) | QUIL_LINE_X as u64,
-            (rect_index << 56)
-                | (QUIL_LINE_COLOR << 32)
-                | (QUIL_LINE_H << 16)
-                | QUIL_LINE_W as u64,
-        );
-        serial_println!("[quil.text.line] index={} rect={} y={}", i, rect_index, y);
+        // Pad to QUIL_TEXT_CHARS_PER_LINE
+        let w = pad_text_line(logical_line, &mut line_buf[total_written..],
+                              256usize.saturating_sub(total_written));
+        total_written += w;
 
-        // Left accent overrides the line's left edge (same rect_index).
-        pdx_call(
-            SLOT_DISPLAY,
-            0xEF,
-            SURFACE_ID_QUIL,
-            (y << 32) | QUIL_LINE_X as u64,
-            (rect_index << 56)
-                | (QUIL_LINE_ACCENT_COLOR << 32)
-                | (QUIL_LINE_H << 16)
-                | QUIL_LINE_ACCENT_W as u64,
-        );
+        // Advance past \n separator
+        line_start = line_end;
+        if line_start < buf.len() && buf[line_start] == b'\n' {
+            line_start += 1;
+        }
     }
+
+    if total_written == 0 { return; }
+
+    // Send padded text in 8-byte chunks via OP_TEXT_DRAW.
+    let mut offset: usize = 0;
+    while offset < total_written {
+        let remaining = total_written - offset;
+        let chunk_len = remaining.min(MAX_CHUNK);
+
+        // Pack up to 8 bytes into arg1 (little-endian)
+        let mut packed: u64 = 0;
+        for i in 0..chunk_len {
+            packed |= (line_buf[offset + i] as u64) << (i * 8);
+        }
+
+        // arg2: byte_offset (bits 0-7) | char_count (bits 8-11) | text_color (bits 32-63)
+        let arg2: u64 = (offset as u64 & 0xFF)
+            | ((chunk_len as u64 & 0xF) << 8)
+            | (TEXT_LINE_COLOR << 32);
+
+        pdx_call(SLOT_DISPLAY, OP_TEXT_DRAW, SURFACE_ID_QUIL, packed, arg2);
+        offset += chunk_len;
+    }
+
+    serial_println!("[quil.text.draw.v2.sent] total_bytes={} chunks={}",
+        total_written, (total_written + MAX_CHUNK - 1) / MAX_CHUNK);
 
     if line_count > QUIL_MAX_VISIBLE_LINES {
         serial_println!("[quil.text.buffer.overflow] lines={} visible={}",

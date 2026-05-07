@@ -240,6 +240,17 @@ pub fn init() {
         }
     }
 
+    // SexFiles → SexDrive block/DMA route: grant SLOT_BLOCK so DiskFS
+    // can send DmaCall messages to the block device server.
+    if sexfiles_id != 0 && sexdrive_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::capability::CapabilityData;
+        if let Some(pd) = DOMAIN_REGISTRY.get(sexfiles_id) {
+            pd.grant_capability(sex_pdx::SLOT_BLOCK, CapabilityData::Domain(sexdrive_id));
+            serial_println!("[kernel.cap.block] sexfiles->sexdrive slot={}", sex_pdx::SLOT_BLOCK);
+        }
+    }
+
     // Hand framebuffer to sexdisplay: Limine fb.address is ALREADY VIRTUAL.
     if sexdisp_id != 0 {
         use crate::ipc::DOMAIN_REGISTRY;

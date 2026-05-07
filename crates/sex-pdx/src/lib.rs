@@ -116,6 +116,16 @@ pub const OP_BELL_MUTE_SENDER: u64 = 0xC7; // Shell → Bell: mute a sender PD
 pub const OP_SURFACE_TAB_INFO: u64 = 0xFD;
 
 // Appearance tokens opcode (silk-shell → sexdisplay, two-call state machine)
+// Text draw opcode (app → sexdisplay): draw ASCII text on a surface.
+// arg0 = surface_id (u64)
+// arg1 = 8 ASCII bytes packed little-endian (u64)
+// arg2 = byte_offset (lower 8 bits) | char_count (bits 8-11) | text_color ARGB (upper 32 bits)
+pub const OP_TEXT_DRAW: u64 = 0xFB;
+
+// Text clear opcode (app → sexdisplay): clear text on a surface.
+// arg0 = surface_id (u64)
+pub const OP_TEXT_CLEAR: u64 = 0xFA;
+
 pub const OP_APPEARANCE_TOKENS: u64 = 0xFC;
 
 // Typed input event class constants (IPC encoding for 0x202 OP_HID_EVENT)
@@ -375,6 +385,25 @@ pub const SLOT_QUIL: u64 = 11;    // Quil app surface server (shell→Quil route
 pub const SLOT_BELL: u64 = 12;   // Bell attention/event service (domain 10, namespace audited)
 pub const SLOT_LINEN: u64 = 13;  // Linen app surface server
 pub const SLOT_SPINDLE: u64 = 14; // Spindle command console (domain 12)
+pub const SLOT_BLOCK:   u64 = 15; // sexdrive block/DMA service (sexfiles→sexdrive route)
+
+// ── Block DMA protocol (SLOT_BLOCK, namespace B0-BF assigned) ──
+// Commands: sent as pdx_call opcode (rsi), decoded by sexdrive as msg.type_id.
+pub const BLOCK_READ:  u64 = 1; // Read sectors from block device
+pub const BLOCK_WRITE: u64 = 2; // Write sectors to block device
+pub const BLOCK_SYNC:  u64 = 3; // Flush/barrier (no data transfer)
+
+// Block protocol status codes — returned as pdx_reply value.
+pub const BLOCK_OK:           u64 = 0; // Success
+pub const BLOCK_ERR_BAD_CMD:  u64 = 1; // Unknown/unsupported command
+pub const BLOCK_ERR_BAD_LEN:  u64 = 2; // Transfer size out of bounds
+pub const BLOCK_ERR_BAD_CAP:  u64 = 3; // Invalid/missing buffer capability
+pub const BLOCK_ERR_NO_DEVICE: u64 = 4; // No real block device backend
+pub const BLOCK_ERR_TIMEOUT:  u64 = 5; // Operation timed out
+
+// Block protocol bounds (must match servers/sexfiles/src/backends/diskfs.rs)
+pub const BLOCK_SECTOR_SIZE:  u64 = 512;     // Minimum alignment unit
+pub const BLOCK_MAX_XFER:     u64 = 4096;    // Max bytes per transfer (one page)
 
 // Capability invocation trap numbers (ring-3 → ring-0 transition only).
 // These are sex-pdx implementation details, NOT POSIX-style syscall numbers.

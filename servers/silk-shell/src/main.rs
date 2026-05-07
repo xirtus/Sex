@@ -8885,6 +8885,7 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
 unsafe fn try_set_focus(sid: u64) -> bool {
     if sid == 0 {
         FOCUSED_SURFACE_ID = 0;
+        serial_println!("[silk-shell.focus.change] from=0 to=0 (clear)");
         pdx_call(SLOT_DISPLAY, 0xED, 0, 0, 0);
         serial_println!("[shell.focus.clear] id=0");
         // Selected window: focus cleared → no selection, mask=0.
@@ -11766,6 +11767,9 @@ pub extern "C" fn _start() -> ! {
                             } else {
                                 POINTER_BUTTONS &= !(1u8.checked_shl(button.saturating_sub(1) as u32).unwrap_or(0));
                             }
+                            // ── Click/focus proof marker: pointer event received ──
+                            serial_println!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
+                                button, pressed);
                             serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
                                 button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);
 
@@ -11778,6 +11782,8 @@ pub extern "C" fn _start() -> ! {
                             // ── Click-to-focus: left-button press edge (0→1 transition only) ──
                             if button == 1 {
                                 if pressed && (INTERACTION == InteractionState::Idle || matches!(INTERACTION, InteractionState::PanelActive { .. })) {
+                                    serial_println!("[silk-shell.click.down] btn={} x={} y={} buttons={:#x}",
+                                        button, POINTER_X, POINTER_Y, POINTER_BUTTONS);
                                     try_transition(InteractionState::ClickPending);
                                     let (target, silkbar_handled) = click_hit_test_and_focus(POINTER_X, POINTER_Y, POINTER_BUTTONS);
                                     // Budgeted real-click target marker.
@@ -11795,6 +11801,8 @@ pub extern "C" fn _start() -> ! {
                                 } else if !pressed {
                                     match INTERACTION {
                                         InteractionState::ClickPending => {
+                                            serial_println!("[silk-shell.click.up] btn={} x={} y={}",
+                                                button, POINTER_X, POINTER_Y);
                                             try_transition(InteractionState::Idle);
                                         }
                                         InteractionState::Dragging { surface_id, .. } => {

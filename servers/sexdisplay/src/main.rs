@@ -49,6 +49,9 @@ struct Surface {
     fill_sw: [u32; MAX_RECTS],
     fill_sh: [u32; MAX_RECTS],
     fill_color: [u32; MAX_RECTS],
+    text_len: u8,
+    text_color: u32,
+    text_buf: [u8; 128],
 }
 
 const MAX_SURFACES: usize = 16;
@@ -59,6 +62,7 @@ const SURFACE_EMPTY: Surface = Surface {
     fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
     fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
     fill_color: [0u32; MAX_RECTS],
+    text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; 128],
 };
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 static mut FOCUSED_SURFACE_ID: u64 = 0;
@@ -179,6 +183,8 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
             if sw == 0 || sh == 0 { continue; }
             if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
                 c = fill_rect_color(surf, x, y, surf.color);
+                // ── Text rendering: glyph foreground overrides fill-rect color ──
+                if let Some(tc) = surface_text_fg_at(x, y, surf) { c = tc; }
                 break;
             }
         }
@@ -297,6 +303,8 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                     } else {
                         // ── SURFACE CONTENT AREA ──
                         c = fill_rect_color(surf, x, y, DISPLAY_TOKENS.focus_surface_color);
+                        // ── Text rendering: glyph foreground overrides focus color ──
+                        if let Some(tc) = surface_text_fg_at(x, y, surf) { c = tc; }
                     }
                     break;
                 }
@@ -469,6 +477,119 @@ const FONT: [[u8; 7]; 10] = [
     [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
     [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
 ];
+
+// 5×7 ASCII font: glyphs for chars 0x20 (space) through 0x5A (Z), 59 glyphs
+// Each glyph: 7 bytes, MSB = leftmost pixel, 5 bits wide, 3 bits padding
+// Used by surface_text_fg_at() for text rendering on surfaces
+const FONT_ASCII_5X7: [[u8; 7]; 59] = [
+    [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000],
+    [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100],
+    [0b01010, 0b01010, 0b01010, 0b00000, 0b00000, 0b00000, 0b00000],
+    [0b01010, 0b01010, 0b11111, 0b01010, 0b11111, 0b01010, 0b01010],
+    [0b00100, 0b01111, 0b10100, 0b01110, 0b00101, 0b11110, 0b00100],
+    [0b11001, 0b11010, 0b00010, 0b00100, 0b01000, 0b01011, 0b10011],
+    [0b01100, 0b10010, 0b10010, 0b01100, 0b10101, 0b10010, 0b01101],
+    [0b01100, 0b00100, 0b01000, 0b00000, 0b00000, 0b00000, 0b00000],
+    [0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010],
+    [0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000],
+    [0b00000, 0b00100, 0b10101, 0b01110, 0b10101, 0b00100, 0b00000],
+    [0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000],
+    [0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b00100, 0b01000],
+    [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
+    [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100],
+    [0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000],
+    [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+    [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+    [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
+    [0b01110, 0b10001, 0b00001, 0b00110, 0b00001, 0b10001, 0b01110],
+    [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+    [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110],
+    [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+    [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+    [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
+    [0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100, 0b00000],
+    [0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b00100, 0b01000],
+    [0b00010, 0b00100, 0b01000, 0b10000, 0b01000, 0b00100, 0b00010],
+    [0b00000, 0b00000, 0b11111, 0b00000, 0b11111, 0b00000, 0b00000],
+    [0b01000, 0b00100, 0b00010, 0b00001, 0b00010, 0b00100, 0b01000],
+    [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b00000, 0b00100],
+    [0b01110, 0b10001, 0b10011, 0b10101, 0b10011, 0b10000, 0b01110],
+    [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+    [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+    [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
+    [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+    [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+    [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+    [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110],
+    [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+    [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+    [0b00111, 0b00001, 0b00001, 0b00001, 0b00001, 0b10001, 0b01110],
+    [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+    [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+    [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+    [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
+    [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+    [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
+    [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+    [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+    [0b01110, 0b10001, 0b10000, 0b01110, 0b00001, 0b10001, 0b01110],
+    [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+    [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+    [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+    [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
+    [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+    [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111]
+];
+
+/// Returns `Some(fg_color)` if pixel (x, y) is a text glyph foreground pixel
+/// within the given surface, or `None` if background/not in the text area.
+/// Uses FONT_ASCII_5X7 (5×7 glyphs) with 1px spacing between characters.
+fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
+    if surf.text_len == 0 { return None; }
+    const GLYPH_W: usize = 5;
+    const GLYPH_H: usize = 7;
+    const CHAR_SPACING: usize = 1; // 1px gap between chars
+    const LINE_H: usize = GLYPH_H + 2; // line height with spacing
+    const CHARS_PER_LINE: usize = 20; // max chars per line before wrap
+
+    // Text area inset: 8px from left, 8px from top bar / rim
+    let tx = (surf.x as usize).saturating_add(8);
+    let ty = (surf.y as usize).saturating_add(24); // below title/chrome
+
+    if x < tx || y < ty { return None; }
+
+    let col = (x - tx) / (GLYPH_W + CHAR_SPACING);
+    let row = (y - ty) / LINE_H;
+    let px = (x - tx) % (GLYPH_W + CHAR_SPACING);
+    let py = (y - ty) % LINE_H;
+
+    if px >= GLYPH_W || py >= GLYPH_H { return None; }
+
+    // Calculate character index in text buffer
+    let char_idx = row * CHARS_PER_LINE + col;
+    if char_idx >= surf.text_len as usize { return None; }
+
+    let c = surf.text_buf[char_idx];
+    // Map ASCII to font glyph index: 0x20=0, 0x21=1, ..., 0x5A=58
+    if c < 0x20 || c > 0x5A { return None; }
+    // Map lowercase to uppercase for V1
+    let glyph_idx = if c >= 0x61 && c <= 0x7A {
+        (c - 0x61 + 33) as usize  // 'a' maps to index of 'A' (33)
+    } else {
+        (c - 0x20) as usize
+    };
+    if glyph_idx >= 59 { return None; }
+
+    let glyph_row = FONT_ASCII_5X7[glyph_idx][py];
+    let bit = (glyph_row >> (GLYPH_W - 1 - px)) & 1;
+    if bit != 0 {
+        Some(surf.text_color)
+    } else {
+        None
+    }
+}
 
 /// Returns `Some(fg)` if pixel (x, y) is a clock-digit foreground pixel,
 /// or `None` if it is background/not in the clock area.
@@ -1014,6 +1135,7 @@ pub extern "C" fn _start() -> ! {
                                 fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
                                 fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
                                 fill_color: [0u32; MAX_RECTS],
+                                text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; 128],
                             };
                             break;
                         }
@@ -1066,6 +1188,7 @@ pub extern "C" fn _start() -> ! {
                                     fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
                                     fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
                                     fill_color: [0u32; MAX_RECTS],
+                                    text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; 128],
                                 };
                                 handled = true;
                                 break;
@@ -1221,6 +1344,72 @@ pub extern "C" fn _start() -> ! {
 
                     if updated {
                         redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+                    }
+                }
+            }
+            // ── Text rendering opcodes (V1) ───────────────────────────────
+            0xFA => {
+                // OP_TEXT_CLEAR: arg0 = surface_id
+                let sid = msg.arg0;
+                if sid == 0 { continue; }
+                unsafe {
+                    for slot in SURFACES.iter_mut() {
+                        if slot.active && slot.surface_id == sid {
+                            if slot.owner_pd != msg.caller_pd {
+                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                if n & 0x3F == 0 {
+                                    serial_println!("AUTH: OP_TEXT_CLEAR rejected sid={} caller={} owner={}",
+                                        sid, msg.caller_pd, slot.owner_pd);
+                                }
+                                break;
+                            }
+                            slot.text_len = 0;
+                            slot.text_buf = [0u8; 128];
+                            break;
+                        }
+                    }
+                }
+            }
+            0xFB => {
+                // OP_TEXT_DRAW: arg0=surface_id, arg1=8 ASCII bytes packed LE,
+                //              arg2 = byte_offset (bits 0-7) | char_count (bits 8-11) | text_color (bits 32-63)
+                let sid = msg.arg0;
+                if sid == 0 { continue; }
+                let packed = msg.arg1;
+                let byte_offset = (msg.arg2 & 0xFF) as usize;
+                let char_count = ((msg.arg2 >> 8) & 0xF) as usize;
+                let text_color = ((msg.arg2 >> 32) as u32) | 0xFF000000; // force opaque alpha
+                let max_buf = 128usize;
+                unsafe {
+                    for slot in SURFACES.iter_mut() {
+                        if slot.active && slot.surface_id == sid {
+                            if slot.owner_pd != msg.caller_pd {
+                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                if n & 0x3F == 0 {
+                                    serial_println!("AUTH: OP_TEXT_DRAW rejected sid={} caller={} owner={}",
+                                        sid, msg.caller_pd, slot.owner_pd);
+                                }
+                                break;
+                            }
+                            slot.text_color = text_color;
+                            // Unpack 8 bytes from arg1 (little-endian)
+                            let mut i = 0usize;
+                            while i < char_count && i < 8 && byte_offset + i < max_buf {
+                                let byte = ((packed >> (i * 8)) & 0xFF) as u8;
+                                slot.text_buf[byte_offset + i] = byte;
+                                i += 1;
+                            }
+                            let new_len = byte_offset + i;
+                            if new_len > slot.text_len as usize {
+                                slot.text_len = new_len.min(max_buf) as u8;
+                            }
+                            // Diagnostic: confirm text was written to surface
+                            if slot.text_len > 0 && slot.text_len <= 32 {
+                                serial_println!("[sexdisplay.text.draw] sid={} len={} color={:#x}",
+                                    sid, slot.text_len, slot.text_color);
+                            }
+                            break;
+                        }
                     }
                 }
             }
