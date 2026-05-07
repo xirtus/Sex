@@ -100,6 +100,13 @@ pub const OP_DISKFS_STAT: u64 = 0x3B;
 /// Returns: name_hash (u64) on success, or error (negative).
 pub const OP_DISKFS_MANIFEST_HASH: u64 = 0x3C;
 
+/// Opcode: Select a DiskFS object by path_id for subsequent bridge operations.
+/// V1 single-client proof-only. Global state, not caller-scoped.
+/// arg0 = path_id (u64): 0=/disk/sexfiles-proof-v1, 1=/disk/linen-object-v1, 2=/disk/quil-object-v1
+/// arg1 = 0 (reserved), arg2 = 0 (reserved)
+/// Returns: 0 on success, ERR_BAD_CMD on invalid path_id, other error on manifest failure.
+pub const OP_DISKFS_SELECT: u64 = 0x3E;
+
 /// Maximum bytes per DISKFS_WRITE call (2 u64 args = 16 bytes).
 pub const DISKFS_MAX_WRITE: usize = 16;
 /// Maximum bytes per DISKFS_READ call (reply u64 = 8 bytes).
@@ -114,6 +121,7 @@ pub const ERR_NOT_FOUND: i64 = -3;
 pub const ERR_OVERFLOW: i64 = -4;
 pub const ERR_FULL: i64 = -5;
 pub const ERR_PERM_DENIED: i64 = -6;
+pub const ERR_BAD_CMD: i64 = -7;
 
 // ── Bounds ──
 pub const RAMFS_MAX_FILES: usize = 64;

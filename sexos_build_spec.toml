@@ -148,6 +148,7 @@ action = "cargo_manifest"
 manifest = "servers/sexfiles/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexfiles"
 dest_artifact = "iso_root/servers/sexfiles"
+rustflags = "--cfg sexfiles_diskfs_multi_object_proof"
 
 [[stage]]
 id = "build_spindle"
