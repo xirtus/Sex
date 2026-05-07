@@ -225,6 +225,7 @@ pub extern "C" fn _start() -> ! {
     let mut synth_click_stage: u8 = 0;
     let mut silkbar_click_stage: u8 = 0;
     let mut kbd_proof_stage: u8 = 0;
+    let mut ev_key_edge_stage: u8 = 0;
 
     loop {
         // 0. Local USB->sexinput PDX proof path (no shell routing in this phase).
@@ -573,7 +574,12 @@ pub extern "C" fn _start() -> ! {
         //    with % 3 forever, causing endless drag.start/move/end cycles every
         //    120 ticks that flood the shell and starve visual updates.
         tick = tick.wrapping_add(1);
-        if !SYNTHETIC_INPUT_PROOFS_DISABLED && !unsafe { SYNTHETIC_DRAG_PROOF_DONE } && tick % 120 == 0 {
+        // Ticks 5, 6, 7: one stage per tick, no overlap with EV_KEY (3/4) or click-focus (10/14/15).
+        // Original threshold was tick%120 (~171s to complete); reduced for CI 25s probe window.
+        const DRAG_TICKS: [u64; 3] = [5, 6, 7];
+        if !SYNTHETIC_INPUT_PROOFS_DISABLED && !unsafe { SYNTHETIC_DRAG_PROOF_DONE }
+            && drag_proof_stage < 3 && tick == DRAG_TICKS[drag_proof_stage as usize]
+        {
             let report = match drag_proof_stage {
                 0 => {
                     pdx_call(SLOT_SHELL, OP_HID_EVENT, 200, 200, EV_ABS);
@@ -765,6 +771,25 @@ pub extern "C" fn _start() -> ! {
                     serial_println!("[sexinput.synthetic.click_focus.up]");
                     let _ = pdx_call_checked(SLOT_SHELL, OP_USB_MOUSE_REPORT, 0, 0u64, 0u64);
                     synth_click_stage = 3;
+                }
+                _ => {}
+            }
+        }
+
+        // 6a. KEYBOARD_EDGE_PROOF_V1: one-shot EV_KEY down+up for Enter (scancode 0x1C).
+        //     Proves sexinput→silk-shell EV_KEY path without SEXOS_KEYBOARD_PROOF env var.
+        //     Gated by !SYNTHETIC_INPUT_PROOFS_DISABLED (same gate as other default proofs).
+        if !SYNTHETIC_INPUT_PROOFS_DISABLED {
+            match ev_key_edge_stage {
+                0 if tick == 3 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 0x1Cu64, 1, EV_KEY);
+                    serial_println!("[sexinput.key.ev_key.down code=0x1c]");
+                    ev_key_edge_stage = 1;
+                }
+                1 if tick == 4 => {
+                    pdx_call(SLOT_SHELL, OP_HID_EVENT, 0x1Cu64, 0, EV_KEY);
+                    serial_println!("[sexinput.key.ev_key.up code=0x1c]");
+                    ev_key_edge_stage = 2;
                 }
                 _ => {}
             }

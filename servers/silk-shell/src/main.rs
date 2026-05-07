@@ -16,6 +16,7 @@ use silk_shell::{AppManifest, AppCapabilityBits, APP_RUNTIME_ABI_VERSION};
 
 // Local Opcodes
 pub const OP_DISPLAY_SET_SNAPSHOT: u64 = 0x15;
+pub const OP_REGISTER_WM: u64 = 0xF5;
 
 // Sexstore K/V opcodes (local copies to avoid sex-pdx ABI hash update).
 // Matches servers/sexstore/src/main.rs.
@@ -4592,6 +4593,7 @@ fn is_shell_surface(sid: u64) -> bool {
 fn is_focusable_surface(sid: u64) -> bool {
     sid == SURFACE_ID_APP || sid == SURFACE_ID_STATIC
     || sid == SURFACE_ID_TEST3 || sid == SURFACE_ID_TEST4
+    || sid == SURFACE_ID_LINEN  // client surface managed as WM placeholder
     // Registry lookup: app surfaces use their focusable field
     || app_surface_spec(sid).map_or(false, |s| s.focusable)
 }
@@ -9914,6 +9916,9 @@ pub extern "C" fn _start() -> ! {
     }
     serial_println!("[silk-shell] AUTHORITATIVE WM LISTENING (PDX SLOT 6)");
 
+    // Register as window manager with sexdisplay (first-caller-wins; kernel-verified identity).
+    pdx_call(SLOT_DISPLAY, OP_REGISTER_WM, 0, 0, 0);
+
     // Stage 2B: advertise workspace 0 active to SilkBar
     pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, 0, 0, 0);
     // Stage 2C: focus advertisement (shell) with initial selected-window options mask.
@@ -10730,6 +10735,15 @@ pub extern "C" fn _start() -> ! {
                     unsafe {
                         if event_class == EV_KEY && scancode == 0x43 && value == 0 {
                             F9_TOGGLE_DOWN = false;
+                        }
+
+                        // KEYBOARD_EDGE_PROOF_V1: budgeted receive marker for any EV_KEY.
+                        if event_class == EV_KEY {
+                            static mut KEY_RECV_BUDGET: u32 = 4;
+                            if KEY_RECV_BUDGET > 0 {
+                                KEY_RECV_BUDGET -= 1;
+                                serial_println!("[shell.key.ev_key.received code={:#x} value={}]", scancode, value);
+                            }
                         }
 
                         // ── Event-class dispatch ──
@@ -11648,6 +11662,19 @@ pub extern "C" fn _start() -> ! {
                             }
                             let (cx, cy) = clamp_position(SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H);
                             SURFACE_103_X = cx; SURFACE_103_Y = cy;
+                        } else if focused == SURFACE_ID_LINEN && value == 1 {
+                            match scancode {
+                                0x4B => { SURFACE_200_X -= step; mutated = true; }
+                                0x4D => { SURFACE_200_X += step; mutated = true; }
+                                0x48 => { SURFACE_200_Y -= step; mutated = true; }
+                                0x50 => { SURFACE_200_Y += step; mutated = true; }
+                                _ => {}
+                            }
+                            if mutated {
+                                let (cx, cy) = clamp_position(SURFACE_200_X, SURFACE_200_Y, SURFACE_200_W, SURFACE_200_H);
+                                SURFACE_200_X = cx; SURFACE_200_Y = cy;
+                                serial_println!("[shell.linen.move] x={} y={}", SURFACE_200_X, SURFACE_200_Y);
+                            }
                         }
 
                         // ── Pointer event state updates (no compositor side effects) ──
