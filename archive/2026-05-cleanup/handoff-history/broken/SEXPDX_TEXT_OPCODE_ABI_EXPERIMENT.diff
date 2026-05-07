@@ -1,0 +1,22 @@
+diff --git a/crates/sex-pdx/src/lib.rs b/crates/sex-pdx/src/lib.rs
+index f1722c5..4a11217 100644
+--- a/crates/sex-pdx/src/lib.rs
++++ b/crates/sex-pdx/src/lib.rs
+@@ -118,6 +118,17 @@ pub const OP_SURFACE_TAB_INFO: u64 = 0xFD;
+ // Appearance tokens opcode (silk-shell → sexdisplay, two-call state machine)
+ pub const OP_APPEARANCE_TOKENS: u64 = 0xFC;
+ 
++// Text draw opcode (app → sexdisplay): draw ASCII text on a surface.
++// arg0 = surface_id (u64)
++// arg1 = 8 ASCII bytes packed little-endian (u64)
++// arg2 = byte_offset (lower 8 bits) | char_count in this call (bits 8-11) | text_color ARGB (upper 32 bits)
++// Text accumulates into a 128-byte surface-local buffer.  Multiple calls assemble full text.
++pub const OP_TEXT_DRAW: u64 = 0xFB;
++
++// Text clear opcode (app → sexdisplay): clear text on a surface.
++// arg0 = surface_id (u64)
++pub const OP_TEXT_CLEAR: u64 = 0xFA;
++
+ // Typed input event class constants (IPC encoding for 0x202 OP_HID_EVENT)
+ pub const EV_KEY: u64 = 1;
+ pub const EV_REL: u64 = 2;

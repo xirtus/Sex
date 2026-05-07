@@ -1,0 +1,74 @@
+MISSION: PD_RUNTIME_REACHABILITY_PROOF_V1
+
+Problem:
+INPUT_CLICK_FOCUS_PROOF_V1 build/spawn/fault gates pass, but runtime proof is pending because QEMU test window only reaches PD1. This blocks live proof for silk-shell PD3 and sexinput PD4.
+
+Goal:
+Find why scheduler/runtime only reaches PD1 during the QEMU test window, and prove PD3 silk-shell + PD4 sexinput execute enough to emit runtime markers.
+
+BACKUP BEFORE CHANGES.
+If something goes wrong: READ HANDOUTS and .mds first.
+Reduce token waste: rg first, inspect small snippets only, no broad dumps.
+Save recurring fixes/issues in docs/handoff.
+
+NO Linux assumptions. NO POSIX.
+Strict no_std Rust Sex Microkernel.
+PDX only. MPK/PKU/PKEY isolation.
+No kernel/ABI/sex-pdx edits unless STOP FIRST.
+No sex-pdx ABI edits unless STOP FIRST.
+sexdisplay sole framebuffer writer.
+Preserve framebuffer bounds checks.
+No shared-memory/backing-buffer redesign.
+No broad refactor.
+
+Scope:
+Investigate runtime reachability/scheduling/proof timing only.
+
+Allowed inspection:
+kernel/src/scheduler.rs
+kernel/src/init.rs
+kernel/src/interrupts.rs using docs/INTERRUPTS_QUICKMAP.md discipline
+servers/sexinput/src/main.rs
+servers/silk-shell/src/main.rs
+scripts/runtime or gate scripts if relevant
+docs/handoff/*.md
+
+Do NOT read all of kernel/src/interrupts.rs.
+Use:
+rg "timer_interrupt_handler|switch_to|tick|enqueue|PD|fault.kill|faulted_task_halt|send_eoi|STATE_" kernel/src/interrupts.rs kernel/src/scheduler.rs kernel/src/init.rs -n
+Then inspect only small sed ranges.
+
+Task:
+1. Determine whether PD3/PD4 are:
+   - spawned but not scheduled
+   - scheduled but not running long enough
+   - running but markers not flushed/captured
+   - blocked in pdx_listen
+   - faulted/exited silently
+   - starved by PD1 loop/yield behavior
+   - missed by test window timeout
+2. Add minimal proof markers if necessary:
+   - scheduler.pd.pick id=N
+   - scheduler.pd.enter id=N
+   - pd3.alive
+   - pd4.alive
+   - pd3.listen.wait or pd3.loop.tick
+   - pd4.listen.wait or pd4.loop.tick
+3. Prefer diagnostic markers over behavior changes.
+4. If a behavior fix is needed, make the smallest safe diff.
+5. STOP FIRST if fix requires scheduler ABI redesign, kernel/userspace ABI change, or broad task model change.
+
+Proof required:
+- ./scripts/entrypoint_build.sh PASS
+- SPAWN_GATE PASS
+- FAULT_GATE PASS
+- serial shows PD3 and PD4 runtime markers
+- no #PF/#GP/panic
+- docs/handoff/PD_RUNTIME_REACHABILITY_PROOF_V1.md updated
+
+Output:
+1. root cause
+2. exact minimal diff
+3. marker chain proving PD1, PD3, PD4 all execute
+4. build/fault/spawn result
+5. remaining risks

@@ -1,0 +1,56 @@
+ M Cargo.toml
+ M docs/handoff/MASTER_RUNTIME_GATE_V1.md
+ M scripts/sexos_build_trace.sh
+ M servers/linen/Cargo.toml
+ M servers/linen/src/main.rs
+ M servers/linen/src/session.rs
+ M servers/quil/src/main.rs
+ M servers/sexfiles/Cargo.toml
+ M servers/sexfiles/src/backends/diskfs.rs
+ M servers/sexfiles/src/backends/mod.rs
+ M servers/sexfiles/src/backends/ramfs.rs
+ M servers/sexfiles/src/backends/tmpfs.rs
+ M servers/sexfiles/src/lib.rs
+ M servers/sexfiles/src/main.rs
+ M servers/sexfiles/src/messages.rs
+ M servers/sexfiles/src/proof.rs
+ M servers/sexfiles/src/trampoline.rs
+ M servers/sexfiles/src/vfs.rs
+ M servers/sexstore/src/main.rs
+ M sexos_build_spec.toml
+?? crates/sex-object-model/
+?? docs/handoff/SEXFILES_APPEND_ONLY_JOURNAL_IMPL_V1.md
+?? docs/handoff/SEXFILES_CAP_RECORDS_REVOCATION_V1.md
+?? docs/handoff/SEXFILES_EXTENT_ALLOCATOR_V1.md
+?? docs/handoff/SEXFILES_FAULT_INJECTION_GATE_V1.md
+?? docs/handoff/SEXFILES_FINAL_100_AUDIT_V1.md
+?? docs/handoff/SEXFILES_LINEN_OBJECT_METADATA_PERSISTENCE_V1.md
+?? docs/handoff/SEXFILES_QUIL_REBOOT_PERSISTENCE_PROOF_V1.md
+?? docs/handoff/SEXFILES_REAL_BLOCK_BACKEND_V1.md
+?? docs/handoff/SEXFILES_REAL_HARDWARE_STORAGE_AUDIT_V1.md
+?? docs/handoff/SEXFILES_REBOOT_PERSISTENCE_HARNESS_V1.md
+?? docs/handoff/SEXFILES_REPLAY_RECOVERY_PROOF_V1.md
+?? docs/handoff/SEXFILES_SNAPSHOT_CHECKPOINT_V1.md
+?? docs/handoff/SEXOBJECT_CANONICAL_MODEL_V2.md
+?? docs/handoff/SEXOBJECT_CANONICAL_MODEL_V3.md
+?? docs/handoff/SEXOBJECT_CANONICAL_MODEL_V4.md
+?? docs/handoff/SEXOBJECT_LINEN_VIEW_M4.md
+?? docs/handoff/SEXOBJECT_M3_SEXFILES_PROOF_GATE.md
+?? docs/handoff/SEXOBJECT_M5_COLLAR_RIGHTS_GENERATION_BINDING.md
+?? docs/handoff/SEXOBJECT_MODEL_M1.md
+?? docs/handoff/SEXOBJECT_SEXFILES_VIEW_M2.md
+?? docs/handoff/snapshots/
+?? scripts/sexfiles_reboot_harness.sh
+?? scripts/sexfiles_storage_preflight.sh
+?? servers/linen/src/main.rs.bak
+?? servers/linen/src/session.rs.bak
+?? servers/linen/src/sexobject.rs
+?? servers/sexfiles/src/backends/diskfs.rs.bak.1778071692
+?? servers/sexfiles/src/backends/mod.rs.bak
+?? servers/sexfiles/src/backends/ramfs.rs.bak
+?? servers/sexfiles/src/messages.rs.bak
+?? servers/sexfiles/src/proof.rs.bak.1778071693
+?? servers/sexfiles/src/sexobject.rs
+?? servers/sexfiles/src/trampoline.rs.bak
+?? servers/sexfiles/src/trampoline.rs.bak.1778071697
+?? servers/sexfiles/src/vfs.rs.bak

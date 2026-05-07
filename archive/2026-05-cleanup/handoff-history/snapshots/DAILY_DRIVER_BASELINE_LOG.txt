@@ -1,0 +1,30 @@
+90b202c feat(spindle): add proof and fault reporting commands
+71a0412 feat(spindle): add apps and launch commands for all known app targets
+f5afe48 feat(spindle): add session command with honest Linen bridge status
+6467ac3 feat(spindle): add local event ring with honest Bell bridge status
+164425f feat(spindle): add in-memory command history ring with honest persistence status
+4a856a6 feat(spindle): add native command dispatcher with 8 built-in commands
+246ce43 feat(spindle): add bounded 1024-line scrollback ring
+8c01e37 feat(spindle): add bounded line editor with synthetic input proof
+76893db feat(spindle): add surface render scaffold with static text
+d1c2c0b docs(handoff): close balanced maturity proof consolidation
+0ea89f2 feat(files): consolidate sexfiles campaign proof baseline
+0e3ff0e docs(handoff): close balanced maturity proof consolidation
+1b678bc docs(handoff): record post 12 prompt audit
+bf44600 docs(hardware): audit boot device assumptions
+c6ed731 feat(bell): add subscribe push bridge proof
+a9c0427 feat(mesh): add bounded fact graph query proof
+253c5ef feat(quil): lock buffer object protocol
+611a2d1 feat(files): lock namespace phase2 semantics
+4d51ee1 feat(app): lock minimal stable runtime ABI
+0929a32 feat(files): consolidate sexfiles campaign proof baseline
+fc8c04a docs(handoff): record round 5 reconciliation gate
+13f7b17 feat(sexfiles): enforce namespace capability contract
+67bbffa feat(collar): enforce app capability checks
+2a61530 feat(input): integrate second usb hid path
+2bd4314 docs(linen): reconcile session object model handoff
+45070a8 feat(shell): Atlas overview model lock V1
+38a3f0e feat(files): RamFS contract lock V1
+7907135 feat(input): configure second USB device
+09de7af feat(input): bind second USB HID role
+d83fcef feat(input): fetch second USB device descriptors
