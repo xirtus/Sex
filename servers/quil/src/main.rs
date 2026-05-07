@@ -92,6 +92,7 @@ const QUIL_LINE_BG: u64 = 0x000C1420;   // dark slate
 const QUIL_LINE_COLOR: u64 = 0x00304058; // muted blue-gray
 const QUIL_LINE_ACCENT_W: u64 = 4;
 const QUIL_LINE_ACCENT_COLOR: u64 = 0x00506080;
+const QUIL_PROOF_BADGE_COLOR: u64 = 0x00D4FF7A;
 
 // ── Palette (existing command area, rect_index=0, same as before) ────────────
 const QUIL_ROWS: u8 = 5;
@@ -207,7 +208,7 @@ fn draw_text_lines(buf: &[u8]) {
 
     let show_lines = line_count.min(QUIL_MAX_VISIBLE_LINES);
     for i in 0..show_lines {
-        if i >= 5 { // rect_indices 3-7 cover 5 lines max
+        if i >= 4 { // keep rect_index=7 reserved for static proof badge
             serial_println!("[quil.text.line.skip] index={} reason=max_rects", i);
             break;
         }
@@ -244,6 +245,20 @@ fn draw_text_lines(buf: &[u8]) {
         serial_println!("[quil.text.buffer.overflow] lines={} visible={}",
             line_count, QUIL_MAX_VISIBLE_LINES);
     }
+}
+
+/// Draw a static bounded proof badge inside the Quil title bar.
+/// This is a visual-only proof because sexdisplay text glyph rendering is absent.
+fn draw_static_proof_badge() {
+    // Use rect_index=7 reserved from draw_text_lines.
+    pdx_call(
+        SLOT_DISPLAY,
+        0xEF,
+        SURFACE_ID_QUIL,
+        (6u64 << 32) | 470u64,
+        (7u64 << 56) | (QUIL_PROOF_BADGE_COLOR << 32) | (16u64 << 16) | 150u64,
+    );
+    serial_println!("[quil.static.proof.v1] mode=visual_badge");
 }
 
 fn draw_palette(selected: u8) {
@@ -579,6 +594,7 @@ pub extern "C" fn _start() -> ! {
     unsafe {
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
     }
+    draw_static_proof_badge();
 
     // Palette (rect_index=0, redrawn on each keypress).
     let mut selected_row: u8 = 0;
