@@ -92,7 +92,9 @@ const QUIL_LINE_BG: u64 = 0x000C1420;   // dark slate
 const QUIL_LINE_COLOR: u64 = 0x00304058; // muted blue-gray
 const QUIL_LINE_ACCENT_W: u64 = 4;
 const QUIL_LINE_ACCENT_COLOR: u64 = 0x00506080;
-const QUIL_PROOF_BADGE_COLOR: u64 = 0x00D4FF7A;
+const QUIL_GLYPH_COLOR: u64 = 0x00D4FF7A;
+const QUIL_RECT_SLOT_MIN: u64 = 2;
+const QUIL_RECT_SLOT_MAX: u64 = 7;
 
 // ── Palette (existing command area, rect_index=0, same as before) ────────────
 const QUIL_ROWS: u8 = 5;
@@ -247,18 +249,61 @@ fn draw_text_lines(buf: &[u8]) {
     }
 }
 
-/// Draw a static bounded proof badge inside the Quil title bar.
-/// This is a visual-only proof because sexdisplay text glyph rendering is absent.
-fn draw_static_proof_badge() {
-    // Use rect_index=7 reserved from draw_text_lines.
+fn emit_rect_slot(slot: u64, x: u64, y: u64, w: u64, h: u64, color: u64) {
     pdx_call(
         SLOT_DISPLAY,
         0xEF,
         SURFACE_ID_QUIL,
-        (6u64 << 32) | 470u64,
-        (7u64 << 56) | (QUIL_PROOF_BADGE_COLOR << 32) | (16u64 << 16) | 150u64,
+        (y << 32) | x,
+        (slot << 56) | (color << 32) | (h << 16) | w,
     );
-    serial_println!("[quil.static.proof.v1] mode=visual_badge");
+}
+
+/// Draw bounded pseudo-glyph letters using existing rect slots.
+/// Slot cap is strict: only slot indices 2..7 are used (6 rects max).
+/// This can render only a prefix of the target phrase safely.
+fn draw_rect_glyph_text() {
+    let text = b"QUIL TEXT ALIVE";
+    let mut slot = QUIL_RECT_SLOT_MIN;
+    let x = 462u64;
+    let y = 6u64;
+    let cw = 14u64;
+    let ch = 18u64;
+
+    // Q (2 rects): block + tail
+    if slot <= QUIL_RECT_SLOT_MAX {
+        emit_rect_slot(slot, x + 0, y + 0, cw, ch, QUIL_GLYPH_COLOR);
+        slot += 1;
+    }
+    if slot <= QUIL_RECT_SLOT_MAX {
+        emit_rect_slot(slot, x + 9, y + 12, 5, 6, QUIL_TITLE_BAR_COLOR);
+        slot += 1;
+    }
+
+    // U (3 rects): left/right stems + base
+    if slot <= QUIL_RECT_SLOT_MAX {
+        emit_rect_slot(slot, x + 18, y + 0, 3, ch - 3, QUIL_GLYPH_COLOR);
+        slot += 1;
+    }
+    if slot <= QUIL_RECT_SLOT_MAX {
+        emit_rect_slot(slot, x + 27, y + 0, 3, ch - 3, QUIL_GLYPH_COLOR);
+        slot += 1;
+    }
+    if slot <= QUIL_RECT_SLOT_MAX {
+        emit_rect_slot(slot, x + 18, y + ch - 3, 12, 3, QUIL_GLYPH_COLOR);
+        slot += 1;
+    }
+
+    // I (1 rect): center stem
+    if slot <= QUIL_RECT_SLOT_MAX {
+        emit_rect_slot(slot, x + 38, y + 0, 3, ch, QUIL_GLYPH_COLOR);
+        slot += 1;
+    }
+
+    let emitted = slot - QUIL_RECT_SLOT_MIN;
+    // 6 rect cap means only prefix can be rendered safely.
+    let shown_chars = if emitted >= 6 { 3 } else if emitted >= 5 { 2 } else { 1 };
+    serial_println!("[quil.rect_glyph_text.v1] text=QUIL_TEXT_ALIVE shown={} rects={}", shown_chars, emitted);
 }
 
 fn draw_palette(selected: u8) {
@@ -594,7 +639,7 @@ pub extern "C" fn _start() -> ! {
     unsafe {
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
     }
-    draw_static_proof_badge();
+    draw_rect_glyph_text();
 
     // Palette (rect_index=0, redrawn on each keypress).
     let mut selected_row: u8 = 0;
