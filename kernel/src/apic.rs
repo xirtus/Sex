@@ -75,10 +75,21 @@ pub struct SexPciRegion {
     pub phys_addr: usize,
 }
 
+/// Stored MADT Interrupt Source Override entry for IOAPIC polarity/trigger correction.
+#[derive(Clone, Copy)]
+pub struct IsoOverride {
+    pub isa_source: u8,
+    pub gsi: u32,
+    pub active_low: bool,
+    pub level_triggered: bool,
+}
+
 lazy_static! {
     pub static ref PROCESSORS: Mutex<Vec<ProcessorInfo>> = Mutex::new(Vec::new());
     pub static ref IO_APICS: Mutex<Vec<IoApicInfo>> = Mutex::new(Vec::new());
     pub static ref PCI_REGIONS: Mutex<Vec<SexPciRegion>> = Mutex::new(Vec::new());
+    /// MADT Interrupt Source Overrides — indexed by GSI (sparse, up to 256 entries).
+    pub static ref ISO_OVERRIDES: Mutex<[Option<IsoOverride>; 256]> = Mutex::new([None; 256]);
 }
 
 pub static LAPIC_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -133,6 +144,28 @@ pub fn init_apic(rsdp_addr: u64, physical_memory_offset: VirtAddr) {
             });
         }
 
+        // Store MADT Interrupt Source Overrides for correct polarity/trigger.
+        {
+            let mut iso_map = ISO_OVERRIDES.lock();
+            for iso in apic_info.interrupt_source_overrides.iter() {
+                let gsi = iso.global_system_interrupt;
+                if (gsi as usize) < 256 {
+                    let active_low = matches!(iso.polarity,
+                        acpi::platform::interrupt::Polarity::ActiveLow);
+                    let level = matches!(iso.trigger_mode,
+                        acpi::platform::interrupt::TriggerMode::Level);
+                    iso_map[gsi as usize] = Some(IsoOverride {
+                        isa_source: iso.isa_source,
+                        gsi,
+                        active_low,
+                        level_triggered: level,
+                    });
+                    serial_println!("APIC: ISO GSI {} <- ISA {} (active_low={}, level={})",
+                        gsi, iso.isa_source, active_low, level);
+                }
+            }
+        }
+
         let mut processors = PROCESSORS.lock();
         if let Some(proc_info) = platform.processor_info {
             for proc in proc_info.application_processors.iter() {
@@ -180,16 +213,32 @@ pub unsafe fn map_irq(irq: u8, vector: u8, dest_lapic_id: u8, physical_memory_of
     let low_index = 0x10 + relative_irq * 2;
     let high_index = low_index + 1;
 
-    // Write low part: vector, delivery mode (000 = fixed), dest mode (0 = physical), polarity/trigger (0=active high, 0=edge)
+    // Construct low 32-bit RTE: apply ISO override for polarity (bit 13) and trigger (bit 15).
+    let mut low_val = vector as u32;
+    {
+        let iso_map = ISO_OVERRIDES.lock();
+        if (gsi as usize) < 256 {
+            if let Some(ref iso) = iso_map[gsi as usize] {
+                if iso.active_low {
+                    low_val |= 1 << 13; // INT_POL = active-low
+                }
+                if iso.level_triggered {
+                    low_val |= 1 << 15; // TRIGGER_MODE = level
+                }
+            }
+        }
+    }
+
+    // Write low part: vector, delivery mode (000 = fixed), dest mode (0 = physical)
     reg_sel.write_volatile(low_index);
-    reg_win.write_volatile(vector as u32);
+    reg_win.write_volatile(low_val);
 
     // Write high part: destination (LAPIC ID)
     reg_sel.write_volatile(high_index);
     reg_win.write_volatile((dest_lapic_id as u32) << 24);
     
-    serial_println!("APIC: Mapped GSI {} (IOAPIC {}) to Vector {} (Dest LAPIC {})", 
-        gsi, io_apic.id, vector, dest_lapic_id);
+    serial_println!("APIC: Mapped GSI {} (IOAPIC {}) to Vector {} (Dest LAPIC {}, low={:#x})",
+        gsi, io_apic.id, vector, dest_lapic_id, low_val);
 }
 
 pub unsafe fn send_ipi(lapic_id: u8, vector: u8, delivery_mode: u32) {
