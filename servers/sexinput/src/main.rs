@@ -34,6 +34,11 @@ const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
 /// SEXOS_PROOFS_DISABLED=1 ./scripts/entrypoint_build.sh
 /// ```
 const SYNTHETIC_INPUT_PROOFS_DISABLED: bool = option_env!("SEXOS_PROOFS_DISABLED").is_some();
+/// Enables synthetic SilkBar click proof (launcher/status/clock/bell click script).
+/// Default (unset): disabled to avoid recurring panel toggle behavior during
+/// interactive use.
+/// Set env var `SEXOS_SILKBAR_CLICK_PROOF=1` at build time to re-enable.
+const SILKBAR_CLICK_PROOF_ENABLED: bool = option_env!("SEXOS_SILKBAR_CLICK_PROOF").is_some();
 /// Dev-only keyboard cursor fallback. When enabled, arrow keys and WASD
 /// emit EV_REL events to move the cursor, bypassing broken QEMU USB HID input.
 /// Set env var `SEXOS_KEYBOARD_CURSOR=1` at build time to enable.
@@ -592,7 +597,7 @@ pub extern "C" fn _start() -> ! {
         // 4. Synthetic SilkBar click proof via HID_EVENT path.
         //    Fires clicks on launcher, workspace, status chip, clock.
         //    Resets CLICK_ACTIVE before each click to avoid drag-proof interference.
-        if !SYNTHETIC_INPUT_PROOFS_DISABLED {
+        if !SYNTHETIC_INPUT_PROOFS_DISABLED && SILKBAR_CLICK_PROOF_ENABLED {
             match silkbar_click_stage {
                 // Reset CLICK_ACTIVE from drag proof (stage 0 at tick 0 sets left held)
                 0 if tick == 2 => {
@@ -712,6 +717,14 @@ pub extern "C" fn _start() -> ! {
                     silkbar_click_stage = 25;
                 }
                 _ => {}
+            }
+        } else {
+            unsafe {
+                static mut SILKBAR_CLICK_DISABLED_MARKER_EMITTED: bool = false;
+                if !SILKBAR_CLICK_DISABLED_MARKER_EMITTED {
+                    SILKBAR_CLICK_DISABLED_MARKER_EMITTED = true;
+                    serial_println!("[sexinput.synthetic.silkbar_click.disabled]");
+                }
             }
         }
 
