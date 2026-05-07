@@ -211,6 +211,26 @@ struct SingleHidBind {
     interval: u8,
 }
 
+// C2B restart: per-device metadata for bounded event matching.
+#[derive(Copy, Clone)]
+struct HidDevice {
+    active: bool,
+    slot_id: u32,
+    role: HidRole,
+    intr_dci: u32,
+    intr_ring_va: u64,
+    intr_report_phys: u64,
+    intr_report_va: u64,
+    intr_report_len: u32,
+}
+impl HidDevice {
+    const fn empty() -> Self {
+        HidDevice { active: false, slot_id: 0, role: HidRole::Unknown,
+            intr_dci: 0, intr_ring_va: 0, intr_report_phys: 0,
+            intr_report_va: 0, intr_report_len: 0 }
+    }
+}
+
 #[inline(always)]
 fn classify_single_hid_role(
     found_hid_keyboard: bool,
@@ -2591,14 +2611,170 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
+    // ===== Configure Endpoint + Interrupt-IN Poll =====
+    // Phase: USB_XHCI_INTERRUPT_IN_POLL_PROOF_V1
+    if intr_ep_addr == 0 || (intr_ep_addr & 0x80) == 0 || intr_ep_mps == 0 || intr_ep_mps > 16 {
+        serial_println!(
+            "[sexusb.xhci.intr_in.config.bad] addr={:#x} mps={} interval={}",
+            intr_ep_addr,
+            intr_ep_mps,
+            intr_ep_interval
+        );
+        loop { sys_yield(); }
+    }
+
+    let intr_dci: u32 = single_bind.ep_dci; // EP1 IN endpoint context index (single-slot path)
+    const EP_TYPE_INTERRUPT_IN: u32 = 7;
+    let intr_report_len: u32 = single_bind.max_packet as u32;
+
+    let intr_ring_phys = sys_alloc_phys(PAGE_SIZE);
+    let intr_report_phys = sys_alloc_phys(PAGE_SIZE);
+    if intr_ring_phys == 0 || intr_ring_phys == u64::MAX
+        || intr_report_phys == 0 || intr_report_phys == u64::MAX
+    {
+        serial_println!("[sexusb.xhci.intr_in.alloc.bad]");
+        loop { sys_yield(); }
+    }
+    let intr_ring_va = sys_map_phys(intr_ring_phys, PAGE_SIZE);
+    let intr_report_va = sys_map_phys(intr_report_phys, PAGE_SIZE);
+    if intr_ring_va == 0 || intr_ring_va == u64::MAX
+        || intr_report_va == 0 || intr_report_va == u64::MAX
+    {
+        serial_println!("[sexusb.xhci.intr_in.map.bad]");
+        loop { sys_yield(); }
+    }
+    if (intr_ring_phys % 64) != 0 || (intr_ring_va % PAGE_SIZE) != 0 {
+        serial_println!("[sexusb.xhci.intr_in.align.bad] ring_phys={:#x} ring_va={:#x}", intr_ring_phys, intr_ring_va);
+        loop { sys_yield(); }
+    }
+    unsafe {
+        core::ptr::write_bytes(intr_ring_va as *mut u8, 0, PAGE_SIZE as usize);
+        core::ptr::write_bytes(intr_report_va as *mut u8, 0, intr_report_len as usize);
+        core::ptr::write_bytes(input_ctx_va as *mut u8, 0, PAGE_SIZE as usize);
+    }
+    // Circular interrupt Transfer Ring: 15 Normal slots + Link TRB at slot 15.
+    // Link TRB wraps ring back to slot 0 with TC=1 (toggles xHCI consumer cycle).
+    const TRB_TYPE_LINK: u32 = 6;
+    const INTR_TR_RING_SIZE: u64 = 16;
+    trb_write_volatile(
+        intr_ring_va,
+        INTR_TR_RING_SIZE - 1,
+        (intr_ring_phys & 0xFFFF_FFFF) as u32,
+        (intr_ring_phys >> 32) as u32,
+        0u32,
+        (TRB_TYPE_LINK << 10) | (1u32 << 1) | 1u32, // TC=1, cycle=1
+    );
+
+    serial_println!("[sexusb.xhci.intr_in.config_ep.start]");
+
+    // ICC: add Slot Context (bit 0) + Endpoint Context index 3 (bit 3).
+    unsafe {
+        core::ptr::write_volatile(input_ctx_va as *mut u32, 0u32);            // Drop flags
+        core::ptr::write_volatile((input_ctx_va + 4) as *mut u32, 0x9u32);    // Add flags
+    }
+
+    // Copy Slot Context from output device context.
+    let out_slot_base = device_ctx_va as *const u32;
+    let in_slot_base = (input_ctx_va + ctx_stride) as *mut u32;
+    for i in 0..8u64 {
+        let v = unsafe { core::ptr::read_volatile(out_slot_base.add(i as usize)) };
+        unsafe { core::ptr::write_volatile(in_slot_base.add(i as usize), v); }
+    }
+    // Context Entries (Slot Context DW0 bits 31:27) must cover the highest added DCI.
+    let slot_dw0 = unsafe { core::ptr::read_volatile(in_slot_base.add(0)) };
+    let slot_dw0_new = (slot_dw0 & !(0x1Fu32 << 27)) | ((intr_dci & 0x1F) << 27);
+    unsafe { core::ptr::write_volatile(in_slot_base.add(0), slot_dw0_new); }
+
+    // Build EP1 IN endpoint context at DCI=3.
+    let in_ep_base = (input_ctx_va + ctx_stride * (1 + intr_dci as u64)) as *mut u32;
+    let ep_dw0 = ((single_bind.interval as u32) << 16); // Interval in bits 23:16
+    let ep_dw1 = (CERR_DEFAULT & 0x3)
+        | (EP_TYPE_INTERRUPT_IN << 3)
+        | ((single_bind.max_packet as u32) << 16);
+    let ep_deq = intr_ring_phys | 1u64; // DCS=1
+    let ep_dw2 = (ep_deq & 0xFFFF_FFFF) as u32;
+    let ep_dw3 = (ep_deq >> 32) as u32;
+    let ep_dw4 = intr_report_len | (intr_report_len << 16); // avg TRB len + max ESIT payload
+    unsafe {
+        core::ptr::write_volatile(in_ep_base.add(0), ep_dw0);
+        core::ptr::write_volatile(in_ep_base.add(1), ep_dw1);
+        core::ptr::write_volatile(in_ep_base.add(2), ep_dw2);
+        core::ptr::write_volatile(in_ep_base.add(3), ep_dw3);
+        core::ptr::write_volatile(in_ep_base.add(4), ep_dw4);
+    }
+
+    // Configure Endpoint command.
+    let cfg_ep_d0 = (input_ctx_phys & 0xFFFF_FFFF) as u32;
+    let cfg_ep_d1 = (input_ctx_phys >> 32) as u32;
+    let cfg_ep_d3 = (en_slot_id << 24) | (TRB_TYPE_CONFIGURE_ENDPOINT_CMD << 10) | cmd_cycle;
+    trb_write_volatile(cmd_ring_va, cmd_idx, cfg_ep_d0, cfg_ep_d1, 0u32, cfg_ep_d3);
+    trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle ^ 1);
+    mmio_write32(db_base, 0, 0u32);
+
+    let mut cfg_ep_ok = false;
+    // Diagnostic: dump first event ring state.
+    {
+        let d0 = trb_read_dword(event_ring_va, ev_idx, 0);
+        let d1 = trb_read_dword(event_ring_va, ev_idx, 1);
+        let d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+        let d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        serial_println!("[sexusb.cfg_ep.diag] ev_idx={} ev_dcs={} d0={:#x} d1={:#x} d2={:#x} d3={:#x}",
+            ev_idx, ev_dcs, d0, d1, d2, d3);
+    }
+    for _ in 0..POLL_BUDGET {
+        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
+        if (ev_d3 & 1) == (ev_dcs as u32) {
+            let ev_type = (ev_d3 >> 10) & 0x3F;
+            if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
+                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+                let cc = (ev_d2 >> 24) & 0xFF;
+                let slot = (ev_d3 >> 24) & 0xFF;
+                if cc == TRB_CC_SUCCESS && slot == en_slot_id {
+                    cfg_ep_ok = true;
+                } else {
+                    serial_println!("[sexusb.xhci.intr_in.config_ep.event.bad] cc={} slot={}", cc, slot);
+                }
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS {
+                    ev_idx = 0;
+                    ev_dcs ^= 1;
+                }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            }
+            // Non-command event: consume and continue.
+            trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+            ev_idx += 1;
+            if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+            let new_erdp = event_ring_phys + ev_idx * 16;
+            mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+            mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+        }
+        sys_yield();
+    }
+    if !cfg_ep_ok {
+        serial_println!("[sexusb.xhci.intr_in.config_ep.timeout.bad]");
+        loop { sys_yield(); }
+    }
+    cmd_idx += 1;
+    serial_println!("[sexusb.xhci.intr_in.config_ep.ok]");
     // ===== Second Device Slot Enable =====
     // If a second connected port was collected by the initial scan
     // (target_ports[1]), enable an XHCI slot for it and address the
     // device.  No endpoint configuration, HID descriptor fetch, or
     // interrupt polling yet — the device is merely detected and
     // addressed so that future phases can complete enumeration.
-    if target_port_count > 1 {
+
+    // C2B restart: bounded device table.
+    let mut devices: [HidDevice; 2] = [HidDevice::empty(), HidDevice::empty()];
+    let mut device_count: usize = 0;
+
+    if target_port_count > 1 { //
         let second_port: u64 = target_ports[1] as u64;
+        let mut s2_hid_role: HidRole = HidRole::Unknown;
         serial_println!("[sexusb.slot2.enable.start] port={}", second_port);
 
         // --- Enable Slot ---
@@ -3156,7 +3332,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 s_walk_off += b_len as u64;
             }
-            let s2_hid_role: HidRole = classify_single_hid_role(
+            s2_hid_role = classify_single_hid_role(
                 s2_found_hid_keyboard, s2_found_hid_tablet, s2_found_hid_mouse);
             serial_println!("[sexusb.slot2.hid.role] role={:?} iface={}",
                 s2_hid_role, s2_hid_iface);
@@ -3397,8 +3573,15 @@ pub extern "C" fn _start() -> ! {
                     let new_erdp = event_ring_phys + ev_idx * 16;
                     mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                     mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                    break;
                 }
-                break;
+                // Non-command event: consume and continue.
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
             }
             sys_yield();
         }
@@ -3414,158 +3597,32 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[sexusb.slot2.configure_endpoint.ok] slot={} ep={:#x} dci={}",
             s2_slot_id, s2_intr_ep_addr, s2_intr_dci);
 
-        // ===== SEXUSB_SLOT2_POLL_START_V1: queue first interrupt-IN TRB =====
-        {
-            let s2_intr_pcs: u32 = 1;
-            trb_write_volatile(
-                s2_intr_ring_va, 0,
-                (s2_intr_report_phys & 0xFFFF_FFFF) as u32,
-                (s2_intr_report_phys >> 32) as u32,
-                s2_intr_report_len,
-                (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | s2_intr_pcs,
-            );
-            mmio_write32(db_base, s2_slot_id as u64 * 4, s2_intr_dci as u32);
-            serial_println!(
-                "[sexusb.slot2.poll.start] slot={} dci={} buf={:#x} len={}",
-                s2_slot_id, s2_intr_dci, s2_intr_report_phys, s2_intr_report_len
-            );
-        }
+        devices[1] = HidDevice { active: true, slot_id: s2_slot_id,
+            role: s2_hid_role, intr_dci: s2_intr_dci,
+            intr_ring_va: s2_intr_ring_va, intr_report_phys: s2_intr_report_phys,
+            intr_report_va: s2_intr_report_va, intr_report_len: s2_intr_report_len };
+        device_count = 2;
     }
 
-    // ===== Configure Endpoint + Interrupt-IN Poll =====
-    // Phase: USB_XHCI_INTERRUPT_IN_POLL_PROOF_V1
-    if intr_ep_addr == 0 || (intr_ep_addr & 0x80) == 0 || intr_ep_mps == 0 || intr_ep_mps > 16 {
-        serial_println!(
-            "[sexusb.xhci.intr_in.config.bad] addr={:#x} mps={} interval={}",
-            intr_ep_addr,
-            intr_ep_mps,
-            intr_ep_interval
-        );
-        loop { sys_yield(); }
-    }
 
-    let intr_dci: u32 = single_bind.ep_dci; // EP1 IN endpoint context index (single-slot path)
-    const EP_TYPE_INTERRUPT_IN: u32 = 7;
-    let intr_report_len: u32 = single_bind.max_packet as u32;
 
-    let intr_ring_phys = sys_alloc_phys(PAGE_SIZE);
-    let intr_report_phys = sys_alloc_phys(PAGE_SIZE);
-    if intr_ring_phys == 0 || intr_ring_phys == u64::MAX
-        || intr_report_phys == 0 || intr_report_phys == u64::MAX
-    {
-        serial_println!("[sexusb.xhci.intr_in.alloc.bad]");
-        loop { sys_yield(); }
-    }
-    let intr_ring_va = sys_map_phys(intr_ring_phys, PAGE_SIZE);
-    let intr_report_va = sys_map_phys(intr_report_phys, PAGE_SIZE);
-    if intr_ring_va == 0 || intr_ring_va == u64::MAX
-        || intr_report_va == 0 || intr_report_va == u64::MAX
-    {
-        serial_println!("[sexusb.xhci.intr_in.map.bad]");
-        loop { sys_yield(); }
-    }
-    if (intr_ring_phys % 64) != 0 || (intr_ring_va % PAGE_SIZE) != 0 {
-        serial_println!("[sexusb.xhci.intr_in.align.bad] ring_phys={:#x} ring_va={:#x}", intr_ring_phys, intr_ring_va);
-        loop { sys_yield(); }
-    }
-    unsafe {
-        core::ptr::write_bytes(intr_ring_va as *mut u8, 0, PAGE_SIZE as usize);
-        core::ptr::write_bytes(intr_report_va as *mut u8, 0, intr_report_len as usize);
-        core::ptr::write_bytes(input_ctx_va as *mut u8, 0, PAGE_SIZE as usize);
-    }
-    // Circular interrupt Transfer Ring: 15 Normal slots + Link TRB at slot 15.
-    // Link TRB wraps ring back to slot 0 with TC=1 (toggles xHCI consumer cycle).
-    const TRB_TYPE_LINK: u32 = 6;
-    const INTR_TR_RING_SIZE: u64 = 16;
-    trb_write_volatile(
-        intr_ring_va,
-        INTR_TR_RING_SIZE - 1,
-        (intr_ring_phys & 0xFFFF_FFFF) as u32,
-        (intr_ring_phys >> 32) as u32,
-        0u32,
-        (TRB_TYPE_LINK << 10) | (1u32 << 1) | 1u32, // TC=1, cycle=1
-    );
+    devices[0] = HidDevice { active: true, slot_id: single_bind.slot_id,
+        role: single_bind.role, intr_dci, intr_ring_va,
+        intr_report_phys, intr_report_va, intr_report_len };
+    if device_count == 0 { device_count = 1; }
 
-    serial_println!("[sexusb.xhci.intr_in.config_ep.start]");
-
-    // ICC: add Slot Context (bit 0) + Endpoint Context index 3 (bit 3).
-    unsafe {
-        core::ptr::write_volatile(input_ctx_va as *mut u32, 0u32);            // Drop flags
-        core::ptr::write_volatile((input_ctx_va + 4) as *mut u32, 0x9u32);    // Add flags
+    // C1: queue slot2 first TRB after slot1 config_ep completes.
+    if device_count > 1 {
+        let d2 = &devices[1];
+        trb_write_volatile(d2.intr_ring_va, 0,
+            (d2.intr_report_phys & 0xFFFF_FFFF) as u32,
+            (d2.intr_report_phys >> 32) as u32,
+            d2.intr_report_len,
+            (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | 1u32);
+        mmio_write32(db_base, d2.slot_id as u64 * 4, d2.intr_dci);
+        serial_println!("[sexusb.slot2.poll.start] slot={} dci={}",
+            d2.slot_id, d2.intr_dci);
     }
-
-    // Copy Slot Context from output device context.
-    let out_slot_base = device_ctx_va as *const u32;
-    let in_slot_base = (input_ctx_va + ctx_stride) as *mut u32;
-    for i in 0..8u64 {
-        let v = unsafe { core::ptr::read_volatile(out_slot_base.add(i as usize)) };
-        unsafe { core::ptr::write_volatile(in_slot_base.add(i as usize), v); }
-    }
-    // Context Entries (Slot Context DW0 bits 31:27) must cover the highest added DCI.
-    let slot_dw0 = unsafe { core::ptr::read_volatile(in_slot_base.add(0)) };
-    let slot_dw0_new = (slot_dw0 & !(0x1Fu32 << 27)) | ((intr_dci & 0x1F) << 27);
-    unsafe { core::ptr::write_volatile(in_slot_base.add(0), slot_dw0_new); }
-
-    // Build EP1 IN endpoint context at DCI=3.
-    let in_ep_base = (input_ctx_va + ctx_stride * (1 + intr_dci as u64)) as *mut u32;
-    let ep_dw0 = ((single_bind.interval as u32) << 16); // Interval in bits 23:16
-    let ep_dw1 = (CERR_DEFAULT & 0x3)
-        | (EP_TYPE_INTERRUPT_IN << 3)
-        | ((single_bind.max_packet as u32) << 16);
-    let ep_deq = intr_ring_phys | 1u64; // DCS=1
-    let ep_dw2 = (ep_deq & 0xFFFF_FFFF) as u32;
-    let ep_dw3 = (ep_deq >> 32) as u32;
-    let ep_dw4 = intr_report_len | (intr_report_len << 16); // avg TRB len + max ESIT payload
-    unsafe {
-        core::ptr::write_volatile(in_ep_base.add(0), ep_dw0);
-        core::ptr::write_volatile(in_ep_base.add(1), ep_dw1);
-        core::ptr::write_volatile(in_ep_base.add(2), ep_dw2);
-        core::ptr::write_volatile(in_ep_base.add(3), ep_dw3);
-        core::ptr::write_volatile(in_ep_base.add(4), ep_dw4);
-    }
-
-    // Configure Endpoint command.
-    let cfg_ep_d0 = (input_ctx_phys & 0xFFFF_FFFF) as u32;
-    let cfg_ep_d1 = (input_ctx_phys >> 32) as u32;
-    let cfg_ep_d3 = (en_slot_id << 24) | (TRB_TYPE_CONFIGURE_ENDPOINT_CMD << 10) | cmd_cycle;
-    trb_write_volatile(cmd_ring_va, cmd_idx, cfg_ep_d0, cfg_ep_d1, 0u32, cfg_ep_d3);
-    trb_write_volatile(cmd_ring_va, cmd_idx + 1, 0, 0, 0, cmd_cycle ^ 1);
-    mmio_write32(db_base, 0, 0u32);
-
-    let mut cfg_ep_ok = false;
-    for _ in 0..POLL_BUDGET {
-        let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
-        if (ev_d3 & 1) == (ev_dcs as u32) {
-            let ev_type = (ev_d3 >> 10) & 0x3F;
-            if ev_type == TRB_TYPE_CMD_COMPLETION_EVENT {
-                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
-                let cc = (ev_d2 >> 24) & 0xFF;
-                let slot = (ev_d3 >> 24) & 0xFF;
-                if cc == TRB_CC_SUCCESS && slot == en_slot_id {
-                    cfg_ep_ok = true;
-                } else {
-                    serial_println!("[sexusb.xhci.intr_in.config_ep.event.bad] cc={} slot={}", cc, slot);
-                }
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
-                ev_idx += 1;
-                if ev_idx >= EVENT_RING_TRBS {
-                    ev_idx = 0;
-                    ev_dcs ^= 1;
-                }
-                let new_erdp = event_ring_phys + ev_idx * 16;
-                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
-                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
-            }
-            break;
-        }
-        sys_yield();
-    }
-    if !cfg_ep_ok {
-        serial_println!("[sexusb.xhci.intr_in.config_ep.timeout.bad]");
-        loop { sys_yield(); }
-    }
-    cmd_idx += 1;
-    serial_println!("[sexusb.xhci.intr_in.config_ep.ok]");
 
     if SEXUSB_SYNTHETIC {
         serial_println!("[sexusb.synthetic.gate] enabled=1 source=env");
@@ -3631,6 +3688,37 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
+    // ===== Synthetic Slot2 Gate (Option E) =====
+    // SEXUSB_SYNTHETIC_SLOT2: inject slot2-shaped pointer reports through
+    // the existing normalizer → OP_HID_EVENT → silk-shell pipeline.
+    // Zero poll-loop overhead.  Proves pointer/click/focus without
+    // touching the cooperative scheduler hot path.
+    const SEXUSB_SYNTHETIC_SLOT2: bool =
+        option_env!("SEXUSB_SYNTHETIC_SLOT2").is_some();
+    if SEXUSB_SYNTHETIC_SLOT2 {
+        serial_println!("[sexusb.synthetic_slot2.begin]");
+        // Phase 1: move pointer toward target surface (5 frames, button up).
+        for i in 0..5u32 {
+            serial_println!("[sexusb.synthetic_slot2.report] n={} buttons=0 dx=1 dy=1", i);
+            send_synthetic_mouse_frame(i, 0, 1, 1);
+            sys_yield();
+            sys_yield();
+        }
+        // Phase 2: button down + small movement (click).
+        serial_println!("[sexusb.synthetic_slot2.report] n=5 buttons=1 dx=0 dy=0");
+        send_synthetic_mouse_frame(5, 1, 0, 0);
+        sys_yield();
+        sys_yield();
+        sys_yield();
+        // Phase 3: button up (release).
+        serial_println!("[sexusb.synthetic_slot2.report] n=6 buttons=0 dx=0 dy=0");
+        send_synthetic_mouse_frame(6, 0, 0, 0);
+        sys_yield();
+        sys_yield();
+        serial_println!("[sexusb.synthetic_slot2.done]");
+        // Fall through to poll loop — keyboard works after synthetic proof.
+    }
+
     // Continuous bounded poll: one TRB in-flight at a time.
     // Inner loop waits indefinitely (no POLL_BUDGET timeout) — safe because the
     // xHCI completes (or NAKs-then-completes) the single enqueued TRB before we
@@ -3657,6 +3745,7 @@ pub extern "C" fn _start() -> ! {
         "mouse"
     };
     serial_println!("[sexusb.hid.{}.continuous.start] attempts=unbounded", dev_kind);
+    serial_println!("[sexusb.poll.budget.enter] budget=1_per_iter");
     let mut saw_nonzero = false;
     let mut i: u32 = 0;
     let mut intr_prod: u64 = 0;
@@ -3699,12 +3788,55 @@ pub extern "C" fn _start() -> ! {
                 intr_residue = ev_d2 & 0xFFFFFF;
                 let slot = (ev_d3 >> 24) & 0xFF;
                 let ep = (ev_d3 >> 16) & 0x1F;
+                // C2B: bounded event match (one check per outer iteration).
+                {
+                    for midx in 0..device_count {
+                        let d = &devices[midx];
+                        if d.active && slot == d.slot_id && ep == d.intr_dci {
+                            unsafe {
+                                static mut C2B_EVENT_BUDGET: u32 = 16;
+                                if C2B_EVENT_BUDGET > 0 { C2B_EVENT_BUDGET -= 1;
+                                    serial_println!("[sexusb.c2b.event.seen] idx={} kind={}",
+                                        midx, if d.role == HidRole::Keyboard {"kbd"} else {"tbl"});
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
                 if (cc == TRB_CC_SUCCESS || cc == TRB_CC_SHORT_PACKET)
                     && slot == single_bind.slot_id && ep == intr_dci
                 {
                     intr_ok = true;
                 } else {
                     serial_println!("[sexusb.xhci.intr_in.event.bad] cc={} slot={} ep={}", cc, slot, ep);
+                    // C2C: bounded slot2 report classify (no forwarding).
+                    if device_count > 1 {
+                        let d2 = &devices[1];
+                        if d2.active && slot == d2.slot_id && ep == d2.intr_dci
+                            && (cc == TRB_CC_SUCCESS || cc == TRB_CC_SHORT_PACKET)
+                        {
+                            let s2_actual = if intr_residue <= d2.intr_report_len {
+                                d2.intr_report_len - intr_residue } else { 0 };
+                            let p = d2.intr_report_va as *const u8;
+                            let b0 = unsafe { core::ptr::read_volatile(p.add(0)) };
+                            let b1 = unsafe { core::ptr::read_volatile(p.add(1)) };
+                            let b2 = unsafe { core::ptr::read_volatile(p.add(2)) };
+                            let class = if b0 == 0 && b1 == 0 && b2 == 0 { "all_zero" }
+                                else if b0 != 0 { "button" }
+                                else if b1 != 0 || b2 != 0 { "motion" }
+                                else { "unknown" };
+                            unsafe {
+                                static mut C2C_BUDGET: u32 = 16;
+                                if C2C_BUDGET > 0 { C2C_BUDGET -= 1;
+                                    serial_println!("[sexusb.c2c.slot2.event] slot=2");
+                                    serial_println!("[sexusb.c2c.report.read] len={} b0={:#x} b1={:#x} b2={:#x}",
+                                        s2_actual, b0, b1, b2);
+                                    serial_println!("[sexusb.c2c.report.classify] class={}", class);
+                                }
+                            }
+                        }
+                    }
                 }
                 trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
                 ev_idx += 1;
@@ -4173,6 +4305,17 @@ pub extern "C" fn _start() -> ! {
             }
         }
         i = i.wrapping_add(1);
+        // Option B: budgeted yield — give scheduler a tick every iteration
+        // so other PDs (silk-shell, sexdisplay) can make progress.
+        sys_yield();
+        unsafe {
+            static mut POLL_YIELD_BUDGET: u32 = 64;
+            let rem = &mut POLL_YIELD_BUDGET;
+            if *rem > 0 {
+                *rem -= 1;
+                serial_println!("[sexusb.poll.budget.yield] i={}", i);
+            }
+        }
     }
     loop { sys_yield(); }
 }

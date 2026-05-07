@@ -16,8 +16,9 @@ case "$USB_DEV" in
   tablet-display-sdl) USB_DEVICE_ARG="-device usb-tablet,bus=xhci.0,display=sdl" ;;
   kbd)    USB_DEVICE_ARG="-device usb-kbd,bus=xhci.0" ;;
   kbd-display-sdl) USB_DEVICE_ARG="-device usb-kbd,bus=xhci.0,display=sdl" ;;
+  kbd+tablet) USB_DEVICE_ARG="-device usb-kbd,bus=xhci.0 -device usb-tablet,bus=xhci.0" ;;
   *)
-    echo "error: unknown SEXUSB_QEMU_DEVICE=$USB_DEV (use mouse, tablet, tablet-display-sdl, kbd)"
+    echo "error: unknown SEXUSB_QEMU_DEVICE=$USB_DEV (use mouse, tablet, tablet-display-sdl, kbd, kbd+tablet)"
     exit 1
     ;;
 esac
