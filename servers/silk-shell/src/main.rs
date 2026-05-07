@@ -6994,6 +6994,12 @@ const YARN_OUTPUT_LINES: usize = 20;
 const YARN_OUTPUT_LINE_CAP: usize = 32;
 /// Maximum command history entries.
 const YARN_HISTORY_CAP: usize = 16;
+// ── Spindle vi-mode state (bounded, no heap) ──────────────────────────────
+static mut SPINDLE_VI_NORMAL: bool = false;
+static mut SPINDLE_VI_CUR: usize = 0;
+static mut SPINDLE_VI_PREV_BUF: [u8; YARN_CMD_BUF_CAP] = [0u8; YARN_CMD_BUF_CAP];
+static mut SPINDLE_VI_PREV_LEN: usize = 0;
+static mut SPINDLE_VI_PENDING_D: bool = false;
 // ── Scrollback ring (bounded, no heap) ──
 /// Max scrollback lines in the ring buffer.
 const SPINDLE_SB_LINES: usize = 1024;
@@ -7317,6 +7323,111 @@ fn trim_ascii(s: &[u8]) -> &[u8] {
 }
 
 /// Yarn session: dispatch a command from cmd_buf.
+fn spindle_scan_to_char(s: u8) -> Option<u8> {
+    static ROW1: [u8; 10] = [b'q',b'w',b'e',b'r',b't',b'y',b'u',b'i',b'o',b'p'];
+    static ROW2: [u8; 9]  = [b'a',b's',b'd',b'f',b'g',b'h',b'j',b'k',b'l'];
+    static ROW3: [u8; 7]  = [b'z',b'x',b'c',b'v',b'b',b'n',b'm'];
+    static NUMS: [u8; 10] = [b'1',b'2',b'3',b'4',b'5',b'6',b'7',b'8',b'9',b'0'];
+    match s {
+        x if x >= 0x10 && x <= 0x19 => Some(ROW1[(x - 0x10) as usize]),
+        x if x >= 0x1E && x <= 0x26 => Some(ROW2[(x - 0x1E) as usize]),
+        0x2C => Some(b'z'), 0x2D => Some(b'x'), 0x2E => Some(b'c'), 0x2F => Some(b'v'),
+        0x30 => Some(b'b'), 0x31 => Some(b'n'), 0x32 => Some(b'm'),
+        x if x >= 0x02 && x <= 0x0B => Some(NUMS[(x - 0x02) as usize]),
+        0x39 => Some(b' '),
+        _ => None,
+    }
+}
+
+unsafe fn spindle_vi_save_undo() {
+    SPINDLE_VI_PREV_BUF[..YARN_CMD_BUF_CAP].copy_from_slice(&YARN.cmd_buf);
+    SPINDLE_VI_PREV_LEN = YARN.cmd_len;
+}
+
+unsafe fn spindle_vi_undo() {
+    YARN.cmd_buf.copy_from_slice(&SPINDLE_VI_PREV_BUF);
+    YARN.cmd_len = SPINDLE_VI_PREV_LEN;
+    if SPINDLE_VI_CUR > YARN.cmd_len { SPINDLE_VI_CUR = YARN.cmd_len; }
+}
+
+unsafe fn spindle_vi_word_fwd() {
+    let mut c = SPINDLE_VI_CUR;
+    while c < YARN.cmd_len && YARN.cmd_buf[c] != b' ' { c += 1; }
+    while c < YARN.cmd_len && YARN.cmd_buf[c] == b' '  { c += 1; }
+    SPINDLE_VI_CUR = c;
+}
+
+unsafe fn spindle_vi_word_back() {
+    let mut c = SPINDLE_VI_CUR;
+    while c > 0 && YARN.cmd_buf[c - 1] == b' '  { c -= 1; }
+    while c > 0 && YARN.cmd_buf[c - 1] != b' ' { c -= 1; }
+    SPINDLE_VI_CUR = c;
+}
+
+unsafe fn spindle_vi_word_end() {
+    let len = YARN.cmd_len;
+    if SPINDLE_VI_CUR >= len { return; }
+    let mut c = SPINDLE_VI_CUR + 1;
+    while c < len && YARN.cmd_buf[c] == b' '       { c += 1; }
+    while c + 1 < len && YARN.cmd_buf[c + 1] != b' ' { c += 1; }
+    SPINDLE_VI_CUR = c.min(len.saturating_sub(1));
+}
+
+unsafe fn spindle_vi_insert_at(pos: usize, b: u8) {
+    if YARN.cmd_len >= YARN_CMD_BUF_CAP - 1 { return; }
+    if pos > YARN.cmd_len { return; }
+    let mut i = YARN.cmd_len;
+    while i > pos { YARN.cmd_buf[i] = YARN.cmd_buf[i - 1]; i -= 1; }
+    YARN.cmd_buf[pos] = b;
+    YARN.cmd_len += 1;
+    SPINDLE_VI_CUR = (pos + 1).min(YARN.cmd_len);
+}
+
+unsafe fn spindle_vi_delete_at(pos: usize) {
+    if pos >= YARN.cmd_len { return; }
+    let mut i = pos;
+    while i + 1 < YARN.cmd_len { YARN.cmd_buf[i] = YARN.cmd_buf[i + 1]; i += 1; }
+    YARN.cmd_buf[YARN.cmd_len - 1] = 0;
+    YARN.cmd_len -= 1;
+    if SPINDLE_VI_CUR > YARN.cmd_len { SPINDLE_VI_CUR = YARN.cmd_len; }
+}
+
+unsafe fn spindle_vi_normal_key(scancode: u8) {
+    if SPINDLE_VI_PENDING_D {
+        SPINDLE_VI_PENDING_D = false;
+        if spindle_scan_to_char(scancode) == Some(b'd') {
+            spindle_vi_save_undo();
+            YARN.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
+            YARN.cmd_len = 0;
+            SPINDLE_VI_CUR = 0;
+            serial_println!("[spindle.line.edit.ok] op=dd");
+            serial_println!("[spindle.line.cursor] pos=0 len=0");
+            spindle_render();
+        }
+        return;
+    }
+    match scancode {
+        0x0E => { // Backspace in normal = cursor left (h)
+            if SPINDLE_VI_CUR > 0 { SPINDLE_VI_CUR -= 1; }
+            serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);
+            spindle_render();
+        }
+        _ => match spindle_scan_to_char(scancode) {
+            Some(b'h') => { if SPINDLE_VI_CUR > 0 { SPINDLE_VI_CUR -= 1; }                   serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); spindle_render(); }
+            Some(b'l') => { if SPINDLE_VI_CUR < YARN.cmd_len { SPINDLE_VI_CUR += 1; }        serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); spindle_render(); }
+            Some(b'0') => { SPINDLE_VI_CUR = 0;                                               serial_println!("[spindle.line.cursor] pos=0 len={}", YARN.cmd_len); serial_println!("[spindle.line.edit.ok] op=home"); spindle_render(); }
+            Some(b'w') => { spindle_vi_word_fwd();  serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); serial_println!("[spindle.line.edit.ok] op=word_fwd");  spindle_render(); }
+            Some(b'b') => { spindle_vi_word_back(); serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); serial_println!("[spindle.line.edit.ok] op=word_back"); spindle_render(); }
+            Some(b'e') => { spindle_vi_word_end();  serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); serial_println!("[spindle.line.edit.ok] op=word_end");  spindle_render(); }
+            Some(b'i') => { SPINDLE_VI_NORMAL = false; serial_println!("[spindle.vi.mode] mode=insert"); spindle_render(); }
+            Some(b'a') => { if SPINDLE_VI_CUR < YARN.cmd_len { SPINDLE_VI_CUR += 1; } SPINDLE_VI_NORMAL = false; serial_println!("[spindle.vi.mode] mode=insert cursor={}", SPINDLE_VI_CUR); spindle_render(); }
+            Some(b'd') => { SPINDLE_VI_PENDING_D = true; }
+            Some(b'u') => { spindle_vi_undo(); serial_println!("[spindle.line.edit.ok] op=undo len={}", YARN.cmd_len); serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len); spindle_render(); }
+            _ => {}
+        }
+    }
+}
+
 unsafe fn spindle_dispatch() {
     let yarn = &mut YARN;
     let cmd = yarn.cmd_buf;
@@ -7370,6 +7481,9 @@ unsafe fn spindle_dispatch() {
     // Clear command buffer after dispatch.
     yarn.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
     yarn.cmd_len = 0;
+    SPINDLE_VI_CUR = 0;
+    SPINDLE_VI_NORMAL = false; // return to insert mode for next command
+    SPINDLE_VI_PENDING_D = false;
 
     // Render output bands.
     spindle_render();
@@ -7427,70 +7541,62 @@ unsafe fn spindle_render() {
     serial_println!("[spindle.render.done] lines={}", visible_count);
 }
 
-/// Render Spindle command line (prompt + input) as text glyphs and a block cursor
-/// as a fill rect, using the existing sexdisplay-safe path (0xFA/0xFB/0xEF).
-/// Text buffer is 128 bytes (20 chars/line, 5×7 font, fixed at surface.y+24).
-/// Block cursor placed below band area for visibility.
+/// Render Spindle command line: vi mode tag + prompt + input + block cursor at vi position.
 unsafe fn spindle_render_cmdline() {
     let w = SURFACE_0x99_W;
     let h = SURFACE_0x99_H;
     if w == 0 || h == 0 { return; }
 
     let yarn = &YARN;
+    // Mode tag: [I] insert (Catppuccin Green) or [N] normal (Catppuccin Yellow).
+    let mode_tag: &[u8] = if SPINDLE_VI_NORMAL { b"[N]" } else { b"[I]" };
+    let mode_color: u64   = if SPINDLE_VI_NORMAL { 0x00F9E2AFu64 } else { 0x00A6E3A1u64 };
     const PROMPT_BYTES: &[u8] = b"sex> ";
+    let header_len = mode_tag.len() + PROMPT_BYTES.len(); // 3 + 5 = 8
 
-    // ── [spindle.render.submit] Clear text buffer on Spindle surface ──
+    // Clear text buffer.
     pdx_call(SLOT_DISPLAY, 0xFA, SURFACE_ID_SPINDLE, 0, 0);
 
-    // ── [spindle.line.edit] Pack prompt + command into text buffer ──
-    // Submit in 8-byte chunks via 0xFB. Text appears at text row 0 (header area,
-    // rendered on top of header fill rect).
-    let max_chars = 40usize; // 2 text lines of 20 chars
+    // Pack mode tag + prompt + cmd into 40-byte buffer, submit as 0xFB chunks.
+    let max_chars = 40usize;
     let mut packed_buf = [0u8; 40];
     let mut ti = 0usize;
-    for &b in PROMPT_BYTES {
-        if ti < max_chars { packed_buf[ti] = b; ti += 1; }
-    }
+    for &b in mode_tag    { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
+    for &b in PROMPT_BYTES { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
     for i in 0..yarn.cmd_len {
-        if ti < max_chars {
-            packed_buf[ti] = yarn.cmd_buf[i];
-            ti += 1;
-        }
+        if ti < max_chars { packed_buf[ti] = yarn.cmd_buf[i]; ti += 1; }
     }
 
+    // Mode tag (0..3) in mode color, rest in Catppuccin Text.
     let mut offset = 0usize;
     while offset < ti {
         let chunk = 8.min(ti - offset);
         let mut word: u64 = 0;
-        for i in 0..chunk {
-            word |= (packed_buf[offset + i] as u64) << (i * 8);
-        }
+        for i in 0..chunk { word |= (packed_buf[offset + i] as u64) << (i * 8); }
+        let color: u64 = if offset < mode_tag.len() { mode_color } else { 0x00CDD6F4u64 };
         pdx_call(SLOT_DISPLAY, 0xFB, SURFACE_ID_SPINDLE, word,
-            (offset as u64)
-            | ((chunk as u64) << 8)
-            | ((0x00CDD6F4u64) << 32)); // Catppuccin Text color
+            (offset as u64) | ((chunk as u64) << 8) | (color << 32));
         offset += chunk;
     }
 
-    // ── Block cursor as fill rect (rect_index=7) below band area ──
+    // Block cursor at vi cursor position (clamped to surface width).
     let cursor_y = SPINDLE_HEADER_H
         + SPINDLE_ROW_RECTS as u32 * (SPINDLE_ROW_H + SPINDLE_ROW_GAP)
         + SPINDLE_ROW_GAP;
-    // Character cells are 8px wide; inset by 4px + prompt_offset.
     let cursor_w = 8u32;
     let cursor_h = SPINDLE_ROW_H;
-    let cursor_x = (4u32 + (PROMPT_BYTES.len() as u32 + yarn.cmd_len as u32) * 8u32)
+    let vi_cur = SPINDLE_VI_CUR.min(yarn.cmd_len);
+    let cursor_x = (4u32 + (header_len as u32 + vi_cur as u32) * 8u32)
         .min(w.saturating_sub(cursor_w));
+    // Normal mode: amber cursor; insert mode: rosewater cursor.
+    let cursor_color: u64 = if SPINDLE_VI_NORMAL { 0x00F9E2AFu64 } else { 0x00F5E0DCu64 };
 
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_SPINDLE,
         ((cursor_y as u64) << 32) | (cursor_x as u64),
-        (7u64 << 56)  // rect_index=7 (cursor slot)
-            | ((0x00F5E0DCu64) << 32)  // Catppuccin Rosewater cursor color
-            | ((cursor_h as u64) << 16)
-            | (cursor_w as u64));
+        (7u64 << 56) | (cursor_color << 32) | ((cursor_h as u64) << 16) | (cursor_w as u64));
 
-    serial_println!("[spindle.render.submit] cmd_len={} text_chars={} cursor_x={} cursor_y={}",
-        yarn.cmd_len, ti, cursor_x, cursor_y);
+    serial_println!("[spindle.render.submit] cmd_len={} vi_cur={} mode={} cursor_x={}",
+        yarn.cmd_len, vi_cur, if SPINDLE_VI_NORMAL { b'N' } else { b'I' } as char, cursor_x);
 }
 
 // ── Bell Surface Control Helpers ─────────────────────────────────────────────
@@ -11263,97 +11369,50 @@ pub extern "C" fn _start() -> ! {
                                 // Forward key event to Spindle PD 12 via SLOT_SPINDLE
                                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, 1, EV_KEY);
                                 serial_println!("[spindle.input.recv] scancode={:#x}", scancode);
-                                match scancode {
+                                // Normal vi mode: route to vi handler (Enter always dispatches).
+                                if SPINDLE_VI_NORMAL && scancode != 0x1C {
+                                    spindle_vi_normal_key(scancode);
+                                } else { match scancode {
                                     0x1C => { // Enter — dispatch command
                                         serial_println!("[spindle.enter] len={}", YARN.cmd_len);
                                         spindle_dispatch();
                                     }
-                                    0x0E => { // Backspace — edit command buffer
-                                        if YARN.cmd_len > 0 {
-                                            YARN.cmd_len -= 1;
-                                            YARN.cmd_buf[YARN.cmd_len] = 0;
+                                    0x0E => { // Backspace — delete before cursor
+                                        if SPINDLE_VI_CUR > 0 {
+                                            spindle_vi_delete_at(SPINDLE_VI_CUR - 1);
                                             serial_println!("[spindle.key.backspace] len={}", YARN.cmd_len);
                                             serial_println!("[spindle.line.edit] op=backspace len={}", YARN.cmd_len);
+                                            serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);
                                             spindle_render();
                                         }
                                     }
-                                    0x01 => { // Escape — clear command buffer
-                                        if YARN.cmd_len > 0 {
-                                            YARN.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
-                                            YARN.cmd_len = 0;
-                                            serial_println!("[spindle.key.escape]");
-                                            serial_println!("[spindle.line.edit] op=escape len=0");
+                                    0x01 => { // Escape — enter normal vi mode
+                                        if !SPINDLE_VI_NORMAL {
+                                            SPINDLE_VI_NORMAL = true;
+                                            SPINDLE_VI_PENDING_D = false;
+                                            if SPINDLE_VI_CUR > 0 && SPINDLE_VI_CUR == YARN.cmd_len {
+                                                SPINDLE_VI_CUR -= 1;
+                                            }
+                                            serial_println!("[spindle.vi.mode] mode=normal");
+                                            serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);
                                             spindle_render();
                                         }
                                     }
                                     0x0F => { // Tab — future completion (consume for now)
                                         serial_println!("[spindle.key.tab] deferred");
                                     }
-                                    0x39 => { // Space
-                                        if YARN.cmd_len < YARN_CMD_BUF_CAP - 1 {
-                                            YARN.cmd_buf[YARN.cmd_len] = b' ';
-                                            YARN.cmd_len += 1;
-                                            serial_println!("[spindle.key.char] ch=' '");
-                                            serial_println!("[spindle.line.edit] op=push ch=' ' len={}", YARN.cmd_len);
-                                            spindle_render();
+                                    _ => {
+                                        if let Some(ch) = spindle_scan_to_char(scancode) {
+                                            if ch != b' ' || scancode == 0x39 {
+                                                spindle_vi_insert_at(SPINDLE_VI_CUR, ch);
+                                                serial_println!("[spindle.key.char] ch={}", ch as char);
+                                                serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
+                                                serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);
+                                                spindle_render();
+                                            }
                                         }
                                     }
-                                    // Numbers 1-9, 0 (evdev KEY_1 through KEY_0).
-                                    s if s >= 0x02 && s <= 0x0B => {
-                                        static SCAN2NUM: [u8; 10] = [b'1',b'2',b'3',b'4',b'5',b'6',b'7',b'8',b'9',b'0'];
-                                        let ch = SCAN2NUM[(s - 0x02) as usize];
-                                        if YARN.cmd_len < YARN_CMD_BUF_CAP - 1 {
-                                            YARN.cmd_buf[YARN.cmd_len] = ch;
-                                            YARN.cmd_len += 1;
-                                            serial_println!("[spindle.key.char] ch={}", ch as char);
-                                            serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
-                                            spindle_render();
-                                        }
-                                    }
-                                    // Lowercase letters (unshifted V1). evdev KEY_Q through KEY_P (row 1).
-                                    s if s >= 0x10 && s <= 0x19 => {
-                                        static SCAN2ROW1: [u8; 10] = [b'q',b'w',b'e',b'r',b't',b'y',b'u',b'i',b'o',b'p'];
-                                        let ch = SCAN2ROW1[(s - 0x10) as usize];
-                                        if YARN.cmd_len < YARN_CMD_BUF_CAP - 1 {
-                                            YARN.cmd_buf[YARN.cmd_len] = ch;
-                                            YARN.cmd_len += 1;
-                                            serial_println!("[spindle.key.char] ch={}", ch as char);
-                                            serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
-                                            spindle_render();
-                                        }
-                                    }
-                                    // Lowercase letters A-L (row 2). evdev KEY_A through KEY_L.
-                                    s if s >= 0x1E && s <= 0x26 => {
-                                        static SCAN2ROW2: [u8; 9] = [b'a',b's',b'd',b'f',b'g',b'h',b'j',b'k',b'l'];
-                                        let ch = SCAN2ROW2[(s - 0x1E) as usize];
-                                        if YARN.cmd_len < YARN_CMD_BUF_CAP - 1 {
-                                            YARN.cmd_buf[YARN.cmd_len] = ch;
-                                            YARN.cmd_len += 1;
-                                            serial_println!("[spindle.key.char] ch={}", ch as char);
-                                            serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
-                                            spindle_render();
-                                        }
-                                    }
-                                    // Remaining letters: Z, X, C, V, B, N, M.
-                                    s if s == 0x2C || s == 0x2D || s == 0x2E || s == 0x2F
-                                        || s == 0x30 || s == 0x31 || s == 0x32 => {
-                                        static SCAN2ROW3: [u8; 7] = [b'z',b'x',b'c',b'v',b'b',b'n',b'm'];
-                                        let idx = match s {
-                                            0x2C => 0, 0x2D => 1, 0x2E => 2, 0x2F => 3,
-                                            0x30 => 4, 0x31 => 5, 0x32 => 6,
-                                            _ => 0,
-                                        };
-                                        let ch = SCAN2ROW3[idx];
-                                        if YARN.cmd_len < YARN_CMD_BUF_CAP - 1 {
-                                            YARN.cmd_buf[YARN.cmd_len] = ch;
-                                            YARN.cmd_len += 1;
-                                            serial_println!("[spindle.key.char] ch={}", ch as char);
-                                            serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
-                                            spindle_render();
-                                        }
-                                    }
-                                    _ => {}
-                                }
+                                }}
                                 mutated = true;
                             // ── Linen focused-surface: Enter/Space → OpenIntent → Quil ──
                             } else if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN

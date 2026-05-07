@@ -106,60 +106,123 @@ const CMD_MAX: usize = 256;
 const PROMPT: &[u8] = b"sex> ";
 const PROMPT_LEN: usize = PROMPT.len();
 
+#[derive(Clone, Copy, PartialEq)]
+enum ViMode { Insert, Normal }
+
 struct CmdLine {
     buf: [u8; CMD_MAX],
     len: usize,
+    cur: usize,
+    mode: ViMode,
+    prev_buf: [u8; CMD_MAX],
+    prev_len: usize,
+    pending_d: bool,
 }
 
 impl CmdLine {
-    const fn new() -> Self { CmdLine { buf: [0u8; CMD_MAX], len: 0 } }
+    const fn new() -> Self {
+        CmdLine {
+            buf: [0u8; CMD_MAX], len: 0, cur: 0,
+            mode: ViMode::Insert,
+            prev_buf: [0u8; CMD_MAX], prev_len: 0,
+            pending_d: false,
+        }
+    }
 
-    /// Append a printable ASCII byte. Rejects if full or non-printable.
     fn push(&mut self, b: u8) {
         if self.len < CMD_MAX && b >= 0x20 && b <= 0x7E {
             self.buf[self.len] = b;
             self.len += 1;
+            self.cur = self.len;
         }
     }
 
-    /// Delete one character before cursor.
     fn backspace(&mut self) {
-        if self.len > 0 { self.len -= 1; }
+        if self.len > 0 { self.len -= 1; self.cur = self.len; }
     }
 
-    /// Clear the buffer entirely.
-    fn clear(&mut self) { self.len = 0; }
+    fn clear(&mut self) { self.len = 0; self.cur = 0; }
 
-    /// Return the current line as a byte slice.
     fn as_bytes(&self) -> &[u8] { &self.buf[..self.len] }
+
+    fn insert_at(&mut self, pos: usize, b: u8) {
+        if self.len >= CMD_MAX || pos > self.len || b < 0x20 || b > 0x7E { return; }
+        let mut i = self.len;
+        while i > pos { self.buf[i] = self.buf[i - 1]; i -= 1; }
+        self.buf[pos] = b;
+        self.len += 1;
+        self.cur = (pos + 1).min(self.len);
+    }
+
+    fn delete_at(&mut self, pos: usize) {
+        if pos >= self.len { return; }
+        let mut i = pos;
+        while i + 1 < self.len { self.buf[i] = self.buf[i + 1]; i += 1; }
+        self.buf[self.len - 1] = 0;
+        self.len -= 1;
+        if self.cur > self.len { self.cur = self.len; }
+    }
+
+    fn cursor_left(&mut self)  { if self.cur > 0 { self.cur -= 1; } }
+    fn cursor_right(&mut self) { if self.cur < self.len { self.cur += 1; } }
+    fn cursor_home(&mut self)  { self.cur = 0; }
+    fn cursor_end(&mut self)   { self.cur = self.len; }
+
+    fn word_fwd(&mut self) {
+        let mut c = self.cur;
+        while c < self.len && self.buf[c] != b' ' { c += 1; }
+        while c < self.len && self.buf[c] == b' '  { c += 1; }
+        self.cur = c;
+    }
+
+    fn word_back(&mut self) {
+        let mut c = self.cur;
+        while c > 0 && self.buf[c - 1] == b' '  { c -= 1; }
+        while c > 0 && self.buf[c - 1] != b' ' { c -= 1; }
+        self.cur = c;
+    }
+
+    fn word_end(&mut self) {
+        if self.cur >= self.len { return; }
+        let mut c = self.cur + 1;
+        while c < self.len && self.buf[c] == b' '      { c += 1; }
+        while c + 1 < self.len && self.buf[c + 1] != b' ' { c += 1; }
+        self.cur = c.min(self.len.saturating_sub(1));
+    }
+
+    fn save_undo(&mut self) { self.prev_buf = self.buf; self.prev_len = self.len; }
+
+    fn undo(&mut self) {
+        self.buf = self.prev_buf;
+        self.len = self.prev_len;
+        if self.cur > self.len { self.cur = self.len; }
+    }
 }
 
 // ── Prompt redraw ──────────────────────────────────────────────────────────
 
-/// Redraw the prompt line (row 23). Clears the row, draws "sex> " + current line + cursor.
+/// Redraw the prompt line (row 23). Shows vi mode tag, prompt, text, cursor at line.cur.
 unsafe fn redraw_prompt(fb: &mut WindowBuffer, line: &CmdLine) {
-    // Clear entire prompt row
     fb.draw_rect(sex_pdx::Rect { x: 0, y: CELL_H * 23, width: WIN_W, height: CELL_H }, BG);
 
-    // Draw prompt prefix
-    font::draw_str(fb, 4, CELL_H * 23 + 4, PROMPT, GREEN, None);
+    let mode_tag: &[u8] = if line.mode == ViMode::Insert { b"[I]" } else { b"[N]" };
+    font::draw_str(fb, 4, CELL_H * 23 + 4, mode_tag, YELLOW, None);
+    let mode_px = (mode_tag.len() as u32) * CELL_W;
 
-    // Draw current line
+    font::draw_str(fb, 4 + mode_px, CELL_H * 23 + 4, PROMPT, GREEN, None);
+    let header_px = mode_px + (PROMPT_LEN as u32) * CELL_W;
+    let header_cols = mode_tag.len() + PROMPT_LEN;
+
     if line.len > 0 {
-        let prompt_px = (PROMPT_LEN as u32) * CELL_W;
-        // Max visible chars = COLS - PROMPT_LEN - 1 (cursor)
-        let max_vis = (COLS as usize).saturating_sub(PROMPT_LEN + 1);
-        let start = line.len.saturating_sub(max_vis);
+        let max_vis = (COLS as usize).saturating_sub(header_cols + 1);
+        let start = if line.cur > max_vis { line.cur - max_vis } else { 0 };
         let visible = &line.as_bytes()[start..];
-        font::draw_str(fb, 4 + prompt_px, CELL_H * 23 + 4, visible, FG, None);
-
-        // Cursor block at end of input
-        let cursor_col = PROMPT_LEN as u32 + visible.len() as u32;
+        font::draw_str(fb, 4 + header_px, CELL_H * 23 + 4, visible, FG, None);
+        let vis_cur = line.cur.saturating_sub(start).min(visible.len());
+        let cursor_col = header_cols as u32 + vis_cur as u32;
         font::draw_char(fb, cursor_col * CELL_W, CELL_H * 23, b' ', CURSOR, Some(CURSOR));
     } else {
-        // Cursor block at prompt position when empty
-        let cursor_col = PROMPT_LEN as u32;
-        font::draw_char(fb, cursor_col * CELL_W, CELL_H * 23, b' ', CURSOR, Some(CURSOR));
+        font::draw_char(fb, header_cols as u32 * CELL_W, CELL_H * 23, b' ', CURSOR, Some(CURSOR));
     }
 }
 
@@ -773,29 +836,86 @@ pub extern "C" fn _start() -> ! {
 /// Process a single keyboard scancode into the line editor.
 /// Scancode table matches sexsh convention (US QWERTY set 1).
 fn handle_key(scancode: u8, line: &mut CmdLine) {
+    match line.mode {
+        ViMode::Insert => handle_key_insert(scancode, line),
+        ViMode::Normal => handle_key_normal(scancode, line),
+    }
+}
+
+fn handle_key_insert(scancode: u8, line: &mut CmdLine) {
     match scancode {
-        0x1C => { // Enter
-            serial_println!("[spindle.line.enter] len={} text={:?}", line.len,
-                core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
+        0x1C => { // Enter — caller handles dispatch; just clear
+            serial_println!("[spindle.line.enter] len={} mode=insert text={:?}",
+                line.len, core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
             serial_println!("[spindle.input.recv] key=enter len={}", line.len);
             line.clear();
         }
-        0x0E => { // Backspace
-            line.backspace();
+        0x0E => { // Backspace — delete before cursor
+            if line.cur > 0 { line.delete_at(line.cur - 1); }
             serial_println!("[spindle.line.backspace] len={}", line.len);
             serial_println!("[spindle.input.recv] key=backspace len={}", line.len);
+            serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len);
         }
-        0x01 => { // Escape -- clear buffer
-            line.clear();
-            serial_println!("[spindle.input.recv] key=escape len=0");
+        0x01 => { // Escape — enter normal mode
+            line.mode = ViMode::Normal;
+            if line.cur > 0 && line.cur == line.len { line.cur -= 1; }
+            serial_println!("[spindle.vi.mode] mode=normal");
+            serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len);
         }
         _ => {
             if let Some(ch) = scancode_to_ascii(scancode) {
-                line.push(ch);
+                line.insert_at(line.cur, ch);
                 serial_println!("[spindle.line.append] ch={} len={}", ch as char, line.len);
                 serial_println!("[spindle.input.recv] key=printable ch={} len={}", ch as char, line.len);
+                serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len);
+                serial_println!("[spindle.line.edit.ok] op=insert ch={}", ch as char);
             }
-            // Unknown scancodes silently ignored
+        }
+    }
+}
+
+fn handle_key_normal(scancode: u8, line: &mut CmdLine) {
+    match scancode {
+        0x1C => { // Enter — clear (dispatch handled by caller)
+            serial_println!("[spindle.line.enter] len={} mode=normal text={:?}",
+                line.len, core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
+            serial_println!("[spindle.input.recv] key=enter len={}", line.len);
+            line.clear();
+            line.mode = ViMode::Insert; // return to insert after dispatch
+            line.pending_d = false;
+        }
+        0x01 => { // Escape — already normal
+            line.pending_d = false;
+            serial_println!("[spindle.vi.mode] mode=normal already");
+        }
+        0x0E => { // Backspace in normal = cursor left (h)
+            line.cursor_left();
+            serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len);
+        }
+        _ => {
+            if line.pending_d {
+                line.pending_d = false;
+                if scancode == 0x20 { // second 'd' = dd → clear line
+                    line.save_undo();
+                    line.clear();
+                    serial_println!("[spindle.line.edit.ok] op=dd");
+                    serial_println!("[spindle.line.cursor] pos=0 len=0");
+                }
+                return;
+            }
+            match scancode_to_ascii(scancode) {
+                Some(b'h') => { line.cursor_left();  serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len); }
+                Some(b'l') => { line.cursor_right(); serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len); }
+                Some(b'0') => { line.cursor_home();  serial_println!("[spindle.line.cursor] pos=0 len={}",  line.len); serial_println!("[spindle.line.edit.ok] op=home"); }
+                Some(b'w') => { line.word_fwd();     serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len); serial_println!("[spindle.line.edit.ok] op=word_fwd"); }
+                Some(b'b') => { line.word_back();    serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len); serial_println!("[spindle.line.edit.ok] op=word_back"); }
+                Some(b'e') => { line.word_end();     serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len); serial_println!("[spindle.line.edit.ok] op=word_end"); }
+                Some(b'i') => { line.mode = ViMode::Insert; serial_println!("[spindle.vi.mode] mode=insert"); }
+                Some(b'a') => { line.cursor_right(); line.mode = ViMode::Insert; serial_println!("[spindle.vi.mode] mode=insert cursor={}", line.cur); }
+                Some(b'd') => { line.pending_d = true; }
+                Some(b'u') => { line.undo(); serial_println!("[spindle.line.edit.ok] op=undo len={}", line.len); serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len); }
+                _ => {}
+            }
         }
     }
 }
