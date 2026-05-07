@@ -55,6 +55,8 @@ target_debug/
 *.log
 
 .codex/
+.gemini/
+.openclaw/
 .sexos_snapshot/
 sexos/
 milestone1/
