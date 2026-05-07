@@ -3,27 +3,37 @@ use crate::serial_println;
 use crate::ipc::DOMAIN_REGISTRY;
 use crate::capability::{CapabilityData, PciCapData, InterruptCapData};
 
+// SLOT_NVME_HOST = 16 — slotted BAR lease for sexdrive NVMe probe.
+// Not added to sex-pdx to avoid ABI hash churn; canonical slot number only here.
+const SLOT_NVME_HOST: u64 = 16;
+
 pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32) {
     serial_println!("DevMgr: Starting hardware discovery...");
-    
+
     let devices = HAL.enumerate_pci();
     serial_println!("DevMgr: Enumerated {} PCI devices.", devices.len());
 
+    let mut nvme_found = false;
     for dev in devices {
         match (dev.class_id, dev.subclass_id) {
             (0x01, 0x08) => { // NVMe
-                serial_println!("DevMgr: Assigning NVMe ({:02x}:{:02x}.{}) to sexdrive", dev.bus, dev.dev, dev.func);
+                serial_println!("[kernel.pci.nvme.found] {:02x}:{:02x}.{} vendor={:04x} device={:04x}", dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id);
+                let bar0_pa = dev.get_bar(0);
+                serial_println!("[kernel.pci.nvme.bar0] pa={:#x}", bar0_pa);
                 if let Some(pd) = DOMAIN_REGISTRY.get(sexdrive_pd_id) {
-                    pd.grant(CapabilityData::Pci(PciCapData {
+                    // Grant at SLOT_NVME_HOST (16) so sexdrive can call MAP_PCI_BAR(16, ...).
+                    pd.grant_capability(SLOT_NVME_HOST, CapabilityData::Pci(PciCapData {
                         bus: dev.bus,
                         dev: dev.dev,
                         func: dev.func,
                         vendor_id: dev.vendor_id,
                         device_id: dev.device_id,
                     }));
+                    serial_println!("[kernel.cap.nvme_bar.grant] pd={} slot={}", sexdrive_pd_id, SLOT_NVME_HOST);
                     // Route IRQ (Simplified vector mapping)
                     crate::interrupts::register_irq_route(0x22, sexdrive_pd_id);
                 }
+                nvme_found = true;
             }
             (0x03, _) => { // GPU
                 serial_println!("DevMgr: Assigning GPU ({:02x}:{:02x}.{}) to sexdisplay", dev.bus, dev.dev, dev.func);
@@ -70,5 +80,8 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32) {
         }
     }
 
+    if !nvme_found {
+        serial_println!("[kernel.pci.nvme.absent]");
+    }
     serial_println!("DevMgr: Hardware discovery complete.");
 }
