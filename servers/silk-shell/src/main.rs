@@ -112,6 +112,9 @@ const SCENE_BLOB_VERSION: u8 = 0x01;
 pub const OP_SHELL_BIND_BUFFER: u64 = 0x14;
 pub const OP_HID_EVENT: u64 = 0x202;
 pub const OP_USB_MOUSE_REPORT: u64 = 0x260;
+const OP_LINEN_GET_PUBLIC_SNAPSHOT: u64 = 0x44;
+const OP_LINEN_GET_PUBLIC_NAME: u64 = 0x45;
+const OP_LINEN_OPEN_INTENT: u64 = 0x46;
 const SHELL_USB_MOUSE_RECEIVE_UNPARK_PROOF_V1: bool = true;
 pub const OP_SURFACE_UPDATE: u64 = 0xEB;
 
@@ -315,6 +318,10 @@ struct LinenObject {
     linked_surface_id: u64,
     flags: u32,
     display_name: &'static str,
+    /// Raw name bytes fetched from Linen PD (remote objects only).
+    /// name_len == 0 means use display_name. Sanitized to printable ASCII.
+    name: [u8; 24],
+    name_len: u8,
 }
 
 /// In-memory Linen object table. No heap, no filesystem, no storage.
@@ -325,6 +332,10 @@ static mut LINEN_OBJECTS: [Option<LinenObject>; LINEN_MAX_OBJECTS] = [None; LINE
 /// 0 = unset (repaired to first valid on first access via linen_selected_object_id()).
 /// Only meaningful when Linen surface is focused (FOCUSED_SURFACE_ID == SURFACE_ID_LINEN).
 static mut SELECTED_LINEN_OBJECT_ID: u64 = 0;
+
+/// Set to true after the first successful remote snapshot fetch from Linen PD.
+/// Prevents re-fetch on every paint; fetch is one-shot per boot.
+static mut LINEN_REMOTE_FETCHED: bool = false;
 
 /// Seed objects for initial Linen workspace. 6 objects covering key kinds.
 const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
@@ -338,6 +349,8 @@ const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
         linked_surface_id: 0,
         flags: 0,
         display_name: "SexOS Kernel",
+        name: [0u8; 24],
+        name_len: 0,
     },
     LinenObject {
         object_id: 2,
@@ -349,6 +362,8 @@ const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
         linked_surface_id: 0,
         flags: 0,
         display_name: "Compositor Lifecycle Spec",
+        name: [0u8; 24],
+        name_len: 0,
     },
     LinenObject {
         object_id: 3,
@@ -360,6 +375,8 @@ const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
         linked_surface_id: SURFACE_ID_LINEN,
         flags: 0,
         display_name: "Silk Shell main.rs",
+        name: [0u8; 24],
+        name_len: 0,
     },
     LinenObject {
         object_id: 4,
@@ -371,6 +388,8 @@ const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
         linked_surface_id: 0,
         flags: 0,
         display_name: "Desktop Screenshot",
+        name: [0u8; 24],
+        name_len: 0,
     },
     LinenObject {
         object_id: 5,
@@ -382,6 +401,8 @@ const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
         linked_surface_id: 0,
         flags: 0,
         display_name: "Current ISO Build",
+        name: [0u8; 24],
+        name_len: 0,
     },
     LinenObject {
         object_id: 6,
@@ -393,6 +414,8 @@ const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
         linked_surface_id: 0,
         flags: 0,
         display_name: "Drafts",
+        name: [0u8; 24],
+        name_len: 0,
     },
 ];
 
@@ -565,6 +588,17 @@ const LINEN_LIST_ACCENT_BARS: u8 = 5;
 const LINEN_LIST_BG_COLOR: u32 = 0x000C1420; // dark slate
 /// Width of the left accent bar per row, in pixels.
 const LINEN_ACCENT_BAR_W: u32 = 5;
+
+// V1 static browser UI — rendered when LINEN_OBJECTS is empty.
+const LINEN_UI_ROW_COUNT: usize = 5;
+const LINEN_UI_ROW_COLORS: [u32; 5] = [
+    0x00_3060A0,  // PROJECTS
+    0x00_6040A0,  // SEX MICROKERNEL
+    0x00_306060,  // HANDOUTS
+    0x00_805030,  // HANDOFFS
+    0x00_204060,  // QUIL DRAFTS
+];
+static mut LINEN_UI_SELECTED: u8 = 0;
 /// Linen surface height sized to fit all visual row rects without clipping.
 /// = HEADER_H + ACCENT_BARS * (ROW_H + ROW_GAP) + 10px margin = 28 + 5*26 + 10 = 168.
 const LINEN_SURFACE_VISUAL_H: u32 =
@@ -662,8 +696,15 @@ unsafe fn linen_render_object_list() {
             let state_name = linen_object_state_name(obj.state);
             let is_selected = obj.object_id == SELECTED_LINEN_OBJECT_ID;
             let selected_flag = if is_selected { "true" } else { "false" };
-            serial_println!("[linen.object_list.row] id={} kind={} state={} name={} selected={}",
-                obj.object_id, kind_name, state_name, obj.display_name, selected_flag);
+            if obj.name_len > 0 {
+                let n = obj.name_len as usize;
+                let name_str = core::str::from_utf8(&obj.name[..n]).unwrap_or("[bad_utf8]");
+                serial_println!("[linen.object_list.row] id={} kind={} state={} name={} selected={}",
+                    obj.object_id, kind_name, state_name, name_str, selected_flag);
+            } else {
+                serial_println!("[linen.object_list.row] id={} kind={} state={} name={} selected={}",
+                    obj.object_id, kind_name, state_name, obj.display_name, selected_flag);
+            }
 
             // Track selected row position for later highlight rect.
             let row_y = LINEN_LIST_HEADER_H
@@ -712,6 +753,192 @@ unsafe fn linen_render_object_list() {
 
     serial_println!("[linen.object_select.current] id={}", SELECTED_LINEN_OBJECT_ID);
     serial_println!("[linen.object_list.done] count={} rows={}", count, rows_emitted);
+}
+
+/// V1 static browser UI for surface 200.
+/// Renders 5 fixed category rows when no real Linen objects exist.
+/// Rect index layout mirrors linen_render_object_list:
+///   0=header, 1=list_bg, 2=selected_highlight, 3-7=accent_bars.
+unsafe fn linen_render_static_ui() {
+    let w = SURFACE_200_W;
+    let h = SURFACE_200_H;
+    if w == 0 || h == 0 { return; }
+    let sel = (LINEN_UI_SELECTED as usize).min(LINEN_UI_ROW_COUNT - 1);
+    let header_color = LINEN_UI_ROW_COLORS[sel];
+
+    // index 0: header band with selected row's accent color
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
+        0u64,
+        ((header_color as u64) << 32)
+            | ((LINEN_LIST_HEADER_H as u64) << 16)
+            | w as u64);
+
+    // index 1: list background
+    let list_bg_h = LINEN_LIST_ACCENT_BARS as u32 * (LINEN_LIST_ROW_H + LINEN_LIST_ROW_GAP)
+        - LINEN_LIST_ROW_GAP;
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
+        (LINEN_LIST_HEADER_H as u64) << 32,
+        (1u64 << 56)
+            | ((LINEN_LIST_BG_COLOR as u64) << 32)
+            | ((list_bg_h as u64) << 16)
+            | w as u64);
+
+    // index 2: selected row highlight (full width)
+    let sel_y = LINEN_LIST_HEADER_H + sel as u32 * (LINEN_LIST_ROW_H + LINEN_LIST_ROW_GAP);
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
+        (sel_y as u64) << 32,
+        (2u64 << 56)
+            | ((header_color as u64) << 32)
+            | ((LINEN_LIST_ROW_H as u64) << 16)
+            | w as u64);
+
+    // indices 3-7: left accent bars (5px wide, per row)
+    let row_labels: [[u8; 8]; LINEN_UI_ROW_COUNT] = [
+        *b"PROJECTS",
+        *b"SEX MICR",
+        *b"HANDOUTS",
+        *b"HANDOFFS",
+        *b"QUIL DFT",
+    ];
+    for i in 0..LINEN_UI_ROW_COUNT {
+        let row_y = LINEN_LIST_HEADER_H + i as u32 * (LINEN_LIST_ROW_H + LINEN_LIST_ROW_GAP);
+        let accent_idx = (i as u64 + 3) & 0x7;
+        let bar_color = if i == sel { header_color } else { LINEN_UI_ROW_COLORS[i] };
+        pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
+            (row_y as u64) << 32,
+            (accent_idx << 56)
+                | ((bar_color as u64) << 32)
+                | ((LINEN_LIST_ROW_H as u64) << 16)
+                | LINEN_ACCENT_BAR_W as u64);
+    }
+
+    // Clear text buf then write title + row labels
+    pdx_call(SLOT_DISPLAY, 0xFA, SURFACE_ID_LINEN, 0, 0);
+
+    let title_color: u64 = 0x00_F0F8FF;
+    pdx_call(SLOT_DISPLAY, 0xFB, SURFACE_ID_LINEN,
+        u64::from_le_bytes(*b"LINEN\0\0\0"),
+        0u64 | (5u64 << 8) | (title_color << 32));
+
+    let label_color: u64 = 0x00_B8CCE0;
+    for i in 0..LINEN_UI_ROW_COUNT {
+        let byte_offset = ((i + 1) * 20) as u64;
+        pdx_call(SLOT_DISPLAY, 0xFB, SURFACE_ID_LINEN,
+            u64::from_le_bytes(row_labels[i]),
+            byte_offset | (8u64 << 8) | (label_color << 32));
+    }
+
+    serial_println!("[linen.ui.render] rows={} selected={}", LINEN_UI_ROW_COUNT, sel);
+}
+
+/// Spin-wait for a type_id==0x1 reply in shell's mailbox.
+/// Used during narrow synchronous fetch window — non-reply messages are dropped.
+unsafe fn linen_sync_reply() -> u64 {
+    loop {
+        let msg = pdx_listen_raw(0);
+        if msg.type_id == 0x1 {
+            return msg.arg0;
+        }
+    }
+}
+
+/// Sanitize a byte to printable ASCII. Returns '?' for non-printable bytes.
+fn sanitize_ascii(b: u8) -> u8 {
+    if b >= 0x20 && b <= 0x7E { b } else { b'?' }
+}
+
+/// Fetch the public object snapshot from Linen PD and populate LINEN_OBJECTS.
+/// Iterates all 16 session slots; empty slots (reply=0) are skipped.
+/// For each entry, fetches actual name bytes via OP_LINEN_GET_PUBLIC_NAME (0x45)
+/// in 8-byte chunks, sanitizes to printable ASCII, stores in LinenObject.name.
+/// Replaces seed objects with real session data from Linen's SESSION.
+/// Called once on first linen_paint_surface() invocation.
+unsafe fn linen_fetch_remote_snapshot() {
+    serial_println!("[linen.remote.snapshot.begin]");
+    for slot in LINEN_OBJECTS.iter_mut() {
+        *slot = None;
+    }
+    SELECTED_LINEN_OBJECT_ID = 0;
+    let mut write_idx = 0usize;
+    let mut slot_idx = 0u64;
+    while slot_idx < 16 && write_idx < LINEN_MAX_OBJECTS {
+        pdx_call(sex_pdx::SLOT_LINEN, OP_LINEN_GET_PUBLIC_SNAPSHOT, slot_idx, 0, 0);
+        let packed = linen_sync_reply();
+        if packed != 0 {
+            let object_id = packed & 0xFFFF_FFFF;
+            let kind_byte = ((packed >> 32) & 0xFF) as u8;
+            let name_len_raw = ((packed >> 40) & 0xFF) as u8;
+            let name_len = (name_len_raw as usize).min(24) as u8;
+
+            // Fetch name bytes via OP_LINEN_GET_PUBLIC_NAME in 8-byte chunks.
+            let mut name = [0u8; 24];
+            let mut fetched_len = 0u8;
+            let mut off = 0u64;
+            let mut fetch_ok = true;
+            while off < name_len as u64 {
+                pdx_call(sex_pdx::SLOT_LINEN, OP_LINEN_GET_PUBLIC_NAME, object_id, off, 8);
+                let chunk = linen_sync_reply();
+                if chunk == 0 {
+                    break; // EOF
+                }
+                if (chunk as i64) < 0 {
+                    serial_println!("[linen.remote.name.err] id={} err={}", object_id, chunk as i64);
+                    fetch_ok = false;
+                    break;
+                }
+                let bytes = chunk.to_le_bytes();
+                let remaining = name_len as u64 - off;
+                let take = remaining.min(8) as usize;
+                for i in 0..take {
+                    name[off as usize + i] = sanitize_ascii(bytes[i]);
+                }
+                fetched_len = (off as u8).saturating_add(take as u8);
+                off += 8;
+            }
+
+            if fetch_ok && fetched_len > 0 {
+                serial_println!("[linen.remote.name.ok] id={} len={}", object_id, fetched_len);
+            }
+
+            let kind = match kind_byte {
+                0 => LinenObjectKind::Document,
+                1 => LinenObjectKind::Project,
+                _ => LinenObjectKind::Document,
+            };
+            LINEN_OBJECTS[write_idx] = Some(LinenObject {
+                object_id,
+                kind,
+                state: LinenObjectState::Saved,
+                parent_id: 0,
+                project_id: 0,
+                grant_ref: 0,
+                linked_surface_id: 0,
+                flags: 0,
+                display_name: "[linen.remote]",
+                name,
+                name_len: fetched_len,
+            });
+            serial_println!("[linen.remote.entry] slot={} id={} kind={} name_len={}",
+                slot_idx, object_id, kind_byte, fetched_len);
+            write_idx += 1;
+        }
+        slot_idx += 1;
+    }
+    serial_println!("[linen.remote.snapshot.ok] count={}", write_idx);
+    linen_select_first_valid_object();
+}
+
+/// Paint Linen surface 200: fetch remote snapshot on first call, then render.
+unsafe fn linen_paint_surface() {
+    if !LINEN_REMOTE_FETCHED {
+        LINEN_REMOTE_FETCHED = true;
+        linen_fetch_remote_snapshot();
+    }
+    if linen_object_count() == 0 {
+        linen_render_static_ui();
+    } else {
+        linen_render_object_list();
+    }
 }
 
 // ── J3: Quil Buffer Table ────────────────────────────────────────────────────
@@ -1941,7 +2168,7 @@ unsafe fn mesh_focus_linen_at_selected_fact(fact: &MeshFact) {
     serial_println!("[mesh.action.focus_linen] subject_id={}", fact.subject_id);
     open_linen_in_active_scene();
     SELECTED_LINEN_OBJECT_ID = fact.subject_id;
-    linen_render_object_list();
+    linen_paint_surface();
 }
 
 // ── J7: Bell Object Link Event Stub ──────────────────────────────────────────
@@ -5946,7 +6173,7 @@ unsafe fn open_linen_in_active_scene() -> bool {
                         serial_println!("[linen.placeholder.focus] frame={} sid={}", LINEN_FRAME_ID, sid);
                     }
                 }
-                linen_render_object_list();
+                linen_paint_surface();
                 return true;
             }
         }
@@ -5998,7 +6225,7 @@ unsafe fn open_linen_in_active_scene() -> bool {
 
     serial_println!("[linen.placeholder.open] frame={}", fid);
     serial_println!("[linen.object_table.ready] count={}", linen_object_count());
-    linen_render_object_list();
+    linen_paint_surface();
     snap_capture_layout();
     static mut LINEN_OPEN_BUDGET: u32 = 4;
     let b = &mut LINEN_OPEN_BUDGET;
@@ -10044,6 +10271,7 @@ pub extern "C" fn _start() -> ! {
         (linen_h as u64) << 32 | linen_w as u64);
     serial_println!("[silk-shell] Boot 0xEC surface 200 (Linen) created");
     serial_println!("[silk-shell.boot.surface.create] sid={} owner=linen", SURFACE_ID_LINEN);
+    unsafe { linen_paint_surface(); }
     serial_println!("[silk-shell.ui.ready] surfaces=2");
     serial_println!("[silk-shell.boot.layout.tiled] mode=2pane main_sid={} side_sid={} gutter={}",
         SURFACE_ID_QUIL, SURFACE_ID_LINEN, gutter);
@@ -10990,6 +11218,36 @@ pub extern "C" fn _start() -> ! {
                                     _ => {}
                                 }
                                 mutated = true;
+                            // ── Linen focused-surface: Enter/Space → OpenIntent → Quil ──
+                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN
+                                && (scancode == 0x1C || scancode == 0x39)
+                            {
+                                let obj_id = linen_selected_object_id();
+                                if obj_id != 0 {
+                                    let mut idx: usize = 0;
+                                    for (i, slot) in LINEN_OBJECTS.iter().enumerate() {
+                                        if let Some(obj) = slot {
+                                            if obj.object_id == obj_id {
+                                                idx = i;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    pdx_call(sex_pdx::SLOT_LINEN, OP_LINEN_OPEN_INTENT, obj_id, idx as u64, 0);
+                                    serial_println!("[linen.open_intent.send] id={} idx={}", obj_id, idx);
+
+                                    // Wait for Linen reply then route accepted intent to Quil.
+                                    let reply = linen_sync_reply();
+                                    if reply == 0 {
+                                        open_linen_object_in_quil(obj_id);
+                                        serial_println!("[linen.open_intent.quil.open] id={} idx={} ok=1", obj_id, idx);
+                                    } else {
+                                        serial_println!("[linen.open_intent.quil.open] id={} idx={} ok=0 err={}", obj_id, idx, reply);
+                                    }
+                                } else {
+                                    serial_println!("[linen.open_intent.skip] reason=no_object");
+                                }
+                                mutated = true;
                             } else if let Some(action) = scancode_to_action(scancode) {
                                 match action {
                                     SurfaceAction::FocusToggle => {
@@ -11294,10 +11552,20 @@ pub extern "C" fn _start() -> ! {
                                     // K4: Cycle Linen selection forward — gated to Linen-focused state.
                                     SurfaceAction::SelectNextLinenObject => {
                                         if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
-                                            linen_select_next_object();
-                                            linen_render_object_list();
+                                            if linen_object_count() == 0 {
+                                                if LINEN_UI_SELECTED + 1 < LINEN_UI_ROW_COUNT as u8 {
+                                                    LINEN_UI_SELECTED += 1;
+                                                } else {
+                                                    LINEN_UI_SELECTED = 0;
+                                                }
+                                                serial_println!("[linen.ui.select] index={}", LINEN_UI_SELECTED);
+                                                linen_render_static_ui();
+                                            } else {
+                                                linen_select_next_object();
+                                                linen_render_object_list();
+                                                serial_println!("[shell.action.select_next_linen] id={}", SELECTED_LINEN_OBJECT_ID);
+                                            }
                                             mutated = true;
-                                            serial_println!("[shell.action.select_next_linen] id={}", SELECTED_LINEN_OBJECT_ID);
                                         } else {
                                             serial_println!("[linen.object_select.reject] reason=not_focused");
                                         }
@@ -11306,10 +11574,20 @@ pub extern "C" fn _start() -> ! {
                                     // K4: Cycle Linen selection backward — gated to Linen-focused state.
                                     SurfaceAction::SelectPrevLinenObject => {
                                         if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
-                                            linen_select_prev_object();
-                                            linen_render_object_list();
+                                            if linen_object_count() == 0 {
+                                                if LINEN_UI_SELECTED > 0 {
+                                                    LINEN_UI_SELECTED -= 1;
+                                                } else {
+                                                    LINEN_UI_SELECTED = (LINEN_UI_ROW_COUNT - 1) as u8;
+                                                }
+                                                serial_println!("[linen.ui.select] index={}", LINEN_UI_SELECTED);
+                                                linen_render_static_ui();
+                                            } else {
+                                                linen_select_prev_object();
+                                                linen_render_object_list();
+                                                serial_println!("[shell.action.select_prev_linen] id={}", SELECTED_LINEN_OBJECT_ID);
+                                            }
                                             mutated = true;
-                                            serial_println!("[shell.action.select_prev_linen] id={}", SELECTED_LINEN_OBJECT_ID);
                                         } else {
                                             serial_println!("[linen.object_select.reject] reason=not_focused");
                                         }
