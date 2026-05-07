@@ -51,9 +51,11 @@ pub const CHIP_X_BELL: usize = 1020; // Bell icon between Battery and Clock
 /// Total number of layout boxes: 1 launcher + 5 workspaces + 4 chips + 1 bell
 pub const LAYOUT_COUNT: usize = 11;
 
-/// ABI version for SilkBar model shared across PDX boundary.
+/// ABI version for SilkBar model layout (not the PDX wire protocol).
 /// Increment when `SilkBarUpdate` layout or `UpdateKind` discriminants change.
+/// Consumers query `SILKBAR_ABI_VERSION` for PDX compatibility, not this value.
 pub const ABI_VERSION: u32 = 3;
+/// Must equal `ABI_VERSION`. Checked by `validate_contract()` at startup.
 pub const SILK_DE_BAR_ABI_V1: u32 = 3;
 pub const SILK_DE_REQUIRED_MODULES: usize = LAYOUT_COUNT;
 pub const SILK_DE_REQUIRED_CHIPS: usize = MAX_CHIPS;
@@ -68,6 +70,8 @@ pub const SILKBAR_CHIP_IDX_MAX: u8 = (MAX_CHIPS - 1) as u8;
 // ── PDX Protocol Opcodes (v6: wire names exist, no live transport yet) ──────
 
 /// PDX-facing ABI version (u64 for register-width return).
+/// Distinct from `ABI_VERSION` (model layout version).
+/// Returned by `OP_SILKBAR_GET_ABI`. Consumers use this for PDX compat checks.
 pub const SILKBAR_ABI_VERSION: u64 = 2;
 
 /// Opcode: ping → returns 0 (connectivity check).
@@ -216,7 +220,19 @@ pub struct Theme {
     pub chip_border: u32,
 }
 
-// ── Color Helpers ──────────────────────────────────────────────────────────
+// ── Appearance Token Index Constants ───────────────────────────────────────
+/// Named indices into the `[u32; 8]` appearance token array shared across
+/// silk-shell producer and sexdisplay consumer via OP_APPEARANCE_TOKENS (0xFC).
+/// These eliminate positional magic numbers and prevent reorder drift (M7).
+pub const APPEARANCE_TOKEN_FOCUS_SURFACE:   usize = 0;
+pub const APPEARANCE_TOKEN_FRAME_RIM:       usize = 1;
+pub const APPEARANCE_TOKEN_FRAME_TOP_BAR:   usize = 2;
+pub const APPEARANCE_TOKEN_ACTIVE_TAB:      usize = 3;
+pub const APPEARANCE_TOKEN_INACTIVE_TAB:    usize = 4;
+pub const APPEARANCE_TOKEN_CLOSE_LIGHT:     usize = 5;
+pub const APPEARANCE_TOKEN_MINIMIZE_LIGHT:  usize = 6;
+pub const APPEARANCE_TOKEN_ZOOM_LIGHT:      usize = 7;
+pub const APPEARANCE_TOKEN_COUNT: usize = 8;
 
 /// Lighten each RGB component by 0x22 (saturating).
 #[inline]
@@ -424,8 +440,9 @@ pub fn apply_update(bar: &mut SilkBar, update: SilkBarUpdate) -> bool {
             true
         }
         5 => {
-            // SetThemeToken: acknowledged but no-op (Theme is not part of SilkBar).
-            // Future: route to mutable theme storage.
+            // GATE: SetThemeToken (kind=5) is intentionally no-op in V1.
+            // Theme tokens are delivered via OP_APPEARANCE_TOKENS (0xFC) to sexdisplay.
+            // This slot is reserved for future in-model theme storage.
             false
         }
         6 => {

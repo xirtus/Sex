@@ -4,7 +4,11 @@
 
 use sex_pdx::serial_println;
 use silkbar_model::{SilkBar, SilkBarUpdate, UpdateKind, apply_update, DEFAULT_SILK_BAR,
-                    DEFAULT_THEME, ChipKind, ModuleSlot, validate_silkbar_contract, SILKBAR_ABI_VERSION};
+                    DEFAULT_THEME, ChipKind, ModuleSlot, validate_silkbar_contract, SILKBAR_ABI_VERSION,
+                    APPEARANCE_TOKEN_FOCUS_SURFACE, APPEARANCE_TOKEN_FRAME_RIM,
+                    APPEARANCE_TOKEN_FRAME_TOP_BAR, APPEARANCE_TOKEN_ACTIVE_TAB,
+                    APPEARANCE_TOKEN_INACTIVE_TAB, APPEARANCE_TOKEN_CLOSE_LIGHT,
+                    APPEARANCE_TOKEN_MINIMIZE_LIGHT, APPEARANCE_TOKEN_ZOOM_LIGHT};
 
 const FALLBACK_PTR: u64 = 0xffff8000fd000000;
 const FALLBACK_W: u32 = 1280;
@@ -162,6 +166,8 @@ static DISPLAY_WM_PD: core::sync::atomic::AtomicU32 = core::sync::atomic::Atomic
 /// Returns `(x, y, w, h)` guaranteed to be within FB bounds and below the bar.
 /// The `y` coordinate is clamped to at least `BAR_H` to prevent covering the top strip.
 fn clamp_surface(surf: &Surface, fb_w: usize, fb_h: usize) -> (usize, usize, usize, usize) {
+    // BAR_H covers model PANEL_Y+PANEL_H (10+38=48) plus 2px safety margin.
+    // Must remain >= PANEL_Y + PANEL_H from silkbar-model.
     const BAR_H: usize = 50;
     let x = (surf.x.max(0) as usize).min(fb_w.saturating_sub(1));
     let y = (surf.y.max(BAR_H as i32) as usize).min(fb_h.saturating_sub(1));
@@ -712,6 +718,8 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     let total_pixels = pixels;
 
     let focused_id = unsafe { FOCUSED_SURFACE_ID };
+    // Top strip boundary: BAR_H = 50. Keep in sync with BAR_H constant.
+    // Rows 0..49 = SilkBar panel background, 50 = glow edge.
     for y in 0..h {
         for x in 0..w {
             let c: u32 = if y < 50 {
@@ -756,6 +764,8 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         Some(v) => v,
         None => return,
     };
+    // Top strip boundary: rows 0..50. Keep in sync with BAR_H constant.
+    // Row 50 = glow edge; rows 0..49 = SilkBar panel fill + modules.
     for y in 0..51 {
         for x in 0..w {
             let c: u32 = if y < 50 {
@@ -1464,6 +1474,9 @@ pub extern "C" fn _start() -> ! {
                             serial_println!("[sexdisplay.appearance.tokens] seq=0 buffered");
                         }
                     } else {
+                        // Unpack token preset by APPEARANCE_TOKEN_* index from silkbar-model.
+                        // Call 1 packed: [0|1] in arg0, [2|3] in arg1, [4|5] in arg2.
+                        // Call 2 packed: [6|7] in arg0, flags in arg1.
                         let focus_surface_color  = clamp_color_token(TOKEN_BUF_ARG0 as u32);
                         let frame_rim_color      = clamp_color_token((TOKEN_BUF_ARG0 >> 32) as u32);
                         let frame_top_bar_color  = clamp_color_token(TOKEN_BUF_ARG1 as u32);

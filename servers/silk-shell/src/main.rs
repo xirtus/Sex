@@ -11,7 +11,11 @@ use sex_pdx::{
     OP_SURFACE_TAB_INFO, OP_APPEARANCE_TOKENS,
     SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
 };
-use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y, PANEL_W, PANEL_H};
+use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y, PANEL_W, PANEL_H,
+    OPTION_CLOSE, OPTION_ZOOM, OPTION_MINIMIZE, OPTION_MOVE, SILKBAR_WORKSPACE_COUNT,
+    APPEARANCE_TOKEN_FOCUS_SURFACE, APPEARANCE_TOKEN_FRAME_RIM, APPEARANCE_TOKEN_FRAME_TOP_BAR,
+    APPEARANCE_TOKEN_ACTIVE_TAB, APPEARANCE_TOKEN_INACTIVE_TAB,
+    APPEARANCE_TOKEN_CLOSE_LIGHT, APPEARANCE_TOKEN_MINIMIZE_LIGHT, APPEARANCE_TOKEN_ZOOM_LIGHT};
 use silk_shell::{AppManifest, AppCapabilityBits, APP_RUNTIME_ABI_VERSION};
 
 // Local Opcodes
@@ -2448,8 +2452,9 @@ fn app_surface_spec_by_frame(frame_id: u32) -> Option<&'static AppSurfaceSpec> {
 }
 
 // ── Scene Render Token presets ────────────────────────────────────────────────
-// Fields: [focus_surface, frame_rim, frame_top_bar, active_tab,
-//          inactive_tab, close_light, minimize_light, zoom_light]
+// Fields (indexed by APPEARANCE_TOKEN_* from silkbar-model):
+//   0=focus_surface, 1=frame_rim, 2=frame_top_bar, 3=active_tab,
+//   4=inactive_tab, 5=close_light, 6=minimize_light, 7=zoom_light
 const PRESET_COUNT: usize = 4;
 type TokenPreset = [u32; 8];
 
@@ -2495,8 +2500,9 @@ static mut SCENE_APPEARANCE_STATE: SceneAppearanceState = DEFAULT_SCENE_APPEARAN
 const TINT_COUNT: usize = 5;
 type TintBundle = [u32; 8];
 
-// Slot order: [focus_surface, frame_rim, frame_top_bar, active_tab, inactive_tab,
-//              close_light, minimize_light, zoom_light]
+// Slot order (indexed by APPEARANCE_TOKEN_* from silkbar-model):
+//   focus_surface, frame_rim, frame_top_bar, active_tab, inactive_tab,
+//   close_light, minimize_light, zoom_light
 // Zero in any slot = keep preset value (handled by resolve_scene_render_tokens).
 // Semantic lights (slots 5/6/7) are zero in all tints.
 static CUSTOM_TINT_BUNDLES: [TintBundle; TINT_COUNT] = [
@@ -2525,14 +2531,15 @@ fn pack_u32_pair(lo: u32, hi: u32) -> u64 {
 
 /// Push a token preset to sexdisplay via OP_APPEARANCE_TOKENS (0xFC).
 /// Two sequential pdx_call messages; sexdisplay state machine disambiguates calls.
+/// Token indices use APPEARANCE_TOKEN_* from silkbar-model to prevent reorder drift (M7).
 unsafe fn push_token_preset(p: &TokenPreset) {
     pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
-        pack_u32_pair(p[0], p[1]),
-        pack_u32_pair(p[2], p[3]),
-        pack_u32_pair(p[4], p[5]),
+        pack_u32_pair(p[APPEARANCE_TOKEN_FOCUS_SURFACE], p[APPEARANCE_TOKEN_FRAME_RIM]),
+        pack_u32_pair(p[APPEARANCE_TOKEN_FRAME_TOP_BAR], p[APPEARANCE_TOKEN_ACTIVE_TAB]),
+        pack_u32_pair(p[APPEARANCE_TOKEN_INACTIVE_TAB], p[APPEARANCE_TOKEN_CLOSE_LIGHT]),
     );
     pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
-        pack_u32_pair(p[6], p[7]),
+        pack_u32_pair(p[APPEARANCE_TOKEN_MINIMIZE_LIGHT], p[APPEARANCE_TOKEN_ZOOM_LIGHT]),
         0u64, // appearance_flags=0, effect_levels=0
         0u64, // reserved
     );
@@ -4198,15 +4205,8 @@ struct AtlasSnapshot {
     scenes: [SceneDescriptor; ATLAS_MAX_SCENES],
 }
 
-// ── Selected Window Option Bits (model only, no action behavior in V1) ──
-/// Bit: selected frame can be closed/destroyed.
-const OPTION_CLOSE: u32 = 1;
-/// Bit: selected frame can be zoomed/maximized.
-const OPTION_ZOOM: u32 = 2;
-/// Bit: selected frame can be minimized/hidden.
-const OPTION_MINIMIZE: u32 = 4;
-/// Bit: selected frame can be moved via rim drag.
-const OPTION_MOVE: u32 = 8;
+// ── Selected Window Option Bits ────────────────────────────────────────────
+// Imported from silkbar-model: OPTION_CLOSE, OPTION_ZOOM, OPTION_MINIMIZE, OPTION_MOVE.
 
 static mut HOVERED_FRAME_ID: u32 = 0;
 static mut HOVER_KIND: u32 = HOVER_NONE;
@@ -4972,7 +4972,8 @@ unsafe fn sync_scene_visibility() {
 // They use only the existing Scene/Frame/Tab model — no new IPC, no kernel changes.
 
 /// Maximum workspace/scene count (0..WORKSPACE_COUNT-1).
-const WORKSPACE_COUNT: u8 = 5;
+/// Derived from silkbar-model::SILKBAR_WORKSPACE_COUNT.
+const WORKSPACE_COUNT: u8 = SILKBAR_WORKSPACE_COUNT as u8;
 
 // ── Atlas Capture ─────────────────────────────────────────────────────────────
 
