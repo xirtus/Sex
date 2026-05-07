@@ -3765,12 +3765,73 @@ pub extern "C" fn _start() -> ! {
                 intr_residue = ev_d2 & 0xFFFFFF;
                 let slot = (ev_d3 >> 24) & 0xFF;
                 let ep = (ev_d3 >> 16) & 0x1F;
+                // C2B: match event against device table (log only, no dispatch).
+                {
+                    for midx in 0..device_count {
+                        let d = &devices[midx];
+                        if d.active && slot == d.slot_id && ep == d.intr_dci {
+                            let kind = if d.role == HidRole::Keyboard { "keyboard" }
+                                  else if d.role == HidRole::PointerTablet { "tablet" }
+                                  else { "mouse" };
+                            unsafe {
+                                static mut DEMUX_MATCH_BUDGET: u32 = 32;
+                                let rem = &mut DEMUX_MATCH_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!(
+                                        "[sexusb.hid.demux.match] idx={} slot={} dci={} role={}",
+                                        midx, slot, ep, kind
+                                    );
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
                 if (cc == TRB_CC_SUCCESS || cc == TRB_CC_SHORT_PACKET)
                     && slot == single_bind.slot_id && ep == intr_dci
                 {
                     intr_ok = true;
                 } else {
                     serial_println!("[sexusb.xhci.intr_in.event.bad] cc={} slot={} ep={}", cc, slot, ep);
+                    // C2C: classify slot2 report without forwarding.
+                    if device_count > 1 {
+                        let d2 = &devices[1];
+                        if d2.active && slot == d2.slot_id && ep == d2.intr_dci
+                            && (cc == TRB_CC_SUCCESS || cc == TRB_CC_SHORT_PACKET)
+                        {
+                            let s2_actual = if intr_residue <= d2.intr_report_len {
+                                d2.intr_report_len - intr_residue
+                            } else {
+                                0
+                            };
+                            let s2_ptr = d2.intr_report_va as *const u8;
+                            let b0 = unsafe { core::ptr::read_volatile(s2_ptr.add(0)) };
+                            let b1 = unsafe { core::ptr::read_volatile(s2_ptr.add(1)) };
+                            let b2 = unsafe { core::ptr::read_volatile(s2_ptr.add(2)) };
+                            unsafe {
+                                static mut SLOT2_RAW_BUDGET: u32 = 16;
+                                let rem = &mut SLOT2_RAW_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!(
+                                        "[sexusb.slot2.report.raw] b0={:#x} b1={:#x} b2={:#x} len={}",
+                                        b0, b1, b2, s2_actual
+                                    );
+                                }
+                            }
+                            if b0 == 0 && b1 == 0 && b2 == 0 {
+                                unsafe {
+                                    static mut SLOT2_IDLE_BUDGET: u32 = 16;
+                                    let rem = &mut SLOT2_IDLE_BUDGET;
+                                    if *rem > 0 {
+                                        *rem -= 1;
+                                        serial_println!("[sexusb.slot2.report.idle] len={}", s2_actual);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
                 ev_idx += 1;
