@@ -1,4 +1,5 @@
 use crate::pdx::{pdx_listen_raw, pdx_reply, serial_println};
+use crate::messages;
 use crate::vfs;
 
 #[no_mangle]
@@ -61,8 +62,13 @@ pub extern "C" fn trampoline_main() {
         crate::proof::run_sexfiles_checkpoint_proofs();
     }
     const DISKFS_MULTI_OBJECT_PROOF_ENABLED: bool = cfg!(sexfiles_diskfs_multi_object_proof);
+    const SEXFILES_ROUTE_AUDIT_ONLY: bool = option_env!("SEXFILES_ROUTE_AUDIT_ONLY").is_some();
     if DISKFS_MULTI_OBJECT_PROOF_ENABLED {
-        crate::proof::run_diskfs_multi_object_proofs();
+        if SEXFILES_ROUTE_AUDIT_ONLY {
+            serial_println!("[sexfiles.disk.multi.skip] reason=route_audit");
+        } else {
+            crate::proof::run_diskfs_multi_object_proofs();
+        }
     }
 
     const SEXOBJECT_VIEW_PROOF_ENABLED: bool =
@@ -80,15 +86,36 @@ pub extern "C" fn trampoline_main() {
     serial_println!("[sexfiles.ready]");
 
     loop {
+        static mut SEXFILES_TRAMP_LISTEN_BUDGET: u32 = 8;
+        unsafe {
+            if SEXFILES_TRAMP_LISTEN_BUDGET > 0 {
+                SEXFILES_TRAMP_LISTEN_BUDGET -= 1;
+                serial_println!("[sexfiles.trampoline.listen.enter]");
+            }
+        }
         // Listen on slot 0 (self message ring — all servers use this pattern).
         let msg = pdx_listen_raw(0);
         let caller = msg.caller_pd;
+        serial_println!(
+            "[sexfiles.trampoline.after_listen] type={:#x} caller={} a0={:#x} a1={:#x}",
+            msg.type_id, caller, msg.arg0, msg.arg1
+        );
+        serial_println!(
+            "[sexfiles.route.recv] type={:#x} caller={} a0={:#x} a1={:#x}",
+            msg.type_id, caller, msg.arg0, msg.arg1
+        );
 
         // Route message type_id to VFS handler, passing caller PD for namespace/cap check
         let reply = vfs::handle_vfs_message(msg.type_id, msg.arg0, msg.arg1, msg.arg2, caller);
 
         // If type_id was 0 (empty/spurious), skip reply
         if msg.type_id != 0 {
+            if msg.type_id == messages::OP_DISKFS_READ {
+                serial_println!(
+                    "[sexfiles.bridge.diskfs.read.reply.sent] caller={} value={:#x}",
+                    caller, reply
+                );
+            }
             pdx_reply(caller, reply);
         }
     }

@@ -205,10 +205,10 @@ fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64) -> u64 {
     }
 }
 
-fn handle_diskfs_read(byte_offset: u64, max_len: u64) -> u64 {
+fn handle_diskfs_read(byte_offset: u64, max_len: u64, caller_pd: u32) -> u64 {
     crate::pdx::serial_println!(
-        "[sexfiles.bridge.diskfs.recv] op=0x39 offset={} max_len={}",
-        byte_offset, max_len
+        "[sexfiles.bridge.diskfs.read.recv] caller={} off={} len={}",
+        caller_pd, byte_offset, max_len
     );
 
     if max_len == 0 || max_len > messages::DISKFS_MAX_READ as u64 {
@@ -280,15 +280,15 @@ fn handle_diskfs_read(byte_offset: u64, max_len: u64) -> u64 {
                 i += 1;
             }
             crate::pdx::serial_println!(
-                "[sexfiles.bridge.diskfs.read.ok] offset={} read={}",
-                byte_offset, n
+                "[sexfiles.bridge.diskfs.read.reply] caller={} value={:#x} off={} read={}",
+                caller_pd, reply, byte_offset, n
             );
             reply
         }
         Err(e) => {
             crate::pdx::serial_println!(
-                "[sexfiles.bridge.diskfs.read.err] offset={} code={}",
-                byte_offset, e
+                "[sexfiles.bridge.diskfs.read.err] caller={} err={} off={}",
+                caller_pd, e, byte_offset
             );
             e
         }
@@ -355,6 +355,10 @@ fn handle_diskfs_manifest_hash() -> u64 {
 /// Called from the trampoline message loop.
 /// `caller_pd` is the PD of the requesting process (from PDX message).
 pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_pd: u32) -> u64 {
+    crate::pdx::serial_println!(
+        "[sexfiles.vfs.enter] type={:#x} caller={} a0={:#x} a1={:#x}",
+        type_id, caller_pd, arg0, arg1
+    );
     IPC_OPS_TOTAL.fetch_add(1, Ordering::Relaxed);
 
     // All operations currently route to RamFS.
@@ -500,24 +504,42 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
         // Fixed-object bridge: /disk/sexfiles-proof-v1
         messages::OP_DISKFS_WRITE => {
             // arg0 = byte_offset, arg1 = data_lo, arg2 = data_hi
-            handle_diskfs_write(arg0, arg1, arg2)
+            crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x38 name=write caller={}", caller_pd);
+            let reply = handle_diskfs_write(arg0, arg1, arg2);
+            crate::pdx::serial_println!("[sexfiles.route.reply] op=0x38 caller={} value={:#x}", caller_pd, reply);
+            reply
         }
         messages::OP_DISKFS_READ => {
             // arg0 = byte_offset, arg1 = max_len, arg2 = 0 (reserved)
-            handle_diskfs_read(arg0, arg1)
+            crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x39 name=read caller={}", caller_pd);
+            let reply = handle_diskfs_read(arg0, arg1, caller_pd);
+            crate::pdx::serial_println!("[sexfiles.route.reply] op=0x39 caller={} value={:#x}", caller_pd, reply);
+            reply
         }
         messages::OP_DISKFS_FLUSH => {
-            handle_diskfs_flush()
+            crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x3A name=flush caller={}", caller_pd);
+            let reply = handle_diskfs_flush();
+            crate::pdx::serial_println!("[sexfiles.route.reply] op=0x3A caller={} value={:#x}", caller_pd, reply);
+            reply
         }
         messages::OP_DISKFS_STAT => {
-            handle_diskfs_stat()
+            crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x3B name=stat caller={}", caller_pd);
+            let reply = handle_diskfs_stat();
+            crate::pdx::serial_println!("[sexfiles.route.reply] op=0x3B caller={} value={:#x}", caller_pd, reply);
+            reply
         }
         messages::OP_DISKFS_MANIFEST_HASH => {
-            handle_diskfs_manifest_hash()
+            crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x3C name=hash caller={}", caller_pd);
+            let reply = handle_diskfs_manifest_hash();
+            crate::pdx::serial_println!("[sexfiles.route.reply] op=0x3C caller={} value={:#x}", caller_pd, reply);
+            reply
         }
         messages::OP_DISKFS_SELECT => {
             // arg0 = path_id, arg1/arg2 = 0 (reserved)
-            handle_diskfs_select(arg0)
+            crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x3E name=select caller={}", caller_pd);
+            let reply = handle_diskfs_select(arg0);
+            crate::pdx::serial_println!("[sexfiles.route.reply] op=0x3E caller={} value={:#x}", caller_pd, reply);
+            reply
         }
 
         _ => messages::ERR_NOT_FOUND as u64,

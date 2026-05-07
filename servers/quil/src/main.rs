@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::alloc::{GlobalAlloc, Layout};
-use sex_pdx::{pdx_call, pdx_listen_raw, serial_println, OP_QUIL_PING, OP_TEXT_DRAW, OP_TEXT_CLEAR, SLOT_DISPLAY, SLOT_STORAGE};
+use sex_pdx::{pdx_call, pdx_listen_raw, sched_yield, serial_println, OP_QUIL_PING, OP_TEXT_DRAW, OP_TEXT_CLEAR, SLOT_DISPLAY, SLOT_STORAGE};
 
 struct DummyAllocator;
 unsafe impl GlobalAlloc for DummyAllocator {
@@ -59,6 +59,15 @@ const OP_RAMFS_READ: u64 = 0x31;
 const OP_RAMFS_CLOSE: u64 = 0x33;
 const RAMFS_O_CREATE: u32 = 0x01;
 const STORAGE_CAP_PROOF_ENABLED: bool = option_env!("SEXOS_STORAGE_CAP_PROOF").is_some();
+const QUIL_DISKFS_SLOT_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_DISKFS_SLOT_PROOF").is_some();
+
+const OP_DISKFS_WRITE: u64 = 0x38;
+const OP_DISKFS_READ: u64 = 0x39;
+const OP_DISKFS_STAT: u64 = 0x3B;
+const OP_DISKFS_SELECT: u64 = 0x3E;
+const QUIL_DISKFS_PATH_ID: u64 = 2;
+const QUIL_DISKFS_EXPECT_SIZE: u64 = 4096;
+const QUIL_DISKFS_EXPECT_FLAGS: u64 = 0x3;
 
 /// Fixed document name (fits RamFS 24-byte bound).
 const QUIL_DOC_NAME: &[u8] = b"quil_doc_01";
@@ -480,6 +489,100 @@ fn pdx_storage_call(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64,
     Ok(value)
 }
 
+fn run_quil_diskfs_slot_min_proof() {
+    serial_println!("[quil.diskfs.slot.min.begin]");
+
+    // Bounded readiness wait: cooperative yield only.
+    // Matches Linen pattern — lets SexFiles boot and initialize NVMe/DiskFS.
+    let mut ready_n: u64 = 0;
+    while ready_n < 64 {
+        sched_yield();
+        ready_n += 1;
+    }
+
+    // SELECT path_id=2 (/disk/quil-object-v1)
+    match pdx_storage_call(OP_DISKFS_SELECT, QUIL_DISKFS_PATH_ID, 0, 0) {
+        Ok(_) => serial_println!("[quil.diskfs.slot.min.select.ok] path_id=2"),
+        Err(e) => {
+            serial_println!("[quil.diskfs.slot.min.select.err] err={}", e);
+            serial_println!("[quil.diskfs.slot.min.done] ok=0");
+            return;
+        }
+    }
+
+    // STAT selected object
+    match pdx_storage_call(OP_DISKFS_STAT, 0, 0, 0) {
+        Ok(_) => serial_println!(
+            "[quil.diskfs.slot.min.stat.ok] size={} flags={:#x}",
+            QUIL_DISKFS_EXPECT_SIZE,
+            QUIL_DISKFS_EXPECT_FLAGS
+        ),
+        Err(e) => {
+            serial_println!("[quil.diskfs.slot.min.stat.err] err={}", e);
+            serial_println!("[quil.diskfs.slot.min.done] ok=0");
+            return;
+        }
+    }
+
+    // Deterministic 16B payload
+    let mut payload: [u8; 16] = [0u8; 16];
+    payload[0..15].copy_from_slice(b"QUIL-SLOT-V1!!\0");
+    payload[15] = 0x02;
+    let mut lo: u64 = 0;
+    let mut hi: u64 = 0;
+    for i in 0..8 { lo |= (payload[i] as u64) << (i * 8); }
+    for i in 8..16 { hi |= (payload[i] as u64) << ((i - 8) * 8); }
+
+    // WRITE 1x16B
+    match pdx_storage_call(OP_DISKFS_WRITE, 0, lo, hi) {
+        Ok(written) if written > 0 => serial_println!("[quil.diskfs.slot.min.write.ok] size=16"),
+        Ok(written) => {
+            serial_println!("[quil.diskfs.slot.min.write.err] err={}", written as i64);
+            serial_println!("[quil.diskfs.slot.min.done] ok=0");
+            return;
+        }
+        Err(e) => {
+            serial_println!("[quil.diskfs.slot.min.write.err] err={}", e);
+            serial_println!("[quil.diskfs.slot.min.done] ok=0");
+            return;
+        }
+    }
+
+    // READ 2x8B through reply path
+    let mut readback: [u8; 16] = [0u8; 16];
+    for chunk in 0..2u64 {
+        let off = chunk * 8;
+        match pdx_storage_call(OP_DISKFS_READ, off, 8, 0) {
+            Ok(word) => {
+                let bytes = word.to_le_bytes();
+                for i in 0..8 {
+                    readback[(off as usize) + i] = bytes[i];
+                }
+            }
+            Err(e) => {
+                serial_println!("[quil.diskfs.slot.min.read.err] err={}", e);
+                serial_println!("[quil.diskfs.slot.min.done] ok=0");
+                return;
+            }
+        }
+    }
+    serial_println!("[quil.diskfs.slot.min.read.ok] size=16");
+
+    // Match
+    for i in 0..16 {
+        if readback[i] != payload[i] {
+            serial_println!(
+                "[quil.diskfs.slot.min.match] ok=0 first_bad={} got={:#x} expected={:#x}",
+                i, readback[i], payload[i]
+            );
+            serial_println!("[quil.diskfs.slot.min.done] ok=0");
+            return;
+        }
+    }
+    serial_println!("[quil.diskfs.slot.min.match] ok=1");
+    serial_println!("[quil.diskfs.slot.min.done] ok=1");
+}
+
 // ── RamFS Save/Load Helpers ──────────────────────────────────────────────────
 //
 // All operations use pdx_storage_call (synchronous wrapper around SLOT_STORAGE).
@@ -680,6 +783,9 @@ pub extern "C" fn _start() -> ! {
     let mut selected_row: u8 = 0;
     draw_palette(selected_row);
     serial_println!("[quil.boot.draw.ok]");
+    if QUIL_DISKFS_SLOT_PROOF_ENABLED {
+        run_quil_diskfs_slot_min_proof();
+    }
 
     // ── Boot-time sexfiles persistence proof ──────────────────────────────
     // SEXFILES_QUIL_REBOOT_PERSISTENCE_PROOF_V1
