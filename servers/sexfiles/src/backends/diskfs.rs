@@ -37,6 +37,21 @@ pub const DISKFS_MANIFEST_FLAG_READ: u16 = 0x1;
 pub const DISKFS_MANIFEST_FLAG_WRITE: u16 = 0x2;
 pub const DISKFS_MANIFEST_OBJECT_PATH: &[u8] = b"/disk/sexfiles-proof-v1";
 
+// ── DiskFS V2 multi-object manifest constants ────────────────────────────────
+// SEXFILES_DISK_MULTI_OBJECT_MANIFEST_PLAN_V1: 3 reserved slots.
+// path_id 0 → /disk/sexfiles-proof-v1 (existing, LBA 2038-2045)
+// path_id 1 → /disk/linen-object-v1    (LBA 2030-2037)
+// path_id 2 → /disk/quil-object-v1     (LBA 2022-2029)
+pub const DISKFS_V2_ENTRY_COUNT: u16 = 3;
+pub const DISKFS_OBJECT_PATH_SEXFILES: &[u8] = b"/disk/sexfiles-proof-v1";
+pub const DISKFS_OBJECT_PATH_LINEN:    &[u8] = b"/disk/linen-object-v1";
+pub const DISKFS_OBJECT_PATH_QUIL:     &[u8] = b"/disk/quil-object-v1";
+pub const DISKFS_OBJECT_SLOT_LINEN_LBA: u64 = 2030;
+pub const DISKFS_OBJECT_SLOT_QUIL_LBA:  u64 = 2022;
+pub const DISKFS_OBJECT_SLOT_SECTORS:   u64 = 8;
+pub const DISKFS_OBJECT_SLOT_SIZE:      u32 = 4096;
+pub const DISKFS_V2_MANIFEST_VERSION:   u16 = 2;
+
 #[derive(Clone, Copy)]
 pub struct DiskManifestEntryV1 {
     pub name_hash: u64,
@@ -1913,27 +1928,139 @@ impl DiskFs {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    //  File-like operations over the fixed manifest entry.
-    //  Minimal path→LBA resolution with byte-range read/write.
+    //  DiskFS V2 multi-object manifest — build, parse, path_id lookup.
     //  No directory tree, no allocator, no POSIX semantics.
-    //
-    //  All methods accept a pre-granted buf_va (MemLend buffer VA) to avoid
-    //  re-granting through the same slot. The caller grants once and reuses.
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// [sexfiles.disk.file.lookup] — Resolve a named path to its manifest entry.
-    /// Uses the caller-provided buf_va for the read operation.
-    pub fn diskfs_lookup_path(path: &[u8], buf_va: u64) -> Result<DiskManifestEntryV1, u64> {
-        let arg_hash = Self::proof_manifest_name_hash(path);
-        let expected_hash = Self::proof_manifest_name_hash(DISKFS_MANIFEST_OBJECT_PATH);
-        if arg_hash != expected_hash {
-            serial_println!(
-                "[sexfiles.disk.file.lookup.err] reason=unknown_path arg_hash={:#x}",
-                arg_hash
-            );
-            return Err(messages::ERR_NOT_FOUND as u64);
+    /// Build a V2 3-entry manifest sector.
+    /// Slots: 0=sexfiles-proof-v1, 1=linen-object-v1, 2=quil-object-v1.
+    pub fn proof_manifest_build_v2_entries_sector() -> [u8; 512] {
+        let mut sector = [0u8; 512];
+        let entries = [
+            DiskManifestEntryV1 {
+                name_hash: Self::proof_manifest_name_hash(DISKFS_OBJECT_PATH_SEXFILES),
+                start_lba: DISKFS_PROOF_OBJECT_START_LBA,
+                len_bytes: DISKFS_OBJECT_SLOT_SIZE,
+                flags: DISKFS_MANIFEST_FLAG_READ | DISKFS_MANIFEST_FLAG_WRITE,
+            },
+            DiskManifestEntryV1 {
+                name_hash: Self::proof_manifest_name_hash(DISKFS_OBJECT_PATH_LINEN),
+                start_lba: DISKFS_OBJECT_SLOT_LINEN_LBA,
+                len_bytes: DISKFS_OBJECT_SLOT_SIZE,
+                flags: DISKFS_MANIFEST_FLAG_READ | DISKFS_MANIFEST_FLAG_WRITE,
+            },
+            DiskManifestEntryV1 {
+                name_hash: Self::proof_manifest_name_hash(DISKFS_OBJECT_PATH_QUIL),
+                start_lba: DISKFS_OBJECT_SLOT_QUIL_LBA,
+                len_bytes: DISKFS_OBJECT_SLOT_SIZE,
+                flags: DISKFS_MANIFEST_FLAG_READ | DISKFS_MANIFEST_FLAG_WRITE,
+            },
+        ];
+
+        sector[0..8].copy_from_slice(&DISKFS_MANIFEST_MAGIC.to_le_bytes());
+        sector[8..10].copy_from_slice(&DISKFS_V2_MANIFEST_VERSION.to_le_bytes());
+        sector[10..12].copy_from_slice(&DISKFS_V2_ENTRY_COUNT.to_le_bytes());
+        sector[12..16].copy_from_slice(&(0u32).to_le_bytes()); // header flags
+        sector[16..24].copy_from_slice(&(0u64).to_le_bytes()); // reserved0
+        sector[24..28].copy_from_slice(&(0u32).to_le_bytes()); // header crc32
+        sector[28..32].copy_from_slice(&(0u32).to_le_bytes()); // reserved1
+
+        for ei in 0..3usize {
+            let off = 32 + ei * 32;
+            let e = &entries[ei];
+            sector[off..off + 8].copy_from_slice(&e.name_hash.to_le_bytes());
+            sector[off + 8..off + 16].copy_from_slice(&e.start_lba.to_le_bytes());
+            sector[off + 16..off + 20].copy_from_slice(&e.len_bytes.to_le_bytes());
+            sector[off + 20..off + 22].copy_from_slice(&e.flags.to_le_bytes());
+            sector[off + 22..off + 24].copy_from_slice(&(0u16).to_le_bytes());
+            sector[off + 24..off + 28].copy_from_slice(&(0u32).to_le_bytes()); // crc32
+            sector[off + 28..off + 32].copy_from_slice(&(0u32).to_le_bytes());
         }
-        // Clear buffer.
+        sector
+    }
+
+    /// Parse a V2 multi-entry manifest sector. Returns up to `expected_count` entries.
+    /// V2 version is validated; single-entry V1 manifests are rejected here
+    /// (handled by upgrade path in diskfs_ensure_manifest_v2).
+    pub fn proof_manifest_parse_v2_entries(
+        sector: &[u8; 512],
+    ) -> Result<([DiskManifestEntryV1; 3], u16), u64> {
+        let mut tmp8 = [0u8; 8];
+        let mut tmp4 = [0u8; 4];
+        let mut tmp2 = [0u8; 2];
+
+        tmp8.copy_from_slice(&sector[0..8]);
+        let magic = u64::from_le_bytes(tmp8);
+        if magic != DISKFS_MANIFEST_MAGIC {
+            return Err(messages::ERR_PERM_DENIED as u64);
+        }
+        tmp2.copy_from_slice(&sector[8..10]);
+        let version = u16::from_le_bytes(tmp2);
+        // Accept V2+ (V1 must be upgraded first)
+        if version < DISKFS_V2_MANIFEST_VERSION {
+            return Err(messages::ERR_PERM_DENIED as u64);
+        }
+        tmp2.copy_from_slice(&sector[10..12]);
+        let entry_count = u16::from_le_bytes(tmp2);
+        if entry_count < DISKFS_V2_ENTRY_COUNT || entry_count > DISKFS_MANIFEST_ENTRY_MAX {
+            return Err(messages::ERR_OVERFLOW as u64);
+        }
+
+        let defaults = DiskManifestEntryV1 {
+            name_hash: 0, start_lba: 0, len_bytes: 0, flags: 0,
+        };
+        let mut entries: [DiskManifestEntryV1; 3] = [defaults; 3];
+
+        for ei in 0..3usize {
+            let off = 32 + ei * 32;
+            if off + 32 > 512 {
+                return Err(messages::ERR_OVERFLOW as u64);
+            }
+            tmp8.copy_from_slice(&sector[off..off + 8]);
+            let name_hash = u64::from_le_bytes(tmp8);
+            tmp8.copy_from_slice(&sector[off + 8..off + 16]);
+            let start_lba = u64::from_le_bytes(tmp8);
+            tmp4.copy_from_slice(&sector[off + 16..off + 20]);
+            let len_bytes = u32::from_le_bytes(tmp4);
+            tmp2.copy_from_slice(&sector[off + 20..off + 22]);
+            let flags = u16::from_le_bytes(tmp2);
+
+            // Validate entry.
+            if len_bytes == 0 || len_bytes > (DISKFS_OBJECT_SLOT_SECTORS * BLOCK_SECTOR_SIZE) as u32 {
+                return Err(BLOCK_ERR_BAD_LEN);
+            }
+            let sectors =
+                (len_bytes as u64 + (BLOCK_SECTOR_SIZE - 1)) / BLOCK_SECTOR_SIZE;
+            if sectors == 0 {
+                return Err(BLOCK_ERR_BAD_LEN);
+            }
+            let end_lba = start_lba.saturating_add(sectors.saturating_sub(1));
+            if start_lba <= DISKFS_MANIFEST_LBA && end_lba >= DISKFS_MANIFEST_LBA {
+                return Err(messages::ERR_OVERFLOW as u64);
+            }
+            if start_lba <= DISKFS_WRITE_PROOF_LBA && end_lba >= DISKFS_WRITE_PROOF_LBA {
+                return Err(messages::ERR_OVERFLOW as u64);
+            }
+
+            entries[ei] = DiskManifestEntryV1 {
+                name_hash, start_lba, len_bytes, flags,
+            };
+        }
+        Ok((entries, entry_count))
+    }
+
+    /// Resolve path_id to the matching V2 manifest entry.
+    /// path_id 0=sexfiles-proof, 1=linen-object, 2=quil-object.
+    /// Reads manifest from LBA 2046 via buf_va. Validates all entries.
+    pub fn diskfs_lookup_by_path_id(
+        path_id: u64,
+        buf_va: u64,
+    ) -> Result<DiskManifestEntryV1, u64> {
+        if path_id >= DISKFS_V2_ENTRY_COUNT as u64 {
+            return Err(messages::ERR_BAD_CMD as u64);
+        }
+
+        // Read manifest sector.
         unsafe {
             let p = buf_va as *mut u8;
             let mut i = 0usize;
@@ -1961,21 +2088,109 @@ impl DiskFs {
                 i += 1;
             }
         }
-        let entry = match Self::proof_manifest_parse_single_entry(&sector) {
+
+        let (entries, _count) = match Self::proof_manifest_parse_v2_entries(&sector) {
             Ok(e) => e,
             Err(e) => {
                 serial_println!(
-                    "[sexfiles.disk.file.lookup.err] reason=manifest_parse code={}",
+                    "[sexfiles.disk.file.lookup.err] reason=v2_manifest_parse code={}",
                     e
                 );
                 return Err(messages::ERR_NOT_FOUND as u64);
             }
         };
+
+        let entry = entries[path_id as usize];
+        // Verify name hash matches expected for this path_id.
+        let expected_path = match path_id {
+            0 => DISKFS_OBJECT_PATH_SEXFILES,
+            1 => DISKFS_OBJECT_PATH_LINEN,
+            2 => DISKFS_OBJECT_PATH_QUIL,
+            _ => return Err(messages::ERR_BAD_CMD as u64),
+        };
+        let expected_hash = Self::proof_manifest_name_hash(expected_path);
+        if entry.name_hash != expected_hash {
+            serial_println!(
+                "[sexfiles.disk.file.lookup.err] reason=hash_mismatch path_id={} expected={:#x} got={:#x}",
+                path_id, expected_hash, entry.name_hash
+            );
+            return Err(messages::ERR_PERM_DENIED as u64);
+        }
+
+        serial_println!(
+            "[sexfiles.disk.file.lookup.ok] path_id={} start_lba={} len={} flags={:#x}",
+            path_id, entry.start_lba, entry.len_bytes, entry.flags
+        );
+        Ok(entry)
+    }
+
+    /// Return the path bytes for a given path_id.
+    pub fn diskfs_path_for_id(path_id: u64) -> Result<&'static [u8], u64> {
+        match path_id {
+            0 => Ok(DISKFS_OBJECT_PATH_SEXFILES),
+            1 => Ok(DISKFS_OBJECT_PATH_LINEN),
+            2 => Ok(DISKFS_OBJECT_PATH_QUIL),
+            _ => Err(messages::ERR_BAD_CMD as u64),
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  File-like operations over the fixed manifest entry.
+    //  Minimal path→LBA resolution with byte-range read/write.
+    //  No directory tree, no allocator, no POSIX semantics.
+    //
+    //  All methods accept a pre-granted buf_va (MemLend buffer VA) to avoid
+    //  re-granting through the same slot. The caller grants once and reuses.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// [sexfiles.disk.file.lookup] — Resolve a named path to its manifest entry.
+    /// Uses the caller-provided buf_va for the read operation.
+    pub fn diskfs_lookup_path(path: &[u8], buf_va: u64) -> Result<DiskManifestEntryV1, u64> {
+        let arg_hash = Self::proof_manifest_name_hash(path);
+        // Clear buffer.
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), 0u8);
+                i += 1;
+            }
+        }
+        let status = Self::diskfs_block_read(
+            DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if status != 0 {
+            serial_println!("[sexfiles.disk.file.lookup.err] reason=manifest_read code={}", status);
+            return Err(messages::ERR_NOT_FOUND as u64);
+        }
+        let mut sector = [0u8; 512];
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 512 { sector[i] = core::ptr::read_volatile(p.add(i)); i += 1; }
+        }
+        // Try V2 parse first (multi-entry, version >= 2).
+        if let Ok((entries, _count)) = Self::proof_manifest_parse_v2_entries(&sector) {
+            for ei in 0..DISKFS_V2_ENTRY_COUNT as usize {
+                if entries[ei].name_hash == arg_hash && entries[ei].len_bytes > 0 {
+                    serial_println!("[sexfiles.disk.file.lookup.ok] start_lba={} len={} flags={:#x}", entries[ei].start_lba, entries[ei].len_bytes, entries[ei].flags);
+                    return Ok(entries[ei]);
+                }
+            }
+            return Err(messages::ERR_NOT_FOUND as u64);
+        }
+        // Fallback: V1 single-entry parse.
+        let expected_hash = Self::proof_manifest_name_hash(DISKFS_MANIFEST_OBJECT_PATH);
+        if arg_hash != expected_hash {
+            return Err(messages::ERR_NOT_FOUND as u64);
+        }
+        let entry = match Self::proof_manifest_parse_single_entry(&sector) {
+            Ok(e) => e,
+            Err(e) => { return Err(messages::ERR_NOT_FOUND as u64); }
+        };
         serial_println!(
             "[sexfiles.disk.file.lookup.ok] start_lba={} len={} flags={:#x}",
-            entry.start_lba,
-            entry.len_bytes,
-            entry.flags
+            entry.start_lba, entry.len_bytes, entry.flags
         );
         Ok(entry)
     }
@@ -2018,7 +2233,7 @@ impl DiskFs {
         }
 
         let max_lba =
-            DISKFS_PROOF_OBJECT_START_LBA + (end.saturating_sub(1)) / BLOCK_SECTOR_SIZE;
+            entry.start_lba + (end.saturating_sub(1)) / BLOCK_SECTOR_SIZE;
         if max_lba >= DISKFS_WRITE_PROOF_LBA {
             serial_println!(
                 "[sexfiles.disk.file.bounds.err] reason=lba_collision max_lba={}",
@@ -2032,7 +2247,7 @@ impl DiskFs {
         let mut written: u64 = 0;
 
         while data_off < data.len() {
-            let lba = DISKFS_PROOF_OBJECT_START_LBA + byte_off / BLOCK_SECTOR_SIZE;
+            let lba = entry.start_lba + byte_off / BLOCK_SECTOR_SIZE;
             let sector_off = (byte_off % BLOCK_SECTOR_SIZE) as usize;
             let space = (BLOCK_SECTOR_SIZE as usize).saturating_sub(sector_off);
             let chunk = (data.len() - data_off).min(space);
@@ -2136,7 +2351,7 @@ impl DiskFs {
         let mut total_read: u64 = 0;
 
         while out_off < out.len() {
-            let lba = DISKFS_PROOF_OBJECT_START_LBA + byte_off / BLOCK_SECTOR_SIZE;
+            let lba = entry.start_lba + byte_off / BLOCK_SECTOR_SIZE;
             let sector_off = (byte_off % BLOCK_SECTOR_SIZE) as usize;
             let space = (BLOCK_SECTOR_SIZE as usize).saturating_sub(sector_off);
             let chunk = (out.len() - out_off).min(space);
@@ -2215,55 +2430,31 @@ impl DiskFs {
         serial_println!("[sexfiles.bridge.diskfs.manifest.ensure.begin]");
 
         // ── Step 1: Read LBA 2046 ──
-        unsafe {
-            let p = buf_va as *mut u8;
-            let mut i = 0usize;
-            while i < 512 {
-                core::ptr::write_volatile(p.add(i), 0u8);
-                i += 1;
-            }
-        }
-        let status = Self::diskfs_block_read(
-            DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
-        );
+        unsafe { let p = buf_va as *mut u8; for i in 0..512 { core::ptr::write_volatile(p.add(i), 0u8); } }
+        let status = Self::diskfs_block_read(DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
         if status != 0 {
-            serial_println!(
-                "[sexfiles.bridge.diskfs.manifest.ensure.err] reason=read_failed status={}",
-                status
-            );
-            // Read failed — attempt bootstrap write anyway.
+            serial_println!("[sexfiles.bridge.diskfs.manifest.ensure.err] reason=read_failed status={}", status);
         }
-
-        // ── Step 2: Try to parse the manifest ──
         let mut sector = [0u8; 512];
-        unsafe {
-            let p = buf_va as *const u8;
-            let mut i = 0usize;
-            while i < 512 {
-                sector[i] = core::ptr::read_volatile(p.add(i));
-                i += 1;
-            }
-        }
+        unsafe { let p = buf_va as *const u8; for i in 0..512 { sector[i] = core::ptr::read_volatile(p.add(i)); } }
 
-        match Self::proof_manifest_parse_single_entry(&sector) {
-            Ok(entry) => {
-                // Manifest already valid.
-                serial_println!(
-                    "[sexfiles.bridge.diskfs.manifest.ensure.valid] hash={:#x} start_lba={} len={}",
-                    entry.name_hash, entry.start_lba, entry.len_bytes
-                );
-                return Ok(());
-            }
-            Err(_) => {
-                // Manifest invalid or not present — bootstrap.
-                serial_println!(
-                    "[sexfiles.bridge.diskfs.manifest.ensure.bootstrap] reason=invalid_or_missing"
-                );
-            }
+        // ── Step 2: Try V2 parse first ──
+        if let Ok((_entries, _count)) = Self::proof_manifest_parse_v2_entries(&sector) {
+            serial_println!("[sexfiles.disk.manifest.v2.valid] entries=3");
+            return Ok(());
         }
-
-        // ── Step 3: Build and write the known manifest ──
-        let manifest_sector = Self::proof_manifest_build_single_entry_sector();
+        // Try V1 parse — if valid, upgrade to V2.
+        if Self::proof_manifest_parse_single_entry(&sector).is_ok() {
+            serial_println!("[sexfiles.disk.manifest.v2.upgrade] from_version=1 entries=3");
+            let v2_sector = Self::proof_manifest_build_v2_entries_sector();
+            unsafe { let p = buf_va as *mut u8; for i in 0..512 { core::ptr::write_volatile(p.add(i), v2_sector[i]); } }
+            let ws = Self::diskfs_block_write(DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+            if ws != 0 { serial_println!("[sexfiles.disk.manifest.v2.err] reason=upgrade_write_failed status={}", ws); return Err(ws); }
+            return Ok(());
+        }
+        // ── Step 3: Bootstrap V2 from scratch ──
+        serial_println!("[sexfiles.disk.manifest.v2.bootstrap] reason=invalid_or_missing entries=3");
+        let manifest_sector = Self::proof_manifest_build_v2_entries_sector();
         unsafe {
             let p = buf_va as *mut u8;
             let mut i = 0usize;
@@ -2322,6 +2513,132 @@ impl DiskFs {
             Err(e) => {
                 serial_println!(
                     "[sexfiles.bridge.diskfs.manifest.ensure.err] reason=verify_parse_failed code={}",
+                    e
+                );
+                Err(e)
+            }
+        }
+    }
+
+    /// Ensure the V2 multi-entry manifest exists on NVMe.
+    /// If a valid V2 manifest is found, returns Ok — data intact.
+    /// If a V1 manifest is found, performs V1→V2 upgrade (metadata only, no data touched).
+    /// If invalid/missing, bootstraps V2 directly.
+    /// Writes the 3-entry V2 manifest to LBA 2046. Never touches LBA 2047.
+    pub fn diskfs_ensure_manifest_v2(buf_va: u64) -> Result<(), u64> {
+        serial_println!("[sexfiles.disk.manifest.v2.ensure.begin]");
+
+        // ── Step 1: Read current manifest sector ──
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), 0u8);
+                i += 1;
+            }
+        }
+        let status = Self::diskfs_block_read(
+            DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if status != 0 {
+            serial_println!(
+                "[sexfiles.disk.manifest.v2.err] reason=read_failed status={}",
+                status
+            );
+        }
+
+        let mut sector = [0u8; 512];
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 512 {
+                sector[i] = core::ptr::read_volatile(p.add(i));
+                i += 1;
+            }
+        }
+
+        // ── Step 2: Determine current manifest state ──
+        // Try V2 parse first.
+        let v2_valid = Self::proof_manifest_parse_v2_entries(&sector).is_ok();
+
+        if v2_valid {
+            serial_println!("[sexfiles.disk.manifest.v2.valid] entries=3");
+            return Ok(());
+        }
+
+        // Try V1 parse — if valid V1, upgrade (no data touched).
+        let v1_valid = Self::proof_manifest_parse_single_entry(&sector).is_ok();
+
+        if v1_valid {
+            serial_println!(
+                "[sexfiles.disk.manifest.v2.upgrade] from_version=1 entries=3"
+            );
+        } else {
+            serial_println!(
+                "[sexfiles.disk.manifest.v2.bootstrap] entries=3"
+            );
+        }
+
+        // ── Step 3: Write V2 manifest ──
+        let v2_sector = Self::proof_manifest_build_v2_entries_sector();
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), v2_sector[i]);
+                i += 1;
+            }
+        }
+        let write_status = Self::diskfs_block_write(
+            DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if write_status != 0 {
+            serial_println!(
+                "[sexfiles.disk.manifest.v2.err] reason=write_failed status={}",
+                write_status
+            );
+            return Err(write_status);
+        }
+
+        // ── Step 4: Verify ──
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), 0u8);
+                i += 1;
+            }
+        }
+        let verify_status = Self::diskfs_block_read(
+            DISKFS_MANIFEST_LBA * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if verify_status != 0 {
+            serial_println!(
+                "[sexfiles.disk.manifest.v2.err] reason=verify_read_failed status={}",
+                verify_status
+            );
+            return Err(verify_status);
+        }
+        let mut verify_sector = [0u8; 512];
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 512 {
+                verify_sector[i] = core::ptr::read_volatile(p.add(i));
+                i += 1;
+            }
+        }
+        match Self::proof_manifest_parse_v2_entries(&verify_sector) {
+            Ok((_, count)) => {
+                serial_println!(
+                    "[sexfiles.disk.manifest.v2.ok] entries={}",
+                    count
+                );
+                Ok(())
+            }
+            Err(e) => {
+                serial_println!(
+                    "[sexfiles.disk.manifest.v2.err] reason=verify_parse_failed code={}",
                     e
                 );
                 Err(e)

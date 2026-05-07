@@ -22,6 +22,14 @@ static DISKFS_BRIDGE_BUF_VA: AtomicU64 = AtomicU64::new(0);
 /// Avoids redundant NVMe manifest reads on every bridge WRITE/READ.
 static DISKFS_MANIFEST_READY: AtomicU64 = AtomicU64::new(0);
 
+/// Currently selected DiskFS object path_id for bridge operations.
+/// Default 0 = /disk/sexfiles-proof-v1. Single-client proof-only.
+/// Set via OP_DISKFS_SELECT. Read by bridge WRITE/READ/STAT/HASH handlers.
+static DISKFS_SELECTED_PATH_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Whether a SELECT has been issued at least once since boot.
+static DISKFS_SELECT_USED: AtomicU64 = AtomicU64::new(0);
+
 fn diskfs_bridge_get_buf_va() -> u64 {
     let va = DISKFS_BRIDGE_BUF_VA.load(Ordering::Relaxed);
     if va != 0 && va != u64::MAX {
@@ -41,6 +49,72 @@ fn diskfs_bridge_get_buf_va() -> u64 {
 }
 
 // ── DiskFS bridge inline handlers ───────────────────────────────────────────
+
+fn handle_diskfs_select(path_id: u64) -> u64 {
+    crate::pdx::serial_println!(
+        "[sexfiles.bridge.diskfs.recv] op=0x3E select path_id={}",
+        path_id
+    );
+
+    if path_id >= 3 {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.select.err] reason=bad_path_id path_id={}",
+            path_id
+        );
+        return messages::ERR_BAD_CMD as u64;
+    }
+
+    let buf_va = diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.select.err] reason=grant_failed"
+        );
+        return messages::ERR_NOT_FOUND as u64;
+    }
+
+    // Ensure V2 manifest on first SELECT.
+    if DISKFS_MANIFEST_READY.load(Ordering::Relaxed) == 0 {
+        if let Err(e) = DiskFs::diskfs_ensure_manifest_v2(buf_va) {
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.select.err] reason=manifest_ensure_v2_failed code={}",
+                e
+            );
+            return e;
+        }
+        DISKFS_MANIFEST_READY.store(1, Ordering::Relaxed);
+    }
+
+    // Validate the selected path_id resolves.
+    match DiskFs::diskfs_lookup_by_path_id(path_id, buf_va) {
+        Ok(_entry) => {
+            DISKFS_SELECTED_PATH_ID.store(path_id, Ordering::Relaxed);
+            if DISKFS_SELECT_USED.load(Ordering::Relaxed) == 0 {
+                DISKFS_SELECT_USED.store(1, Ordering::Relaxed);
+                crate::pdx::serial_println!(
+                    "[sexfiles.bridge.diskfs.select.v1_single_client]"
+                );
+            }
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.select.ok] path_id={}", path_id
+            );
+            0
+        }
+        Err(e) => {
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.select.err] path_id={} code={}",
+                path_id, e
+            );
+            e
+        }
+    }
+}
+
+/// Resolve the currently selected path_id to a path slice.
+/// Returns the path bytes, or an error if path_id is invalid.
+fn diskfs_selected_path() -> Result<&'static [u8], u64> {
+    let path_id = DISKFS_SELECTED_PATH_ID.load(Ordering::Relaxed);
+    DiskFs::diskfs_path_for_id(path_id)
+}
 
 fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64) -> u64 {
     crate::pdx::serial_println!(
@@ -76,18 +150,24 @@ fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64) -> u64 {
         return messages::ERR_NOT_FOUND as u64;
     }
 
-    // Ensure manifest exists on NVMe before attempting write.
+    // Ensure V2 manifest exists on NVMe before attempting write.
     // Cached: only performs NVMe read on first bridge operation.
     if DISKFS_MANIFEST_READY.load(Ordering::Relaxed) == 0 {
-        if let Err(e) = DiskFs::diskfs_ensure_manifest(buf_va) {
+        if let Err(e) = DiskFs::diskfs_ensure_manifest_v2(buf_va) {
             crate::pdx::serial_println!(
-                "[sexfiles.bridge.diskfs.write.err] reason=manifest_ensure_failed code={}",
+                "[sexfiles.bridge.diskfs.write.err] reason=manifest_ensure_v2_failed code={}",
                 e
             );
             return e;
         }
         DISKFS_MANIFEST_READY.store(1, Ordering::Relaxed);
     }
+
+    // Resolve selected path.
+    let path = match diskfs_selected_path() {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
 
     // Pack 16 bytes inline from data_lo + data_hi.
     let mut inline_data = [0u8; 16];
@@ -103,7 +183,7 @@ fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64) -> u64 {
     }
 
     match DiskFs::diskfs_write_object(
-        DISKFS_MANIFEST_OBJECT_PATH,
+        path,
         byte_offset,
         &inline_data,
         buf_va,
@@ -164,12 +244,12 @@ fn handle_diskfs_read(byte_offset: u64, max_len: u64) -> u64 {
         return messages::ERR_NOT_FOUND as u64;
     }
 
-    // Ensure manifest exists on NVMe before attempting read.
+    // Ensure V2 manifest exists on NVMe before attempting read.
     // Cached: only performs NVMe read on first bridge operation.
     if DISKFS_MANIFEST_READY.load(Ordering::Relaxed) == 0 {
-        if let Err(e) = DiskFs::diskfs_ensure_manifest(buf_va) {
+        if let Err(e) = DiskFs::diskfs_ensure_manifest_v2(buf_va) {
             crate::pdx::serial_println!(
-                "[sexfiles.bridge.diskfs.read.err] reason=manifest_ensure_failed code={}",
+                "[sexfiles.bridge.diskfs.read.err] reason=manifest_ensure_v2_failed code={}",
                 e
             );
             return e;
@@ -177,10 +257,16 @@ fn handle_diskfs_read(byte_offset: u64, max_len: u64) -> u64 {
         DISKFS_MANIFEST_READY.store(1, Ordering::Relaxed);
     }
 
+    // Resolve selected path.
+    let path = match diskfs_selected_path() {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
     let rlen = max_len as usize;
     let mut rbuf = [0u8; 8];
     match DiskFs::diskfs_read_object(
-        DISKFS_MANIFEST_OBJECT_PATH,
+        path,
         byte_offset,
         &mut rbuf[..rlen],
         buf_va,
@@ -229,11 +315,20 @@ fn handle_diskfs_stat() -> u64 {
     crate::pdx::serial_println!(
         "[sexfiles.bridge.diskfs.recv] op=0x3B stat"
     );
+    let path_id = DISKFS_SELECTED_PATH_ID.load(Ordering::Relaxed);
+    let path = match DiskFs::diskfs_path_for_id(path_id) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    // For now, all 3 objects have identical metadata (4096 bytes, READ|WRITE).
+    // In future, per-object sizes can be read from the manifest entry.
     let flags: u64 = (DISKFS_MANIFEST_FLAG_READ | DISKFS_MANIFEST_FLAG_WRITE) as u64;
     let size: u64 = messages::DISKFS_OBJECT_SIZE;
     let packed = (flags << 32) | (size & 0xFFFF_FFFF);
     crate::pdx::serial_println!(
-        "[sexfiles.bridge.diskfs.stat.ok] size={} flags={:#x}",
+        "[sexfiles.bridge.diskfs.stat.ok] path_id={} path={} size={} flags={:#x}",
+        path_id,
+        core::str::from_utf8(path).unwrap_or("?"),
         size, flags
     );
     packed
@@ -243,10 +338,15 @@ fn handle_diskfs_manifest_hash() -> u64 {
     crate::pdx::serial_println!(
         "[sexfiles.bridge.diskfs.recv] op=0x3C manifest_hash"
     );
-    let hash = DiskFs::proof_manifest_name_hash(DISKFS_MANIFEST_OBJECT_PATH);
+    let path_id = DISKFS_SELECTED_PATH_ID.load(Ordering::Relaxed);
+    let path = match DiskFs::diskfs_path_for_id(path_id) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let hash = DiskFs::proof_manifest_name_hash(path);
     crate::pdx::serial_println!(
-        "[sexfiles.bridge.diskfs.manifest_hash.ok] hash={:#x}",
-        hash
+        "[sexfiles.bridge.diskfs.manifest_hash.ok] path_id={} hash={:#x}",
+        path_id, hash
     );
     hash
 }
@@ -414,6 +514,10 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
         }
         messages::OP_DISKFS_MANIFEST_HASH => {
             handle_diskfs_manifest_hash()
+        }
+        messages::OP_DISKFS_SELECT => {
+            // arg0 = path_id, arg1/arg2 = 0 (reserved)
+            handle_diskfs_select(arg0)
         }
 
         _ => messages::ERR_NOT_FOUND as u64,

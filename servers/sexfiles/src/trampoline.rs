@@ -60,6 +60,11 @@ pub extern "C" fn trampoline_main() {
     if SEXFILES_CHECKPOINT_PROOF_ENABLED {
         crate::proof::run_sexfiles_checkpoint_proofs();
     }
+    const DISKFS_MULTI_OBJECT_PROOF_ENABLED: bool =
+        option_env!("SEXOS_DISKFS_MULTI_OBJECT_PROOF").is_some();
+    if DISKFS_MULTI_OBJECT_PROOF_ENABLED {
+        crate::proof::run_diskfs_multi_object_proofs();
+    }
 
     const SEXOBJECT_VIEW_PROOF_ENABLED: bool =
         option_env!("SEXOS_SEXOBJECT_VIEW_PROOF").is_some();

@@ -72,6 +72,11 @@ const WRITE_PROOF_MAGIC: u64 = 0x3156_4554_4952_5753; // "SWRITEV1" LE
 const MANIFEST_LBA: u64 = 2046;
 const PROOF_OBJECT_START_LBA: u64 = 2038;
 const PROOF_OBJECT_END_LBA: u64 = 2045;
+// V2 multi-object slots (SEXFILES_DISK_MULTI_OBJECT_MANIFEST_PLAN_V1)
+const LINEN_OBJECT_START_LBA: u64 = 2030;
+const LINEN_OBJECT_END_LBA:   u64 = 2037;
+const QUIL_OBJECT_START_LBA:  u64 = 2022;
+const QUIL_OBJECT_END_LBA:    u64 = 2029;
 
 struct NvmeIoState {
     ready: bool,
@@ -445,12 +450,22 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
     let object_end_offset = PROOF_OBJECT_END_LBA * NVME_LBA_BYTES;
     let proof_mode = buf_cap == SLOT_BUF_LEND;
     let allow_manifest = proof_mode && size == WRITE_PROOF_LEN && offset == manifest_offset;
+    let linen_start = LINEN_OBJECT_START_LBA * NVME_LBA_BYTES;
+    let linen_end   = LINEN_OBJECT_END_LBA   * NVME_LBA_BYTES;
+    let quil_start  = QUIL_OBJECT_START_LBA  * NVME_LBA_BYTES;
+    let quil_end    = QUIL_OBJECT_END_LBA    * NVME_LBA_BYTES;
     let allow_object = proof_mode && size == WRITE_PROOF_LEN
         && (offset % NVME_LBA_BYTES) == 0
         && offset >= object_start_offset
         && offset <= object_end_offset;
+    let allow_linen = proof_mode && size == WRITE_PROOF_LEN
+        && (offset % NVME_LBA_BYTES) == 0
+        && offset >= linen_start && offset <= linen_end;
+    let allow_quil = proof_mode && size == WRITE_PROOF_LEN
+        && (offset % NVME_LBA_BYTES) == 0
+        && offset >= quil_start && offset <= quil_end;
     let allow_proof = proof_mode && offset == expected_offset && size == WRITE_PROOF_LEN;
-    let allow = allow_proof || allow_manifest || allow_object;
+    let allow = allow_proof || allow_manifest || allow_object || allow_linen || allow_quil;
     serial_println!(
         "[sexdrive.write.guard.config] proof_lba={} proof_offset={:#x} manifest_lba={} object_lba_start={} object_lba_end={} proof_len={} magic={:#x}",
         WRITE_PROOF_LBA,
