@@ -211,6 +211,33 @@ struct SingleHidBind {
     interval: u8,
 }
 
+// SEXUSB_HID_DEVICE_TABLE_C2A_V1: per-device metadata for bounded two-slot
+// demux.  Populated during enumeration; poll loop unchanged in this phase.
+#[derive(Copy, Clone)]
+struct HidDevice {
+    active: bool,
+    slot_id: u32,
+    role: HidRole,
+    intr_dci: u32,
+    intr_report_phys: u64,
+    intr_report_va: u64,
+    intr_report_len: u32,
+}
+
+impl HidDevice {
+    const fn empty() -> Self {
+        HidDevice {
+            active: false,
+            slot_id: 0,
+            role: HidRole::Unknown,
+            intr_dci: 0,
+            intr_report_phys: 0,
+            intr_report_va: 0,
+            intr_report_len: 0,
+        }
+    }
+}
+
 #[inline(always)]
 fn classify_single_hid_role(
     found_hid_keyboard: bool,
@@ -2591,6 +2618,12 @@ pub extern "C" fn _start() -> ! {
         loop { sys_yield(); }
     }
 
+    // ===== Multi-Device Table (C2A) =====
+    // Bounded two-slot HidDevice array.  Populated during enumeration;
+    // poll loop unchanged.  device_count tracks active slots.
+    let mut devices: [HidDevice; 2] = [HidDevice::empty(), HidDevice::empty()];
+    let mut device_count: usize = 0;
+
     // ===== Second Device Slot Enable =====
     // If a second connected port was collected by the initial scan
     // (target_ports[1]), enable an XHCI slot for it and address the
@@ -2599,6 +2632,7 @@ pub extern "C" fn _start() -> ! {
     // addressed so that future phases can complete enumeration.
     if target_port_count > 1 {
         let second_port: u64 = target_ports[1] as u64;
+        let mut s2_hid_role: HidRole = HidRole::Unknown; // hoisted for C2A visibility
         serial_println!("[sexusb.slot2.enable.start] port={}", second_port);
 
         // --- Enable Slot ---
@@ -3156,7 +3190,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 s_walk_off += b_len as u64;
             }
-            let s2_hid_role: HidRole = classify_single_hid_role(
+            s2_hid_role = classify_single_hid_role(
                 s2_found_hid_keyboard, s2_found_hid_tablet, s2_found_hid_mouse);
             serial_println!("[sexusb.slot2.hid.role] role={:?} iface={}",
                 s2_hid_role, s2_hid_iface);
@@ -3430,6 +3464,18 @@ pub extern "C" fn _start() -> ! {
                 s2_slot_id, s2_intr_dci, s2_intr_report_phys, s2_intr_report_len
             );
         }
+
+        // Populate device table slot 1 (second enumerated device).
+        devices[1] = HidDevice {
+            active: true,
+            slot_id: s2_slot_id,
+            role: s2_hid_role,
+            intr_dci: s2_intr_dci,
+            intr_report_phys: s2_intr_report_phys,
+            intr_report_va: s2_intr_report_va,
+            intr_report_len: s2_intr_report_len,
+        };
+        device_count = 2;
     }
 
     // ===== Configure Endpoint + Interrupt-IN Poll =====
@@ -3566,6 +3612,26 @@ pub extern "C" fn _start() -> ! {
     }
     cmd_idx += 1;
     serial_println!("[sexusb.xhci.intr_in.config_ep.ok]");
+
+    // Populate device table slot 0 (first enumerated device).
+    devices[0] = HidDevice {
+        active: true,
+        slot_id: single_bind.slot_id,
+        role: single_bind.role,
+        intr_dci,
+        intr_report_phys,
+        intr_report_va,
+        intr_report_len,
+    };
+    if device_count == 0 {
+        device_count = 1;
+    }
+
+    serial_println!("[sexusb.hid.devices.ready] count={} slot1={} slot2={}",
+        device_count,
+        devices[0].slot_id,
+        if device_count > 1 { devices[1].slot_id } else { 0 }
+    );
 
     if SEXUSB_SYNTHETIC {
         serial_println!("[sexusb.synthetic.gate] enabled=1 source=env");
