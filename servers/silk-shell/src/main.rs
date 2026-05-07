@@ -4066,6 +4066,9 @@ static mut CLOCK_ACTIVE: bool = false;
 static mut BELL_ACTIVE: bool = false;
 // Scene Settings panel toggle state
 static mut SCENE_SETTINGS_ACTIVE: bool = false;
+// Edge latch for F9 (ToggleQuil): prevent repeated key-down from retriggering
+// until release is observed.
+static mut F9_TOGGLE_DOWN: bool = false;
 // Scene Settings panel geometry (static position, no text labels in V1)
 const SCENE_SETTINGS_PANEL_X: u32 = SILK_CHROME_TEMPLATE_DEFAULT.settings_panel_x;
 const SCENE_SETTINGS_PANEL_Y: u32 = SILK_CHROME_TEMPLATE_DEFAULT.settings_panel_y;
@@ -10724,6 +10727,10 @@ pub extern "C" fn _start() -> ! {
                     let event_class = msg.arg2; // EV_KEY, EV_REL, EV_ABS, EV_BTN
 
                     unsafe {
+                        if event_class == EV_KEY && scancode == 0x43 && value == 0 {
+                            F9_TOGGLE_DOWN = false;
+                        }
+
                         // ── Event-class dispatch ──
                         if event_class == EV_KEY && value == 1 {
                             // Track C2: key routing proof
@@ -11214,9 +11221,15 @@ pub extern "C" fn _start() -> ! {
                                     }
 
                                     SurfaceAction::ToggleQuil => {
-                                        if toggle_quil() {
-                                            mutated = true;
-                                            serial_println!("[shell.action.quil] toggle");
+                                        if F9_TOGGLE_DOWN {
+                                            serial_println!("[shell.key.repeat.suppressed] scancode=0x43 action=ToggleQuil");
+                                        } else {
+                                            F9_TOGGLE_DOWN = true;
+                                            serial_println!("[shell.key.edge.accept] scancode=0x43 action=ToggleQuil");
+                                            if toggle_quil() {
+                                                mutated = true;
+                                                serial_println!("[shell.action.quil] toggle");
+                                            }
                                         }
                                     }
 
