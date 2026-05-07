@@ -247,7 +247,7 @@ resolved by Linen or SexFiles, never exposing LBA addresses to non-storage PDs.
 
 3. **`SEXFILES_DISK_MULTI_OBJECT_MANIFEST_PLAN_V1`** — Design multi-entry
    manifest support. Add path/hash selector to bridge opcodes. Plan
-   OP_DISKFS_OPEN (0x3D) for explicit object selection.
+   OP_DISKFS_SELECT (0x3E) for explicit object selection.
 
 4. **`SEXFILES_DISK_OBJECT_ALLOCATOR_PLAN_V1`** — Wire extent allocator
    into file ops path. Replace fixed-LBA proof object with dynamic

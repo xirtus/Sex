@@ -4,7 +4,7 @@
 2026-05-07
 
 ## Status
-STOP FIRST — SELECT 0x3D not yet implemented. Quil bridge-capable but slot blocked.
+STOP FIRST — SELECT 0x3E not yet implemented. Quil bridge-capable but slot blocked.
 
 ## 1. Canonical Quil Reality
 
@@ -47,26 +47,26 @@ Quil's designated DiskFS slot is:
 To select this slot, Quil needs:
 
 ```
-OP_DISKFS_SELECT = 0x3D
+OP_DISKFS_SELECT = 0x3E
 arg0 = 2  (path_id for Quil object)
 ```
 
-**SELECT 0x3D is planned but not yet implemented** (see
+**SELECT 0x3E is planned but not yet implemented** (see
 `SEXFILES_DISK_MULTI_OBJECT_MANIFEST_PLAN_V1.md`). Until SELECT exists,
 the bridge operates on path_id=0 (/disk/sexfiles-proof-v1) by default.
 Quil using path_id=0 would collide with Linen's usage of the same slot.
 
 ## 4. Path Forward (Two Options)
 
-### Option A: Implement SELECT 0x3D First (Preferred)
+### Option A: Implement SELECT 0x3E First (Preferred)
 
 Complete `SEXFILES_DISK_MULTI_OBJECT_MANIFEST_IMPL_V1`, then add Quil proof:
 
 ```
-1. Implement SELECT 0x3D + V2 manifest per the multi-object plan
-2. Add DISKFS opcode constants to Quil (0x38-0x3D)
+1. Implement SELECT 0x3E + V2 manifest per the multi-object plan
+2. Add DISKFS opcode constants to Quil (0x38-0x3E)
 3. Add quil_diskfs_proof() function:
-   - pdx_storage_call(0x3D, 2, 0, 0)  // SELECT path_id=2
+   - pdx_storage_call(0x3E, 2, 0, 0)  // SELECT path_id=2
    - Write QUIL_BUFFER content via OP_DISKFS_WRITE (0x38)
    - Read back via OP_DISKFS_READ (0x39)
    - Verify match
@@ -123,19 +123,19 @@ quil.diskfs.slot.stop_first reason=select_not_implemented
 | File | Change |
 |------|--------|
 | `servers/quil/src/main.rs` | Add DISKFS opcode constants, quil_diskfs_proof(), gate flag |
-| (if Option A) `servers/sexfiles/src/vfs.rs` | SELECT 0x3D handler (multi-object manifest impl) |
+| (if Option A) `servers/sexfiles/src/vfs.rs` | SELECT 0x3E handler (multi-object manifest impl) |
 | (if Option A) `servers/sexfiles/src/messages.rs` | OP_DISKFS_SELECT constant |
 
 ## 8. Exact Next Prompt
 
 ```
-If SELECT 0x3D is implemented first (Option A):
+If SELECT 0x3E is implemented first (Option A):
 
 QUIL_DISKFS_SLOT_OBJECT_PROOF_V1
 
 Implement the Quil DiskFS proof targeting path_id=2:
 
-1. Add DISKFS bridge opcode constants (0x38-0x3D) to servers/quil/src/main.rs.
+1. Add DISKFS bridge opcode constants (0x38-0x3E) to servers/quil/src/main.rs.
 2. Add quil_diskfs_proof() function gated by SEXOS_QUIL_DISKFS_PROOF=1.
 3. SELECT path_id=2, write QUIL_BUFFER content, read back, verify match.
 4. Emit markers: quil.diskfs.slot.begin → .select.ok → .write.ok → .read.match → .done.
@@ -148,5 +148,5 @@ Implement the Quil DiskFS proof targeting path_id=2:
 If SELECT is not yet ready (current state):
 
 SEXFILES_DISK_MULTI_OBJECT_MANIFEST_IMPL_V1
-(Implement SELECT 0x3D + V2 manifest first, then return to Quil proof.)
+(Implement SELECT 0x3E + V2 manifest first, then return to Quil proof.)
 ```

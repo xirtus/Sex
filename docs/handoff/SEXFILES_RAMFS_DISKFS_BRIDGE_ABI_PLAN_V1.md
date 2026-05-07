@@ -256,7 +256,7 @@ V1 supports exactly ONE fixed object: `/disk/sexfiles-proof-v1`.
 - **Flags**: READ (0x1) | WRITE (0x2)
 
 **No dynamic path strings**: DISKFS_WRITE/READ do not take a path argument.
-The object is implicit. If V2 needs multiple objects, add `OP_DISKFS_OPEN` (0x3D)
+The object is implicit. If V2 needs multiple objects, add `OP_DISKFS_SELECT` (0x3E)
 to select by name or hash.
 
 **No file handle**: Unlike RamFS, V1 DiskFS bridge is stateless between calls.

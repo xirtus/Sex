@@ -164,13 +164,13 @@ Currently writes V1 single-entry manifest. V2 should:
 - If invalid, bootstrap V2 from scratch
 - Always idempotent: valid V2 manifest → no-op
 
-### 3E. SELECT Opcode (0x3D) — Tightened Semantics
+### 3E. SELECT Opcode (0x3E) — Tightened Semantics
 
 **Decision**: Option A — single-client proof-only global SELECT, explicitly
 not concurrent-safe. Future V3 should use caller-scoped session state.
 
 ```rust
-OP_DISKFS_SELECT = 0x3D
+OP_DISKFS_SELECT = 0x3E
 ```
 
 **arg0 = path_id** (u64):
@@ -309,7 +309,7 @@ No generic writes. No arbitrary LBA writes.
 | File | Change |
 |------|--------|
 | `servers/sexfiles/src/backends/diskfs.rs` | V2 constants, manifest_build_v2, manifest_parse_v2, update lookup + ensure with V1→V2 upgrade |
-| `servers/sexfiles/src/messages.rs` | Add OP_DISKFS_SELECT (0x3D), ERR_BAD_CMD |
+| `servers/sexfiles/src/messages.rs` | Add OP_DISKFS_SELECT (0x3E), ERR_BAD_CMD |
 | `servers/sexfiles/src/vfs.rs` | Add SELECT handler with global path_id state, update STAT/HASH for per-object, SELECT marker |
 | `apps/sexdrive/src/main.rs` | Extend write_guard_allows() for LBAs 2022-2037 |
 | `servers/sexfiles/src/proof.rs` | Add run_disk_multi_object_proof() (11 phases) |
@@ -363,7 +363,7 @@ STOP FIRST: confirm no OpenIntent branch is active touching servers/linen/.
 3. Update diskfs_lookup_path() for multi-entry hash lookup.
 4. Update diskfs_ensure_manifest() for V1→V2 upgrade with safety markers:
    .v2.bootstrap, .v2.upgrade, .v2.valid, .v2.err.
-5. Add OP_DISKFS_SELECT (0x3D) to messages.rs — path_id only, no hashes.
+5. Add OP_DISKFS_SELECT (0x3E) to messages.rs — path_id only, no hashes.
 6. Add ERR_BAD_CMD to messages.rs for invalid path_id.
 7. Add SELECT handler in vfs.rs:
    - global DISKFS_SELECTED_PATH_ID (AtomicU64, default 0)
