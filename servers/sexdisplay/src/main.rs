@@ -156,6 +156,7 @@ const LAUNCHER_PANEL_SURFACE_ID: u64 = 0x92;
 static REJECT_COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static CURSOR_Z_TOP_LOGGED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
+static DISPLAY_WM_PD: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Clamp a surface rectangle against framebuffer dimensions.
 /// Returns `(x, y, w, h)` guaranteed to be within FB bounds and below the bar.
@@ -1213,14 +1214,15 @@ pub extern "C" fn _start() -> ! {
                 let new_x = msg.arg1 as i32;
                 let new_y = msg.arg2 as i32;
                 unsafe {
+                    let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
                     let mut found = false;
                     for slot in SURFACES.iter_mut() {
                         if slot.active && slot.surface_id == target_id {
-                            if slot.owner_pd != msg.caller_pd {
+                            if slot.owner_pd != msg.caller_pd && !(wm_pd != 0 && msg.caller_pd == wm_pd) {
                                 let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                                 if n & 0x3F == 0 {
-                                    serial_println!("AUTH: 0xEB move rejected sid={} caller={} owner={}",
-                                        target_id, msg.caller_pd, slot.owner_pd);
+                                    serial_println!("[sexdisplay.auth.deny] op=0xeb caller={} sid={} owner={} wm={}",
+                                        msg.caller_pd, target_id, slot.owner_pd, wm_pd);
                                 }
                                 continue;
                             }
@@ -1247,10 +1249,26 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             0xED => {
-                // OP_SET_FOCUS: arg0=surface_id (0 clears focus). Unknown id safe.
+                // OP_SET_FOCUS: arg0=surface_id (0 clears focus). Owner or registered WM only.
                 if !fb_live { continue; }
+                let sid = msg.arg0;
+                if sid != 0 {
+                    let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
+                    let authorized = unsafe {
+                        SURFACES.iter().any(|s| s.active && s.surface_id == sid
+                            && (s.owner_pd == msg.caller_pd || (wm_pd != 0 && msg.caller_pd == wm_pd)))
+                    };
+                    if !authorized {
+                        let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        if n & 0x3F == 0 {
+                            serial_println!("[sexdisplay.auth.deny] op=0xed caller={} sid={} wm={}",
+                                msg.caller_pd, sid, wm_pd);
+                        }
+                        continue;
+                    }
+                }
                 unsafe {
-                    FOCUSED_SURFACE_ID = msg.arg0;
+                    FOCUSED_SURFACE_ID = sid;
                     redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
                 }
             }
@@ -1281,6 +1299,22 @@ pub extern "C" fn _start() -> ! {
                         }
                         redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
                     }
+                }
+            }
+            0xF5 => {
+                // OP_REGISTER_WM: first caller wins; idempotent for same caller.
+                let caller = msg.caller_pd;
+                if caller == 0 { continue; }
+                match DISPLAY_WM_PD.compare_exchange(
+                    0, caller,
+                    core::sync::atomic::Ordering::AcqRel,
+                    core::sync::atomic::Ordering::Acquire,
+                ) {
+                    Ok(_) => { serial_println!("[sexdisplay.auth.wm.register] caller={} ok=1", caller); }
+                    Err(existing) if existing != caller => {
+                        serial_println!("[sexdisplay.auth.wm.deny] caller={} registered={}", caller, existing);
+                    }
+                    _ => {}
                 }
             }
             0xEF => {
@@ -1480,9 +1514,18 @@ pub extern "C" fn _start() -> ! {
                     active_tab_raw.min(tab_count.saturating_sub(1))
                 } else { 0 };
                 unsafe {
+                    let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
                     let mut updated = false;
                     for slot in SURFACES.iter_mut() {
                         if slot.active && slot.surface_id == surface_id {
+                            if slot.owner_pd != msg.caller_pd && !(wm_pd != 0 && msg.caller_pd == wm_pd) {
+                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                if n & 0x3F == 0 {
+                                    serial_println!("[sexdisplay.auth.deny] op=0xfd caller={} sid={} owner={} wm={}",
+                                        msg.caller_pd, surface_id, slot.owner_pd, wm_pd);
+                                }
+                                break;
+                            }
                             slot.tab_count = tab_count;
                             slot.active_tab = active_tab;
                             slot.chrome_flags = chrome_flags_raw;
