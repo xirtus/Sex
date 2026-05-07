@@ -164,23 +164,74 @@ Currently writes V1 single-entry manifest. V2 should:
 - If invalid, bootstrap V2 from scratch
 - Always idempotent: valid V2 manifest → no-op
 
-### 3E. Bridge Opcode Updates
+### 3E. SELECT Opcode (0x3D) — Tightened Semantics
 
-New opcode: `OP_DISKFS_SELECT = 0x3D`
-- arg0 = name_hash (u64, FNV-1a of object path)
-- Selects which object subsequent WRITE/READ/FLUSH operate on
-- Default (no SELECT): operates on /disk/sexfiles-proof-v1 (backward compatible)
-- Returns 0 on success, ERR_NOT_FOUND if hash unknown
+**Decision**: Option A — single-client proof-only global SELECT, explicitly
+not concurrent-safe. Future V3 should use caller-scoped session state.
 
-OR keep it simpler: add a `path_id` selector:
-- arg0 = 0 → /disk/sexfiles-proof-v1 (default)
-- arg0 = 1 → /disk/linen-object-v1
-- arg0 = 2 → /disk/quil-object-v1
+```rust
+OP_DISKFS_SELECT = 0x3D
+```
 
-Linen-side: add `pdx_storage_sync(OP_DISKFS_SELECT, 1, 0, 0)` before
-WRITE/READ to operate on the Linen object.
+**arg0 = path_id** (u64):
+- `0` → `/disk/sexfiles-proof-v1` (default, backward compatible)
+- `1` → `/disk/linen-object-v1`
+- `2` → `/disk/quil-object-v1`
+- Any other value → `ERR_BAD_CMD` (-1)
+- SELECT does NOT accept name hashes, raw paths, or LBA addresses from the client.
+- SELECT does NOT expose LBA addresses to Linen or Quil.
 
-### 3F. Backward Compatibility
+**Server state**: One global `AtomicU64 DISKFS_SELECTED_PATH_ID` (defaults to 0).
+A SELECT call sets it; subsequent WRITE/READ/FLUSH/STAT/HASH operate on the
+selected object. Single-client V1 only — concurrent clients would race.
+
+**Marker on first use**: `[sexfiles.bridge.diskfs.select.v1_single_client]`
+
+**STAT after SELECT**: Returns size and flags of the SELECTED object
+(e.g., `path_id=1` → size=4096, flags=0x3 for /disk/linen-object-v1).
+
+**HASH after SELECT**: Returns the FNV-1a hash of the SELECTED object's path.
+This allows the client to confirm which object is selected.
+
+**Default**: path_id=0 at boot and after manifest bootstrap. Backward compatible
+— existing Linen bridge proof operates on path_id=0 without calling SELECT.
+
+### 3F. Write Guard Extension
+
+Extend sexdrive `write_guard_allows()` to accept the new LBA ranges
+in addition to existing allowed ranges:
+
+```
+Existing:  2038..2045 (SexFiles proof), 2046 (manifest), 2047 (write proof)
+New:       2022..2029 (Quil object), 2030..2037 (Linen object)
+```
+
+All writes outside these ranges → `ERR_NO_DEVICE honest=write_not_implemented_guard_only`.
+No generic writes. No arbitrary LBA writes.
+
+### 3G. V1→V2 Upgrade Safety
+
+`diskfs_ensure_manifest` upgrade path:
+
+1. Read LBA 2046
+2. If magic != DISKFS_MANIFEST_MAGIC → **bootstrap V2** from scratch
+   - Marker: `[sexfiles.disk.manifest.v2.bootstrap] entries=3`
+3. If version == 1 (V1, 1 entry) → **upgrade to V2**
+   - Preserve existing V1 entry (SexFiles proof object)
+   - Add Linen + Quil entries at their reserved LBAs
+   - Write new 3-entry V2 manifest to LBA 2046
+   - Must NOT rewrite any object data ranges (LBAs 2022-2045)
+   - Must NOT touch LBA 2047
+   - Marker: `[sexfiles.disk.manifest.v2.upgrade] from_version=1 entries=3`
+4. If version == 2 → validate all entries
+   - Check no overlaps, no LBA 2046/2047 intersection
+   - If valid: marker `[sexfiles.disk.manifest.v2.valid] entries=N`
+   - If invalid and proof mode: **bootstrap** V2 from scratch
+     Marker: `[sexfiles.disk.manifest.v2.err] reason=corrupt action=bootstrap`
+   - If invalid and NOT proof mode: return `ERR_OVERFLOW`
+5. Cache as ready.
+
+### 3H. Backward Compatibility
 
 - V1 manifests (version=1, 1 entry) still parse and work
 - V2 manifests (version=2, N entries) extend V1
@@ -197,68 +248,77 @@ WRITE/READ to operate on the Linen object.
    a. entry_count in [1, 15]
    b. No overlapping LBA ranges between entries
    c. No entry intersects LBA 2046 or 2047
-   d. All required reserved objects present (optional: warn if missing)
-5. If any validation fails → rebuild manifest from scratch (V2, 3 entries)
-6. Cache as valid, set DISKFS_MANIFEST_READY
+   d. All entries have valid reserved start_lba values
+5. If any validation fails and proof mode → rebuild manifest from scratch (V2, 3 entries)
+6. If any validation fails and NOT proof mode → return ERR_OVERFLOW
+7. Cache as valid, set DISKFS_MANIFEST_READY
 
 ## 5. Proof Sequence (for implementation gate)
 
 ### Gate: SEXOS_DISK_MULTI_OBJECT_MANIFEST_PROOF=1
 
-**Phase 1: Bootstrap**
-1. Read LBA 2046 → detect invalid → write V2 manifest (3 entries)
-2. Marker: `sexfiles.disk.manifest.v2.bootstrap ok=1 entries=3`
+**Phase 1: Bootstrap or upgrade**
+1. Read LBA 2046 → detect V1 or invalid → upgrade/bootstrap V2 manifest (3 entries)
+2. Marker: `sexfiles.disk.manifest.v2.upgrade` or `.v2.bootstrap`
 
-**Phase 2: Write object A (Linen)**
-3. SELECT path_id=1 (Linen)
-4. Write 128-byte deterministic payload (matching Linen proof)
-5. Marker: `sexfiles.disk.multi.object.write.ok path=/disk/linen-object-v1 size=128`
+**Phase 2: SELECT V1 single-client marker**
+3. Marker: `sexfiles.bridge.diskfs.select.v1_single_client`
 
-**Phase 3: Write object B (Quil)**
-6. SELECT path_id=2 (Quil)
-7. Write 128-byte deterministic payload (different pattern)
-8. Marker: `sexfiles.disk.multi.object.write.ok path=/disk/quil-object-v1 size=128`
+**Phase 3: Write Linen object**
+4. SELECT path_id=1
+5. Write 128-byte deterministic payload to Linen object
+6. Marker: `sexfiles.disk.multi.object.write.ok path_id=1 size=128`
 
-**Phase 4: Read back A + verify**
-9. SELECT path_id=1 → read 128 bytes → verify match
-10. Marker: `sexfiles.disk.multi.object.match path=/disk/linen-object-v1`
+**Phase 4: Write Quil object**
+7. SELECT path_id=2
+8. Write 128-byte deterministic payload (different pattern) to Quil object
+9. Marker: `sexfiles.disk.multi.object.write.ok path_id=2 size=128`
 
-**Phase 5: Read back B + verify**
-11. SELECT path_id=2 → read 128 bytes → verify match
-12. Marker: `sexfiles.disk.multi.object.match path=/disk/quil-object-v1`
+**Phase 5: Read Linen + match**
+10. SELECT path_id=1 → read 128 bytes → verify match
+11. Marker: `sexfiles.disk.multi.object.match path_id=1 ok=1`
 
-**Phase 6: Verify no collision**
-13. Read object A again → must match original, not B's data
-14. Marker: `sexfiles.disk.multi.object.no_collision ok=1`
+**Phase 6: Read Quil + match**
+12. SELECT path_id=2 → read 128 bytes → verify match
+13. Marker: `sexfiles.disk.multi.object.match path_id=2 ok=1`
 
-**Phase 7: Verify SexFiles proof object still intact**
-15. SELECT path_id=0 → read original 4096 bytes → verify pattern match
-16. Marker: `sexfiles.disk.multi.object.proof_still_ok ok=1`
+**Phase 7: No collision**
+14. Read Linen again → must match Linen data, not Quil data
+15. Marker: `sexfiles.disk.multi.object.no_collision ok=1`
 
-**Phase 8: Manifest integrity**
-17. Re-read LBA 2046 → parse V2 → verify all 3 entries correct
-18. Marker: `sexfiles.disk.multi.object.manifest_still_ok ok=1`
+**Phase 8: Proof object intact**
+16. SELECT path_id=0 → read original 4096 bytes → verify pattern match
+17. Marker: `sexfiles.disk.multi.object.proof_still_ok ok=1`
 
-**Phase 9: Limits**
-19. SELECT path_id=99 → ERR_NOT_FOUND
-20. Collision injection: try to write entry with overlapping LBA → ERR_OVERFLOW
-21. Marker: `sexfiles.disk.multi.object.bounds_negative ok=1`
+**Phase 9: Manifest integrity**
+18. Re-read LBA 2046 → parse V2 → verify all 3 entries correct
+19. Marker: `sexfiles.disk.multi.object.manifest_still_ok ok=1`
+
+**Phase 10: Limits**
+20. SELECT path_id=99 → ERR_BAD_CMD
+21. SELECT path_id=3 → ERR_BAD_CMD
+22. Marker: `sexfiles.disk.multi.object.bounds_negative ok=1`
+
+**Phase 11: Regression**
+23. Existing persistence proof still passes
+24. Storage negatives still pass
+25. No #PF/#GP/panic
 
 ## 6. Files to Change (Implementation)
 
 | File | Change |
 |------|--------|
-| `servers/sexfiles/src/backends/diskfs.rs` | V2 constants, manifest_build_v2, manifest_parse_v2, update lookup + ensure |
-| `servers/sexfiles/src/messages.rs` | Add OP_DISKFS_SELECT (0x3D) |
-| `servers/sexfiles/src/vfs.rs` | Add SELECT handler, per-object state |
-| `servers/sexfiles/src/proof.rs` | Add run_disk_multi_object_proof() |
+| `servers/sexfiles/src/backends/diskfs.rs` | V2 constants, manifest_build_v2, manifest_parse_v2, update lookup + ensure with V1→V2 upgrade |
+| `servers/sexfiles/src/messages.rs` | Add OP_DISKFS_SELECT (0x3D), ERR_BAD_CMD |
+| `servers/sexfiles/src/vfs.rs` | Add SELECT handler with global path_id state, update STAT/HASH for per-object, SELECT marker |
+| `apps/sexdrive/src/main.rs` | Extend write_guard_allows() for LBAs 2022-2037 |
+| `servers/sexfiles/src/proof.rs` | Add run_disk_multi_object_proof() (11 phases) |
 | `servers/sexfiles/src/trampoline.rs` | Wire SEXOS_DISK_MULTI_OBJECT_MANIFEST_PROOF |
 
 **NOT changed**:
 - `crates/sex-pdx/` — no ABI edits
 - `kernel/` — no kernel changes
-- `apps/sexdrive/` — no sexdrive changes (same LBA range)
-- `servers/linen/` — Linen uses existing bridge; SELECT is optional
+- `servers/linen/` — avoid touching Linen if OpenIntent branch is active; proof runs from SexFiles side
 
 ## 7. STOP FIRST Conditions
 
@@ -270,26 +330,53 @@ WRITE/READ to operate on the Linen object.
 | Requires kernel changes | NO | All within SexFiles |
 | Requires sex-pdx changes | NO | No new slots |
 | Requires general filesystem design | NO | 3 fixed objects, bounded |
+| SELECT is concurrent-unsafe | YES (V1) | Documented single-client only; marker emitted |
+| V1→V2 upgrade touches object data | NO | Manifest sector only; object LBAs preserved |
+| OpenIntent collision | AVOIDED | Proof runs in SexFiles; Linen untouched |
 
-## 8. Exact Next Prompt
+## 8. Limitations (Must Be Stated in Implementation Handoff)
+
+- **Fixed-slot multi-object storage, NOT a general allocator.**
+- **No delete/rename. No directory tree. No dynamic object creation.**
+- **SELECT is single-client proof-only V1.** Concurrent clients would race on
+  the global `DISKFS_SELECTED_PATH_ID`. Future V3 should use caller-scoped
+  session state keyed by caller_pd.
+- **No dynamic path IPC.** Paths are mapped to fixed path_id values.
+  Clients never send path strings or LBA addresses.
+- **V1→V2 upgrade only from proof mode or first bridge use.** Accidental
+  upgrade of a valid V1 manifest by a non-proof client is prevented.
+- **Write guard must be extended in sexdrive** for LBAs 2022-2037.
+  This is a minor allowed change (same guard pattern, new ranges).
+
+## 9. Exact Next Prompt
 
 ```
 SEXFILES_DISK_MULTI_OBJECT_MANIFEST_IMPL_V1
 
-Implement the V2 manifest with 3 reserved object slots per
-SEXFILES_DISK_MULTI_OBJECT_MANIFEST_PLAN_V1.
+Implement the V2 manifest with 3 reserved object slots per the refined
+SEXFILES_DISK_MULTI_OBJECT_MANIFEST_PLAN_V1 (with tightened SELECT semantics).
+
+STOP FIRST: confirm no OpenIntent branch is active touching servers/linen/.
 
 1. Add V2 constants and reserved object slots to diskfs.rs.
 2. Add manifest_build_v2() and manifest_parse_v2().
-3. Update diskfs_lookup_path() for multi-entry lookup.
-4. Update diskfs_ensure_manifest() for V1→V2 upgrade.
-5. Add OP_DISKFS_SELECT (0x3D) to messages.rs.
-6. Add SELECT handler in vfs.rs with per-object path state.
-7. Add multi-object proof in proof.rs.
-8. Wire SEXOS_DISK_MULTI_OBJECT_MANIFEST_PROOF in trampoline.rs.
-9. Build and run:
-   SEXOS_GATE_NVME=1 SEXOS_DISK_MULTI_OBJECT_MANIFEST_PROOF=1
-   ./scripts/master_runtime_gate.sh --probe 45 --keep-log
-10. Verify all 9 proof phases pass.
-11. Write docs/handoff/SEXFILES_DISK_MULTI_OBJECT_MANIFEST_IMPL_V1.md.
+3. Update diskfs_lookup_path() for multi-entry hash lookup.
+4. Update diskfs_ensure_manifest() for V1→V2 upgrade with safety markers:
+   .v2.bootstrap, .v2.upgrade, .v2.valid, .v2.err.
+5. Add OP_DISKFS_SELECT (0x3D) to messages.rs — path_id only, no hashes.
+6. Add ERR_BAD_CMD to messages.rs for invalid path_id.
+7. Add SELECT handler in vfs.rs:
+   - global DISKFS_SELECTED_PATH_ID (AtomicU64, default 0)
+   - valid values: 0/1/2 only
+   - emit [sexfiles.bridge.diskfs.select.v1_single_client] on first SELECT
+8. Update STAT/HASH handlers to return per-selected-object data.
+9. Extend write_guard_allows() in sexdrive for LBAs 2022-2037.
+10. Add run_disk_multi_object_proof() in proof.rs (11 phases).
+11. Wire SEXOS_DISK_MULTI_OBJECT_MANIFEST_PROOF in trampoline.rs.
+12. Build and run:
+    SEXOS_GATE_NVME=1 SEXOS_DISK_MULTI_OBJECT_MANIFEST_PROOF=1
+    ./scripts/master_runtime_gate.sh --probe 45 --keep-log
+13. Verify all 11 proof phases pass.
+14. Write docs/handoff/SEXFILES_DISK_MULTI_OBJECT_MANIFEST_IMPL_V1.md
+    with limitations clearly stated.
 ```
