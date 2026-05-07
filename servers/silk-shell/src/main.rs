@@ -836,13 +836,17 @@ unsafe fn linen_render_static_ui() {
 }
 
 /// Spin-wait for a type_id==0x1 reply in shell's mailbox.
-/// Used during narrow synchronous fetch window — non-reply messages are dropped.
+/// Non-reply messages (e.g. OP_HID_EVENT) are replied-to immediately
+/// to unblock the sender, then discarded.  This prevents sexinput
+/// from blocking during synchronous Linen fetch.
 unsafe fn linen_sync_reply() -> u64 {
     loop {
         let msg = pdx_listen_raw(0);
         if msg.type_id == 0x1 {
             return msg.arg0;
         }
+        // Unblock sender without processing — prevents input stall.
+        pdx_reply(msg.caller_pd, 0);
     }
 }
 
@@ -6990,6 +6994,11 @@ const YARN_OUTPUT_LINES: usize = 20;
 const YARN_OUTPUT_LINE_CAP: usize = 32;
 /// Maximum command history entries.
 const YARN_HISTORY_CAP: usize = 16;
+// ── Scrollback ring (bounded, no heap) ──
+/// Max scrollback lines in the ring buffer.
+const SPINDLE_SB_LINES: usize = 1024;
+/// Max chars per scrollback line.
+const SPINDLE_SB_LINE_CAP: usize = 80;
 
 /// YarnSession — bounded input/output/state for the Spindle terminal.
 /// No heap, no strings, no POSIX/PTY/TTY.
@@ -7001,6 +7010,11 @@ struct YarnSession {
     history: [[u8; YARN_CMD_BUF_CAP]; YARN_HISTORY_CAP],
     history_count: usize,
     history_pos: i64,
+    // ── Bounded scrollback ring ──
+    sb_ring: [[u8; SPINDLE_SB_LINE_CAP]; SPINDLE_SB_LINES],
+    sb_write: usize,
+    sb_total: u32,
+    sb_offset: u32,
 }
 
 static mut YARN: YarnSession = YarnSession {
@@ -7011,6 +7025,10 @@ static mut YARN: YarnSession = YarnSession {
     history: [[0u8; YARN_CMD_BUF_CAP]; YARN_HISTORY_CAP],
     history_count: 0,
     history_pos: -1,
+    sb_ring: [[0u8; SPINDLE_SB_LINE_CAP]; SPINDLE_SB_LINES],
+    sb_write: 0,
+    sb_total: 0,
+    sb_offset: 0,
 };
 
 /// Shell commands exposed via the command palette.
@@ -7195,6 +7213,15 @@ unsafe fn yarn_append_output(text: &[u8]) {
         if i >= YARN_OUTPUT_LINE_CAP - 1 { break; }
         line[i] = b;
     }
+    // ── [spindle.scrollback.push] — push to bounded scrollback ring ──
+    let n = text.len().min(SPINDLE_SB_LINE_CAP);
+    let dst = &mut yarn.sb_ring[yarn.sb_write];
+    dst[..n].copy_from_slice(&text[..n]);
+    for i in n..SPINDLE_SB_LINE_CAP { dst[i] = 0; }
+    yarn.sb_write = (yarn.sb_write + 1) % SPINDLE_SB_LINES;
+    yarn.sb_total = yarn.sb_total.saturating_add(1);
+    if yarn.sb_offset > 0 { yarn.sb_offset = yarn.sb_offset.saturating_sub(1); }
+    serial_println!("[spindle.scrollback.push] total={} len={}", yarn.sb_total, n);
     serial_println!("[spindle.output.append] len={}", text.len().min(YARN_OUTPUT_LINE_CAP - 1));
 }
 
@@ -7204,13 +7231,18 @@ unsafe fn yarn_cmd_help() {
     yarn_append_output(b"Commands: help clear echo about time pd scene routes faults");
 }
 
-/// Yarn built-in: clear — reset output ring.
+/// Yarn built-in: clear — reset output ring and scrollback.
 unsafe fn yarn_cmd_clear() {
     serial_println!("[spindle.command.clear]");
     for i in 0..YARN_OUTPUT_LINES {
         YARN.output_lines[i] = [0u8; YARN_OUTPUT_LINE_CAP];
     }
     YARN.output_count = 0;
+    // Reset scrollback ring.
+    YARN.sb_ring = [[0u8; SPINDLE_SB_LINE_CAP]; SPINDLE_SB_LINES];
+    YARN.sb_write = 0;
+    YARN.sb_total = 0;
+    YARN.sb_offset = 0;
 }
 
 /// Yarn built-in: echo — echo arguments back.
@@ -7388,7 +7420,77 @@ unsafe fn spindle_render() {
                 | w as u64);
         serial_println!("[spindle.render.band] index={} color={:#010x}", rect_index, color);
     }
+
+    // ── Render command line text + cursor via display-safe path ──
+    spindle_render_cmdline();
+
     serial_println!("[spindle.render.done] lines={}", visible_count);
+}
+
+/// Render Spindle command line (prompt + input) as text glyphs and a block cursor
+/// as a fill rect, using the existing sexdisplay-safe path (0xFA/0xFB/0xEF).
+/// Text buffer is 128 bytes (20 chars/line, 5×7 font, fixed at surface.y+24).
+/// Block cursor placed below band area for visibility.
+unsafe fn spindle_render_cmdline() {
+    let w = SURFACE_0x99_W;
+    let h = SURFACE_0x99_H;
+    if w == 0 || h == 0 { return; }
+
+    let yarn = &YARN;
+    const PROMPT_BYTES: &[u8] = b"sex> ";
+
+    // ── [spindle.render.submit] Clear text buffer on Spindle surface ──
+    pdx_call(SLOT_DISPLAY, 0xFA, SURFACE_ID_SPINDLE, 0, 0);
+
+    // ── [spindle.line.edit] Pack prompt + command into text buffer ──
+    // Submit in 8-byte chunks via 0xFB. Text appears at text row 0 (header area,
+    // rendered on top of header fill rect).
+    let max_chars = 40usize; // 2 text lines of 20 chars
+    let mut packed_buf = [0u8; 40];
+    let mut ti = 0usize;
+    for &b in PROMPT_BYTES {
+        if ti < max_chars { packed_buf[ti] = b; ti += 1; }
+    }
+    for i in 0..yarn.cmd_len {
+        if ti < max_chars {
+            packed_buf[ti] = yarn.cmd_buf[i];
+            ti += 1;
+        }
+    }
+
+    let mut offset = 0usize;
+    while offset < ti {
+        let chunk = 8.min(ti - offset);
+        let mut word: u64 = 0;
+        for i in 0..chunk {
+            word |= (packed_buf[offset + i] as u64) << (i * 8);
+        }
+        pdx_call(SLOT_DISPLAY, 0xFB, SURFACE_ID_SPINDLE, word,
+            (offset as u64)
+            | ((chunk as u64) << 8)
+            | ((0x00CDD6F4u64) << 32)); // Catppuccin Text color
+        offset += chunk;
+    }
+
+    // ── Block cursor as fill rect (rect_index=7) below band area ──
+    let cursor_y = SPINDLE_HEADER_H
+        + SPINDLE_ROW_RECTS as u32 * (SPINDLE_ROW_H + SPINDLE_ROW_GAP)
+        + SPINDLE_ROW_GAP;
+    // Character cells are 8px wide; inset by 4px + prompt_offset.
+    let cursor_w = 8u32;
+    let cursor_h = SPINDLE_ROW_H;
+    let cursor_x = (4u32 + (PROMPT_BYTES.len() as u32 + yarn.cmd_len as u32) * 8u32)
+        .min(w.saturating_sub(cursor_w));
+
+    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_SPINDLE,
+        ((cursor_y as u64) << 32) | (cursor_x as u64),
+        (7u64 << 56)  // rect_index=7 (cursor slot)
+            | ((0x00F5E0DCu64) << 32)  // Catppuccin Rosewater cursor color
+            | ((cursor_h as u64) << 16)
+            | (cursor_w as u64));
+
+    serial_println!("[spindle.render.submit] cmd_len={} text_chars={} cursor_x={} cursor_y={}",
+        yarn.cmd_len, ti, cursor_x, cursor_y);
 }
 
 // ── Bell Surface Control Helpers ─────────────────────────────────────────────
@@ -10272,7 +10374,9 @@ pub extern "C" fn _start() -> ! {
         (linen_h as u64) << 32 | linen_w as u64);
     serial_println!("[silk-shell] Boot 0xEC surface 200 (Linen) created");
     serial_println!("[silk-shell.boot.surface.create] sid={} owner=linen", SURFACE_ID_LINEN);
-    unsafe { linen_paint_surface(); }
+    // Deferred: linen_paint_surface() moved to after main loop starts
+    // to prevent linen_sync_reply() from dropping OP_HID_EVENT messages.
+    serial_println!("[silk-shell.linen.paint.defer] reason=avoid_input_drop");
     serial_println!("[silk-shell.ui.ready] surfaces=2");
     serial_println!("[silk-shell.boot.layout.tiled] mode=2pane main_sid={} side_sid={} gutter={}",
         SURFACE_ID_QUIL, SURFACE_ID_LINEN, gutter);
@@ -10342,6 +10446,23 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk-shell.ready]");
 
     loop {
+        // Deferred linen paint: run once after main loop starts.
+        // Skip during synthetic input proofs to avoid linen_sync_reply
+        // consuming OP_HID_EVENT before the main dispatch.
+        unsafe {
+            static mut LINEN_PAINT_RUN: bool = false;
+            if !LINEN_PAINT_RUN {
+                LINEN_PAINT_RUN = true;
+                // Skip if synthetic input gate is active (sexusb sends events early).
+                if option_env!("SEXUSB_SYNTHETIC_SLOT2").is_some() {
+                    serial_println!("[silk-shell.linen.paint.skip] reason=synthetic_gate_active");
+                } else {
+                    serial_println!("[silk-shell.linen.paint.begin]");
+                    linen_paint_surface();
+                }
+            }
+        }
+
         // Runtime containment: park without syscall while null-jump root cause is isolated.
         if !SHELL_USB_MOUSE_RECEIVE_UNPARK_PROOF_V1 {
             core::hint::spin_loop();
@@ -11141,6 +11262,7 @@ pub extern "C" fn _start() -> ! {
                             {
                                 // Forward key event to Spindle PD 12 via SLOT_SPINDLE
                                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, 1, EV_KEY);
+                                serial_println!("[spindle.input.recv] scancode={:#x}", scancode);
                                 match scancode {
                                     0x1C => { // Enter — dispatch command
                                         serial_println!("[spindle.enter] len={}", YARN.cmd_len);
@@ -11151,6 +11273,8 @@ pub extern "C" fn _start() -> ! {
                                             YARN.cmd_len -= 1;
                                             YARN.cmd_buf[YARN.cmd_len] = 0;
                                             serial_println!("[spindle.key.backspace] len={}", YARN.cmd_len);
+                                            serial_println!("[spindle.line.edit] op=backspace len={}", YARN.cmd_len);
+                                            spindle_render();
                                         }
                                     }
                                     0x01 => { // Escape — clear command buffer
@@ -11158,6 +11282,8 @@ pub extern "C" fn _start() -> ! {
                                             YARN.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
                                             YARN.cmd_len = 0;
                                             serial_println!("[spindle.key.escape]");
+                                            serial_println!("[spindle.line.edit] op=escape len=0");
+                                            spindle_render();
                                         }
                                     }
                                     0x0F => { // Tab — future completion (consume for now)
@@ -11168,6 +11294,8 @@ pub extern "C" fn _start() -> ! {
                                             YARN.cmd_buf[YARN.cmd_len] = b' ';
                                             YARN.cmd_len += 1;
                                             serial_println!("[spindle.key.char] ch=' '");
+                                            serial_println!("[spindle.line.edit] op=push ch=' ' len={}", YARN.cmd_len);
+                                            spindle_render();
                                         }
                                     }
                                     // Numbers 1-9, 0 (evdev KEY_1 through KEY_0).
@@ -11178,6 +11306,8 @@ pub extern "C" fn _start() -> ! {
                                             YARN.cmd_buf[YARN.cmd_len] = ch;
                                             YARN.cmd_len += 1;
                                             serial_println!("[spindle.key.char] ch={}", ch as char);
+                                            serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
+                                            spindle_render();
                                         }
                                     }
                                     // Lowercase letters (unshifted V1). evdev KEY_Q through KEY_P (row 1).
@@ -11188,6 +11318,8 @@ pub extern "C" fn _start() -> ! {
                                             YARN.cmd_buf[YARN.cmd_len] = ch;
                                             YARN.cmd_len += 1;
                                             serial_println!("[spindle.key.char] ch={}", ch as char);
+                                            serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
+                                            spindle_render();
                                         }
                                     }
                                     // Lowercase letters A-L (row 2). evdev KEY_A through KEY_L.
@@ -11198,6 +11330,8 @@ pub extern "C" fn _start() -> ! {
                                             YARN.cmd_buf[YARN.cmd_len] = ch;
                                             YARN.cmd_len += 1;
                                             serial_println!("[spindle.key.char] ch={}", ch as char);
+                                            serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
+                                            spindle_render();
                                         }
                                     }
                                     // Remaining letters: Z, X, C, V, B, N, M.
@@ -11214,6 +11348,8 @@ pub extern "C" fn _start() -> ! {
                                             YARN.cmd_buf[YARN.cmd_len] = ch;
                                             YARN.cmd_len += 1;
                                             serial_println!("[spindle.key.char] ch={}", ch as char);
+                                            serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
+                                            spindle_render();
                                         }
                                     }
                                     _ => {}
