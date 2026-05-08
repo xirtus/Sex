@@ -216,3 +216,22 @@ Runtime proof:
 - boot continues to userland
 - SilkBar clock continues with synthetic fallback in QEMU
 - no `SCHEDULER_RUNNING_VIOLATION`, kernel panic, `#PF`, or `#GP` observed
+
+## SILKBAR_KVM_STALE_THRESHOLD_4_V1
+
+Status:
+KVM stale-real-tick fallback is tuned separately from TCG synthetic fallback.
+
+Runtime behavior:
+- TCG path: `raw_ticks=0`, synthetic threshold=2.
+- KVM stale path: `raw_ticks=1` then stale, fallback threshold=4.
+- KVM clock is still slightly fast but usable.
+- TCG clock remains usable.
+- No panic / `#PF` / `#GP` observed in proof runs.
+
+Invariant:
+Do not use one synthetic threshold for all degraded clock modes.
+`raw_ticks==0` TCG fallback and `raw_ticks!=0 but stale` KVM fallback have different scheduler cadence behavior.
+
+Remaining:
+True wall-clock requires calibrated tick-rate export and RTC seed. That is separate STOP FIRST work.
