@@ -49,6 +49,10 @@ SPAWN_GATE="FAIL"
 CLOCK_GATE="FAIL"
 SCHED_GATE="FAIL"
 FAULT_GATE="FAIL"
+BOOTGRAPH_GATE="FAIL"
+CAP_GRANT_GATE="FAIL"
+ORDER_GATE="FAIL"
+BOOTGRAPH_CLOCK_GATE="FAIL"
 SEXFILES_GATE="FAIL"
 FINAL_SCORE="RED_MASTER"
 SEXFILES_BOOT_PROOF="${SEXOS_SEXFILES_BOOT_PROOF:-0}"
@@ -312,6 +316,7 @@ if [ -z "$MISSING_RUNNING" ]; then
 else
     SCHED_GATE="FAIL"
 fi
+SCHED_ADVISORY="ADVISORY"
 echo ""
 
 # --- FAULT GATE: no panics, faults, kills ---
@@ -341,6 +346,36 @@ if [ -z "$FAULT_HIT" ]; then
     echo "  v No faults/panics detected"
 else
     FAULT_GATE="FAIL"
+fi
+echo ""
+
+# --- BOOTGRAPH PARSER GATES ---
+echo "--- BOOTGRAPH CHECK ---"
+BOOTGRAPH_CHECKER="$ROOT_DIR/scripts/check_bootgraph_log.py"
+BOOTGRAPH_FAIL_LINE=""
+if [ ! -x "$BOOTGRAPH_CHECKER" ]; then
+    BOOTGRAPH_GATE="FAIL"
+    CAP_GRANT_GATE="FAIL"
+    ORDER_GATE="FAIL"
+    BOOTGRAPH_CLOCK_GATE="FAIL"
+    BOOTGRAPH_FAIL_LINE="BOOTGRAPH FAIL: CHECKER_MISSING path=$BOOTGRAPH_CHECKER"
+    echo "  x checker missing: $BOOTGRAPH_CHECKER"
+else
+    BOOTGRAPH_OUT="$("$BOOTGRAPH_CHECKER" "$LOG" --allow-fault 2>&1 || true)"
+    BOOTGRAPH_FAIL_LINE="$(printf '%s\n' "$BOOTGRAPH_OUT" | grep -m1 '^BOOTGRAPH FAIL:' || true)"
+    BOOTGRAPH_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^BOOTGRAPH_GATE:/ {print $2; exit}')"
+    CAP_GRANT_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^CAP_GRANT_GATE:/ {print $2; exit}')"
+    ORDER_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^ORDER_GATE:/ {print $2; exit}')"
+    BOOTGRAPH_CLOCK_GATE="$(printf '%s\n' "$BOOTGRAPH_OUT" | awk '/^CLOCK_GATE:/ {print $2; exit}')"
+    if [ -z "$BOOTGRAPH_GATE" ]; then BOOTGRAPH_GATE="FAIL"; fi
+    if [ -z "$CAP_GRANT_GATE" ]; then CAP_GRANT_GATE="FAIL"; fi
+    if [ -z "$ORDER_GATE" ]; then ORDER_GATE="FAIL"; fi
+    if [ -z "$BOOTGRAPH_CLOCK_GATE" ]; then BOOTGRAPH_CLOCK_GATE="FAIL"; fi
+    if [ -n "$BOOTGRAPH_FAIL_LINE" ]; then
+        echo "  x $BOOTGRAPH_FAIL_LINE"
+    else
+        echo "  v BOOTGRAPH PASS"
+    fi
 fi
 echo ""
 
@@ -384,21 +419,26 @@ echo ""
 
 print_gate "BUILD_GATE" "$BUILD_GATE"
 print_gate "SPAWN_GATE" "$SPAWN_GATE"
-print_gate "CLOCK_GATE" "$CLOCK_GATE"
-print_gate "SCHED_GATE" "$SCHED_GATE"
 print_gate "FAULT_GATE" "$FAULT_GATE"
+print_gate "BOOTGRAPH_GATE" "$BOOTGRAPH_GATE"
+print_gate "CAP_GRANT_GATE" "$CAP_GRANT_GATE"
+print_gate "ORDER_GATE" "$ORDER_GATE"
+print_gate "CLOCK_GATE" "$BOOTGRAPH_CLOCK_GATE"
+print_gate "SCHED_GATE" "$SCHED_GATE ($SCHED_ADVISORY)"
 print_gate "SEXFILES_GATE" "$SEXFILES_GATE"
 
 if [ "$BUILD_GATE" = "PASS" ] || [ "$BUILD_GATE" = "SKIP" ]; then
-    if [ "$SPAWN_GATE" = "PASS" ] && [ "$CLOCK_GATE" = "PASS" ] \
-        && [ "$SCHED_GATE" = "PASS" ] && [ "$FAULT_GATE" = "PASS" ]; then
+    if [ "$SPAWN_GATE" = "PASS" ] && [ "$FAULT_GATE" = "PASS" ] \
+        && [ "$BOOTGRAPH_GATE" = "PASS" ] && [ "$CAP_GRANT_GATE" = "PASS" ] \
+        && [ "$ORDER_GATE" = "PASS" ] && [ "$BOOTGRAPH_CLOCK_GATE" = "PASS" ]; then
         if [ "$SEXFILES_GATE" = "PASS" ] || [ "$SEXFILES_GATE" = "SKIP" ]; then
             FINAL_SCORE="GREEN_MASTER"
         else
             FINAL_SCORE="YELLOW_MASTER"
         fi
-    elif [ "$SPAWN_GATE" = "PASS" ] && [ "$CLOCK_GATE" = "PASS" ] \
-        && [ "$SCHED_GATE" = "PASS" ]; then
+    elif [ "$SPAWN_GATE" = "PASS" ] && [ "$FAULT_GATE" = "PASS" ] \
+        && [ "$BOOTGRAPH_GATE" = "PASS" ] && [ "$CAP_GRANT_GATE" = "PASS" ] \
+        && [ "$ORDER_GATE" = "PASS" ]; then
         FINAL_SCORE="YELLOW_MASTER"
     else
         FINAL_SCORE="RED_MASTER"
@@ -547,8 +587,14 @@ if [ "$FINAL_SCORE" = "GREEN_MASTER" ]; then
     exit 0
 elif [ "$FINAL_SCORE" = "YELLOW_MASTER" ]; then
     echo "[gate] PARTIAL PASS (YELLOW) - review fault details"
+    if [ -n "$BOOTGRAPH_FAIL_LINE" ]; then
+        echo "[gate] $BOOTGRAPH_FAIL_LINE"
+    fi
     exit 1
 else
     echo "[gate] GATE FAILED (RED)"
+    if [ -n "$BOOTGRAPH_FAIL_LINE" ]; then
+        echo "[gate] $BOOTGRAPH_FAIL_LINE"
+    fi
     exit 1
 fi
