@@ -350,3 +350,26 @@ python3 scripts/check_cursor_route_log.py /tmp/sexos.log
 
 BootGraph gates turn runtime proof chains into repeatable checks.
 Every new input/hid/cursor edge should add its required markers here.
+
+## POINTER_QUALITY_V2_GATE_SYNTHETIC_ABS_V1
+
+Status:
+Cursor route remains alive and pointer movement is smoother.
+
+Runtime proof:
+- Relative movement is filtered:
+  `[silk-shell.pointer.filter] raw_dx=-18 raw_dy=2 dx=-4 dy=1`
+- Synthetic/proof absolute jump is gated:
+  `[silk-shell.pointer.synthetic_abs.skip] x=940 y=560 reason=real_input_seen`
+- Display cursor moves gradually:
+  `[sexdisplay.cursor.draw] n=0 x=... y=...`
+- Automatic gate passes:
+  `[cursor.route.PASS] sexinput->silk-shell->sexdisplay moved cursor`
+
+Invariant:
+Real user pointer input outranks boot-time synthetic pointer proofs. Synthetic/proof ABS
+events must not yank the cursor after real relative movement begins.
+
+Remaining:
+Fine-tune pointer feel later if needed, but do not change USB decode, sexinput wire format,
+or sexdisplay render path for gain/clamp work unless STOP FIRST proves route regression.
