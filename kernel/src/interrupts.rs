@@ -386,6 +386,26 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
         serial_println!("timer.tick.enter");
     }
     TICKS.fetch_add(1, Ordering::Relaxed);
+    // Boot-phase guard: skip scheduler tick until SchedulerRunning.
+    // Early LAPIC timer interrupts fire before userland PDs are spawned.
+    // Accumulate TICKS harmlessly; defer sched.tick() until the boot
+    // controller advances past SchedulerArmed.
+    unsafe {
+        if (crate::ipc::BOOT_CONTROLLER.phase() as u8)
+            < (crate::ipc::BootPhase::SchedulerRunning as u8)
+        {
+            static mut TICK_DEFER_BUDGET: u32 = 8;
+            if TICK_DEFER_BUDGET > 0 {
+                TICK_DEFER_BUDGET -= 1;
+                serial_println!(
+                    "[timer.tick.defer] reason=scheduler_not_running phase={}",
+                    crate::ipc::BOOT_CONTROLLER.phase() as u8
+                );
+            }
+            send_eoi();
+            return;
+        }
+    }
     let core_id = crate::core_local::CoreLocal::get().core_id;
     let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
 
