@@ -7069,6 +7069,56 @@ static mut YARN: YarnSession = YarnSession {
     sb_offset: 0,
 };
 
+// ── Spindle session/pane model (bounded, no heap) ────────────────────────────
+/// Scrollback lines kept per session (64 × 80 bytes = 5 KiB each, 10 KiB for 2).
+const SESSION_SB_LINES: usize = 64;
+/// Number of concurrent sessions.
+const SPINDLE_SESSION_COUNT: usize = 2;
+
+/// Saved state for one Spindle session (swapped in/out of YARN + vi statics).
+struct SpindleSessionState {
+    cmd_buf: [u8; YARN_CMD_BUF_CAP],
+    cmd_len: usize,
+    vi_normal: bool,
+    vi_cur: usize,
+    vi_pending_d: bool,
+    vi_prev_buf: [u8; YARN_CMD_BUF_CAP],
+    vi_prev_len: usize,
+    output_lines: [[u8; YARN_OUTPUT_LINE_CAP]; YARN_OUTPUT_LINES],
+    output_count: usize,
+    sb_ring: [[u8; SPINDLE_SB_LINE_CAP]; SESSION_SB_LINES],
+    sb_write: usize,
+    sb_total: u32,
+    history: [[u8; YARN_CMD_BUF_CAP]; YARN_HISTORY_CAP],
+    history_count: usize,
+    history_pos: i64,
+    label: [u8; 16],
+}
+
+static mut SPINDLE_SESSIONS: [SpindleSessionState; SPINDLE_SESSION_COUNT] = [
+    SpindleSessionState {
+        cmd_buf: [0u8; YARN_CMD_BUF_CAP], cmd_len: 0,
+        vi_normal: false, vi_cur: 0, vi_pending_d: false,
+        vi_prev_buf: [0u8; YARN_CMD_BUF_CAP], vi_prev_len: 0,
+        output_lines: [[0u8; YARN_OUTPUT_LINE_CAP]; YARN_OUTPUT_LINES], output_count: 0,
+        sb_ring: [[0u8; SPINDLE_SB_LINE_CAP]; SESSION_SB_LINES], sb_write: 0, sb_total: 0,
+        history: [[0u8; YARN_CMD_BUF_CAP]; YARN_HISTORY_CAP], history_count: 0, history_pos: -1,
+        label: *b"session-0       ",
+    },
+    SpindleSessionState {
+        cmd_buf: [0u8; YARN_CMD_BUF_CAP], cmd_len: 0,
+        vi_normal: false, vi_cur: 0, vi_pending_d: false,
+        vi_prev_buf: [0u8; YARN_CMD_BUF_CAP], vi_prev_len: 0,
+        output_lines: [[0u8; YARN_OUTPUT_LINE_CAP]; YARN_OUTPUT_LINES], output_count: 0,
+        sb_ring: [[0u8; SPINDLE_SB_LINE_CAP]; SESSION_SB_LINES], sb_write: 0, sb_total: 0,
+        history: [[0u8; YARN_CMD_BUF_CAP]; YARN_HISTORY_CAP], history_count: 0, history_pos: -1,
+        label: *b"session-1       ",
+    },
+];
+
+/// Index of the currently active session (0 or 1).
+static mut SPINDLE_ACTIVE_SESSION: usize = 0;
+
 /// Shell commands exposed via the command palette.
 /// Each command routes to an existing SurfaceAction via the normal dispatch path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7207,6 +7257,15 @@ unsafe fn open_spindle_in_active_scene() -> bool {
     if let Some(sid) = active_surface_for_frame(fid) {
         try_set_focus(sid);
         serial_println!("[spindle.placeholder.focus] frame={} sid={}", fid, sid);
+    }
+
+    // Session model init proof: emit once on first open.
+    static mut SESSION_INIT_DONE: bool = false;
+    if !SESSION_INIT_DONE {
+        SESSION_INIT_DONE = true;
+        serial_println!("[spindle.session.create] idx=0 count={}", SPINDLE_SESSION_COUNT);
+        serial_println!("[spindle.session.create] idx=1 count={}", SPINDLE_SESSION_COUNT);
+        serial_println!("[spindle.pane.active] idx={}", SPINDLE_ACTIVE_SESSION);
     }
 
     // Render Spindle output bands.
@@ -7795,6 +7854,12 @@ unsafe fn spindle_render_cmdline() {
 
     let yarn = &YARN;
 
+    // ── Segment 0: session [S0] / [S1] ──────────────────────────────────────
+    let sess_idx = SPINDLE_ACTIVE_SESSION;
+    let session_tag: &[u8] = if sess_idx == 0 { b"[S0]" } else { b"[S1]" };
+    let session_color: u64 = if sess_idx == 0 { CAT_BLUE } else { CAT_MAUVE };
+    serial_println!("[spindle.stargate.segment] kind=session idx={}", sess_idx);
+
     // ── Segment 1: status [OK] / [!!] ───────────────────────────────────────
     let status_tag:   &[u8] = if SPINDLE_LAST_CMD_OK { b"[OK]" } else { b"[!!]" };
     let status_color: u64   = if SPINDLE_LAST_CMD_OK { CAT_GREEN  } else { CAT_RED };
@@ -7807,21 +7872,24 @@ unsafe fn spindle_render_cmdline() {
 
     // ── Segment 3: prompt ───────────────────────────────────────────────────
     const PROMPT_BYTES: &[u8] = b"sex> ";
-    let header_len = status_tag.len() + mode_tag.len() + PROMPT_BYTES.len(); // 4+3+5=12
+    // header: [S0/S1](4) + [OK/!!](4) + [I/N](3) + sex>(5) = 16 chars
+    let header_len = session_tag.len() + status_tag.len() + mode_tag.len() + PROMPT_BYTES.len();
 
     // Clear text buffer then pack all segments + cmd into one 0xFB stream.
     pdx_call(SLOT_DISPLAY, 0xFA, SURFACE_ID_SPINDLE, 0, 0);
 
     let max_chars = 40usize;
     let mut packed_buf = [0u8; 40];
-    let mut seg_ends = [0usize; 3]; // end byte offsets of each colored segment
+    let mut seg_ends = [0usize; 4]; // end byte offsets of each colored segment
     let mut ti = 0usize;
+    for &b in session_tag  { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
+    seg_ends[0] = ti; // end of session segment
     for &b in status_tag   { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
-    seg_ends[0] = ti; // end of status segment
+    seg_ends[1] = ti; // end of status segment
     for &b in mode_tag     { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
-    seg_ends[1] = ti; // end of mode segment
+    seg_ends[2] = ti; // end of mode segment
     for &b in PROMPT_BYTES { if ti < max_chars { packed_buf[ti] = b; ti += 1; } }
-    seg_ends[2] = ti; // end of prompt segment
+    seg_ends[3] = ti; // end of prompt segment
     for i in 0..yarn.cmd_len {
         if ti < max_chars { packed_buf[ti] = yarn.cmd_buf[i]; ti += 1; }
     }
@@ -7831,10 +7899,11 @@ unsafe fn spindle_render_cmdline() {
         let chunk = 8.min(ti - offset);
         let mut word: u64 = 0;
         for i in 0..chunk { word |= (packed_buf[offset + i] as u64) << (i * 8); }
-        // Color by segment: status → mode → prompt (subtext) → cmd text.
-        let color: u64 = if offset < seg_ends[0]      { status_color }
-                         else if offset < seg_ends[1] { mode_color }
-                         else if offset < seg_ends[2] { CAT_SUBTEXT1 }
+        // Color by segment: session → status → mode → prompt (subtext) → cmd text.
+        let color: u64 = if offset < seg_ends[0]      { session_color }
+                         else if offset < seg_ends[1] { status_color }
+                         else if offset < seg_ends[2] { mode_color }
+                         else if offset < seg_ends[3] { CAT_SUBTEXT1 }
                          else                          { CAT_TEXT };
         pdx_call(SLOT_DISPLAY, 0xFB, SURFACE_ID_SPINDLE, word,
             (offset as u64) | ((chunk as u64) << 8) | (color << 32));
@@ -7856,8 +7925,84 @@ unsafe fn spindle_render_cmdline() {
         ((cursor_y as u64) << 32) | (cursor_x as u64),
         (7u64 << 56) | (cursor_color << 32) | ((cursor_h as u64) << 16) | (cursor_w as u64));
 
-    serial_println!("[spindle.stargate.render] cmd_len={} vi_cur={} cursor_x={} ok={}",
-        yarn.cmd_len, vi_cur, cursor_x, SPINDLE_LAST_CMD_OK as u8);
+    serial_println!("[spindle.stargate.render] cmd_len={} vi_cur={} cursor_x={} ok={} sess={}",
+        yarn.cmd_len, vi_cur, cursor_x, SPINDLE_LAST_CMD_OK as u8, sess_idx);
+}
+
+// ── Spindle session save/load/switch ─────────────────────────────────────────
+
+/// Save live YARN + vi state into SPINDLE_SESSIONS[idx].
+/// Scrollback is trimmed to SESSION_SB_LINES newest lines.
+unsafe fn spindle_session_save(idx: usize) {
+    let s = &mut SPINDLE_SESSIONS[idx];
+    let yarn = &YARN;
+    s.cmd_buf = yarn.cmd_buf;
+    s.cmd_len = yarn.cmd_len;
+    s.vi_normal = SPINDLE_VI_NORMAL;
+    s.vi_cur = SPINDLE_VI_CUR;
+    s.vi_pending_d = SPINDLE_VI_PENDING_D;
+    s.vi_prev_buf = SPINDLE_VI_PREV_BUF;
+    s.vi_prev_len = SPINDLE_VI_PREV_LEN;
+    s.output_lines = [[0u8; YARN_OUTPUT_LINE_CAP]; YARN_OUTPUT_LINES];
+    for i in 0..YARN_OUTPUT_LINES { s.output_lines[i] = yarn.output_lines[i]; }
+    s.output_count = yarn.output_count;
+    // Copy newest SESSION_SB_LINES lines from the 1024-line ring.
+    let total = yarn.sb_total as usize;
+    let src_lines = total.min(SPINDLE_SB_LINES);
+    let keep = src_lines.min(SESSION_SB_LINES);
+    s.sb_ring = [[0u8; SPINDLE_SB_LINE_CAP]; SESSION_SB_LINES];
+    for i in 0..keep {
+        let src_idx = (yarn.sb_write + SPINDLE_SB_LINES - src_lines + i) % SPINDLE_SB_LINES;
+        s.sb_ring[i] = yarn.sb_ring[src_idx];
+    }
+    s.sb_write = keep % SESSION_SB_LINES;
+    s.sb_total = keep as u32;
+    s.history = yarn.history;
+    s.history_count = yarn.history_count;
+    s.history_pos = yarn.history_pos;
+    serial_println!("[spindle.session.save] idx={} cmd_len={} sb_total={}", idx, s.cmd_len, s.sb_total);
+}
+
+/// Load SPINDLE_SESSIONS[idx] into live YARN + vi state.
+unsafe fn spindle_session_load(idx: usize) {
+    let s = &SPINDLE_SESSIONS[idx];
+    let yarn = &mut YARN;
+    yarn.cmd_buf = s.cmd_buf;
+    yarn.cmd_len = s.cmd_len;
+    SPINDLE_VI_NORMAL = s.vi_normal;
+    SPINDLE_VI_CUR = s.vi_cur;
+    SPINDLE_VI_PENDING_D = s.vi_pending_d;
+    SPINDLE_VI_PREV_BUF = s.vi_prev_buf;
+    SPINDLE_VI_PREV_LEN = s.vi_prev_len;
+    for i in 0..YARN_OUTPUT_LINES { yarn.output_lines[i] = s.output_lines[i]; }
+    yarn.output_count = s.output_count;
+    // Expand saved ring into the 1024-line YARN ring.
+    yarn.sb_ring = [[0u8; SPINDLE_SB_LINE_CAP]; SPINDLE_SB_LINES];
+    let n = (s.sb_total as usize).min(SESSION_SB_LINES);
+    for i in 0..n {
+        let src_idx = (s.sb_write + SESSION_SB_LINES - n + i) % SESSION_SB_LINES;
+        yarn.sb_ring[i] = s.sb_ring[src_idx];
+    }
+    yarn.sb_write = n % SPINDLE_SB_LINES;
+    yarn.sb_total = n as u32;
+    yarn.sb_offset = 0;
+    yarn.history = s.history;
+    yarn.history_count = s.history_count;
+    yarn.history_pos = s.history_pos;
+    serial_println!("[spindle.session.load] idx={} cmd_len={} sb_total={}", idx, yarn.cmd_len, yarn.sb_total);
+}
+
+/// Save current session, advance to next, load it, then re-render.
+unsafe fn spindle_session_switch() {
+    let prev = SPINDLE_ACTIVE_SESSION;
+    spindle_session_save(prev);
+    let next = (prev + 1) % SPINDLE_SESSION_COUNT;
+    SPINDLE_ACTIVE_SESSION = next;
+    spindle_session_load(next);
+    serial_println!("[spindle.pane.switch] from={} to={}", prev, next);
+    serial_println!("[spindle.pane.active] idx={}", next);
+    serial_println!("[spindle.pane.buffer.independent] prev={} next={}", prev, next);
+    spindle_render();
 }
 
 // ── Bell Surface Control Helpers ─────────────────────────────────────────────
@@ -11635,7 +11780,9 @@ pub extern "C" fn _start() -> ! {
                                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, 1, EV_KEY);
                                 serial_println!("[spindle.input.recv] scancode={:#x}", scancode);
                                 // Priority: Ctrl chords → Spiderweb → vi-normal → insert.
-                                if SPINDLE_CTRL_DOWN && scancode == 0x13 { // Ctrl+R
+                                if SPINDLE_CTRL_DOWN && scancode == 0x11 { // Ctrl+W — session switch
+                                    spindle_session_switch();
+                                } else if SPINDLE_CTRL_DOWN && scancode == 0x13 { // Ctrl+R
                                     spiderweb_open(SpiderwebMode::History);
                                 } else if SPINDLE_CTRL_DOWN && scancode == 0x19 { // Ctrl+P
                                     spiderweb_open(SpiderwebMode::Command);
