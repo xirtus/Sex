@@ -455,6 +455,31 @@ pub fn init() {
         );
     }
 
+    // Spindle route: grant silk-shell capability to send key events
+    // to Spindle terminal (domain 12) via SLOT_SPINDLE.
+    if spindle_id != 0 && silkshell_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::capability::CapabilityData;
+        if let Some(pd) = DOMAIN_REGISTRY.get(silkshell_id) {
+            pd.grant_capability(sex_pdx::SLOT_SPINDLE, CapabilityData::Domain(spindle_id));
+            serial_println!("[kernel.cap.spindle.route] shell->spindle slot={}", sex_pdx::SLOT_SPINDLE);
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SPINDLE target={} ok=1 optional=1]",
+                silkshell_id, spindle_id
+            );
+        } else {
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SPINDLE target={} ok=0 optional=1 reason=pd_missing]",
+                silkshell_id, spindle_id
+            );
+        }
+    } else {
+        serial_println!(
+            "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SPINDLE target={} ok=0 optional=1 reason=spindle_or_silkshell_absent]",
+            silkshell_id, spindle_id
+        );
+    }
+
     // Bell self-cap: grant SLOT_BELL to sexbell for listen (no external caps).
     if sexbell_id != 0 {
         use crate::ipc::DOMAIN_REGISTRY;

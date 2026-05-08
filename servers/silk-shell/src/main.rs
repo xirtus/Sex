@@ -111,6 +111,15 @@ const LIFECYCLE_PROOF_ENABLED: bool =
 /// Synthetic proof stage counter for app lifecycle proof. Advances 0..5 then stops.
 static mut LIFECYCLE_PROOF_STAGE: u8 = 0;
 
+/// Spindle keyboard route synthetic proof gate.
+/// Sends a short key sequence (a b c Backspace d Enter) through the
+/// existing EV_KEY → Spindle route when Spindle surface is focused.
+const SPINDLE_KEYBOARD_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SPINDLE_KEYBOARD_PROOF").is_some();
+static mut SPINDLE_KEYBOARD_PROOF_STAGE: u8 = 0;
+/// Scancodes for the synthetic key sequence: a, b, c, Backspace, d, Enter.
+const SPINDLE_SYNTH_SEQ: [u8; 6] = [0x1E, 0x30, 0x2E, 0x0E, 0x20, 0x1C];
+
 // Well-known key ID for scene appearance settings blob.
 const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
 
@@ -11399,6 +11408,43 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silkshell.ready]");
 
     loop {
+        // ── Spindle keyboard route synthetic proof ────────────────────
+        // Runs BEFORE any blocking work (Linen paint, input drain).
+        // Sends a short key sequence through the existing EV_KEY→Spindle
+        // route when Spindle surface is focused.  Does not touch kernel/IRQ.
+        if SPINDLE_KEYBOARD_PROOF_ENABLED {
+            unsafe {
+                let stage = SPINDLE_KEYBOARD_PROOF_STAGE;
+                let max_stage = SPINDLE_SYNTH_SEQ.len() as u8;
+                if stage == 0 {
+                    serial_println!("[shell.synthetic_key.enabled] stages={}", max_stage);
+                    // Best-effort focus: key delivery uses SLOT_SPINDLE
+                    // directly, so focus is cosmetic.  Advance to key
+                    // send even if focus fails.
+                    if FOCUSED_SURFACE_ID != SURFACE_ID_SPINDLE {
+                        serial_println!("[shell.synthetic_key.set_focus] target=spindle sid={:#x}", SURFACE_ID_SPINDLE);
+                        try_set_focus(SURFACE_ID_SPINDLE);
+                    }
+                    SPINDLE_KEYBOARD_PROOF_STAGE = 1;
+                    sys_yield();
+                    continue;
+                }
+                if stage <= max_stage {
+                    let sc = SPINDLE_SYNTH_SEQ[(stage - 1) as usize];
+                    let (status, _) = pdx_call(SLOT_SPINDLE, OP_HID_EVENT, sc as u64, 1, EV_KEY);
+                    serial_println!("[shell.synthetic_key.send] sc=0x{:x} stage={} status={}", sc, stage, status);
+                    SPINDLE_KEYBOARD_PROOF_STAGE = stage + 1;
+                    sys_yield();
+                    continue;
+                }
+                // stage == max_stage + 1: proof complete, no more work.
+                if stage == max_stage + 1 {
+                    SPINDLE_KEYBOARD_PROOF_STAGE = stage + 1;
+                    serial_println!("[shell.synthetic_key.done] target=spindle stages={}", max_stage);
+                }
+            }
+        }
+
         // ── Input-first drain: run BEFORE any blocking work ────────────
         // Non-blocking bounded drain of pending input messages so
         // sexinput events are not consumed by linen_sync_reply() or

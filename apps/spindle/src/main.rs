@@ -844,6 +844,17 @@ pub extern "C" fn _start() -> ! {
 
     loop {
         let msg = unsafe { sex_pdx::pdx_listen_raw(0) };
+        // Budgeted raw receive marker: log all incoming PDX messages.
+        unsafe {
+            static mut SPINDLE_RAW_BUDGET: u32 = 32;
+            if SPINDLE_RAW_BUDGET > 0 {
+                SPINDLE_RAW_BUDGET -= 1;
+                sex_pdx::serial_println!(
+                    "[spindle.pdx.raw] type=0x{:x} a0=0x{:x} a1=0x{:x} a2=0x{:x} caller={}",
+                    msg.type_id, msg.arg0, msg.arg1, msg.arg2, msg.caller_pd
+                );
+            }
+        }
         if msg.type_id == 0x202 {
             let scancode = msg.arg0 as u8;
             let value = msg.arg1;
