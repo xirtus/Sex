@@ -447,3 +447,35 @@ Invariant:
 Pointer feel is SilkShell policy. Do not change USB decode, sexinput wire format,
 sexdisplay framebuffer path, kernel routing, or PDX ABI for pointer acceleration unless
 STOP FIRST proves route regression.
+
+## SPINDLE_CAP_GRANT_V1
+
+Status:
+SilkShell -> Spindle PDX route is proven.
+
+Root cause:
+SilkShell had a logical Spindle route marker, but no kernel capability at `SLOT_SPINDLE=14`.
+Synthetic keyboard sends failed with `ERR_CAP_INVALID = -4`.
+
+Fix:
+Kernel init now grants SilkShell `SLOT_SPINDLE -> Domain(spindle_id)`.
+
+Runtime proof:
+- `[kernel.cap.spindle.route] shell->spindle slot=14`
+- `[bootgraph.cap.grant from=kernel to=3 slot=SLOT_SPINDLE target=12 ok=1 optional=1]`
+- `[shell.synthetic_key.send] ... status=0`
+- `[spindle.pdx.raw] type=0x202 ... caller=3`
+- `[spindle.input.recv]`
+- `[spindle.line.append]`
+- `[spindle.line.backspace]`
+- `[spindle.line.enter]`
+
+Known follow-up:
+Spindle receives keys, but its scancode-to-char mapping is wrong for several set-1 scancodes:
+- `0x30` produced `~`, expected `b`
+- `0x2e` produced `|`, expected `c`
+- `0x20` produced `c`, expected `d`
+
+Invariant:
+A UI route marker is not a capability proof. Every cross-PD route must have a matching
+kernel capability grant and a runtime send-status proof.
