@@ -1,9 +1,9 @@
 # MASTER_RUNTIME_GATE_V1
 
-- date: 2026-05-07T11:00:03+02:00
-- git commit: ff588d2
+- date: 2026-05-08T07:00:05+02:00
+- git commit: c577919
 - log_path: /home/xirtus_arch/Documents/microkernel/.gate_master/serial.log
-- probe_seconds: 35
+- probe_seconds: 25
 - nvme_enabled: 1
 - nvme_img: /home/xirtus_arch/Documents/microkernel/.gate_master/nvme.img
 - qemu: qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku -cdrom sexos-v1.0.0.iso -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0 -drive if=none,id=nvm,file=/home/xirtus_arch/Documents/microkernel/.gate_master/nvme.img,format=raw -device nvme,serial=sexos01,drive=nvm -serial file:$LOG -display none -no-reboot -no-shutdown
@@ -12,18 +12,18 @@
 
 | Gate | Status |
 |------|--------|
-| BUILD_GATE | PASS |
+| BUILD_GATE | SKIP |
 | SPAWN_GATE | PASS |
-| CLOCK_GATE | FAIL |
+| CLOCK_GATE | PASS |
 | SCHED_GATE | PASS |
 | FAULT_GATE | PASS |
-| SEXFILES_GATE | SKIP |
-| **FINAL_SCORE** | **RED_MASTER** |
+| SEXFILES_GATE | PASS |
+| **FINAL_SCORE** | **GREEN_MASTER** |
 
 ## Marker Counts
 
 - Spawned PDs: 12
-- Clock ticks (silkbar.clock.send): 0
+- Clock ticks (silkbar.clock.send): 2
 - task.running total: 128
 - Fault/panic hits: 0
 
@@ -36,7 +36,7 @@
 - v silkbar: spawned
 - v linen: spawned
 
-- sexfiles: SEXFILES_GATE=SKIP ready=0 kspawn=1
+- sexfiles: SEXFILES_GATE=PASS ready=1 kspawn=1
 
 - sexdisplay (PD 1): task.running 41x
 - sexdrive (PD 2): task.running 11x
@@ -49,7 +49,7 @@
 
 ## Clock Liveness
 
-- silkbar.clock.send ticks: 0
+- silkbar.clock.send ticks: 2
 - Minimum required: 2
 
 ## Expected Pass Criteria
