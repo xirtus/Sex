@@ -865,18 +865,25 @@ unsafe fn linen_sync_reply() -> u64 {
                 }
             }
             if event_class == EV_ABS {
-                POINTER_X = (msg.arg0 as i32).clamp(0, P.width - 1);
-                POINTER_Y = (msg.arg1 as i32).clamp(0, P.height - 1);
-                pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
-            } else if event_class == EV_REL {
-                if !POINTER_USB_STATE_INIT {
-                    POINTER_X = P.width / 2;
-                    POINTER_Y = P.height / 2;
-                    POINTER_USB_STATE_INIT = true;
+                if !REAL_POINTER_SEEN {
+                    POINTER_X = (msg.arg0 as i32).clamp(0, P.width - 1);
+                    POINTER_Y = (msg.arg1 as i32).clamp(0, P.height - 1);
+                    pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                } else {
+                    unsafe {
+                        static mut SYNTH_ABS_SKIP_BUDGET: u32 = 8;
+                        let s = &mut SYNTH_ABS_SKIP_BUDGET;
+                        if *s > 0 {
+                            *s -= 1;
+                            serial_println!(
+                                "[silk-shell.pointer.synthetic_abs.skip] x={} y={} reason=real_input_seen",
+                                msg.arg0 as i32, msg.arg1 as i32
+                            );
+                        }
+                    }
                 }
-                POINTER_X = POINTER_X.wrapping_add(msg.arg0 as i32);
-                POINTER_Y = POINTER_Y.wrapping_add(msg.arg1 as i32);
-                pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+            } else if event_class == EV_REL {
+                apply_rel_pointer(msg.arg0 as i32, msg.arg1 as i32);
             }
             // EV_KEY, EV_BTN: not processed here; full dispatch
             // happens later in the main match block.
@@ -4330,7 +4337,90 @@ static mut POINTER_Y: i32 = 0;
 static mut POINTER_BUTTONS: u8 = 0; // bitmask: bit0=left, bit1=right, bit2=middle
 static mut POINTER_WHEEL_ACCUM: i32 = 0;
 static mut POINTER_USB_STATE_INIT: bool = false;
+/// Set true by apply_rel_pointer on first real relative input.
+/// Once set, EV_ABS handlers skip synthetic proof absolute events
+/// to prevent cursor yanking during normal operation.
+static mut REAL_POINTER_SEEN: bool = false;
 static mut INTERACTION: InteractionState = InteractionState::Idle;
+
+/// Apply relative pointer movement with gain reduction and bounds clamping,
+/// then send cursor surface update to sexdisplay.
+/// Used by the three EV_REL dispatch sites (main match, linen_sync_reply,
+/// before-linen drain) so filter/clamp behavior is identical everywhere.
+/// Apply relative pointer movement with gain reduction and bounds clamping,
+/// then send cursor surface update to sexdisplay.
+/// Returns the filtered (dx, dy) actually applied, so callers can reuse
+/// the same filtered deltas for drag movement.
+unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
+    // Mark that real relative input has been seen.  Used by EV_ABS
+    // handlers to gate off synthetic proof absolute events after boot.
+    REAL_POINTER_SEEN = true;
+
+    // Clamp incoming delta to [-16, 16] to prevent wild jumps from
+    // acceleration spikes or trackpad noise.
+    const MAX_DELTA: i32 = 16;
+    let dx_in = dx_raw.clamp(-MAX_DELTA, MAX_DELTA);
+    let dy_in = dy_raw.clamp(-MAX_DELTA, MAX_DELTA);
+
+    // Gain reduction: divide by 4, preserving sign.
+    // Small nonzero deltas must produce at least ±1 so micro-movements
+    // aren't swallowed.
+    let dx = if dx_in != 0 {
+        let scaled = dx_in / 4;
+        if scaled == 0 { dx_in.signum() } else { scaled }
+    } else { 0 };
+    let dy = if dy_in != 0 {
+        let scaled = dy_in / 4;
+        if scaled == 0 { dy_in.signum() } else { scaled }
+    } else { 0 };
+
+    // Budgeted filter proof: log raw vs filtered deltas.
+    unsafe {
+        static mut POINTER_FILTER_BUDGET: u32 = 32;
+        let f = &mut POINTER_FILTER_BUDGET;
+        if *f > 0 && (dx_raw != dx || dy_raw != dy) {
+            *f -= 1;
+            serial_println!(
+                "[silk-shell.pointer.filter] raw_dx={} raw_dy={} dx={} dy={}",
+                dx_raw, dy_raw, dx, dy
+            );
+        }
+    }
+
+    // Initialize to center on first relative movement.
+    if !POINTER_USB_STATE_INIT {
+        POINTER_X = P.width / 2;
+        POINTER_Y = P.height / 2;
+        POINTER_USB_STATE_INIT = true;
+    }
+
+    let old_x = POINTER_X;
+    let old_y = POINTER_Y;
+    POINTER_X = POINTER_X.wrapping_add(dx);
+    POINTER_Y = POINTER_Y.wrapping_add(dy);
+
+    // Clamp to display bounds.
+    let new_x = POINTER_X.clamp(0, P.width - 1);
+    let new_y = POINTER_Y.clamp(0, P.height - 1);
+    if new_x != old_x || new_y != old_y {
+        unsafe {
+            static mut CURSOR_CLAMP_BUDGET: u32 = 16;
+            let c = &mut CURSOR_CLAMP_BUDGET;
+            if *c > 0 {
+                *c -= 1;
+                serial_println!(
+                    "[silk-shell.cursor.clamp] old_x={} old_y={} new_x={} new_y={}",
+                    old_x, old_y, new_x, new_y
+                );
+            }
+        }
+    }
+    POINTER_X = new_x;
+    POINTER_Y = new_y;
+
+    pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+    (dx, dy)
+}
 /// Number of allowed [shell.interaction.transition] log lines remaining.
 /// Uses AtomicU32 (not static mut) to guarantee the compiler cannot elide
 /// the decrement — shared references to static mut are UB and get optimized.
@@ -11238,18 +11328,25 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                     if event_class == EV_ABS {
-                        POINTER_X = (req.arg0 as i32).clamp(0, P.width - 1);
-                        POINTER_Y = (req.arg1 as i32).clamp(0, P.height - 1);
-                        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
-                    } else if event_class == EV_REL {
-                        if !POINTER_USB_STATE_INIT {
-                            POINTER_X = P.width / 2;
-                            POINTER_Y = P.height / 2;
-                            POINTER_USB_STATE_INIT = true;
+                        if !REAL_POINTER_SEEN {
+                            POINTER_X = (req.arg0 as i32).clamp(0, P.width - 1);
+                            POINTER_Y = (req.arg1 as i32).clamp(0, P.height - 1);
+                            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                        } else {
+                            unsafe {
+                                static mut SYNTH_ABS_SKIP_BUDGET_DRAIN: u32 = 8;
+                                let s = &mut SYNTH_ABS_SKIP_BUDGET_DRAIN;
+                                if *s > 0 {
+                                    *s -= 1;
+                                    serial_println!(
+                                        "[silk-shell.pointer.synthetic_abs.skip] x={} y={} reason=real_input_seen",
+                                        req.arg0 as i32, req.arg1 as i32
+                                    );
+                                }
+                            }
                         }
-                        POINTER_X = POINTER_X.wrapping_add(dx);
-                        POINTER_Y = POINTER_Y.wrapping_add(dy);
-                        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                    } else if event_class == EV_REL {
+                        apply_rel_pointer(dx, dy);
                     }
                     // else: EV_KEY, EV_BTN — do minimal processing only;
                     // full dispatch happens later in the main match block.
@@ -12900,40 +12997,52 @@ pub extern "C" fn _start() -> ! {
                                     serial_println!("[silk-shell.pointer.recv] class={} a0={} a1={}", event_class, msg.arg0 as i32, msg.arg1 as i32);
                                 }
                             }
-                            POINTER_X = (msg.arg0 as i32).clamp(0, P.width - 1);
-                            POINTER_Y = (msg.arg1 as i32).clamp(0, P.height - 1);
-                            serial_println!("[silk-shell] Pointer ABS ({}, {})", POINTER_X, POINTER_Y);
-                            
-                            // Budgeted marker: shell sends cursor surface update to display.
-                            unsafe {
-                                static mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS: u32 = 16;
-                                let rem = &mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS;
-                                if *rem > 0 {
-                                    *rem -= 1;
-                                    serial_println!("[shell.cursor.surface.update] n=0 x={} y={}", POINTER_X, POINTER_Y);
+                            if !REAL_POINTER_SEEN {
+                                POINTER_X = (msg.arg0 as i32).clamp(0, P.width - 1);
+                                POINTER_Y = (msg.arg1 as i32).clamp(0, P.height - 1);
+                                serial_println!("[silk-shell] Pointer ABS ({}, {})", POINTER_X, POINTER_Y);
+                                // Budgeted marker: shell sends cursor surface update to display.
+                                unsafe {
+                                    static mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS: u32 = 16;
+                                    let rem = &mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS;
+                                    if *rem > 0 {
+                                        *rem -= 1;
+                                        serial_println!("[shell.cursor.surface.update] n=0 x={} y={}", POINTER_X, POINTER_Y);
+                                    }
                                 }
-                            }
-                            // Move cursor surface to updated pointer position.
-                            serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
-                            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
-                            serial_println!("[shell.cursor_surface.move.ok]");
-                            unsafe {
-                                static mut SILK_SHELL_CURSOR_UPDATE_BUDGET_ABS: u32 = 16;
-                                let rem = &mut SILK_SHELL_CURSOR_UPDATE_BUDGET_ABS;
-                                if *rem > 0 {
-                                    *rem -= 1;
-                                    serial_println!("[silk-shell.cursor.update] x={} y={}", POINTER_X, POINTER_Y);
+                                serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
+                                pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                                serial_println!("[shell.cursor_surface.move.ok]");
+                                unsafe {
+                                    static mut SILK_SHELL_CURSOR_UPDATE_BUDGET_ABS: u32 = 16;
+                                    let rem = &mut SILK_SHELL_CURSOR_UPDATE_BUDGET_ABS;
+                                    if *rem > 0 {
+                                        *rem -= 1;
+                                        serial_println!("[silk-shell.cursor.update] x={} y={}", POINTER_X, POINTER_Y);
+                                    }
+                                }
+                            } else {
+                                unsafe {
+                                    static mut SYNTH_ABS_SKIP_BUDGET_MAIN: u32 = 8;
+                                    let s = &mut SYNTH_ABS_SKIP_BUDGET_MAIN;
+                                    if *s > 0 {
+                                        *s -= 1;
+                                        serial_println!(
+                                            "[silk-shell.pointer.synthetic_abs.skip] x={} y={} reason=real_input_seen",
+                                            msg.arg0 as i32, msg.arg1 as i32
+                                        );
+                                    }
                                 }
                             }
                         } else if event_class == EV_REL {
-                            let dx = msg.arg0 as i32;
-                            let dy = msg.arg1 as i32;
+                            let dx_raw = msg.arg0 as i32;
+                            let dy_raw = msg.arg1 as i32;
                             unsafe {
                                 static mut SILK_SHELL_POINTER_RECV_BUDGET: u32 = 2048;
                                 let rem = &mut SILK_SHELL_POINTER_RECV_BUDGET;
                                 if *rem > 0 {
                                     *rem -= 1;
-                                    serial_println!("[silk-shell.pointer.recv] class={} a0={} a1={}", event_class, dx, dy);
+                                    serial_println!("[silk-shell.pointer.recv] class={} a0={} a1={}", event_class, dx_raw, dy_raw);
                                 }
                             }
                             // Budgeted liveness: shell received EV_REL from sexinput.
@@ -12943,25 +13052,14 @@ pub extern "C" fn _start() -> ! {
                                 if *rem > 0 {
                                     *rem -= 1;
                                     serial_println!("[shell.hid.rel.live] n=0 x={} y={} dx={} dy={}",
-                                        POINTER_X, POINTER_Y, dx, dy);
+                                        POINTER_X, POINTER_Y, dx_raw, dy_raw);
                                 }
                             }
-                            // Initialize POINTER_X/Y on first EV_REL (real USB path).
-                            // The USB handler also does this for OP_USB_MOUSE_REPORT path
-                            // (synthetic proof). Whichever fires first sets the center position.
-                            if !POINTER_USB_STATE_INIT {
-                                POINTER_X = P.width / 2;
-                                POINTER_Y = P.height / 2;
-                                POINTER_USB_STATE_INIT = true;
-                            }
-                            POINTER_X = POINTER_X.wrapping_add(dx);
-                            POINTER_Y = POINTER_Y.wrapping_add(dy);
+                            // Apply filter + clamp + cursor update via shared helper.
+                            let (dx, dy) = apply_rel_pointer(dx_raw, dy_raw);
 
                             // ── Drag movement: move drag target surface by delta while button held ──
-                            // clear_drag_if_dead() transitions to Idle if the drag target died,
-                            // so the next call will naturally skip movement.
-                            // Uses the Drag state's recorded surface_id (not FOCUSED_SURFACE_ID)
-                            // so focus changes during drag do not corrupt the target.
+                            // Uses filtered deltas so drag feels consistent with cursor movement.
                             clear_drag_if_dead();
                             if drag_move_focused(dx, dy) {
                                 mutated = true;
@@ -12978,10 +13076,6 @@ pub extern "C" fn _start() -> ! {
                                     serial_println!("[shell.cursor.surface.update] n=0 x={} y={}", POINTER_X, POINTER_Y);
                                 }
                             }
-                            // Move cursor surface to updated pointer position.
-                            serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
-                            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
-                            serial_println!("[shell.cursor_surface.move.ok]");
                             unsafe {
                                 static mut SILK_SHELL_CURSOR_UPDATE_BUDGET: u32 = 16;
                                 let rem = &mut SILK_SHELL_CURSOR_UPDATE_BUDGET;
