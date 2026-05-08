@@ -399,3 +399,27 @@ Proof markers:
 Invariant:
 Button/focus route is separate from pointer smoothing. Do not modify USB decode, sexinput wire
 format, or sexdisplay render path for focus issues unless STOP FIRST proves the route regressed.
+
+## POINTER_QUALITY_V5_COALESCE_ACCEL
+
+Status:
+Pointer movement is usable with shell-side piecewise scaling.
+
+Runtime proof:
+- `[silk-shell.pointer.filter] ... mode=piecewise`
+- `[silk-shell.pointer.synthetic_abs.skip] ... reason=real_input_seen`
+- `[silk-shell.click.down]`
+- `[shell.click_focus.hit]`
+- `[silkbar.clock.tick] ... ss=12`
+- `[cursor.route.PASS] sexinput->silk-shell->sexdisplay moved cursor`
+
+Formula:
+- preserve ±1 for tiny nonzero movement
+- medium movement scaled moderately
+- large HID bursts capped at ±16 px
+- cursor state clamped before display update
+
+Invariant:
+Pointer quality is SilkShell policy. Do not change USB decode, sexinput wire format,
+sexdisplay framebuffer path, kernel routing, or PDX ABI for pointer feel unless STOP FIRST
+proves route regression.
