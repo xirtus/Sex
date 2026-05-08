@@ -503,3 +503,55 @@ Fixes:
 Invariant:
 A UI route marker is not a capability proof. Every cross-PD route must have a matching
 kernel capability grant and runtime send-status proof.
+
+## SPINDLE_KEYBOARD_AND_WINDOW_CHROME_V1
+
+Status:
+Spindle terminal keyboard route and visible window chrome are proven.
+
+Keyboard route proof:
+- SilkShell sends synthetic EV_KEY sequence through SLOT_SPINDLE.
+- Kernel grants SilkShell -> Spindle capability at SLOT_SPINDLE=14.
+- Spindle receives OP_HID_EVENT and edits its line buffer.
+- Scancode map now uses explicit PS/2 set-1 mapping.
+- Runtime proof:
+  - `[kernel.cap.spindle.route] shell->spindle slot=14`
+  - `[shell.synthetic_key.send] ... status=0`
+  - `[spindle.pdx.raw] type=0x202`
+  - `[spindle.line.append] ch=a`
+  - `[spindle.line.append] ch=b`
+  - `[spindle.line.append] ch=c`
+  - `[spindle.line.backspace]`
+  - `[spindle.line.append] ch=d`
+  - `[spindle.line.enter] len=3 mode=insert text="abd"`
+
+Window chrome proof:
+- The visible Quil/Linen surfaces are 201 and 200.
+- Legacy surface 100 receiving chrome info was not enough.
+- SilkShell now sends chrome/tab metadata for boot-created visible surfaces 200/201.
+- sexdisplay receives the tab/chrome info and renders the actual per-window toolbar.
+- Button/light sizing was tuned after the toolbar became visible.
+- Runtime proof target:
+  - `[shell.surface.chrome.info.send] surface=201 owner=quil top_bar=1 chrome_visible=1`
+  - `[shell.surface.chrome.info.send] surface=200 owner=linen top_bar=1 chrome_visible=1`
+  - `[sexdisplay.surface.tab.info] surface=201 ...`
+  - `[sexdisplay.surface.tab.info] surface=200 ...`
+  - no `fault.kill`, `#PF`, `#GP`, or panic`
+
+GUI/chrome lessons:
+- Do not conflate the main SilkBar system bar with per-window frame toolbar chrome.
+- Do not assume constants are active until runtime markers prove visible surfaces receive the metadata.
+- The visible boot app surfaces are Quil=201 and Linen=200; surface 100 is legacy/offscreen for this path.
+- Per-window chrome requires both:
+  1. SilkShell sending chrome/tab metadata for the visible surface id.
+  2. sexdisplay receiving that metadata and setting chrome flags.
+- Visual size changes need both geometry and visible affordance:
+  - toolbar height
+  - light/button size
+  - title/text or divider contrast
+  - content bounds
+- For future GUI work, first add a canary/marker to prove the exact draw path before tuning colors or sizes.
+
+Invariant:
+A UI route marker is not a capability proof. A chrome constant is not a visual proof.
+Every cross-PD route and every visible chrome path needs runtime sender + receiver markers.
