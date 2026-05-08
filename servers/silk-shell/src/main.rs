@@ -11437,10 +11437,19 @@ pub extern "C" fn _start() -> ! {
                     sys_yield();
                     continue;
                 }
-                // stage == max_stage + 1: proof complete, no more work.
+                // stage == max_stage + 1: proof complete.
                 if stage == max_stage + 1 {
                     SPINDLE_KEYBOARD_PROOF_STAGE = stage + 1;
                     serial_println!("[shell.synthetic_key.done] target=spindle stages={}", max_stage);
+                    // Write proof output to Spindle surface scrollback
+                    // so the terminal visibly shows the route is alive.
+                    yarn_append_output(b"");
+                    yarn_append_output(b"> synthetic keyboard route: PASS");
+                    yarn_append_output(b"> sent: a b c Backspace d Enter");
+                    yarn_append_output(b"> Spindle PD received and processed all keys");
+                    yarn_append_output(b"");
+                    spindle_render();
+                    serial_println!("[silk-shell.spindle.render.input_line] proof_output=written");
                 }
             }
         }
