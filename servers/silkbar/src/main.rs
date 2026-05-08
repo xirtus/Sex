@@ -117,6 +117,15 @@ pub extern "C" fn _start() -> ! {
     // fall back to synthetic yield counting on QEMU TCG (get_ticks()==0).
     let mut last_clock_ticks: u64 = 0;
     let mut clock_source_logged: bool = false;
+    // Stale-real-tick fallback: if raw_ticks is nonzero but stops advancing
+    // (observed under KVM where LAPIC fires once then stalls), switch to
+    // synthetic cadence after STALE_REAL_TICK_FALLBACK_LOOPS passes.
+    let mut stale_tick_loops: u16 = 0;
+    const STALE_REAL_TICK_FALLBACK_LOOPS: u16 = 16;
+    // Cadence threshold used when real ticks are nonzero but stalled.
+    // Separate from pure-synthetic TCG threshold so KVM fallback cadence
+    // can be tuned independently.
+    const STALE_REAL_TICK_FALLBACK_THRESHOLD: u16 = 4;
     const BOOT_CLOCK_SENDS_TARGET: u8 = 2;
     const BOOT_CLOCK_THRESHOLD: u16 = 8;
     const STEADY_CLOCK_THRESHOLD: u16 = 100;
@@ -403,6 +412,7 @@ pub extern "C" fn _start() -> ! {
         if raw_ticks == 0 {
             // QEMU TCG fallback: use visible synthetic threshold so clock
             // advances at a proof-usable rate (~1 sec per yield).
+            stale_tick_loops = 0;
             cadence_threshold = SYNTHETIC_VISIBLE_CLOCK_THRESHOLD;
             cadence_yields = cadence_yields.wrapping_add(1);
             if !clock_source_logged && loop_iter >= 10 {
@@ -422,6 +432,9 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         } else if raw_ticks > last_clock_ticks {
+            // Real tick advanced: resume from any stale fallback.
+            let was_stale = stale_tick_loops >= STALE_REAL_TICK_FALLBACK_LOOPS;
+            stale_tick_loops = 0;
             last_clock_ticks = raw_ticks;
             cadence_yields = cadence_yields.wrapping_add(1);
             if !clock_source_logged {
@@ -440,9 +453,45 @@ pub extern "C" fn _start() -> ! {
                     );
                 }
             }
+            // Resume marker: ticks recovered after a stall.
+            if was_stale {
+                unsafe {
+                    static mut RESUME_BUDGET: u32 = 4;
+                    let r = &mut RESUME_BUDGET;
+                    if *r > 0 {
+                        *r -= 1;
+                        sex_pdx::serial_println!(
+                            "[silkbar.clock.real_tick.resume] ticks={}",
+                            raw_ticks
+                        );
+                    }
+                }
+            }
+        } else {
+            // raw_ticks == last_clock_ticks && raw_ticks != 0.
+            // Real ticks exist but haven't advanced: count stale loops.
+            stale_tick_loops = stale_tick_loops.wrapping_add(1);
+            if stale_tick_loops >= STALE_REAL_TICK_FALLBACK_LOOPS {
+                // Stale for too long: fall back to synthetic so clock
+                // doesn't freeze while waiting for next timer interrupt.
+                // Use dedicated stale threshold (tuned for KVM) — not the
+                // pure-synthetic TCG threshold.
+                cadence_threshold = STALE_REAL_TICK_FALLBACK_THRESHOLD;
+                cadence_yields = cadence_yields.wrapping_add(1);
+                unsafe {
+                    static mut STALE_BUDGET: u32 = 8;
+                    let s = &mut STALE_BUDGET;
+                    if *s > 0 {
+                        *s -= 1;
+                        sex_pdx::serial_println!(
+                            "[silkbar.clock.real_tick.stale] ticks={} loops={} fallback=synthetic threshold={}",
+                            raw_ticks, stale_tick_loops, cadence_threshold
+                        );
+                    }
+                }
+            }
+            // else: still within grace window; don't increment cadence_yields.
         }
-        // else: raw_ticks unchanged (real HW but LAPIC hasn't fired yet).
-        // Do not increment cadence_yields; let the continue gate spin normally.
         // Unbudgeted iter=2 proof: emit at milestones only (not every pass).
         if loop_iter == 2 {
             let half = cadence_threshold / 2;
