@@ -4,7 +4,7 @@
 use silkbar_model::{
     SilkBarUpdate, UpdateKind, ChipKind, ChipSlot, OP_SILKBAR_UPDATE, validate_silkbar_contract,
     SILKBAR_ABI_VERSION, SILKBAR_WORKSPACE_COUNT, SILKBAR_CHIP_COUNT,
-    SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX, SILKBAR_WORKSPACE_IDX_MAX,
+    SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX, SILKBAR_WORKSPACE_IDX_MAX, DEFAULT_SILK_BAR,
 };
 use sex_pdx::{OP_BELL_LIST, OP_BELL_SUBSCRIBE, SLOT_BELL};
 
@@ -62,18 +62,17 @@ pub extern "C" fn _start() -> ! {
     let mut last_options_mask: u32 = 0;
     let mut chip_phase: u8 = 0;
     let mut chip0_net: bool = true;
-    // Initialize to 0 so the first loop iteration skips the redundant
-    // SetClock(ss=0) and waits until uptime_seconds advances to 1.
-    // Sexdisplay's fallback clock handles the first second.
-    let mut last_uptime_seconds: u64 = 0;
-    /// Cached Bell generation counter. 0 forces first LIST poll.
+    // Clock state: software counter (no get_ticks() — frozen under QEMU TCG).
+    // Each 100-yield cadence advances by 1 second.
+    let mut hh: u8 = DEFAULT_SILK_BAR.clock_hh;
+    let mut mm: u8 = DEFAULT_SILK_BAR.clock_mm;
+    let mut ss: u8 = DEFAULT_SILK_BAR.clock_ss;
+    // Loop iteration counter — drives clock, bell, and chip cadence.
+    let mut loop_iter: u64 = 0;
+    // Cached Bell generation counter. 0 forces first LIST poll.
     let mut bell_gen_cached: u64 = 0;
-    /// True when OP_BELL_LIST is enqueued and reply not yet received.
+    // True when OP_BELL_LIST is enqueued and reply not yet received.
     let mut bell_pending_list: bool = false;
-
-    /// Approximate LAPIC timer ticks per second (divide=16, init_count=1_000_000).
-    /// Not calibrated — yields monotonic uptime, not wall-clock accuracy.
-    const LAPIC_TICKS_PER_SECOND_APPROX: u64 = 62;
 
     // INIT: full GLOBAL_BAR state — workspace activation, chip visibility.
     // Clock is deliberately omitted: sexdisplay fallback handles the first
@@ -227,23 +226,48 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::sys_yield();
         }
 
-        // Read kernel uptime ticks for clock and chip cadence
-        let ticks = sex_pdx::get_ticks();
-        let uptime_seconds = ticks / LAPIC_TICKS_PER_SECOND_APPROX;
-        if uptime_seconds == last_uptime_seconds {
-            continue;
+        // Advance software clock by one logical second per cadence.
+        // get_ticks() is diagnostic-only — under QEMU TCG it returns 0.
+        loop_iter = loop_iter.wrapping_add(1);
+        // [silkbar.loop.alive] budgeted marker
+        {
+            static mut LOOP_ALIVE_BUDGET: u32 = 16;
+            let b = unsafe { &mut LOOP_ALIVE_BUDGET };
+            if *b > 0 {
+                *b -= 1;
+                sex_pdx::serial_println!("[silkbar.loop.alive] iter={}", loop_iter);
+            }
         }
-        last_uptime_seconds = uptime_seconds;
-        let hh = ((uptime_seconds / 3600) % 24) as u8;
-        let mm = ((uptime_seconds / 60) % 60) as u8;
-        let ss = (uptime_seconds % 60) as u8;
+        let raw_ticks = sex_pdx::get_ticks();
+        // Software clock: increment by 1 second
+        ss = ss.wrapping_add(1);
+        if ss >= 60 {
+            ss = 0;
+            mm = mm.wrapping_add(1);
+            if mm >= 60 {
+                mm = 0;
+                hh = hh.wrapping_add(1);
+                if hh >= 24 {
+                    hh = 0;
+                }
+            }
+        }
+        // [silkbar.clock.tick] budgeted diagnostic
+        {
+            static mut CLOCK_TICK_BUDGET: u32 = 12;
+            let c = unsafe { &mut CLOCK_TICK_BUDGET };
+            if *c > 0 {
+                *c -= 1;
+                sex_pdx::serial_println!("[silkbar.clock.tick] hh={} mm={} ss={} raw_ticks={}", hh, mm, ss, raw_ticks);
+            }
+        }
 
         // ── Bell presence poll (every ~2 seconds) ──────────────────────────
         // V2: Poll OP_BELL_SUBSCRIBE for generation counter.
         // If generation changed since last poll, call OP_BELL_LIST.
         // If SUBSCRIBE fails (no cap or Bell down), fall back to LIST.
         // Existing LIST reply handler (type_id=1, caller_pd=1) covers both paths.
-        if uptime_seconds % 2 == 0 && !bell_pending_list {
+        if loop_iter % 2 == 0 && !bell_pending_list {
             let result = sex_pdx::pdx_call_checked(SLOT_BELL, OP_BELL_SUBSCRIBE, 0, 0, 0);
             if let Err(e) = result {
                 // SUBSCRIBE failed — fall back to LIST.
@@ -271,7 +295,7 @@ pub extern "C" fn _start() -> ! {
 
         // Stage 2C: bounded internal status-chip stub (no new ABI, no floods).
         // Slow cadence: every 120 seconds.
-        if uptime_seconds % 120 == 0 {
+        if loop_iter % 120 == 0 {
             match chip_phase {
                 0 => {
                     let chip0_kind = if chip0_net { ChipKind::Net } else { ChipKind::Wifi };
