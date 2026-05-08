@@ -19,7 +19,7 @@ SEXINPUT_SEND_RE = re.compile(
 )
 
 SHELL_HID_RE = re.compile(
-    r"\[(?:silk-shell\.(?:linen_sync\.input_hid|pointer\.recv|hid\.raw))\]\s+class=2\b"
+    r"\[silk-shell\.(?:linen_sync\.input_hid|pointer\.recv|hid\.raw|pointer\.filter)\]"
 )
 
 DISPLAY_UPDATE_RE = re.compile(

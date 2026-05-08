@@ -852,41 +852,7 @@ unsafe fn linen_sync_reply() -> u64 {
         // Process HID cursor events in-line so mouse doesn't freeze
         // while waiting for Linen to reply.
         if msg.type_id == OP_HID_EVENT {
-            let event_class = msg.arg2;
-            unsafe {
-                static mut LINEN_SYNC_HID_BUDGET: u32 = 16;
-                let h = &mut LINEN_SYNC_HID_BUDGET;
-                if *h > 0 {
-                    *h -= 1;
-                    serial_println!(
-                        "[silk-shell.linen_sync.input_hid] class={} a0={} a1={}",
-                        event_class, msg.arg0 as i32, msg.arg1 as i32
-                    );
-                }
-            }
-            if event_class == EV_ABS {
-                if !REAL_POINTER_SEEN {
-                    POINTER_X = (msg.arg0 as i32).clamp(0, P.width - 1);
-                    POINTER_Y = (msg.arg1 as i32).clamp(0, P.height - 1);
-                    pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
-                } else {
-                    unsafe {
-                        static mut SYNTH_ABS_SKIP_BUDGET: u32 = 8;
-                        let s = &mut SYNTH_ABS_SKIP_BUDGET;
-                        if *s > 0 {
-                            *s -= 1;
-                            serial_println!(
-                                "[silk-shell.pointer.synthetic_abs.skip] x={} y={} reason=real_input_seen",
-                                msg.arg0 as i32, msg.arg1 as i32
-                            );
-                        }
-                    }
-                }
-            } else if event_class == EV_REL {
-                apply_rel_pointer(msg.arg0 as i32, msg.arg1 as i32);
-            }
-            // EV_KEY, EV_BTN: not processed here; full dispatch
-            // happens later in the main match block.
+            handle_hid_event(msg.arg2, msg.arg0, msg.arg1);
             continue;
         }
         // Unblock sender for non-HID non-reply messages.
@@ -4356,23 +4322,27 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
     // handlers to gate off synthetic proof absolute events after boot.
     REAL_POINTER_SEEN = true;
 
-    // Clamp incoming delta to [-16, 16] to prevent wild jumps from
-    // acceleration spikes or trackpad noise.
-    const MAX_DELTA: i32 = 16;
-    let dx_in = dx_raw.clamp(-MAX_DELTA, MAX_DELTA);
-    let dy_in = dy_raw.clamp(-MAX_DELTA, MAX_DELTA);
-
-    // Gain reduction: divide by 4, preserving sign.
-    // Small nonzero deltas must produce at least ±1 so micro-movements
-    // aren't swallowed.
-    let dx = if dx_in != 0 {
-        let scaled = dx_in / 4;
-        if scaled == 0 { dx_in.signum() } else { scaled }
-    } else { 0 };
-    let dy = if dy_in != 0 {
-        let scaled = dy_in / 4;
-        if scaled == 0 { dy_in.signum() } else { scaled }
-    } else { 0 };
+    // Piecewise acceleration: scale raw delta by magnitude bracket.
+    // Preserves sign.  Small movements get 1:1 feel; large bursts are
+    // progressively damped but not all collapsed to the same ceiling.
+    // Final output clamped to ±16 px to prevent wild jumps.
+    fn scale_axis(raw: i32) -> i32 {
+        if raw == 0 { return 0; }
+        let sign = raw.signum();
+        let abs = raw.unsigned_abs();
+        let scaled = if abs <= 3 {
+            1  // micro-movement floor
+        } else if abs <= 15 {
+            (abs / 3) as i32
+        } else if abs <= 63 {
+            (abs / 4) as i32
+        } else {
+            ((abs / 6) as i32).min(16)
+        };
+        sign * scaled
+    }
+    let dx = scale_axis(dx_raw);
+    let dy = scale_axis(dy_raw);
 
     // Budgeted filter proof: log raw vs filtered deltas.
     unsafe {
@@ -4381,7 +4351,7 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
         if *f > 0 && (dx_raw != dx || dy_raw != dy) {
             *f -= 1;
             serial_println!(
-                "[silk-shell.pointer.filter] raw_dx={} raw_dy={} dx={} dy={}",
+                "[silk-shell.pointer.filter] raw_dx={} raw_dy={} dx={} dy={} mode=piecewise",
                 dx_raw, dy_raw, dx, dy
             );
         }
@@ -4420,6 +4390,85 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
 
     pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
     (dx, dy)
+}
+
+/// Process one HID event (EV_ABS, EV_REL, or EV_BTN) identically to the
+/// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
+/// drain so button click/focus works even during blocking Linen fetch.
+unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
+    if event_class == EV_ABS {
+        if !REAL_POINTER_SEEN {
+            POINTER_X = (arg0 as i32).clamp(0, P.width - 1);
+            POINTER_Y = (arg1 as i32).clamp(0, P.height - 1);
+            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+        } else {
+            static mut SYNTH_ABS_SKIP_BUDGET: u32 = 8;
+            if SYNTH_ABS_SKIP_BUDGET > 0 {
+                SYNTH_ABS_SKIP_BUDGET -= 1;
+                serial_println!(
+                    "[silk-shell.pointer.synthetic_abs.skip] x={} y={} reason=real_input_seen",
+                    arg0 as i32, arg1 as i32
+                );
+            }
+        }
+    } else if event_class == EV_REL {
+        let _ = apply_rel_pointer(arg0 as i32, arg1 as i32);
+    } else if event_class == EV_BTN {
+        let button = arg0 as u8;
+        let pressed = arg1 != 0;
+        if pressed {
+            POINTER_BUTTONS |= 1u8.checked_shl(button.saturating_sub(1) as u32).unwrap_or(0);
+        } else {
+            POINTER_BUTTONS &= !(1u8.checked_shl(button.saturating_sub(1) as u32).unwrap_or(0));
+        }
+        static mut INLINE_BTN_BUDGET: u32 = 16;
+        if INLINE_BTN_BUDGET > 0 {
+            INLINE_BTN_BUDGET -= 1;
+            serial_println!(
+                "[silk-shell.linen_sync.input_btn] btn={} pressed={}",
+                button, pressed as u8
+            );
+        }
+        serial_println!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
+            button, pressed);
+        serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
+            button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);
+
+        clear_focus_if_dead();
+        clear_drag_if_dead();
+        clear_hover_if_dead();
+        clear_hover_if_wrong_scene();
+
+        if button == 1 {
+            if pressed && (INTERACTION == InteractionState::Idle || matches!(INTERACTION, InteractionState::PanelActive { .. })) {
+                serial_println!("[silk-shell.click.down] btn={} x={} y={} buttons={:#x}",
+                    button, POINTER_X, POINTER_Y, POINTER_BUTTONS);
+                try_transition(InteractionState::ClickPending);
+                let (target, silkbar_handled) = click_hit_test_and_focus(POINTER_X, POINTER_Y, POINTER_BUTTONS);
+                static mut INLINE_CLICK_TARGET_BUDGET: u32 = 16;
+                if INLINE_CLICK_TARGET_BUDGET > 0 {
+                    INLINE_CLICK_TARGET_BUDGET -= 1;
+                    let (kind, target_id) = hit_target_label(target, silkbar_handled);
+                    serial_println!("[shell.click.real.target] x={} y={} target={} kind={}",
+                        POINTER_X, POINTER_Y, target_id, kind);
+                }
+            } else if !pressed {
+                match INTERACTION {
+                    InteractionState::ClickPending => {
+                        serial_println!("[silk-shell.click.up] btn={} x={} y={}",
+                            button, POINTER_X, POINTER_Y);
+                        try_transition(InteractionState::Idle);
+                    }
+                    InteractionState::Dragging { surface_id, .. } => {
+                        serial_println!("[shell.interact.drag.end] sid={} x={} y={}",
+                            surface_id, POINTER_X, POINTER_Y);
+                        try_transition(InteractionState::Idle);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 /// Number of allowed [shell.interaction.transition] log lines remaining.
 /// Uses AtomicU32 (not static mut) to guarantee the compiler cannot elide
@@ -11313,43 +11362,7 @@ pub extern "C" fn _start() -> ! {
                     );
                 }
                 if req.type_id == OP_HID_EVENT {
-                    let event_class = req.arg2;
-                    let dx = req.arg0 as i32;
-                    let dy = req.arg1 as i32;
-                    unsafe {
-                        static mut BEFORE_LINEN_HID_BUDGET: u32 = 16;
-                        let h = &mut BEFORE_LINEN_HID_BUDGET;
-                        if *h > 0 {
-                            *h -= 1;
-                            serial_println!(
-                                "[silk-shell.input.before_linen_hid] class={} a0={} a1={}",
-                                event_class, dx, dy
-                            );
-                        }
-                    }
-                    if event_class == EV_ABS {
-                        if !REAL_POINTER_SEEN {
-                            POINTER_X = (req.arg0 as i32).clamp(0, P.width - 1);
-                            POINTER_Y = (req.arg1 as i32).clamp(0, P.height - 1);
-                            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
-                        } else {
-                            unsafe {
-                                static mut SYNTH_ABS_SKIP_BUDGET_DRAIN: u32 = 8;
-                                let s = &mut SYNTH_ABS_SKIP_BUDGET_DRAIN;
-                                if *s > 0 {
-                                    *s -= 1;
-                                    serial_println!(
-                                        "[silk-shell.pointer.synthetic_abs.skip] x={} y={} reason=real_input_seen",
-                                        req.arg0 as i32, req.arg1 as i32
-                                    );
-                                }
-                            }
-                        }
-                    } else if event_class == EV_REL {
-                        apply_rel_pointer(dx, dy);
-                    }
-                    // else: EV_KEY, EV_BTN — do minimal processing only;
-                    // full dispatch happens later in the main match block.
+                    handle_hid_event(req.arg2, req.arg0, req.arg1);
                 } else if req.type_id == 0x1 {
                     // Reply from async service (e.g. sexstore GET).
                     // Handled by the main match block later; just ack here.
