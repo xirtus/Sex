@@ -146,6 +146,16 @@ impl Session {
         Err(-3) // not found
     }
 
+    /// Return the object at the given slot index, or None if the slot is empty.
+    /// No owner filter — direct slot access for public snapshot rendering.
+    pub fn get_at_slot(&self, slot: usize) -> Option<LinenObject> {
+        if slot < LINEN_MAX_OBJECTS {
+            self.objects[slot]
+        } else {
+            None
+        }
+    }
+
     /// Return the number of objects in the session.
     pub fn count(&self) -> usize {
         let mut c = 0;

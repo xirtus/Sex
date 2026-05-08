@@ -480,9 +480,14 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
         messages::OP_RAMFS_READNAME => {
             let handle = arg0;
             let byte_offset = arg1;
-            let max_len = arg2.min(8);
-            match RAMFS.readname(handle, byte_offset, max_len, caller_pd) {
-                Ok(packed) => {
+            let max_len = (arg2 as usize).min(8);
+            let mut buf = [0u8; 8];
+            match RAMFS.read(handle, byte_offset, &mut buf[..max_len], caller_pd) {
+                Ok(n) => {
+                    let mut packed = 0u64;
+                    for i in 0..(n as usize).min(8) {
+                        packed |= (buf[i] as u64) << (i * 8);
+                    }
                     crate::pdx::serial_println!(
                         "[sexfiles.ramfs.readname.ok] handle={} off={} len={}",
                         handle, byte_offset, max_len
