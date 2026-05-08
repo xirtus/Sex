@@ -423,3 +423,27 @@ Invariant:
 Pointer quality is SilkShell policy. Do not change USB decode, sexinput wire format,
 sexdisplay framebuffer path, kernel routing, or PDX ABI for pointer feel unless STOP FIRST
 proves route regression.
+
+## POINTER_QUALITY_V8_TRACKER_LITE_CAP8
+
+Status:
+Pointer movement uses tracker-lite accumulation with max step capped near 8px.
+It is not perfect, but it is usable enough to preserve as the current working baseline.
+
+Runtime proof:
+- `[silk-shell.pointer.accum]`
+- `[silk-shell.pointer.flush] ... mode=tracker_lite`
+- `[silk-shell.pointer.synthetic_abs.skip] x=940 y=560 reason=real_input_seen`
+- `[silk-shell.click.down]`
+- `[shell.click_focus.hit]`
+- `[silkbar.clock.tick] ... ss=12`
+- `[cursor.route.PASS] sexinput->silk-shell->sexdisplay moved cursor`
+
+Remaining:
+Trackpad/mouse feel still needs deeper acceleration/velocity tuning later. Do not regress the
+working route while tuning.
+
+Invariant:
+Pointer feel is SilkShell policy. Do not change USB decode, sexinput wire format,
+sexdisplay framebuffer path, kernel routing, or PDX ABI for pointer acceleration unless
+STOP FIRST proves route regression.
