@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use silkbar_model::{
     SilkBarUpdate, UpdateKind, ChipKind, ChipSlot, OP_SILKBAR_UPDATE, validate_silkbar_contract,
     SILKBAR_ABI_VERSION, SILKBAR_WORKSPACE_COUNT, SILKBAR_CHIP_COUNT,
@@ -9,6 +10,8 @@ use silkbar_model::{
 use sex_pdx::{OP_BELL_LIST, OP_BELL_SUBSCRIBE, SLOT_BELL};
 
 const BELL_DELIVERY_PROOF_ENABLED: bool = option_env!("SEXOS_BELL_DELIVERY_PROOF").is_some();
+static CAP_READY_DISPLAY: AtomicBool = AtomicBool::new(false);
+static DEFER_EMITTED_DISPLAY: AtomicBool = AtomicBool::new(false);
 
 fn send_update_status(update: SilkBarUpdate) -> u64 {
     unsafe {
@@ -27,6 +30,25 @@ fn send_update_status(update: SilkBarUpdate) -> u64 {
         (update.index as u64) << 32 | update.a as u64,
         update.b as u64,
     );
+
+    if !CAP_READY_DISPLAY.load(Ordering::Relaxed) {
+        match result {
+            Ok(_) => {
+                CAP_READY_DISPLAY.store(true, Ordering::Relaxed);
+            }
+            Err(err) if err == sex_pdx::ERR_CAP_INVALID => {
+                if !DEFER_EMITTED_DISPLAY.swap(true, Ordering::Relaxed) {
+                    sex_pdx::serial_println!(
+                        "[bootgraph.edge.defer from=silkbar to=sexdisplay slot=5 reason=missing_cap]"
+                    );
+                }
+                sex_pdx::sys_yield();
+                return err;
+            }
+            _ => {}
+        }
+    }
+
     if let Err(err) = result {
         unsafe {
             static mut DROP_COUNTER: u64 = 0;

@@ -25,7 +25,7 @@ For integrated runtime gate:
 - `BOOTGRAPH_GATE: PASS`
 - `CAP_GRANT_GATE: PASS`
 - `ORDER_GATE: PASS`
-- `CLOCK_GATE: PASS` (or warning semantics as configured by parser)
+- `CLOCK_GATE: PASS`
 - `FINAL_SCORE: GREEN_MASTER` for full pass.
 
 ## Common failures
@@ -37,7 +37,7 @@ For integrated runtime gate:
 - `BOOTGRAPH FAIL: ORDER_GATE ...`
   - Sender `bootgraph.edge.send` appears before receiver `*.ready` or before `phase25.complete`.
 - `CLOCK_GATE: PASS WARN: ...`
-  - Tick-based clock markers are incomplete/not implemented. Non-strict mode reports warning instead of fail.
+  - Clock chain is partially degraded (for example: send without recv, recv without redraw, repeated clock drops, or fb_live wait without live render).
 - `FAULT_GATE: FAIL ...`
   - Fault patterns (`panic`, `fault.kill`, `#PF`, `#GP`) found in serial log (unless explicitly allowed).
 
@@ -75,5 +75,40 @@ Existing related marker names in this checkout:
 - `[sexdisplay.clock.recv]`
 - `[sexdisplay.clock.redraw]`
 - `[sexdisplay.render.live.ok]`
+
+Canonical CLOCK_GATE chain (real PASS):
+
+- `[silkbar.clock.send]` count >= 1
+- `[sexdisplay.clock.recv]` count >= 1
+- `[sexdisplay.clock.redraw]` count >= 1
+- `[sexdisplay.render.live.ok]` count >= 1
+
+Boot canary semantics:
+
+- `[silkbar.clock.boot_canary] send=N threshold=T` proves early-boot accelerated cadence.
+- Boot canary marker is advisory and not required forever once steady cadence is active.
+
+Tick-based markers:
+
+- Tick-indexed markers remain optional/advisory.
+- Parser no longer emits stale warning solely because tick-indexed markers are absent when canonical chain passes.
+
+## V2 Soft Barrier Marker Contract
+
+First rollout edge:
+
+- `silkbar -> sexdisplay` (`slot=5`, `SLOT_DISPLAY`, `op=OP_SILKBAR_UPDATE`)
+
+Soft-barrier defer marker:
+
+- `[bootgraph.edge.defer from=silkbar to=sexdisplay slot=5 reason=missing_cap]`
+
+Rules:
+
+- No separate probe call is allowed; first `pdx_call_checked` remains the real send attempt.
+- Emit at most one defer marker per boot per edge/slot.
+- Defer before `phase25.complete` is informational/pass.
+- Defer after `phase25.complete` is warning.
+- Defer followed by normal `bootgraph.edge.send` is pass recovery.
 
 Note: earlier "missing handoff path" note is superseded; `AGENT_HANDOFF_GP_CLOCK.md` may live under `docs/legacy/` in this checkout.

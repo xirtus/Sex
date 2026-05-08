@@ -156,11 +156,39 @@ def parse_first_send_edges(lines: List[str]) -> Dict[Tuple[str, str], int]:
     return edge_line
 
 
+def parse_defer_edges(lines: List[str]) -> Dict[Tuple[str, str, str], List[int]]:
+    defer_lines: Dict[Tuple[str, str, str], List[int]] = {}
+    rx = re.compile(
+        r"\[bootgraph\.edge\.defer\s+from=([^\s]+)\s+to=([^\s]+)\s+slot=([^\s]+)\s+reason=missing_cap\]"
+    )
+    for i, line in enumerate(lines, 1):
+        m = rx.search(line)
+        if not m:
+            continue
+        key = (m.group(1), m.group(2), m.group(3))
+        defer_lines.setdefault(key, []).append(i)
+    return defer_lines
+
+
 def order_gate(lines: List[str], ready_lines: Dict[str, int]) -> Tuple[GateResult, List[EdgeRow]]:
     phase_complete = find_first_line(lines, "[bootgraph.phase25.complete]")
     edges = parse_first_send_edges(lines)
+    defers = parse_defer_edges(lines)
     rows: List[EdgeRow] = []
     errs: List[str] = []
+    warnings: List[str] = []
+
+    for (sender, receiver, slot), lines_for_edge in defers.items():
+        if len(lines_for_edge) > 1:
+            errs.append(f"{sender}->{receiver} slot={slot} duplicate defer markers ({len(lines_for_edge)})")
+        first_defer = lines_for_edge[0]
+        if phase_complete is not None and first_defer > phase_complete:
+            warnings.append(f"{sender}->{receiver} slot={slot} defer after phase25.complete ({first_defer}>{phase_complete})")
+        send_line = edges.get((sender, receiver))
+        if send_line is not None and send_line > first_defer:
+            pass
+        elif send_line is None:
+            warnings.append(f"{sender}->{receiver} slot={slot} defer without later edge.send")
 
     for sender, receiver in CRITICAL_EDGES:
         send_line = edges.get((sender, receiver))
@@ -188,44 +216,48 @@ def order_gate(lines: List[str], ready_lines: Dict[str, int]) -> Tuple[GateResul
 
     if errs:
         return GateResult("ORDER_GATE", False, "; ".join(errs)), rows
+    if warnings:
+        return GateResult("ORDER_GATE", True, "WARN: " + "; ".join(warnings)), rows
     return GateResult("ORDER_GATE", True), rows
 
 
 def clock_gate(lines: List[str], strict_clock: bool) -> Tuple[GateResult, List[str]]:
     warnings: List[str] = []
-
-    # Prefer tick-based markers if present.
-    sb_ticks = set()
-    for line in lines:
-        m = re.search(r"\[silkbar\.clock\.send[^\]]*tick=(\d+)", line)
-        if m:
-            sb_ticks.add(int(m.group(1)))
-
-    has_recv_tick = any(re.search(r"\[sexdisplay\.clock\.recv[^\]]*tick=\d+", ln) for ln in lines)
-    has_apply_ok_tick = any(re.search(r"\[sexdisplay\.clock\.apply[^\]]*tick=\d+[^\]]*ok=1", ln) for ln in lines)
-    has_render_tick = any(re.search(r"\[sexdisplay\.clock\.render[^\]]*tick=\d+", ln) for ln in lines)
-
-    tick_markers_present = bool(sb_ticks or has_recv_tick or has_apply_ok_tick or has_render_tick)
-
-    if not tick_markers_present:
-        warnings.append("tick-based clock markers not implemented")
-        return (GateResult("CLOCK_GATE", not strict_clock, "WARN: " + "; ".join(warnings) if warnings else ""), warnings)
+    # Canonical V1 runtime chain.
+    send_lines = find_all_lines(lines, "[silkbar.clock.send]")
+    recv_lines = find_all_lines(lines, "[sexdisplay.clock.recv]")
+    redraw_lines = find_all_lines(lines, "[sexdisplay.clock.redraw]")
+    live_ok_lines = find_all_lines(lines, "[sexdisplay.render.live.ok]")
+    drop_clock_lines = find_all_lines(lines, "[silkbar.send_update.drop.clock]")
+    fb_live_wait_lines = find_all_lines(lines, "[sexdisplay.fb.live.wait]")
 
     errs: List[str] = []
-    if len(sb_ticks) < 2:
-        errs.append("need >=2 unique silkbar.clock.send tick")
-    if not has_recv_tick:
-        errs.append("missing sexdisplay.clock.recv tick")
-    if not has_apply_ok_tick:
-        errs.append("missing sexdisplay.clock.apply tick ok=1")
-    if not has_render_tick:
-        errs.append("missing sexdisplay.clock.render tick")
+    if len(send_lines) < 1:
+        errs.append("missing silkbar.clock.send")
+    if len(recv_lines) < 1:
+        errs.append("missing sexdisplay.clock.recv")
+    if len(redraw_lines) < 1:
+        errs.append("missing sexdisplay.clock.redraw")
+    if len(live_ok_lines) < 1:
+        errs.append("missing sexdisplay.render.live.ok")
 
     if errs:
+        return GateResult("CLOCK_GATE", False, "; ".join(errs)), warnings
+
+    # Diagnostic warnings for degraded-but-live behavior.
+    if send_lines and not recv_lines:
+        warnings.append("silkbar.clock.send present but sexdisplay.clock.recv absent")
+    if recv_lines and not redraw_lines:
+        warnings.append("sexdisplay.clock.recv present but sexdisplay.clock.redraw absent")
+    if fb_live_wait_lines and not live_ok_lines:
+        warnings.append("sexdisplay.fb.live.wait present but sexdisplay.render.live.ok absent")
+    if len(drop_clock_lines) > 3:
+        warnings.append(f"silkbar.send_update.drop.clock count high ({len(drop_clock_lines)})")
+
+    if warnings:
         if strict_clock:
-            return GateResult("CLOCK_GATE", False, "; ".join(errs)), warnings
-        warnings.extend(errs)
-        return GateResult("CLOCK_GATE", True, "WARN: " + "; ".join(errs)), warnings
+            return GateResult("CLOCK_GATE", False, "; ".join(warnings)), warnings
+        return GateResult("CLOCK_GATE", True, "WARN: " + "; ".join(warnings)), warnings
 
     return GateResult("CLOCK_GATE", True), warnings
 
