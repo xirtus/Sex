@@ -10,7 +10,7 @@ use sex_pdx::{OP_BELL_LIST, OP_BELL_SUBSCRIBE, SLOT_BELL};
 
 const BELL_DELIVERY_PROOF_ENABLED: bool = option_env!("SEXOS_BELL_DELIVERY_PROOF").is_some();
 
-fn send_update(update: SilkBarUpdate) {
+fn send_update_status(update: SilkBarUpdate) -> u64 {
     let result = sex_pdx::pdx_call_checked(
         sex_pdx::SLOT_DISPLAY,
         OP_SILKBAR_UPDATE,
@@ -44,18 +44,29 @@ fn send_update(update: SilkBarUpdate) {
                 }
             }
         }
+        return err;
     }
+    0
+}
+
+fn send_update(update: SilkBarUpdate) {
+    let _ = send_update_status(update);
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    sex_pdx::serial_println!("[silk.contract.validate.start]");
+    sex_pdx::serial_println!("[silkbar.boot.begin]");
+    sex_pdx::serial_println!("[bootgraph.silkbar.spawned]");
     let contract_err = validate_silkbar_contract();
-    if contract_err != 0 {
-        sex_pdx::serial_println!("[silk.contract.validate.fail] reason={}", contract_err);
-        loop { core::hint::spin_loop(); }
+    let degraded = contract_err != 0;
+    if degraded {
+        sex_pdx::serial_println!("[silkbar.boot.contract.fail] code={}", contract_err);
+        sex_pdx::serial_println!("[bootgraph.silkbar.degraded] reason=contract_fail");
+    } else {
+        sex_pdx::serial_println!("[silkbar.boot.contract.ok]");
+        sex_pdx::serial_println!("[bootgraph.silkbar.contract_ready]");
     }
-    sex_pdx::serial_println!("[silk.contract.validate.ok] version={}", SILKBAR_ABI_VERSION);
+    sex_pdx::serial_println!("[silk.contract.validate.version] version={}", SILKBAR_ABI_VERSION);
 
     let mut focus_state: u8 = 0;
     let mut last_focus_state: u8 = 0xFF;
@@ -74,43 +85,76 @@ pub extern "C" fn _start() -> ! {
     // True when OP_BELL_LIST is enqueued and reply not yet received.
     let mut bell_pending_list: bool = false;
 
-    // INIT: full GLOBAL_BAR state — workspace activation, chip visibility.
-    // Clock is deliberately omitted: sexdisplay fallback handles the first
-    // second, and the main loop sends SetClock starting at ss=1.
-    for ws_idx in 0..SILKBAR_WORKSPACE_COUNT as u8 {
-        send_update(SilkBarUpdate::new(
-            UpdateKind::SetWorkspaceActive as u32, ws_idx, if ws_idx == SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX { 1 } else { 0 }, 0,
-        ));
+    // INIT updates are deferred to avoid startup blocking before loop liveness.
+    // Clock init is intentionally omitted (no init SetClock ss=0).
+    let mut init_deferred: [SilkBarUpdate; SILKBAR_WORKSPACE_COUNT + SILKBAR_CHIP_COUNT] =
+        [SilkBarUpdate::new(0, 0, 0, 0); SILKBAR_WORKSPACE_COUNT + SILKBAR_CHIP_COUNT];
+    let mut init_deferred_count: usize = 0;
+    if !degraded {
+        for ws_idx in 0..SILKBAR_WORKSPACE_COUNT as u8 {
+            init_deferred[init_deferred_count] = SilkBarUpdate::new(
+                UpdateKind::SetWorkspaceActive as u32,
+                ws_idx,
+                if ws_idx == SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX { 1 } else { 0 },
+                0,
+            );
+            init_deferred_count += 1;
+        }
+        for chip_idx in 0..SILKBAR_CHIP_COUNT as u8 {
+            init_deferred[init_deferred_count] =
+                SilkBarUpdate::new(UpdateKind::SetChipVisible as u32, chip_idx, 1, 0);
+            init_deferred_count += 1;
+        }
     }
-    // All four status chips visible
-    for chip_idx in 0..SILKBAR_CHIP_COUNT as u8 {
-        send_update(SilkBarUpdate::new(
-            UpdateKind::SetChipVisible as u32, chip_idx, 1, 0,
-        ));
-    }
+    let mut init_deferred_next: usize = 0;
+    sex_pdx::serial_println!("[silkbar.boot.init.defer] count={}", init_deferred_count);
 
     loop {
+        if loop_iter == 0 {
+            sex_pdx::serial_println!("[bootgraph.silkbar.loop_ready]");
+        }
         // Process at most one upstream message per loop (non-blocking).
         if let Some(msg) = sex_pdx::pdx_try_listen_raw(0) {
             if msg.type_id == sex_pdx::OP_SILKBAR_WORKSPACE_ACTIVE {
-                let ws = (msg.arg0 as u8).min(SILKBAR_WORKSPACE_IDX_MAX);
+                let ws_raw = msg.arg0 as u8;
+                if ws_raw > SILKBAR_WORKSPACE_IDX_MAX {
+                    sex_pdx::serial_println!(
+                        "[silkbar.update.reject] kind={} idx={} reason=out_of_bounds",
+                        msg.type_id,
+                        ws_raw
+                    );
+                    sex_pdx::sys_yield();
+                    continue;
+                }
+                let ws = ws_raw;
                 sex_pdx::serial_println!("[silkbar.workspace.recv] index={}", ws);
                 sex_pdx::serial_println!("[silkbar.workspace.active.set] index={}", ws);
                 sex_pdx::serial_println!("[silkbar.workspace.active.send.start] index={}", ws);
-                for i in 0..SILKBAR_WORKSPACE_COUNT as u8 {
-                    send_update(SilkBarUpdate::new(
-                        UpdateKind::SetWorkspaceActive as u32, i, if i == ws { 1 } else { 0 }, 0,
-                    ));
+                if !degraded {
+                    for i in 0..SILKBAR_WORKSPACE_COUNT as u8 {
+                        send_update(SilkBarUpdate::new(
+                            UpdateKind::SetWorkspaceActive as u32, i, if i == ws { 1 } else { 0 }, 0,
+                        ));
+                    }
                 }
                 sex_pdx::serial_println!("[silkbar.workspace.active.send.ok] index={}", ws);
             } else if msg.type_id == sex_pdx::OP_SILKBAR_FOCUS_STATE {
-                // Clamp invalid producer values to debug(3) to keep update space bounded.
-                focus_state = (msg.arg0 as u8).min(3);
+                let raw = msg.arg0 as u8;
+                if raw > 3 {
+                    sex_pdx::serial_println!(
+                        "[silkbar.update.reject] kind={} idx={} reason=out_of_bounds",
+                        msg.type_id,
+                        raw
+                    );
+                    sex_pdx::sys_yield();
+                    continue;
+                }
+                focus_state = raw;
                 // Extract selected-window options mask from arg1 (V1 extension).
                 // Old senders pass 0 (no options) — backward compatible.
                 let options_mask = msg.arg1 as u32;
                 sex_pdx::serial_println!("[silkbar.selected.options.recv] mask={:#x}", options_mask);
-                if options_mask != last_options_mask {
+                if !degraded && options_mask != last_options_mask {
                     last_options_mask = options_mask;
                     send_update(SilkBarUpdate::new(
                         UpdateKind::SetSelectedOptions as u32, 0, options_mask, 0,
@@ -140,9 +184,11 @@ pub extern "C" fn _start() -> ! {
                                 total, redacted, flags);
                         }
                     }
-                    send_update(SilkBarUpdate::new(
-                        UpdateKind::SetBellPresence as u32, 0, a, 0,
-                    ));
+                    if !degraded {
+                        send_update(SilkBarUpdate::new(
+                            UpdateKind::SetBellPresence as u32, 0, a, 0,
+                        ));
+                    }
                     if BELL_DELIVERY_PROOF_ENABLED {
                         sex_pdx::serial_println!("[bell.poll.ok] total={} redacted={} flags={:#x}", total, redacted, flags);
                         sex_pdx::serial_println!("[silkbar.bell.state] total={} redacted={} flags={:#x}", total, redacted, flags);
@@ -183,7 +229,7 @@ pub extern "C" fn _start() -> ! {
                         let list_args = 0xFFu64 | (1u64 << 8);
                         if let Ok(_) = sex_pdx::pdx_call_checked(SLOT_BELL, OP_BELL_LIST, list_args, 0, 0) {
                             bell_pending_list = true;
-                        } else {
+                        } else if !degraded {
                             send_update(SilkBarUpdate::new(
                                 UpdateKind::SetBellPresence as u32, 0, 0, 0,
                             ));
@@ -212,13 +258,27 @@ pub extern "C" fn _start() -> ! {
                 3 => Some(2u8),
                 _ => None,
             };
-            for ws in 0..SILKBAR_WORKSPACE_COUNT as u8 {
-                let urgent = if Some(ws) == urgent_ws { 1 } else { 0 };
-                send_update(SilkBarUpdate::new(
-                    UpdateKind::SetWorkspaceUrgent as u32, ws, urgent, 0,
-                ));
+            if !degraded {
+                for ws in 0..SILKBAR_WORKSPACE_COUNT as u8 {
+                    let urgent = if Some(ws) == urgent_ws { 1 } else { 0 };
+                    send_update(SilkBarUpdate::new(
+                        UpdateKind::SetWorkspaceUrgent as u32, ws, urgent, 0,
+                    ));
+                }
             }
             last_focus_state = focus_state;
+        }
+
+        if !degraded && init_deferred_next < init_deferred_count {
+            let idx = init_deferred_next;
+            let update = init_deferred[idx];
+            let remaining = init_deferred_count - idx - 1;
+            send_update(update);
+            init_deferred_next += 1;
+            sex_pdx::serial_println!("[silkbar.boot.init.flush] idx={} remaining={}", idx, remaining);
+            if init_deferred_next == init_deferred_count {
+                sex_pdx::serial_println!("[silkbar.boot.init.flush.done]");
+            }
         }
 
         // ~1s via yield (no rdtsc — freezes under QEMU TCG)
@@ -267,7 +327,7 @@ pub extern "C" fn _start() -> ! {
         // If generation changed since last poll, call OP_BELL_LIST.
         // If SUBSCRIBE fails (no cap or Bell down), fall back to LIST.
         // Existing LIST reply handler (type_id=1, caller_pd=1) covers both paths.
-        if loop_iter % 2 == 0 && !bell_pending_list {
+        if !degraded && loop_iter % 2 == 0 && !bell_pending_list {
             let result = sex_pdx::pdx_call_checked(SLOT_BELL, OP_BELL_SUBSCRIBE, 0, 0, 0);
             if let Err(e) = result {
                 // SUBSCRIBE failed — fall back to LIST.
@@ -295,7 +355,7 @@ pub extern "C" fn _start() -> ! {
 
         // Stage 2C: bounded internal status-chip stub (no new ABI, no floods).
         // Slow cadence: every 120 seconds.
-        if loop_iter % 120 == 0 {
+        if !degraded && loop_iter % 120 == 0 {
             match chip_phase {
                 0 => {
                     let chip0_kind = if chip0_net { ChipKind::Net } else { ChipKind::Wifi };
@@ -326,16 +386,30 @@ pub extern "C" fn _start() -> ! {
             chip_phase = (chip_phase + 1) & 0x3;
         }
 
-        send_update(SilkBarUpdate::new(
-            UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
-        ));
+        let clock_status = if degraded {
+            u64::MAX
+        } else {
+            send_update_status(SilkBarUpdate::new(
+                UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
+            ))
+        };
+        if loop_iter == 1 {
+            if degraded {
+                sex_pdx::serial_println!("[bootgraph.silkbar.degraded] reason=clock_send_disabled");
+            } else {
+                sex_pdx::serial_println!("[bootgraph.silkbar.clock_ready]");
+            }
+        }
         // Budgeted diagnostic: first 12 clock sends
         {
             static mut CLOCK_SEND_BUDGET: u32 = 12;
             let remaining = unsafe { &mut CLOCK_SEND_BUDGET };
             if *remaining > 0 {
                 *remaining -= 1;
-                sex_pdx::serial_println!("[silkbar.clock.send] hh={} mm={} ss={}", hh, mm, ss);
+                sex_pdx::serial_println!(
+                    "[silkbar.clock.send] hh={} mm={} ss={} status={:#x}",
+                    hh, mm, ss, clock_status
+                );
             }
         }
     }
