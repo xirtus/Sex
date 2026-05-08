@@ -16,6 +16,7 @@ const FALLBACK_H: u32 = 800;
 const HIGH_HALF_BASE: u64 = 0xffff_8000_0000_0000;
 const MAX_FB_W: usize = 8192;
 const MAX_FB_H: usize = 4320;
+const DRAIN_MAX: usize = 8;
 
 // Runtime FB config — starts as fallback, updated by OP_PRIMARY_FB
 static mut FB_PTR: u64 = FALLBACK_PTR;
@@ -1079,6 +1080,13 @@ pub extern "C" fn _start() -> ! {
 
     // 2. Listen for runtime FB handoff and SilkBar updates
     loop {
+        // ── Per-cycle flags ──
+        let mut needs_surface_redraw = false;
+        let mut needs_top_strip_redraw = false;
+        let mut did_primary_fb_render = false;
+        let mut drained: usize = 0;
+
+        // ── Clock tick ──
         let sec_now = sex_pdx::get_ticks() / 62;
 
         // Liveness-gate: if SilkBar clock stalls for >5 seconds while we trust
@@ -1103,131 +1111,82 @@ pub extern "C" fn _start() -> ! {
             bar.clock_mm = ((sec_now / 60) % 60) as u8;
             bar.clock_ss = (sec_now % 60) as u8;
             if fb_live {
-                unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+                needs_top_strip_redraw = true;
             }
         }
 
-        let Some(msg) = sex_pdx::pdx_try_listen_raw(0) else {
-            sex_pdx::sys_yield();
-            continue;
-        };
-        match msg.type_id {
-            silkbar_model::OP_SILKBAR_UPDATE => {
-                let (applied, kind) = handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
-                if applied {
-                    if kind == UpdateKind::SetClock as u32 {
-                        if !clock_from_silkbar {
-                            // Gate: only cede fallback to silkbar if the received
-                            // time is not stale. A boot-time SetClock that arrives
-                            // seconds late (behind the init message batch) must not
-                            // permanently disable the fallback clock.
-                            let incoming_ss = bar.clock_ss;
-                            let fallback_ss = (sec_now % 60) as u8;
-                            let stale = incoming_ss < fallback_ss
-                                && (fallback_ss.wrapping_sub(incoming_ss) < 30);
-                            if !stale {
-                                clock_from_silkbar = true;
+        // ── Bounded drain: process up to DRAIN_MAX messages ──
+        for _drain_i in 0..DRAIN_MAX {
+            let Some(msg) = sex_pdx::pdx_try_listen_raw(0) else {
+                break;
+            };
+            drained += 1;
+
+            match msg.type_id {
+                silkbar_model::OP_SILKBAR_UPDATE => {
+                    let (applied, kind) = handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
+                    if applied {
+                        if kind == UpdateKind::SetClock as u32 {
+                            if !clock_from_silkbar {
+                                // Gate: only cede fallback to silkbar if the received
+                                // time is not stale. A boot-time SetClock that arrives
+                                // seconds late (behind the init message batch) must not
+                                // permanently disable the fallback clock.
+                                let incoming_ss = bar.clock_ss;
+                                let fallback_ss = (sec_now % 60) as u8;
+                                let stale = incoming_ss < fallback_ss
+                                    && (fallback_ss.wrapping_sub(incoming_ss) < 30);
+                                if !stale {
+                                    clock_from_silkbar = true;
+                                    last_silkbar_clock_sec = sec_now;
+                                }
+                            } else {
+                                // Already trusting SilkBar — every SetClock resets
+                                // the liveness timeout.
                                 last_silkbar_clock_sec = sec_now;
                             }
-                        } else {
-                            // Already trusting SilkBar — every SetClock resets
-                            // the liveness timeout.
-                            last_silkbar_clock_sec = sec_now;
+                        }
+                        if fb_live {
+                            needs_top_strip_redraw = true;
+                        }
+                    } else {
+                        serial_println!("[silkde.m2.assert.bad] apply_update=false kind={}", kind);
+                    }
+                }
+                0x11 => { // OP_PRIMARY_FB
+                    if handle_primary_fb(msg.arg0, msg.arg1) {
+                        fb_live = true;
+                        serial_println!("[pdx.identity.accept] display owner_pd validation active");
+                        // Coalesce startup repaints into one clean first frame.
+                        unsafe {
+                            render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar);
+                            serial_println!("[sexdisplay.render.live.ok] fb_w={} fb_h={}", FB_W, FB_H);
+                        }
+                        did_primary_fb_render = true;
+                        if !render_proof_done {
+                            render_proof_done = true;
+                            unsafe { top_strip_render_proof(FB_PTR as *const u32, FB_W as usize, FB_H as usize); }
                         }
                     }
-                    if fb_live {
-                        unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
-                    }
-                } else {
-                    serial_println!("[silkde.m2.assert.bad] apply_update=false kind={}", kind);
                 }
-            }
-            0x11 => { // OP_PRIMARY_FB
-                if handle_primary_fb(msg.arg0, msg.arg1) {
-                    fb_live = true;
-                    serial_println!("[pdx.identity.accept] display owner_pd validation active");
-                    // Coalesce startup repaints into one clean first frame.
+                0 => continue,
+                0xE4 => {
+                    // OP_WINDOW_CREATE safe inline ABI: arg0=x, arg1=y, arg2=(h<<32)|w
+                    // Store only, no immediate placeholder paint.
+                    // Immediate blue paint here causes startup flicker.
+                    let x = msg.arg0 as i32;
+                    let y = msg.arg1 as i32;
+                    let w = (msg.arg2 as u32).min(MAX_FB_W as u32);
+                    let h = ((msg.arg2 >> 32) as u32).min(MAX_FB_H as u32);
+                    if w == 0 || h == 0 { continue; }
                     unsafe {
-                        render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar);
-                        serial_println!("[sexdisplay.render.live.ok] fb_w={} fb_h={}", FB_W, FB_H);
-                    }
-                    if !render_proof_done {
-                        render_proof_done = true;
-                        unsafe { top_strip_render_proof(FB_PTR as *const u32, FB_W as usize, FB_H as usize); }
-                    }
-                }
-            }
-            0 => continue,
-            0xE4 => {
-                // OP_WINDOW_CREATE safe inline ABI: arg0=x, arg1=y, arg2=(h<<32)|w
-                // Store only, no immediate placeholder paint.
-                // Immediate blue paint here causes startup flicker.
-                let x = msg.arg0 as i32;
-                let y = msg.arg1 as i32;
-                let w = (msg.arg2 as u32).min(MAX_FB_W as u32);
-                let h = ((msg.arg2 >> 32) as u32).min(MAX_FB_H as u32);
-                if w == 0 || h == 0 { continue; }
-                unsafe {
-                    for slot in SURFACES.iter_mut() {
-                        if !slot.active {
-                            *slot = Surface {
-                                surface_id: 0,
-                                owner_pd: 0,
-                                x, y, w, h,
-                                color: 0x00303860,
-                                active: true,
-                                tab_count: 0, active_tab: 0, chrome_flags: 0,
-                                fill_count: 0,
-                                fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
-                                fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
-                                fill_color: [0u32; MAX_RECTS],
-                                text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; 128],
-                            };
-                            break;
-                        }
-                    }
-                }
-                continue;
-            }
-            0xEC => {
-                // OP_SURFACE_CREATE_ID: arg0=surface_id(non-zero), arg1=(y<<32)|x, arg2=(h<<32)|w
-                let surface_id = msg.arg0;
-                if surface_id == 0 { continue; }
-                let x = msg.arg1 as i32;
-                let y = (msg.arg1 >> 32) as i32;
-                let w = (msg.arg2 as u32).min(MAX_FB_W as u32);
-                let h = ((msg.arg2 >> 32) as u32).min(MAX_FB_H as u32);
-                if w == 0 || h == 0 { continue; }
-                let color = if surface_id & 1 == 0 { 0x00303860u32 } else { 0x00704890u32 };
-                unsafe {
-                    // Upsert: update existing surface or allocate new slot
-                    // Ownership invariant: only the owning PD may upsert an active surface.
-                    let mut handled = false;
-                    for slot in SURFACES.iter_mut() {
-                        if slot.active && slot.surface_id == surface_id {
-                            if slot.owner_pd != msg.caller_pd {
-                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                                if n & 0x3F == 0 {
-                                    serial_println!("AUTH: 0xEC upsert rejected sid={} caller={} owner={}",
-                                        surface_id, msg.caller_pd, slot.owner_pd);
-                                }
-                                continue;
-                            }
-                            slot.x = x; slot.y = y; slot.w = w; slot.h = h;
-                            if slot.color != color { slot.color = color; }
-                            handled = true;
-                            break;
-                        }
-                    }
-                    // Create: bind owner_pd on first allocation of an inactive slot.
-                    // After destroy (active=false) the same or a different PD may
-                    // reclaim the slot, becoming the new owner.
-                    if !handled {
                         for slot in SURFACES.iter_mut() {
                             if !slot.active {
                                 *slot = Surface {
-                                    surface_id, owner_pd: msg.caller_pd, x, y, w, h,
-                                    color,
+                                    surface_id: 0,
+                                    owner_pd: 0,
+                                    x, y, w, h,
+                                    color: 0x00303860,
                                     active: true,
                                     tab_count: 0, active_tab: 0, chrome_flags: 0,
                                     fill_count: 0,
@@ -1236,371 +1195,451 @@ pub extern "C" fn _start() -> ! {
                                     fill_color: [0u32; MAX_RECTS],
                                     text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; 128],
                                 };
+                                break;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                0xEC => {
+                    // OP_SURFACE_CREATE_ID: arg0=surface_id(non-zero), arg1=(y<<32)|x, arg2=(h<<32)|w
+                    let surface_id = msg.arg0;
+                    if surface_id == 0 { continue; }
+                    let x = msg.arg1 as i32;
+                    let y = (msg.arg1 >> 32) as i32;
+                    let w = (msg.arg2 as u32).min(MAX_FB_W as u32);
+                    let h = ((msg.arg2 >> 32) as u32).min(MAX_FB_H as u32);
+                    if w == 0 || h == 0 { continue; }
+                    let color = if surface_id & 1 == 0 { 0x00303860u32 } else { 0x00704890u32 };
+                    unsafe {
+                        // Upsert: update existing surface or allocate new slot
+                        // Ownership invariant: only the owning PD may upsert an active surface.
+                        let mut handled = false;
+                        for slot in SURFACES.iter_mut() {
+                            if slot.active && slot.surface_id == surface_id {
+                                if slot.owner_pd != msg.caller_pd {
+                                    let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                    if n & 0x3F == 0 {
+                                        serial_println!("AUTH: 0xEC upsert rejected sid={} caller={} owner={}",
+                                            surface_id, msg.caller_pd, slot.owner_pd);
+                                    }
+                                    continue;
+                                }
+                                slot.x = x; slot.y = y; slot.w = w; slot.h = h;
+                                if slot.color != color { slot.color = color; }
                                 handled = true;
                                 break;
                             }
                         }
-                    }
-                    // Composite full below-bar area to respect registry z-order
-                    if handled && fb_live {
-                        redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
-                    }
-                }
-            }
-            0xDE => {
-                // OP_WINDOW_CREATE (legacy pointer protocol) — arg0 is cross-PD pointer.
-                // Must NOT dereference. Unsupported until kernel-mediated copy exists.
-                continue;
-            }
-            0xEB => {
-                // OP_SURFACE_UPDATE: arg0=surface_id, arg1=x, arg2=y
-                let target_id = msg.arg0;
-                if target_id == 0 { continue; }
-                let new_x = msg.arg1 as i32;
-                let new_y = msg.arg2 as i32;
-                unsafe {
-                    let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
-                    let mut found = false;
-                    for slot in SURFACES.iter_mut() {
-                        if slot.active && slot.surface_id == target_id {
-                            if slot.owner_pd != msg.caller_pd && !(wm_pd != 0 && msg.caller_pd == wm_pd) {
-                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                                if n & 0x3F == 0 {
-                                    serial_println!("[sexdisplay.auth.deny] op=0xeb caller={} sid={} owner={} wm={}",
-                                        msg.caller_pd, target_id, slot.owner_pd, wm_pd);
-                                }
-                                continue;
-                            }
-                            slot.x = new_x;
-                            slot.y = new_y;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if found && fb_live {
-                        if target_id == CURSOR_SURFACE_ID {
-                            // Budgeted marker: display received cursor surface update from shell.
-                            unsafe {
-                                static mut DISPLAY_CURSOR_UPDATE_BUDGET: u32 = 16;
-                                let rem = &mut DISPLAY_CURSOR_UPDATE_BUDGET;
-                                if *rem > 0 {
-                                    *rem -= 1;
-                                    serial_println!("[sexdisplay.cursor.surface.update] n=0 x={} y={}", new_x, new_y);
+                        // Create: bind owner_pd on first allocation of an inactive slot.
+                        // After destroy (active=false) the same or a different PD may
+                        // reclaim the slot, becoming the new owner.
+                        if !handled {
+                            for slot in SURFACES.iter_mut() {
+                                if !slot.active {
+                                    *slot = Surface {
+                                        surface_id, owner_pd: msg.caller_pd, x, y, w, h,
+                                        color,
+                                        active: true,
+                                        tab_count: 0, active_tab: 0, chrome_flags: 0,
+                                        fill_count: 0,
+                                        fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
+                                        fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
+                                        fill_color: [0u32; MAX_RECTS],
+                                        text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; 128],
+                                    };
+                                    handled = true;
+                                    break;
                                 }
                             }
                         }
-                        redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
-                    }
-                }
-            }
-            0xED => {
-                // OP_SET_FOCUS: arg0=surface_id (0 clears focus). Owner or registered WM only.
-                if !fb_live { continue; }
-                let sid = msg.arg0;
-                if sid != 0 {
-                    let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
-                    let authorized = unsafe {
-                        SURFACES.iter().any(|s| s.active && s.surface_id == sid
-                            && (s.owner_pd == msg.caller_pd || (wm_pd != 0 && msg.caller_pd == wm_pd)))
-                    };
-                    if !authorized {
-                        let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                        if n & 0x3F == 0 {
-                            serial_println!("[sexdisplay.auth.deny] op=0xed caller={} sid={} wm={}",
-                                msg.caller_pd, sid, wm_pd);
+                        // Composite full below-bar area to respect registry z-order
+                        if handled && fb_live {
+                            needs_surface_redraw = true;
                         }
-                        continue;
                     }
                 }
-                unsafe {
-                    FOCUSED_SURFACE_ID = sid;
-                    redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+                0xDE => {
+                    // OP_WINDOW_CREATE (legacy pointer protocol) — arg0 is cross-PD pointer.
+                    // Must NOT dereference. Unsupported until kernel-mediated copy exists.
+                    continue;
                 }
-            }
-            0xEE => {
-                // OP_SURFACE_DESTROY: arg0=surface_id. Hide/deactivate surface.
-                let target_id = msg.arg0;
-                if target_id == 0 { continue; }
-                unsafe {
-                    let mut found = false;
-                    for slot in SURFACES.iter_mut() {
-                        if slot.active && slot.surface_id == target_id {
-                            if slot.owner_pd != msg.caller_pd {
-                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                                if n & 0x3F == 0 {
-                                    serial_println!("AUTH: 0xEE destroy rejected sid={} caller={} owner={}",
-                                        target_id, msg.caller_pd, slot.owner_pd);
+                0xEB => {
+                    // OP_SURFACE_UPDATE: arg0=surface_id, arg1=x, arg2=y
+                    let target_id = msg.arg0;
+                    if target_id == 0 { continue; }
+                    let new_x = msg.arg1 as i32;
+                    let new_y = msg.arg2 as i32;
+                    unsafe {
+                        let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
+                        let mut found = false;
+                        for slot in SURFACES.iter_mut() {
+                            if slot.active && slot.surface_id == target_id {
+                                if slot.owner_pd != msg.caller_pd && !(wm_pd != 0 && msg.caller_pd == wm_pd) {
+                                    let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                    if n & 0x3F == 0 {
+                                        serial_println!("[sexdisplay.auth.deny] op=0xeb caller={} sid={} owner={} wm={}",
+                                            msg.caller_pd, target_id, slot.owner_pd, wm_pd);
+                                    }
+                                    continue;
                                 }
-                                continue;
+                                slot.x = new_x;
+                                slot.y = new_y;
+                                found = true;
+                                break;
                             }
-                            slot.active = false;
-                            found = true;
-                            break;
                         }
-                    }
-                    if found && fb_live {
-                        if FOCUSED_SURFACE_ID == target_id {
-                            FOCUSED_SURFACE_ID = 0;
+                        if found && fb_live {
+                            if target_id == CURSOR_SURFACE_ID {
+                                // Budgeted marker: display received cursor surface update from shell.
+                                unsafe {
+                                    static mut DISPLAY_CURSOR_UPDATE_BUDGET: u32 = 16;
+                                    let rem = &mut DISPLAY_CURSOR_UPDATE_BUDGET;
+                                    if *rem > 0 {
+                                        *rem -= 1;
+                                        serial_println!("[sexdisplay.cursor.surface.update] n=0 x={} y={}", new_x, new_y);
+                                    }
+                                }
+                            }
+                            needs_surface_redraw = true;
                         }
-                        redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
                     }
                 }
-            }
-            0xF5 => {
-                // OP_REGISTER_WM: first caller wins; idempotent for same caller.
-                let caller = msg.caller_pd;
-                if caller == 0 { continue; }
-                match DISPLAY_WM_PD.compare_exchange(
-                    0, caller,
-                    core::sync::atomic::Ordering::AcqRel,
-                    core::sync::atomic::Ordering::Acquire,
-                ) {
-                    Ok(_) => { serial_println!("[sexdisplay.auth.wm.register] caller={} ok=1", caller); }
-                    Err(existing) if existing != caller => {
-                        serial_println!("[sexdisplay.auth.wm.deny] caller={} registered={}", caller, existing);
-                    }
-                    _ => {}
-                }
-            }
-            0xEF => {
-                // OP_SURFACE_FILL_RECT: arg0=surface_id, arg1=(sy<<32)|sx,
-                // arg2=(rect_index<<56)|(color_rgb<<32)|(sh<<16)|sw.
-                // rect_index in bits 56-59 (top nibble of color's alpha byte).
-                // Existing callers use 0x00RRGGBB so bits 56-63 are zero → rect_index=0.
-                let surface_id = msg.arg0;
-                if surface_id == 0 { continue; }
-                if !fb_live { continue; }
-
-                let sx = (msg.arg1 & 0xFFFF_FFFF) as i32;
-                let sy = ((msg.arg1 >> 32) & 0xFFFF_FFFF) as i32;
-                let mut sw = (msg.arg2 & 0xFFFF) as u32;
-                let mut sh = ((msg.arg2 >> 16) & 0xFFFF) as u32;
-                let color = ((msg.arg2 >> 32) & 0x00FF_FFFF) as u32;
-                let rect_index = ((msg.arg2 >> 56) & 0xF) as usize;
-                if sw == 0 || sh == 0 { continue; }
-
-                unsafe {
-                    let mut updated = false;
-                    for slot in SURFACES.iter_mut() {
-                        if !(slot.active && slot.surface_id == surface_id) {
-                            continue;
-                        }
-                        if slot.owner_pd != msg.caller_pd {
+                0xED => {
+                    // OP_SET_FOCUS: arg0=surface_id (0 clears focus). Owner or registered WM only.
+                    if !fb_live { continue; }
+                    let sid = msg.arg0;
+                    if sid != 0 {
+                        let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
+                        let authorized = unsafe {
+                            SURFACES.iter().any(|s| s.active && s.surface_id == sid
+                                && (s.owner_pd == msg.caller_pd || (wm_pd != 0 && msg.caller_pd == wm_pd)))
+                        };
+                        if !authorized {
                             let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                             if n & 0x3F == 0 {
-                                serial_println!("AUTH: 0xEF fill rejected sid={} caller={} owner={}",
-                                    surface_id, msg.caller_pd, slot.owner_pd);
+                                serial_println!("[sexdisplay.auth.deny] op=0xed caller={} sid={} wm={}",
+                                    msg.caller_pd, sid, wm_pd);
                             }
-                            break;
+                            continue;
                         }
-                        if rect_index >= MAX_RECTS {
-                            serial_println!("[display.fill_rect.reject.index] sid={} index={}",
-                                surface_id, rect_index);
-                            break;
-                        }
-
-                        sw = sw.min(slot.w);
-                        sh = sh.min(slot.h);
-                        if sw == 0 || sh == 0 { break; }
-
-                        let max_sx = slot.w.saturating_sub(sw) as i32;
-                        let max_sy = slot.h.saturating_sub(sh) as i32;
-                        let fill_sx = sx.clamp(0, max_sx);
-                        let fill_sy = sy.clamp(0, max_sy);
-
-                        slot.fill_sx[rect_index] = fill_sx;
-                        slot.fill_sy[rect_index] = fill_sy;
-                        slot.fill_sw[rect_index] = sw;
-                        slot.fill_sh[rect_index] = sh;
-                        slot.fill_color[rect_index] = color;
-                        if rect_index + 1 > slot.fill_count as usize {
-                            slot.fill_count = (rect_index + 1) as u8;
-                        }
-                        serial_println!("[display.fill_rect.set] sid={} index={}", surface_id, rect_index);
-                        updated = true;
-                        break;
                     }
-
-                    if updated {
-                        redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+                    unsafe {
+                        FOCUSED_SURFACE_ID = sid;
+                        needs_surface_redraw = true;
                     }
                 }
-            }
-            // ── Text rendering opcodes (V1) ───────────────────────────────
-            0xFA => {
-                // OP_TEXT_CLEAR: arg0 = surface_id
-                let sid = msg.arg0;
-                if sid == 0 { continue; }
-                unsafe {
-                    for slot in SURFACES.iter_mut() {
-                        if slot.active && slot.surface_id == sid {
+                0xEE => {
+                    // OP_SURFACE_DESTROY: arg0=surface_id. Hide/deactivate surface.
+                    let target_id = msg.arg0;
+                    if target_id == 0 { continue; }
+                    unsafe {
+                        let mut found = false;
+                        for slot in SURFACES.iter_mut() {
+                            if slot.active && slot.surface_id == target_id {
+                                if slot.owner_pd != msg.caller_pd {
+                                    let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                    if n & 0x3F == 0 {
+                                        serial_println!("AUTH: 0xEE destroy rejected sid={} caller={} owner={}",
+                                            target_id, msg.caller_pd, slot.owner_pd);
+                                    }
+                                    continue;
+                                }
+                                slot.active = false;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if found && fb_live {
+                            if FOCUSED_SURFACE_ID == target_id {
+                                FOCUSED_SURFACE_ID = 0;
+                            }
+                            needs_surface_redraw = true;
+                        }
+                    }
+                }
+                0xF5 => {
+                    // OP_REGISTER_WM: first caller wins; idempotent for same caller.
+                    let caller = msg.caller_pd;
+                    if caller == 0 { continue; }
+                    match DISPLAY_WM_PD.compare_exchange(
+                        0, caller,
+                        core::sync::atomic::Ordering::AcqRel,
+                        core::sync::atomic::Ordering::Acquire,
+                    ) {
+                        Ok(_) => { serial_println!("[sexdisplay.auth.wm.register] caller={} ok=1", caller); }
+                        Err(existing) if existing != caller => {
+                            serial_println!("[sexdisplay.auth.wm.deny] caller={} registered={}", caller, existing);
+                        }
+                        _ => {}
+                    }
+                }
+                0xEF => {
+                    // OP_SURFACE_FILL_RECT: arg0=surface_id, arg1=(sy<<32)|sx,
+                    // arg2=(rect_index<<56)|(color_rgb<<32)|(sh<<16)|sw.
+                    // rect_index in bits 56-59 (top nibble of color's alpha byte).
+                    // Existing callers use 0x00RRGGBB so bits 56-63 are zero → rect_index=0.
+                    let surface_id = msg.arg0;
+                    if surface_id == 0 { continue; }
+                    if !fb_live { continue; }
+
+                    let sx = (msg.arg1 & 0xFFFF_FFFF) as i32;
+                    let sy = ((msg.arg1 >> 32) & 0xFFFF_FFFF) as i32;
+                    let mut sw = (msg.arg2 & 0xFFFF) as u32;
+                    let mut sh = ((msg.arg2 >> 16) & 0xFFFF) as u32;
+                    let color = ((msg.arg2 >> 32) & 0x00FF_FFFF) as u32;
+                    let rect_index = ((msg.arg2 >> 56) & 0xF) as usize;
+                    if sw == 0 || sh == 0 { continue; }
+
+                    unsafe {
+                        let mut updated = false;
+                        for slot in SURFACES.iter_mut() {
+                            if !(slot.active && slot.surface_id == surface_id) {
+                                continue;
+                            }
                             if slot.owner_pd != msg.caller_pd {
                                 let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                                 if n & 0x3F == 0 {
-                                    serial_println!("AUTH: OP_TEXT_CLEAR rejected sid={} caller={} owner={}",
-                                        sid, msg.caller_pd, slot.owner_pd);
+                                    serial_println!("AUTH: 0xEF fill rejected sid={} caller={} owner={}",
+                                        surface_id, msg.caller_pd, slot.owner_pd);
                                 }
                                 break;
                             }
-                            slot.text_len = 0;
-                            slot.text_buf = [0u8; 128];
-                            break;
-                        }
-                    }
-                }
-            }
-            0xFB => {
-                // OP_TEXT_DRAW: arg0=surface_id, arg1=8 ASCII bytes packed LE,
-                //              arg2 = byte_offset (bits 0-7) | char_count (bits 8-11) | text_color (bits 32-63)
-                let sid = msg.arg0;
-                if sid == 0 { continue; }
-                let packed = msg.arg1;
-                let byte_offset = (msg.arg2 & 0xFF) as usize;
-                let char_count = ((msg.arg2 >> 8) & 0xF) as usize;
-                let text_color = ((msg.arg2 >> 32) as u32) | 0xFF000000; // force opaque alpha
-                let max_buf = 128usize;
-                unsafe {
-                    for slot in SURFACES.iter_mut() {
-                        if slot.active && slot.surface_id == sid {
-                            if slot.owner_pd != msg.caller_pd {
-                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                                if n & 0x3F == 0 {
-                                    serial_println!("AUTH: OP_TEXT_DRAW rejected sid={} caller={} owner={}",
-                                        sid, msg.caller_pd, slot.owner_pd);
-                                }
+                            if rect_index >= MAX_RECTS {
+                                serial_println!("[display.fill_rect.reject.index] sid={} index={}",
+                                    surface_id, rect_index);
                                 break;
                             }
-                            slot.text_color = text_color;
-                            // Unpack 8 bytes from arg1 (little-endian)
-                            let mut i = 0usize;
-                            while i < char_count && i < 8 && byte_offset + i < max_buf {
-                                let byte = ((packed >> (i * 8)) & 0xFF) as u8;
-                                slot.text_buf[byte_offset + i] = byte;
-                                i += 1;
+
+                            sw = sw.min(slot.w);
+                            sh = sh.min(slot.h);
+                            if sw == 0 || sh == 0 { break; }
+
+                            let max_sx = slot.w.saturating_sub(sw) as i32;
+                            let max_sy = slot.h.saturating_sub(sh) as i32;
+                            let fill_sx = sx.clamp(0, max_sx);
+                            let fill_sy = sy.clamp(0, max_sy);
+
+                            slot.fill_sx[rect_index] = fill_sx;
+                            slot.fill_sy[rect_index] = fill_sy;
+                            slot.fill_sw[rect_index] = sw;
+                            slot.fill_sh[rect_index] = sh;
+                            slot.fill_color[rect_index] = color;
+                            if rect_index + 1 > slot.fill_count as usize {
+                                slot.fill_count = (rect_index + 1) as u8;
                             }
-                            let new_len = byte_offset + i;
-                            if new_len > slot.text_len as usize {
-                                slot.text_len = new_len.min(max_buf) as u8;
-                            }
-                            // Diagnostic: confirm text was written to surface
-                            if slot.text_len > 0 && slot.text_len <= 32 {
-                                serial_println!("[sexdisplay.text.draw] sid={} len={} color={:#x}",
-                                    sid, slot.text_len, slot.text_color);
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-            0xFC => {
-                // OP_APPEARANCE_TOKENS: two-call state machine.
-                // Call 1 (TOKEN_BUF_CALL1_RECEIVED=false): buffer 6 packed colors in arg0/arg1/arg2.
-                // Call 2 (TOKEN_BUF_CALL1_RECEIVED=true): commit 8 colors + flags to DISPLAY_TOKENS.
-                // Sequenced by receiver state only — no arg2 tagging (color data in Call 1 arg2).
-                unsafe {
-                    if !TOKEN_BUF_CALL1_RECEIVED {
-                        TOKEN_BUF_ARG0 = msg.arg0;
-                        TOKEN_BUF_ARG1 = msg.arg1;
-                        TOKEN_BUF_ARG2 = msg.arg2;
-                        TOKEN_BUF_CALL1_RECEIVED = true;
-                        static mut APPEARANCE_TOKENS_SEQ0_BUDGET: u32 = 4;
-                        if APPEARANCE_TOKENS_SEQ0_BUDGET > 0 {
-                            APPEARANCE_TOKENS_SEQ0_BUDGET -= 1;
-                            serial_println!("[sexdisplay.appearance.tokens] seq=0 buffered");
-                        }
-                    } else {
-                        // Unpack token preset by APPEARANCE_TOKEN_* index from silkbar-model.
-                        // Call 1 packed: [0|1] in arg0, [2|3] in arg1, [4|5] in arg2.
-                        // Call 2 packed: [6|7] in arg0, flags in arg1.
-                        let focus_surface_color  = clamp_color_token(TOKEN_BUF_ARG0 as u32);
-                        let frame_rim_color      = clamp_color_token((TOKEN_BUF_ARG0 >> 32) as u32);
-                        let frame_top_bar_color  = clamp_color_token(TOKEN_BUF_ARG1 as u32);
-                        let active_tab_color     = clamp_color_token((TOKEN_BUF_ARG1 >> 32) as u32);
-                        let inactive_tab_color   = clamp_color_token(TOKEN_BUF_ARG2 as u32);
-                        let close_light_color    = clamp_color_token((TOKEN_BUF_ARG2 >> 32) as u32);
-                        let minimize_light_color = clamp_color_token(msg.arg0 as u32);
-                        let zoom_light_color     = clamp_color_token((msg.arg0 >> 32) as u32);
-                        let appearance_flags     = (msg.arg1 & 0xFF) as u8;
-                        let effect_levels        = ((msg.arg1 >> 8) & 0xFF) as u8 & !0x0F; // blur=0 in V1
-                        DISPLAY_TOKENS = RenderTokensV1 {
-                            focus_surface_color,
-                            frame_rim_color,
-                            frame_top_bar_color,
-                            active_tab_color,
-                            inactive_tab_color,
-                            close_light_color,
-                            minimize_light_color,
-                            zoom_light_color,
-                            appearance_flags,
-                            effect_levels,
-                        };
-                        TOKEN_BUF_CALL1_RECEIVED = false;
-                        static mut APPEARANCE_TOKENS_APPLIED: u32 = 0;
-                        APPEARANCE_TOKENS_APPLIED += 1;
-                        let applied = APPEARANCE_TOKENS_APPLIED;
-                        static mut APPEARANCE_TOKENS_SEQ1_BUDGET: u32 = 4;
-                        if APPEARANCE_TOKENS_SEQ1_BUDGET > 0 {
-                            APPEARANCE_TOKENS_SEQ1_BUDGET -= 1;
-                            serial_println!("[sexdisplay.appearance.tokens] seq=1 applied={}", applied);
-                        }
-                        if fb_live {
-                            redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
-                        }
-                    }
-                }
-            }
-            0xFD => {
-                // OP_SURFACE_TAB_INFO: arg0=surface_id, arg1=tab_count,
-                //   arg2 low 8 bits=active_tab, arg2 bit 8=chrome_flags
-                let surface_id = msg.arg0;
-                if surface_id == 0 { continue; }
-                let tab_count = (msg.arg1 as u8).min(8);
-                let raw_arg2 = msg.arg2;
-                let active_tab_raw = raw_arg2 as u8;
-                let chrome_flags_raw = ((raw_arg2 >> 8) & 0xff) as u8;
-                let active_tab = if tab_count > 0 {
-                    active_tab_raw.min(tab_count.saturating_sub(1))
-                } else { 0 };
-                unsafe {
-                    let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
-                    let mut updated = false;
-                    for slot in SURFACES.iter_mut() {
-                        if slot.active && slot.surface_id == surface_id {
-                            if slot.owner_pd != msg.caller_pd && !(wm_pd != 0 && msg.caller_pd == wm_pd) {
-                                let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                                if n & 0x3F == 0 {
-                                    serial_println!("[sexdisplay.auth.deny] op=0xfd caller={} sid={} owner={} wm={}",
-                                        msg.caller_pd, surface_id, slot.owner_pd, wm_pd);
-                                }
-                                break;
-                            }
-                            slot.tab_count = tab_count;
-                            slot.active_tab = active_tab;
-                            slot.chrome_flags = chrome_flags_raw;
+                            serial_println!("[display.fill_rect.set] sid={} index={}", surface_id, rect_index);
                             updated = true;
                             break;
                         }
-                    }
-                    if updated {
-                        static mut SURFACE_TAB_INFO_BUDGET: u32 = 8;
-                        let b = &mut SURFACE_TAB_INFO_BUDGET;
-                        if *b > 0 {
-                            *b -= 1;
-                            serial_println!("[sexdisplay.surface.tab.info] surface={} tabs={} active={} chrome={}",
-                                surface_id, tab_count, active_tab, chrome_flags_raw);
-                        }
-                        if fb_live {
-                            redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize);
+
+                        if updated {
+                            needs_surface_redraw = true;
                         }
                     }
                 }
-            }
-            _ => {
-                serial_println!("[pdx.opcode.unknown] display type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
-                // Ignore unrelated messages and continue draining.
-                continue;
+                // ── Text rendering opcodes (V1) ───────────────────────────────
+                0xFA => {
+                    // OP_TEXT_CLEAR: arg0 = surface_id
+                    let sid = msg.arg0;
+                    if sid == 0 { continue; }
+                    unsafe {
+                        for slot in SURFACES.iter_mut() {
+                            if slot.active && slot.surface_id == sid {
+                                if slot.owner_pd != msg.caller_pd {
+                                    let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                    if n & 0x3F == 0 {
+                                        serial_println!("AUTH: OP_TEXT_CLEAR rejected sid={} caller={} owner={}",
+                                            sid, msg.caller_pd, slot.owner_pd);
+                                    }
+                                    break;
+                                }
+                                slot.text_len = 0;
+                                slot.text_buf = [0u8; 128];
+                                break;
+                            }
+                        }
+                    }
+                }
+                0xFB => {
+                    // OP_TEXT_DRAW: arg0=surface_id, arg1=8 ASCII bytes packed LE,
+                    //              arg2 = byte_offset (bits 0-7) | char_count (bits 8-11) | text_color (bits 32-63)
+                    let sid = msg.arg0;
+                    if sid == 0 { continue; }
+                    let packed = msg.arg1;
+                    let byte_offset = (msg.arg2 & 0xFF) as usize;
+                    let char_count = ((msg.arg2 >> 8) & 0xF) as usize;
+                    let text_color = ((msg.arg2 >> 32) as u32) | 0xFF000000; // force opaque alpha
+                    let max_buf = 128usize;
+                    unsafe {
+                        for slot in SURFACES.iter_mut() {
+                            if slot.active && slot.surface_id == sid {
+                                if slot.owner_pd != msg.caller_pd {
+                                    let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                    if n & 0x3F == 0 {
+                                        serial_println!("AUTH: OP_TEXT_DRAW rejected sid={} caller={} owner={}",
+                                            sid, msg.caller_pd, slot.owner_pd);
+                                    }
+                                    break;
+                                }
+                                slot.text_color = text_color;
+                                // Unpack 8 bytes from arg1 (little-endian)
+                                let mut i = 0usize;
+                                while i < char_count && i < 8 && byte_offset + i < max_buf {
+                                    let byte = ((packed >> (i * 8)) & 0xFF) as u8;
+                                    slot.text_buf[byte_offset + i] = byte;
+                                    i += 1;
+                                }
+                                let new_len = byte_offset + i;
+                                if new_len > slot.text_len as usize {
+                                    slot.text_len = new_len.min(max_buf) as u8;
+                                }
+                                // Diagnostic: confirm text was written to surface
+                                if slot.text_len > 0 && slot.text_len <= 32 {
+                                    serial_println!("[sexdisplay.text.draw] sid={} len={} color={:#x}",
+                                        sid, slot.text_len, slot.text_color);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                0xFC => {
+                    // OP_APPEARANCE_TOKENS: two-call state machine.
+                    // Call 1 (TOKEN_BUF_CALL1_RECEIVED=false): buffer 6 packed colors in arg0/arg1/arg2.
+                    // Call 2 (TOKEN_BUF_CALL1_RECEIVED=true): commit 8 colors + flags to DISPLAY_TOKENS.
+                    // Sequenced by receiver state only — no arg2 tagging (color data in Call 1 arg2).
+                    unsafe {
+                        if !TOKEN_BUF_CALL1_RECEIVED {
+                            TOKEN_BUF_ARG0 = msg.arg0;
+                            TOKEN_BUF_ARG1 = msg.arg1;
+                            TOKEN_BUF_ARG2 = msg.arg2;
+                            TOKEN_BUF_CALL1_RECEIVED = true;
+                            static mut APPEARANCE_TOKENS_SEQ0_BUDGET: u32 = 4;
+                            if APPEARANCE_TOKENS_SEQ0_BUDGET > 0 {
+                                APPEARANCE_TOKENS_SEQ0_BUDGET -= 1;
+                                serial_println!("[sexdisplay.appearance.tokens] seq=0 buffered");
+                            }
+                        } else {
+                            // Unpack token preset by APPEARANCE_TOKEN_* index from silkbar-model.
+                            // Call 1 packed: [0|1] in arg0, [2|3] in arg1, [4|5] in arg2.
+                            // Call 2 packed: [6|7] in arg0, flags in arg1.
+                            let focus_surface_color  = clamp_color_token(TOKEN_BUF_ARG0 as u32);
+                            let frame_rim_color      = clamp_color_token((TOKEN_BUF_ARG0 >> 32) as u32);
+                            let frame_top_bar_color  = clamp_color_token(TOKEN_BUF_ARG1 as u32);
+                            let active_tab_color     = clamp_color_token((TOKEN_BUF_ARG1 >> 32) as u32);
+                            let inactive_tab_color   = clamp_color_token(TOKEN_BUF_ARG2 as u32);
+                            let close_light_color    = clamp_color_token((TOKEN_BUF_ARG2 >> 32) as u32);
+                            let minimize_light_color = clamp_color_token(msg.arg0 as u32);
+                            let zoom_light_color     = clamp_color_token((msg.arg0 >> 32) as u32);
+                            let appearance_flags     = (msg.arg1 & 0xFF) as u8;
+                            let effect_levels        = ((msg.arg1 >> 8) & 0xFF) as u8 & !0x0F; // blur=0 in V1
+                            DISPLAY_TOKENS = RenderTokensV1 {
+                                focus_surface_color,
+                                frame_rim_color,
+                                frame_top_bar_color,
+                                active_tab_color,
+                                inactive_tab_color,
+                                close_light_color,
+                                minimize_light_color,
+                                zoom_light_color,
+                                appearance_flags,
+                                effect_levels,
+                            };
+                            TOKEN_BUF_CALL1_RECEIVED = false;
+                            static mut APPEARANCE_TOKENS_APPLIED: u32 = 0;
+                            APPEARANCE_TOKENS_APPLIED += 1;
+                            let applied = APPEARANCE_TOKENS_APPLIED;
+                            static mut APPEARANCE_TOKENS_SEQ1_BUDGET: u32 = 4;
+                            if APPEARANCE_TOKENS_SEQ1_BUDGET > 0 {
+                                APPEARANCE_TOKENS_SEQ1_BUDGET -= 1;
+                                serial_println!("[sexdisplay.appearance.tokens] seq=1 applied={}", applied);
+                            }
+                            if fb_live {
+                                needs_surface_redraw = true;
+                            }
+                        }
+                    }
+                }
+                0xFD => {
+                    // OP_SURFACE_TAB_INFO: arg0=surface_id, arg1=tab_count,
+                    //   arg2 low 8 bits=active_tab, arg2 bit 8=chrome_flags
+                    let surface_id = msg.arg0;
+                    if surface_id == 0 { continue; }
+                    let tab_count = (msg.arg1 as u8).min(8);
+                    let raw_arg2 = msg.arg2;
+                    let active_tab_raw = raw_arg2 as u8;
+                    let chrome_flags_raw = ((raw_arg2 >> 8) & 0xff) as u8;
+                    let active_tab = if tab_count > 0 {
+                        active_tab_raw.min(tab_count.saturating_sub(1))
+                    } else { 0 };
+                    unsafe {
+                        let wm_pd = DISPLAY_WM_PD.load(core::sync::atomic::Ordering::Acquire);
+                        let mut updated = false;
+                        for slot in SURFACES.iter_mut() {
+                            if slot.active && slot.surface_id == surface_id {
+                                if slot.owner_pd != msg.caller_pd && !(wm_pd != 0 && msg.caller_pd == wm_pd) {
+                                    let n = REJECT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                    if n & 0x3F == 0 {
+                                        serial_println!("[sexdisplay.auth.deny] op=0xfd caller={} sid={} owner={} wm={}",
+                                            msg.caller_pd, surface_id, slot.owner_pd, wm_pd);
+                                    }
+                                    break;
+                                }
+                                slot.tab_count = tab_count;
+                                slot.active_tab = active_tab;
+                                slot.chrome_flags = chrome_flags_raw;
+                                updated = true;
+                                break;
+                            }
+                        }
+                        if updated {
+                            static mut SURFACE_TAB_INFO_BUDGET: u32 = 8;
+                            let b = &mut SURFACE_TAB_INFO_BUDGET;
+                            if *b > 0 {
+                                *b -= 1;
+                                serial_println!("[sexdisplay.surface.tab.info] surface={} tabs={} active={} chrome={}",
+                                    surface_id, tab_count, active_tab, chrome_flags_raw);
+                            }
+                            if fb_live {
+                                needs_surface_redraw = true;
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    serial_println!("[pdx.opcode.unknown] display type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
+                    // Ignore unrelated messages and continue draining.
+                    continue;
+                }
             }
         }
+
+        // ── Budgeted marker: first 32 cycles ──
+        unsafe {
+            static mut RENDER_BUDGET_CYCLE: u32 = 32;
+            if RENDER_BUDGET_CYCLE > 0 {
+                RENDER_BUDGET_CYCLE -= 1;
+                serial_println!("[sexdisplay.render.budget] drained={} surface={} strip={} primary={}",
+                    drained,
+                    needs_surface_redraw as u8,
+                    needs_top_strip_redraw as u8,
+                    did_primary_fb_render as u8);
+            }
+        }
+
+        // ── Post-drain redraws ──
+        if !did_primary_fb_render {
+            if needs_surface_redraw {
+                unsafe { redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
+            }
+            if needs_top_strip_redraw {
+                unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+            }
+        }
+
+        // ── Yield once regardless of whether messages remain queued ──
+        sex_pdx::sys_yield();
     }
 }
 
