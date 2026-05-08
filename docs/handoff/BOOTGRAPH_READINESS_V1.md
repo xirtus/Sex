@@ -479,3 +479,27 @@ Spindle receives keys, but its scancode-to-char mapping is wrong for several set
 Invariant:
 A UI route marker is not a capability proof. Every cross-PD route must have a matching
 kernel capability grant and a runtime send-status proof.
+
+## SPINDLE_KEYBOARD_ROUTE_AND_KEYMAP_V1
+
+Status:
+Synthetic keyboard route to Spindle is proven.
+
+Runtime proof:
+- `[kernel.cap.spindle.route] shell->spindle slot=14`
+- `[shell.synthetic_key.send] ... status=0`
+- `[spindle.pdx.raw] type=0x202`
+- `[spindle.line.append] ch=a len=1`
+- `[spindle.line.append] ch=b len=2`
+- `[spindle.line.append] ch=c len=3`
+- `[spindle.line.backspace] len=2`
+- `[spindle.line.append] ch=d len=3`
+- `[spindle.line.enter] len=3 mode=insert text="abd"`
+
+Fixes:
+- SilkShell now has a kernel capability grant to call Spindle at `SLOT_SPINDLE=14`.
+- Spindle now uses explicit PS/2 set-1 scancode mapping instead of broken range math.
+
+Invariant:
+A UI route marker is not a capability proof. Every cross-PD route must have a matching
+kernel capability grant and runtime send-status proof.
