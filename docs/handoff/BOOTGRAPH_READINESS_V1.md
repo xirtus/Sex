@@ -373,3 +373,29 @@ events must not yank the cursor after real relative movement begins.
 Remaining:
 Fine-tune pointer feel later if needed, but do not change USB decode, sexinput wire format,
 or sexdisplay render path for gain/clamp work unless STOP FIRST proves route regression.
+
+## CLICK_FOCUS_ROUTE_V1
+
+Status:
+Click/focus route is fully instrumented. No patch needed from audit.
+
+Route:
+sexusb button report -> sexinput EV_BTN -> silk-shell click handler -> hit-test/focus/drag.
+
+Proof markers:
+- `[sexinput.pointer.button.down]`
+- `[sexinput.pointer.button.up]`
+- `[sexinput.pointer.send] class=4`
+- `[silk-shell.pointer.recv] class=EV_BTN`
+- `[silk-shell.click.down]`
+- `[shell.click_focus.hit]` or `[shell.click_focus.miss]`
+- `[shell.click_focus.send.ok]`
+- `[silk-shell.click.up]`
+- optional drag markers:
+  `[shell.interact.drag.begin]`
+  `[shell.interact.drag.move]`
+  `[shell.interact.drag.end]`
+
+Invariant:
+Button/focus route is separate from pointer smoothing. Do not modify USB decode, sexinput wire
+format, or sexdisplay render path for focus issues unless STOP FIRST proves the route regressed.
