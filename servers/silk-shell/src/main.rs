@@ -4307,6 +4307,12 @@ static mut POINTER_USB_STATE_INIT: bool = false;
 /// Once set, EV_ABS handlers skip synthetic proof absolute events
 /// to prevent cursor yanking during normal operation.
 static mut REAL_POINTER_SEEN: bool = false;
+/// Tracker-lite accumulator: raw deltas are queued across EV_REL frames
+/// and flushed as a single cursor update when enough motion accumulates.
+/// Reduces steppy feel from per-event scaling of large bursts.
+static mut PENDING_DX: i32 = 0;
+static mut PENDING_DY: i32 = 0;
+static mut PENDING_COUNT: u8 = 0;
 static mut INTERACTION: InteractionState = InteractionState::Idle;
 
 /// Apply relative pointer movement with gain reduction and bounds clamping,
@@ -4318,41 +4324,91 @@ static mut INTERACTION: InteractionState = InteractionState::Idle;
 /// Returns the filtered (dx, dy) actually applied, so callers can reuse
 /// the same filtered deltas for drag movement.
 unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
-    // Mark that real relative input has been seen.  Used by EV_ABS
-    // handlers to gate off synthetic proof absolute events after boot.
+    // Mark that real relative input has been seen.
     REAL_POINTER_SEEN = true;
 
-    // Piecewise acceleration: scale raw delta by magnitude bracket.
-    // Preserves sign.  Small movements get 1:1 feel; large bursts are
-    // progressively damped but not all collapsed to the same ceiling.
-    // Final output clamped to ±16 px to prevent wild jumps.
-    fn scale_axis(raw: i32) -> i32 {
+    // ── Tracker-lite accumulator ──
+    // Queue raw deltas; flush cursor update only when enough motion
+    // accumulates or consecutive events warrant a move.
+    PENDING_DX = PENDING_DX.wrapping_add(dx_raw);
+    PENDING_DY = PENDING_DY.wrapping_add(dy_raw);
+    if PENDING_COUNT < 4 { PENDING_COUNT += 1; }
+
+    // Budgeted accumulation marker.
+    unsafe {
+        static mut POINTER_ACCUM_BUDGET: u32 = 32;
+        let a = &mut POINTER_ACCUM_BUDGET;
+        if *a > 0 {
+            *a -= 1;
+            serial_println!(
+                "[silk-shell.pointer.accum] raw_dx={} raw_dy={} pend_dx={} pend_dy={} count={}",
+                dx_raw, dy_raw, PENDING_DX, PENDING_DY, PENDING_COUNT
+            );
+        }
+    }
+
+    // ── Flush decision ──
+    let abs_sum = PENDING_DX.abs() + PENDING_DY.abs();
+    let should_flush = PENDING_COUNT >= 4
+        || (PENDING_COUNT >= 2 && abs_sum >= 24)
+        || (PENDING_COUNT >= 3 && abs_sum <= 2); // repeated micro → intentional
+
+    if !should_flush {
+        return (0, 0);
+    }
+
+    // ── Flush: piecewise scale accumulated total ──
+    let total_dx = PENDING_DX;
+    let total_dy = PENDING_DY;
+    PENDING_DX = 0;
+    PENDING_DY = 0;
+    PENDING_COUNT = 0;
+
+    fn scale_total(raw: i32) -> i32 {
         if raw == 0 { return 0; }
         let sign = raw.signum();
         let abs = raw.unsigned_abs();
-        let scaled = if abs <= 3 {
-            1  // micro-movement floor
-        } else if abs <= 15 {
-            (abs / 3) as i32
-        } else if abs <= 63 {
-            (abs / 4) as i32
+        let scaled = if abs <= 2 {
+            0        // noise floor
+        } else if abs <= 8 {
+            ((abs / 4) as i32).max(1)  // 3-8 → 1-2
+        } else if abs <= 32 {
+            (abs / 4) as i32           // 9-32 → 2-8
+        } else if abs <= 96 {
+            (abs / 6) as i32           // 33-96 → 5-16
         } else {
-            ((abs / 6) as i32).min(16)
+            8                          // cap
         };
         sign * scaled
     }
-    let dx = scale_axis(dx_raw);
-    let dy = scale_axis(dy_raw);
+    let dx = scale_total(total_dx);
+    let dy = scale_total(total_dy);
 
-    // Budgeted filter proof: log raw vs filtered deltas.
+    // Jitter drop: tiny accumulated total with low repeat count.
+    if dx == 0 && dy == 0 {
+        unsafe {
+            static mut JITTER_DROP_BUDGET: u32 = 16;
+            let j = &mut JITTER_DROP_BUDGET;
+            if *j > 0 {
+                *j -= 1;
+                serial_println!(
+                    "[silk-shell.pointer.jitter.drop] dx={} dy={} count=N/A",
+                    total_dx, total_dy
+                );
+            }
+        }
+        return (0, 0);
+    }
+
+    // Budgeted flush marker.
     unsafe {
-        static mut POINTER_FILTER_BUDGET: u32 = 32;
-        let f = &mut POINTER_FILTER_BUDGET;
-        if *f > 0 && (dx_raw != dx || dy_raw != dy) {
-            *f -= 1;
+        static mut POINTER_FLUSH_BUDGET: u32 = 32;
+        let fl = &mut POINTER_FLUSH_BUDGET;
+        if *fl > 0 {
+            *fl -= 1;
             serial_println!(
-                "[silk-shell.pointer.filter] raw_dx={} raw_dy={} dx={} dy={} mode=piecewise",
-                dx_raw, dy_raw, dx, dy
+                "[silk-shell.pointer.flush] total_dx={} total_dy={} dx={} dy={} mode=tracker_lite",
+                total_dx, total_dy, dx, dy
             );
         }
     }
