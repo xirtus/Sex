@@ -181,3 +181,21 @@ Root lessons:
 
 Remaining work:
 Replace yield-count clock with a real monotonic timer source once timer calibration is ready.
+
+## SILKBAR_SYNTHETIC_THRESHOLD_2_V1
+
+Status:
+QEMU synthetic fallback clock is tuned to threshold=2.
+
+Runtime proof:
+- `[silkbar.clock.synthetic.visible] threshold=2`
+- `[silkbar.clock.source] kind=synthetic raw_ticks=0 threshold=2`
+- SilkBar emits ss=1..13+
+- sexdisplay applies ss=1..13+
+- no `fault.kill`, `#PF`, `#GP`, or `panic` observed in proof grep
+
+Notes:
+- This is still synthetic QEMU/degraded liveness time, not wall-clock time.
+- It is slightly fast but usable.
+- Real tick path remains preferred when `sex_pdx::get_ticks()` advances.
+- Default clock seed remains model/demo state and should be handled separately by real clock/RTC work.
