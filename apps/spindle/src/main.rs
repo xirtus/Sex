@@ -359,6 +359,22 @@ impl Scrollback {
     }
 }
 
+// ── BSS storage (moved off stack to stay within 64 KiB PD stack limit) ──
+// Scrollback: [[u8; 80]; 1024] = 80 KiB → BSS
+// History:    [[u8; 256]; 128] = 32 KiB → BSS
+// EventRing + CmdLine remain on stack (~4 KiB combined, safe).
+static mut SPINDLE_SCROLLBACK: Scrollback = Scrollback {
+    ring: [[0u8; 80]; 1024],
+    write_pos: 0,
+    total_lines: 0,
+    scroll_offset: 0,
+};
+static mut SPINDLE_HISTORY: History = History {
+    ring: [[0u8; HIST_LINE_BYTES]; MAX_HISTORY],
+    write_pos: 0,
+    total: 0,
+};
+
 // ── Scrollback render ──────────────────────────────────────────────────────
 
 /// Render the visible scrollback area (rows 5–22) into the framebuffer.
@@ -778,8 +794,8 @@ pub extern "C" fn _start() -> ! {
             serial_println!("[spindle.surface.req] w={} h={}", WIN_W, WIN_H);
 
             let mut fb = WindowBuffer::new((FB_PFN_BASE << 12) as u64, WIN_W, WIN_H, WIN_W);
-            let mut sb = Scrollback::new();
-            let mut hist = History::new();
+            let sb = unsafe { &mut SPINDLE_SCROLLBACK };
+            let hist = unsafe { &mut SPINDLE_HISTORY };
             let mut ev = EventRing::new();
 
             sb.push(b"Spindle -- SexOS native command console");
@@ -791,29 +807,33 @@ pub extern "C" fn _start() -> ! {
             font::draw_str(&mut fb, 4, CELL_H * 2 + 4, b"SexOS native command console", FG, None);
             font::draw_str(&mut fb, 4, CELL_H * 3 + 4, b"Type help for commands.", FG, None);
             for col in 0..COLS { fb.draw_pixel(col * CELL_W, CELL_H * 4 + CELL_H / 2 - 1, ACCENT); }
-            render_scrollback(&mut fb, &sb);
+            render_scrollback(&mut fb, sb);
             font::draw_str(&mut fb, 4, CELL_H * 23 + 4, b"sex> ", GREEN, None);
             serial_println!("[spindle.surface.ok] boot_lines={}", sb.total_lines);
 
-            run_input_proof(&mut fb, &mut sb, &mut hist, &mut ev);
+            run_input_proof(&mut fb, sb, hist, &mut ev);
 
             const SEXOBJECT_PROOF_ENABLED: bool =
                 option_env!("SEXOS_SPINDLE_SEXOBJECT_PROOF").is_some();
-            if SEXOBJECT_PROOF_ENABLED { run_spindle_sexobject_proof(&mut sb); }
+            if SEXOBJECT_PROOF_ENABLED { run_spindle_sexobject_proof(sb); }
         }
     }
 
-    // Initialize state (always, no FB needed)
-    let mut sb = Scrollback::new();
-    let mut hist = History::new();
+    // Initialize state (always, no FB needed).
+    // Scrollback (80 KiB) + History (32 KiB) live in BSS to stay within
+    // the 64 KiB per-PD stack allocation.
+    // EventRing (~3 KiB) + CmdLine (~1 KiB) remain on stack.
+    let sb = unsafe { &mut SPINDLE_SCROLLBACK };
+    let hist = unsafe { &mut SPINDLE_HISTORY };
     let mut ev = EventRing::new();
     let mut line = CmdLine::new();
+    serial_println!("[spindle.stack.bss] scrollback=1 history=1");
 
     // Font: 5×7 ASCII bitmap (safe, bounded). JetBrains Mono planned via offline converter.
     serial_println!("[spindle.font.safe] backend=5x7_ascii bounds=checked");
 
     // Best-effort restore from SexFiles (cap granted via 8ce251e).
-    let restored = unsafe { restore_history(&mut hist) };
+    let restored = unsafe { restore_history(hist) };
     serial_println!("[spindle.history.restore] count={}", restored);
     // Best-effort Linen .spn session object create (non-fatal if nonzero).
     let (ls, _) = pdx_call(SLOT_LINEN, OP_LINEN_CREATE_OBJECT, 0, 0, 0);
@@ -834,7 +854,7 @@ pub extern "C" fn _start() -> ! {
                 hist.push(line.as_bytes());
                 unsafe { persist_history(&hist); }
                 serial_println!("[spindle.sexfiles.persist] ok");
-                let recognized = dispatch(line.as_bytes(), &mut sb, &mut hist, &mut ev);
+                let recognized = dispatch(line.as_bytes(), sb, hist, &mut ev);
                 serial_println!("[spindle.stargate.segment] kind=status ok={}", recognized as u8);
                 if recognized {
                     let (bs, _) = pdx_call(SLOT_BELL, OP_BELL_NOTIFY, 0, 0, 0);
