@@ -162,6 +162,8 @@ static REJECT_COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomi
 static CURSOR_Z_TOP_LOGGED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 static DISPLAY_WM_PD: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// Clock source for redraw marker: 0=silkbar, 1=fallback
+static mut CLOCK_REDRAW_SOURCE: u8 = 0;
 
 /// Clamp a surface rectangle against framebuffer dimensions.
 /// Returns `(x, y, w, h)` guaranteed to be within FB bounds and below the bar.
@@ -782,6 +784,18 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
             *b -= 1;
             serial_println!("[sexdisplay.render.top_strip] fb_w={} fb_h={}", w, h);
         }
+        // Clock redraw proof: what time is drawn on screen.
+        // Source tracked via module-level CLOCK_REDRAW_SOURCE set by apply path.
+        unsafe {
+            static mut CLOCK_REDRAW_BUDGET: u32 = 64;
+            let b = &mut CLOCK_REDRAW_BUDGET;
+            if *b > 0 {
+                *b -= 1;
+                let src = if CLOCK_REDRAW_SOURCE == 1 { "fallback" } else { "silkbar" };
+                serial_println!("[sexdisplay.clock.redraw] h={} m={} s={} source={}",
+                    bar.clock_hh, bar.clock_mm, bar.clock_ss, src);
+            }
+        }
     }
     // Top strip boundary: rows 0..50. Keep in sync with BAR_H constant.
     // Row 50 = glow edge; rows 0..49 = SilkBar panel fill + modules.
@@ -1115,6 +1129,19 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
+        // ── Clock state: once per unique sec_now (≈once/sec), budget 64 ──
+        unsafe {
+            static mut CLOCK_STATE_BUDGET: u32 = 64;
+            static mut CLOCK_STATE_LAST_SEC: u64 = u64::MAX;
+            if CLOCK_STATE_BUDGET > 0 && sec_now != CLOCK_STATE_LAST_SEC {
+                CLOCK_STATE_LAST_SEC = sec_now;
+                CLOCK_STATE_BUDGET -= 1;
+                serial_println!("[sexdisplay.clock.state] sec_now={} from_silkbar={} last_clock={} hh={} mm={} ss={}",
+                    sec_now, clock_from_silkbar as u8, last_clock_second,
+                    bar.clock_hh, bar.clock_mm, bar.clock_ss);
+            }
+        }
+
         // ── Bounded drain: process up to DRAIN_MAX messages ──
         for _drain_i in 0..DRAIN_MAX {
             let Some(msg) = sex_pdx::pdx_try_listen_raw(0) else {
@@ -1124,26 +1151,51 @@ pub extern "C" fn _start() -> ! {
 
             match msg.type_id {
                 silkbar_model::OP_SILKBAR_UPDATE => {
+                    // For SetClock: capture old bar values and decode incoming
+                    // BEFORE apply_update mutates bar. This gives accurate
+                    // old vs incoming comparison in markers.
+                    let update_kind = msg.arg0 as u32;
+                    let (old_hh, old_mm, old_ss, in_hh, in_mm, in_ss) =
+                        if update_kind == UpdateKind::SetClock as u32 {
+                            let ih = (msg.arg1 as u32).min(23);
+                            let im = ((msg.arg2 >> 8) as u32).min(59);
+                            let is_ = (msg.arg2 as u8 as u32).min(59);
+                            (bar.clock_hh as u32, bar.clock_mm as u32, bar.clock_ss as u32,
+                             ih, im, is_)
+                        } else {
+                            (0, 0, 0, 0, 0, 0)
+                        };
+
                     let (applied, kind) = handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
                     if applied {
                         if kind == UpdateKind::SetClock as u32 {
-                            if !clock_from_silkbar {
-                                // Gate: only cede fallback to silkbar if the received
-                                // time is not stale. A boot-time SetClock that arrives
-                                // seconds late (behind the init message batch) must not
-                                // permanently disable the fallback clock.
-                                let incoming_ss = bar.clock_ss;
-                                let fallback_ss = (sec_now % 60) as u8;
-                                let stale = incoming_ss < fallback_ss
-                                    && (fallback_ss.wrapping_sub(incoming_ss) < 30);
-                                if !stale {
-                                    clock_from_silkbar = true;
-                                    last_silkbar_clock_sec = sec_now;
+                            let changed = in_hh != old_hh || in_mm != old_mm || in_ss != old_ss;
+                            // Always trust silkbar for clock ownership — no modulo-based
+                            // stale gate. get_ticks() may be frozen under QEMU TCG.
+                            clock_from_silkbar = true;
+                            last_silkbar_clock_sec = sec_now;
+                            unsafe {
+                                static mut CLOCK_RECV_BUDGET: u32 = 64;
+                                let b = &mut CLOCK_RECV_BUDGET;
+                                if *b > 0 {
+                                    *b -= 1;
+                                    serial_println!(
+                                        "[sexdisplay.clock.recv] in_h={} in_m={} in_s={} old_h={} old_m={} old_s={} sec_now={} changed={} from_silkbar=1",
+                                        in_hh, in_mm, in_ss,
+                                        old_hh, old_mm, old_ss,
+                                        sec_now, changed as u8);
                                 }
-                            } else {
-                                // Already trusting SilkBar — every SetClock resets
-                                // the liveness timeout.
-                                last_silkbar_clock_sec = sec_now;
+                            }
+                            unsafe {
+                                static mut CLOCK_APPLY_BUDGET: u32 = 64;
+                                let b = &mut CLOCK_APPLY_BUDGET;
+                                if *b > 0 {
+                                    *b -= 1;
+                                    serial_println!(
+                                        "[sexdisplay.clock.apply] source=silkbar h={} m={} s={} accepted=1 reason={}",
+                                        bar.clock_hh, bar.clock_mm, bar.clock_ss,
+                                        if changed { "changed" } else { "same" });
+                                }
                             }
                         }
                         if fb_live {

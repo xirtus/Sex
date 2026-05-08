@@ -19,7 +19,6 @@ fn send_update(update: SilkBarUpdate) {
         update.b as u64,
     );
     if let Err(err) = result {
-        // Budgeted error diagnostic: log first 16 drops.
         unsafe {
             static mut DROP_COUNTER: u64 = 0;
             static mut DROP_LOG_BUDGET: u32 = 16;
@@ -30,6 +29,19 @@ fn send_update(update: SilkBarUpdate) {
                 *remaining -= 1;
                 sex_pdx::serial_println!("[silkbar.send_update.drop] kind={} idx={} err={:#x} count={}",
                     update.kind, update.index, err, n);
+            }
+            // Clock-specific drop: 64 entries so starvation survives startup noise.
+            if update.kind == UpdateKind::SetClock as u32 {
+                static mut CLOCK_DROP_COUNTER: u64 = 0;
+                static mut CLOCK_DROP_LOG_BUDGET: u32 = 64;
+                let cn = CLOCK_DROP_COUNTER;
+                CLOCK_DROP_COUNTER = CLOCK_DROP_COUNTER.wrapping_add(1);
+                let cb = &mut CLOCK_DROP_LOG_BUDGET;
+                if *cb > 0 {
+                    *cb -= 1;
+                    sex_pdx::serial_println!("[silkbar.send_update.drop.clock] count={} err={:#x}",
+                        cn, err);
+                }
             }
         }
     }
