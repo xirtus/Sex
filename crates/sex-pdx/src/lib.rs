@@ -221,6 +221,7 @@ pub struct PdxEvent; // Stub
 
 /// Spin-receive from a specific capability slot.
 pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
+    static mut PDX_LISTEN_WRAPPER_BUDGET: u32 = 64;
     loop {
         let type_id: u64;
         let caller_pd: u64;
@@ -244,6 +245,15 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
         if type_id == 0 {
             sys_yield();
             continue;
+        }
+        unsafe {
+            if PDX_LISTEN_WRAPPER_BUDGET > 0 {
+                PDX_LISTEN_WRAPPER_BUDGET -= 1;
+                serial_println!(
+                    "[pdx.listen.raw.wrapper] type={:#x} caller={} a0={:#x} a1={:#x}",
+                    type_id, caller_pd, arg0, arg1
+                );
+            }
         }
         return PdxMessage {
             type_id,

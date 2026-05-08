@@ -44,9 +44,14 @@ pub fn init() {
         for module in modules.modules() {
             let path = module.path();
             if path.contains(target) {
+                serial_println!("[bootgraph.pd.spawn.begin] pd={}", target);
                 match pdx_spawn(path, domain_id) {
                     Ok(id) => {
                         serial_println!("✓ Spawned PD {}: {} (Domain {})", id, path, domain_id);
+                        serial_println!(
+                            "[bootgraph.pd.spawn.ok] pd={} id={} pkey={}",
+                            target, id, domain_id
+                        );
                         if domain_id == 1 { 
                             sexdisp_id = id; 
                             unsafe { SEXDISPLAY_PD_ID = id; }
@@ -92,6 +97,7 @@ pub fn init() {
                     }
                     Err(e) => {
                         serial_println!("!! Spawn Error {}: {}", path, e);
+                        serial_println!("[bootgraph.pd.spawn.err] pd={} reason=spawn_failed", target);
                     }
                 }
                 break;
@@ -100,35 +106,152 @@ pub fn init() {
     }
 
     // Grant Phase 25 well-known capabilities
+    serial_println!("[bootgraph.phase25.begin]");
     if sexdisp_id != 0 && silkshell_id != 0 {
         use crate::ipc::DOMAIN_REGISTRY;
         use crate::capability::CapabilityData;
 
         if let Some(pd) = DOMAIN_REGISTRY.get(silkshell_id) {
             pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=1]",
+                silkshell_id, sexdisp_id
+            );
+            serial_println!(
+                "[bootgraph.cap.grant] from=kernel to={} slot=SLOT_DISPLAY target={} ok=1",
+                silkshell_id, sexdisp_id
+            );
             pd.grant_capability(sex_pdx::SLOT_SHELL,   CapabilityData::Domain(silkshell_id));
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SHELL target={} ok=1]",
+                silkshell_id, silkshell_id
+            );
+            serial_println!(
+                "[bootgraph.cap.grant] from=kernel to={} slot=SLOT_SHELL target={} ok=1",
+                silkshell_id, silkshell_id
+            );
             // Stage 2B: silk-shell can send workspace IPC to SilkBar
             pd.grant_capability(sex_pdx::SLOT_SILKBAR, CapabilityData::Domain(silkbar_id));
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SILKBAR target={} ok=1 optional=1]",
+                silkshell_id, silkbar_id
+            );
+            serial_println!(
+                "[bootgraph.cap.grant] from=kernel to={} slot=SLOT_SILKBAR target={} ok=1 optional=1",
+                silkshell_id, silkbar_id
+            );
             if sexstore_id != 0 {
                 pd.grant_capability(sex_pdx::SLOT_SEXSTORE, CapabilityData::Domain(sexstore_id));
                 serial_println!("[kernel.sexstore.cap] shell={} store={}", silkshell_id, sexstore_id);
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SEXSTORE target={} ok=1 optional=1]",
+                    silkshell_id, sexstore_id
+                );
+                serial_println!(
+                    "[bootgraph.cap.grant] from=kernel to={} slot=SLOT_SEXSTORE target={} ok=1 optional=1",
+                    silkshell_id, sexstore_id
+                );
+            } else {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SEXSTORE target=missing ok=0 optional=1 reason=sexstore_absent]",
+                    silkshell_id
+                );
+                serial_println!(
+                    "[bootgraph.cap.grant] from=kernel to={} slot=SLOT_SEXSTORE target=missing ok=0 optional=1 reason=missing_target",
+                    silkshell_id
+                );
             }
             // Bell read-cap: silk-shell can call OP_BELL_LIST
             if sexbell_id != 0 {
                 pd.grant_capability(sex_pdx::SLOT_BELL, CapabilityData::Domain(sexbell_id));
                 serial_println!("[kernel.sexbell.cap.shell] shell→bell slot=12");
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target={} ok=1 optional=1]",
+                    silkshell_id, sexbell_id
+                );
+                serial_println!(
+                    "[bootgraph.cap.grant] from=kernel to={} slot=SLOT_BELL target={} ok=1 optional=1",
+                    silkshell_id, sexbell_id
+                );
+            } else {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target=missing ok=0 optional=1 reason=sexbell_absent]",
+                    silkshell_id
+                );
+                serial_println!(
+                    "[bootgraph.cap.grant] from=kernel to={} slot=SLOT_BELL target=missing ok=0 optional=1 reason=missing_target",
+                    silkshell_id
+                );
             }
             serial_println!("✓ Phase 25: Capabilities granted to silk-shell");
+        } else {
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=0 optional=1 reason=pd_missing]",
+                silkshell_id, sexdisp_id
+            );
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SHELL target={} ok=0 optional=1 reason=pd_missing]",
+                silkshell_id, silkshell_id
+            );
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SILKBAR target={} ok=0 optional=1 reason=pd_missing]",
+                silkshell_id, silkbar_id
+            );
+            if sexstore_id != 0 {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SEXSTORE target={} ok=0 optional=1 reason=pd_missing]",
+                    silkshell_id, sexstore_id
+                );
+            }
+            if sexbell_id != 0 {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target={} ok=0 optional=1 reason=pd_missing]",
+                    silkshell_id, sexbell_id
+                );
+            }
         }
 
         if sexinput_id != 0 {
             if let Some(pd) = DOMAIN_REGISTRY.get(sexinput_id) {
                 // Static Binding: SLOT_INPUT -> Kernel INPUT_RING
                 pd.grant_capability(sex_pdx::SLOT_INPUT, CapabilityData::InputRing);
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_INPUT target=input_ring ok=1]",
+                    sexinput_id
+                );
+                serial_println!(
+                    "[bootgraph.cap.grant] from=kernel to={} slot=SLOT_INPUT target=input_ring ok=1",
+                    sexinput_id
+                );
                 // Grant access to silk-shell for event forwarding
                 pd.grant_capability(sex_pdx::SLOT_SHELL, CapabilityData::Domain(silkshell_id));
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SHELL target={} ok=1]",
+                    sexinput_id, silkshell_id
+                );
+                serial_println!(
+                    "[bootgraph.cap.grant] from=kernel to={} slot=SLOT_SHELL target={} ok=1",
+                    sexinput_id, silkshell_id
+                );
                 serial_println!("✓ Phase 25: Capabilities granted to sexinput");
+            } else {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_INPUT target=input_ring ok=0 optional=1 reason=pd_missing]",
+                    sexinput_id
+                );
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SHELL target={} ok=0 optional=1 reason=pd_missing]",
+                    sexinput_id, silkshell_id
+                );
             }
+        } else {
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to=missing slot=SLOT_INPUT target=input_ring ok=0 optional=1 reason=sexinput_absent]"
+            );
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to=missing slot=SLOT_SHELL target={} ok=0 optional=1 reason=sexinput_absent]",
+                silkshell_id
+            );
         }
 
         // Minimal USB input route: allow sexusb to send decoded mouse reports
@@ -137,9 +260,32 @@ pub fn init() {
             if let Some(pd) = DOMAIN_REGISTRY.get(sexusb_id) {
                 pd.grant_capability(SLOT_USB_SEXINPUT, CapabilityData::Domain(sexinput_id));
                 serial_println!("✓ cap.route: sexusb->sexinput slot {}", SLOT_USB_SEXINPUT);
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot={} target={} ok=1 optional=1]",
+                    sexusb_id, SLOT_USB_SEXINPUT, sexinput_id
+                );
+                serial_println!(
+                    "[bootgraph.cap.grant] from=kernel to={} slot={} target={} ok=1 optional=1",
+                    sexusb_id, SLOT_USB_SEXINPUT, sexinput_id
+                );
+            } else {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot={} target={} ok=0 optional=1 reason=pd_missing]",
+                    sexusb_id, SLOT_USB_SEXINPUT, sexinput_id
+                );
             }
+        } else {
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot={} target={} ok=0 optional=1 reason=sexusb_or_sexinput_absent]",
+                sexusb_id, SLOT_USB_SEXINPUT, sexinput_id
+            );
         }
 
+    } else {
+        serial_println!(
+            "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=0 optional=1 reason=sexdisplay_or_silkshell_absent]",
+            silkshell_id, sexdisp_id
+        );
     }
 
     // Hardware discovery and driver lease routing.
@@ -156,14 +302,37 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(silkbar_id) {
             pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
             serial_println!("✓ SilkBar v8: Capability SLOT_DISPLAY granted");
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=1]",
+                silkbar_id, sexdisp_id
+            );
             // Bell polling cap: SilkBar needs SLOT_BELL for OP_BELL_LIST.
             // This is a read-only LIST capability — SilkBar has no NOTIFY/CLOSE/ACTION.
             // Bell server-side allowlist (BELL_LIST_ALLOWLIST) provides second gate.
             if sexbell_id != 0 {
                 pd.grant_capability(sex_pdx::SLOT_BELL, CapabilityData::Domain(sexbell_id));
                 serial_println!("[kernel.sexbell.cap.silkbar] silkbar→bell slot=12");
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target={} ok=1 optional=1]",
+                    silkbar_id, sexbell_id
+                );
+            } else {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target=missing ok=0 optional=1 reason=sexbell_absent]",
+                    silkbar_id
+                );
             }
+        } else {
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=0 optional=1 reason=pd_missing]",
+                silkbar_id, sexdisp_id
+            );
         }
+    } else {
+        serial_println!(
+            "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=0 optional=1 reason=sexdisplay_or_silkbar_absent]",
+            silkbar_id, sexdisp_id
+        );
     }
 
     // Linen delivery path: grant display capability for placeholder surface.
@@ -173,18 +342,59 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(linen_id) {
             pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
             serial_println!("✓ Phase 25: Capability SLOT_DISPLAY granted to linen");
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=1]",
+                linen_id, sexdisp_id
+            );
             if sexfiles_id != 0 {
                 pd.grant_capability(sex_pdx::SLOT_STORAGE, CapabilityData::Domain(sexfiles_id));
-                serial_println!("[kernel.cap.storage.linen] linen->sexfiles slot={}", sex_pdx::SLOT_STORAGE);
+                serial_println!(
+                    "[kernel.cap.storage.linen] slot={} target_pd={}",
+                    sex_pdx::SLOT_STORAGE,
+                    sexfiles_id
+                );
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_STORAGE target={} ok=1 optional=1]",
+                    linen_id, sexfiles_id
+                );
+            } else {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_STORAGE target=missing ok=0 optional=1 reason=sexfiles_absent]",
+                    linen_id
+                );
             }
+        } else {
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=0 optional=1 reason=pd_missing]",
+                linen_id, sexdisp_id
+            );
         }
         
         if silkshell_id != 0 {
             if let Some(pd) = DOMAIN_REGISTRY.get(silkshell_id) {
                 pd.grant_capability(sex_pdx::SLOT_LINEN, CapabilityData::Domain(linen_id));
                 serial_println!("[kernel.cap.linen.route] shell->linen slot={}", sex_pdx::SLOT_LINEN);
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_LINEN target={} ok=1 optional=1]",
+                    silkshell_id, linen_id
+                );
+            } else {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_LINEN target={} ok=0 optional=1 reason=pd_missing]",
+                    silkshell_id, linen_id
+                );
             }
+        } else {
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to=missing slot=SLOT_LINEN target={} ok=0 optional=1 reason=silkshell_absent]",
+                linen_id
+            );
         }
+    } else {
+        serial_println!(
+            "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=0 optional=1 reason=linen_or_sexdisplay_absent]",
+            linen_id, sexdisp_id
+        );
     }
 
     // Quil route: grant silk-shell capability to ping Quil (no display caps).
@@ -194,18 +404,55 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(silkshell_id) {
             pd.grant_capability(sex_pdx::SLOT_QUIL, CapabilityData::Domain(quil_id));
             serial_println!("[kernel.cap.quil.route] shell->quil slot={}", sex_pdx::SLOT_QUIL);
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_QUIL target={} ok=1 optional=1]",
+                silkshell_id, quil_id
+            );
+        } else {
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_QUIL target={} ok=0 optional=1 reason=pd_missing]",
+                silkshell_id, quil_id
+            );
         }
         
         if sexdisp_id != 0 {
             if let Some(pd) = DOMAIN_REGISTRY.get(quil_id) {
                 pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
                 serial_println!("✓ Capability SLOT_DISPLAY granted to quil");
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=1]",
+                    quil_id, sexdisp_id
+                );
                 if sexfiles_id != 0 {
                     pd.grant_capability(sex_pdx::SLOT_STORAGE, CapabilityData::Domain(sexfiles_id));
                     serial_println!("[kernel.cap.storage.quil] quil->sexfiles slot={}", sex_pdx::SLOT_STORAGE);
+                    serial_println!(
+                        "[bootgraph.cap.grant from=kernel to={} slot=SLOT_STORAGE target={} ok=1 optional=1]",
+                        quil_id, sexfiles_id
+                    );
+                } else {
+                    serial_println!(
+                        "[bootgraph.cap.grant from=kernel to={} slot=SLOT_STORAGE target=missing ok=0 optional=1 reason=sexfiles_absent]",
+                        quil_id
+                    );
                 }
+            } else {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=0 optional=1 reason=pd_missing]",
+                    quil_id, sexdisp_id
+                );
             }
+        } else {
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=0 optional=1 reason=sexdisplay_absent]",
+                quil_id, sexdisp_id
+            );
         }
+    } else {
+        serial_println!(
+            "[bootgraph.cap.grant from=kernel to={} slot=SLOT_QUIL target={} ok=0 optional=1 reason=quil_or_silkshell_absent]",
+            silkshell_id, quil_id
+        );
     }
 
     // Bell self-cap: grant SLOT_BELL to sexbell for listen (no external caps).
@@ -215,7 +462,20 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(sexbell_id) {
             pd.grant_capability(sex_pdx::SLOT_BELL, CapabilityData::Domain(sexbell_id));
             serial_println!("[kernel.sexbell.cap] self slot={}", sex_pdx::SLOT_BELL);
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target={} ok=1 optional=1]",
+                sexbell_id, sexbell_id
+            );
+        } else {
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target={} ok=0 optional=1 reason=pd_missing]",
+                sexbell_id, sexbell_id
+            );
         }
+    } else {
+        serial_println!(
+            "[bootgraph.cap.grant from=kernel to=missing slot=SLOT_BELL target=missing ok=0 optional=1 reason=sexbell_absent]"
+        );
     }
 
     // Spindle capability grants: terminal console bridges (PD 12).
@@ -226,18 +486,63 @@ pub fn init() {
             if sexfiles_id != 0 {
                 pd.grant_capability(sex_pdx::SLOT_STORAGE, CapabilityData::Domain(sexfiles_id));
                 serial_println!("[kernel.cap.storage.spindle] spindle->sexfiles slot={}", sex_pdx::SLOT_STORAGE);
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_STORAGE target={} ok=1 optional=1]",
+                    spindle_id, sexfiles_id
+                );
+            } else {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_STORAGE target=missing ok=0 optional=1 reason=sexfiles_absent]",
+                    spindle_id
+                );
             }
             if sexbell_id != 0 {
                 pd.grant_capability(sex_pdx::SLOT_BELL, CapabilityData::Domain(sexbell_id));
                 serial_println!("[kernel.cap.bell.spindle] spindle->sexbell slot={}", sex_pdx::SLOT_BELL);
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target={} ok=1 optional=1]",
+                    spindle_id, sexbell_id
+                );
+            } else {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target=missing ok=0 optional=1 reason=sexbell_absent]",
+                    spindle_id
+                );
             }
             if linen_id != 0 {
                 pd.grant_capability(sex_pdx::SLOT_LINEN, CapabilityData::Domain(linen_id));
                 serial_println!("[kernel.cap.linen.spindle] spindle->linen slot={}", sex_pdx::SLOT_LINEN);
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_LINEN target={} ok=1 optional=1]",
+                    spindle_id, linen_id
+                );
+            } else {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_LINEN target=missing ok=0 optional=1 reason=linen_absent]",
+                    spindle_id
+                );
             }
             serial_println!("[kernel.cap.spindle] storage={} bell={} linen={}",
                 sexfiles_id != 0, sexbell_id != 0, linen_id != 0);
+        } else {
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_STORAGE target={} ok=0 optional=1 reason=pd_missing]",
+                spindle_id, sexfiles_id
+            );
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BELL target={} ok=0 optional=1 reason=pd_missing]",
+                spindle_id, sexbell_id
+            );
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_LINEN target={} ok=0 optional=1 reason=pd_missing]",
+                spindle_id, linen_id
+            );
         }
+    } else {
+        serial_println!(
+            "[bootgraph.cap.grant from=kernel to=missing slot=SLOT_STORAGE target={} ok=0 optional=1 reason=spindle_absent]",
+            sexfiles_id
+        );
     }
 
     // SexFiles → SexDrive block/DMA route: grant SLOT_BLOCK so DiskFS
@@ -248,8 +553,23 @@ pub fn init() {
         if let Some(pd) = DOMAIN_REGISTRY.get(sexfiles_id) {
             pd.grant_capability(sex_pdx::SLOT_BLOCK, CapabilityData::Domain(sexdrive_id));
             serial_println!("[kernel.cap.block] sexfiles->sexdrive slot={}", sex_pdx::SLOT_BLOCK);
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BLOCK target={} ok=1 optional=1]",
+                sexfiles_id, sexdrive_id
+            );
+        } else {
+            serial_println!(
+                "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BLOCK target={} ok=0 optional=1 reason=pd_missing]",
+                sexfiles_id, sexdrive_id
+            );
         }
+    } else {
+        serial_println!(
+            "[bootgraph.cap.grant from=kernel to={} slot=SLOT_BLOCK target={} ok=0 optional=1 reason=sexfiles_or_sexdrive_absent]",
+            sexfiles_id, sexdrive_id
+        );
     }
+    serial_println!("[bootgraph.phase25.complete]");
 
     // Hand framebuffer to sexdisplay: Limine fb.address is ALREADY VIRTUAL.
     if sexdisp_id != 0 {
@@ -299,6 +619,26 @@ pub fn init() {
         if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(pd_id) {
             let task_ptr = pd.main_task.load(core::sync::atomic::Ordering::Acquire);
             if !task_ptr.is_null() {
+                let pd_name = match pd_id {
+                    1 => "sexdisplay",
+                    2 => "sexdrive",
+                    3 => "silk-shell",
+                    4 => "sexinput",
+                    5 => "sexusb",
+                    6 => "silkbar",
+                    7 => "linen",
+                    8 => "sexstore",
+                    9 => "quil",
+                    10 => "sexbell",
+                    11 => "sexfiles",
+                    12 => "spindle",
+                    _ => "unknown",
+                };
+                let entry = unsafe { (*task_ptr).context.rip };
+                serial_println!(
+                    "[bootgraph.boot.handoff] target={} id={} entry={:#x}",
+                    pd_name, pd_id, entry
+                );
                 unsafe { (*task_ptr).state.store(crate::scheduler::STATE_READY, core::sync::atomic::Ordering::Release); }
                 crate::scheduler::SCHEDULERS[0].runqueue.push(task_ptr);
                 serial_println!("scheduler.enqueue pd_id={}", pd_id);
