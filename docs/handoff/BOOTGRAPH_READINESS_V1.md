@@ -1,193 +1,79 @@
 # BOOTGRAPH_READINESS_V1
 
-- date: 2026-05-08
-- status: DESIGN_DOC — no code changes
-- scope: docs only
+## BootGraph gate command
 
----
-
-## Purpose
-
-BootGraph tracks which Protection Domains (PDs) are ready before dependents start work.
-No POSIX. No systemd. No runit. Pure PDX + marker-based coordination.
-
-Goal: eliminate the class of bugs where a sender fires before the receiver has set up its
-PDX receive loop, cap table, or display surface. Every PD declares what it needs; the graph
-enforces order via runtime markers (V1), PDX handshake (V2), or mesh-visible state (V3).
-
----
-
-## Current Boot Dependency Graph
-
-Kernel spawns PDs in array order from `init.rs`:
-
-```
-sexdisplay → (no upstream PD dep — owns framebuffer directly)
-sexdrive   → (no upstream PD dep — owns block device)
-silk-shell → display=sexdisplay, bar=silkbar, bell=sexbell, linen=linen
-sexinput   → shell=silk-shell
-sexusb     → input=sexinput
-silkbar    → display=sexdisplay, bell=sexbell
-linen      → display=sexdisplay, storage=sexfiles
-sexstore   → (standalone)
-quil       → storage=sexfiles (optional)
-sexbell    → (standalone)
-sexfiles   → (standalone)
-spindle    → (standalone, user-facing app)
+```bash
+scripts/check_bootgraph_log.py /tmp/sexos.log
 ```
 
-Capability grants happen after all spawns complete (Phase 25 in init.rs). A PD that calls
-`pdx_call` before its cap is granted will see a null slot and silently drop the message or fault.
+Integrated runtime gate path:
 
----
-
-## Readiness Markers Per PD
-
-Each PD emits a serial marker when it has completed initialization and is safe to receive
-messages on all its registered slots. These are the V1 canonical markers:
-
-| PD         | Readiness Marker                          | What it means                                 |
-|------------|-------------------------------------------|-----------------------------------------------|
-| sexdisplay | `[sexdisplay.ready]`                      | Framebuffer mapped, receive loop running      |
-| sexdrive   | `[sexdrive.ready]`                        | Block device open, PDX loop running           |
-| silk-shell | `[silkshell.ready]`                       | Focus state init, PDX loop running            |
-| sexinput   | `[sexinput.ready]`                        | HID table init, PDX loop running              |
-| sexusb     | `[sexusb.ready]`                          | xHCI ring init, interrupt-IN loop running     |
-| silkbar    | `[silkbar.ready]`                         | Clock arm, contract validated, loop running   |
-| linen      | `[linen.ready]`                           | Session state init, loop running              |
-| sexstore   | `[sexstore.ready]`                        | KV store open, loop running                   |
-| quil       | `[quil.ready]`                            | Disk FS mount complete, loop running          |
-| sexbell    | `[sexbell.ready]`                         | Bell ring buffer init, loop running           |
-| sexfiles   | `[sexfiles.ready]`                        | RamFS/NVMe mount, loop running                |
-| spindle    | `[spindle.ready]`                         | TUI frame init, PDX loop running              |
-
-Marker format: printed via `serial_println!` in `_start` before the first blocking `pdx_recv`.
-
----
-
-## Dependency Matrix
-
-Rows = sender. Columns = receiver. `X` = sender must wait for receiver marker before first call.
-
-|            | sexdisplay | sexdrive | silk-shell | sexinput | sexusb | silkbar | linen | sexstore | quil | sexbell | sexfiles | spindle |
-|------------|:----------:|:--------:|:----------:|:--------:|:------:|:-------:|:-----:|:--------:|:----:|:-------:|:--------:|:-------:|
-| silk-shell |     X      |          |            |          |        |    X    |   X   |          |      |    X    |          |         |
-| sexinput   |            |          |     X      |          |        |         |       |          |      |         |          |         |
-| sexusb     |            |          |            |    X     |        |         |       |          |      |         |          |         |
-| silkbar    |     X      |          |            |          |        |         |       |          |      |    X    |          |         |
-| linen      |     X      |          |            |          |        |         |       |          |      |         |    X     |         |
-| quil       |            |          |            |          |        |         |       |          |      |         |    X     |         |
-| spindle    |            |          |     X      |          |        |         |       |          |   X  |         |          |         |
-
----
-
-## V1 — Marker-Only (current baseline)
-
-Implementation: serial log scan only. No runtime enforcement.
-
-Mechanism:
-1. Each PD emits `[pd.ready]` marker at `_start` before `pdx_recv`.
-2. Gate scripts (`master_runtime_gate.sh`) scan serial log for required markers.
-3. If a marker is absent → gate = RED → do not ship.
-
-Rules for V1:
-- Markers must appear before the first blocking call.
-- No sentinel message required — log presence is sufficient proof.
-- Marker drift (wrong string) treated same as absent marker.
-- Canonical alias table (see below) is source of truth.
-
-V1 limitations:
-- Log-only: a PD can emit the marker then deadlock before its receive loop is live.
-- No ordering enforcement between PDs at runtime.
-- Suitable only for CI gate and triage, not production readiness.
-
----
-
-## V2 — PDX Handshake (next phase)
-
-Mechanism:
-1. Dependent PD sends `OP_PING` to upstream on startup.
-2. Upstream responds `OP_PONG` only after its receive loop is live.
-3. Dependent defers all upstream calls until pong received.
-4. Timeout (e.g. 5000 ticks) → dependent logs `[boot.wait.timeout pd=X]` and continues degraded.
-
-Rules for V2:
-- `OP_PING` / `OP_PONG` reserved opcodes, not to be reused.
-- Handshake must complete before dependent emits its own `[pd.ready]` marker.
-- No circular ping dependencies allowed.
-- Degraded mode must be defined per PD (e.g. silkbar skips clock if sexdisplay times out).
-
-Required opcode additions (STOP FIRST before adding):
-- `OP_PING = 0xFE`
-- `OP_PONG = 0xFF`
-- Must not collide with existing surface opcodes (see `claude-references/SILKBAR_ABI.md`).
-
----
-
-## V3 — Mesh-Visible Graph (future phase)
-
-Mechanism:
-1. Each PD writes readiness state into a shared mesh (capability-gated read-only segment).
-2. Kernel or sexdisplay renders boot progress overlay on framebuffer.
-3. Dependents poll mesh via PDX read-cap instead of polling serial log.
-4. Boot graph visible to user as animated progress indicator.
-
-Rules for V3:
-- Mesh segment is read-only to all PDs except the owning PD.
-- No raw pointer sharing — all access via PDX cap.
-- Mesh layout versioned: bump version field before any layout change.
-- PKU key assigned to mesh segment at init; kernel opens key at entry, closes at return.
-
----
-
-## Rules for Deferring Startup Work
-
-1. **Do not call a slot until the receiver's readiness marker has been observed.**
-   In V1: rely on spawn order + serial log confirmation.
-   In V2: defer until `OP_PONG` received.
-
-2. **Do not emit your own `[pd.ready]` until all upstream handshakes complete.**
-   Downstream PDs treat your marker as authorization to call you.
-
-3. **Large initialization work (RamFS scan, NVMe mount, font load) must complete before ready marker.**
-   The marker is a contract: once emitted, the PD is live and responsive.
-
-4. **If upstream is optional (e.g. sexbell absent), emit ready marker anyway.**
-   Log `[boot.optional.absent pd=sexbell]` and continue without that capability.
-
-5. **Never spin-wait for a readiness marker inside a PD.**
-   Use `pdx_yield` or a timed retry loop with bounded iteration count.
-   Unbounded spin is a starvation risk for the cooperative scheduler.
-
----
-
-## Runtime Gate Requirements
-
-For a build to pass BOOTGRAPH gate (extends SPAWN_GATE):
-
-| Check | Requirement |
-|-------|-------------|
-| All 12 PD ready markers present | PASS |
-| No PD emits ready marker before its upstream markers appear in log | PASS |
-| No marker appears after a `fault.kill` for that PD | PASS |
-| Marker strings match canonical alias table exactly | PASS |
-
-Canonical marker alias table (single source of truth):
-
-```
-sexdisplay  → [sexdisplay.ready]
-sexdrive    → [sexdrive.ready]
-silk-shell  → [silkshell.ready]
-sexinput    → [sexinput.ready]
-sexusb      → [sexusb.ready]
-silkbar     → [silkbar.ready]
-linen       → [linen.ready]
-sexstore    → [sexstore.ready]
-quil        → [quil.ready]
-sexbell     → [sexbell.ready]
-sexfiles    → [sexfiles.ready]
-spindle     → [spindle.ready]
+```bash
+./scripts/master_runtime_gate.sh --probe 25 --keep-log
 ```
 
-Any deviation (e.g. `[silkshell.init.done]` instead of `[silkshell.ready]`) is MARKER_DRIFT —
-see RECOVERY_BRAIN_TRAINING_LEDGER.md failure class 2.
+The runtime gate captures serial output and then runs `scripts/check_bootgraph_log.py <serial_log> --allow-fault` as the host-side BootGraph checker.
+
+## Required pass output
+
+For parser-only run:
+
+- `BOOTGRAPH PASS`
+
+For integrated runtime gate:
+
+- `BOOTGRAPH_GATE: PASS`
+- `CAP_GRANT_GATE: PASS`
+- `ORDER_GATE: PASS`
+- `CLOCK_GATE: PASS` (or warning semantics as configured by parser)
+- `FINAL_SCORE: GREEN_MASTER` for full pass.
+
+## Common failures
+
+- `BOOTGRAPH FAIL: BOOTGRAPH_GATE ... missing ...ready`
+  - A required `*.ready` marker is missing in the log, or appears before `*.init.start`.
+- `BOOTGRAPH FAIL: CAP_GRANT_GATE ...`
+  - Missing `[bootgraph.phase25.begin]` / `[bootgraph.phase25.complete]` or invalid ordering, or missing required A2 grant markers.
+- `BOOTGRAPH FAIL: ORDER_GATE ...`
+  - Sender `bootgraph.edge.send` appears before receiver `*.ready` or before `phase25.complete`.
+- `CLOCK_GATE: PASS WARN: ...`
+  - Tick-based clock markers are incomplete/not implemented. Non-strict mode reports warning instead of fail.
+- `FAULT_GATE: FAIL ...`
+  - Fault patterns (`panic`, `fault.kill`, `#PF`, `#GP`) found in serial log (unless explicitly allowed).
+
+## BootGraph V1 Kernel Markers
+
+The kernel emits marker-only observability logs in `kernel/src/init.rs`:
+
+- `[bootgraph.pd.spawn.begin] pd=<name>`
+- `[bootgraph.pd.spawn.ok] pd=<name> id=<id> pkey=<pkey>`
+- `[bootgraph.pd.spawn.err] pd=<name> reason=<reason>`
+- `[bootgraph.phase25.begin]`
+- `[bootgraph.cap.grant] from=kernel to=<pd> slot=<slot> target=<target> ok=1`
+- `[bootgraph.cap.grant] from=kernel to=<pd> slot=<slot> target=<target> ok=0 optional=1 reason=<reason>`
+- `[bootgraph.phase25.complete]`
+- `[bootgraph.boot.handoff] target=<pd> id=<id> entry=<entry_addr>`
+
+Proof command:
+
+```bash
+rg "bootgraph.pd.spawn|bootgraph.phase25|bootgraph.cap.grant|bootgraph.boot.handoff|fault.kill|#PF|#GP|panic" /tmp/sexos.log
+```
+
+## Clock Canary Markers
+
+Added marker names for clock-freeze layer classification:
+
+- `[silkbar.loop.cadence.start] iter=N`
+- `[silkbar.loop.cadence.done] iter=N`
+- `[sexdisplay.fb.live.wait] iter=N` (hard-budgeted)
+
+Existing related marker names in this checkout:
+
+- `[silkbar.clock.send]`
+- `[silkbar.send_update.drop.clock]`
+- `[sexdisplay.clock.recv]`
+- `[sexdisplay.clock.redraw]`
+- `[sexdisplay.render.live.ok]`
+
+Note: earlier "missing handoff path" note is superseded; `AGENT_HANDOFF_GP_CLOCK.md` may live under `docs/legacy/` in this checkout.

@@ -738,6 +738,7 @@ fn quil_load() -> Result<(), i64> {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    serial_println!("[quil.init.start]");
     serial_println!("[quil.boot]");
     serial_println!("[quil.no_fb_write]");
     serial_println!("[quil.text.surface] title={}", QUIL_TITLE);
@@ -783,7 +784,9 @@ pub extern "C" fn _start() -> ! {
     let mut selected_row: u8 = 0;
     draw_palette(selected_row);
     serial_println!("[quil.boot.draw.ok]");
+    serial_println!("[quil.ready]");
     if QUIL_DISKFS_SLOT_PROOF_ENABLED {
+        serial_println!("[quil.diskfs.mount]");
         run_quil_diskfs_slot_min_proof();
     }
 
@@ -877,8 +880,6 @@ pub extern "C" fn _start() -> ! {
     }
 
     let mut palette_active = true;
-
-    serial_println!("[quil.ready]");
 
     loop {
         let msg = pdx_listen_raw(0);

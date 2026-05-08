@@ -11,6 +11,15 @@ use sex_pdx::{OP_BELL_LIST, OP_BELL_SUBSCRIBE, SLOT_BELL};
 const BELL_DELIVERY_PROOF_ENABLED: bool = option_env!("SEXOS_BELL_DELIVERY_PROOF").is_some();
 
 fn send_update_status(update: SilkBarUpdate) -> u64 {
+    unsafe {
+        static mut BOOTGRAPH_EDGE_SEND_BUDGET: u32 = 1;
+        if BOOTGRAPH_EDGE_SEND_BUDGET > 0 {
+            BOOTGRAPH_EDGE_SEND_BUDGET -= 1;
+            sex_pdx::serial_println!(
+                "[bootgraph.edge.send from=silkbar to=sexdisplay slot=SLOT_DISPLAY op=OP_SILKBAR_UPDATE first=1]"
+            );
+        }
+    }
     let result = sex_pdx::pdx_call_checked(
         sex_pdx::SLOT_DISPLAY,
         OP_SILKBAR_UPDATE,
@@ -55,6 +64,7 @@ fn send_update(update: SilkBarUpdate) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    sex_pdx::serial_println!("[silkbar.init.start]");
     sex_pdx::serial_println!("[silkbar.boot.begin]");
     sex_pdx::serial_println!("[bootgraph.silkbar.spawned]");
     let contract_err = validate_silkbar_contract();
@@ -80,6 +90,12 @@ pub extern "C" fn _start() -> ! {
     let mut ss: u8 = DEFAULT_SILK_BAR.clock_ss;
     // Loop iteration counter — drives clock, bell, and chip cadence.
     let mut loop_iter: u64 = 0;
+    // Cadence accumulator: one yield per outer loop, 100 yields per clock step.
+    let mut cadence_yields: u16 = 0;
+    const BOOT_CLOCK_SENDS_TARGET: u8 = 2;
+    const BOOT_CLOCK_THRESHOLD: u16 = 8;
+    const STEADY_CLOCK_THRESHOLD: u16 = 100;
+    let mut boot_clock_sends: u8 = 0;
     // Cached Bell generation counter. 0 forces first LIST poll.
     let mut bell_gen_cached: u64 = 0;
     // True when OP_BELL_LIST is enqueued and reply not yet received.
@@ -108,12 +124,37 @@ pub extern "C" fn _start() -> ! {
     }
     let mut init_deferred_next: usize = 0;
     sex_pdx::serial_println!("[silkbar.boot.init.defer] count={}", init_deferred_count);
+    sex_pdx::serial_println!("[silkbar.ready]");
 
     loop {
+        {
+            static mut CADENCE_START_BUDGET: u32 = 16;
+            let b = unsafe { &mut CADENCE_START_BUDGET };
+            if *b > 0 {
+                *b -= 1;
+                sex_pdx::serial_println!("[silkbar.loop.cadence.start] iter={}", loop_iter);
+            }
+        }
+        {
+            static mut STALL_AFTER_START_BUDGET: u32 = 2;
+            let b = unsafe { &mut STALL_AFTER_START_BUDGET };
+            if *b > 0 {
+                *b -= 1;
+                sex_pdx::serial_println!("[silkbar.stall.after_start] iter={}", loop_iter);
+            }
+        }
         if loop_iter == 0 {
             sex_pdx::serial_println!("[bootgraph.silkbar.loop_ready]");
         }
         // Process at most one upstream message per loop (non-blocking).
+        {
+            static mut STALL_BEFORE_RECV_BUDGET: u32 = 2;
+            let b = unsafe { &mut STALL_BEFORE_RECV_BUDGET };
+            if *b > 0 {
+                *b -= 1;
+                sex_pdx::serial_println!("[silkbar.stall.before_recv] iter={}", loop_iter);
+            }
+        }
         if let Some(msg) = sex_pdx::pdx_try_listen_raw(0) {
             if msg.type_id == sex_pdx::OP_SILKBAR_WORKSPACE_ACTIVE {
                 let ws_raw = msg.arg0 as u8;
@@ -163,6 +204,14 @@ pub extern "C" fn _start() -> ! {
                 }
             } else if msg.type_id == 1 && msg.caller_pd == 1 {
                 // ── Bell reply (SUBSCRIBE generation or LIST packed counts) ──
+                {
+                    static mut STALL_BEFORE_BELL_BUDGET: u32 = 2;
+                    let b = unsafe { &mut STALL_BEFORE_BELL_BUDGET };
+                    if *b > 0 {
+                        *b -= 1;
+                        sex_pdx::serial_println!("[silkbar.stall.before_bell] iter={}", loop_iter);
+                    }
+                }
                 if bell_pending_list {
                     // LIST reply: arg0 = packed lane counts from Bell.
                     // Repack for sexdisplay SetBellPresence format:
@@ -244,11 +293,35 @@ pub extern "C" fn _start() -> ! {
                     }
                     // If gen == bell_gen_cached: no change, skip update.
                 }
+                {
+                    static mut STALL_AFTER_BELL_BUDGET: u32 = 2;
+                    let b = unsafe { &mut STALL_AFTER_BELL_BUDGET };
+                    if *b > 0 {
+                        *b -= 1;
+                        sex_pdx::serial_println!("[silkbar.stall.after_bell] iter={}", loop_iter);
+                    }
+                }
             } else {
                 sex_pdx::serial_println!("[pdx.opcode.unknown] silkbar type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
             }
         }
+        {
+            static mut STALL_AFTER_RECV_BUDGET: u32 = 2;
+            let b = unsafe { &mut STALL_AFTER_RECV_BUDGET };
+            if *b > 0 {
+                *b -= 1;
+                sex_pdx::serial_println!("[silkbar.stall.after_recv] iter={}", loop_iter);
+            }
+        }
 
+        {
+            static mut STALL_BEFORE_SHELL_SYNC_BUDGET: u32 = 2;
+            let b = unsafe { &mut STALL_BEFORE_SHELL_SYNC_BUDGET };
+            if *b > 0 {
+                *b -= 1;
+                sex_pdx::serial_println!("[silkbar.stall.before_shell_sync] iter={}", loop_iter);
+            }
+        }
         if focus_state != last_focus_state {
             // Focus state drives workspace urgent highlight.
             // none: clear all; shell/app/debug => ws0/ws1/ws2 urgent respectively.
@@ -268,6 +341,14 @@ pub extern "C" fn _start() -> ! {
             }
             last_focus_state = focus_state;
         }
+        {
+            static mut STALL_AFTER_SHELL_SYNC_BUDGET: u32 = 2;
+            let b = unsafe { &mut STALL_AFTER_SHELL_SYNC_BUDGET };
+            if *b > 0 {
+                *b -= 1;
+                sex_pdx::serial_println!("[silkbar.stall.after_shell_sync] iter={}", loop_iter);
+            }
+        }
 
         if !degraded && init_deferred_next < init_deferred_count {
             let idx = init_deferred_next;
@@ -281,9 +362,33 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        // ~1s via yield (no rdtsc — freezes under QEMU TCG)
-        for _ in 0..100 {
-            sex_pdx::sys_yield();
+        // One yield per outer loop; cadence completes every 100 yields.
+        sex_pdx::sys_yield();
+        cadence_yields = cadence_yields.wrapping_add(1);
+        {
+            static mut CADENCE_STEP_BUDGET: u32 = 16;
+            let b = unsafe { &mut CADENCE_STEP_BUDGET };
+            if *b > 0 {
+                *b -= 1;
+                sex_pdx::serial_println!("[silkbar.loop.cadence.step] iter={} yield_count={}", loop_iter, cadence_yields);
+            }
+        }
+        let cadence_threshold = if boot_clock_sends < BOOT_CLOCK_SENDS_TARGET {
+            BOOT_CLOCK_THRESHOLD
+        } else {
+            STEADY_CLOCK_THRESHOLD
+        };
+        if cadence_yields < cadence_threshold {
+            continue;
+        }
+        cadence_yields = 0;
+        {
+            static mut CADENCE_DONE_BUDGET: u32 = 16;
+            let b = unsafe { &mut CADENCE_DONE_BUDGET };
+            if *b > 0 {
+                *b -= 1;
+                sex_pdx::serial_println!("[silkbar.loop.cadence.done] iter={}", loop_iter);
+            }
         }
 
         // Advance software clock by one logical second per cadence.
@@ -393,6 +498,28 @@ pub extern "C" fn _start() -> ! {
                 UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
             ))
         };
+        if !degraded {
+            boot_clock_sends = boot_clock_sends.wrapping_add(1);
+            {
+                static mut CLOCK_BOOT_CANARY_BUDGET: u32 = 8;
+                let b = unsafe { &mut CLOCK_BOOT_CANARY_BUDGET };
+                if *b > 0 {
+                    *b -= 1;
+                    sex_pdx::serial_println!(
+                        "[silkbar.clock.boot_canary] send={} threshold={}",
+                        boot_clock_sends,
+                        cadence_threshold
+                    );
+                }
+            }
+        } else {
+            static mut CLOCK_BOOT_CANARY_SUPPRESS_BUDGET: u32 = 4;
+            let b = unsafe { &mut CLOCK_BOOT_CANARY_SUPPRESS_BUDGET };
+            if *b > 0 {
+                *b -= 1;
+                sex_pdx::serial_println!("[silkbar.clock.boot_canary] suppressed=degraded threshold={}", cadence_threshold);
+            }
+        }
         if loop_iter == 1 {
             if degraded {
                 sex_pdx::serial_println!("[bootgraph.silkbar.degraded] reason=clock_send_disabled");

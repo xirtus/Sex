@@ -17,9 +17,11 @@ use crate::trampoline::trampoline_main;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    crate::pdx::serial_println!("[sexfiles.init.start]");
     // sexfiles: RamFS Contract Lock V1
     // Bounded RAM-backed filesystem with no POSIX semantics.
     sex_rt::heap_init();
+    crate::pdx::serial_println!("[sexfiles.ready]");
     trampoline_main();
 
     // Fallback: trampoline_main should never return

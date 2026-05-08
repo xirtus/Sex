@@ -1071,6 +1071,7 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> 
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    serial_println!("[sexdisplay.init.start]");
     serial_println!("[silk.contract.validate.start]");
     let contract_err = validate_silkbar_contract();
     if contract_err != 0 {
@@ -1082,11 +1083,13 @@ pub extern "C" fn _start() -> ! {
 
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
-    let mut last_clock_second = sex_pdx::get_ticks() / 62;
+    let mut last_clock_tick = sex_pdx::get_ticks();     // raw ticks for fallback
+    let mut last_clock_second = last_clock_tick / 62;    // sec_now for liveness gate
     let mut clock_from_silkbar = false;
-    let mut last_silkbar_clock_sec: u64 = 0;
+    let mut last_silkbar_clock_ticks: u64 = 0;            // raw ticks of last silkbar update
     let mut fb_live = false;
     let mut render_proof_done = false;
+    let mut loop_iter: u64 = 0;
 
     // 1. Render immediately with fallback — visible before any IPC
     unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
@@ -1099,14 +1102,26 @@ pub extern "C" fn _start() -> ! {
         let mut needs_top_strip_redraw = false;
         let mut did_primary_fb_render = false;
         let mut drained: usize = 0;
+        if !fb_live {
+            unsafe {
+                static mut FB_LIVE_WAIT_BUDGET: u32 = 4;
+                if FB_LIVE_WAIT_BUDGET > 0 {
+                    FB_LIVE_WAIT_BUDGET -= 1;
+                    serial_println!("[sexdisplay.fb.live.wait] iter={}", loop_iter);
+                }
+            }
+        }
 
         // ── Clock tick ──
-        let sec_now = sex_pdx::get_ticks() / 62;
+        // Use raw ticks to detect time advancement. Dividing by 62 assumes
+        // a calibrated LAPIC timer; under QEMU TCG ticks may be far slower,
+        // causing sec_now to stay 0 and the clock to freeze.
+        let raw_ticks = sex_pdx::get_ticks();
+        let sec_now = raw_ticks / 62; // still computed for silkbar liveness gate
 
-        // Liveness-gate: if SilkBar clock stalls for >5 seconds while we trust
-        // it, resume the local fallback. The stale-time gate (below) ensures
-        // SilkBar must send fresh time to re-take ownership when it recovers.
-        if clock_from_silkbar && sec_now.saturating_sub(last_silkbar_clock_sec) > 5 {
+        // Liveness-gate: if SilkBar clock stalls, resume local fallback.
+        // Uses raw_ticks so a slow timer doesn't falsely trigger staleness.
+        if clock_from_silkbar && raw_ticks.saturating_sub(last_silkbar_clock_ticks) > (62 * 5) {
             clock_from_silkbar = false;
             // Budgeted: first 4 fallback-resume events.
             unsafe {
@@ -1119,26 +1134,31 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        if !clock_from_silkbar && sec_now > last_clock_second {
-            last_clock_second = sec_now;
-            bar.clock_hh = ((sec_now / 3600) % 24) as u8;
-            bar.clock_mm = ((sec_now / 60) % 60) as u8;
-            bar.clock_ss = (sec_now % 60) as u8;
+        // Fallback: advance one second each time raw_ticks increments.
+        // Works even when ticks < 62 (i.e. sec_now stays 0 for many cycles).
+        if !clock_from_silkbar && raw_ticks > last_clock_tick {
+            last_clock_tick = raw_ticks;
+            last_clock_second = sec_now; // still track for silkbar liveness
+            bar.clock_ss = bar.clock_ss.wrapping_add(1);
+            if bar.clock_ss >= 60 { bar.clock_ss = 0; bar.clock_mm = bar.clock_mm.wrapping_add(1); }
+            if bar.clock_mm >= 60 { bar.clock_mm = 0; bar.clock_hh = bar.clock_hh.wrapping_add(1); }
+            if bar.clock_hh >= 24 { bar.clock_hh = 0; }
             if fb_live {
                 needs_top_strip_redraw = true;
+                unsafe { CLOCK_REDRAW_SOURCE = 1; } // fallback source
             }
         }
 
-        // ── Clock state: once per unique sec_now (≈once/sec), budget 64 ──
+        // ── Clock state marker: budgeted, per unique raw_ticks ──
         unsafe {
             static mut CLOCK_STATE_BUDGET: u32 = 64;
-            static mut CLOCK_STATE_LAST_SEC: u64 = u64::MAX;
-            if CLOCK_STATE_BUDGET > 0 && sec_now != CLOCK_STATE_LAST_SEC {
-                CLOCK_STATE_LAST_SEC = sec_now;
+            static mut CLOCK_STATE_LAST_TICK: u64 = u64::MAX;
+            if CLOCK_STATE_BUDGET > 0 && raw_ticks != CLOCK_STATE_LAST_TICK {
+                CLOCK_STATE_LAST_TICK = raw_ticks;
                 CLOCK_STATE_BUDGET -= 1;
-                serial_println!("[sexdisplay.clock.state] sec_now={} from_silkbar={} last_clock={} hh={} mm={} ss={}",
-                    sec_now, clock_from_silkbar as u8, last_clock_second,
-                    bar.clock_hh, bar.clock_mm, bar.clock_ss);
+                serial_println!("[sexdisplay.clock.fallback.tick] ticks={} sec={} h={} m={} s={} from_silkbar={}",
+                    raw_ticks, sec_now, bar.clock_hh, bar.clock_mm, bar.clock_ss,
+                    clock_from_silkbar as u8);
             }
         }
 
@@ -1173,7 +1193,8 @@ pub extern "C" fn _start() -> ! {
                             // Always trust silkbar for clock ownership — no modulo-based
                             // stale gate. get_ticks() may be frozen under QEMU TCG.
                             clock_from_silkbar = true;
-                            last_silkbar_clock_sec = sec_now;
+                            last_silkbar_clock_ticks = raw_ticks;
+                            unsafe { CLOCK_REDRAW_SOURCE = 0; } // silkbar source
                             unsafe {
                                 static mut CLOCK_RECV_BUDGET: u32 = 64;
                                 let b = &mut CLOCK_RECV_BUDGET;
@@ -1691,6 +1712,7 @@ pub extern "C" fn _start() -> ! {
         }
 
         // ── Yield once regardless of whether messages remain queued ──
+        loop_iter = loop_iter.wrapping_add(1);
         sex_pdx::sys_yield();
     }
 }
