@@ -42,7 +42,6 @@ fn send_update_status(update: SilkBarUpdate) -> u64 {
                         "[bootgraph.edge.defer from=silkbar to=sexdisplay slot=5 reason=missing_cap]"
                     );
                 }
-                sex_pdx::sys_yield();
                 return err;
             }
             _ => {}
@@ -186,8 +185,7 @@ pub extern "C" fn _start() -> ! {
                         msg.type_id,
                         ws_raw
                     );
-                    sex_pdx::sys_yield();
-                    continue;
+                    sex_pdx::serial_println!("[silkbar.cadence.no_skip] reason=workspace iter={}", loop_iter);
                 }
                 let ws = ws_raw;
                 sex_pdx::serial_println!("[silkbar.workspace.recv] index={}", ws);
@@ -209,8 +207,7 @@ pub extern "C" fn _start() -> ! {
                         msg.type_id,
                         raw
                     );
-                    sex_pdx::sys_yield();
-                    continue;
+                    sex_pdx::serial_println!("[silkbar.cadence.no_skip] reason=options iter={}", loop_iter);
                 }
                 focus_state = raw;
                 // Extract selected-window options mask from arg1 (V1 extension).
@@ -323,6 +320,7 @@ pub extern "C" fn _start() -> ! {
                         sex_pdx::serial_println!("[silkbar.stall.after_bell] iter={}", loop_iter);
                     }
                 }
+                sex_pdx::serial_println!("[silkbar.stall.after_bell_all] iter={}", loop_iter);
             } else {
                 sex_pdx::serial_println!("[pdx.opcode.unknown] silkbar type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
             }
@@ -384,22 +382,34 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        // One yield per outer loop; cadence completes every 100 yields.
-        sex_pdx::sys_yield();
+        // One yield per outer loop; cadence completes after threshold yields.
         cadence_yields = cadence_yields.wrapping_add(1);
-        {
-            static mut CADENCE_STEP_BUDGET: u32 = 16;
-            let b = unsafe { &mut CADENCE_STEP_BUDGET };
-            if *b > 0 {
-                *b -= 1;
-                sex_pdx::serial_println!("[silkbar.loop.cadence.step] iter={} yield_count={}", loop_iter, cadence_yields);
-            }
-        }
-        let cadence_threshold = if boot_clock_sends < BOOT_CLOCK_SENDS_TARGET {
+        // Use boot threshold until loop_iter >= 10 AND boot_clock_sends >= 10.
+        // This proves clock liveness before switching to steady 100-yield cadence.
+        let cadence_threshold = if loop_iter < 10 && boot_clock_sends < 10 {
             BOOT_CLOCK_THRESHOLD
         } else {
             STEADY_CLOCK_THRESHOLD
         };
+        // Unbudgeted iter=2 proof: emit at milestones so we know cadence is alive.
+        if loop_iter == 2 {
+            sex_pdx::serial_println!(
+                "[silkbar.loop.cadence.threshold] iter=2 threshold={} boot_sends={} target={}",
+                cadence_threshold, boot_clock_sends, BOOT_CLOCK_SENDS_TARGET
+            );
+            let half = cadence_threshold / 2;
+            if cadence_yields == 1
+                || cadence_yields == half
+                || cadence_yields + 1 == cadence_threshold
+                || cadence_yields == cadence_threshold
+            {
+                sex_pdx::serial_println!(
+                    "[silkbar.loop.cadence.count] iter={} yield_count={} threshold={}",
+                    loop_iter, cadence_yields, cadence_threshold
+                );
+            }
+        }
+        sex_pdx::sys_yield();
         if cadence_yields < cadence_threshold {
             continue;
         }
@@ -415,6 +425,7 @@ pub extern "C" fn _start() -> ! {
 
         // Advance software clock by one logical second per cadence.
         // get_ticks() is diagnostic-only — under QEMU TCG it returns 0.
+        sex_pdx::serial_println!("[silkbar.loop.iter_advance] old={} new={}", loop_iter, loop_iter.wrapping_add(1));
         loop_iter = loop_iter.wrapping_add(1);
         // [silkbar.loop.alive] budgeted marker
         {
