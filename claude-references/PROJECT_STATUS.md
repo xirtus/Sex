@@ -5,7 +5,7 @@
 
 ---
 
-## Current Status (last updated 2026-05-03 — INTERACTIVE_MODE_PROOF_GATE_V1)
+## Current Status (last updated 2026-05-08 — SILKBAR_CLOCK_CADENCE_FIX_V1)
 
 - **Scheduler stall is FIXED.** All PDX domains spawn and schedule correctly.
 - **USB HID boot-class mouse pipeline is code-complete.**
@@ -59,6 +59,15 @@
 ### Input replay storm fix (INPUT_REPLAY_STORM_FIX_V1)
 - Synthetic drag proof no longer wraps forever via `% 3`
 - One-shot gate prevents replay after stage 2
+
+### SilkBar clock cadence fix (SILKBAR_CLOCK_CADENCE_FIX_V1)
+- Clock frozen at ss=2/iter=2 — three root causes found and fixed
+- Bug 1: `sys_yield()` in ERR_CAP_INVALID path created scheduler window → reject messages bypassed cadence counter. Fix: removed yield.
+- Bug 2: Reject handlers for out-of-bounds workspace/focus called `sys_yield(); continue;` → skipped cadence accumulator. Fix: removed early continue.
+- Bug 3: STEADY_CLOCK_THRESHOLD=100 activated after 10 clock sends → synthetic yield loop takes 100 iters with no wall-clock. Fix: flat LIVE_CLOCK_THRESHOLD=8 always.
+- BootGraph V2 soft barrier: `[bootgraph.edge.defer]` one-shot proof on first cap-miss; no sys_yield in defer path.
+- STOP FIRST: Real clock source (get_ticks()) reads 0 under QEMU TCG — LAPIC doesn't fire. Not implemented. Synthetic fallback is accepted.
+- See `docs/handoff/SILKBAR_CLOCK_CADENCE_FIX_V1.md`
 
 ### Clock freeze fallback gate (CLOCK_FREEZE_FALLBACK_GATE_V1)
 - SilkBar clock no longer freezes at 00:00 within 4s
