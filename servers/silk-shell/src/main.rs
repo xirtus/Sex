@@ -7855,7 +7855,7 @@ unsafe fn spindle_render_cmdline() {
     let yarn = &YARN;
 
     // ── Segment 0: session [S0] / [S1] ──────────────────────────────────────
-    let sess_idx = SPINDLE_ACTIVE_SESSION;
+    let sess_idx = SPINDLE_ACTIVE_SESSION.min(SPINDLE_SESSION_COUNT - 1);
     let session_tag: &[u8] = if sess_idx == 0 { b"[S0]" } else { b"[S1]" };
     let session_color: u64 = if sess_idx == 0 { CAT_BLUE } else { CAT_MAUVE };
     serial_println!("[spindle.stargate.segment] kind=session idx={}", sess_idx);
@@ -7934,6 +7934,7 @@ unsafe fn spindle_render_cmdline() {
 /// Save live YARN + vi state into SPINDLE_SESSIONS[idx].
 /// Scrollback is trimmed to SESSION_SB_LINES newest lines.
 unsafe fn spindle_session_save(idx: usize) {
+    if idx >= SPINDLE_SESSION_COUNT { return; }
     let s = &mut SPINDLE_SESSIONS[idx];
     let yarn = &YARN;
     s.cmd_buf = yarn.cmd_buf;
@@ -7965,6 +7966,7 @@ unsafe fn spindle_session_save(idx: usize) {
 
 /// Load SPINDLE_SESSIONS[idx] into live YARN + vi state.
 unsafe fn spindle_session_load(idx: usize) {
+    if idx >= SPINDLE_SESSION_COUNT { return; }
     let s = &SPINDLE_SESSIONS[idx];
     let yarn = &mut YARN;
     yarn.cmd_buf = s.cmd_buf;
