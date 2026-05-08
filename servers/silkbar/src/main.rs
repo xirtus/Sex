@@ -113,9 +113,17 @@ pub extern "C" fn _start() -> ! {
     let mut loop_iter: u64 = 0;
     // Cadence accumulator: one yield per outer loop, 100 yields per clock step.
     let mut cadence_yields: u16 = 0;
+    // Tick-watch state: prefer real monotonic ticks when available (get_ticks()>0),
+    // fall back to synthetic yield counting on QEMU TCG (get_ticks()==0).
+    let mut last_clock_ticks: u64 = 0;
+    let mut clock_source_logged: bool = false;
     const BOOT_CLOCK_SENDS_TARGET: u8 = 2;
     const BOOT_CLOCK_THRESHOLD: u16 = 8;
     const STEADY_CLOCK_THRESHOLD: u16 = 100;
+    // Synthetic visible threshold: used when get_ticks()==0 (QEMU TCG) so the
+    // displayed clock advances at a proof-usable rate (~1 sec per loop yield).
+    // Not wall-clock; removed once real LAPIC ticks are available.
+    const SYNTHETIC_VISIBLE_CLOCK_THRESHOLD: u16 = 2;
     // Synthetic liveness cadence: used for displayed clock until real timer/tick source exists.
     // Do NOT switch to STEADY_CLOCK_THRESHOLD=100 for the displayed clock — synthetic yields
     // have no wall-clock correlation; 100 yields makes ss appear frozen.
@@ -386,9 +394,55 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        // One yield per outer loop; cadence completes after LIVE_CLOCK_THRESHOLD yields.
-        cadence_yields = cadence_yields.wrapping_add(1);
-        let cadence_threshold = LIVE_CLOCK_THRESHOLD;
+        // Tick-watch cadence: prefer real monotonic ticks when get_ticks()>0,
+        // fall back to synthetic yield counting on QEMU TCG (get_ticks()==0).
+        // One tick change = one cadence increment; LIVE_CLOCK_THRESHOLD
+        // increments complete one logical clock second.
+        let mut cadence_threshold = LIVE_CLOCK_THRESHOLD; // default for real ticks
+        let raw_ticks = sex_pdx::get_ticks();
+        if raw_ticks == 0 {
+            // QEMU TCG fallback: use visible synthetic threshold so clock
+            // advances at a proof-usable rate (~1 sec per yield).
+            cadence_threshold = SYNTHETIC_VISIBLE_CLOCK_THRESHOLD;
+            cadence_yields = cadence_yields.wrapping_add(1);
+            if !clock_source_logged && loop_iter >= 10 {
+                sex_pdx::serial_println!("[silkbar.clock.source] kind=synthetic raw_ticks=0 threshold={}", cadence_threshold);
+                clock_source_logged = true;
+            }
+            // Budgeted marker: prove visible synthetic threshold is active.
+            unsafe {
+                static mut SYNTHETIC_VISIBLE_BUDGET: u32 = 4;
+                let s = &mut SYNTHETIC_VISIBLE_BUDGET;
+                if *s > 0 {
+                    *s -= 1;
+                    sex_pdx::serial_println!(
+                        "[silkbar.clock.synthetic.visible] threshold={}",
+                        cadence_threshold
+                    );
+                }
+            }
+        } else if raw_ticks > last_clock_ticks {
+            last_clock_ticks = raw_ticks;
+            cadence_yields = cadence_yields.wrapping_add(1);
+            if !clock_source_logged {
+                sex_pdx::serial_println!("[silkbar.clock.source] kind=real raw_ticks={}", raw_ticks);
+                clock_source_logged = true;
+            }
+            // Budgeted marker: first 12 real-tick clock advances.
+            unsafe {
+                static mut REAL_TICK_BUDGET: u32 = 12;
+                let r = &mut REAL_TICK_BUDGET;
+                if *r > 0 {
+                    *r -= 1;
+                    sex_pdx::serial_println!(
+                        "[silkbar.clock.real_tick] ticks={} iter={} yield_count={}",
+                        raw_ticks, loop_iter, cadence_yields
+                    );
+                }
+            }
+        }
+        // else: raw_ticks unchanged (real HW but LAPIC hasn't fired yet).
+        // Do not increment cadence_yields; let the continue gate spin normally.
         // Unbudgeted iter=2 proof: emit at milestones only (not every pass).
         if loop_iter == 2 {
             let half = cadence_threshold / 2;
@@ -433,7 +487,8 @@ pub extern "C" fn _start() -> ! {
         }
 
         // Advance software clock by one logical second per cadence.
-        // get_ticks() is diagnostic-only — under QEMU TCG it returns 0.
+        // raw_ticks captured above in tick-watch cadence section; reused here
+        // so only one get_ticks() syscall per loop iteration.
         sex_pdx::serial_println!("[silkbar.loop.iter_advance] old={} new={}", loop_iter, loop_iter.wrapping_add(1));
         loop_iter = loop_iter.wrapping_add(1);
         // [silkbar.loop.alive] budgeted marker
@@ -445,7 +500,6 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::serial_println!("[silkbar.loop.alive] iter={}", loop_iter);
             }
         }
-        let raw_ticks = sex_pdx::get_ticks();
         // Software clock: increment by 1 second
         ss = ss.wrapping_add(1);
         if ss >= 60 {
