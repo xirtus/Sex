@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
 use sex_pdx::{
-    pdx_call, pdx_call_checked, pdx_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
+    pdx_call, pdx_call_checked, pdx_listen_raw, pdx_try_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
     SLOT_DISPLAY, SLOT_SILKBAR, SLOT_SEXSTORE, SLOT_QUIL, SLOT_SPINDLE, SLOT_STORAGE, OP_QUIL_PING,
     OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
     OP_SURFACE_TAB_INFO, OP_APPEARANCE_TOKENS,
@@ -840,16 +840,60 @@ unsafe fn linen_render_static_ui() {
 }
 
 /// Spin-wait for a type_id==0x1 reply in shell's mailbox.
-/// Non-reply messages (e.g. OP_HID_EVENT) are replied-to immediately
-/// to unblock the sender, then discarded.  This prevents sexinput
-/// from blocking during synchronous Linen fetch.
+/// Processes OP_HID_EVENT cursor movement in-line so input is not
+/// starved during blocking Linen fetch.  All other non-reply messages
+/// are acked to unblock the sender.
 unsafe fn linen_sync_reply() -> u64 {
     loop {
         let msg = pdx_listen_raw(0);
         if msg.type_id == 0x1 {
             return msg.arg0;
         }
-        // Unblock sender without processing — prevents input stall.
+        // Process HID cursor events in-line so mouse doesn't freeze
+        // while waiting for Linen to reply.
+        if msg.type_id == OP_HID_EVENT {
+            let event_class = msg.arg2;
+            unsafe {
+                static mut LINEN_SYNC_HID_BUDGET: u32 = 16;
+                let h = &mut LINEN_SYNC_HID_BUDGET;
+                if *h > 0 {
+                    *h -= 1;
+                    serial_println!(
+                        "[silk-shell.linen_sync.input_hid] class={} a0={} a1={}",
+                        event_class, msg.arg0 as i32, msg.arg1 as i32
+                    );
+                }
+            }
+            if event_class == EV_ABS {
+                POINTER_X = (msg.arg0 as i32).clamp(0, P.width - 1);
+                POINTER_Y = (msg.arg1 as i32).clamp(0, P.height - 1);
+                pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+            } else if event_class == EV_REL {
+                if !POINTER_USB_STATE_INIT {
+                    POINTER_X = P.width / 2;
+                    POINTER_Y = P.height / 2;
+                    POINTER_USB_STATE_INIT = true;
+                }
+                POINTER_X = POINTER_X.wrapping_add(msg.arg0 as i32);
+                POINTER_Y = POINTER_Y.wrapping_add(msg.arg1 as i32);
+                pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+            }
+            // EV_KEY, EV_BTN: not processed here; full dispatch
+            // happens later in the main match block.
+            continue;
+        }
+        // Unblock sender for non-HID non-reply messages.
+        unsafe {
+            static mut LINEN_SYNC_NONREPLY_BUDGET: u32 = 8;
+            let n = &mut LINEN_SYNC_NONREPLY_BUDGET;
+            if *n > 0 {
+                *n -= 1;
+                serial_println!(
+                    "[silk-shell.linen_sync.nonreply] type={:#x} caller={}",
+                    msg.type_id, msg.caller_pd
+                );
+            }
+        }
         pdx_reply(msg.caller_pd, 0);
     }
 }
@@ -11160,6 +11204,67 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silkshell.ready]");
 
     loop {
+        // ── Input-first drain: run BEFORE any blocking work ────────────
+        // Non-blocking bounded drain of pending input messages so
+        // sexinput events are not consumed by linen_sync_reply() or
+        // starved during synthetic proof stages.
+        // Process at most 4 messages per loop pass.
+        unsafe {
+            static mut BEFORE_LINEN_DRAIN_BUDGET: u32 = 16;
+            for _drain_i in 0..4u32 {
+                let maybe = pdx_try_listen_raw(0);
+                if maybe.is_none() { break; }
+                let req = maybe.unwrap();
+                if BEFORE_LINEN_DRAIN_BUDGET > 0 {
+                    BEFORE_LINEN_DRAIN_BUDGET -= 1;
+                    serial_println!(
+                        "[silk-shell.input.before_linen_drain] n={} type={:#x}",
+                        _drain_i, req.type_id
+                    );
+                }
+                if req.type_id == OP_HID_EVENT {
+                    let event_class = req.arg2;
+                    let dx = req.arg0 as i32;
+                    let dy = req.arg1 as i32;
+                    unsafe {
+                        static mut BEFORE_LINEN_HID_BUDGET: u32 = 16;
+                        let h = &mut BEFORE_LINEN_HID_BUDGET;
+                        if *h > 0 {
+                            *h -= 1;
+                            serial_println!(
+                                "[silk-shell.input.before_linen_hid] class={} a0={} a1={}",
+                                event_class, dx, dy
+                            );
+                        }
+                    }
+                    if event_class == EV_ABS {
+                        POINTER_X = (req.arg0 as i32).clamp(0, P.width - 1);
+                        POINTER_Y = (req.arg1 as i32).clamp(0, P.height - 1);
+                        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                    } else if event_class == EV_REL {
+                        if !POINTER_USB_STATE_INIT {
+                            POINTER_X = P.width / 2;
+                            POINTER_Y = P.height / 2;
+                            POINTER_USB_STATE_INIT = true;
+                        }
+                        POINTER_X = POINTER_X.wrapping_add(dx);
+                        POINTER_Y = POINTER_Y.wrapping_add(dy);
+                        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                    }
+                    // else: EV_KEY, EV_BTN — do minimal processing only;
+                    // full dispatch happens later in the main match block.
+                } else if req.type_id == 0x1 {
+                    // Reply from async service (e.g. sexstore GET).
+                    // Handled by the main match block later; just ack here.
+                    pdx_reply(req.caller_pd, 0);
+                } else {
+                    // Unknown message during pre-paint drain: ack to unblock sender.
+                    pdx_reply(req.caller_pd, 0);
+                }
+            }
+        }
+        // ── End input-first drain ──────────────────────────────────────
+
         // Deferred linen paint: run once after main loop starts.
         // Skip during synthetic input proofs to avoid linen_sync_reply
         // consuming OP_HID_EVENT before the main dispatch.
@@ -11795,6 +11900,20 @@ pub extern "C" fn _start() -> ! {
                     let scancode = msg.arg0 as u8;
                     let value = msg.arg1; // 1=pressed, 0=released
                     let event_class = msg.arg2; // EV_KEY, EV_REL, EV_ABS, EV_BTN
+
+                    // Raw HID receive proof: log raw args before any EV dispatch.
+                    // Budget 64 covers boot + first ~30 seconds of cursor movement.
+                    unsafe {
+                        static mut HID_RAW_BUDGET: u32 = 64;
+                        let r = &mut HID_RAW_BUDGET;
+                        if *r > 0 {
+                            *r -= 1;
+                            serial_println!(
+                                "[silk-shell.hid.raw] class={} a0={:#x} a1={:#x} a2={:#x} caller={}",
+                                event_class, msg.arg0, msg.arg1, msg.arg2, msg.caller_pd
+                            );
+                        }
+                    }
 
                     unsafe {
                         if event_class == EV_KEY && scancode == 0x43 && value == 0 {
