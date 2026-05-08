@@ -75,3 +75,16 @@ sex-packages/sexbuild/recipes/redox-os/
 
 # Local 0.2 gate runtime artifacts
 .gate_0_2/
+
+# --- private/local agent files: do not publish ---
+/gemini/
+/.openclaw/
+/rapid/
+/AGENTS.md
+/CLAUDE.md
+/HANDOFF.md
+/IDENTITY.md
+/SOUL.md
+/TOOLS.md
+/USER.md
+# --- end private/local agent files ---
