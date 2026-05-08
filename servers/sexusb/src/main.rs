@@ -15,6 +15,7 @@
 // adding multi-slot allocation, per-device bind/ring state, and an event
 // demux loop.
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use sex_pdx::{serial_println, sys_yield, SLOT_USB_HOST, pdx_call_checked};
 
 const SEXUSB_SYNTHETIC: bool = false; // FORCED OFF
@@ -151,14 +152,9 @@ fn send_synthetic_mouse_frame(n: u32, buttons: u8, dx: i8, dy: i8) {
             "[sexusb.synthetic.frame] n={} dx={} dy={} buttons={}",
             n, decoded.dx, decoded.dy, decoded.buttons
         );
-        match pdx_call_checked(
-            SLOT_USB_SEXINPUT,
-            OP_USB_MOUSE_REPORT,
-            0,
-            decoded.buttons as u64,
-            packed_axes,
-        ) {
-            Ok(_) => serial_println!("[sexusb.synthetic.send.ok]"),
+        match send_report_to_sexinput(OP_USB_MOUSE_REPORT, 0, decoded.buttons as u64, packed_axes) {
+            Ok(true) => serial_println!("[sexusb.synthetic.send.ok]"),
+            Ok(false) => {}
             Err(e) => serial_println!("[sexusb.synthetic.send.fail] e={}", e),
         }
     }
@@ -251,12 +247,53 @@ fn classify_single_hid_role(
 const SLOT_USB_SEXINPUT: u64 = 9;
 const OP_USB_MOUSE_REPORT: u64 = 0x260;
 const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
+static CAP_READY_SEXINPUT: AtomicBool = AtomicBool::new(false);
+static DEFER_EMITTED_SEXINPUT: AtomicBool = AtomicBool::new(false);
+static EDGE_SEND_EMITTED_SEXINPUT: AtomicBool = AtomicBool::new(false);
+static BOOTGRAPH_PROOF_SENT: AtomicBool = AtomicBool::new(false);
+static BOOTGRAPH_PROOF_MARKER_EMITTED: AtomicBool = AtomicBool::new(false);
 // Gate per-iteration ring-advance and idle-poll serial logs.
 // Off by default for quiet production boot; set true for USB proof sessions.
 const HID_VERBOSE_RING_LOG: bool = false;
 
+fn send_report_to_sexinput(op: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u64> {
+    if CAP_READY_SEXINPUT.load(Ordering::Relaxed) {
+        return pdx_call_checked(SLOT_USB_SEXINPUT, op, arg0, arg1, arg2).map(|_| {
+            if !BOOTGRAPH_PROOF_MARKER_EMITTED.swap(true, Ordering::Relaxed) {
+                serial_println!("[sexusb.bootgraph.proof_report]");
+            }
+            if !EDGE_SEND_EMITTED_SEXINPUT.swap(true, Ordering::Relaxed) {
+                serial_println!("[bootgraph.edge.send from=sexusb to=sexinput slot=9 op=HID_REPORT first=1]");
+            }
+            true
+        });
+    }
+
+    match pdx_call_checked(SLOT_USB_SEXINPUT, op, arg0, arg1, arg2) {
+        Ok(_) => {
+            CAP_READY_SEXINPUT.store(true, Ordering::Relaxed);
+            if !BOOTGRAPH_PROOF_MARKER_EMITTED.swap(true, Ordering::Relaxed) {
+                serial_println!("[sexusb.bootgraph.proof_report]");
+            }
+            if !EDGE_SEND_EMITTED_SEXINPUT.swap(true, Ordering::Relaxed) {
+                serial_println!("[bootgraph.edge.send from=sexusb to=sexinput slot=9 op=HID_REPORT first=1]");
+            }
+            Ok(true)
+        }
+        Err(e) if e == sex_pdx::ERR_CAP_INVALID => {
+            if !DEFER_EMITTED_SEXINPUT.swap(true, Ordering::Relaxed) {
+                serial_println!("[bootgraph.edge.defer from=sexusb to=sexinput slot=9 reason=missing_cap]");
+            }
+            sys_yield();
+            Ok(false)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    serial_println!("[sexusb.init.start]");
     const PAGE_SIZE: u64 = 4096;
     const TRB_SIZE: u64 = 16;
     const CMD_RING_TRBS: u64 = 64;
@@ -502,6 +539,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.xhci.config.ok] max_slots={}", max_slots);
 
     serial_println!("[sexusb.xhci.ring.proof.ok]");
+    serial_println!("[sexusb.xhci.ring]");
 
     // ── Phase 4: Run/Stop after rings are programmed (spec 4.6.6) ──
     let usbcmd_before = mmio_read32(op_base, XHCI_USBCMD);
@@ -2218,6 +2256,13 @@ pub extern "C" fn _start() -> ! {
     // See SEXUSB_SINGLE_DEVICE_GUARD_V1.md and
     // SEXUSB_HID_MULTIDEVICE_POINTER_AUDIT_V1.md.
     let bind_role = classify_single_hid_role(found_hid_keyboard, found_hid_tablet, found_hid_mouse);
+    let kind_str = match bind_role {
+        HidRole::Keyboard => "keyboard",
+        HidRole::PointerMouse => "mouse",
+        HidRole::PointerTablet => "touchpad",
+        HidRole::Unknown => "unknown",
+    };
+    serial_println!("[sexusb.hid.candidate] slot={} kind={}", en_slot_id, kind_str);
     let is_tablet_device = bind_role == HidRole::PointerTablet;
     let is_keyboard_device = bind_role == HidRole::Keyboard;
 
@@ -3165,6 +3210,7 @@ pub extern "C" fn _start() -> ! {
                 loop { sys_yield(); }
             }
             serial_println!("[sexusb.slot2.cfg9.ok] wTotalLength={} num_interfaces={}", s2_w_total_length, s2_num_interfaces);
+            serial_println!("[sexusb.config.descriptor] slot=2 interfaces={}", s2_num_interfaces);
         }
 
         // EP metadata hoisted to outer scope for Configure Endpoint phase
@@ -3328,12 +3374,23 @@ pub extern "C" fn _start() -> ! {
                         s2_intr_ep_interval = b_interval;
                         serial_println!("[sexusb.slot2.ep.find] ep={:#x} mps={} interval={}",
                             b_endpoint, pkt_size, b_interval);
+                        serial_println!("[sexusb.endpoint.interrupt_in] slot=2 ep={:#x} mps={} interval={}", b_endpoint, pkt_size, b_interval);
                     }
                 }
                 s_walk_off += b_len as u64;
             }
             s2_hid_role = classify_single_hid_role(
-                s2_found_hid_keyboard, s2_found_hid_tablet, s2_found_hid_mouse);
+                s2_found_hid_keyboard,
+                s2_found_hid_tablet,
+                s2_found_hid_mouse
+            );
+            let s2_kind_str = match s2_hid_role {
+                HidRole::Keyboard => "keyboard",
+                HidRole::PointerMouse => "mouse",
+                HidRole::PointerTablet => "touchpad",
+                HidRole::Unknown => "unknown",
+            };
+            serial_println!("[sexusb.hid.candidate] slot=2 kind={}", s2_kind_str);
             serial_println!("[sexusb.slot2.hid.role] role={:?} iface={}",
                 s2_hid_role, s2_hid_iface);
             if s2_hid_role == HidRole::PointerTablet || s2_hid_role == HidRole::PointerMouse {
@@ -3697,6 +3754,8 @@ pub extern "C" fn _start() -> ! {
         option_env!("SEXUSB_SYNTHETIC_SLOT2").is_some();
     if SEXUSB_SYNTHETIC_SLOT2 {
         serial_println!("[sexusb.synthetic_slot2.begin]");
+        // Yield to let silk-shell finish boot before injecting events.
+        for _ in 0..20u32 { sys_yield(); }
         // Phase 1: move pointer toward target surface (5 frames, button up).
         for i in 0..5u32 {
             serial_println!("[sexusb.synthetic_slot2.report] n={} buttons=0 dx=1 dy=1", i);
@@ -3750,6 +3809,14 @@ pub extern "C" fn _start() -> ! {
     let mut i: u32 = 0;
     let mut intr_prod: u64 = 0;
     let mut intr_pcs: u32 = 1;
+    serial_println!("[sexusb.ready]");
+    if !BOOTGRAPH_PROOF_SENT.swap(true, Ordering::Relaxed) {
+        // Zero-motion, zero-button report: exercises the edge without input action.
+        if !BOOTGRAPH_PROOF_MARKER_EMITTED.swap(true, Ordering::Relaxed) {
+            serial_println!("[sexusb.bootgraph.proof_report]");
+        }
+        let _ = send_report_to_sexinput(OP_USB_MOUSE_REPORT, 0, 0, 0);
+    }
     loop {
         let mut skip_advance = false;
         // NOTE: report buffer is NOT cleared here. xHCI overwrites it on TRB
@@ -3976,8 +4043,7 @@ pub extern "C" fn _start() -> ! {
             // Mark advance done so bottom-of-loop skips it.
             skip_advance = true;
 
-            let _ = pdx_call_checked(
-                SLOT_USB_SEXINPUT,
+            let _ = send_report_to_sexinput(
                 OP_USB_KEYBOARD_REPORT,
                 0,
                 kb_b0 as u64,  // arg1 = modifiers
@@ -4017,8 +4083,7 @@ pub extern "C" fn _start() -> ! {
                                     let b_b2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
                                     serial_println!("[sexusb.kbd.poll.burst] b2=0x{:x} actual={}", b_b2, b_actual);
                                     let burst_key = b_b2 as u64;
-                                    let _ = pdx_call_checked(
-                                        SLOT_USB_SEXINPUT,
+                                    let _ = send_report_to_sexinput(
                                         OP_USB_KEYBOARD_REPORT,
                                         0,
                                         b_b0 as u64,
@@ -4125,8 +4190,7 @@ pub extern "C" fn _start() -> ! {
                             td.buttons, packed_axes);
                     }
                 }
-                let _ = pdx_call_checked(
-                    SLOT_USB_SEXINPUT,
+                let _ = send_report_to_sexinput(
                     OP_USB_MOUSE_REPORT,
                     0,
                     td.buttons as u64,
@@ -4239,8 +4303,7 @@ pub extern "C" fn _start() -> ! {
                             decoded.buttons, packed_axes);
                     }
                 }
-                let _ = pdx_call_checked(
-                    SLOT_USB_SEXINPUT,
+                let _ = send_report_to_sexinput(
                     OP_USB_MOUSE_REPORT,
                     0,
                     decoded.buttons as u64,
