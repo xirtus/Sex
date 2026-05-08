@@ -255,3 +255,98 @@ Runtime proof:
 
 Remaining:
 Pointer movement quality is not yet smooth/perfect. Route is alive; tuning should be separate.
+
+## CURSOR_ROUTE_ALIVE_V1
+
+Route map (end-to-end, all hops proven live at runtime):
+
+```
+sexusb → sexinput → silk-shell → sexdisplay
+```
+
+### Root cause
+
+`silk-shell` `linen_sync_reply()` consumed and acked non-reply `OP_HID_EVENT` messages
+while waiting for Linen replies.  Pointer events arriving during Linen paint were lost
+before Shell HID dispatch — cursor appeared frozen during boot composition.
+
+### Fix
+
+`linen_sync_reply()` now recognises `OP_HID_EVENT` and handles cursor input inline
+(`apply_rel_pointer`) while continuing to wait for Linen replies.
+A pre-Linen non-blocking input drain is also in place.
+
+### Runtime proof markers
+
+| Hop | Marker |
+|-----|--------|
+| sexusb → sexinput | `[sexinput.pointer.raw] a0=... a1=... a2=... caller=N` |
+| sexinput → silk-shell | `[sexinput.pointer.send] class=2 ...`  /  `[sexinput.hid.emit.rel] ...` |
+| silk-shell receives during Linen sync | `[silk-shell.linen_sync.input_hid] class=2 ...` |
+| silk-shell updates cursor | `pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, x, y)` |
+| sexdisplay applies | `[sexdisplay.cursor.surface.update] n=0 x=...` |
+| sexdisplay draws | `[sexdisplay.cursor.draw] n=0 x=...` |
+
+### Invariant
+
+**Blocking reply helpers MUST be input-aware.**
+No wait-for-reply loop may ack/drop `OP_HID_EVENT`.
+
+Any future helper that loops on `pdx_try_listen_raw` waiting for a specific reply
+opcode must handle `OP_HID_EVENT` inline and continue waiting — never ack/drop it.
+
+### Remaining work
+
+Pointer movement quality (smoothing, gain reduction, clamping) is separate
+and tracked under `POINTER_QUALITY_V1`.  Route liveness is the prerequisite.
+
+## CURSOR_ROUTE_BOOTGRAPH_GATE_V1
+
+**Date:** 2026-05-08
+**Status:** MERGED
+
+### What it proves
+
+The full input chain is alive end-to-end:
+
+```
+sexusb → sexinput → silk-shell → sexdisplay (cursor draw)
+    ✅         ✅          ✅              ✅
+  [send]    [send]    [recv/hid]    [draw x≠640,y≠360]
+```
+
+### Command
+
+```bash
+python3 scripts/check_cursor_route_log.py /tmp/sexos.log
+```
+
+### Pass output
+
+```
+[cursor.route.PASS] sexinput->silk-shell->sexdisplay moved cursor
+```
+
+### Fail output examples
+
+```
+[cursor.route.FAIL] missing=shell_hid,display_draw
+[cursor.route.FAIL] missing=cursor_moved_from_center
+[cursor.route.FAIL] fatal_fault_or_panic detected
+```
+
+### Required markers
+
+| Key | Marker pattern | Proves |
+|-----|---------------|--------|
+| `sexinput_send` | `[sexinput.pointer.send] class=2` | sexinput emitted EV_REL |
+| `shell_hid` | `[silk-shell.{linen_sync.input_hid,pointer.recv,hid.raw}] class=2` | Shell processed HID |
+| `display_update` | `[sexdisplay.cursor.surface.update] n=0 x=... y=...` | Display received update |
+| `display_draw` | `[sexdisplay.cursor.draw] n=0 x=... y=...` | Display rendered cursor |
+| `cursor_moved_from_center` | Any draw where (x,y) ≠ (640,360) | Cursor actually moved |
+| `fatal_fault_or_panic` | `fault.kill`, `#PF`, `#GP`, `panic` | Must be absent |
+
+### Invariant
+
+BootGraph gates turn runtime proof chains into repeatable checks.
+Every new input/hid/cursor edge should add its required markers here.
