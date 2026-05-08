@@ -199,3 +199,20 @@ Notes:
 - It is slightly fast but usable.
 - Real tick path remains preferred when `sex_pdx::get_ticks()` advances.
 - Default clock seed remains model/demo state and should be handled separately by real clock/RTC work.
+
+## TIMER_BOOT_PHASE_GUARD_V1
+
+Root cause:
+Real LAPIC timer delivery can fire before the scheduler reaches `BootPhase::SchedulerRunning`.
+Before this guard, the timer ISR could call `sched.tick()` during early boot phase 0 and hit
+`SCHEDULER_RUNNING_VIOLATION`.
+
+Fix:
+Early timer IRQs now increment `TICKS`, optionally emit `[timer.tick.defer]`, send EOI, and
+return until scheduler phase is running. Scheduler invariants remain enforced after that phase.
+
+Runtime proof:
+- `scheduler.tick.enter core=0 phase=4 rq_depth=12` repeats safely
+- boot continues to userland
+- SilkBar clock continues with synthetic fallback in QEMU
+- no `SCHEDULER_RUNNING_VIOLATION`, kernel panic, `#PF`, or `#GP` observed
