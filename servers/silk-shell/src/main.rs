@@ -7263,9 +7263,12 @@ unsafe fn open_spindle_in_active_scene() -> bool {
     static mut SESSION_INIT_DONE: bool = false;
     if !SESSION_INIT_DONE {
         SESSION_INIT_DONE = true;
-        serial_println!("[spindle.session.create] idx=0 count={}", SPINDLE_SESSION_COUNT);
-        serial_println!("[spindle.session.create] idx=1 count={}", SPINDLE_SESSION_COUNT);
-        serial_println!("[spindle.pane.active] idx={}", SPINDLE_ACTIVE_SESSION);
+        serial_println!("[spindle.session.init] idx=0 count={}", SPINDLE_SESSION_COUNT);
+	        serial_println!("[spindle.session.pane.create] idx=0");
+        serial_println!("[spindle.session.init] idx=1 count={}", SPINDLE_SESSION_COUNT);
+	        serial_println!("[spindle.session.pane.create] idx=1");
+        serial_println!("[spindle.session.active] idx={}", SPINDLE_ACTIVE_SESSION);
+        serial_println!("[spindle.stargate.init]");
     }
 
     // Render Spindle output bands.
@@ -7945,6 +7948,7 @@ unsafe fn spindle_dispatch() {
         }
     };
     serial_println!("[spindle.stargate.segment] kind=status ok={}", SPINDLE_LAST_CMD_OK as u8);
+    serial_println!("[spindle.stargate.status] ok={} sess={}", SPINDLE_LAST_CMD_OK as u8, SPINDLE_ACTIVE_SESSION);
 
     // Clear command buffer after dispatch.
     yarn.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
@@ -8006,7 +8010,7 @@ unsafe fn spindle_render() {
     // ── Render command line text + cursor via display-safe path ──
     spindle_render_cmdline();
 
-    serial_println!("[spindle.render.done] lines={}", visible_count);
+    serial_println!("[spindle.render.submit] lines={}", visible_count);
 }
 
 /// Stargate prompt renderer: [OK/!!] [I/N] sex> <cmd> + block cursor.
@@ -8166,10 +8170,11 @@ unsafe fn spindle_session_switch() {
     let next = (prev + 1) % SPINDLE_SESSION_COUNT;
     SPINDLE_ACTIVE_SESSION = next;
     spindle_session_load(next);
-    serial_println!("[spindle.pane.switch] from={} to={}", prev, next);
-    serial_println!("[spindle.pane.active] idx={}", next);
-    serial_println!("[spindle.pane.buffer.independent] prev={} next={}", prev, next);
+    serial_println!("[spindle.session.pane.switch] from={} to={}", prev, next);
+    serial_println!("[spindle.session.active] idx={}", next);
+    serial_println!("[spindle.session.pane.independent] prev={} next={}", prev, next);
     spindle_render();
+    serial_println!("[spindle.session.render] idx={}", SPINDLE_ACTIVE_SESSION);
 }
 
 // ── Bell Surface Control Helpers ─────────────────────────────────────────────
