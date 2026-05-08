@@ -161,3 +161,23 @@ Guardrails:
 - Do not force blocking storage proof during boot probes.
 
 Note: earlier "missing handoff path" note is superseded; `AGENT_HANDOFF_GP_CLOCK.md` may live under `docs/legacy/` in this checkout.
+
+## SILKBAR_CLOCK_LIVENESS_RESTORED_V1
+
+Runtime proof:
+SilkBar clock advances past the old iter=2 / ss=2 freeze boundary.
+
+Observed pass:
+- SilkBar emits ss=1..6
+- sexdisplay applies ss=1..6
+- loop advances old=0→1 through old=5→6
+- iter=2 reaches cadence.done and iter_advance old=2 new=3
+
+Root lessons:
+1. Do not trust budgeted markers for failing-iteration proof.
+2. Place proof markers immediately after the state mutation they claim to prove.
+3. Do not switch to long steady thresholds before boot liveness is proven.
+4. Synthetic yield-based clock is a liveness canary, not a real wall-clock.
+
+Remaining work:
+Replace yield-count clock with a real monotonic timer source once timer calibration is ready.
