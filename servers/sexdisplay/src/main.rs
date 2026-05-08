@@ -715,6 +715,15 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     if end_addr < HIGH_HALF_BASE {
         return;
     }
+    // Budgeted marker: full-FB render invoked (proof of render entry + boundedness).
+    unsafe {
+        static mut FULL_RENDER_BUDGET: u32 = 8;
+        let b = &mut FULL_RENDER_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[sexdisplay.render.full] fb_w={} fb_h={}", w, h);
+        }
+    }
     let total_pixels = pixels;
 
     let focused_id = unsafe { FOCUSED_SURFACE_ID };
@@ -764,6 +773,15 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         Some(v) => v,
         None => return,
     };
+    // Budgeted marker: top-strip redraw invoked (proof of bar render + boundedness).
+    unsafe {
+        static mut TOP_STRIP_REDRAW_BUDGET: u32 = 16;
+        let b = &mut TOP_STRIP_REDRAW_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[sexdisplay.render.top_strip] fb_w={} fb_h={}", w, h);
+        }
+    }
     // Top strip boundary: rows 0..50. Keep in sync with BAR_H constant.
     // Row 50 = glow edge; rows 0..49 = SilkBar panel fill + modules.
     for y in 0..51 {
@@ -798,6 +816,15 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
         Some(v) => v,
         None => return,
     };
+    // Budgeted marker: surface-area redraw invoked (proof of compositor render + boundedness).
+    unsafe {
+        static mut SURFACE_AREA_REDRAW_BUDGET: u32 = 16;
+        let b = &mut SURFACE_AREA_REDRAW_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[sexdisplay.render.surface_area] fb_w={} fb_h={}", w, h);
+        }
+    }
     let focused_id = unsafe { FOCUSED_SURFACE_ID };
     for y in 50..h {
         for x in 0..w {
@@ -935,8 +962,16 @@ fn draw_launcher_panel(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
             if sw == 0 || sh == 0 { break; }
             const LAUNCHER_PANEL_COLOR: u32 = 0x00203058;
             const LAUNCHER_BORDER_COLOR: u32 = 0x00405880;
-            serial_println!("[sexdisplay.launcher_panel.draw] id={:#x} x={} y={} w={} h={}",
-                LAUNCHER_PANEL_SURFACE_ID, sx, sy, sw, sh);
+            // Budgeted marker: launcher panel drawn to framebuffer.
+            unsafe {
+                static mut LAUNCHER_PANEL_DRAW_BUDGET: u32 = 8;
+                let b = &mut LAUNCHER_PANEL_DRAW_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!("[sexdisplay.launcher_panel.draw] id={:#x} x={} y={} w={} h={}",
+                        LAUNCHER_PANEL_SURFACE_ID, sx, sy, sw, sh);
+                }
+            }
             for row in 0..sh {
                 let py = sy + row;
                 if py >= h { break; }
