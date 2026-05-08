@@ -235,3 +235,23 @@ Do not use one synthetic threshold for all degraded clock modes.
 
 Remaining:
 True wall-clock requires calibrated tick-rate export and RTC seed. That is separate STOP FIRST work.
+
+## SILKSHELL_LINEN_SYNC_PRESERVE_INPUT_V1
+
+Root cause:
+`linen_sync_reply()` consumed and acked OP_HID_EVENT messages while waiting for Linen replies.
+Pointer events arriving during Linen paint were lost before SilkShell cursor dispatch.
+
+Fix:
+`linen_sync_reply()` now handles OP_HID_EVENT inline while continuing to wait for Linen replies.
+The pre-Linen non-blocking input drain remains in place.
+
+Runtime proof:
+- sexinput emits pointer movement
+- `[silk-shell.linen_sync.input_hid]` receives class=2 movement
+- sexdisplay receives cursor surface updates
+- `sexdisplay.cursor.draw` moves away from center
+- no `fault.kill`, `#PF`, `#GP`, or panic observed
+
+Remaining:
+Pointer movement quality is not yet smooth/perfect. Route is alive; tuning should be separate.
