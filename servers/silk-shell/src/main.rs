@@ -7325,7 +7325,8 @@ unsafe fn yarn_append_output(text: &[u8]) {
 /// Yarn built-in: help — list available commands.
 unsafe fn yarn_cmd_help() {
     serial_println!("[spindle.command.help]");
-    yarn_append_output(b"Commands: help clear echo about time pd scene routes faults");
+    yarn_append_output(b"help clear echo about time pd scene routes faults");
+    yarn_append_output(b"session panes history status");
 }
 
 /// Yarn built-in: clear — reset output ring and scrollback.
@@ -7413,7 +7414,165 @@ fn trim_ascii(s: &[u8]) -> &[u8] {
     &s[start..end]
 }
 
-/// Yarn session: dispatch a command from cmd_buf.
+// ── Spindle structured result model ─────────────────────────────────────────
+const RESULT_TEXT_CAP: usize = 80;
+const RESULT_MAX_ROWS: usize = 4;
+
+#[derive(Clone, Copy, PartialEq)]
+#[repr(u8)]
+enum SpindleResultKind { Text = 0, Int = 1, Bool = 2, Error = 3, Table = 4 }
+
+#[derive(Clone, Copy)]
+struct SpindleResult {
+    kind: SpindleResultKind,
+    text: [u8; RESULT_TEXT_CAP],
+    text_len: usize,
+    int_val: i64,
+    bool_val: bool,
+    rows: [[u8; YARN_OUTPUT_LINE_CAP]; RESULT_MAX_ROWS],
+    row_lens: [usize; RESULT_MAX_ROWS],
+    row_count: usize,
+}
+
+impl SpindleResult {
+    fn zero() -> Self {
+        SpindleResult {
+            kind: SpindleResultKind::Text,
+            text: [0u8; RESULT_TEXT_CAP], text_len: 0,
+            int_val: 0, bool_val: false,
+            rows: [[0u8; YARN_OUTPUT_LINE_CAP]; RESULT_MAX_ROWS],
+            row_lens: [0usize; RESULT_MAX_ROWS], row_count: 0,
+        }
+    }
+    fn new_text(msg: &[u8]) -> Self {
+        let mut r = Self::zero();
+        let n = msg.len().min(RESULT_TEXT_CAP);
+        r.text[..n].copy_from_slice(&msg[..n]);
+        r.text_len = n;
+        r
+    }
+    fn new_error(msg: &[u8]) -> Self {
+        let mut r = Self::new_text(msg);
+        r.kind = SpindleResultKind::Error;
+        r
+    }
+    fn new_table() -> Self {
+        let mut r = Self::zero();
+        r.kind = SpindleResultKind::Table;
+        r
+    }
+    fn add_row(&mut self, row: &[u8]) {
+        if self.row_count >= RESULT_MAX_ROWS { return; }
+        let n = row.len().min(YARN_OUTPUT_LINE_CAP);
+        self.rows[self.row_count][..n].copy_from_slice(&row[..n]);
+        self.row_lens[self.row_count] = n;
+        self.row_count += 1;
+    }
+}
+
+fn fmt_u32(val: u32, buf: &mut [u8; 10]) -> &[u8] {
+    if val == 0 { buf[0] = b'0'; return &buf[..1]; }
+    let mut tmp = [0u8; 10];
+    let mut n = 0usize;
+    let mut v = val;
+    while v > 0 && n < 10 { tmp[n] = b'0' + (v % 10) as u8; v /= 10; n += 1; }
+    for i in 0..n { buf[i] = tmp[n - 1 - i]; }
+    &buf[..n]
+}
+
+unsafe fn spindle_result_render(result: &SpindleResult) {
+    serial_println!("[spindle.structured.render] kind={}", result.kind as u8);
+    match result.kind {
+        SpindleResultKind::Text | SpindleResultKind::Int | SpindleResultKind::Bool => {
+            serial_println!("[spindle.structured.result.text]");
+            if result.text_len > 0 { yarn_append_output(&result.text[..result.text_len]); }
+        }
+        SpindleResultKind::Error => {
+            serial_println!("[spindle.structured.result.error]");
+            if result.text_len > 0 { yarn_append_output(&result.text[..result.text_len]); }
+        }
+        SpindleResultKind::Table => {
+            serial_println!("[spindle.structured.result.table]");
+            for i in 0..result.row_count {
+                yarn_append_output(&result.rows[i][..result.row_lens[i]]);
+            }
+        }
+    }
+}
+
+unsafe fn spindle_cmd_session() -> SpindleResult {
+    let mut r = SpindleResult::new_table();
+    let idx = SPINDLE_ACTIVE_SESSION.min(SPINDLE_SESSION_COUNT - 1);
+    let mut buf0 = [0u8; YARN_OUTPUT_LINE_CAP];
+    buf0[..6].copy_from_slice(b"sess: "); buf0[6] = b'0' + idx as u8;
+    r.add_row(&buf0[..7]);
+    let label = &SPINDLE_SESSIONS[idx].label;
+    let llen = label.iter().position(|&b| b == 0).unwrap_or(16).min(YARN_OUTPUT_LINE_CAP - 8);
+    let mut buf1 = [0u8; YARN_OUTPUT_LINE_CAP];
+    buf1[..7].copy_from_slice(b"label: ");
+    buf1[7..7+llen].copy_from_slice(&label[..llen]);
+    r.add_row(&buf1[..7+llen]);
+    r
+}
+
+unsafe fn spindle_cmd_panes() -> SpindleResult {
+    let mut r = SpindleResult::new_table();
+    let active = SPINDLE_ACTIVE_SESSION.min(SPINDLE_SESSION_COUNT - 1);
+    for i in 0..SPINDLE_SESSION_COUNT {
+        let mark = if i == active { b'*' } else { b' ' };
+        let label = &SPINDLE_SESSIONS[i].label;
+        let llen = label.iter().position(|&b| b == 0).unwrap_or(16).min(YARN_OUTPUT_LINE_CAP - 10);
+        let mut buf = [0u8; YARN_OUTPUT_LINE_CAP];
+        buf[0] = b'['; buf[1] = mark; buf[2] = b']';
+        buf[3] = b' '; buf[4] = b'S'; buf[5] = b'0' + i as u8;
+        buf[6] = b':'; buf[7] = b' ';
+        buf[8..8+llen].copy_from_slice(&label[..llen]);
+        r.add_row(&buf[..8+llen]);
+    }
+    r
+}
+
+unsafe fn spindle_cmd_history() -> SpindleResult {
+    let yarn = &YARN;
+    if yarn.history_count == 0 { return SpindleResult::new_text(b"No history."); }
+    let mut r = SpindleResult::new_table();
+    let start = if yarn.history_count > RESULT_MAX_ROWS { yarn.history_count - RESULT_MAX_ROWS } else { 0 };
+    for i in start..yarn.history_count.min(start + RESULT_MAX_ROWS) {
+        let entry = &yarn.history[i];
+        let elen = entry.iter().position(|&b| b == 0).unwrap_or(YARN_CMD_BUF_CAP).min(YARN_OUTPUT_LINE_CAP - 4);
+        let mut buf = [0u8; YARN_OUTPUT_LINE_CAP];
+        let num = (i - start + 1) as u8;
+        buf[0] = b'0' + num / 10; buf[1] = b'0' + num % 10;
+        buf[2] = b':'; buf[3] = b' ';
+        buf[4..4+elen].copy_from_slice(&entry[..elen]);
+        r.add_row(&buf[..4+elen]);
+    }
+    r
+}
+
+unsafe fn spindle_cmd_status() -> SpindleResult {
+    let mut r = SpindleResult::new_table();
+    let mut nb = [0u8; 10];
+    let mut b0 = [0u8; YARN_OUTPUT_LINE_CAP];
+    b0[..9].copy_from_slice(b"sessions:"); b0[9] = b' ';
+    let ns = fmt_u32(SPINDLE_SESSION_COUNT as u32, &mut nb);
+    let nl = ns.len().min(YARN_OUTPUT_LINE_CAP - 10);
+    b0[10..10+nl].copy_from_slice(&ns[..nl]);
+    r.add_row(&b0[..10+nl]);
+    let mut b1 = [0u8; YARN_OUTPUT_LINE_CAP];
+    b1[..7].copy_from_slice(b"active:"); b1[7] = b' ';
+    b1[8] = b'0' + SPINDLE_ACTIVE_SESSION.min(9) as u8;
+    r.add_row(&b1[..9]);
+    let mut b2 = [0u8; YARN_OUTPUT_LINE_CAP];
+    b2[..8].copy_from_slice(b"history:"); b2[8] = b' ';
+    let hn = fmt_u32(YARN.history_count as u32, &mut nb);
+    let hl = hn.len().min(YARN_OUTPUT_LINE_CAP - 10);
+    b2[9..9+hl].copy_from_slice(&hn[..hl]);
+    r.add_row(&b2[..9+hl]);
+    r.add_row(if SPINDLE_LAST_CMD_OK { b"last: ok    " } else { b"last: error " });
+    r
+}
+
 /// Bounded subsequence matcher: every byte of `query` must appear in `candidate` in order.
 fn spiderweb_match(query: &[u8], candidate: &[u8]) -> bool {
     if query.is_empty() { return true; }
@@ -7454,6 +7613,7 @@ unsafe fn spiderweb_search() {
             const CMDS: &[&[u8]] = &[
                 b"help", b"clear", b"echo", b"about", b"time",
                 b"pd", b"scene", b"routes", b"faults",
+                b"session", b"panes", b"history", b"status",
             ];
             let mut filled = 0usize;
             for &cmd in CMDS {
@@ -7763,19 +7923,24 @@ unsafe fn spindle_dispatch() {
     let token = &args[..first_space];
     let rest = if first_space < args.len() { &args[first_space + 1..] } else { &[] };
 
+    serial_println!("[spindle.structured.dispatch] cmd={:?}", token);
     SPINDLE_LAST_CMD_OK = match token {
-        b"help"   => { yarn_cmd_help();          true }
-        b"clear"  => { yarn_cmd_clear();         true }
-        b"echo"   => { yarn_cmd_echo(rest);      true }
-        b"about"  => { yarn_cmd_about();         true }
-        b"time"   => { yarn_cmd_time();          true }
-        b"pd"     => { yarn_cmd_pd();            true }
-        b"scene"  => { yarn_cmd_scene();         true }
-        b"routes" => { yarn_cmd_routes();        true }
-        b"faults" => { yarn_cmd_faults();        true }
+        b"help"    => { yarn_cmd_help();                                   true }
+        b"clear"   => { yarn_cmd_clear();                                  true }
+        b"echo"    => { yarn_cmd_echo(rest);                               true }
+        b"about"   => { yarn_cmd_about();                                  true }
+        b"time"    => { yarn_cmd_time();                                   true }
+        b"pd"      => { yarn_cmd_pd();                                     true }
+        b"scene"   => { yarn_cmd_scene();                                  true }
+        b"routes"  => { yarn_cmd_routes();                                 true }
+        b"faults"  => { yarn_cmd_faults();                                 true }
+        b"session" => { let r = spindle_cmd_session(); spindle_result_render(&r); true }
+        b"panes"   => { let r = spindle_cmd_panes();   spindle_result_render(&r); true }
+        b"history" => { let r = spindle_cmd_history(); spindle_result_render(&r); true }
+        b"status"  => { let r = spindle_cmd_status();  spindle_result_render(&r); true }
         _ => {
-            serial_println!("[spindle.command.unknown] cmd={:?}", token);
-            yarn_append_output(b"Unknown command. Type 'help'.");
+            let r = SpindleResult::new_error(b"Unknown command. Type 'help'.");
+            spindle_result_render(&r);
             false
         }
     };
