@@ -3,6 +3,7 @@
 
 use sex_pdx::*;
 use core::panic::PanicInfo;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -16,6 +17,9 @@ static mut LAST_USB_KEY: u8 = 0;
 const OP_HID_EVENT: u64 = 0x202;
 const OP_USB_MOUSE_REPORT: u64 = 0x260;
 const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
+static CAP_READY_SHELL: AtomicBool = AtomicBool::new(false);
+static DEFER_EMITTED_SHELL: AtomicBool = AtomicBool::new(false);
+static EDGE_SEND_EMITTED_SHELL: AtomicBool = AtomicBool::new(false);
 /// Master switch for all synthetic input proofs (drag, click-focus, silkbar clicks).
 ///
 /// Set env var `SEXOS_PROOFS_DISABLED=1` at build time to disable all proofs
@@ -144,6 +148,30 @@ fn normalize_pointer_report_v1(
     count
 }
 
+fn send_shell_hid_event(arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u64> {
+    if CAP_READY_SHELL.load(Ordering::Relaxed) {
+        return pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2).map(|_| true);
+    }
+
+    match pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2) {
+        Ok(_) => {
+            CAP_READY_SHELL.store(true, Ordering::Relaxed);
+            if !EDGE_SEND_EMITTED_SHELL.swap(true, Ordering::Relaxed) {
+                serial_println!("[bootgraph.edge.send from=sexinput to=silk-shell slot=6 op=OP_HID_EVENT first=1]");
+            }
+            Ok(true)
+        }
+        Err(err) if err == ERR_CAP_INVALID => {
+            if !DEFER_EMITTED_SHELL.swap(true, Ordering::Relaxed) {
+                serial_println!("[bootgraph.edge.defer from=sexinput to=silk-shell slot=6 reason=missing_cap]");
+            }
+            sys_yield();
+            Ok(false)
+        }
+        Err(err) => Err(err),
+    }
+}
+
 /// Translate USB HID keyboard usage ID to PS/2 scancode set 1.
 /// Returns None for unmapped keys.
 fn hid_to_ps2(hid: u8) -> Option<u8> {
@@ -187,6 +215,7 @@ fn hid_to_ps2(hid: u8) -> Option<u8> {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    serial_println!("[sexinput.init.start]");
     sex_rt::heap_init();
     serial_println!("[sexinput] Normalizer Starting...");
 
@@ -227,6 +256,7 @@ pub extern "C" fn _start() -> ! {
     let mut kbd_proof_stage: u8 = 0;
     let mut ev_key_edge_stage: u8 = 0;
 
+    serial_println!("[sexinput.ready]");
     loop {
         // 0. Local USB->sexinput PDX proof path (no shell routing in this phase).
         if let Some(req) = pdx_try_listen_raw(0) {
@@ -262,16 +292,20 @@ pub extern "C" fn _start() -> ! {
                             serial_println!("[sexinput.pointer.send] class={} a0={} a1={}", cls, req.arg1 as i32, req.arg2 as i32);
                         }
                     }
-                    if let Err(err) = pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, req.arg1, req.arg2, cls) {
-                        unsafe {
-                            static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
-                            let rem = &mut SEXINPUT_POINTER_DROP_BUDGET;
-                            if *rem > 0 {
-                                *rem -= 1;
-                                serial_println!(
-                                    "[sexinput.pointer.drop] reason=shell_send_fail class={} a0={} a1={} err={}",
-                                    cls, req.arg1 as i32, req.arg2 as i32, err
-                                );
+                    match send_shell_hid_event(req.arg1, req.arg2, cls) {
+                        Ok(true) => {}
+                        Ok(false) => continue,
+                        Err(err) => {
+                            unsafe {
+                                static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
+                                let rem = &mut SEXINPUT_POINTER_DROP_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!(
+                                        "[sexinput.pointer.drop] reason=shell_send_fail class={} a0={} a1={} err={}",
+                                        cls, req.arg1 as i32, req.arg2 as i32, err
+                                    );
+                                }
                             }
                         }
                     }
@@ -380,9 +414,13 @@ pub extern "C" fn _start() -> ! {
                             }
                         }
                     }
-                    if let Err(err) = pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2) {
-                        if send_err == 0 {
-                            send_err = err;
+                    match send_shell_hid_event(arg0, arg1, arg2) {
+                        Ok(true) => {}
+                        Ok(false) => continue,
+                        Err(err) => {
+                            if send_err == 0 {
+                                send_err = err;
+                            }
                         }
                     }
                 }

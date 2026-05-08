@@ -95,17 +95,22 @@ Tick-based markers:
 
 ## V2 Soft Barrier Marker Contract
 
-First rollout edge:
+V2 rollout edges:
 
 - `silkbar -> sexdisplay` (`slot=5`, `SLOT_DISPLAY`, `op=OP_SILKBAR_UPDATE`)
+- `sexinput -> silk-shell` (`slot=6`, `SLOT_SHELL`, `op=OP_HID_EVENT`)
 
 Soft-barrier defer marker:
 
 - `[bootgraph.edge.defer from=silkbar to=sexdisplay slot=5 reason=missing_cap]`
+- `[bootgraph.edge.defer from=sexinput to=silk-shell slot=6 reason=missing_cap]`
 
 Rules:
 
 - No separate probe call is allowed; first `pdx_call_checked` remains the real send attempt.
+- Canonical first-send marker grammar is fixed:
+  `[bootgraph.edge.send from=<sender> to=<target> slot=<slot_num> op=<op_name> first=1]`
+  (use numeric `slot`, not symbolic slot names).
 - Emit at most one defer marker per boot per edge/slot.
 - Defer before `phase25.complete` is informational/pass.
 - Defer after `phase25.complete` is warning.
