@@ -116,6 +116,10 @@ pub extern "C" fn _start() -> ! {
     const BOOT_CLOCK_SENDS_TARGET: u8 = 2;
     const BOOT_CLOCK_THRESHOLD: u16 = 8;
     const STEADY_CLOCK_THRESHOLD: u16 = 100;
+    // Synthetic liveness cadence: used for displayed clock until real timer/tick source exists.
+    // Do NOT switch to STEADY_CLOCK_THRESHOLD=100 for the displayed clock — synthetic yields
+    // have no wall-clock correlation; 100 yields makes ss appear frozen.
+    const LIVE_CLOCK_THRESHOLD: u16 = BOOT_CLOCK_THRESHOLD;
     let mut boot_clock_sends: u8 = 0;
     // Cached Bell generation counter. 0 forces first LIST poll.
     let mut bell_gen_cached: u64 = 0;
@@ -382,21 +386,11 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        // One yield per outer loop; cadence completes after threshold yields.
+        // One yield per outer loop; cadence completes after LIVE_CLOCK_THRESHOLD yields.
         cadence_yields = cadence_yields.wrapping_add(1);
-        // Use boot threshold until loop_iter >= 10 AND boot_clock_sends >= 10.
-        // This proves clock liveness before switching to steady 100-yield cadence.
-        let cadence_threshold = if loop_iter < 10 && boot_clock_sends < 10 {
-            BOOT_CLOCK_THRESHOLD
-        } else {
-            STEADY_CLOCK_THRESHOLD
-        };
-        // Unbudgeted iter=2 proof: emit at milestones so we know cadence is alive.
+        let cadence_threshold = LIVE_CLOCK_THRESHOLD;
+        // Unbudgeted iter=2 proof: emit at milestones only (not every pass).
         if loop_iter == 2 {
-            sex_pdx::serial_println!(
-                "[silkbar.loop.cadence.threshold] iter=2 threshold={} boot_sends={} target={}",
-                cadence_threshold, boot_clock_sends, BOOT_CLOCK_SENDS_TARGET
-            );
             let half = cadence_threshold / 2;
             if cadence_yields == 1
                 || cadence_yields == half
@@ -409,10 +403,25 @@ pub extern "C" fn _start() -> ! {
                 );
             }
         }
+        // Post-10 synthetic threshold proof: once per cadence after iter 10.
+        if loop_iter == 10 {
+            unsafe {
+                static mut SYNTH_THRESHOLD_BUDGET: u32 = 1;
+                let b = &mut SYNTH_THRESHOLD_BUDGET;
+                if *b > 0 && cadence_yields == 1 {
+                    *b -= 1;
+                    sex_pdx::serial_println!(
+                        "[silkbar.clock.synthetic.threshold] iter={} threshold={} reason=until_real_timer",
+                        loop_iter, cadence_threshold
+                    );
+                }
+            }
+        }
         sex_pdx::sys_yield();
         if cadence_yields < cadence_threshold {
             continue;
         }
+        let _ = STEADY_CLOCK_THRESHOLD; // reserved for real timer integration
         cadence_yields = 0;
         {
             static mut CADENCE_DONE_BUDGET: u32 = 16;

@@ -101,6 +101,8 @@ V2 rollout edges:
 - `sexinput -> silk-shell` (`slot=6`, `SLOT_SHELL`, `op=OP_HID_EVENT`)
 - `sexusb -> sexinput` (`slot=9`, `SLOT_USB_SEXINPUT`, `op=HID_REPORT`)
 - `silk-shell -> sexdisplay` (`slot=5`, `SLOT_DISPLAY`, `op=SURFACE_UPDATE`)
+- `linen -> sexfiles` (`slot=1`, `SLOT_STORAGE`, `op=STORAGE_OP`)
+- `quil -> sexfiles` (`slot=1`, `SLOT_STORAGE`, `op=DISKFS_OP`)
 
 Soft-barrier defer marker:
 
@@ -108,6 +110,8 @@ Soft-barrier defer marker:
 - `[bootgraph.edge.defer from=sexinput to=silk-shell slot=6 reason=missing_cap]`
 - `[bootgraph.edge.defer from=sexusb to=sexinput slot=9 reason=missing_cap]`
 - `[bootgraph.edge.defer from=silk-shell to=sexdisplay slot=5 reason=missing_cap]`
+- `[bootgraph.edge.defer from=linen to=sexfiles slot=1 reason=missing_cap]`
+- `[bootgraph.edge.defer from=quil to=sexfiles slot=1 reason=missing_cap]`
 
 Canonical first-send examples:
 
@@ -115,6 +119,8 @@ Canonical first-send examples:
 - `[bootgraph.edge.send from=sexinput to=silk-shell slot=6 op=OP_HID_EVENT first=1]`
 - `[bootgraph.edge.send from=sexusb to=sexinput slot=9 op=HID_REPORT first=1]`
 - `[bootgraph.edge.send from=silk-shell to=sexdisplay slot=5 op=SURFACE_UPDATE first=1]`
+- `[bootgraph.edge.send from=linen to=sexfiles slot=1 op=STORAGE_OP first=1]`
+- `[bootgraph.edge.send from=quil to=sexfiles slot=1 op=DISKFS_OP first=1]`
 
 Rules:
 
@@ -124,9 +130,34 @@ Rules:
   (use numeric `slot`, not symbolic slot names).
 - Rollout note: for `silk-shell -> sexdisplay`, only the first boot-critical display send is checked in V1.
   Broad conversion of all shell display calls is intentionally deferred.
+- Rollout note: for `linen -> sexfiles`, central helper `pdx_storage_sync` is adapted to checked send.
+  Broad per-call-site storage conversion is intentionally deferred.
+- Rollout note: for `quil -> sexfiles`, central storage path (`pdx_storage_call -> pdx_call_and_reply(SLOT_STORAGE, ...)`) is adapted for edge markers.
+  Broad per-call-site storage conversion is intentionally deferred.
 - Emit at most one defer marker per boot per edge/slot.
 - Defer before `phase25.complete` is informational/pass.
 - Defer after `phase25.complete` is warning.
 - Defer followed by normal `bootgraph.edge.send` is pass recovery.
+
+### Storage Edge Boot-Probe Status (V2)
+
+Storage edges are V2-installed, but boot proof is deferred to storage workload phase:
+
+- `linen -> sexfiles`: `INSTALLED / UNEXERCISED / DEFERRED_TO_STORAGE_WORKLOAD`
+- `quil -> sexfiles`: `INSTALLED / UNEXERCISED / DEFERRED_TO_STORAGE_WORKLOAD`
+
+Reason:
+- Current storage helpers can block waiting for reply-path messages.
+- BootGraph must not introduce blocking-risk proof triggers in the 25s boot probe window.
+
+Workload-phase proof markers (not required during 25s boot probe):
+
+- `[bootgraph.edge.send from=linen to=sexfiles slot=1 op=STORAGE_OP first=1]`
+- `[bootgraph.edge.send from=quil to=sexfiles slot=1 op=DISKFS_OP first=1]`
+
+Guardrails:
+- Do not add BootGraph-only storage send paths.
+- Do not add timeout behavior to storage helpers as part of BootGraph rollout.
+- Do not force blocking storage proof during boot probes.
 
 Note: earlier "missing handoff path" note is superseded; `AGENT_HANDOFF_GP_CLOCK.md` may live under `docs/legacy/` in this checkout.
