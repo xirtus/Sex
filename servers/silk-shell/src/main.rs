@@ -4,8 +4,9 @@
 extern crate alloc;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
+use core::sync::atomic::{AtomicBool, Ordering};
 use sex_pdx::{
-    pdx_call, pdx_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
+    pdx_call, pdx_call_checked, pdx_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
     SLOT_DISPLAY, SLOT_SILKBAR, SLOT_SEXSTORE, SLOT_QUIL, SLOT_SPINDLE, SLOT_STORAGE, OP_QUIL_PING,
     OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
     OP_SURFACE_TAB_INFO, OP_APPEARANCE_TOKENS,
@@ -21,6 +22,9 @@ use silk_shell::{AppManifest, AppCapabilityBits, APP_RUNTIME_ABI_VERSION};
 // Local Opcodes
 pub const OP_DISPLAY_SET_SNAPSHOT: u64 = 0x15;
 pub const OP_REGISTER_WM: u64 = 0xF5;
+static CAP_READY_DISPLAY: AtomicBool = AtomicBool::new(false);
+static DEFER_EMITTED_DISPLAY: AtomicBool = AtomicBool::new(false);
+static EDGE_SEND_EMITTED_DISPLAY: AtomicBool = AtomicBool::new(false);
 
 // Sexstore K/V opcodes (local copies to avoid sex-pdx ABI hash update).
 // Matches servers/sexstore/src/main.rs.
@@ -10847,6 +10851,7 @@ unsafe fn snap_restore_layout() -> bool {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    serial_println!("[silkshell.init.start]");
     sex_rt::heap_init();
     serial_println!("[silk-shell] Authority Starting...");
 
@@ -10986,10 +10991,34 @@ pub extern "C" fn _start() -> ! {
     // Stage: cursor surface — created first so it occupies SURFACES slot 0,
     // winning composite Pass 1 over all other non-focused surfaces.
     serial_println!("[shell.cursor_surface.create.start] id={:#x}", SURFACE_ID_CURSOR);
-    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_CURSOR,
-        ((P.height / 2) as u64) << 32 | (P.width / 2) as u64,
-        (18u64 << 32) | 12u64);
-    serial_println!("[shell.cursor_surface.create.ok]");
+    let cursor_arg1 = ((P.height / 2) as u64) << 32 | (P.width / 2) as u64;
+    let cursor_arg2 = (18u64 << 32) | 12u64;
+    let cursor_send = pdx_call_checked(SLOT_DISPLAY, 0xEC, SURFACE_ID_CURSOR, cursor_arg1, cursor_arg2);
+    match cursor_send {
+        Ok(_) => {
+            CAP_READY_DISPLAY.store(true, Ordering::Relaxed);
+            if !EDGE_SEND_EMITTED_DISPLAY.swap(true, Ordering::Relaxed) {
+                serial_println!("[bootgraph.edge.send from=silk-shell to=sexdisplay slot=5 op=SURFACE_UPDATE first=1]");
+            }
+            serial_println!("[shell.cursor_surface.create.ok]");
+        }
+        Err(e) if e == ERR_CAP_INVALID => {
+            if !DEFER_EMITTED_DISPLAY.swap(true, Ordering::Relaxed) {
+                serial_println!("[bootgraph.edge.defer from=silk-shell to=sexdisplay slot=5 reason=missing_cap]");
+            }
+            sys_yield();
+        }
+        Err(e) => {
+            unsafe {
+                static mut SILKSHELL_DISPLAY_SEND_ERR_BUDGET: u32 = 8;
+                let rem = &mut SILKSHELL_DISPLAY_SEND_ERR_BUDGET;
+                if *rem > 0 {
+                    *rem -= 1;
+                    serial_println!("[silkshell.display.send.err e=0x{:x}]", e);
+                }
+            }
+        }
+    }
 
     // Legacy demo surfaces (100..103) are intentionally not created at boot in
     // the two-surface startup path to avoid transient fullscreen overlays.
@@ -11128,6 +11157,7 @@ pub extern "C" fn _start() -> ! {
     // Reply arrives asynchronously in main loop via type_id == 0x1.
     unsafe { boot_load_scene_settings(); }
     serial_println!("[silk-shell.ready]");
+    serial_println!("[silkshell.ready]");
 
     loop {
         // Deferred linen paint: run once after main loop starts.

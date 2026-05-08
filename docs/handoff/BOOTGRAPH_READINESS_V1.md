@@ -100,18 +100,21 @@ V2 rollout edges:
 - `silkbar -> sexdisplay` (`slot=5`, `SLOT_DISPLAY`, `op=OP_SILKBAR_UPDATE`)
 - `sexinput -> silk-shell` (`slot=6`, `SLOT_SHELL`, `op=OP_HID_EVENT`)
 - `sexusb -> sexinput` (`slot=9`, `SLOT_USB_SEXINPUT`, `op=HID_REPORT`)
+- `silk-shell -> sexdisplay` (`slot=5`, `SLOT_DISPLAY`, `op=SURFACE_UPDATE`)
 
 Soft-barrier defer marker:
 
 - `[bootgraph.edge.defer from=silkbar to=sexdisplay slot=5 reason=missing_cap]`
 - `[bootgraph.edge.defer from=sexinput to=silk-shell slot=6 reason=missing_cap]`
 - `[bootgraph.edge.defer from=sexusb to=sexinput slot=9 reason=missing_cap]`
+- `[bootgraph.edge.defer from=silk-shell to=sexdisplay slot=5 reason=missing_cap]`
 
 Canonical first-send examples:
 
 - `[bootgraph.edge.send from=silkbar to=sexdisplay slot=5 op=OP_SILKBAR_UPDATE first=1]`
 - `[bootgraph.edge.send from=sexinput to=silk-shell slot=6 op=OP_HID_EVENT first=1]`
 - `[bootgraph.edge.send from=sexusb to=sexinput slot=9 op=HID_REPORT first=1]`
+- `[bootgraph.edge.send from=silk-shell to=sexdisplay slot=5 op=SURFACE_UPDATE first=1]`
 
 Rules:
 
@@ -119,6 +122,8 @@ Rules:
 - Canonical first-send marker grammar is fixed:
   `[bootgraph.edge.send from=<sender> to=<target> slot=<slot_num> op=<op_name> first=1]`
   (use numeric `slot`, not symbolic slot names).
+- Rollout note: for `silk-shell -> sexdisplay`, only the first boot-critical display send is checked in V1.
+  Broad conversion of all shell display calls is intentionally deferred.
 - Emit at most one defer marker per boot per edge/slot.
 - Defer before `phase25.complete` is informational/pass.
 - Defer after `phase25.complete` is warning.
