@@ -150,7 +150,12 @@ fn normalize_pointer_report_v1(
 
 fn send_shell_hid_event(arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u64> {
     if CAP_READY_SHELL.load(Ordering::Relaxed) {
-        return pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2).map(|_| true);
+        return pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2).map(|_| {
+            if !EDGE_SEND_EMITTED_SHELL.swap(true, Ordering::Relaxed) {
+                serial_println!("[bootgraph.edge.send from=sexinput to=silk-shell slot=6 op=OP_HID_EVENT first=1]");
+            }
+            true
+        });
     }
 
     match pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2) {
