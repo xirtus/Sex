@@ -4470,7 +4470,15 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         clear_hover_if_wrong_scene();
 
         if button == 1 {
+            let pointer_ready = ABS_SEEN_VALID || POINTER_USB_STATE_INIT;
             if pressed && (INTERACTION == InteractionState::Idle || matches!(INTERACTION, InteractionState::PanelActive { .. })) {
+                if !pointer_ready {
+                    static mut CLICK_BLOCK_BUDGET: u32 = 8;
+                    if CLICK_BLOCK_BUDGET > 0 {
+                        CLICK_BLOCK_BUDGET -= 1;
+                        serial_println!("[shell.click.block] reason=pointer_not_ready x={} y={}", POINTER_X, POINTER_Y);
+                    }
+                } else {
                 serial_println!("[silk-shell.click.down] btn={} x={} y={} buttons={:#x}",
                     button, POINTER_X, POINTER_Y, POINTER_BUTTONS);
                 try_transition(InteractionState::ClickPending);
@@ -4482,6 +4490,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     serial_println!("[shell.click.real.target] x={} y={} target={} kind={}",
                         POINTER_X, POINTER_Y, target_id, kind);
                 }
+                } // close pointer_ready else
             } else if !pressed {
                 match INTERACTION {
                     InteractionState::ClickPending => {
@@ -13149,6 +13158,32 @@ pub extern "C" fn _start() -> ! {
                                         serial_println!("[shell.pointer.abs.reject] reason=zero_init x={} y={}", ax, ay);
                                     }
                                 }
+                            // Edge guard: reject out-of-window max-edge reports
+                            // that QEMU tablet sends when pointer leaves window.
+                            } else if ax >= P.width - 1 && ay >= P.height - 1 {
+                                let reject = !ABS_SEEN_VALID
+                                    || (LAST_VALID_ABS_X >= 0
+                                        && (ax - LAST_VALID_ABS_X).unsigned_abs() > (P.width as u32 / 2)
+                                        && (ay - LAST_VALID_ABS_Y).unsigned_abs() > (P.height as u32 / 2));
+                                if reject {
+                                    unsafe {
+                                        static mut ABS_EDGE_REJECT_BUDGET: u32 = 16;
+                                        let r = &mut ABS_EDGE_REJECT_BUDGET;
+                                        if *r > 0 {
+                                            *r -= 1;
+                                            serial_println!("[shell.pointer.abs.reject] reason=edge_max x={} y={} last_x={} last_y={}",
+                                                ax, ay, LAST_VALID_ABS_X, LAST_VALID_ABS_Y);
+                                        }
+                                    }
+                                } else {
+                                    // Near edge but reached gradually — accept.
+                                    LAST_VALID_ABS_X = ax;
+                                    LAST_VALID_ABS_Y = ay;
+                                    POINTER_X = ax.clamp(0, P.width - 1);
+                                    POINTER_Y = ay.clamp(0, P.height - 1);
+                                    pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                                    REAL_POINTER_SEEN = true;
+                                }
                             } else {
                                 if !ABS_SEEN_VALID {
                                     ABS_SEEN_VALID = true;
@@ -13163,7 +13198,6 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 LAST_VALID_ABS_X = ax;
                                 LAST_VALID_ABS_Y = ay;
-                                // Skip synthetic gate: real tablet ABS is valid.
                                 POINTER_X = ax.clamp(0, P.width - 1);
                                 POINTER_Y = ay.clamp(0, P.height - 1);
                                 unsafe {
@@ -13258,7 +13292,15 @@ pub extern "C" fn _start() -> ! {
 
                             // ── Click-to-focus: left-button press edge (0→1 transition only) ──
                             if button == 1 {
+                                let pointer_ready = ABS_SEEN_VALID || POINTER_USB_STATE_INIT;
                                 if pressed && (INTERACTION == InteractionState::Idle || matches!(INTERACTION, InteractionState::PanelActive { .. })) {
+                                    if !pointer_ready {
+                                        static mut CLICK_BLOCK_MAIN_BUDGET: u32 = 8;
+                                        if CLICK_BLOCK_MAIN_BUDGET > 0 {
+                                            CLICK_BLOCK_MAIN_BUDGET -= 1;
+                                            serial_println!("[shell.click.block] reason=pointer_not_ready x={} y={}", POINTER_X, POINTER_Y);
+                                        }
+                                    } else {
                                     serial_println!("[silk-shell.click.down] btn={} x={} y={} buttons={:#x}",
                                         button, POINTER_X, POINTER_Y, POINTER_BUTTONS);
                                     try_transition(InteractionState::ClickPending);
@@ -13275,6 +13317,7 @@ pub extern "C" fn _start() -> ! {
                                                 POINTER_X, POINTER_Y, target_id, kind);
                                         }
                                     }
+                                    } // close pointer_ready else
                                 } else if !pressed {
                                     match INTERACTION {
                                         InteractionState::ClickPending => {
