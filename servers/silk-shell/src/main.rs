@@ -4336,90 +4336,48 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
     // Mark that real relative input has been seen.
     REAL_POINTER_SEEN = true;
 
-    // ── Tracker-lite accumulator ──
-    // Queue raw deltas; flush cursor update only when enough motion
-    // accumulates or consecutive events warrant a move.
-    PENDING_DX = PENDING_DX.wrapping_add(dx_raw);
-    PENDING_DY = PENDING_DY.wrapping_add(dy_raw);
-    if PENDING_COUNT < 4 { PENDING_COUNT += 1; }
-
-    // Budgeted accumulation marker.
-    unsafe {
-        static mut POINTER_ACCUM_BUDGET: u32 = 32;
-        let a = &mut POINTER_ACCUM_BUDGET;
-        if *a > 0 {
-            *a -= 1;
-            serial_println!(
-                "[silk-shell.pointer.accum] raw_dx={} raw_dy={} pend_dx={} pend_dy={} count={}",
-                dx_raw, dy_raw, PENDING_DX, PENDING_DY, PENDING_COUNT
-            );
-        }
-    }
-
-    // ── Flush decision ──
-    let abs_sum = PENDING_DX.unsigned_abs() + PENDING_DY.unsigned_abs();
-    let should_flush = PENDING_COUNT >= 3
-        || (PENDING_COUNT >= 1 && abs_sum >= 6);
-
-    if !should_flush {
-        return (0, 0);
-    }
-
-    // ── Flush: piecewise scale accumulated total ──
-    let total_dx = PENDING_DX;
-    let total_dy = PENDING_DY;
-    PENDING_DX = 0;
-    PENDING_DY = 0;
-    PENDING_COUNT = 0;
-
-    fn scale_total(raw: i32) -> i32 {
+    // ── Per-event gain acceleration ──
+    // Multiply raw USB deltas by magnitude bracket to make QEMU
+    // trackpad usable.  No batching — cursor moves on every nonzero
+    // event.  Accumulator retained for sub-pixel tracking only.
+    fn gain_axis(raw: i32) -> i32 {
         if raw == 0 { return 0; }
         let sign = raw.signum();
         let abs = raw.unsigned_abs();
-        let scaled: i32 = if abs <= 1 {
-            0                       // sub-pixel noise
-        } else if abs <= 6 {
-            1                       // micro movement
-        } else if abs <= 30 {
-            (abs / 3) as i32        // 7-30 → 2-10
-        } else if abs <= 60 {
-            (abs / 4) as i32        // 31-60 → 7-15
+        let scaled: i32 = if abs == 1 {
+            1                       // 1:1 for micro
+        } else if abs <= 3 {
+            (abs * 2) as i32        // 2-3 → 4-6
+        } else if abs <= 8 {
+            (abs * 3) as i32        // 4-8 → 12-24
+        } else if abs <= 20 {
+            (abs * 4) as i32        // 9-20 → 36-80
         } else {
-            12                      // cap
+            ((abs * 5) as i32).min(48)  // 21+ → 105 capped at 48
         };
         sign * scaled
     }
-    let dx = scale_total(total_dx);
-    let dy = scale_total(total_dy);
+    let dx = gain_axis(dx_raw);
+    let dy = gain_axis(dy_raw);
 
-    // Jitter drop: tiny accumulated total with low repeat count.
-    if dx == 0 && dy == 0 {
-        unsafe {
-            static mut JITTER_DROP_BUDGET: u32 = 16;
-            let j = &mut JITTER_DROP_BUDGET;
-            if *j > 0 {
-                *j -= 1;
-                serial_println!(
-                    "[silk-shell.pointer.jitter.drop] dx={} dy={} count=N/A",
-                    total_dx, total_dy
-                );
-            }
-        }
-        return (0, 0);
-    }
-
-    // Budgeted flush marker.
+    // Budgeted gain marker.
     unsafe {
-        static mut POINTER_FLUSH_BUDGET: u32 = 32;
-        let fl = &mut POINTER_FLUSH_BUDGET;
-        if *fl > 0 {
-            *fl -= 1;
+        static mut POINTER_GAIN_BUDGET: u32 = 32;
+        let g = &mut POINTER_GAIN_BUDGET;
+        if *g > 0 && (dx_raw != dx || dy_raw != dy) {
+            *g -= 1;
             serial_println!(
-                "[silk-shell.pointer.flush] total_dx={} total_dy={} dx={} dy={} mode=tracker_lite",
-                total_dx, total_dy, dx, dy
+                "[shell.pointer.filter.v2] raw_dx={} raw_dy={} out_dx={} out_dy={} x={} y={}",
+                dx_raw, dy_raw, dx, dy, POINTER_X, POINTER_Y
             );
         }
     }
+
+    // Reset pending accumulators (not used for gain, retained for future
+    // sub-pixel tracking if needed).
+    PENDING_DX = 0;
+    PENDING_DY = 0;
+    PENDING_COUNT = 0;
 
     // Initialize to center on first relative movement.
     if !POINTER_USB_STATE_INIT {
