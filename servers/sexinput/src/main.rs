@@ -80,28 +80,15 @@ fn normalize_pointer_report_v1(
     let mut count = 0;
     let buttons = report.buttons & 0x07;       // mask to valid button bits
     let changed = buttons ^ *last_buttons; // XOR edge detection
-    let mut bit = 1u8;
-    let mut btn_id = 1u8;
-
-    // Emit BTN events for each changed button (bit0=left, bit1=right, bit2=middle)
-    while bit <= 0x04 {
-        if changed & bit != 0 {
-            let pressed = buttons & bit != 0;
-            emit(btn_id as u64, if pressed { 1 } else { 0 }, EV_BTN);
-            count += 1;
-        }
-        bit <<= 1;
-        btn_id += 1;
-    }
-    *last_buttons = buttons;
 
     // Keep wire encoding byte-for-byte: shell decodes as msg.argN as i32.
     let dx = report.dx as i32;
     let dy = report.dy as i32;
-    
-    let mut reason = "none";
-    if changed != 0 { reason = "buttons"; }
 
+    let mut reason = "none";
+
+    // Emit ABS/REL movement FIRST so cursor position is current
+    // before any button click is processed at silk-shell.
     if report.is_abs {
         unsafe {
             static mut LAST_ABS_X: i32 = -1;
@@ -141,6 +128,22 @@ fn normalize_pointer_report_v1(
             }
         }
     }
+
+    // Emit BTN events AFTER ABS/REL so cursor position is current
+    // before silk-shell processes the button click.
+    if changed != 0 { reason = "buttons"; }
+    let mut bit = 1u8;
+    let mut btn_id = 1u8;
+    while bit <= 0x04 {
+        if changed & bit != 0 {
+            let pressed = buttons & bit != 0;
+            emit(btn_id as u64, if pressed { 1 } else { 0 }, EV_BTN);
+            count += 1;
+        }
+        bit <<= 1;
+        btn_id += 1;
+    }
+    *last_buttons = buttons;
 
     // V1 keeps wheel in the raw report model but does not emit wheel events yet.
     let _ = report.wheel;
