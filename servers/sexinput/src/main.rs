@@ -267,6 +267,20 @@ pub extern "C" fn _start() -> ! {
         if let Some(req) = pdx_try_listen_raw(0) {
             serial_println!("[sexinput.usb_mouse.recv] type={:#x}", req.type_id);
             if req.type_id == OP_USB_MOUSE_REPORT {
+                // Raw payload diagnostic: log exact arg1/arg2 before budgeted decode.
+                // Budget 64 covers init zero-report + first ~63 real reports.
+                // Use hex to avoid sign-extension ambiguity in the log.
+                unsafe {
+                    static mut RAW_PAYLOAD_BUDGET: u32 = 64;
+                    let r = &mut RAW_PAYLOAD_BUDGET;
+                    if *r > 0 {
+                        *r -= 1;
+                        serial_println!(
+                            "[sexinput.pointer.raw] a0={:#x} a1={:#x} a2={:#x} caller={}",
+                            req.arg0, req.arg1, req.arg2, req.caller_pd
+                        );
+                    }
+                }
                 let cls = req.arg0;
                 unsafe {
                     static mut SEXINPUT_POINTER_RECV_BUDGET: u32 = 16;
