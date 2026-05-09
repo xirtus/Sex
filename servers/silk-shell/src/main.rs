@@ -4456,6 +4456,18 @@ fn normalize_abs_coord(raw: i32, screen_dim: i32) -> i32 {
     (raw * (screen_dim - 1) / TABLET_RAW_MAX).clamp(0, screen_dim - 1)
 }
 
+/// Reject huge single-report ABS jumps (QEMU enter/exit/grab discontinuities).
+/// Returns true if the jump should be accepted.
+fn abs_jump_ok(screen_x: i32, screen_y: i32) -> bool {
+    if !unsafe { ABS_SEEN_VALID } { return true; } // first valid: always accept
+    let last_x = unsafe { LAST_VALID_ABS_X };
+    let last_y = unsafe { LAST_VALID_ABS_Y };
+    if last_x < 0 || last_y < 0 { return true; }
+    let dx = (screen_x - last_x).unsigned_abs();
+    let dy = (screen_y - last_y).unsigned_abs();
+    dx <= (P.width as u32 / 3) && dy <= (P.height as u32 / 3)
+}
+
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
 /// drain so button click/focus works even during blocking Linen fetch.
 unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
@@ -4470,7 +4482,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 || (LAST_VALID_ABS_X >= 0
                     && (ax - LAST_VALID_ABS_X).unsigned_abs() > (P.width as u32 / 2)
                     && (ay - LAST_VALID_ABS_Y).unsigned_abs() > (P.height as u32 / 2));
-            if !reject {
+            if !reject && abs_jump_ok(ax, ay) {
                 LAST_VALID_ABS_X = ax;
                 LAST_VALID_ABS_Y = ay;
                 POINTER_X = ax;
@@ -4482,12 +4494,14 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             if !ABS_SEEN_VALID {
                 ABS_SEEN_VALID = true;
             }
-            LAST_VALID_ABS_X = ax;
-            LAST_VALID_ABS_Y = ay;
-            POINTER_X = ax;
-            POINTER_Y = ay;
-            send_cursor_checked(POINTER_X, POINTER_Y, "abs");
-            REAL_POINTER_SEEN = true;
+            if abs_jump_ok(ax, ay) {
+                LAST_VALID_ABS_X = ax;
+                LAST_VALID_ABS_Y = ay;
+                POINTER_X = ax;
+                POINTER_Y = ay;
+                send_cursor_checked(POINTER_X, POINTER_Y, "abs");
+                REAL_POINTER_SEEN = true;
+            }
         }
     } else if event_class == EV_REL {
         let _ = apply_rel_pointer(arg0 as i32, arg1 as i32);
@@ -13322,8 +13336,7 @@ pub extern "C" fn _start() -> ! {
                                                 ax, ay, LAST_VALID_ABS_X, LAST_VALID_ABS_Y);
                                         }
                                     }
-                                } else {
-                                    // Near edge but reached gradually — accept.
+                                } else if abs_jump_ok(ax, ay) {
                                     LAST_VALID_ABS_X = ax;
                                     LAST_VALID_ABS_Y = ay;
                                     POINTER_X = ax;
@@ -13343,20 +13356,22 @@ pub extern "C" fn _start() -> ! {
                                         }
                                     }
                                 }
-                                LAST_VALID_ABS_X = ax;
-                                LAST_VALID_ABS_Y = ay;
-                                POINTER_X = ax;
-                                POINTER_Y = ay;
-                                unsafe {
-                                    static mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS: u32 = 16;
-                                    let rem = &mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS;
-                                    if *rem > 0 {
-                                        *rem -= 1;
-                                        serial_println!("[shell.cursor.surface.update] n=0 x={} y={}", POINTER_X, POINTER_Y);
+                                if abs_jump_ok(ax, ay) {
+                                    LAST_VALID_ABS_X = ax;
+                                    LAST_VALID_ABS_Y = ay;
+                                    POINTER_X = ax;
+                                    POINTER_Y = ay;
+                                    unsafe {
+                                        static mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS: u32 = 16;
+                                        let rem = &mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS;
+                                        if *rem > 0 {
+                                            *rem -= 1;
+                                            serial_println!("[shell.cursor.surface.update] n=0 x={} y={}", POINTER_X, POINTER_Y);
+                                        }
                                     }
+                                    send_cursor_checked(POINTER_X, POINTER_Y, "abs");
+                                    REAL_POINTER_SEEN = true;
                                 }
-                                send_cursor_checked(POINTER_X, POINTER_Y, "abs");
-                                REAL_POINTER_SEEN = true;
                             }
                         } else if event_class == EV_REL {
                             let dx_raw = msg.arg0 as i32;
