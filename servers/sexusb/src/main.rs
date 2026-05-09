@@ -4372,6 +4372,21 @@ pub extern "C" fn _start() -> ! {
                 );
                 intr_prod = 0;
             }
+            // Re-arm: queue next interrupt-IN TRB and ring doorbell.
+            // The keyboard path does this manually before IPC; tablet/mouse
+            // paths fall through here and must re-arm for the next transfer.
+            unsafe {
+                core::ptr::write_bytes(intr_report_va as *mut u8, 0, intr_report_len as usize);
+            }
+            trb_write_volatile(
+                intr_ring_va,
+                intr_prod,
+                (intr_report_phys & 0xFFFF_FFFF) as u32,
+                (intr_report_phys >> 32) as u32,
+                intr_report_len,
+                (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs,
+            );
+            mmio_write32(db_base, single_bind.slot_id as u64 * 4, intr_dci);
             if HID_VERBOSE_RING_LOG {
                 serial_println!("[sexusb.xhci.intr_ring.advance] next={} cycle={}", intr_prod, intr_pcs);
             }
