@@ -240,13 +240,34 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                     let frame_hovered = (surf.chrome_flags & SURFACE_CHROME_FRAME_HOVER) != 0;
                     let light_hovered = (surf.chrome_flags & SURFACE_CHROME_LIGHT_HOVER) != 0;
                     let hovered_light_kind = (surf.chrome_flags & SURFACE_CHROME_LIGHT_KIND_MASK) >> SURFACE_CHROME_LIGHT_KIND_SHIFT;
+                    let single_tab = surf.tab_count <= 1;
+
+                    // One-shot reveal mode marker.
+                    unsafe {
+                        static mut HOVER_REVEAL_PROOF: u32 = 1;
+                        if HOVER_REVEAL_PROOF > 0 && ly == 0 && lx == 0 {
+                            HOVER_REVEAL_PROOF -= 1;
+                            serial_println!("[sexdisplay.frame.hover.reveal] mode=v1b single_tab={} hovered={}",
+                                single_tab as u8, frame_hovered as u8);
+                        }
+                    }
+
+                    // Hover reveal: single-tab frame chrome dims when not hovered,
+                    // brightens on hover. Multi-tab always fully visible.
+                    let chrome_dim: u8 = if single_tab && !frame_hovered { 5 } else { 10 };
+                    // Scale: 5 → ~20% alpha, 10 → full alpha.
+                    fn scale_alpha(base: u8, dim: u8) -> u8 {
+                        ((base as u16 * dim as u16) / 10) as u8
+                    }
 
                     // ── TOP BAR ZONE (default chrome mode, R6 glass) ──
                     if top_bar_active && ly < FRAME_TOP_BAR_HEIGHT_PX {
                         // Frosted glass toolbar background.
-                        // Brighten slightly when frame is hovered.
-                        let toolbar_alpha: u8 = if frame_hovered { 220 } else { 200 };
-                        c = glass_over_bg(DISPLAY_TOKENS.frame_top_bar_color, x, y, toolbar_alpha);
+                        let base_alpha: u8 = if frame_hovered { 220 } else { 200 };
+                        let toolbar_alpha = scale_alpha(base_alpha, chrome_dim);
+                        if toolbar_alpha > 0 {
+                            c = glass_over_bg(DISPLAY_TOKENS.frame_top_bar_color, x, y, toolbar_alpha);
+                        }
                         // Divider: bright opaque line at bottom edge.
                         if ly == FRAME_TOP_BAR_HEIGHT_PX - 1 {
                             c = FRAME_TOP_BAR_DIVIDER_COLOR;
@@ -275,27 +296,28 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                             }
                         }
                         // Frame lights: glass background with light color overlay.
-                        // Brighten to full opaque when that specific light is hovered.
+                        // Dimmed for single-tab non-hover; full bright for hovered light.
                         if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {
                             let l1_end = FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                             let l1_hovered = light_hovered && hovered_light_kind == 0;
-                            let light_alpha: u8 = if l1_hovered { 255 } else { 224 };
+                            let light_alpha: u8 = scale_alpha(
+                                if l1_hovered { 255 } else { 224 }, chrome_dim);
                             if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX && lx < l1_end {
-                                c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, light_alpha);
+                                if light_alpha > 0 { c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, light_alpha); }
                             } else {
                                 let l2_start = l1_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
                                 let l2_end = l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                                 let l2_hovered = light_hovered && hovered_light_kind == 1;
-                                let light_alpha: u8 = if l2_hovered { 255 } else { 224 };
+                                let l2_alpha = scale_alpha(if l2_hovered { 255 } else { 224 }, chrome_dim);
                                 if lx >= l2_start && lx < l2_end {
-                                    c = glass_over_bg(DISPLAY_TOKENS.minimize_light_color, x, y, light_alpha);
+                                    if l2_alpha > 0 { c = glass_over_bg(DISPLAY_TOKENS.minimize_light_color, x, y, l2_alpha); }
                                 } else {
                                     let l3_start = l2_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
                                     let l3_end = l3_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                                     let l3_hovered = light_hovered && hovered_light_kind == 2;
-                                    let light_alpha: u8 = if l3_hovered { 255 } else { 224 };
+                                    let l3_alpha = scale_alpha(if l3_hovered { 255 } else { 224 }, chrome_dim);
                                     if lx >= l3_start && lx < l3_end {
-                                        c = glass_over_bg(DISPLAY_TOKENS.zoom_light_color, x, y, light_alpha);
+                                        if l3_alpha > 0 { c = glass_over_bg(DISPLAY_TOKENS.zoom_light_color, x, y, l3_alpha); }
                                     }
                                 }
                             }
