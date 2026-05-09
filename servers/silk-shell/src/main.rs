@@ -4462,7 +4462,6 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
     if event_class == EV_ABS {
         let ax = normalize_abs_coord(arg0 as i32, P.width);
         let ay = normalize_abs_coord(arg1 as i32, P.height);
-        let ay = arg1 as i32;
         if !ABS_SEEN_VALID && ax <= 1 && ay <= 1 {
             // Reject zero/init tablet report.
         } else if ax >= P.width - 1 && ay >= P.height - 1 {
