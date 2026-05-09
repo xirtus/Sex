@@ -4179,6 +4179,15 @@ pub extern "C" fn _start() -> ! {
                         serial_println!("[sexusb.tablet.abs] x={} y={} buttons={}", td.abs_x, td.abs_y, td.buttons);
                     }
                 }
+                // Periodic liveness: proof reports continue past budget window.
+                unsafe {
+                    static mut TABLET_REPORT_COUNT: u64 = 0;
+                    TABLET_REPORT_COUNT = TABLET_REPORT_COUNT.wrapping_add(1);
+                    if TABLET_REPORT_COUNT % 256 == 0 {
+                        serial_println!("[sexusb.tablet.liveness] reports={}",
+                            TABLET_REPORT_COUNT);
+                    }
+                }
                 
                 // Budgeted marker for what is forwarded to sexinput.
                 unsafe {
