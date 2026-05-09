@@ -9863,7 +9863,12 @@ unsafe fn frame_tab_at(frame_id: u32, x: i32, y: i32) -> Option<u32> {
 }
 
 /// Send current tab metadata for the given frame to sexdisplay via OP_SURFACE_TAB_INFO.
-/// Called after frame init and on tab changes (future).
+/// Called after frame init, on tab changes, and on hover state transitions.
+/// Packs chrome flags into arg2 bits 8-15:
+///   bit 0 (8): SURFACE_CHROME_TOP_BAR
+///   bit 1 (9): SURFACE_CHROME_FRAME_HOVER
+///   bit 2 (10): SURFACE_CHROME_LIGHT_HOVER
+///   bits 3-4 (11-12): hovered light kind
 unsafe fn send_frame_tab_info(frame_id: u32) {
     let surface_id = match active_surface_for_frame(frame_id) {
         Some(sid) => sid,
@@ -9871,19 +9876,37 @@ unsafe fn send_frame_tab_info(frame_id: u32) {
     };
     let tab_count = frame_tab_count(frame_id);
     let active_tab = frame_active_tab_index(frame_id);
-    let top_bar: u64 = if frame_has_top_bar(frame_id) { 1 } else { 0 };
-    // B4: Derive tab chrome visibility from frame state + hover.
-    let tab_chrome_visible: u64 = if frame_chrome_visible(frame_id) { 1 } else { 0 };
-    // Pack: low 8 bits = active_tab, bit 8 = top_bar, bit 9 = chrome_visible.
-    let arg2 = (active_tab as u64) | (top_bar << 8) | (tab_chrome_visible << 9);
+    // Chrome flag byte (packed into arg2 bits 8-15):
+    // bit 0 = top bar enabled
+    let chrome_byte: u64 = if frame_has_top_bar(frame_id) { 1 } else { 0 };
+    // bit 1 = frame hovered
+    let frame_hovered: u64 = if HOVERED_FRAME_ID != 0 && HOVERED_FRAME_ID == frame_id { 1 } else { 0 };
+    // bit 2 = light hovered, bits 3-4 = light kind
+    let light_hovered: u64 = if frame_hovered != 0 && HOVERED_FRAME_LIGHT != FRAME_LIGHT_NONE { 1 } else { 0 };
+    let light_kind: u64 = if light_hovered != 0 {
+        match HOVERED_FRAME_LIGHT {
+            FRAME_LIGHT_CLOSE => 0,
+            FRAME_LIGHT_MINIMIZE => 1,
+            FRAME_LIGHT_ZOOM => 2,
+            _ => 3,
+        }
+    } else { 3 };
+    let chrome_flags = chrome_byte
+        | (frame_hovered << 1)
+        | (light_hovered << 2)
+        | (light_kind << 3);
+    // Pack: low 8 bits = active_tab, bits 8-15 = chrome_flags byte.
+    let arg2 = (active_tab as u64) | (chrome_flags << 8);
     pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, surface_id, tab_count as u64, arg2);
     unsafe {
         static mut SHELL_TAB_INFO_SEND_BUDGET: u32 = 8;
         let b = &mut SHELL_TAB_INFO_SEND_BUDGET;
         if *b > 0 {
             *b -= 1;
-            serial_println!("[shell.frame.tab.info.send] frame={} surface={} tabs={} active={} top_bar={} chrome_visible={}",
-                frame_id, surface_id, tab_count, active_tab, top_bar, tab_chrome_visible);
+            serial_println!("[shell.frame.tab.info.send] frame={} surface={} tabs={} active={} top_bar={} hover={} light={}/{:?}",
+                frame_id, surface_id, tab_count, active_tab,
+                chrome_byte, frame_hovered, HOVERED_FRAME_LIGHT,
+                if light_hovered != 0 { "some" } else { "none" });
         }
     }
 }
@@ -10138,6 +10161,24 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
                     *b -= 1;
                     serial_println!("[tab.chrome.persist.multi] frame={}", new_frame_id);
                 }
+            }
+        }
+    }
+    // Notify sexdisplay of hover state change via OP_SURFACE_TAB_INFO.
+    if changed || light_changed {
+        unsafe {
+            // Clear hover on previous frame.
+            if HOVERED_FRAME_ID != 0 && HOVERED_FRAME_ID != new_frame_id {
+                let prev_id = HOVERED_FRAME_ID;
+                HOVERED_FRAME_ID = 0;
+                HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
+                send_frame_tab_info(prev_id);
+                HOVERED_FRAME_ID = prev_id;
+                HOVERED_FRAME_LIGHT = new_light;
+            }
+            // Send hover on new frame.
+            if new_frame_id != 0 {
+                send_frame_tab_info(new_frame_id);
             }
         }
     }

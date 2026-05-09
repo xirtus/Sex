@@ -96,6 +96,13 @@ const TAB_INACTIVE_COLOR: u32 = 0x006080B0; // dimmed cyan
 // ── Top Bar Chrome Mode (default mode, matches shell FRAME_TOP_BAR_*) ──
 /// Surface.chrome_flags bit: top bar enabled (24px top band replaces 4px top rim).
 const SURFACE_CHROME_TOP_BAR: u8 = 1 << 0;
+/// chrome_flags bit 1: frame is hovered (pointer over frame body/chrome).
+const SURFACE_CHROME_FRAME_HOVER: u8 = 1 << 1;
+/// chrome_flags bit 2: a frame light is hovered (pointer over close/minimize/zoom).
+const SURFACE_CHROME_LIGHT_HOVER: u8 = 1 << 2;
+/// chrome_flags bits 3-4: hovered light kind (0=close, 1=minimize, 2=zoom).
+const SURFACE_CHROME_LIGHT_KIND_MASK: u8 = 0x18; // bits 3-4
+const SURFACE_CHROME_LIGHT_KIND_SHIFT: u8 = 3;
 /// Height of the top bar chrome band in default mode.
 const FRAME_TOP_BAR_HEIGHT_PX: usize = 28;
 /// Width and height of each frame light in default mode.
@@ -230,12 +237,16 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                     let rim_right = sw.saturating_sub(FRAME_RIM_PX);
                     let rim_bottom = sh.saturating_sub(FRAME_RIM_PX);
                     let top_bar_active = (surf.chrome_flags & SURFACE_CHROME_TOP_BAR) != 0;
+                    let frame_hovered = (surf.chrome_flags & SURFACE_CHROME_FRAME_HOVER) != 0;
+                    let light_hovered = (surf.chrome_flags & SURFACE_CHROME_LIGHT_HOVER) != 0;
+                    let hovered_light_kind = (surf.chrome_flags & SURFACE_CHROME_LIGHT_KIND_MASK) >> SURFACE_CHROME_LIGHT_KIND_SHIFT;
 
                     // ── TOP BAR ZONE (default chrome mode, R6 glass) ──
                     if top_bar_active && ly < FRAME_TOP_BAR_HEIGHT_PX {
                         // Frosted glass toolbar background.
-                        const TOOLBAR_GLASS_ALPHA: u8 = 200;
-                        c = glass_over_bg(DISPLAY_TOKENS.frame_top_bar_color, x, y, TOOLBAR_GLASS_ALPHA);
+                        // Brighten slightly when frame is hovered.
+                        let toolbar_alpha: u8 = if frame_hovered { 220 } else { 200 };
+                        c = glass_over_bg(DISPLAY_TOKENS.frame_top_bar_color, x, y, toolbar_alpha);
                         // Divider: bright opaque line at bottom edge.
                         if ly == FRAME_TOP_BAR_HEIGHT_PX - 1 {
                             c = FRAME_TOP_BAR_DIVIDER_COLOR;
@@ -264,20 +275,27 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                             }
                         }
                         // Frame lights: glass background with light color overlay.
+                        // Brighten to full opaque when that specific light is hovered.
                         if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {
                             let l1_end = FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX;
+                            let l1_hovered = light_hovered && hovered_light_kind == 0;
+                            let light_alpha: u8 = if l1_hovered { 255 } else { 224 };
                             if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX && lx < l1_end {
-                                c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, 224);
+                                c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, light_alpha);
                             } else {
                                 let l2_start = l1_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
                                 let l2_end = l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
+                                let l2_hovered = light_hovered && hovered_light_kind == 1;
+                                let light_alpha: u8 = if l2_hovered { 255 } else { 224 };
                                 if lx >= l2_start && lx < l2_end {
-                                    c = glass_over_bg(DISPLAY_TOKENS.minimize_light_color, x, y, 224);
+                                    c = glass_over_bg(DISPLAY_TOKENS.minimize_light_color, x, y, light_alpha);
                                 } else {
                                     let l3_start = l2_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
                                     let l3_end = l3_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
+                                    let l3_hovered = light_hovered && hovered_light_kind == 2;
+                                    let light_alpha: u8 = if l3_hovered { 255 } else { 224 };
                                     if lx >= l3_start && lx < l3_end {
-                                        c = glass_over_bg(DISPLAY_TOKENS.zoom_light_color, x, y, 224);
+                                        c = glass_over_bg(DISPLAY_TOKENS.zoom_light_color, x, y, light_alpha);
                                     }
                                 }
                             }
@@ -1971,6 +1989,19 @@ pub extern "C" fn _start() -> ! {
                                 *b -= 1;
                                 serial_println!("[sexdisplay.surface.tab.info] surface={} tabs={} active={} chrome={}",
                                     surface_id, tab_count, active_tab, chrome_flags_raw);
+                            }
+                            // Hover state marker: log when hover flags change.
+                            let hover = (chrome_flags_raw & SURFACE_CHROME_FRAME_HOVER) != 0;
+                            let light = (chrome_flags_raw & SURFACE_CHROME_LIGHT_HOVER) != 0;
+                            if hover || light {
+                                static mut FRAME_HOVER_RECV_BUDGET: u32 = 32;
+                                let hb = &mut FRAME_HOVER_RECV_BUDGET;
+                                if *hb > 0 {
+                                    *hb -= 1;
+                                    let lk = (chrome_flags_raw & SURFACE_CHROME_LIGHT_KIND_MASK) >> SURFACE_CHROME_LIGHT_KIND_SHIFT;
+                                    serial_println!("[sexdisplay.frame.hover.recv] sid={} flags=0x{:02x} light={}",
+                                        surface_id, chrome_flags_raw, lk);
+                                }
                             }
                             if fb_live {
                                 needs_surface_redraw = true;
