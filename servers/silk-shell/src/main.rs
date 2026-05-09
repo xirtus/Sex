@@ -3475,12 +3475,12 @@ struct ChromeTemplate {
 /// No visual behavior change. Future Glass Chrome can derive from this.
 const SILK_CHROME_TEMPLATE_DEFAULT: ChromeTemplate = ChromeTemplate {
     rim_px: 4,
-    top_bar_height_px: 16,
+    top_bar_height_px: 28,
     light_size_px: 4,
     light_gap_px: 2,
-    top_bar_light_size_px: 8,
-    top_bar_light_gap_px: 4,
-    top_bar_light_exclusion_px: 40,
+    top_bar_light_size_px: 10,
+    top_bar_light_gap_px: 5,
+    top_bar_light_exclusion_px: 50,
     tab_light_exclusion_px: 20,
     tab_min_width_px: 12,
     tab_strip_px: 4,
@@ -6399,6 +6399,7 @@ unsafe fn ensure_linen_frame() -> Option<u32> {
             });
             serial_println!("[linen.placeholder.attach.frame] frame={} scene={} slot={}", LINEN_FRAME_ID, ACTIVE_SCENE_IDX, slot_idx);
             serial_println!("[linen.placeholder.attach.tab] frame={} tab=0 surface={}", LINEN_FRAME_ID, SURFACE_ID_LINEN);
+            send_frame_tab_info(LINEN_FRAME_ID);
             static mut LINEN_CREATE_BUDGET: u32 = 4;
             let b = &mut LINEN_CREATE_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[shell.linen.frame.create] frame={} slot={}", LINEN_FRAME_ID, slot_idx); }
@@ -6607,6 +6608,7 @@ unsafe fn ensure_quil_frame() -> Option<u32> {
             });
             serial_println!("[quil.placeholder.attach.frame] frame={} scene={} slot={}", QUIL_FRAME_ID, ACTIVE_SCENE_IDX, slot_idx);
             serial_println!("[quil.placeholder.attach.tab] frame={} tab=0 surface={}", QUIL_FRAME_ID, SURFACE_ID_QUIL);
+            send_frame_tab_info(QUIL_FRAME_ID);
             static mut QUIL_CREATE_BUDGET: u32 = 4;
             let b = &mut QUIL_CREATE_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[shell.quil.frame.create] frame={} slot={}", QUIL_FRAME_ID, slot_idx); }
@@ -11330,11 +11332,18 @@ pub extern "C" fn _start() -> ! {
         (boot_quil_h as u64) << 32 | boot_quil_w as u64);
     serial_println!("[silk-shell] Boot 0xEC surface 201 (Quil) created");
     serial_println!("[silk-shell.boot.surface.create] sid={} owner=quil", SURFACE_ID_QUIL);
+    // Send chrome metadata immediately so sexdisplay renders the toolbar.
+    pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, SURFACE_ID_QUIL, 1, (1u64 << 8) | (1u64 << 9));
+    serial_println!("[shell.surface.chrome.info.send] surface={} owner=quil top_bar=1 chrome_visible=1", SURFACE_ID_QUIL);
+
     pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_LINEN,
         (boot_linen_y as u64) << 32 | boot_linen_x as u64,
         (linen_h as u64) << 32 | linen_w as u64);
     serial_println!("[silk-shell] Boot 0xEC surface 200 (Linen) created");
     serial_println!("[silk-shell.boot.surface.create] sid={} owner=linen", SURFACE_ID_LINEN);
+    // Send chrome metadata immediately so sexdisplay renders the toolbar.
+    pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, SURFACE_ID_LINEN, 1, (1u64 << 8) | (1u64 << 9));
+    serial_println!("[shell.surface.chrome.info.send] surface={} owner=linen top_bar=1 chrome_visible=1", SURFACE_ID_LINEN);
     // Deferred: linen_paint_surface() moved to after main loop starts
     // to prevent linen_sync_reply() from dropping OP_HID_EVENT messages.
     serial_println!("[silk-shell.linen.paint.defer] reason=avoid_input_drop");

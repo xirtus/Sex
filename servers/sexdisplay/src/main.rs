@@ -17,11 +17,15 @@ const HIGH_HALF_BASE: u64 = 0xffff_8000_0000_0000;
 const MAX_FB_W: usize = 8192;
 const MAX_FB_H: usize = 4320;
 const DRAIN_MAX: usize = 8;
+const BAR_BG_W_CAP: usize = 2560;
+const BAR_BG_H: usize = 50;
 
 // Runtime FB config — starts as fallback, updated by OP_PRIMARY_FB
 static mut FB_PTR: u64 = FALLBACK_PTR;
 static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
+static mut BAR_BG_BUF: [u32; BAR_BG_H * BAR_BG_W_CAP] = [0u32; BAR_BG_H * BAR_BG_W_CAP];
+static mut BAR_BLUR_BUF: [u32; BAR_BG_H * BAR_BG_W_CAP] = [0u32; BAR_BG_H * BAR_BG_W_CAP];
 
 // ── Surface Registry (V1: safe inline ABI, no backing buffers) ──────────────
 
@@ -90,22 +94,24 @@ const TAB_ACTIVE_COLOR: u32 = FOCUS_SURFACE_COLOR; // 0x00A8E0FF (bright cyan)
 const TAB_INACTIVE_COLOR: u32 = 0x006080B0; // dimmed cyan
 
 // ── Top Bar Chrome Mode (default mode, matches shell FRAME_TOP_BAR_*) ──
-/// Surface.chrome_flags bit: top bar enabled (16px top band replaces 4px top rim).
+/// Surface.chrome_flags bit: top bar enabled (24px top band replaces 4px top rim).
 const SURFACE_CHROME_TOP_BAR: u8 = 1 << 0;
 /// Height of the top bar chrome band in default mode.
-const FRAME_TOP_BAR_HEIGHT_PX: usize = 16;
+const FRAME_TOP_BAR_HEIGHT_PX: usize = 28;
 /// Width and height of each frame light in default mode.
-const FRAME_TOP_BAR_LIGHT_SIZE_PX: usize = 8;
+const FRAME_TOP_BAR_LIGHT_SIZE_PX: usize = 10;
 /// Gap between adjacent frame lights in default mode.
-const FRAME_TOP_BAR_LIGHT_GAP_PX: usize = 4;
+const FRAME_TOP_BAR_LIGHT_GAP_PX: usize = 5;
 /// X-width of the Frame Lights exclusion zone in default mode.
-const FRAME_TOP_BAR_LIGHT_EXCLUSION_PX: usize = 40;
-/// Top bar background color (same as rim color for visual continuity).
-const FRAME_TOP_BAR_COLOR: u32 = 0x0088C2B7;
-/// Light vertical zone: top (y offset within top bar).
-const FRAME_TOP_BAR_LIGHT_TOP: usize = 4;
+const FRAME_TOP_BAR_LIGHT_EXCLUSION_PX: usize = 50;
+/// Top bar background color: dark navy-blue header, distinct from content teal.
+const FRAME_TOP_BAR_COLOR: u32 = 0x00182730;
+/// Toolbar divider color (bottom edge of top bar).
+const FRAME_TOP_BAR_DIVIDER_COLOR: u32 = 0x00B8F2E8;
+/// Light vertical zone: top (y offset within top bar), centered in 28px.
+const FRAME_TOP_BAR_LIGHT_TOP: usize = 9;
 /// Light vertical zone: bottom (exclusive).
-const FRAME_TOP_BAR_LIGHT_BOTTOM: usize = 12; // 4 + 8
+const FRAME_TOP_BAR_LIGHT_BOTTOM: usize = 19; // 9 + 10
 
 // ── Appearance Tokens (V1: flat ARGB, no alpha blending, blur forced zero) ────
 
@@ -162,6 +168,16 @@ static REJECT_COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomi
 static CURSOR_Z_TOP_LOGGED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 static DISPLAY_WM_PD: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static RENDER_FRAME_COUNTER: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+static ROW_BUFFER_PROOF_LOGGED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+static BLUR_PROOF_LOGGED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+static ANIM_PROOF_LOGGED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+static R6_GLASS_PROOF_LOGGED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 /// Clock source for redraw marker: 0=silkbar, 1=fallback
 static mut CLOCK_REDRAW_SOURCE: u8 = 0;
 
@@ -208,6 +224,7 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                     // Rim + Frame Light + Top Bar check (focused surface only).
                     let lx = x - sx;  // local x within clamped surface
                     let ly = y - sy;  // local y within clamped surface
+
                     // Edge detection with saturating_sub to prevent underflow
                     // on tiny surfaces (rim fills entire surface if sw/sh < RIM_PX).
                     let rim_right = sw.saturating_sub(FRAME_RIM_PX);
@@ -218,6 +235,15 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                     if top_bar_active && ly < FRAME_TOP_BAR_HEIGHT_PX {
                         // Default to top bar background color.
                         c = DISPLAY_TOKENS.frame_top_bar_color;
+                        // Divider: bright line at bottom edge of toolbar.
+                        if ly == FRAME_TOP_BAR_HEIGHT_PX - 1 {
+                            c = FRAME_TOP_BAR_DIVIDER_COLOR;
+                        }
+                        // Toolbar title text: render surface title in top bar.
+                        // Uses same 5x7 font as content text, positioned after lights.
+                        if let Some(fg) = toolbar_title_fg_at(lx, ly, surf.surface_id) {
+                            c = fg;
+                        }
                         // Tab strip override: full 16px height, after light exclusion,
                         // before right rim. Uses same tab block geometry as minimal mode
                         // but with wider exclusion zone for larger lights.
@@ -343,12 +369,167 @@ fn fill_rect_color(surf: &Surface, x: usize, y: usize, base_color: u32) -> u32 {
     c
 }
 
-fn bg(y: usize) -> u32 {
-    if      y < 200 { DEFAULT_THEME.bg_top }    // deep navy
-    else if y < 350 { 0x00102038 }               // deep blue
-    else if y < 500 { 0x00182850 }               // violet blue
-    else if y < 650 { DEFAULT_THEME.bg_bottom }  // warm purple
-    else            { DEFAULT_THEME.bg_bottom }  // warm purple
+/// Fixed-point linear interpolation between two XRGB colors.
+/// t=0 returns a, t=255 returns b.  Alpha byte forced to 0xFF.
+#[inline]
+fn lerp_color_xrgb(a: u32, b: u32, t: u8) -> u32 {
+    if t == 0 { return a | 0xFF000000; }
+    if t == 255 { return b | 0xFF000000; }
+    let ar = (a & 0xFF) as u32;
+    let ag = ((a >> 8) & 0xFF) as u32;
+    let ab = ((a >> 16) & 0xFF) as u32;
+    let br = (b & 0xFF) as u32;
+    let bg = ((b >> 8) & 0xFF) as u32;
+    let bb = ((b >> 16) & 0xFF) as u32;
+    let ti = t as u32;
+    let r = ar + ((br.wrapping_sub(ar)).wrapping_mul(ti) / 255);
+    let g = ag + ((bg.wrapping_sub(ag)).wrapping_mul(ti) / 255);
+    let b_ = ab + ((bb.wrapping_sub(ab)).wrapping_mul(ti) / 255);
+    0xFF000000 | (b_ << 16) | (g << 8) | r
+}
+
+/// Smooth vertical gradient between two XRGB colors.
+/// y=0 returns top, y=h-1 returns bottom.
+#[inline]
+fn vertical_gradient_xrgb(y: usize, h: usize, top: u32, bottom: u32) -> u32 {
+    if h <= 1 { return top; }
+    let t = ((y.min(h - 1) as u32).wrapping_mul(255)) / ((h - 1) as u32);
+    lerp_color_xrgb(top, bottom, t as u8)
+}
+
+/// Desktop background: smooth gradient from bg_top (at y=0) to bg_bottom (at bottom).
+/// Replaces the old 4-band hard gradient.  Endpoint colors preserved from Theme.
+fn bg(y: usize, h: usize) -> u32 {
+    vertical_gradient_xrgb(y, h, DEFAULT_THEME.bg_top, DEFAULT_THEME.bg_bottom)
+}
+
+fn fill_bar_bg_buffer(fb_w: u32, fb_h: u32) -> bool {
+    let fill_w = fb_w as usize;
+    if fill_w > BAR_BG_W_CAP {
+        return false;
+    }
+    let fill_h = BAR_BG_H.min(fb_h as usize);
+    for y in 0..fill_h {
+        let c = bg(y, fb_h as usize);
+        for x in 0..fill_w {
+            unsafe { BAR_BG_BUF[y * BAR_BG_W_CAP + x] = c; }
+        }
+    }
+    true
+}
+
+fn blur_bar_bg_buffer_radius1(fb_w: u32, fb_h: u32) -> bool {
+    let width = fb_w as usize;
+    if width > BAR_BG_W_CAP {
+        return false;
+    }
+    let height = BAR_BG_H.min(fb_h as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let mut acc_r: u32 = 0;
+            let mut acc_g: u32 = 0;
+            let mut acc_b: u32 = 0;
+            let y0 = y.saturating_sub(1);
+            let y1 = (y + 1).min(height.saturating_sub(1));
+            let x0 = x.saturating_sub(1);
+            let x1 = (x + 1).min(width.saturating_sub(1));
+            for sy in y0..=y1 {
+                for sx in x0..=x1 {
+                    let c = unsafe { BAR_BG_BUF[sy * BAR_BG_W_CAP + sx] };
+                    acc_r += c & 0xFF;
+                    acc_g += (c >> 8) & 0xFF;
+                    acc_b += (c >> 16) & 0xFF;
+                }
+            }
+            let count = ((y1 - y0 + 1) * (x1 - x0 + 1)) as u32;
+            let r = (acc_r / count) & 0xFF;
+            let g = (acc_g / count) & 0xFF;
+            let b = (acc_b / count) & 0xFF;
+            unsafe { BAR_BLUR_BUF[y * BAR_BG_W_CAP + x] = 0xFF000000 | (b << 16) | (g << 8) | r; }
+        }
+    }
+    true
+}
+
+fn sample_bar_blur_bg_xrgb(x: u32, y: u32, fb_w: u32, fb_h: u32) -> u32 {
+    if fb_w as usize > BAR_BG_W_CAP || y as usize >= BAR_BG_H || x >= fb_w {
+        return bg(y as usize, fb_h as usize);
+    }
+    unsafe { BAR_BLUR_BUF[y as usize * BAR_BG_W_CAP + x as usize] }
+}
+
+#[inline]
+fn triangle_wave_u8(frame: u64, period: u64) -> u8 {
+    if period == 0 {
+        return 0;
+    }
+    let pos = frame % period;
+    let half = period / 2;
+    if half == 0 {
+        return 0;
+    }
+    if pos < half {
+        ((pos * 255) / half) as u8
+    } else {
+        let denom = period - half;
+        if denom == 0 {
+            0
+        } else {
+            (((period - pos) * 255) / denom) as u8
+        }
+    }
+}
+
+#[inline]
+fn pulse_alpha(base: u8, amp: u8, frame: u64, period: u64) -> u8 {
+    if period == 0 {
+        return base;
+    }
+    let wave = triangle_wave_u8(frame, period) as i32; // 0..255
+    let centered = wave - 127; // ~[-127,128]
+    let delta = (centered * amp as i32) / 127;
+    let out = base as i32 + delta;
+    out.clamp(0, 255) as u8
+}
+
+/// Alpha-blend an XRGB foreground over an XRGB background.
+/// alpha=0 → bg, alpha=255 → fg.  Result is opaque XRGB.
+/// Uses integer arithmetic only; no framebuffer read.
+#[inline]
+fn alpha_blend_xrgb_over_xrgb(fg: u32, bg: u32, alpha: u8) -> u32 {
+    if alpha == 0 { return bg; }
+    if alpha == 255 { return fg; }
+    let a = alpha as u32;
+    let inv = 255 - a;
+    let fr = (fg & 0xFF) as u32;
+    let fg_ = ((fg >> 8) & 0xFF) as u32;
+    let fb = ((fg >> 16) & 0xFF) as u32;
+    let br = (bg & 0xFF) as u32;
+    let bg_ = ((bg >> 8) & 0xFF) as u32;
+    let bb = ((bg >> 16) & 0xFF) as u32;
+    let r = (fr * a + br * inv) / 255;
+    let g = (fg_ * a + bg_ * inv) / 255;
+    let b = (fb * a + bb * inv) / 255;
+    0xFF000000 | (b << 16) | (g << 8) | r
+}
+
+/// Alpha-blend a glass fg over the desktop background gradient.
+/// Uses FB_H for height; alpha controls translucency.
+#[inline]
+fn glass_over_bg(fg: u32, x: usize, y: usize, alpha: u8) -> u32 {
+    let fb_w = unsafe { FB_W };
+    let fb_h = unsafe { FB_H };
+    if fb_h == 0 { return fg; }
+    let bg = sample_bar_blur_bg_xrgb(x as u32, y as u32, fb_w, fb_h);
+    alpha_blend_xrgb_over_xrgb(fg, bg, alpha)
+}
+
+/// Linear edge glow alpha: distance 0 → max_alpha, distance ≥ spread → 0.
+/// Integer-only, no floats.
+#[inline]
+fn glow_edge_alpha(dist: u32, spread: u32, max_alpha: u8) -> u8 {
+    if spread == 0 || dist >= spread { return 0; }
+    (max_alpha as u32 * (spread - dist) / spread) as u8
 }
 
 #[inline]
@@ -374,7 +555,22 @@ fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
         let (wx, wy, ww, wh) = module_rect(bar, *slot);
         if in_rect(x, y, wx, wy, ww, wh) {
             let ws = &bar.workspaces[idx];
-            if ws.active { return Some(DEFAULT_THEME.active); }
+            if ws.active {
+                // Active workspace gets a subtle glow tint over bg.
+                const WORKSPACE_GLOW_BASE: u8 = 48;
+                const WORKSPACE_GLOW_AMP: u8 = 32;
+                const WORKSPACE_GLOW_PERIOD: u64 = 96;
+                let frame = RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed);
+                let glow_alpha = pulse_alpha(
+                    WORKSPACE_GLOW_BASE,
+                    WORKSPACE_GLOW_AMP,
+                    frame,
+                    WORKSPACE_GLOW_PERIOD,
+                );
+                let active_glow = alpha_blend_xrgb_over_xrgb(
+                    0x00FFFFFF, DEFAULT_THEME.active, glow_alpha);
+                return Some(glass_over_bg(active_glow, x, y, 224));
+            }
             if ws.urgent { return Some(DEFAULT_THEME.urgent); }
             return Some(DEFAULT_THEME.muted);
         }
@@ -383,6 +579,7 @@ fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
 }
 
 fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+    const R6_CHIP_ALPHA: u8 = 212;
     const CHIP_SLOTS: [ModuleSlot; 4] = [
         ModuleSlot::Chip0,
         ModuleSlot::Chip1,
@@ -395,7 +592,7 @@ fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
             let chip = &bar.chips[idx];
             if !chip.visible { return Some(0x00102038); }
             match chip.kind {
-                ChipKind::Net     => return Some(DEFAULT_THEME.chip_fill),
+                ChipKind::Net     => return Some(glass_over_bg(DEFAULT_THEME.chip_fill, x, y, R6_CHIP_ALPHA)),
                 ChipKind::Wifi    => return Some(0x0038D6C8),
                 ChipKind::Battery => return Some(0x00FFB84D),
                 ChipKind::Clock   => return Some(DEFAULT_THEME.chip_border),
@@ -406,6 +603,11 @@ fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
 }
 
 fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
+    const R6_BAR_ALPHA: u8 = 196;
+    const R6_EDGE_ALPHA: u8 = 72;
+    const BAR_TOP_HIGHLIGHT: u32 = 0x00A8D8FF;
+    const BAR_BOTTOM_DARK_EDGE: u32 = 0x000B1220;
+    const BAR_CRYSTAL_TINT: u32 = 0x001C2A54;
     // Selected-window option indicators (display-only, no action behavior).
     // Rendered as small colored dots between launcher and workspace indicators.
     // Each dot is 3x3 px at a fixed position, colored by option bit.
@@ -467,11 +669,35 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
         let xw = lx + lw - 2;
         let yh = ly + lh - 2;
         if x < x2 || x >= xw || y < y2 || y >= yh {
-            return DEFAULT_THEME.panel_glow; // low-contrast glass edge
+            return glass_over_bg(DEFAULT_THEME.panel_glow, x, y, R6_EDGE_ALPHA);
         }
-        return 0x0070CCFF; // cyan launcher dot
+        let launcher_body = glass_over_bg(0x005CAEE8, x, y, 200);
+        return alpha_blend_xrgb_over_xrgb(0x0082D6FF, launcher_body, 64);
     }
-    DEFAULT_THEME.panel_fill // deep blue-violet glass bar default
+    // Bar body: glass translucency over desktop background,
+    // with subtle bottom-edge glow falloff.
+    const BAR_BOTTOM: usize = 50;
+    const GLOW_SPREAD: usize = 4;
+    if y == 0 {
+        let body = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA);
+        return alpha_blend_xrgb_over_xrgb(BAR_TOP_HIGHLIGHT, body, 64);
+    }
+    if y == BAR_BOTTOM - 1 {
+        let body = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA);
+        let darkened = alpha_blend_xrgb_over_xrgb(BAR_BOTTOM_DARK_EDGE, body, 88);
+        return alpha_blend_xrgb_over_xrgb(DEFAULT_THEME.panel_glow, darkened, 48);
+    }
+    if y + GLOW_SPREAD >= BAR_BOTTOM && y < BAR_BOTTOM {
+        let dist = (BAR_BOTTOM - 1 - y) as u32;
+        let glow_a = glow_edge_alpha(dist, GLOW_SPREAD as u32, R6_EDGE_ALPHA);
+        if glow_a > 0 {
+            let base = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA);
+            let body = alpha_blend_xrgb_over_xrgb(BAR_CRYSTAL_TINT, base, 36);
+            return alpha_blend_xrgb_over_xrgb(DEFAULT_THEME.panel_glow, body, glow_a);
+        }
+    }
+    let base = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA);
+    alpha_blend_xrgb_over_xrgb(BAR_CRYSTAL_TINT, base, 32)
 }
 
 // 5×7 bitmap glyphs for digits 0-9 (MSB = leftmost pixel)
@@ -552,6 +778,47 @@ const FONT_ASCII_5X7: [[u8; 7]; 59] = [
     [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
     [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111]
 ];
+
+/// Returns `Some(text_color)` if pixel (lx, ly) is a toolbar title glyph pixel
+/// for the given surface_id, or `None` if not in the toolbar title text area.
+/// Uses FONT_ASCII_5X7 at a fixed position within the top bar.
+fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64) -> Option<u32> {
+    const GLYPH_W: usize = 5;
+    const GLYPH_H: usize = 7;
+    // Title text position: after lights exclusion, centered vertically in 32px bar.
+    let title_x = FRAME_TOP_BAR_LIGHT_EXCLUSION_PX + 12;
+    let title_y: usize = 10; // top padding for 5x7 glyph in 28px bar
+
+    if (lx as isize) < (title_x as isize) || ly < title_y || ly >= title_y + GLYPH_H {
+        return None;
+    }
+
+    let col = (lx - title_x) / (GLYPH_W + 1);
+    let px = (lx - title_x) % (GLYPH_W + 1);
+    let py = ly - title_y;
+    if px >= GLYPH_W { return None; }
+
+    // Hardcoded titles by surface_id
+    let title: &[u8] = match surface_id {
+        200 => b"Linen",
+        201 => b"Quil",
+        0x99 => b"Spindle",
+        100 => b"App",
+        _ => return None,
+    };
+    if col >= title.len() { return None; }
+    let ch = title[col];
+    if ch < 0x20 || ch > 0x5A { return None; }
+    let glyph_idx = (ch - 0x20) as usize;
+    if glyph_idx >= 59 { return None; }
+    let row_bits = FONT_ASCII_5X7[glyph_idx][py];
+    let pixel_on = (row_bits >> (4 - px)) & 1;
+    if pixel_on != 0 {
+        Some(0x00E8FFFFu32) // bright cyan-white
+    } else {
+        None
+    }
+}
 
 /// Returns `Some(fg_color)` if pixel (x, y) is a text glyph foreground pixel
 /// within the given surface, or `None` if background/not in the text area.
@@ -718,6 +985,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     if end_addr < HIGH_HALF_BASE {
         return;
     }
+    let frame = RENDER_FRAME_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     // Budgeted marker: full-FB render invoked (proof of render entry + boundedness).
     unsafe {
         static mut FULL_RENDER_BUDGET: u32 = 8;
@@ -728,6 +996,31 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         }
     }
     let total_pixels = pixels;
+    let row_buffer_filled = fill_bar_bg_buffer(w as u32, h as u32);
+    let blur_filled = if row_buffer_filled {
+        blur_bar_bg_buffer_radius1(w as u32, h as u32)
+    } else {
+        false
+    };
+    if !ROW_BUFFER_PROOF_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        serial_println!(
+            "[sexdisplay.render.row_buffer] cap_w={} fb_w={} filled={}",
+            BAR_BG_W_CAP,
+            w,
+            if row_buffer_filled { 1 } else { 0 }
+        );
+    }
+    if !BLUR_PROOF_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        serial_println!(
+            "[sexdisplay.render.blur] radius=1 fb_w={} filled={}",
+            w,
+            if blur_filled { 1 } else { 0 }
+        );
+    }
+    if !ANIM_PROOF_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        let _ = frame;
+        serial_println!("[sexdisplay.render.anim] period=96 base=48 amp=32");
+    }
 
     let focused_id = unsafe { FOCUSED_SURFACE_ID };
     // Top strip boundary: BAR_H = 50. Keep in sync with BAR_H constant.
@@ -746,7 +1039,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
             } else if y == 50 {
                 DEFAULT_THEME.panel_glow // low-contrast bar edge
             } else {
-                composite_pixel(x, y, w, h, bg(y), focused_id)
+                composite_pixel(x, y, w, h, bg(y, h), focused_id)
             };
             let idx = y * w + x;
             if idx < total_pixels {
@@ -846,7 +1139,7 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
             let c: u32 = if y == 50 {
                 DEFAULT_THEME.panel_glow // low-contrast bar edge
             } else {
-                composite_pixel(x, y, w, h, bg(y), focused_id)
+                composite_pixel(x, y, w, h, bg(y, h), focused_id)
             };
             let idx = y * w + x;
             if idx < total_pixels {
