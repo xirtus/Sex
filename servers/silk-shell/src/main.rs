@@ -4422,11 +4422,22 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
 }
 
 /// Process one HID event (EV_ABS, EV_REL, or EV_BTN) identically to the
+/// Normalize QEMU usb-tablet raw ABS coordinate (0..32767) to screen
+/// coordinate (0..screen_dim-1).  QEMU tablet uses 16-bit signed range;
+/// max observed is 32767.
+const TABLET_RAW_MAX: i32 = 32767;
+fn normalize_abs_coord(raw: i32, screen_dim: i32) -> i32 {
+    if raw <= 0 { return 0; }
+    if raw >= TABLET_RAW_MAX { return screen_dim - 1; }
+    (raw * (screen_dim - 1) / TABLET_RAW_MAX).clamp(0, screen_dim - 1)
+}
+
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
 /// drain so button click/focus works even during blocking Linen fetch.
 unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
     if event_class == EV_ABS {
-        let ax = arg0 as i32;
+        let ax = normalize_abs_coord(arg0 as i32, P.width);
+        let ay = normalize_abs_coord(arg1 as i32, P.height);
         let ay = arg1 as i32;
         if !ABS_SEEN_VALID && ax <= 1 && ay <= 1 {
             // Reject zero/init tablet report.
@@ -4439,8 +4450,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             if !reject {
                 LAST_VALID_ABS_X = ax;
                 LAST_VALID_ABS_Y = ay;
-                POINTER_X = ax.clamp(0, P.width - 1);
-                POINTER_Y = ay.clamp(0, P.height - 1);
+                POINTER_X = ax;
+                POINTER_Y = ay;
                 pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
                 REAL_POINTER_SEEN = true;
             }
@@ -4450,8 +4461,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             }
             LAST_VALID_ABS_X = ax;
             LAST_VALID_ABS_Y = ay;
-            POINTER_X = ax.clamp(0, P.width - 1);
-            POINTER_Y = ay.clamp(0, P.height - 1);
+            POINTER_X = ax;
+            POINTER_Y = ay;
             pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
             REAL_POINTER_SEEN = true;
         }
@@ -9717,6 +9728,21 @@ unsafe fn frame_light_at(frame_id: u32, x: i32, y: i32) -> u32 {
     };
     let (sx, sy, _sw, _sh) = bounds;
 
+    // One-shot light hitbox diagnostic.
+    unsafe {
+        static mut LIGHT_HITBOX_BUDGET: u32 = 4;
+        if LIGHT_HITBOX_BUDGET > 0 {
+            LIGHT_HITBOX_BUDGET -= 1;
+            let gap = FRAME_TOP_BAR_LIGHT_GAP_PX;
+            let sz = FRAME_TOP_BAR_LIGHT_SIZE_PX;
+            serial_println!("[shell.frame.light.hitbox] frame={} sx={} sy={} close=({},{})-({},{}) min=({},{})-({},{}) zoom=({},{})-({},{})",
+                frame_id, sx, sy,
+                sx + gap, sy, sx + gap + sz, sy + FRAME_TOP_BAR_HEIGHT_PX,
+                sx + gap + sz + gap, sy, sx + gap + sz + gap + sz, sy + FRAME_TOP_BAR_HEIGHT_PX,
+                sx + gap + sz + gap + sz + gap, sy, sx + gap + sz + gap + sz + gap + sz, sy + FRAME_TOP_BAR_HEIGHT_PX);
+        }
+    }
+
     // Dispatch on chrome mode: top bar (default) vs minimal (4px rim).
     if frame_has_top_bar(frame_id) {
         // Default mode: lights in 16px top bar band.
@@ -10413,6 +10439,15 @@ unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
 unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget> {
     let bounds = get_surface_bounds(sid)?;
     let (sx, sy, sw, sh) = bounds;
+    // One-shot frame bounds marker.
+    unsafe {
+        static mut CHROME_BOUNDS_BUDGET: u32 = 8;
+        if CHROME_BOUNDS_BUDGET > 0 {
+            CHROME_BOUNDS_BUDGET -= 1;
+            serial_println!("[shell.frame.chrome.bounds] sid={} x={} y={} w={} h={} topbar_h={}",
+                sid, sx, sy, sw, sh, FRAME_TOP_BAR_HEIGHT_PX);
+        }
+    }
     // Find the frame that owns this surface — no chrome for unowned surfaces (linen, standalone).
     let frame_id = frame_for_surface(sid)?;
 
@@ -13151,8 +13186,8 @@ pub extern "C" fn _start() -> ! {
 
                         // ── Pointer event state updates (no compositor side effects) ──
                         if event_class == EV_ABS {
-                            let ax = msg.arg0 as i32;
-                            let ay = msg.arg1 as i32;
+                            let ax = normalize_abs_coord(msg.arg0 as i32, P.width);
+                            let ay = normalize_abs_coord(msg.arg1 as i32, P.height);
                             unsafe {
                                 static mut SILK_SHELL_POINTER_RECV_BUDGET: u32 = 2048;
                                 let rem = &mut SILK_SHELL_POINTER_RECV_BUDGET;
@@ -13193,8 +13228,8 @@ pub extern "C" fn _start() -> ! {
                                     // Near edge but reached gradually — accept.
                                     LAST_VALID_ABS_X = ax;
                                     LAST_VALID_ABS_Y = ay;
-                                    POINTER_X = ax.clamp(0, P.width - 1);
-                                    POINTER_Y = ay.clamp(0, P.height - 1);
+                                    POINTER_X = ax;
+                                    POINTER_Y = ay;
                                     pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
                                     REAL_POINTER_SEEN = true;
                                 }
@@ -13212,8 +13247,8 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 LAST_VALID_ABS_X = ax;
                                 LAST_VALID_ABS_Y = ay;
-                                POINTER_X = ax.clamp(0, P.width - 1);
-                                POINTER_Y = ay.clamp(0, P.height - 1);
+                                POINTER_X = ax;
+                                POINTER_Y = ay;
                                 unsafe {
                                     static mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS: u32 = 16;
                                     let rem = &mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS;
