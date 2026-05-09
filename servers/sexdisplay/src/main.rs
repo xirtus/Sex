@@ -1021,6 +1021,9 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         let _ = frame;
         serial_println!("[sexdisplay.render.anim] period=96 base=48 amp=32");
     }
+    if !R6_GLASS_PROOF_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        serial_println!("[sexdisplay.render.glass.r6] bar_alpha=196 chip_alpha=212 blur=1 pulse=1");
+    }
 
     let focused_id = unsafe { FOCUSED_SURFACE_ID };
     // Top strip boundary: BAR_H = 50. Keep in sync with BAR_H constant.
