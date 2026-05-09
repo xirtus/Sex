@@ -4343,6 +4343,11 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
     // Mark that real relative input has been seen.
     REAL_POINTER_SEEN = true;
 
+    // ABS tablet mode: REL deltas would fight ABS position authority.
+    if ABS_SEEN_VALID {
+        return (0, 0);
+    }
+
     // ── Per-event gain acceleration ──
     // Multiply raw USB deltas by magnitude bracket to make QEMU
     // trackpad usable.  No batching — cursor moves on every nonzero
@@ -9745,27 +9750,22 @@ unsafe fn frame_light_at(frame_id: u32, x: i32, y: i32) -> u32 {
 
     // Dispatch on chrome mode: top bar (default) vs minimal (4px rim).
     if frame_has_top_bar(frame_id) {
-        // Default mode: lights in 16px top bar band.
+        // Default mode: lights in top bar band.
+        // Expanded hitboxes for usability (20px each vs visual 10px).
+        // Hitboxes are contiguous: close 0..20, minimize 20..40, zoom 40..60.
         let band_bottom = sy + FRAME_TOP_BAR_HEIGHT_PX;
         if y < sy || y >= band_bottom {
             return FRAME_LIGHT_NONE;
         }
         let lx = x - sx;
-        // CLOSE: gap from left edge.
-        if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX
-            && lx < FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX
-        {
+        const LIGHT_HIT_W: i32 = 20;
+        if lx >= 0 && lx < LIGHT_HIT_W {
             return FRAME_LIGHT_CLOSE;
         }
-        // MINIMIZE: gap + size + gap.
-        let l2_start = FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX
-            + FRAME_TOP_BAR_LIGHT_GAP_PX;
-        if lx >= l2_start && lx < l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX {
+        if lx >= LIGHT_HIT_W && lx < LIGHT_HIT_W * 2 {
             return FRAME_LIGHT_MINIMIZE;
         }
-        // ZOOM: gap + size + gap + size + gap.
-        let l3_start = l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX + FRAME_TOP_BAR_LIGHT_GAP_PX;
-        if lx >= l3_start && lx < l3_start + FRAME_TOP_BAR_LIGHT_SIZE_PX {
+        if lx >= LIGHT_HIT_W * 2 && lx < LIGHT_HIT_W * 3 {
             return FRAME_LIGHT_ZOOM;
         }
         FRAME_LIGHT_NONE
@@ -9792,6 +9792,83 @@ unsafe fn frame_light_at(frame_id: u32, x: i32, y: i32) -> u32 {
         }
         FRAME_LIGHT_NONE
     }
+}
+
+/// Synthesize a pointer click targeted at the zoom light midpoint of `frame_id` using the
+/// same hit-test + action path as a real click. Calculates the green light midpoint
+/// (px = sx + 50, py = sy + 14), emits explicit hitbox diagnostics, then calls
+/// click_hit_test_and_focus(px, py, 1) so the normal frames/chrome logic runs.
+unsafe fn synthetic_prove_frame_light_zoom_click(frame_id: u32) -> bool {
+    // Resolve active surface and bounds.
+    let surface_id = match active_surface_for_frame(frame_id) {
+        Some(s) => s,
+        None => { serial_println!("[frame.light.zoom.synthetic.done] ok=0 reason=no_surface frame={}", frame_id); return false; }
+    };
+    let bounds = match get_surface_bounds(surface_id) {
+        Some(b) => b,
+        None => { serial_println!("[frame.light.zoom.synthetic.done] ok=0 reason=no_bounds frame={}", frame_id); return false; }
+    };
+    let (sx, sy, _sw, _sh) = bounds;
+
+    // Compute explicit zoom hitbox and midpoint (expanded hitboxes: x=[sx+40,sx+60), y=[sy,sy+28)).
+    let hit_x0 = sx + 40;
+    let hit_y0 = sy;
+    let hit_x1 = sx + 60;
+    let hit_y1 = sy + FRAME_TOP_BAR_HEIGHT_PX; // 28
+    let px = sx + 50;
+    let py = sy + (FRAME_TOP_BAR_HEIGHT_PX / 2); // 14
+
+    // Emit explicit hitbox and begin markers (owned by this helper).
+    serial_println!("[shell.frame.light.hitbox] frame={} light=3 x0={} y0={} x1={} y1={}", frame_id, hit_x0, hit_y0, hit_x1, hit_y1);
+    serial_println!("[frame.light.zoom.synthetic.begin] frame={} x={} y={}", frame_id, px, py);
+
+    // Record pre/post state to detect a successful toggle.
+    let before = frame_is_zoomed(frame_id);
+    let (target, silkbar_handled) = click_hit_test_and_focus(px, py, 1u8);
+    // click_hit_test_and_focus will produce the normal shell markers
+    // (shell.hit_target.chrome, frame.light.zoom.fsm, shell.frame.zoom/unzoom).
+
+    // Emit a concise click diagnostic and final result marker.
+    serial_println!("[frame.light.zoom.synthetic.click] frame={} px={} py={} target_label={:?}", frame_id, px, py, hit_target_label(target, silkbar_handled));
+    let after = frame_is_zoomed(frame_id);
+    if before == after {
+        serial_println!("[frame.light.zoom.synthetic.done] ok=0 frame={}", frame_id);
+        false
+    } else {
+        serial_println!("[frame.light.zoom.synthetic.done] ok=1 frame={}", frame_id);
+        true
+    }
+}
+
+unsafe fn maybe_run_frame_light_zoom_synthetic_proof() {
+    // Deferred one-shot runner: attempts several times until Quil frame has
+    // an active surface with bounds. Does not spam logs thanks to ATTEMPTS and DEFER_LOG_BUDGET.
+    static mut BUDGET: u32 = 1;
+    static mut ATTEMPTS: u32 = 240;
+    static mut DEFER_LOG_BUDGET: u32 = 8;
+    if BUDGET == 0 || ATTEMPTS == 0 { return; }
+    ATTEMPTS -= 1;
+
+    // Check active surface for Quil frame.
+    let maybe_sid = active_surface_for_frame(QUIL_FRAME_ID);
+    if maybe_sid.is_none() {
+        if DEFER_LOG_BUDGET > 0 { DEFER_LOG_BUDGET -= 1; serial_println!("[frame.light.zoom.synthetic.defer] reason=no_surface frame={}", QUIL_FRAME_ID); }
+        return;
+    }
+    let sid = maybe_sid.unwrap();
+    // Ensure bounds are available.
+    if get_surface_bounds(sid).is_none() {
+        if DEFER_LOG_BUDGET > 0 { DEFER_LOG_BUDGET -= 1; serial_println!("[frame.light.zoom.synthetic.defer] reason=no_bounds frame={}", QUIL_FRAME_ID); }
+        return;
+    }
+
+    // Reserve the budget and run the synthetic proof.
+    BUDGET = 0;
+    serial_println!("[frame.light.zoom.synthetic.trigger] frame={}", QUIL_FRAME_ID);
+    // Emulate a full click (down/up) to avoid leaving ClickPending.
+    try_transition(InteractionState::ClickPending);
+    let _ok = synthetic_prove_frame_light_zoom_click(QUIL_FRAME_ID);
+    try_transition(InteractionState::Idle);
 }
 
 // ── Frame Tab Strip Helpers ─────────────────────────────────────────────────
@@ -11466,6 +11543,7 @@ pub extern "C" fn _start() -> ! {
     unsafe { sync_focus_ref(); }
     serial_println!("[silk-shell.boot.ui.ready] surfaces=2 focus={}", SURFACE_ID_QUIL);
 
+
     // Send initial tab metadata for frame 1 (surface 100: 1 tab, active tab 0)
     unsafe { send_frame_tab_info(1); }
     serial_println!("[silk-shell] Boot tab info sent to sexdisplay");
@@ -11481,6 +11559,8 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silkshell.ready]");
 
     loop {
+        unsafe { maybe_run_frame_light_zoom_synthetic_proof(); }
+
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
         // Sends a short key sequence through the existing EV_KEY→Spindle
