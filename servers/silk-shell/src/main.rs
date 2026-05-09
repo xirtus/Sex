@@ -4316,6 +4316,13 @@ static mut POINTER_USB_STATE_INIT: bool = false;
 /// Once set, EV_ABS handlers skip synthetic proof absolute events
 /// to prevent cursor yanking during normal operation.
 static mut REAL_POINTER_SEEN: bool = false;
+/// ABS tablet trust gate: set true when first valid (non-zero) ABS
+/// report arrives.  Rejects tablet init reports that send x=0,y=0
+/// before the device has valid position data.
+static mut ABS_SEEN_VALID: bool = false;
+/// Last accepted ABS position (for button-down trust).
+static mut LAST_VALID_ABS_X: i32 = -1;
+static mut LAST_VALID_ABS_Y: i32 = -1;
 /// Tracker-lite accumulator: raw deltas are queued across EV_REL frames
 /// and flushed as a single cursor update when enough motion accumulates.
 /// Reduces steppy feel from per-event scaling of large bursts.
@@ -4419,19 +4426,20 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
 /// drain so button click/focus works even during blocking Linen fetch.
 unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
     if event_class == EV_ABS {
-        if !REAL_POINTER_SEEN {
-            POINTER_X = (arg0 as i32).clamp(0, P.width - 1);
-            POINTER_Y = (arg1 as i32).clamp(0, P.height - 1);
-            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+        let ax = arg0 as i32;
+        let ay = arg1 as i32;
+        if !ABS_SEEN_VALID && ax <= 1 && ay <= 1 {
+            // Reject zero/init tablet report.
         } else {
-            static mut SYNTH_ABS_SKIP_BUDGET: u32 = 8;
-            if SYNTH_ABS_SKIP_BUDGET > 0 {
-                SYNTH_ABS_SKIP_BUDGET -= 1;
-                serial_println!(
-                    "[silk-shell.pointer.synthetic_abs.skip] x={} y={} reason=real_input_seen",
-                    arg0 as i32, arg1 as i32
-                );
+            if !ABS_SEEN_VALID {
+                ABS_SEEN_VALID = true;
             }
+            LAST_VALID_ABS_X = ax;
+            LAST_VALID_ABS_Y = ay;
+            POINTER_X = ax.clamp(0, P.width - 1);
+            POINTER_Y = ay.clamp(0, P.height - 1);
+            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+            REAL_POINTER_SEEN = true;
         }
     } else if event_class == EV_REL {
         let _ = apply_rel_pointer(arg0 as i32, arg1 as i32);
@@ -13120,19 +13128,44 @@ pub extern "C" fn _start() -> ! {
 
                         // ── Pointer event state updates (no compositor side effects) ──
                         if event_class == EV_ABS {
+                            let ax = msg.arg0 as i32;
+                            let ay = msg.arg1 as i32;
                             unsafe {
                                 static mut SILK_SHELL_POINTER_RECV_BUDGET: u32 = 2048;
                                 let rem = &mut SILK_SHELL_POINTER_RECV_BUDGET;
                                 if *rem > 0 {
                                     *rem -= 1;
-                                    serial_println!("[silk-shell.pointer.recv] class={} a0={} a1={}", event_class, msg.arg0 as i32, msg.arg1 as i32);
+                                    serial_println!("[silk-shell.pointer.recv] class={} a0={} a1={}", event_class, ax, ay);
                                 }
                             }
-                            if !REAL_POINTER_SEEN {
-                                POINTER_X = (msg.arg0 as i32).clamp(0, P.width - 1);
-                                POINTER_Y = (msg.arg1 as i32).clamp(0, P.height - 1);
-                                serial_println!("[silk-shell] Pointer ABS ({}, {})", POINTER_X, POINTER_Y);
-                                // Budgeted marker: shell sends cursor surface update to display.
+                            // ABS trust gate: reject zero/init reports before
+                            // first valid tablet position is seen.
+                            if !ABS_SEEN_VALID && ax <= 1 && ay <= 1 {
+                                unsafe {
+                                    static mut ABS_REJECT_BUDGET: u32 = 16;
+                                    let r = &mut ABS_REJECT_BUDGET;
+                                    if *r > 0 {
+                                        *r -= 1;
+                                        serial_println!("[shell.pointer.abs.reject] reason=zero_init x={} y={}", ax, ay);
+                                    }
+                                }
+                            } else {
+                                if !ABS_SEEN_VALID {
+                                    ABS_SEEN_VALID = true;
+                                    unsafe {
+                                        static mut ABS_ACCEPT_BUDGET: u32 = 4;
+                                        let a = &mut ABS_ACCEPT_BUDGET;
+                                        if *a > 0 {
+                                            *a -= 1;
+                                            serial_println!("[shell.pointer.abs.accept] x={} y={}", ax, ay);
+                                        }
+                                    }
+                                }
+                                LAST_VALID_ABS_X = ax;
+                                LAST_VALID_ABS_Y = ay;
+                                // Skip synthetic gate: real tablet ABS is valid.
+                                POINTER_X = ax.clamp(0, P.width - 1);
+                                POINTER_Y = ay.clamp(0, P.height - 1);
                                 unsafe {
                                     static mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS: u32 = 16;
                                     let rem = &mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS;
@@ -13141,29 +13174,8 @@ pub extern "C" fn _start() -> ! {
                                         serial_println!("[shell.cursor.surface.update] n=0 x={} y={}", POINTER_X, POINTER_Y);
                                     }
                                 }
-                                serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
                                 pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
-                                serial_println!("[shell.cursor_surface.move.ok]");
-                                unsafe {
-                                    static mut SILK_SHELL_CURSOR_UPDATE_BUDGET_ABS: u32 = 16;
-                                    let rem = &mut SILK_SHELL_CURSOR_UPDATE_BUDGET_ABS;
-                                    if *rem > 0 {
-                                        *rem -= 1;
-                                        serial_println!("[silk-shell.cursor.update] x={} y={}", POINTER_X, POINTER_Y);
-                                    }
-                                }
-                            } else {
-                                unsafe {
-                                    static mut SYNTH_ABS_SKIP_BUDGET_MAIN: u32 = 8;
-                                    let s = &mut SYNTH_ABS_SKIP_BUDGET_MAIN;
-                                    if *s > 0 {
-                                        *s -= 1;
-                                        serial_println!(
-                                            "[silk-shell.pointer.synthetic_abs.skip] x={} y={} reason=real_input_seen",
-                                            msg.arg0 as i32, msg.arg1 as i32
-                                        );
-                                    }
-                                }
+                                REAL_POINTER_SEEN = true;
                             }
                         } else if event_class == EV_REL {
                             let dx_raw = msg.arg0 as i32;
