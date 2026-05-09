@@ -231,22 +231,20 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                     let rim_bottom = sh.saturating_sub(FRAME_RIM_PX);
                     let top_bar_active = (surf.chrome_flags & SURFACE_CHROME_TOP_BAR) != 0;
 
-                    // ── TOP BAR ZONE (default chrome mode) ──
+                    // ── TOP BAR ZONE (default chrome mode, R6 glass) ──
                     if top_bar_active && ly < FRAME_TOP_BAR_HEIGHT_PX {
-                        // Default to top bar background color.
-                        c = DISPLAY_TOKENS.frame_top_bar_color;
-                        // Divider: bright line at bottom edge of toolbar.
+                        // Frosted glass toolbar background.
+                        const TOOLBAR_GLASS_ALPHA: u8 = 200;
+                        c = glass_over_bg(DISPLAY_TOKENS.frame_top_bar_color, x, y, TOOLBAR_GLASS_ALPHA);
+                        // Divider: bright opaque line at bottom edge.
                         if ly == FRAME_TOP_BAR_HEIGHT_PX - 1 {
                             c = FRAME_TOP_BAR_DIVIDER_COLOR;
                         }
-                        // Toolbar title text: render surface title in top bar.
-                        // Uses same 5x7 font as content text, positioned after lights.
+                        // Toolbar title text: opaque foreground over glass.
                         if let Some(fg) = toolbar_title_fg_at(lx, ly, surf.surface_id) {
                             c = fg;
                         }
-                        // Tab strip override: full 16px height, after light exclusion,
-                        // before right rim. Uses same tab block geometry as minimal mode
-                        // but with wider exclusion zone for larger lights.
+                        // Tab strip: glass background with tab color overlay.
                         if surf.tab_count > 0
                             && lx >= FRAME_TOP_BAR_LIGHT_EXCLUSION_PX
                             && lx < rim_right
@@ -255,29 +253,31 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                             let slot_w = available / surf.tab_count as usize;
                             if slot_w > 0 {
                                 let tab_idx = (lx - FRAME_TOP_BAR_LIGHT_EXCLUSION_PX) / slot_w;
-                                if tab_idx == surf.active_tab as usize {
-                                    c = DISPLAY_TOKENS.active_tab_color;
+                                let tab_color = if tab_idx == surf.active_tab as usize {
+                                    DISPLAY_TOKENS.active_tab_color
                                 } else {
-                                    c = DISPLAY_TOKENS.inactive_tab_color;
-                                }
+                                    DISPLAY_TOKENS.inactive_tab_color
+                                };
+                                let tab_glass = glass_over_bg(tab_color, x, y, 224);
+                                let tab_alpha: u8 = if tab_idx == surf.active_tab as usize { 240 } else { 200 };
+                                c = alpha_blend_xrgb_over_xrgb(tab_color, tab_glass, tab_alpha);
                             }
                         }
-                        // Light override: only within the lights vertical band (y=4..12).
-                        // Lights are 8x8px with 4px gaps, matching shell top bar model.
+                        // Frame lights: glass background with light color overlay.
                         if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {
                             let l1_end = FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                             if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX && lx < l1_end {
-                                c = DISPLAY_TOKENS.close_light_color;
+                                c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, 224);
                             } else {
                                 let l2_start = l1_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
                                 let l2_end = l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                                 if lx >= l2_start && lx < l2_end {
-                                    c = DISPLAY_TOKENS.minimize_light_color;
+                                    c = glass_over_bg(DISPLAY_TOKENS.minimize_light_color, x, y, 224);
                                 } else {
                                     let l3_start = l2_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
                                     let l3_end = l3_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                                     if lx >= l3_start && lx < l3_end {
-                                        c = DISPLAY_TOKENS.zoom_light_color;
+                                        c = glass_over_bg(DISPLAY_TOKENS.zoom_light_color, x, y, 224);
                                     }
                                 }
                             }
@@ -291,27 +291,23 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                         // This path is reached in minimal mode (top_bar_active=false) or
                         // for left/right/bottom edges when top bar is active.
                         if ly < FRAME_RIM_PX && !top_bar_active {
-                            // Minimal mode top rim. Lights are within top 4px rim band.
-                            // CLOSE: gap from left edge
+                            // Minimal mode top rim lights — glass version.
                             if lx >= FRAME_LIGHT_GAP_PX
                                 && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
                             {
-                                c = DISPLAY_TOKENS.close_light_color;
+                                c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, 224);
                             }
-                            // MINIMIZE: gap + size + gap
                             else if lx >= FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX
                                 && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
                             {
-                                c = DISPLAY_TOKENS.minimize_light_color;
+                                c = glass_over_bg(DISPLAY_TOKENS.minimize_light_color, x, y, 224);
                             }
-                            // ZOOM: gap + 2*(size + gap)
                             else if lx >= FRAME_LIGHT_GAP_PX + 2 * (FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX)
                                 && lx < FRAME_LIGHT_GAP_PX + 2 * (FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX) + FRAME_LIGHT_SIZE_PX
                             {
-                                c = DISPLAY_TOKENS.zoom_light_color;
+                                c = glass_over_bg(DISPLAY_TOKENS.zoom_light_color, x, y, 224);
                             }
-                            // Tab strip: equal-width colored blocks after light exclusion
-                            // zone and before right rim. Active tab is bright, inactive dim.
+                            // Tab strip — glass version.
                             else if surf.tab_count > 0
                                 && lx >= TAB_STRIP_LIGHT_EXCLUSION_PX
                                 && lx < rim_right
@@ -320,21 +316,27 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                                 let slot_w = available / surf.tab_count as usize;
                                 if slot_w > 0 {
                                     let tab_idx = (lx - TAB_STRIP_LIGHT_EXCLUSION_PX) / slot_w;
-                                    if tab_idx == surf.active_tab as usize {
-                                        c = DISPLAY_TOKENS.active_tab_color;
+                                    let tab_color = if tab_idx == surf.active_tab as usize {
+                                        DISPLAY_TOKENS.active_tab_color
                                     } else {
-                                        c = DISPLAY_TOKENS.inactive_tab_color;
-                                    }
+                                        DISPLAY_TOKENS.inactive_tab_color
+                                    };
+                                    let tab_alpha: u8 = if tab_idx == surf.active_tab as usize { 220 } else { 180 };
+                                    c = glass_over_bg(tab_color, x, y, tab_alpha);
                                 } else {
-                                    c = DISPLAY_TOKENS.frame_rim_color;
+                                    c = glass_over_bg(DISPLAY_TOKENS.frame_rim_color, x, y, 196);
                                 }
                             } else {
-                                c = DISPLAY_TOKENS.frame_rim_color;
+                                c = glass_over_bg(DISPLAY_TOKENS.frame_rim_color, x, y, 196);
                             }
                         } else {
-                            // Left, right, or bottom rim edge (or top edge in minimal mode
-                            // already handled above — this catches left/right/bottom always).
-                            c = DISPLAY_TOKENS.frame_rim_color;
+                            // Left, right, or bottom rim edge — pulsing neon glass.
+                            let frame = RENDER_FRAME_COUNTER.load(core::sync::atomic::Ordering::Relaxed);
+                            const RIM_BASE_ALPHA: u8 = 196;
+                            const RIM_AMP: u8 = 12;
+                            const RIM_PERIOD: u64 = 128;
+                            let rim_alpha = pulse_alpha(RIM_BASE_ALPHA, RIM_AMP, frame, RIM_PERIOD);
+                            c = glass_over_bg(DISPLAY_TOKENS.frame_rim_color, x, y, rim_alpha);
                         }
                     } else {
                         // ── SURFACE CONTENT AREA ──
