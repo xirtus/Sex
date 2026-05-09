@@ -4331,10 +4331,29 @@ static mut PENDING_DY: i32 = 0;
 static mut PENDING_COUNT: u8 = 0;
 static mut INTERACTION: InteractionState = InteractionState::Idle;
 
-/// Apply relative pointer movement with gain reduction and bounds clamping,
-/// then send cursor surface update to sexdisplay.
-/// Used by the three EV_REL dispatch sites (main match, linen_sync_reply,
-/// before-linen drain) so filter/clamp behavior is identical everywhere.
+/// Send cursor surface update to sexdisplay with bounds clamping.
+/// All cursor movement paths must use this — no direct pdx_call for cursor.
+unsafe fn send_cursor_checked(x: i32, y: i32, source: &str) {
+    let cx = x.clamp(0, P.width - 1);
+    let cy = y.clamp(0, P.height - 1);
+    if cx != x || cy != y {
+        static mut CURSOR_CLAMP_SEND_BUDGET: u32 = 16;
+        if CURSOR_CLAMP_SEND_BUDGET > 0 {
+            CURSOR_CLAMP_SEND_BUDGET -= 1;
+            serial_println!("[shell.cursor.final.clamp] source={} raw_x={} raw_y={} clamped_x={} clamped_y={}",
+                source, x, y, cx, cy);
+        }
+    }
+    POINTER_X = cx;
+    POINTER_Y = cy;
+    pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, cx as u64, cy as u64);
+    static mut CURSOR_SEND_BUDGET: u32 = 64;
+    if CURSOR_SEND_BUDGET > 0 {
+        CURSOR_SEND_BUDGET -= 1;
+        serial_println!("[shell.cursor.final.send] source={} x={} y={}", source, cx, cy);
+    }
+}
+
 /// Apply relative pointer movement with gain reduction and bounds clamping,
 /// then send cursor surface update to sexdisplay.
 /// Returns the filtered (dx, dy) actually applied, so callers can reuse
@@ -4422,7 +4441,7 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
     POINTER_X = new_x;
     POINTER_Y = new_y;
 
-    pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+    send_cursor_checked(new_x, new_y, "rel");
     (dx, dy)
 }
 
@@ -4457,7 +4476,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 LAST_VALID_ABS_Y = ay;
                 POINTER_X = ax;
                 POINTER_Y = ay;
-                pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                send_cursor_checked(POINTER_X, POINTER_Y, "abs");
                 REAL_POINTER_SEEN = true;
             }
         } else {
@@ -4468,7 +4487,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             LAST_VALID_ABS_Y = ay;
             POINTER_X = ax;
             POINTER_Y = ay;
-            pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+            send_cursor_checked(POINTER_X, POINTER_Y, "abs");
             REAL_POINTER_SEEN = true;
         }
     } else if event_class == EV_REL {
@@ -12248,7 +12267,7 @@ pub extern "C" fn _start() -> ! {
                         }
                         // Move cursor surface to updated pointer position.
                         serial_println!("[shell.cursor_surface.move.start] id={:#x} x={} y={}", SURFACE_ID_CURSOR, POINTER_X, POINTER_Y);
-                        pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                        send_cursor_checked(POINTER_X, POINTER_Y, "usb");
                         serial_println!("[shell.cursor_surface.move.ok]");
                         // Budgeted diagnostic for cursor position after USB mouse report.
                         unsafe {
@@ -13310,7 +13329,7 @@ pub extern "C" fn _start() -> ! {
                                     LAST_VALID_ABS_Y = ay;
                                     POINTER_X = ax;
                                     POINTER_Y = ay;
-                                    pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                                    send_cursor_checked(POINTER_X, POINTER_Y, "abs");
                                     REAL_POINTER_SEEN = true;
                                 }
                             } else {
@@ -13337,7 +13356,7 @@ pub extern "C" fn _start() -> ! {
                                         serial_println!("[shell.cursor.surface.update] n=0 x={} y={}", POINTER_X, POINTER_Y);
                                     }
                                 }
-                                pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                                send_cursor_checked(POINTER_X, POINTER_Y, "abs");
                                 REAL_POINTER_SEEN = true;
                             }
                         } else if event_class == EV_REL {
