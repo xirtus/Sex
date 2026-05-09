@@ -4151,6 +4151,15 @@ pub extern "C" fn _start() -> ! {
             }
 
             if let Some(td) = decode_tablet_report(&report_bytes, intr_actual as usize) {
+                // Active path liveness marker.
+                unsafe {
+                    static mut TABLET_ACTIVE_COUNT: u64 = 0;
+                    TABLET_ACTIVE_COUNT = TABLET_ACTIVE_COUNT.wrapping_add(1);
+                    if TABLET_ACTIVE_COUNT <= 64 || TABLET_ACTIVE_COUNT % 64 == 0 {
+                        serial_println!("[sexusb.tablet.active] n={} x={} y={}",
+                            TABLET_ACTIVE_COUNT, td.abs_x, td.abs_y);
+                    }
+                }
                 // Pass absolute coordinates directly. Set bit 32 of packed_axes to indicate absolute.
                 let packed_axes = (td.abs_x as u64) | ((td.abs_y as u64) << 16) | (1u64 << 32);
                 
@@ -4354,14 +4363,29 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[sexusb.hid.mouse.decode.bad] len={}", intr_actual);
             }
         }
-        // Advance circular ring producer: skip if we already advanced in the
-        // keyboard re-arm path above.
+        // Re-arm interrupt endpoint: advance ring, handle wrap, write TRB, ring doorbell.
         if !skip_advance {
             intr_prod += 1;
             if intr_prod >= INTR_TR_RING_SIZE - 1 {
-                // Wrap: toggle PCS and update Link TRB cycle bit to match new PCS
-                // so xHCI follows it correctly on the next wrap-around.
+                // Wrap: toggle cycle and write NORMAL TRB at slot 0 BEFORE
+                // updating the Link TRB.  This prevents a race where the
+                // controller follows the Link to slot 0 before the NORMAL TRB
+                // is written, sees a stale TRB with wrong cycle bit, and stops.
                 intr_pcs ^= 1;
+                intr_prod = 0;
+                unsafe {
+                    core::ptr::write_bytes(intr_report_va as *mut u8, 0, intr_report_len as usize);
+                }
+                // 1. Write NORMAL TRB at new slot 0 first.
+                trb_write_volatile(
+                    intr_ring_va,
+                    0,
+                    (intr_report_phys & 0xFFFF_FFFF) as u32,
+                    (intr_report_phys >> 32) as u32,
+                    intr_report_len,
+                    (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs,
+                );
+                // 2. Then update Link TRB cycle so controller can follow it.
                 trb_write_volatile(
                     intr_ring_va,
                     INTR_TR_RING_SIZE - 1,
@@ -4370,25 +4394,33 @@ pub extern "C" fn _start() -> ! {
                     0u32,
                     (TRB_TYPE_LINK << 10) | (1u32 << 1) | intr_pcs,
                 );
-                intr_prod = 0;
+                unsafe {
+                    static mut WRAP_COUNT: u64 = 0;
+                    WRAP_COUNT += 1;
+                    serial_println!("[sexusb.xhci.intr_ring.wrap] n={} pcs={}",
+                        WRAP_COUNT, intr_pcs);
+                }
+            } else {
+                unsafe {
+                    core::ptr::write_bytes(intr_report_va as *mut u8, 0, intr_report_len as usize);
+                }
+                trb_write_volatile(
+                    intr_ring_va,
+                    intr_prod,
+                    (intr_report_phys & 0xFFFF_FFFF) as u32,
+                    (intr_report_phys >> 32) as u32,
+                    intr_report_len,
+                    (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs,
+                );
             }
-            // Re-arm: queue next interrupt-IN TRB and ring doorbell.
-            // The keyboard path does this manually before IPC; tablet/mouse
-            // paths fall through here and must re-arm for the next transfer.
-            unsafe {
-                core::ptr::write_bytes(intr_report_va as *mut u8, 0, intr_report_len as usize);
-            }
-            trb_write_volatile(
-                intr_ring_va,
-                intr_prod,
-                (intr_report_phys & 0xFFFF_FFFF) as u32,
-                (intr_report_phys >> 32) as u32,
-                intr_report_len,
-                (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs,
-            );
             mmio_write32(db_base, single_bind.slot_id as u64 * 4, intr_dci);
-            if HID_VERBOSE_RING_LOG {
-                serial_println!("[sexusb.xhci.intr_ring.advance] next={} cycle={}", intr_prod, intr_pcs);
+            unsafe {
+                static mut REQUEUE_COUNT: u64 = 0;
+                REQUEUE_COUNT += 1;
+                if REQUEUE_COUNT <= 64 || REQUEUE_COUNT % 64 == 0 {
+                    serial_println!("[sexusb.tablet.requeue.doorbell] n={} prod={} pcs={}",
+                        REQUEUE_COUNT, intr_prod, intr_pcs);
+                }
             }
         }
         i = i.wrapping_add(1);
