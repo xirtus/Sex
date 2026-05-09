@@ -4367,32 +4367,34 @@ pub extern "C" fn _start() -> ! {
         if !skip_advance {
             intr_prod += 1;
             if intr_prod >= INTR_TR_RING_SIZE - 1 {
-                // Wrap: toggle cycle and write NORMAL TRB at slot 0 BEFORE
-                // updating the Link TRB.  This prevents a race where the
-                // controller follows the Link to slot 0 before the NORMAL TRB
-                // is written, sees a stale TRB with wrong cycle bit, and stops.
+                // Wrap: toggle PCS for new TRBs.  Link TRB must use OLD PCS
+                // because the controller reaches it with the old CCS.
+                // After following the Link (TC=1), controller toggles CCS
+                // to match our new PCS, sees the NORMAL TRB at slot 0.
+                let old_pcs = intr_pcs;
                 intr_pcs ^= 1;
+                let new_pcs = intr_pcs;
                 intr_prod = 0;
                 unsafe {
                     core::ptr::write_bytes(intr_report_va as *mut u8, 0, intr_report_len as usize);
                 }
-                // 1. Write NORMAL TRB at new slot 0 first.
+                // 1. Write NORMAL TRB at slot 0 with NEW cycle.
                 trb_write_volatile(
                     intr_ring_va,
                     0,
                     (intr_report_phys & 0xFFFF_FFFF) as u32,
                     (intr_report_phys >> 32) as u32,
                     intr_report_len,
-                    (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs,
+                    (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | new_pcs,
                 );
-                // 2. Then update Link TRB cycle so controller can follow it.
+                // 2. Update Link TRB with OLD cycle (controller still has old CCS).
                 trb_write_volatile(
                     intr_ring_va,
                     INTR_TR_RING_SIZE - 1,
                     (intr_ring_phys & 0xFFFF_FFFF) as u32,
                     (intr_ring_phys >> 32) as u32,
                     0u32,
-                    (TRB_TYPE_LINK << 10) | (1u32 << 1) | intr_pcs,
+                    (TRB_TYPE_LINK << 10) | (1u32 << 1) | old_pcs,
                 );
                 unsafe {
                     static mut WRAP_COUNT: u64 = 0;
