@@ -4456,16 +4456,33 @@ fn normalize_abs_coord(raw: i32, screen_dim: i32) -> i32 {
     (raw * (screen_dim - 1) / TABLET_RAW_MAX).clamp(0, screen_dim - 1)
 }
 
-/// Reject huge single-report ABS jumps (QEMU enter/exit/grab discontinuities).
-/// Returns true if the jump should be accepted.
-fn abs_jump_ok(screen_x: i32, screen_y: i32) -> bool {
-    if !unsafe { ABS_SEEN_VALID } { return true; } // first valid: always accept
-    let last_x = unsafe { LAST_VALID_ABS_X };
-    let last_y = unsafe { LAST_VALID_ABS_Y };
-    if last_x < 0 || last_y < 0 { return true; }
-    let dx = (screen_x - last_x).unsigned_abs();
-    let dy = (screen_y - last_y).unsigned_abs();
-    dx <= (P.width as u32 / 3) && dy <= (P.height as u32 / 3)
+/// Reject ABS sentinel/poison reports only — not legitimate position changes.
+/// ABS tablet is direct position; any coordinate is valid after trust gate.
+fn abs_sentinel_ok(screen_x: i32, screen_y: i32) -> bool {
+    // Zero-init before first valid position.
+    if !unsafe { ABS_SEEN_VALID } && screen_x <= 1 && screen_y <= 1 {
+        return false;
+    }
+    // Max-edge with no buttons = QEMU out-of-window sentinel.
+    let at_edge = screen_x >= P.width - 1 && screen_y >= P.height - 1;
+    // Near-corner sentinel: QEMU grab/ungrab emits ~(36,12) or similar.
+    let near_tl = screen_x <= 40 && screen_y <= 20;
+    if (at_edge || near_tl) && !unsafe { ABS_SEEN_VALID } {
+        return false;
+    }
+    // After trust: reject near-corner only if it's a huge jump from last valid.
+    if (at_edge || near_tl) && unsafe { ABS_SEEN_VALID } {
+        let lx = unsafe { LAST_VALID_ABS_X };
+        let ly = unsafe { LAST_VALID_ABS_Y };
+        if lx >= 0 && ly >= 0 {
+            let dx = (screen_x - lx).unsigned_abs();
+            let dy = (screen_y - ly).unsigned_abs();
+            if dx > (P.width as u32 / 3) || dy > (P.height as u32 / 3) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
@@ -4482,7 +4499,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 || (LAST_VALID_ABS_X >= 0
                     && (ax - LAST_VALID_ABS_X).unsigned_abs() > (P.width as u32 / 2)
                     && (ay - LAST_VALID_ABS_Y).unsigned_abs() > (P.height as u32 / 2));
-            if !reject && abs_jump_ok(ax, ay) {
+            if !reject && abs_sentinel_ok(ax, ay) {
                 LAST_VALID_ABS_X = ax;
                 LAST_VALID_ABS_Y = ay;
                 POINTER_X = ax;
@@ -4494,7 +4511,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             if !ABS_SEEN_VALID {
                 ABS_SEEN_VALID = true;
             }
-            if abs_jump_ok(ax, ay) {
+            if abs_sentinel_ok(ax, ay) {
                 LAST_VALID_ABS_X = ax;
                 LAST_VALID_ABS_Y = ay;
                 POINTER_X = ax;
@@ -13336,7 +13353,7 @@ pub extern "C" fn _start() -> ! {
                                                 ax, ay, LAST_VALID_ABS_X, LAST_VALID_ABS_Y);
                                         }
                                     }
-                                } else if abs_jump_ok(ax, ay) {
+                                } else if abs_sentinel_ok(ax, ay) {
                                     LAST_VALID_ABS_X = ax;
                                     LAST_VALID_ABS_Y = ay;
                                     POINTER_X = ax;
@@ -13356,7 +13373,7 @@ pub extern "C" fn _start() -> ! {
                                         }
                                     }
                                 }
-                                if abs_jump_ok(ax, ay) {
+                                if abs_sentinel_ok(ax, ay) {
                                     LAST_VALID_ABS_X = ax;
                                     LAST_VALID_ABS_Y = ay;
                                     POINTER_X = ax;
