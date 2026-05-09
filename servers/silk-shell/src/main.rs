@@ -4357,10 +4357,9 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
     }
 
     // ── Flush decision ──
-    let abs_sum = PENDING_DX.abs() + PENDING_DY.abs();
-    let should_flush = PENDING_COUNT >= 4
-        || (PENDING_COUNT >= 2 && abs_sum >= 24)
-        || (PENDING_COUNT >= 3 && abs_sum <= 2); // repeated micro → intentional
+    let abs_sum = PENDING_DX.unsigned_abs() + PENDING_DY.unsigned_abs();
+    let should_flush = PENDING_COUNT >= 3
+        || (PENDING_COUNT >= 1 && abs_sum >= 6);
 
     if !should_flush {
         return (0, 0);
@@ -4377,16 +4376,16 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
         if raw == 0 { return 0; }
         let sign = raw.signum();
         let abs = raw.unsigned_abs();
-        let scaled = if abs <= 2 {
-            0        // noise floor
-        } else if abs <= 8 {
-            ((abs / 4) as i32).max(1)  // 3-8 → 1-2
-        } else if abs <= 32 {
-            (abs / 4) as i32           // 9-32 → 2-8
-        } else if abs <= 96 {
-            (abs / 6) as i32           // 33-96 → 5-16
+        let scaled: i32 = if abs <= 1 {
+            0                       // sub-pixel noise
+        } else if abs <= 6 {
+            1                       // micro movement
+        } else if abs <= 30 {
+            (abs / 3) as i32        // 7-30 → 2-10
+        } else if abs <= 60 {
+            (abs / 4) as i32        // 31-60 → 7-15
         } else {
-            8                          // cap
+            12                      // cap
         };
         sign * scaled
     }
