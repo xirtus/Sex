@@ -4430,6 +4430,20 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         let ay = arg1 as i32;
         if !ABS_SEEN_VALID && ax <= 1 && ay <= 1 {
             // Reject zero/init tablet report.
+        } else if ax >= P.width - 1 && ay >= P.height - 1 {
+            // Edge guard: reject out-of-window max-edge from QEMU tablet.
+            let reject = !ABS_SEEN_VALID
+                || (LAST_VALID_ABS_X >= 0
+                    && (ax - LAST_VALID_ABS_X).unsigned_abs() > (P.width as u32 / 2)
+                    && (ay - LAST_VALID_ABS_Y).unsigned_abs() > (P.height as u32 / 2));
+            if !reject {
+                LAST_VALID_ABS_X = ax;
+                LAST_VALID_ABS_Y = ay;
+                POINTER_X = ax.clamp(0, P.width - 1);
+                POINTER_Y = ay.clamp(0, P.height - 1);
+                pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, POINTER_X as u64, POINTER_Y as u64);
+                REAL_POINTER_SEEN = true;
+            }
         } else {
             if !ABS_SEEN_VALID {
                 ABS_SEEN_VALID = true;
