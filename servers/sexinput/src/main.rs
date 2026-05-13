@@ -20,6 +20,7 @@ const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
 static CAP_READY_SHELL: AtomicBool = AtomicBool::new(false);
 static DEFER_EMITTED_SHELL: AtomicBool = AtomicBool::new(false);
 static EDGE_SEND_EMITTED_SHELL: AtomicBool = AtomicBool::new(false);
+static mut REAL_USB_POINTER_SEEN: bool = false;
 /// Master switch for all synthetic input proofs (drag, click-focus, silkbar clicks).
 ///
 /// Set env var `SEXOS_PROOFS_DISABLED=1` at build time to disable all proofs
@@ -270,6 +271,7 @@ pub extern "C" fn _start() -> ! {
         if let Some(req) = pdx_try_listen_raw(0) {
             serial_println!("[sexinput.usb_mouse.recv] type={:#x}", req.type_id);
             if req.type_id == OP_USB_MOUSE_REPORT {
+                unsafe { REAL_USB_POINTER_SEEN = true; }
                 // Raw payload diagnostic: log exact arg1/arg2 before budgeted decode.
                 // Budget 64 covers init zero-report + first ~63 real reports.
                 // Use hex to avoid sign-extension ambiguity in the log.
@@ -297,6 +299,17 @@ pub extern "C" fn _start() -> ! {
                 // Compatibility path: if producer already sends normalized HID event
                 // tuples in OP_USB_MOUSE_REPORT (class in arg0), forward as-is.
                 if cls == EV_REL || cls == EV_ABS || cls == EV_BTN {
+                    unsafe {
+                        static mut POINTER_MODE_BUDGET_COMPAT: u32 = 32;
+                        if POINTER_MODE_BUDGET_COMPAT > 0 {
+                            POINTER_MODE_BUDGET_COMPAT -= 1;
+                            let mode = if cls == EV_REL { "rel" } else if cls == EV_ABS { "abs" } else { "btn" };
+                            serial_println!(
+                                "[sexinput.pointer.mode] mode={} class={} a0={} a1={}",
+                                mode, cls, req.arg1 as i32, req.arg2 as i32
+                            );
+                        }
+                    }
                     // ── Button edge proof markers ──
                     if cls == EV_BTN {
                         let pressed = req.arg1 != 0;
@@ -348,6 +361,17 @@ pub extern "C" fn _start() -> ! {
                     wheel,
                     is_abs
                 );
+                unsafe {
+                    static mut POINTER_MODE_BUDGET_PACKED: u32 = 64;
+                    if POINTER_MODE_BUDGET_PACKED > 0 {
+                        POINTER_MODE_BUDGET_PACKED -= 1;
+                        let mode = if is_abs { "abs" } else { "rel" };
+                        serial_println!(
+                            "[sexinput.pointer.mode] mode={} buttons={:#x} dx={} dy={} wheel={}",
+                            mode, buttons, dx, dy, wheel
+                        );
+                    }
+                }
 
                 serial_println!("[sexinput.usb_mouse.normalize.start]");
                 let report = HidPointerRawReport {
@@ -670,7 +694,9 @@ pub extern "C" fn _start() -> ! {
         // Ticks 5, 6, 7: one stage per tick, no overlap with EV_KEY (3/4) or click-focus (10/14/15).
         // Original threshold was tick%120 (~171s to complete); reduced for CI 25s probe window.
         const DRAG_TICKS: [u64; 3] = [5, 6, 7];
-        if !SYNTHETIC_INPUT_PROOFS_DISABLED && !unsafe { SYNTHETIC_DRAG_PROOF_DONE }
+        if !SYNTHETIC_INPUT_PROOFS_DISABLED
+            && !unsafe { REAL_USB_POINTER_SEEN }
+            && !unsafe { SYNTHETIC_DRAG_PROOF_DONE }
             && drag_proof_stage < 3 && tick == DRAG_TICKS[drag_proof_stage as usize]
         {
             let report = match drag_proof_stage {
@@ -841,7 +867,7 @@ pub extern "C" fn _start() -> ! {
         //    Proves sexinput→shell click_focus chain.
         //    Uses EV_ABS for positioning (not delta accumulation) to avoid
         //    coordinate corruption from concurrent silkbar proof EV_ABS events.
-        if !SYNTHETIC_INPUT_PROOFS_DISABLED {
+        if !SYNTHETIC_INPUT_PROOFS_DISABLED && !unsafe { REAL_USB_POINTER_SEEN } {
             match synth_click_stage {
                 0 if tick == 10 => {
                     // Init cursor (POINTER_USB_STATE_INIT → 640,400)

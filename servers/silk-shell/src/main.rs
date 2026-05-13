@@ -4633,6 +4633,14 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
     if event_class == EV_ABS {
         process_abs_tablet(arg0 as i32, arg1 as i32);
     } else if event_class == EV_REL {
+        static mut REL_RECV_DRAIN_BUDGET: u32 = 64;
+        if REL_RECV_DRAIN_BUDGET > 0 {
+            REL_RECV_DRAIN_BUDGET -= 1;
+            serial_println!(
+                "[silk-shell.rel.recv] dx={} dy={} buttons={:#x}",
+                arg0 as i32, arg1 as i32, POINTER_BUTTONS
+            );
+        }
         let _ = apply_rel_pointer(arg0 as i32, arg1 as i32);
     } else if event_class == EV_BTN {
         let button = arg0 as u8;
@@ -13786,6 +13794,17 @@ pub extern "C" fn _start() -> ! {
                                 if *rem > 0 {
                                     *rem -= 1;
                                     serial_println!("[silk-shell.pointer.recv] class={} a0={} a1={}", event_class, dx_raw, dy_raw);
+                                }
+                            }
+                            unsafe {
+                                static mut REL_RECV_MAIN_BUDGET: u32 = 64;
+                                let rem = &mut REL_RECV_MAIN_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!(
+                                        "[silk-shell.rel.recv] dx={} dy={} buttons={:#x}",
+                                        dx_raw, dy_raw, POINTER_BUTTONS
+                                    );
                                 }
                             }
                             // Budgeted liveness: shell received EV_REL from sexinput.
