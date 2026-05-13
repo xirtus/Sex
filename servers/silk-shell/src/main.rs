@@ -4402,29 +4402,24 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
         return (0, 0);
     }
 
-    // ── Per-event gain acceleration ──
-    // Multiply raw USB deltas by magnitude bracket to make QEMU
-    // trackpad usable.  No batching — cursor moves on every nonzero
-    // event.  Accumulator retained for sub-pixel tracking only.
-    fn gain_axis(raw: i32) -> i32 {
+    // ── Conservative REL transfer (no acceleration) ──
+    // Keep micro motion 1:1, reduce medium deltas, hard-cap large bursts.
+    // This tames host-side ±127 saturation while preserving fine control.
+    fn transfer_axis(raw: i32) -> i32 {
         if raw == 0 { return 0; }
         let sign = raw.signum();
         let abs = raw.unsigned_abs();
-        let scaled: i32 = if abs == 1 {
-            1                       // 1:1 for micro
-        } else if abs <= 3 {
-            (abs * 2) as i32        // 2-3 → 4-6
-        } else if abs <= 8 {
-            (abs * 3) as i32        // 4-8 → 12-24
-        } else if abs <= 20 {
-            (abs * 4) as i32        // 9-20 → 36-80
+        let out_abs: i32 = if abs <= 3 {
+            abs as i32              // 1..3 stays 1..3
+        } else if abs <= 16 {
+            ((abs as i32) / 2).max(1) // 4..16 -> 2..8
         } else {
-            ((abs * 5) as i32).min(48)  // 21+ → 105 capped at 48
+            12                      // 17+ saturates to 12
         };
-        sign * scaled
+        sign * out_abs
     }
-    let dx = gain_axis(dx_raw);
-    let dy = gain_axis(dy_raw);
+    let dx = transfer_axis(dx_raw);
+    let dy = transfer_axis(dy_raw);
 
     // Budgeted gain marker.
     unsafe {
@@ -4435,6 +4430,25 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
             serial_println!(
                 "[shell.pointer.filter.v2] raw_dx={} raw_dy={} out_dx={} out_dy={} x={} y={}",
                 dx_raw, dy_raw, dx, dy, POINTER_X, POINTER_Y
+            );
+        }
+    }
+    unsafe {
+        static mut REL_TRANSFER_BUDGET: u32 = 128;
+        if REL_TRANSFER_BUDGET > 0 {
+            REL_TRANSFER_BUDGET -= 1;
+            let reason = if dx_raw == 0 && dy_raw == 0 {
+                "zero"
+            } else if dx_raw.unsigned_abs() <= 3 && dy_raw.unsigned_abs() <= 3 {
+                "micro_keep"
+            } else if dx_raw.unsigned_abs() > 16 || dy_raw.unsigned_abs() > 16 {
+                "large_cap12"
+            } else {
+                "medium_half"
+            };
+            serial_println!(
+                "[shell.rel.transfer] raw_dx={} raw_dy={} out_dx={} out_dy={} x={} y={} reason={}",
+                dx_raw, dy_raw, dx, dy, POINTER_X, POINTER_Y, reason
             );
         }
     }
