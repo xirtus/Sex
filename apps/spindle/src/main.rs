@@ -779,6 +779,7 @@ unsafe fn restore_history(hist: &mut History) -> u32 {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    serial_println!("[spindle.init.start]");
     serial_println!("[spindle.boot]");
     serial_println!("[spindle.surface.req] pd=12 kernel_spawned=1");
 

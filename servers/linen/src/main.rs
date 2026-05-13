@@ -128,6 +128,7 @@ const LINEN_DISKFS_SLOT_PROOF_ENABLED: bool =
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    serial_println!("[linen.init.start]");
     // Brief delay to ensure sexdisplay is ready to receive
     for _ in 0..5_000_000 { core::hint::spin_loop(); }
 

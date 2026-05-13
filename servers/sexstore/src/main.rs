@@ -617,6 +617,7 @@ unsafe fn durable_init(slots: &[KvSlot; 16]) -> bool {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    serial_println!("[sexstore.init.start]");
     // E13: Initialize durable backend and load persisted state into RAM.
     // RAM defaults first (compile-time zeroed KV table), then durable overwrites.
     unsafe {
@@ -643,6 +644,7 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
+    serial_println!("[sexstore.ready]");
     loop {
         let msg = pdx_listen_raw(0); // Slot 0 = self message_ring (all servers listen here)
         let caller = msg.caller_pd as u64;

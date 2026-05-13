@@ -450,6 +450,7 @@ fn derive_lane_first_proof(urgency_hint: u8) -> (u8, u8, Option<&'static str>) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    serial_println!("[sexbell.init.start]");
     serial_println!("[bell.boot]");
 
     // ── Demo self-notify (V1): push one notification to exercise Bell→SilkBar→sexdisplay pipe ──
@@ -469,6 +470,7 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
+    serial_println!("[sexbell.ready]");
     loop {
         let msg = pdx_listen_raw(0);
 

@@ -2115,6 +2115,7 @@ fn xhci_probe_mmio() {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    serial_println!("[sexdrive.init.start]");
     nvme_probe_bar();
     xhci_probe_mmio();
 
@@ -2146,6 +2147,7 @@ pub extern "C" fn _start() -> ! {
     }
 
     let mut frame: u32 = 0;
+    serial_println!("[sexdrive.ready]");
     loop {
         // [sexdrive.block.typed.recv] [sexdrive.block.typed.reply]
         // Typed block command dispatch — decodes SLOT_BLOCK messages.

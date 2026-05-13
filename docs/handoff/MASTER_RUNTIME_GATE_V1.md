@@ -1,7 +1,7 @@
 # MASTER_RUNTIME_GATE_V1
 
-- date: 2026-05-13T19:41:06+02:00
-- git commit: 7e61e06
+- date: 2026-05-13T19:51:32+02:00
+- git commit: e765db8
 - log_path: /home/xirtus_arch/Documents/microkernel/.gate_master/serial.log
 - probe_seconds: 30
 - nvme_enabled: 1
@@ -15,14 +15,14 @@
 | BUILD_GATE | PASS |
 | SPAWN_GATE | PASS |
 | FAULT_GATE | PASS |
-| BOOTGRAPH_GATE | FAIL |
+| BOOTGRAPH_GATE | PASS |
 | BOOTGRAPH_CLOCK_GATE | PASS |
 | CAP_GRANT_GATE | PASS |
 | ORDER_GATE | PASS |
 | SEXFILES_GATE (non-scoring qualifier) | PASS |
 | CLOCK_GATE (legacy visible clock check) | PASS |
 | SCHED_GATE (advisory) | PASS (ADVISORY) |
-| **FINAL_SCORE** | **RED_MASTER** |
+| **FINAL_SCORE** | **GREEN_MASTER** |
 
 ## Marker Counts
 
