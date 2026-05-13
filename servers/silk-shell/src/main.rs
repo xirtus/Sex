@@ -4492,6 +4492,73 @@ fn abs_sentinel_ok(screen_x: i32, screen_y: i32) -> bool {
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
 /// drain so button click/focus works even during blocking Linen fetch.
 unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
+    let scancode = arg0 as u8;
+    let value = arg1;
+    static mut HID_RECV_DRAIN_BUDGET: u32 = 64;
+    if HID_RECV_DRAIN_BUDGET > 0 {
+        HID_RECV_DRAIN_BUDGET -= 1;
+        serial_println!(
+            "[silk-shell.hid.recv] class={} code={} value={} a0={} a1={} a2={}",
+            event_class, scancode, value, arg0, arg1, event_class
+        );
+    }
+
+    if event_class == EV_KEY {
+        static mut KEY_RECV_DRAIN_BUDGET: u32 = 64;
+        if KEY_RECV_DRAIN_BUDGET > 0 {
+            KEY_RECV_DRAIN_BUDGET -= 1;
+            serial_println!(
+                "[silk-shell.key.recv] code={} down={} mod={} focused={}",
+                scancode,
+                value,
+                SPINDLE_CTRL_DOWN as u8,
+                FOCUSED_SURFACE_ID
+            );
+        }
+
+        if scancode == 0x43 && value == 0 {
+            F9_TOGGLE_DOWN = false;
+        }
+        if scancode == 0x1D {
+            SPINDLE_CTRL_DOWN = value == 1;
+        }
+
+        if value == 1 {
+            if FOCUSED_SURFACE_ID == SURFACE_ID_QUIL {
+                static mut KEY_ROUTE_DRAIN_BUDGET: u32 = 32;
+                if KEY_ROUTE_DRAIN_BUDGET > 0 {
+                    KEY_ROUTE_DRAIN_BUDGET -= 1;
+                    serial_println!(
+                        "[silk-shell.key.route] owner=quil sid={} scancode={:#x}",
+                        SURFACE_ID_QUIL, scancode
+                    );
+                }
+                pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+            } else if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
+                static mut KEY_ROUTE_DRAIN_BUDGET_LINEN: u32 = 32;
+                if KEY_ROUTE_DRAIN_BUDGET_LINEN > 0 {
+                    KEY_ROUTE_DRAIN_BUDGET_LINEN -= 1;
+                    serial_println!(
+                        "[silk-shell.key.route] owner=linen sid={} scancode={:#x}",
+                        SURFACE_ID_LINEN, scancode
+                    );
+                }
+                pdx_call(sex_pdx::SLOT_LINEN, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+            } else if FOCUSED_SURFACE_ID == SURFACE_ID_SPINDLE {
+                static mut SPINDLE_ROUTE_DRAIN_BUDGET: u32 = 32;
+                if SPINDLE_ROUTE_DRAIN_BUDGET > 0 {
+                    SPINDLE_ROUTE_DRAIN_BUDGET -= 1;
+                    serial_println!(
+                        "[silk-shell.key.route] target=spindle sid={} code={} down={}",
+                        SURFACE_ID_SPINDLE, scancode, value
+                    );
+                }
+                pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+            }
+        }
+        return;
+    }
+
     if event_class == EV_ABS {
         let ax = normalize_abs_coord(arg0 as i32, P.width);
         let ay = normalize_abs_coord(arg1 as i32, P.height);
@@ -12347,6 +12414,10 @@ pub extern "C" fn _start() -> ! {
                             serial_println!(
                                 "[silk-shell.hid.raw] class={} a0={:#x} a1={:#x} a2={:#x} caller={}",
                                 event_class, msg.arg0, msg.arg1, msg.arg2, msg.caller_pd
+                            );
+                            serial_println!(
+                                "[silk-shell.hid.recv] class={} code={} value={} a0={} a1={} a2={}",
+                                event_class, scancode, value, msg.arg0, msg.arg1, msg.arg2
                             );
                         }
                     }

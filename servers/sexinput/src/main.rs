@@ -539,7 +539,20 @@ pub extern "C" fn _start() -> ! {
                                     *rem -= 1;
                                     serial_println!("[sexinput.key.emit] code={} down=0 mod={}", sc, modifiers);
                                 }
-                                pdx_call(SLOT_SHELL, OP_HID_EVENT, sc as u64, 0, EV_KEY);
+                                match send_shell_hid_event(sc as u64, 0, EV_KEY) {
+                                    Ok(sent) => {
+                                        serial_println!(
+                                            "[sexinput.key.send] code={} down=0 mod={} dst={} ok={} err=0",
+                                            sc, modifiers, SLOT_SHELL, sent as u8
+                                        );
+                                    }
+                                    Err(err) => {
+                                        serial_println!(
+                                            "[sexinput.key.send] code={} down=0 mod={} dst={} ok=0 err={:#x}",
+                                            sc, modifiers, SLOT_SHELL, err
+                                        );
+                                    }
+                                }
                             }
                         }
                         if cur != 0 {
@@ -551,7 +564,20 @@ pub extern "C" fn _start() -> ! {
                                     serial_println!("[sexinput.usb_kbd.evkey] hid=0x{:x} sc=0x{:x}", cur, sc);
                                     serial_println!("[sexinput.key.emit] code={} down=1 mod={}", sc, modifiers);
                                 }
-                                pdx_call(SLOT_SHELL, OP_HID_EVENT, sc as u64, 1, EV_KEY);
+                                match send_shell_hid_event(sc as u64, 1, EV_KEY) {
+                                    Ok(sent) => {
+                                        serial_println!(
+                                            "[sexinput.key.send] code={} down=1 mod={} dst={} ok={} err=0",
+                                            sc, modifiers, SLOT_SHELL, sent as u8
+                                        );
+                                    }
+                                    Err(err) => {
+                                        serial_println!(
+                                            "[sexinput.key.send] code={} down=1 mod={} dst={} ok=0 err={:#x}",
+                                            sc, modifiers, SLOT_SHELL, err
+                                        );
+                                    }
+                                }
                             } else {
                                 static mut KBD_DROP_BUDGET: u32 = 16;
                                 let rem = &mut KBD_DROP_BUDGET;
