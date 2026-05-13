@@ -491,10 +491,14 @@ cat > docs/handoff/MASTER_RUNTIME_GATE_V1.md << MDEOF
 |------|--------|
 | BUILD_GATE | $BUILD_GATE |
 | SPAWN_GATE | $SPAWN_GATE |
-| CLOCK_GATE | $CLOCK_GATE |
-| SCHED_GATE | $SCHED_GATE |
 | FAULT_GATE | $FAULT_GATE |
-| SEXFILES_GATE | $SEXFILES_GATE |
+| BOOTGRAPH_GATE | $BOOTGRAPH_GATE |
+| BOOTGRAPH_CLOCK_GATE | $BOOTGRAPH_CLOCK_GATE |
+| CAP_GRANT_GATE | $CAP_GRANT_GATE |
+| ORDER_GATE | $ORDER_GATE |
+| SEXFILES_GATE (non-scoring qualifier) | $SEXFILES_GATE |
+| CLOCK_GATE (legacy visible clock check) | $CLOCK_GATE |
+| SCHED_GATE (advisory) | $SCHED_GATE ($SCHED_ADVISORY) |
 | **FINAL_SCORE** | **$FINAL_SCORE** |
 
 ## Marker Counts
@@ -530,17 +534,28 @@ done)
 - silkbar.clock.send ticks: $m_clock_total
 - Minimum required: 2
 
-## Expected Pass Criteria
+## FINAL_SCORE Criteria (exact)
 
-1. **BUILD_GATE**: ISO builds without errors (or --skip-build with existing ISO)
-2. **SPAWN_GATE**: All 6 PDs have \`v Spawned PD\` markers
-3. **CLOCK_GATE**: \`[silkbar.clock.send]\` appears at least twice
-4. **SCHED_GATE**: Each PD has at least one \`task.running\` entry
-5. **FAULT_GATE**: No \`panic\`, \`fault.kill\`, \`#PF\`, \`#GP\`, \`FATAL\` markers
+Score uses these gates:
+
+1. **Build prerequisite**: BUILD_GATE is PASS or SKIP
+2. **Hard scoring gates**: SPAWN_GATE, FAULT_GATE, BOOTGRAPH_GATE, CAP_GRANT_GATE, ORDER_GATE, BOOTGRAPH_CLOCK_GATE
+
+Outcome logic:
+
+- **GREEN_MASTER**: all hard scoring gates PASS and SEXFILES_GATE is PASS or SKIP
+- **YELLOW_MASTER**: all hard scoring gates except BOOTGRAPH_CLOCK_GATE PASS, or hard gates PASS with SEXFILES_GATE not PASS/SKIP
+- **RED_MASTER**: any other case (including BUILD_GATE FAIL)
+
+Advisory/non-scoring rows:
+
+- **SCHED_GATE** is advisory only and does not currently change FINAL_SCORE
+- **CLOCK_GATE** is legacy visible clock check; FINAL_SCORE uses BOOTGRAPH_CLOCK_GATE
+- **SEXFILES_GATE** is a non-scoring qualifier used only to distinguish GREEN vs YELLOW when hard gates pass
 
 ## Fail Criteria
 
-- Any gate above is FAIL
+- Any hard scoring gate fails
 - QEMU fails to boot within probe window
 - ISO missing when --skip-build used
 

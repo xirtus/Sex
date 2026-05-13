@@ -1,9 +1,9 @@
 # MASTER_RUNTIME_GATE_V1
 
-- date: 2026-05-08T07:00:05+02:00
-- git commit: c577919
+- date: 2026-05-13T19:41:06+02:00
+- git commit: 7e61e06
 - log_path: /home/xirtus_arch/Documents/microkernel/.gate_master/serial.log
-- probe_seconds: 25
+- probe_seconds: 30
 - nvme_enabled: 1
 - nvme_img: /home/xirtus_arch/Documents/microkernel/.gate_master/nvme.img
 - qemu: qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku -cdrom sexos-v1.0.0.iso -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0 -drive if=none,id=nvm,file=/home/xirtus_arch/Documents/microkernel/.gate_master/nvme.img,format=raw -device nvme,serial=sexos01,drive=nvm -serial file:$LOG -display none -no-reboot -no-shutdown
@@ -12,18 +12,22 @@
 
 | Gate | Status |
 |------|--------|
-| BUILD_GATE | SKIP |
+| BUILD_GATE | PASS |
 | SPAWN_GATE | PASS |
-| CLOCK_GATE | PASS |
-| SCHED_GATE | PASS |
 | FAULT_GATE | PASS |
-| SEXFILES_GATE | PASS |
-| **FINAL_SCORE** | **GREEN_MASTER** |
+| BOOTGRAPH_GATE | FAIL |
+| BOOTGRAPH_CLOCK_GATE | PASS |
+| CAP_GRANT_GATE | PASS |
+| ORDER_GATE | PASS |
+| SEXFILES_GATE (non-scoring qualifier) | PASS |
+| CLOCK_GATE (legacy visible clock check) | PASS |
+| SCHED_GATE (advisory) | PASS (ADVISORY) |
+| **FINAL_SCORE** | **RED_MASTER** |
 
 ## Marker Counts
 
 - Spawned PDs: 12
-- Clock ticks (silkbar.clock.send): 2
+- Clock ticks (silkbar.clock.send): 12
 - task.running total: 128
 - Fault/panic hits: 0
 
@@ -49,20 +53,31 @@
 
 ## Clock Liveness
 
-- silkbar.clock.send ticks: 2
+- silkbar.clock.send ticks: 12
 - Minimum required: 2
 
-## Expected Pass Criteria
+## FINAL_SCORE Criteria (exact)
 
-1. **BUILD_GATE**: ISO builds without errors (or --skip-build with existing ISO)
-2. **SPAWN_GATE**: All 6 PDs have `v Spawned PD` markers
-3. **CLOCK_GATE**: `[silkbar.clock.send]` appears at least twice
-4. **SCHED_GATE**: Each PD has at least one `task.running` entry
-5. **FAULT_GATE**: No `panic`, `fault.kill`, `#PF`, `#GP`, `FATAL` markers
+Score uses these gates:
+
+1. **Build prerequisite**: BUILD_GATE is PASS or SKIP
+2. **Hard scoring gates**: SPAWN_GATE, FAULT_GATE, BOOTGRAPH_GATE, CAP_GRANT_GATE, ORDER_GATE, BOOTGRAPH_CLOCK_GATE
+
+Outcome logic:
+
+- **GREEN_MASTER**: all hard scoring gates PASS and SEXFILES_GATE is PASS or SKIP
+- **YELLOW_MASTER**: all hard scoring gates except BOOTGRAPH_CLOCK_GATE PASS, or hard gates PASS with SEXFILES_GATE not PASS/SKIP
+- **RED_MASTER**: any other case (including BUILD_GATE FAIL)
+
+Advisory/non-scoring rows:
+
+- **SCHED_GATE** is advisory only and does not currently change FINAL_SCORE
+- **CLOCK_GATE** is legacy visible clock check; FINAL_SCORE uses BOOTGRAPH_CLOCK_GATE
+- **SEXFILES_GATE** is a non-scoring qualifier used only to distinguish GREEN vs YELLOW when hard gates pass
 
 ## Fail Criteria
 
-- Any gate above is FAIL
+- Any hard scoring gate fails
 - QEMU fails to boot within probe window
 - ISO missing when --skip-build used
 
