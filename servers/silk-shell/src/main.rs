@@ -120,6 +120,10 @@ static mut SPINDLE_KEYBOARD_PROOF_STAGE: u8 = 0;
 /// Scancodes for the synthetic key sequence: a, b, c, Backspace, d, Enter.
 const SPINDLE_SYNTH_SEQ: [u8; 6] = [0x1E, 0x30, 0x2E, 0x0E, 0x20, 0x1C];
 
+/// Frame-light zoom synthetic proof gate.
+/// Default OFF to keep normal boot/input tests free of synthetic GUI noise.
+const ENABLE_FRAME_LIGHT_ZOOM_SYNTHETIC_PROOF: bool = false;
+
 // Well-known key ID for scene appearance settings blob.
 const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
 
@@ -9890,6 +9894,15 @@ unsafe fn synthetic_prove_frame_light_zoom_click(frame_id: u32) -> bool {
 }
 
 unsafe fn maybe_run_frame_light_zoom_synthetic_proof() {
+    static mut DISABLED_LOG_BUDGET: u32 = 1;
+    if !ENABLE_FRAME_LIGHT_ZOOM_SYNTHETIC_PROOF {
+        if DISABLED_LOG_BUDGET > 0 {
+            DISABLED_LOG_BUDGET -= 1;
+            serial_println!("[frame.light.zoom.synthetic.skip] reason=disabled");
+        }
+        return;
+    }
+
     // Deferred one-shot runner: attempts several times until Quil frame has
     // an active surface with bounds. Does not spam logs thanks to ATTEMPTS and DEFER_LOG_BUDGET.
     static mut BUDGET: u32 = 1;
