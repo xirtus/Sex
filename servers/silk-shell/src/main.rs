@@ -12366,6 +12366,13 @@ pub extern "C" fn _start() -> ! {
                             if KEY_RECV_BUDGET > 0 {
                                 KEY_RECV_BUDGET -= 1;
                                 serial_println!("[shell.key.ev_key.received code={:#x} value={}]", scancode, value);
+                                serial_println!(
+                                    "[silk-shell.key.recv] code={} down={} mod={} focused={}",
+                                    scancode,
+                                    value,
+                                    SPINDLE_CTRL_DOWN as u8,
+                                    FOCUSED_SURFACE_ID
+                                );
                             }
                         }
 
@@ -12536,6 +12543,19 @@ pub extern "C" fn _start() -> ! {
                                 // Forward key event to Spindle PD 12 via SLOT_SPINDLE
                                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, 1, EV_KEY);
                                 serial_println!("[spindle.input.recv] scancode={:#x}", scancode);
+                                unsafe {
+                                    static mut SPINDLE_ROUTE_BUDGET: u32 = 32;
+                                    let b = &mut SPINDLE_ROUTE_BUDGET;
+                                    if *b > 0 {
+                                        *b -= 1;
+                                        serial_println!(
+                                            "[silk-shell.key.route] target=spindle sid={} code={} down={}",
+                                            SURFACE_ID_SPINDLE,
+                                            scancode,
+                                            value
+                                        );
+                                    }
+                                }
                                 // Priority: Ctrl chords → Spiderweb → vi-normal → insert.
                                 if SPINDLE_CTRL_DOWN && scancode == 0x11 { // Ctrl+W — session switch
                                     spindle_session_switch();

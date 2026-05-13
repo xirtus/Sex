@@ -533,6 +533,12 @@ pub extern "C" fn _start() -> ! {
                     if cur != prev {
                         if prev != 0 {
                             if let Some(sc) = hid_to_ps2(prev) {
+                                static mut KBD_KEY_EMIT_UP_BUDGET: u32 = 64;
+                                let rem = &mut KBD_KEY_EMIT_UP_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!("[sexinput.key.emit] code={} down=0 mod={}", sc, modifiers);
+                                }
                                 pdx_call(SLOT_SHELL, OP_HID_EVENT, sc as u64, 0, EV_KEY);
                             }
                         }
@@ -543,6 +549,7 @@ pub extern "C" fn _start() -> ! {
                                 if *rem > 0 {
                                     *rem -= 1;
                                     serial_println!("[sexinput.usb_kbd.evkey] hid=0x{:x} sc=0x{:x}", cur, sc);
+                                    serial_println!("[sexinput.key.emit] code={} down=1 mod={}", sc, modifiers);
                                 }
                                 pdx_call(SLOT_SHELL, OP_HID_EVENT, sc as u64, 1, EV_KEY);
                             } else {

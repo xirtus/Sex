@@ -859,6 +859,13 @@ pub extern "C" fn _start() -> ! {
         if msg.type_id == 0x202 {
             let scancode = msg.arg0 as u8;
             let value = msg.arg1;
+            unsafe {
+                static mut SPINDLE_KEY_RECV_BUDGET: u32 = 64;
+                if SPINDLE_KEY_RECV_BUDGET > 0 {
+                    SPINDLE_KEY_RECV_BUDGET -= 1;
+                    serial_println!("[spindle.key.recv] code={} down={} mod=0", scancode, value);
+                }
+            }
             if value != 1 { continue; }
 
             // On Enter, record command, persist, dispatch, and optionally Bell-notify.
@@ -892,12 +899,14 @@ fn handle_key_insert(scancode: u8, line: &mut CmdLine) {
         0x1C => { // Enter — caller handles dispatch; just clear
             serial_println!("[spindle.line.enter] len={} mode=insert text={:?}",
                 line.len, core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
+            serial_println!("[spindle.key.enter]");
             serial_println!("[spindle.input.recv] key=enter len={}", line.len);
             line.clear();
         }
         0x0E => { // Backspace — delete before cursor
             if line.cur > 0 { line.delete_at(line.cur - 1); }
             serial_println!("[spindle.line.backspace] len={}", line.len);
+            serial_println!("[spindle.text.backspace]");
             serial_println!("[spindle.input.recv] key=backspace len={}", line.len);
             serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len);
         }
@@ -911,6 +920,7 @@ fn handle_key_insert(scancode: u8, line: &mut CmdLine) {
             if let Some(ch) = scancode_to_ascii(scancode) {
                 line.insert_at(line.cur, ch);
                 serial_println!("[spindle.line.append] ch={} len={}", ch as char, line.len);
+                serial_println!("[spindle.text.append] ch={}", ch);
                 serial_println!("[spindle.input.recv] key=printable ch={} len={}", ch as char, line.len);
                 serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len);
                 serial_println!("[spindle.line.edit.ok] op=insert ch={}", ch as char);
@@ -924,6 +934,7 @@ fn handle_key_normal(scancode: u8, line: &mut CmdLine) {
         0x1C => { // Enter — clear (dispatch handled by caller)
             serial_println!("[spindle.line.enter] len={} mode=normal text={:?}",
                 line.len, core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
+            serial_println!("[spindle.key.enter]");
             serial_println!("[spindle.input.recv] key=enter len={}", line.len);
             line.clear();
             line.mode = ViMode::Insert; // return to insert after dispatch
