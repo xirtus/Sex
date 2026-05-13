@@ -119,6 +119,11 @@ const SPINDLE_KEYBOARD_PROOF_ENABLED: bool =
 static mut SPINDLE_KEYBOARD_PROOF_STAGE: u8 = 0;
 /// Scancodes for the synthetic key sequence: a, b, c, Backspace, d, Enter.
 const SPINDLE_SYNTH_SEQ: [u8; 6] = [0x1E, 0x30, 0x2E, 0x0E, 0x20, 0x1C];
+/// Window drag synthetic proof gate.
+/// Default OFF. Exercises normal pointer hit-test/drag lifecycle via HID path.
+const WINDOW_DRAG_PROOF_ENABLED: bool =
+    option_env!("SEXOS_WINDOW_DRAG_PROOF").is_some();
+static mut WINDOW_DRAG_PROOF_STAGE: u8 = 0;
 
 /// Frame-light zoom synthetic proof gate.
 /// Default OFF to keep normal boot/input tests free of synthetic GUI noise.
@@ -4332,6 +4337,8 @@ static mut ABS_SEEN_VALID: bool = false;
 /// Last accepted ABS position (for button-down trust).
 static mut LAST_VALID_ABS_X: i32 = -1;
 static mut LAST_VALID_ABS_Y: i32 = -1;
+static mut ABS_SAMPLE_COUNT: u32 = 0;
+static mut CURSOR_SEND_COUNT: u32 = 0;
 /// Tracker-lite accumulator: raw deltas are queued across EV_REL frames
 /// and flushed as a single cursor update when enough motion accumulates.
 /// Reduces steppy feel from per-event scaling of large bursts.
@@ -4343,6 +4350,8 @@ static mut INTERACTION: InteractionState = InteractionState::Idle;
 /// Send cursor surface update to sexdisplay with bounds clamping.
 /// All cursor movement paths must use this — no direct pdx_call for cursor.
 unsafe fn send_cursor_checked(x: i32, y: i32, source: &str) {
+    let old_x = POINTER_X;
+    let old_y = POINTER_Y;
     let cx = x.clamp(0, P.width - 1);
     let cy = y.clamp(0, P.height - 1);
     if cx != x || cy != y {
@@ -4356,10 +4365,27 @@ unsafe fn send_cursor_checked(x: i32, y: i32, source: &str) {
     POINTER_X = cx;
     POINTER_Y = cy;
     pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, cx as u64, cy as u64);
+    CURSOR_SEND_COUNT = CURSOR_SEND_COUNT.saturating_add(1);
+    static mut CURSOR_DELTA_BUDGET: u32 = 96;
+    if CURSOR_DELTA_BUDGET > 0 {
+        CURSOR_DELTA_BUDGET -= 1;
+        serial_println!(
+            "[shell.cursor.delta] old_x={} old_y={} new_x={} new_y={} dx={} dy={}",
+            old_x, old_y, cx, cy, cx - old_x, cy - old_y
+        );
+    }
     static mut CURSOR_SEND_BUDGET: u32 = 64;
     if CURSOR_SEND_BUDGET > 0 {
         CURSOR_SEND_BUDGET -= 1;
         serial_println!("[shell.cursor.final.send] source={} x={} y={}", source, cx, cy);
+    }
+    static mut CURSOR_RATE_BUDGET: u32 = 32;
+    if CURSOR_RATE_BUDGET > 0 && (CURSOR_SEND_COUNT % 16 == 0) {
+        CURSOR_RATE_BUDGET -= 1;
+        serial_println!(
+            "[shell.cursor.rate] samples={} sends={} draws=0",
+            ABS_SAMPLE_COUNT, CURSOR_SEND_COUNT
+        );
     }
 }
 
@@ -4469,6 +4495,7 @@ fn normalize_abs_coord(raw: i32, screen_dim: i32) -> i32 {
 /// Keeps only minimal pre-ready poison filtering (zero and max edge),
 /// then accepts all absolute coordinates for predictable targeting.
 unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
+    ABS_SAMPLE_COUNT = ABS_SAMPLE_COUNT.saturating_add(1);
     let sx = normalize_abs_coord(raw_x, P.width);
     let sy = normalize_abs_coord(raw_y, P.height);
     let last_x = LAST_VALID_ABS_X;
@@ -4482,6 +4509,26 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
     } else if !ABS_SEEN_VALID && sx >= P.width - 1 && sy >= P.height - 1 {
         accepted = false;
         reason = "edge_before_ready";
+    } else if ABS_SEEN_VALID {
+        let dx = (sx - last_x).unsigned_abs();
+        let dy = (sy - last_y).unsigned_abs();
+        let near_tl = sx <= 40 && sy <= 20;
+        let at_edge = sx >= P.width - 1 && sy >= P.height - 1;
+        let left_held = (POINTER_BUTTONS & 0x01) != 0;
+        if near_tl && !left_held && last_x >= 0 && last_y >= 0
+            && (dx > (P.width as u32 / 4) || dy > (P.height as u32 / 4))
+        {
+            accepted = false;
+            reason = "corner_poison_after_ready";
+        } else if at_edge && !left_held && last_x >= 0 && last_y >= 0
+            && (dx > (P.width as u32 / 3) && dy > (P.height as u32 / 3))
+        {
+            accepted = false;
+            reason = "edge_poison_after_ready";
+        } else if sx == last_x && sy == last_y {
+            accepted = false;
+            reason = "duplicate_sample";
+        }
     }
 
     if accepted {
@@ -4503,6 +4550,14 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
         "[shell.abs.normalize] raw_x={} raw_y={} sx={} sy={} accepted={} reason={}",
         raw_x, raw_y, sx, sy, accepted as u8, reason
     );
+    static mut ABS_SAMPLE_BUDGET: u32 = 192;
+    if ABS_SAMPLE_BUDGET > 0 {
+        ABS_SAMPLE_BUDGET -= 1;
+        serial_println!(
+            "[shell.abs.sample] raw_x={} raw_y={} sx={} sy={} dt=0 accepted={} reason={}",
+            raw_x, raw_y, sx, sy, accepted as u8, reason
+        );
+    }
 }
 
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
@@ -9914,6 +9969,113 @@ unsafe fn frame_light_at(frame_id: u32, x: i32, y: i32) -> u32 {
     }
 }
 
+fn abs_screen_to_raw(screen: i32, dim: i32) -> u64 {
+    if dim <= 1 { return 0; }
+    let s = screen.clamp(0, dim - 1) as i64;
+    ((s * TABLET_RAW_MAX as i64) / (dim as i64 - 1)) as u64
+}
+
+unsafe fn synthetic_window_drag_target() -> Option<(u32, u64, i32, i32, u32, u32, i32, i32)> {
+    let sid = if frame_for_surface(SURFACE_ID_QUIL).is_some() {
+        SURFACE_ID_QUIL
+    } else {
+        let f = FOCUSED_SURFACE_ID;
+        if frame_for_surface(f).is_some() { f } else { return None; }
+    };
+    let frame = frame_for_surface(sid)?;
+    if !frame_accepts_input(frame) {
+        return None;
+    }
+    let (sx, sy, sw, sh) = get_surface_bounds(sid)?;
+    if sw < 4 || sh < 4 {
+        return None;
+    }
+    // Use left rim below topbar to avoid frame lights and tab-strip.
+    let x0 = (sx + 1).clamp(sx, sx + sw as i32 - 1);
+    let y0 = (sy + FRAME_TOP_BAR_HEIGHT_PX + 8).clamp(sy, sy + sh as i32 - 1);
+    // Move within bounds.
+    let x1 = (x0 + 120).clamp(sx, sx + sw as i32 - 1);
+    let y1 = (y0 + 20).clamp(sy, sy + sh as i32 - 1);
+    Some((frame, sid, sx, sy, sw, sh, x0.max(0), y0.max(0))).map(|(f, s, x, y, w, h, a, b)| {
+        // carry x1/y1 via globals staged below
+        let _ = (x1, y1);
+        (f, s, x, y, w, h, a, b)
+    })
+}
+
+unsafe fn maybe_run_window_drag_synthetic_proof() {
+    static mut DEFER_BUDGET: u32 = 8;
+    static mut TX0: i32 = 0;
+    static mut TY0: i32 = 0;
+    static mut TX1: i32 = 0;
+    static mut TY1: i32 = 0;
+    static mut TARGET_SID: u64 = 0;
+    static mut TARGET_FRAME: u32 = 0;
+
+    if !WINDOW_DRAG_PROOF_ENABLED {
+        return;
+    }
+    if WINDOW_DRAG_PROOF_STAGE == 0 {
+        serial_println!("[shell.drag.synthetic.enabled]");
+        WINDOW_DRAG_PROOF_STAGE = 1;
+        return;
+    }
+    if WINDOW_DRAG_PROOF_STAGE == 1 {
+        let (frame, sid, sx, sy, sw, sh, x0, y0) = match synthetic_window_drag_target() {
+            Some(v) => v,
+            None => {
+                if DEFER_BUDGET > 0 {
+                    DEFER_BUDGET -= 1;
+                    serial_println!("[shell.drag.synthetic.done] ok=0 reason=no_target");
+                }
+                return;
+            }
+        };
+        let x1 = (x0 + 120).clamp(sx, sx + sw as i32 - 1);
+        let y1 = (y0 + 20).clamp(sy, sy + sh as i32 - 1);
+        TARGET_FRAME = frame;
+        TARGET_SID = sid;
+        TX0 = x0;
+        TY0 = y0;
+        TX1 = x1;
+        TY1 = y1;
+        serial_println!(
+            "[shell.drag.synthetic.target] frame={} sid={} sx={} sy={} x0={} y0={} x1={} y1={}",
+            frame, sid, sx, sy, x0, y0, x1, y1
+        );
+        WINDOW_DRAG_PROOF_STAGE = 2;
+        return;
+    }
+    if WINDOW_DRAG_PROOF_STAGE == 2 {
+        handle_hid_event(EV_ABS, abs_screen_to_raw(TX0, P.width), abs_screen_to_raw(TY0, P.height));
+        handle_hid_event(EV_BTN, 1, 1);
+        serial_println!("[shell.drag.synthetic.down]");
+        WINDOW_DRAG_PROOF_STAGE = 3;
+        return;
+    }
+    if WINDOW_DRAG_PROOF_STAGE == 3 {
+        let dx = TX1 - TX0;
+        let dy = TY1 - TY0;
+        let abs_ready = ABS_SEEN_VALID;
+        ABS_SEEN_VALID = false;
+        handle_hid_event(EV_REL, dx as u64, dy as u64);
+        ABS_SEEN_VALID = abs_ready;
+        serial_println!("[shell.drag.synthetic.move]");
+        WINDOW_DRAG_PROOF_STAGE = 4;
+        return;
+    }
+    if WINDOW_DRAG_PROOF_STAGE == 4 {
+        handle_hid_event(EV_BTN, 1, 0);
+        serial_println!("[shell.drag.synthetic.up]");
+        let ok = matches!(INTERACTION, InteractionState::Idle);
+        serial_println!(
+            "[shell.drag.synthetic.done] ok={} reason=complete frame={} sid={}",
+            ok as u8, TARGET_FRAME, TARGET_SID
+        );
+        WINDOW_DRAG_PROOF_STAGE = 5;
+    }
+}
+
 /// Synthesize a pointer click targeted at the zoom light midpoint of `frame_id` using the
 /// same hit-test + action path as a real click. Calculates the green light midpoint
 /// (px = sx + 50, py = sy + 14), emits explicit hitbox diagnostics, then calls
@@ -11096,11 +11258,62 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
     }
     // SilkBar intercept: if pointer is in top strip, handle and skip drag
     let silkbar_handled = handle_silkbar_click(px, py);
+    let mut chrome_owned_drag = false;
+    let mut chrome_owned_reason: &str = "none";
+    if let HitTarget::Surface(sid) = target {
+        if let Some(frame_id) = frame_for_surface(sid) {
+            if frame_accepts_input(frame_id) {
+                if let Some((sx, sy, sw, sh)) = get_surface_bounds(sid) {
+                    let top_bar = frame_has_top_bar(frame_id);
+                    let band_height = if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { FRAME_RIM_PX };
+                    let tab_exclusion = if top_bar { FRAME_TOP_BAR_LIGHT_EXCLUSION_PX } else { FRAME_TAB_LIGHT_EXCLUSION_PX };
+                    let right = sx + sw as i32 - 1;
+                    let bottom = sy + sh as i32 - 1;
+                    let in_rim =
+                        (px >= sx && px < sx + FRAME_RIM_PX)
+                        || (px > right - FRAME_RIM_PX && px <= right)
+                        || (py >= sy && py < sy + band_height)
+                        || (py > bottom - FRAME_RIM_PX && py <= bottom);
+                    let in_tab_strip = if FRAME_TAB_STRIP_PX > 0 || top_bar {
+                        let strip_bot = sy + if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { FRAME_TAB_STRIP_PX };
+                        let tab_strip_start = sx + tab_exclusion;
+                        let right_rim_start = sx + sw as i32 - FRAME_RIM_PX;
+                        py >= sy && py < strip_bot && px >= tab_strip_start && px < right_rim_start
+                            && frame_tab_at(frame_id, px, py).is_some()
+                    } else {
+                        false
+                    };
+                    let light = frame_light_at(frame_id, px, py);
+                    let in_light = light == FRAME_LIGHT_CLOSE || light == FRAME_LIGHT_MINIMIZE || light == FRAME_LIGHT_ZOOM;
+                    if in_rim && !in_tab_strip && !in_light {
+                        chrome_owned_drag = true;
+                        chrome_owned_reason = "surface_rim_topbar_zone";
+                    } else if in_tab_strip {
+                        chrome_owned_reason = "tab_strip";
+                    } else if in_light {
+                        chrome_owned_reason = "frame_light";
+                    }
+                }
+            }
+        }
+    }
+    let app_owned = matches!(target, HitTarget::Surface(_)) && !is_shell_surface(FOCUSED_SURFACE_ID);
+    let allow_content_drag = is_shell_surface(FOCUSED_SURFACE_ID);
+    let allow_drag_begin = allow_content_drag || chrome_owned_drag;
+    serial_println!(
+        "[shell.drag.policy] target={} kind={} app_owned={} chrome_owned={} allow={} reason={}",
+        DRAG_PENDING_TARGET,
+        DRAG_PENDING_KIND,
+        app_owned as u8,
+        chrome_owned_drag as u8,
+        allow_drag_begin as u8,
+        chrome_owned_reason
+    );
     // Drag-start only on content area (not chrome rim/tab strip).
     // Rim drag is already started in the match arm above — skip content drag and skip the
     // "drag skipped" diagnostic for rim. Non-rim chrome remains a no-op with diagnostic.
     let is_content_hit = matches!(target, HitTarget::Surface(..) | HitTarget::None);
-    if !silkbar_handled && is_content_hit && is_shell_surface(FOCUSED_SURFACE_ID)
+    if !silkbar_handled && is_content_hit && allow_drag_begin
         && point_in_surface(px, py, FOCUSED_SURFACE_ID)
     {
         try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: px, current_y: py });
@@ -11117,7 +11330,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
             "silkbar_handled"
         } else if !is_content_hit {
             "non_content_target"
-        } else if !is_shell_surface(FOCUSED_SURFACE_ID) {
+        } else if !allow_drag_begin {
             "focused_not_shell_surface"
         } else if !point_in_surface(px, py, FOCUSED_SURFACE_ID) {
             "outside_focused_surface"
@@ -11810,6 +12023,7 @@ pub extern "C" fn _start() -> ! {
 
     loop {
         unsafe { maybe_run_frame_light_zoom_synthetic_proof(); }
+        unsafe { maybe_run_window_drag_synthetic_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
