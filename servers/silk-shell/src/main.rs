@@ -4414,7 +4414,7 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
         } else if abs <= 16 {
             ((abs as i32) / 2).max(1) // 4..16 -> 2..8
         } else {
-            12                      // 17+ saturates to 12
+            18                      // 17+ saturates to 18
         };
         sign * out_abs
     }
@@ -4442,7 +4442,7 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
             } else if dx_raw.unsigned_abs() <= 3 && dy_raw.unsigned_abs() <= 3 {
                 "micro_keep"
             } else if dx_raw.unsigned_abs() > 16 || dy_raw.unsigned_abs() > 16 {
-                "large_cap12"
+                "large_cap18"
             } else {
                 "medium_half"
             };
