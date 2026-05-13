@@ -4314,6 +4314,11 @@ static mut SNAPSHOT: [WindowDescriptor; 16] = [
 static mut POINTER_X: i32 = 0;
 static mut POINTER_Y: i32 = 0;
 static mut POINTER_BUTTONS: u8 = 0; // bitmask: bit0=left, bit1=right, bit2=middle
+static mut DRAG_PENDING_ACTIVE: bool = false;
+static mut DRAG_PENDING_TARGET: u64 = 0;
+static mut DRAG_PENDING_KIND: u8 = 0; // 0=none 1=app 2=rim 3=chrome 4=tab/light
+static mut DRAG_PENDING_START_X: i32 = 0;
+static mut DRAG_PENDING_START_Y: i32 = 0;
 static mut POINTER_WHEEL_ACCUM: i32 = 0;
 static mut POINTER_USB_STATE_INIT: bool = false;
 /// Set true by apply_rel_pointer on first real relative input.
@@ -4460,33 +4465,44 @@ fn normalize_abs_coord(raw: i32, screen_dim: i32) -> i32 {
     (raw * (screen_dim - 1) / TABLET_RAW_MAX).clamp(0, screen_dim - 1)
 }
 
-/// Reject ABS sentinel/poison reports only — not legitimate position changes.
-/// ABS tablet is direct position; any coordinate is valid after trust gate.
-fn abs_sentinel_ok(screen_x: i32, screen_y: i32) -> bool {
-    // Zero-init before first valid position.
-    if !unsafe { ABS_SEEN_VALID } && screen_x <= 1 && screen_y <= 1 {
-        return false;
+/// Process one ABS tablet sample as direct 1:1 positioning.
+/// Keeps only minimal pre-ready poison filtering (zero and max edge),
+/// then accepts all absolute coordinates for predictable targeting.
+unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
+    let sx = normalize_abs_coord(raw_x, P.width);
+    let sy = normalize_abs_coord(raw_y, P.height);
+    let last_x = LAST_VALID_ABS_X;
+    let last_y = LAST_VALID_ABS_Y;
+    let mut accepted = true;
+    let mut reason = "ok";
+
+    if !ABS_SEEN_VALID && sx <= 1 && sy <= 1 {
+        accepted = false;
+        reason = "zero_init";
+    } else if !ABS_SEEN_VALID && sx >= P.width - 1 && sy >= P.height - 1 {
+        accepted = false;
+        reason = "edge_before_ready";
     }
-    // Max-edge with no buttons = QEMU out-of-window sentinel.
-    let at_edge = screen_x >= P.width - 1 && screen_y >= P.height - 1;
-    // Near-corner sentinel: QEMU grab/ungrab emits ~(36,12) or similar.
-    let near_tl = screen_x <= 40 && screen_y <= 20;
-    if (at_edge || near_tl) && !unsafe { ABS_SEEN_VALID } {
-        return false;
+
+    if accepted {
+        ABS_SEEN_VALID = true;
+        LAST_VALID_ABS_X = sx;
+        LAST_VALID_ABS_Y = sy;
+        POINTER_X = sx;
+        POINTER_Y = sy;
+        REAL_POINTER_SEEN = true;
+        send_cursor_checked(POINTER_X, POINTER_Y, "abs");
+    } else {
+        serial_println!(
+            "[shell.abs.reject] reason={} raw_x={} raw_y={} last_x={} last_y={}",
+            reason, raw_x, raw_y, last_x, last_y
+        );
     }
-    // After trust: reject near-corner only if it's a huge jump from last valid.
-    if (at_edge || near_tl) && unsafe { ABS_SEEN_VALID } {
-        let lx = unsafe { LAST_VALID_ABS_X };
-        let ly = unsafe { LAST_VALID_ABS_Y };
-        if lx >= 0 && ly >= 0 {
-            let dx = (screen_x - lx).unsigned_abs();
-            let dy = (screen_y - ly).unsigned_abs();
-            if dx > (P.width as u32 / 3) || dy > (P.height as u32 / 3) {
-                return false;
-            }
-        }
-    }
-    true
+
+    serial_println!(
+        "[shell.abs.normalize] raw_x={} raw_y={} sx={} sy={} accepted={} reason={}",
+        raw_x, raw_y, sx, sy, accepted as u8, reason
+    );
 }
 
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
@@ -4560,37 +4576,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
     }
 
     if event_class == EV_ABS {
-        let ax = normalize_abs_coord(arg0 as i32, P.width);
-        let ay = normalize_abs_coord(arg1 as i32, P.height);
-        if !ABS_SEEN_VALID && ax <= 1 && ay <= 1 {
-            // Reject zero/init tablet report.
-        } else if ax >= P.width - 1 && ay >= P.height - 1 {
-            // Edge guard: reject out-of-window max-edge from QEMU tablet.
-            let reject = !ABS_SEEN_VALID
-                || (LAST_VALID_ABS_X >= 0
-                    && (ax - LAST_VALID_ABS_X).unsigned_abs() > (P.width as u32 / 2)
-                    && (ay - LAST_VALID_ABS_Y).unsigned_abs() > (P.height as u32 / 2));
-            if !reject && abs_sentinel_ok(ax, ay) {
-                LAST_VALID_ABS_X = ax;
-                LAST_VALID_ABS_Y = ay;
-                POINTER_X = ax;
-                POINTER_Y = ay;
-                send_cursor_checked(POINTER_X, POINTER_Y, "abs");
-                REAL_POINTER_SEEN = true;
-            }
-        } else {
-            if !ABS_SEEN_VALID {
-                ABS_SEEN_VALID = true;
-            }
-            if abs_sentinel_ok(ax, ay) {
-                LAST_VALID_ABS_X = ax;
-                LAST_VALID_ABS_Y = ay;
-                POINTER_X = ax;
-                POINTER_Y = ay;
-                send_cursor_checked(POINTER_X, POINTER_Y, "abs");
-                REAL_POINTER_SEEN = true;
-            }
-        }
+        process_abs_tablet(arg0 as i32, arg1 as i32);
     } else if event_class == EV_REL {
         let _ = apply_rel_pointer(arg0 as i32, arg1 as i32);
     } else if event_class == EV_BTN {
@@ -4611,6 +4597,10 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         }
         serial_println!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
             button, pressed);
+        serial_println!(
+            "[shell.pointer.button] btn={} down={} x={} y={}",
+            button, pressed as u8, POINTER_X, POINTER_Y
+        );
         serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
             button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);
 
@@ -4639,6 +4629,10 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     let (kind, target_id) = hit_target_label(target, silkbar_handled);
                     serial_println!("[shell.click.real.target] x={} y={} target={} kind={}",
                         POINTER_X, POINTER_Y, target_id, kind);
+                    serial_println!(
+                        "[shell.drag.candidate] target={} kind={} x={} y={}",
+                        target_id, kind, POINTER_X, POINTER_Y
+                    );
                 }
                 } // close pointer_ready else
             } else if !pressed {
@@ -4646,11 +4640,17 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     InteractionState::ClickPending => {
                         serial_println!("[silk-shell.click.up] btn={} x={} y={}",
                             button, POINTER_X, POINTER_Y);
+                        DRAG_PENDING_ACTIVE = false;
                         try_transition(InteractionState::Idle);
                     }
                     InteractionState::Dragging { surface_id, .. } => {
                         serial_println!("[shell.interact.drag.end] sid={} x={} y={}",
                             surface_id, POINTER_X, POINTER_Y);
+                        serial_println!(
+                            "[shell.drag.end] sid={} frame=0 x={} y={}",
+                            surface_id, POINTER_X, POINTER_Y
+                        );
+                        DRAG_PENDING_ACTIVE = false;
                         try_transition(InteractionState::Idle);
                     }
                     _ => {}
@@ -10617,6 +10617,10 @@ unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
                 if *b > 0 {
                     *b -= 1;
                     serial_println!("[shell.interact.drag.move] sid={} dx={} dy={}", surface_id, dx, dy);
+                    serial_println!(
+                        "[shell.drag.update] sid={} frame=0 x={} y={} dx={} dy={}",
+                        surface_id, POINTER_X, POINTER_Y, dx, dy
+                    );
                 }
             }
             // Integrated contract diagnostic: logs drag target surface_id and
@@ -10667,6 +10671,23 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
     let top_bar = frame_has_top_bar(frame_id);
     let band_height = if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { FRAME_RIM_PX };
     let tab_exclusion = if top_bar { FRAME_TOP_BAR_LIGHT_EXCLUSION_PX } else { FRAME_TAB_LIGHT_EXCLUSION_PX };
+    unsafe {
+        static mut DRAG_BOUNDS_BUDGET: u32 = 24;
+        let b = &mut DRAG_BOUNDS_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            let topbar_y0 = sy;
+            let topbar_y1 = sy + band_height - 1;
+            let rim_y0 = sy;
+            let rim_y1 = sy + sh as i32 - 1;
+            let draggable_x0 = sx;
+            let draggable_x1 = sx + sw as i32 - 1;
+            serial_println!(
+                "[shell.drag.bounds] sid={} frame={} sx={} sy={} sw={} sh={} topbar_y0={} topbar_y1={} rim_y0={} rim_y1={} draggable_x0={} draggable_x1={}",
+                sid, frame_id, sx, sy, sw, sh, topbar_y0, topbar_y1, rim_y0, rim_y1, draggable_x0, draggable_x1
+            );
+        }
+    }
 
     // Tab strip (top band): highest priority. Gated on FRAME_TAB_STRIP_PX > 0.
     // In default mode, the tab strip uses the full top bar height.
@@ -10846,6 +10867,81 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         }
     }
     let target = hit_test_at(px, py);
+    unsafe {
+        static mut DRAG_HIT_TEST_BUDGET: u32 = 32;
+        let b = &mut DRAG_HIT_TEST_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            let (label, draggable): (&str, u8) = match target {
+                HitTarget::None => ("none", 0),
+                HitTarget::Surface(_) => ("app", 1),
+                HitTarget::FrameChrome { frame_id, kind } => {
+                    if kind == FRAME_CHROME_RIM {
+                        ("rim", 1)
+                    } else {
+                        let light = frame_light_at(frame_id, px, py);
+                        if light == FRAME_LIGHT_CLOSE {
+                            ("light_close", 0)
+                        } else if light == FRAME_LIGHT_MINIMIZE {
+                            ("light_min", 0)
+                        } else if light == FRAME_LIGHT_ZOOM {
+                            ("light_zoom", 0)
+                        } else if kind == FRAME_CHROME_TAB_STRIP {
+                            ("tab", 0)
+                        } else {
+                            ("chrome", 0)
+                        }
+                    }
+                }
+            };
+            serial_println!(
+                "[shell.drag.hit_test] x={} y={} result={} draggable={}",
+                px, py, label, draggable
+            );
+        }
+    }
+    let left_held = (buttons_val & 0x01) != 0;
+    if left_held {
+        DRAG_PENDING_ACTIVE = true;
+        DRAG_PENDING_START_X = px;
+        DRAG_PENDING_START_Y = py;
+        match target {
+            HitTarget::Surface(sid) => {
+                DRAG_PENDING_TARGET = sid;
+                DRAG_PENDING_KIND = 1;
+                serial_println!(
+                    "[shell.drag.pending] target={} kind=app start_x={} start_y={} buttons={:#x}",
+                    sid, px, py, buttons_val
+                );
+            }
+            HitTarget::FrameChrome { frame_id, kind } => {
+                DRAG_PENDING_TARGET = frame_id as u64;
+                if kind == FRAME_CHROME_RIM {
+                    DRAG_PENDING_KIND = 2;
+                    serial_println!(
+                        "[shell.drag.pending] target={} kind=rim start_x={} start_y={} buttons={:#x}",
+                        frame_id, px, py, buttons_val
+                    );
+                } else {
+                    DRAG_PENDING_KIND = 4;
+                    serial_println!(
+                        "[shell.drag.pending] target={} kind=chrome start_x={} start_y={} buttons={:#x}",
+                        frame_id, px, py, buttons_val
+                    );
+                }
+            }
+            HitTarget::None => {
+                DRAG_PENDING_TARGET = 0;
+                DRAG_PENDING_KIND = 0;
+                serial_println!(
+                    "[shell.drag.pending] target=0 kind=none start_x={} start_y={} buttons={:#x}",
+                    px, py, buttons_val
+                );
+            }
+        }
+    } else {
+        DRAG_PENDING_ACTIVE = false;
+    }
     match target {
         HitTarget::Surface(sid) => {
             if sid != FOCUSED_SURFACE_ID {
@@ -10956,6 +11052,10 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                                     *b -= 1;
                                     serial_println!("[shell.frame.rim.drag.start] frame={} surface={} x={} y={}",
                                         frame_id, surface_id, px, py);
+                                    serial_println!(
+                                        "[shell.drag.begin] sid={} frame={} x={} y={}",
+                                        surface_id, frame_id, px, py
+                                    );
                                 }
                             }
                         } else {
@@ -11005,8 +11105,29 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
     {
         try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: px, current_y: py });
         serial_println!("[shell.interact.drag.begin] sid={} x={} y={}", FOCUSED_SURFACE_ID, px, py);
+        serial_println!(
+            "[shell.drag.begin] sid={} frame=0 x={} y={}",
+            FOCUSED_SURFACE_ID, px, py
+        );
+        DRAG_PENDING_ACTIVE = false;
     } else if !silkbar_handled && matches!(target, HitTarget::FrameChrome { kind: FRAME_CHROME_TAB_STRIP, .. }) {
         serial_println!("[shell.drag.skip.chrome] kind=tab_strip x={} y={}", px, py);
+    } else if left_held {
+        let reason = if silkbar_handled {
+            "silkbar_handled"
+        } else if !is_content_hit {
+            "non_content_target"
+        } else if !is_shell_surface(FOCUSED_SURFACE_ID) {
+            "focused_not_shell_surface"
+        } else if !point_in_surface(px, py, FOCUSED_SURFACE_ID) {
+            "outside_focused_surface"
+        } else {
+            "unknown"
+        };
+        serial_println!(
+            "[shell.drag.begin.reject] reason={} target={} kind={} buttons={:#x} dx=0 dy=0",
+            reason, DRAG_PENDING_TARGET, DRAG_PENDING_KIND, buttons_val
+        );
     }
     (target, silkbar_handled)
 }
@@ -13429,70 +13550,18 @@ pub extern "C" fn _start() -> ! {
                                     serial_println!("[silk-shell.pointer.recv] class={} a0={} a1={}", event_class, ax, ay);
                                 }
                             }
-                            // ABS trust gate: reject zero/init reports before
-                            // first valid tablet position is seen.
-                            if !ABS_SEEN_VALID && ax <= 1 && ay <= 1 {
-                                unsafe {
-                                    static mut ABS_REJECT_BUDGET: u32 = 16;
-                                    let r = &mut ABS_REJECT_BUDGET;
-                                    if *r > 0 {
-                                        *r -= 1;
-                                        serial_println!("[shell.pointer.abs.reject] reason=zero_init x={} y={}", ax, ay);
-                                    }
-                                }
-                            // Edge guard: reject out-of-window max-edge reports
-                            // that QEMU tablet sends when pointer leaves window.
-                            } else if ax >= P.width - 1 && ay >= P.height - 1 {
-                                let reject = !ABS_SEEN_VALID
-                                    || (LAST_VALID_ABS_X >= 0
-                                        && (ax - LAST_VALID_ABS_X).unsigned_abs() > (P.width as u32 / 2)
-                                        && (ay - LAST_VALID_ABS_Y).unsigned_abs() > (P.height as u32 / 2));
-                                if reject {
-                                    unsafe {
-                                        static mut ABS_EDGE_REJECT_BUDGET: u32 = 16;
-                                        let r = &mut ABS_EDGE_REJECT_BUDGET;
-                                        if *r > 0 {
-                                            *r -= 1;
-                                            serial_println!("[shell.pointer.abs.reject] reason=edge_max x={} y={} last_x={} last_y={}",
-                                                ax, ay, LAST_VALID_ABS_X, LAST_VALID_ABS_Y);
-                                        }
-                                    }
-                                } else if abs_sentinel_ok(ax, ay) {
-                                    LAST_VALID_ABS_X = ax;
-                                    LAST_VALID_ABS_Y = ay;
-                                    POINTER_X = ax;
-                                    POINTER_Y = ay;
-                                    send_cursor_checked(POINTER_X, POINTER_Y, "abs");
-                                    REAL_POINTER_SEEN = true;
-                                }
-                            } else {
-                                if !ABS_SEEN_VALID {
-                                    ABS_SEEN_VALID = true;
-                                    unsafe {
-                                        static mut ABS_ACCEPT_BUDGET: u32 = 4;
-                                        let a = &mut ABS_ACCEPT_BUDGET;
-                                        if *a > 0 {
-                                            *a -= 1;
-                                            serial_println!("[shell.pointer.abs.accept] x={} y={}", ax, ay);
-                                        }
-                                    }
-                                }
-                                if abs_sentinel_ok(ax, ay) {
-                                    LAST_VALID_ABS_X = ax;
-                                    LAST_VALID_ABS_Y = ay;
-                                    POINTER_X = ax;
-                                    POINTER_Y = ay;
-                                    unsafe {
-                                        static mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS: u32 = 16;
-                                        let rem = &mut SHELL_CURSOR_SURFACE_UPDATE_BUDGET_ABS;
-                                        if *rem > 0 {
-                                            *rem -= 1;
-                                            serial_println!("[shell.cursor.surface.update] n=0 x={} y={}", POINTER_X, POINTER_Y);
-                                        }
-                                    }
-                                    send_cursor_checked(POINTER_X, POINTER_Y, "abs");
-                                    REAL_POINTER_SEEN = true;
-                                }
+                            process_abs_tablet(msg.arg0 as i32, msg.arg1 as i32);
+                            if matches!(INTERACTION, InteractionState::ClickPending) && DRAG_PENDING_ACTIVE {
+                                let dx = POINTER_X - DRAG_PENDING_START_X;
+                                let dy = POINTER_Y - DRAG_PENDING_START_Y;
+                                let dist = dx.abs().max(dy.abs());
+                                let required = 8;
+                                let buttons = POINTER_BUTTONS;
+                                let pass = ((buttons & 0x01) != 0) && dist >= required;
+                                serial_println!(
+                                    "[shell.drag.threshold] dx={} dy={} dist={} required={} buttons={:#x} pass={}",
+                                    dx, dy, dist, required, buttons, pass as u8
+                                );
                             }
                         } else if event_class == EV_REL {
                             let dx_raw = msg.arg0 as i32;
@@ -13517,6 +13586,18 @@ pub extern "C" fn _start() -> ! {
                             }
                             // Apply filter + clamp + cursor update via shared helper.
                             let (dx, dy) = apply_rel_pointer(dx_raw, dy_raw);
+                            if matches!(INTERACTION, InteractionState::ClickPending) && DRAG_PENDING_ACTIVE {
+                                let pdx = POINTER_X - DRAG_PENDING_START_X;
+                                let pdy = POINTER_Y - DRAG_PENDING_START_Y;
+                                let dist = pdx.abs().max(pdy.abs());
+                                let required = 8;
+                                let buttons = POINTER_BUTTONS;
+                                let pass = ((buttons & 0x01) != 0) && dist >= required;
+                                serial_println!(
+                                    "[shell.drag.threshold] dx={} dy={} dist={} required={} buttons={:#x} pass={}",
+                                    pdx, pdy, dist, required, buttons, pass as u8
+                                );
+                            }
 
                             // ── Drag movement: move drag target surface by delta while button held ──
                             // Uses filtered deltas so drag feels consistent with cursor movement.
@@ -13606,10 +13687,12 @@ pub extern "C" fn _start() -> ! {
                                         InteractionState::ClickPending => {
                                             serial_println!("[silk-shell.click.up] btn={} x={} y={}",
                                                 button, POINTER_X, POINTER_Y);
+                                            DRAG_PENDING_ACTIVE = false;
                                             try_transition(InteractionState::Idle);
                                         }
                                         InteractionState::Dragging { surface_id, .. } => {
                                             serial_println!("[shell.interact.drag.end] sid={} x={} y={}", surface_id, POINTER_X, POINTER_Y);
+                                            DRAG_PENDING_ACTIVE = false;
                                             try_transition(InteractionState::Idle);
                                         }
                                         _ => {}
