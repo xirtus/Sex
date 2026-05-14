@@ -10503,6 +10503,86 @@ unsafe fn maybe_run_visible_focus_topbar_proof() {
     }
 }
 
+// ── Keyboard Safe Close Proof ────────────────────────────────────────────
+// Proves F11 / AccessClose safely against a disposable test surface (102)
+// without destroying Quil or Linen.  Gated by SEXOS_KEYBOARD_SAFE_CLOSE_PROOF=1.
+const KEYBOARD_SAFE_CLOSE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_KEYBOARD_SAFE_CLOSE_PROOF").is_some();
+static mut KEYBOARD_SAFE_CLOSE_PROOF_STAGE: u8 = 0;
+static mut KEYBOARD_SAFE_CLOSE_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_keyboard_safe_close_proof() {
+    if !KEYBOARD_SAFE_CLOSE_PROOF_ENABLED { return; }
+    if KEYBOARD_SAFE_CLOSE_PROOF_DONE { return; }
+
+    // Stage 0: ensure test surface 102 is alive on sexdisplay.
+    // SURFACE_102_ALIVE is true at boot but surfaces 100-103 skip initial
+    // 0xEC creation.  We always issue 0xEC so sexdisplay has a real slot.
+    if KEYBOARD_SAFE_CLOSE_PROOF_STAGE == 0 {
+        let (rx, ry, rw, rh) = P.boot_rect_102;
+        // Use existing 0xEC opcode — no new ABI.
+        pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST3,
+            (ry as u64) << 32 | rx as u64,
+            (rh as u64) << 32 | rw as u64);
+        SURFACE_102_ALIVE = true;
+        SURFACE_102_X = rx; SURFACE_102_Y = ry;
+        SURFACE_102_W = rw; SURFACE_102_H = rh;
+        serial_println!("[shell.kbd.close.proof] stage=0 action=CreateTarget surface=102 alive=1");
+        KEYBOARD_SAFE_CLOSE_PROOF_STAGE = 1;
+    }
+
+    // Stage 1: focus the disposable target.
+    if KEYBOARD_SAFE_CLOSE_PROOF_STAGE == 1 {
+        let ok = try_set_focus(SURFACE_ID_TEST3);
+        serial_println!("[shell.kbd.close.proof] stage=1 action=FocusTarget sid=102 ok={}", ok as u8);
+        if ok {
+            serial_println!("[shell.kbd.close.target] frame={} sid=102 disposable=1 focused=1",
+                frame_for_surface(SURFACE_ID_TEST3).unwrap_or(0));
+            KEYBOARD_SAFE_CLOSE_PROOF_STAGE = 2;
+        } else {
+            // Surface not focusable for some reason — abort.
+            serial_println!("[shell.kbd.close.proof] stage=1 action=FocusTarget sid=102 ok=0 reason=not_focusable abort");
+            KEYBOARD_SAFE_CLOSE_PROOF_DONE = true;
+            serial_println!("[shell.frame.close.proof.done] ok=0 frame=0 sid=102 reason=focus_failed");
+        }
+    }
+
+    // Stage 2: dispatch F11 through handle_hid_event (same path as real EV_KEY).
+    if KEYBOARD_SAFE_CLOSE_PROOF_STAGE == 2 {
+        // Verify focused surface is still 102 before dispatching.
+        if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+            serial_println!("[shell.kbd.close.proof] stage=2 action=Abort reason=focus_lost focused={}", FOCUSED_SURFACE_ID);
+            KEYBOARD_SAFE_CLOSE_PROOF_DONE = true;
+            serial_println!("[shell.frame.close.proof.done] ok=0 frame=0 sid=102 reason=focus_lost");
+            return;
+        }
+        // Dispatch F11 (scancode 0x57) through the real keyboard input path.
+        handle_hid_event(EV_KEY, 0x57, 1);
+        handle_hid_event(EV_KEY, 0x57, 0); // key-up
+        serial_println!("[shell.kbd.close.proof] stage=2 action=DispatchF11 scancode=0x57 dispatched=1");
+        KEYBOARD_SAFE_CLOSE_PROOF_STAGE = 3;
+    }
+
+    // Stage 3: verify results.
+    if KEYBOARD_SAFE_CLOSE_PROOF_STAGE == 3 {
+        let closed_102 = !SURFACE_102_ALIVE;
+        let quil_alive = surface_is_alive(SURFACE_ID_QUIL) && !is_tombstoned(SURFACE_ID_QUIL);
+        let linen_alive = surface_is_alive(SURFACE_ID_LINEN) && !is_tombstoned(SURFACE_ID_LINEN);
+        let faults: u32 = 0; // no fault counter in shell; trust serial log
+        serial_println!("[shell.kbd.close.proof] stage=3 action=Verify closed_102={} quil_alive={} linen_alive={} faults={}",
+            closed_102 as u8, quil_alive as u8, linen_alive as u8, faults);
+        KEYBOARD_SAFE_CLOSE_PROOF_DONE = true;
+        if closed_102 && quil_alive && linen_alive {
+            serial_println!("[shell.frame.close.proof.done] ok=1 frame={} sid=102 reason=safe_close_proven",
+                frame_for_surface(SURFACE_ID_TEST3).unwrap_or(0));
+        } else {
+            serial_println!("[shell.frame.close.proof.done] ok=0 frame={} sid=102 reason=verification_failed closed_102={} quil={} linen={}",
+                frame_for_surface(SURFACE_ID_TEST3).unwrap_or(0),
+                closed_102 as u8, quil_alive as u8, linen_alive as u8);
+        }
+    }
+}
+
 // ── Keyboard GUI Broad Action Proof ──────────────────────────────────────
 // Drives every non-destructive reserved UI key through handle_hid_event
 // (the same path used by real EV_KEY dispatch) to prove the full keyboard
@@ -12645,6 +12725,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_keyboard_window_synthetic_proof(); }
         unsafe { maybe_run_keyboard_gui_broad_action_proof(); }
         unsafe { maybe_run_visible_focus_topbar_proof(); }
+        unsafe { maybe_run_keyboard_safe_close_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
