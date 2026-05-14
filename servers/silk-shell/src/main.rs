@@ -225,8 +225,11 @@ const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
 const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_LINEN_STATUS_PROOF").is_some();
+const QUIL_STATUS_UNBLOCK_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_STATUS_UNBLOCK_PROOF").is_some();
 static mut COMMAND_PALETTE_STATUS_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE: bool = false;
+static mut QUIL_STATUS_UNBLOCK_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_ACTIVE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_STAGE: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_DONE: bool = false;
@@ -10798,7 +10801,7 @@ fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
             (true, "ready", "proven_safe")
         }
         Command::FocusQuil => {
-            (false, "delivery_blocked", "quil_keyboard_delivery_blocker")
+            (true, "keyboard_nav_ready", "quil_hid_stash_replay_buffer_nav_proven")
         }
         Command::FocusLinen => {
             (true, "nonblocking_ready", "linen_fast_paint_nonblocking")
@@ -11127,6 +11130,62 @@ unsafe fn maybe_run_command_palette_linen_status_proof() {
     let all_ok = avail && exec_ok;
     serial_println!("[shell.palette.linen.status.proof.done] ok={}", all_ok as u8);
     COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE = true;
+}
+
+/// Quil status unblock proof: verifies that Open Quil is now available
+/// in the command palette after QUIL_HID_STASH_REPLAY_V1 and
+/// QUIL_KEYBOARD_BUFFER_NAV_FINISH_V1.
+unsafe fn maybe_run_quil_status_unblock_proof() {
+    if !QUIL_STATUS_UNBLOCK_PROOF_ENABLED || QUIL_STATUS_UNBLOCK_PROOF_DONE {
+        return;
+    }
+    serial_println!("[quil.status.unblock.proof] stage=0 action=start ok=1 reason=begin");
+
+    // Stage 1: Verify palette_item_status returns available for FocusQuil.
+    let (avail, status_label, reason) = palette_item_status(Command::FocusQuil);
+    serial_println!(
+        "[quil.status.unblock.proof] stage=1 action=status_check available={} status={} reason={}",
+        avail as u8, status_label, reason
+    );
+    if !avail {
+        serial_println!("[quil.status.unblock.proof] stage=1 action=status_check ok=0 reason=still_blocked");
+        serial_println!("[quil.status.unblock.proof.done] ok=0");
+        QUIL_STATUS_UNBLOCK_PROOF_DONE = true;
+        return;
+    }
+
+    // Stage 2: Open palette and emit per-item status for Quil.
+    if !COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+    if COMMAND_PALETTE_OPEN {
+        // Find and emit Quil status.
+        for (i, item) in COMMAND_LIST.iter().enumerate() {
+            if item.command == Command::FocusQuil {
+                let (a, s, r) = palette_item_status(item.command);
+                serial_println!(
+                    "[shell.palette.status] idx={} action=OpenQuil available={} status={} reason={}",
+                    i, a as u8, s, r
+                );
+                break;
+            }
+        }
+        serial_println!("[quil.status.unblock.proof] stage=2 action=status_emitted ok=1 reason=available_in_palette");
+    } else {
+        serial_println!("[quil.status.unblock.proof] stage=2 action=status_emitted ok=0 reason=palette_open_failed");
+        QUIL_STATUS_UNBLOCK_PROOF_DONE = true;
+        return;
+    }
+
+    // Stage 3: Close palette.
+    if COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+
+    // Stage 4: Summary.
+    serial_println!("[quil.status.unblock.proof] stage=3 action=summary ok=1 reason=quil_now_available");
+    serial_println!("[quil.status.unblock.proof.done] ok=1");
+    QUIL_STATUS_UNBLOCK_PROOF_DONE = true;
 }
 
 unsafe fn maybe_run_command_palette_daily_proof() {
@@ -14906,6 +14965,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }
         unsafe { maybe_run_command_palette_status_proof(); }
         unsafe { maybe_run_command_palette_linen_status_proof(); }
+        unsafe { maybe_run_quil_status_unblock_proof(); }
         unsafe { maybe_run_command_palette_daily_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────

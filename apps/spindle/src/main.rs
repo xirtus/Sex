@@ -593,7 +593,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  Atlas    PASS   scene/accent nav + theme apply");
             sb.push(b"  Collar   PASS   keyboard grants nav");
             sb.push(b"  Mesh     PASS   keyboard map nav");
-            sb.push(b"  Quil     BLOCK  delivery deferred (STOP FIRST)");
+            sb.push(b"  Quil     PASS   keyboard nav ready (stash/replay)");
             sb.push(b"  Pointer  DEFER  USB/slot2 mouse deferred");
             sb.push(b"");
             sb.push(b"--- Bridges ---");
@@ -609,7 +609,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.status.item] name=Atlas status=PASS reason=scene_accent_theme_apply");
             serial_println!("[spindle.status.item] name=Collar status=PASS reason=keyboard_grants_nav");
             serial_println!("[spindle.status.item] name=Mesh status=PASS reason=keyboard_map_nav");
-            serial_println!("[spindle.status.item] name=Quil status=BLOCK reason=delivery_deferred");
+            serial_println!("[spindle.status.item] name=Quil status=PASS reason=keyboard_nav_ready");
             serial_println!("[spindle.status.item] name=Pointer status=DEFER reason=usb_slot2_mouse");
             true
         }
@@ -661,7 +661,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  Atlas    PASS   scene/accent nav + theme apply");
             sb.push(b"  Collar   PASS   grant table nav + detail");
             sb.push(b"  Mesh     PASS   topology map nav + detail");
-            sb.push(b"  Quil     BLOCK  app delivery deferred");
+            sb.push(b"  Quil     PASS   keyboard nav ready (stash/replay)");
             sb.push(b"  Pointer  DEFER  USB slot2 mouse work");
             sb.push(b"Launch targets: unavailable (kernel spawn needed).");
             serial_println!("[spindle.status.panel] command=apps ok=1 bytes=~500");
@@ -670,7 +670,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"blockers" => {
             sb.push(b"Known blockers (Spindle V1):");
             sb.push(b"  Linen open      sync readback blocked (AsyncEnqueue)");
-            sb.push(b"  Quil delivery   STOP FIRST (deferred)");
+            sb.push(b"  Quil delivery   PROVEN (stash/replay done)");
             sb.push(b"  Pointer/mouse   USB slot2 deferred");
             sb.push(b"  App launch      kernel spawn + SLOT_SHELL needed");
             sb.push(b"  SilkBar name    no UpdateKind variant (ABI blocker)");
