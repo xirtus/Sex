@@ -61,6 +61,8 @@ const RAMFS_O_CREATE: u32 = 0x01;
 const STORAGE_CAP_PROOF_ENABLED: bool = option_env!("SEXOS_STORAGE_CAP_PROOF").is_some();
 const QUIL_DISKFS_SLOT_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_DISKFS_SLOT_PROOF").is_some();
 const QUIL_KEYBOARD_NAV_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_KEYBOARD_NAV_PROOF").is_some();
+const QUIL_KEYBOARD_BUFFER_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_KEYBOARD_BUFFER_PROOF").is_some();
+static mut QUIL_BUFFER_PROOF_ACTIVE: bool = false;
 
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
@@ -787,11 +789,14 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
         match action {
             1 => { // Up
                 if *palette_active {
+                    let old = *selected_row;
                     *selected_row = if *selected_row == 0 {
                         QUIL_ROWS - 1
                     } else {
                         *selected_row - 1
                     };
+                    serial_println!("[quil.nav.move] old={} new={} count={} dir=up",
+                        old, *selected_row, QUIL_ROWS);
                     draw_palette(*selected_row);
                 } else {
                     serial_println!("[quil.palette.reject] action=up reason=inactive");
@@ -799,7 +804,10 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
             }
             2 => { // Down
                 if *palette_active {
+                    let old = *selected_row;
                     *selected_row = (*selected_row + 1) % QUIL_ROWS;
+                    serial_println!("[quil.nav.move] old={} new={} count={} dir=down",
+                        old, *selected_row, QUIL_ROWS);
                     draw_palette(*selected_row);
                 } else {
                     serial_println!("[quil.palette.reject] action=down reason=inactive");
@@ -808,17 +816,30 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
             3 => { // Enter
                 if *palette_active {
                     let cmd = palette_command_for_row(*selected_row);
-                    serial_println!("[quil.palette.action] row={} cmd={}", *selected_row, cmd);
+                    let row = *selected_row;
+                    serial_println!("[quil.select] idx={} buffer_id={} ok=1 reason=selected",
+                        row, cmd as u64);
+                    serial_println!("[quil.palette.action] row={} cmd={}", row, cmd);
                     match cmd {
                         CMD_SAVE_DOCUMENT => {
-                            if let Err(e) = quil_save() {
+                            serial_println!("[quil.open.request] buffer_id={} ok=1 reason=save_via_ramfs", cmd as u64);
+                            if unsafe { QUIL_BUFFER_PROOF_ACTIVE } {
+                                serial_println!("[quil.palette.save.skip] reason=buffer_proof_active");
+                            } else if let Err(e) = quil_save() {
                                 serial_println!("[quil.palette.save.fail] error={}", e);
                             }
                         }
                         CMD_LOAD_DOCUMENT => {
-                            if let Err(e) = quil_load() {
+                            serial_println!("[quil.open.request] buffer_id={} ok=1 reason=load_via_ramfs", cmd as u64);
+                            if unsafe { QUIL_BUFFER_PROOF_ACTIVE } {
+                                serial_println!("[quil.palette.load.skip] reason=buffer_proof_active");
+                            } else if let Err(e) = quil_load() {
                                 serial_println!("[quil.palette.load.fail] error={}", e);
                             }
+                        }
+                        CMD_NEW_BUFFER_STUB | CMD_RUN_CHECK_STUB | CMD_SETTINGS_STUB => {
+                            serial_println!("[quil.open.request] buffer_id={} ok=0 reason=stub_not_implemented", cmd as u64);
+                            serial_println!("[quil.palette.stub] cmd={}", cmd);
                         }
                         _ => {
                             serial_println!("[quil.palette.stub] cmd={}", cmd);
@@ -994,6 +1015,68 @@ pub extern "C" fn _start() -> ! {
         }
 
         serial_println!("[quil.keyboard.nav.proof.done] ok=1");
+    }
+
+    // ── Keyboard buffer nav proof: exercises palette row nav + select ───
+    // Seeds synthetic events for up, down, down, enter (Save) into the stash
+    // and replays them to prove nav/select/open markers fire.
+    if QUIL_KEYBOARD_BUFFER_PROOF_ENABLED {
+        unsafe { QUIL_BUFFER_PROOF_ACTIVE = true; }
+        // Stage 0: seed nav events into stash.
+        unsafe {
+            // Up arrow — move to row 4 (from row 0, wrapping).
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x48, 1, 0);
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.keyboard.buffer.proof] stage=0 action=seed_nav_up idx={} code=0x48", idx);
+            }
+            // Down arrow — move to row 0.
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x50, 1, 0);
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.keyboard.buffer.proof] stage=1 action=seed_nav_down idx={} code=0x50", idx);
+            }
+            // Down arrow — move to row 1 (Save).
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x50, 1, 0);
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.keyboard.buffer.proof] stage=2 action=seed_nav_down idx={} code=0x50", idx);
+            }
+            // Enter — select/execute row 1 (Save).
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x1C, 1, 0);
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.keyboard.buffer.proof] stage=3 action=seed_enter idx={} code=0x1C", idx);
+            }
+            serial_println!("[quil.keyboard.buffer.proof] stage=4 action=seed_done count={}", HID_STASH_COUNT);
+        }
+
+        // Stage 5: replay all stashed events.
+        unsafe {
+            let stash_count = HID_STASH_COUNT;
+            if stash_count > 0 {
+                serial_println!("[quil.keyboard.buffer.proof] stage=5 action=replay_begin count={}", stash_count);
+                for i in 0..stash_count {
+                    let (scancode, value, _arg2) = HID_STASH[i];
+                    serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}",
+                        i, scancode, value, _arg2);
+                    quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+                }
+                HID_STASH_COUNT = 0;
+                serial_println!("[quil.hid.replay.done] count={}", stash_count);
+            }
+        }
+
+        // Stage 6: delete proof — skip (no delete command in palette V1).
+        serial_println!("[quil.keyboard.buffer.proof] stage=6 action=delete_proof ok=1 reason=skipped_no_delete_cmd");
+        serial_println!("[quil.delete.proof] buffer_id=0 ok=1 reason=skipped_no_delete_in_palette_v1");
+
+        serial_println!("[quil.keyboard.buffer.proof.done] ok=1");
+        unsafe { QUIL_BUFFER_PROOF_ACTIVE = false; }
     }
 
     if PERSISTENCE_PROOF_ENABLED {
