@@ -117,6 +117,9 @@ struct CmdLine {
     prev_buf: [u8; CMD_MAX],
     prev_len: usize,
     pending_d: bool,
+    hist_nav: Option<usize>,
+    nav_saved: [u8; CMD_MAX],
+    nav_saved_len: usize,
 }
 
 impl CmdLine {
@@ -126,6 +129,9 @@ impl CmdLine {
             mode: ViMode::Insert,
             prev_buf: [0u8; CMD_MAX], prev_len: 0,
             pending_d: false,
+            hist_nav: None,
+            nav_saved: [0u8; CMD_MAX],
+            nav_saved_len: 0,
         }
     }
 
@@ -197,6 +203,27 @@ impl CmdLine {
         self.len = self.prev_len;
         if self.cur > self.len { self.cur = self.len; }
     }
+
+    fn set_from_slice(&mut self, src: &[u8]) {
+        let n = src.len().min(CMD_MAX);
+        self.buf[..n].copy_from_slice(&src[..n]);
+        for i in n..CMD_MAX { self.buf[i] = 0; }
+        self.len = n;
+        self.cur = n;
+    }
+
+    fn save_nav_snapshot(&mut self) {
+        self.nav_saved[..self.len].copy_from_slice(&self.buf[..self.len]);
+        for i in self.len..CMD_MAX { self.nav_saved[i] = 0; }
+        self.nav_saved_len = self.len;
+    }
+
+    fn restore_nav_snapshot(&mut self) {
+        let n = self.nav_saved_len.min(CMD_MAX);
+        let mut tmp = [0u8; CMD_MAX];
+        tmp[..n].copy_from_slice(&self.nav_saved[..n]);
+        self.set_from_slice(&tmp[..n]);
+    }
 }
 
 // ── Prompt redraw ──────────────────────────────────────────────────────────
@@ -252,12 +279,14 @@ impl History {
     }
 
     /// Push a command line into history. Clamps to HIST_LINE_BYTES.
-    fn push(&mut self, line: &[u8]) {
+    fn push(&mut self, line: &[u8]) -> usize {
+        let idx = self.write_pos;
         let n = line.len().min(HIST_LINE_BYTES);
         self.ring[self.write_pos][..n].copy_from_slice(&line[..n]);
         for i in n..HIST_LINE_BYTES { self.ring[self.write_pos][i] = 0; }
         self.write_pos = (self.write_pos + 1) % MAX_HISTORY;
         self.total = self.total.saturating_add(1);
+        idx
     }
 
     /// Return the nth-most-recent entry (0 = newest). None if out of range.
@@ -274,6 +303,57 @@ impl History {
         self.ring = [[0u8; HIST_LINE_BYTES]; MAX_HISTORY];
         self.write_pos = 0;
         self.total = 0;
+    }
+}
+
+fn history_nav(line: &mut CmdLine, hist: &History, up: bool) -> bool {
+    let count = (hist.total as usize).min(MAX_HISTORY);
+    if count == 0 {
+        serial_println!("[spindle.history.nav] dir={} idx=0 len=0 ok=0", if up { "up" } else { "down" });
+        return false;
+    }
+    if up {
+        if line.hist_nav.is_none() {
+            line.save_nav_snapshot();
+            line.hist_nav = Some(0);
+        } else if let Some(i) = line.hist_nav {
+            if i + 1 < count {
+                line.hist_nav = Some(i + 1);
+            }
+        }
+        if let Some(i) = line.hist_nav {
+            if let Some(entry) = hist.get(i) {
+                line.set_from_slice(entry);
+                serial_println!("[spindle.history.nav] dir=up idx={} len={} ok=1", i, line.len);
+                return true;
+            }
+        }
+        serial_println!("[spindle.history.nav] dir=up idx=0 len={} ok=0", line.len);
+        false
+    } else {
+        match line.hist_nav {
+            None => {
+                serial_println!("[spindle.history.nav] dir=down idx=0 len={} ok=0", line.len);
+                false
+            }
+            Some(0) => {
+                line.hist_nav = None;
+                line.restore_nav_snapshot();
+                serial_println!("[spindle.history.nav] dir=down idx=0 len={} ok=1", line.len);
+                true
+            }
+            Some(i) => {
+                let ni = i - 1;
+                line.hist_nav = Some(ni);
+                if let Some(entry) = hist.get(ni) {
+                    line.set_from_slice(entry);
+                    serial_println!("[spindle.history.nav] dir=down idx={} len={} ok=1", ni, line.len);
+                    return true;
+                }
+                serial_println!("[spindle.history.nav] dir=down idx={} len={} ok=0", ni, line.len);
+                false
+            }
+        }
     }
 }
 
@@ -470,6 +550,14 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  route        input/surface route info");
             sb.push(b"  input        keyboard input status");
             sb.push(b"  session      show Spindle session summary");
+            true
+        }
+        b"echo" => {
+            if args.is_empty() {
+                sb.push(b"echo: missing text");
+            } else {
+                sb.push(args);
+            }
             true
         }
         b"clear" => {
@@ -786,6 +874,8 @@ pub extern "C" fn _start() -> ! {
     // ── Input proof gate (compile-time; guards framebuffer access) ──
     const INPUT_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_INPUT_PROOF").is_some();
+    const CMD_HISTORY_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_COMMAND_HISTORY_PROOF").is_some();
     if INPUT_PROOF_ENABLED {
         unsafe {
             let params = WindowCreateParams {
@@ -840,6 +930,9 @@ pub extern "C" fn _start() -> ! {
     let (ls, _) = pdx_call(SLOT_LINEN, OP_LINEN_CREATE_OBJECT, 0, 0, 0);
     serial_println!("[spindle.linen.spn.create] status={}", ls);
     serial_println!("[spindle.fb.proof.disabled] surface=0x99 route=silk-shell fb=gated_proof_only");
+    if CMD_HISTORY_PROOF_ENABLED {
+        run_command_history_proof(sb, hist, &mut ev);
+    }
 
     serial_println!("[spindle.ready]");
 
@@ -870,31 +963,41 @@ pub extern "C" fn _start() -> ! {
 
             // On Enter, record command, persist, dispatch, and optionally Bell-notify.
             if scancode == 0x1C && line.len > 0 {
-                hist.push(line.as_bytes());
+                serial_println!("[spindle.cmd.recv] line_len={}", line.len);
+                let cmd_name = tokenize(line.as_bytes()).0;
+                let idx = hist.push(line.as_bytes());
+                serial_println!("[spindle.history.push] idx={} len={}", idx, line.len);
                 unsafe { persist_history(&hist); }
                 serial_println!("[spindle.sexfiles.persist] ok");
                 let recognized = dispatch(line.as_bytes(), sb, hist, &mut ev);
                 serial_println!("[spindle.stargate.segment] kind=status ok={}", recognized as u8);
+                serial_println!(
+                    "[spindle.cmd.exec] name={} ok={} reason={}",
+                    core::str::from_utf8(cmd_name).unwrap_or("?"),
+                    recognized as u8,
+                    if recognized { "ok" } else { "unknown_command" }
+                );
                 if recognized {
                     let (bs, _) = pdx_call(SLOT_BELL, OP_BELL_NOTIFY, 0, 0, 0);
                     serial_println!("[spindle.bell.notify] status={}", bs);
                 }
+                line.hist_nav = None;
             }
-            handle_key(scancode, &mut line);
+            handle_key(scancode, &mut line, hist);
         }
     }
 }
 
 /// Process a single keyboard scancode into the line editor.
 /// Scancode table matches sexsh convention (US QWERTY set 1).
-fn handle_key(scancode: u8, line: &mut CmdLine) {
+fn handle_key(scancode: u8, line: &mut CmdLine, hist: &History) {
     match line.mode {
-        ViMode::Insert => handle_key_insert(scancode, line),
-        ViMode::Normal => handle_key_normal(scancode, line),
+        ViMode::Insert => handle_key_insert(scancode, line, hist),
+        ViMode::Normal => handle_key_normal(scancode, line, hist),
     }
 }
 
-fn handle_key_insert(scancode: u8, line: &mut CmdLine) {
+fn handle_key_insert(scancode: u8, line: &mut CmdLine, hist: &History) {
     match scancode {
         0x1C => { // Enter — caller handles dispatch; just clear
             serial_println!("[spindle.line.enter] len={} mode=insert text={:?}",
@@ -916,9 +1019,16 @@ fn handle_key_insert(scancode: u8, line: &mut CmdLine) {
             serial_println!("[spindle.vi.mode] mode=normal");
             serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len);
         }
+        0x48 => { // Up
+            let _ = history_nav(line, hist, true);
+        }
+        0x50 => { // Down
+            let _ = history_nav(line, hist, false);
+        }
         _ => {
             if let Some(ch) = scancode_to_ascii(scancode) {
                 line.insert_at(line.cur, ch);
+                line.hist_nav = None;
                 serial_println!("[spindle.line.append] ch={} len={}", ch as char, line.len);
                 serial_println!("[spindle.text.append] ch={}", ch);
                 serial_println!("[spindle.input.recv] key=printable ch={} len={}", ch as char, line.len);
@@ -929,7 +1039,7 @@ fn handle_key_insert(scancode: u8, line: &mut CmdLine) {
     }
 }
 
-fn handle_key_normal(scancode: u8, line: &mut CmdLine) {
+fn handle_key_normal(scancode: u8, line: &mut CmdLine, hist: &History) {
     match scancode {
         0x1C => { // Enter — clear (dispatch handled by caller)
             serial_println!("[spindle.line.enter] len={} mode=normal text={:?}",
@@ -947,6 +1057,12 @@ fn handle_key_normal(scancode: u8, line: &mut CmdLine) {
         0x0E => { // Backspace in normal = cursor left (h)
             line.cursor_left();
             serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len);
+        }
+        0x48 => {
+            let _ = history_nav(line, hist, true);
+        }
+        0x50 => {
+            let _ = history_nav(line, hist, false);
         }
         _ => {
             if line.pending_d {
@@ -1159,6 +1275,50 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback, hist: &mut
               && stage14_ok && stage15_ok && stage16_ok && stage17_ok
               && stage18_ok && stage19_ok && stage20_ok && true /* events ok */;
     serial_println!("[spindle.input.proof.done] ok={} stages=20 (events: pending)", all_ok as u8);
+}
+
+fn run_command_history_proof(sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) {
+    let mut line = CmdLine::new();
+    serial_println!("[spindle.command.history.proof] stage=0 action=start ok=1");
+
+    let cmds: [&[u8]; 4] = [b"help", b"echo spindle", b"history", b"clear"];
+    for (i, cmd) in cmds.iter().enumerate() {
+        line.set_from_slice(cmd);
+        serial_println!("[spindle.cmd.recv] line_len={}", line.len);
+        let idx = hist.push(line.as_bytes());
+        serial_println!("[spindle.history.push] idx={} len={}", idx, line.len);
+        let recognized = dispatch(line.as_bytes(), sb, hist, ev);
+        let name = tokenize(line.as_bytes()).0;
+        serial_println!(
+            "[spindle.cmd.exec] name={} ok={} reason={}",
+            core::str::from_utf8(name).unwrap_or("?"),
+            recognized as u8,
+            if recognized { "ok" } else { "unknown_command" }
+        );
+        serial_println!(
+            "[spindle.command.history.proof] stage={} action=exec_{} ok={}",
+            i + 1,
+            core::str::from_utf8(name).unwrap_or("?"),
+            recognized as u8
+        );
+        line.clear();
+    }
+
+    let nav_up_ok = history_nav(&mut line, hist, true);
+    serial_println!("[spindle.command.history.proof] stage=5 action=nav_up ok={}", nav_up_ok as u8);
+    let nav_down_ok = history_nav(&mut line, hist, false);
+    serial_println!("[spindle.command.history.proof] stage=6 action=nav_down ok={}", nav_down_ok as u8);
+
+    let history_ok = dispatch(b"history", sb, hist, ev);
+    serial_println!(
+        "[spindle.cmd.exec] name=history ok={} reason={}",
+        history_ok as u8,
+        if history_ok { "ok" } else { "unknown_command" }
+    );
+    serial_println!("[spindle.command.history.proof] stage=7 action=history_show ok={}", history_ok as u8);
+
+    let all_ok = nav_up_ok && nav_down_ok && history_ok;
+    serial_println!("[spindle.command.history.proof.done] ok={}", all_ok as u8);
 }
 
 // ── M9 Proof: Spindle Session as SexObject ────────────────────────────────────
