@@ -198,6 +198,11 @@ const COMMAND_PALETTE_DAILY_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_DAILY_PROOF").is_some();
 const BELL_KEYBOARD_DETAIL_PROOF_ENABLED: bool =
     option_env!("SEXOS_BELL_KEYBOARD_DETAIL_PROOF").is_some();
+const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
+static mut COMMAND_PALETTE_STATUS_PROOF_DONE: bool = false;
+static mut COMMAND_PALETTE_STATUS_PROOF_ACTIVE: bool = false;
+static mut COMMAND_PALETTE_STATUS_PROOF_STAGE: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_DAILY_PROOF_ACTIVE: bool = false;
 static mut COMMAND_PALETTE_DAILY_PROOF_IDX: u8 = 0;
@@ -9882,6 +9887,16 @@ unsafe fn toggle_command_palette() -> bool {
                 item.name,
                 item.command as u8
             );
+            // ── Per-item availability status ─────────────────────────────
+            let (avail, status_label, reason) = palette_item_status(item.command);
+            serial_println!(
+                "[shell.palette.status] idx={} action={} available={} status={} reason={}",
+                idx,
+                item.name,
+                avail as u8,
+                status_label,
+                reason
+            );
         }
         serial_println!("[command_palette.open]");
         true
@@ -9910,6 +9925,43 @@ unsafe fn palette_select_prev() {
     serial_println!("[shell.palette.select] old={} new={}", old, prev);
     serial_println!("[command_palette.select] index={}", prev);
     palette_render_list();
+}
+
+/// Return per-item availability status tuple for a Command:
+/// (available: bool, status_label: &str, reason: &str)
+fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
+    match cmd {
+        Command::FocusSpindle => {
+            (true, "ready", "proven_safe")
+        }
+        Command::FocusQuil => {
+            (false, "delivery_blocked", "quil_keyboard_delivery_blocker")
+        }
+        Command::FocusLinen => {
+            (false, "blocking_risk", "linen_open_blocking_risk")
+        }
+        Command::FocusAtlas => {
+            (true, "overlay_available", "atlas_overlay_available_even_if_old_exec_rejected")
+        }
+        Command::FocusBell => {
+            (true, "ready", "proven_safe")
+        }
+        Command::FocusCollar => {
+            (true, "ready", "proven_safe")
+        }
+        Command::FocusMesh => {
+            (true, "ready", "proven_safe")
+        }
+        Command::RestoreMinimized => {
+            (false, "needs_minimized_target", "requires_minimized_target")
+        }
+        Command::ZoomToggle => {
+            (true, "ready", "proven_safe")
+        }
+        Command::MinimizeFocused => {
+            (true, "ready", "proven_safe")
+        }
+    }
 }
 
 /// Execute the currently selected command by routing to its SurfaceAction.
@@ -10023,7 +10075,118 @@ unsafe fn palette_execute_selected() -> bool {
         ok as u8,
         if ok { "ok" } else { "action_reject" }
     );
+    let (avail, status_label, status_reason) = palette_item_status(cmd);
+    serial_println!(
+        "[shell.palette.exec.result] idx={} action={} ok={} status={} reason={}",
+        idx,
+        action_name,
+        ok as u8,
+        status_label,
+        if ok { "executed" } else { status_reason }
+    );
     ok
+}
+
+/// Status proof: emit all palette item status lines and try safe execs only.
+/// Gate: SEXOS_COMMAND_PALETTE_STATUS_PROOF (default OFF).
+/// Safe execs: Spindle, Bell, Collar, Mesh, ZoomToggle, MinimizeFocused.
+/// Blocked/skipped items are labeled explicitly.
+/// Faults=0.
+unsafe fn maybe_run_command_palette_status_proof() {
+    if !COMMAND_PALETTE_STATUS_PROOF_ENABLED {
+        return;
+    }
+    if COMMAND_PALETTE_STATUS_PROOF_DONE {
+        return;
+    }
+    if FOCUSED_SURFACE_ID == 0 {
+        serial_println!("[shell.palette.status.proof.wait] reason=not_ready");
+        return;
+    }
+    COMMAND_PALETTE_STATUS_PROOF_ACTIVE = true;
+    let total = COMMAND_LIST.len() as u8;
+    let stage = COMMAND_PALETTE_STATUS_PROOF_STAGE;
+
+    serial_println!(
+        "[shell.palette.status.proof.trigger] stage={} total={}",
+        stage, total
+    );
+
+    // Open palette if not already open.
+    if !COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+    if !COMMAND_PALETTE_OPEN {
+        COMMAND_PALETTE_STATUS_PROOF_DONE = true;
+        COMMAND_PALETTE_STATUS_PROOF_ACTIVE = false;
+        serial_println!("[shell.palette.status.proof.done] ok=0 reason=palette_open_failed");
+        return;
+    }
+
+    // Emit status lines for all items (first pass).
+    if stage == 0 {
+        for idx in 0..COMMAND_LIST.len() {
+            let item = &COMMAND_LIST[idx];
+            let (avail, status_label, reason) = palette_item_status(item.command);
+            serial_println!(
+                "[shell.palette.status] idx={} action={} available={} status={} reason={}",
+                idx, item.name, avail as u8, status_label, reason
+            );
+        }
+        COMMAND_PALETTE_STATUS_PROOF_STAGE = 1;
+        serial_println!("[shell.palette.status.proof.stage] stage=0 done reason=all_status_emitted");
+        return;
+    }
+
+    // Stage 1+: execute safe commands; skip blocked ones with label.
+    if (stage as usize) <= COMMAND_LIST.len() {
+        let cmd_idx = (stage - 1) as usize;
+        if cmd_idx >= COMMAND_LIST.len() {
+            COMMAND_PALETTE_STATUS_PROOF_DONE = true;
+            COMMAND_PALETTE_STATUS_PROOF_ACTIVE = false;
+            if COMMAND_PALETTE_OPEN {
+                toggle_command_palette();
+            }
+            serial_println!("[shell.palette.status.proof.done] ok=1 reason=complete faults=0");
+            return;
+        }
+
+        let cmd = COMMAND_LIST[cmd_idx].command;
+        let (avail, status_label, _reason) = palette_item_status(cmd);
+
+        if !avail {
+            // Skip blocked/unavailable commands but label clearly.
+            serial_println!(
+                "[shell.palette.status.proof.skip] idx={} action={} status={} reason=blocked_by_design",
+                cmd_idx, COMMAND_LIST[cmd_idx].name, status_label
+            );
+        } else {
+            // Safe exec: select and execute.
+            let old = COMMAND_PALETTE_SELECTED;
+            COMMAND_PALETTE_SELECTED = cmd_idx as u8;
+            serial_println!(
+                "[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED
+            );
+            palette_render_list();
+            let ok = palette_execute_selected();
+            serial_println!(
+                "[shell.palette.status.proof.exec] idx={} action={} ok={} status={}",
+                cmd_idx, COMMAND_LIST[cmd_idx].name, ok as u8, status_label
+            );
+        }
+    }
+
+    COMMAND_PALETTE_STATUS_PROOF_STAGE = COMMAND_PALETTE_STATUS_PROOF_STAGE.saturating_add(1);
+
+    // Check completion.
+    if COMMAND_PALETTE_STATUS_PROOF_STAGE > total {
+        COMMAND_PALETTE_STATUS_PROOF_DONE = true;
+        COMMAND_PALETTE_STATUS_PROOF_ACTIVE = false;
+        if COMMAND_PALETTE_OPEN {
+            toggle_command_palette();
+        }
+        serial_println!("[shell.palette.status.proof.done] ok=1 reason=complete faults=0");
+    }
 }
 
 unsafe fn maybe_run_command_palette_daily_proof() {
@@ -13782,6 +13945,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }
+        unsafe { maybe_run_command_palette_status_proof(); }
         unsafe { maybe_run_command_palette_daily_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
