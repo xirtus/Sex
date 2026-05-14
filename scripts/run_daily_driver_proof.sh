@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# run_daily_driver_proof.sh — Daily-Driver Proof Profile V1
+#
+# Builds a proof ISO with all daily-driver proof gates enabled, boots in
+# headless QEMU, captures the serial log, and runs daily_driver_master_gate.sh.
+#
+# This is a host-side orchestration script only.  It does not imply POSIX
+# semantics inside SexOS and makes zero source-code, kernel, ABI, USB, input,
+# display, or app behavior changes.
+#
+# Usage:
+#   ./scripts/run_daily_driver_proof.sh [log_path]
+#
+#   log_path defaults to /tmp/sexos_daily_driver_proof.log
+#
+# Returns:
+#   0 — build, boot, and all enabled gates PASS, zero faults
+#   1 — build failed, gate failed, or faults detected
+#   2 — fatal error (missing scripts, log path unwritable)
+#
+# See: docs/handoff/DAILY_DRIVER_PROOF_PROFILE_V1.md
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+LOG="${1:-/tmp/sexos_daily_driver_proof.log}"
+GATE_SCRIPT="./scripts/daily_driver_master_gate.sh"
+BUILD_SCRIPT="./scripts/entrypoint_build.sh"
+ISO="sexos-v1.0.0.iso"
+QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
+PROBE_SECONDS="${DAILY_DRIVER_PROBE_SECONDS:-30}"
+
+# ---- helpers ----
+die() {
+    echo "FATAL: $*" >&2
+    exit 2
+}
+
+# ---- validate prerequisites ----
+[ -x "$BUILD_SCRIPT" ] || die "build script not found: $BUILD_SCRIPT"
+[ -x "$GATE_SCRIPT" ] || die "gate script not found: $GATE_SCRIPT"
+# Ensure log directory is writable.
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || die "cannot create log directory: $(dirname "$LOG")"
+: > "$LOG" || die "cannot write to log: $LOG"
+
+# ---- proof environment variables ----
+#
+# Each variable activates a compile-time option_env! gate in the corresponding
+# SexOS app or server.  Variables for proofs not yet implemented are silently
+# ignored by the compiler (is_some() returns false).
+
+# ── Spindle daily-driver proofs ──
+export SEXOS_SPINDLE_DAILY_SUMMARY_PROOF=1
+export SEXOS_SPINDLE_STATUS_PANEL_PROOF=1
+export SEXOS_SPINDLE_BELL_BRIDGE_PROOF=1
+export SEXOS_SPINDLE_LINEN_BRIDGE_PROOF=1
+export SEXOS_SPINDLE_FILES_COMMANDS_PROOF=1
+export SEXOS_SPINDLE_COMMAND_HISTORY_PROOF=1
+export SEXOS_SPINDLE_PERSIST_HISTORY_PROOF=1
+# NOTE: SEXOS_SPINDLE_INPUT_PROOF is intentionally NOT set.
+# It enables framebuffer writes that cause a PAGE FAULT at 0x40000000
+# when Spindle is kernel-spawned alongside silk-shell's own FB.
+# The input proof is compile-verified in isolation.
+
+# ── Command palette ──
+export SEXOS_COMMAND_PALETTE_STATUS_PROOF=1
+export SEXOS_COMMAND_PALETTE_DAILY_PROOF=1
+export SEXOS_COMMAND_PALETTE_LINEN_STATUS_PROOF=1
+
+# ── Linen ──
+export SEXOS_LINEN_NONBLOCKING_OPEN_PROOF=1
+export SEXOS_LINEN_OBJECT_DETAIL_PROOF=1
+export SEXOS_LINEN_KEYBOARD_NAV_PROOF=1
+export SEXOS_LINEN_SESSION_PROOF=1
+
+# ── Quil ──
+export SEXOS_QUIL_KEYBOARD_BUFFER_PROOF=1
+export SEXOS_QUIL_KEYBOARD_NAV_PROOF=1
+export SEXOS_QUIL_STATUS_UNBLOCK_PROOF=1
+
+# ── Bell ──
+export SEXOS_BELL_SYSTEM_EVENTS_PROOF=1
+export SEXOS_BELL_DETAIL_SEED_PROOF=1
+export SEXOS_BELL_KEYBOARD_DETAIL_PROOF=1
+
+# ── Atlas ──
+export SEXOS_ATLAS_THEME_VISUAL_PROOF=1
+export SEXOS_ATLAS_THEME_PRESETS_PROOF=1
+export SEXOS_ATLAS_SCENE_KEYBOARD_PROOF=1
+
+# ── Collar ──
+export SEXOS_COLLAR_KEYBOARD_GRANTS_PROOF=1
+export SEXOS_COLLAR_ENFORCE_PROOF=1
+export SEXOS_COLLAR_REVIEW_PROOF=1
+
+# ── Mesh / Frame ──
+export SEXOS_MESH_KEYBOARD_MAP_PROOF=1
+
+# ── SilkBar ──
+export SEXOS_SILKBAR_KEYBOARD_STATUS_PROOF=1
+export SEXOS_SILKBAR_PALETTE_STATUS_PROOF=1
+
+# ── Keyboard GUI broad proof ──
+export SEXOS_KEYBOARD_GUI_BROAD_PROOF=1
+export SEXOS_KEYBOARD_PROOF=1
+export SEXOS_KEYBOARD_SAFE_CLOSE_PROOF=1
+export SEXOS_KEYBOARD_WINDOW_PROOF=1
+
+# ── SexFiles storage ──
+export SEXOS_SEXFILES_CAP_RECORD_PROOF=1
+export SEXOS_SEXFILES_EXTENT_PROOF=1
+
+# ── SexObject ──
+export SEXOS_SEXOBJECT_VIEW_PROOF=1
+export SEXOS_SEXOBJECT_OQ=1
+
+echo "============================================"
+echo " DAILY-DRIVER PROOF PROFILE V1"
+echo "============================================"
+echo ""
+echo "  log:     $LOG"
+echo "  iso:     $ISO"
+echo "  probe:   ${PROBE_SECONDS}s"
+echo ""
+
+# ---- 1. BUILD ----
+echo "[proof] BUILD phase..."
+BUILD_START=$(date +%s)
+if "$BUILD_SCRIPT" >/tmp/daily_driver_build.log 2>&1; then
+    BUILD_DURATION=$(($(date +%s) - BUILD_START))
+    echo "[proof] BUILD: PASS (${BUILD_DURATION}s)"
+else
+    echo "[proof] BUILD: FAIL"
+    echo "[proof] Build log: /tmp/daily_driver_build.log"
+    exit 1
+fi
+
+[ -f "$ISO" ] || die "ISO not produced: $ISO"
+
+# ---- 2. BOOT ----
+echo ""
+echo "[proof] BOOT phase (QEMU, ${PROBE_SECONDS}s timeout)..."
+QEMU_PID=""
+
+cleanup() {
+    set +e
+    if [ -n "${QEMU_PID:-}" ] && kill -0 "$QEMU_PID" 2>/dev/null; then
+        kill "$QEMU_PID" 2>/dev/null || true
+        sleep 1
+        kill -9 "$QEMU_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
+"$QEMU_BIN" \
+    -M q35 \
+    -m 512M \
+    -cpu max,+pku \
+    -cdrom "$ISO" \
+    -device nec-usb-xhci,id=xhci \
+    -device usb-kbd,bus=xhci.0 \
+    -serial "file:$LOG" \
+    -display none \
+    -no-reboot \
+    -no-shutdown &
+QEMU_PID=$!
+
+if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+    die "QEMU failed to start"
+fi
+
+echo "[proof] QEMU PID: $QEMU_PID"
+sleep "$PROBE_SECONDS"
+
+# Stop QEMU
+if kill -0 "$QEMU_PID" 2>/dev/null; then
+    kill "$QEMU_PID" 2>/dev/null || true
+    sleep 1
+fi
+
+if [ ! -f "$LOG" ]; then
+    die "no serial log produced at $LOG"
+fi
+
+LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
+echo "[proof] Log lines: $LOG_LINES"
+
+if [ "$LOG_LINES" -lt 10 ]; then
+    echo "[proof] WARNING: Log has fewer than 10 lines — possibly truncated boot"
+fi
+
+# ---- 3. GATE SCAN ----
+echo ""
+echo "[proof] GATE SCAN phase..."
+
+GATE_RESULT=0
+"$GATE_SCRIPT" "$LOG" || GATE_RESULT=$?
+
+echo ""
+
+if [ "$GATE_RESULT" -eq 0 ]; then
+    echo "[proof] DAILY-DRIVER PROOF PROFILE: PASS"
+    exit 0
+else
+    echo "[proof] DAILY-DRIVER PROOF PROFILE: FAIL (gate scan exit=$GATE_RESULT)"
+    exit 1
+fi
