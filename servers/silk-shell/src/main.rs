@@ -4654,6 +4654,54 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         }
 
         if value == 1 {
+            // KEYBOARD_GUI_AUTOPILOT_V1: check reserved UI keys before app routing.
+            // The handle_hid_event path (called from linen_sync_reply and input-first
+            // drain) previously routed all EV_KEY events to the focused app without
+            // checking scancode_to_action, causing reserved UI keys (Tab, Esc, Enter,
+            // Backspace, F-keys) to reach Quil/Linen/Spindle before the main OP_HID_EVENT
+            // dispatch could consume them.
+            let reserved_ui_action = scancode_to_action(scancode);
+            if let Some(action) = reserved_ui_action {
+                static mut KBD_UI_CONSUME_DRAIN_BUDGET: u32 = 32;
+                if KBD_UI_CONSUME_DRAIN_BUDGET > 0 {
+                    KBD_UI_CONSUME_DRAIN_BUDGET -= 1;
+                    serial_println!(
+                        "[shell.kbd.ui.consume] scancode={} action={} down={} consumed={} path=handle_hid_event_drain",
+                        scancode, action_name(action), value, 1
+                    );
+                }
+                serial_println!(
+                    "[shell.kbd.ui.action] scancode={} action={} focused={} frame={} sid={}",
+                    scancode, action_name(action), FOCUSED_SURFACE_ID,
+                    frame_for_surface(FOCUSED_SURFACE_ID).unwrap_or(0),
+                    FOCUSED_SURFACE_ID
+                );
+                // Dispatch accessibility / window actions in-line so they work
+                // even during linen_sync_reply or input drain.
+                let kbd_ui_focus_old = FOCUSED_SURFACE_ID;
+                let dispatched = access_handle_keyboard_action(action);
+                let kbd_ui_focus_new = FOCUSED_SURFACE_ID;
+                if kbd_ui_focus_new != kbd_ui_focus_old {
+                    serial_println!(
+                        "[shell.kbd.ui.focus] old={} new={} frame={} reason={}",
+                        kbd_ui_focus_old,
+                        kbd_ui_focus_new,
+                        frame_for_surface(kbd_ui_focus_new).unwrap_or(0),
+                        action_name(action)
+                    );
+                }
+                serial_println!(
+                    "[shell.kbd.ui.result] action={} ok={} reason={} frame={} sid={}",
+                    action_name(action),
+                    dispatched as u8,
+                    if dispatched { "ok" } else { "noop_or_reject" },
+                    frame_for_surface(FOCUSED_SURFACE_ID).unwrap_or(0),
+                    FOCUSED_SURFACE_ID
+                );
+                // Do not route reserved UI keys to the focused app.
+                return;
+            }
+
             if FOCUSED_SURFACE_ID == SURFACE_ID_QUIL {
                 static mut KEY_ROUTE_DRAIN_BUDGET: u32 = 32;
                 if KEY_ROUTE_DRAIN_BUDGET > 0 {
@@ -12982,8 +13030,10 @@ pub extern "C" fn _start() -> ! {
 
                         // ── Event-class dispatch ──
                         if event_class == EV_KEY && value == 1 {
+                            let reserved_ui_action = scancode_to_action(scancode);
+                            let reserved_ui_key = reserved_ui_action.is_some();
                             // Track C2: key routing proof
-                            if FOCUSED_SURFACE_ID == SURFACE_ID_QUIL {
+                            if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_QUIL {
                                 unsafe {
                                     static mut KEY_ROUTE_BUDGET: u32 = 16;
                                     let b = &mut KEY_ROUTE_BUDGET;
@@ -12994,7 +13044,7 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                                 mutated = true;
-                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
+                            } else if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
                                 unsafe {
                                     static mut KEY_ROUTE_BUDGET_LINEN: u32 = 16;
                                     let b = &mut KEY_ROUTE_BUDGET_LINEN;
@@ -13012,7 +13062,7 @@ pub extern "C" fn _start() -> ! {
                             // [shell.scene.settings.panel.key] budget 16.
                             // F7 (0x41) falls through to normal dispatch unchanged.
                             let mut panel_consumed = false;
-                            if SCENE_SETTINGS_ACTIVE {
+                            if SCENE_SETTINGS_ACTIVE && !reserved_ui_key {
                                 static mut PANEL_KEY_BUDGET: u32 = 16;
                                 let b = &mut PANEL_KEY_BUDGET;
                                 match scancode {
@@ -13048,7 +13098,7 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             // ── Command palette keyboard intercept: consume keys when palette open ──
-                            if !panel_consumed && COMMAND_PALETTE_OPEN {
+                            if !panel_consumed && COMMAND_PALETTE_OPEN && !reserved_ui_key {
                                 match scancode {
                                     0x24 => { palette_select_next(); mutated = true; } // J - next
                                     0x25 => { palette_select_prev(); mutated = true; } // K - prev
@@ -13072,11 +13122,11 @@ pub extern "C" fn _start() -> ! {
                             // ── Atlas keyboard intercept: consume non-F10 keys when Atlas active ──
                             if panel_consumed {
                                 // panel or palette handled key; skip Atlas and action dispatch
-                            } else if ATLAS_MODE_ENABLED && scancode != 0x44 /* F10 falls through to ToggleAtlas */ {
+                            } else if !reserved_ui_key && ATLAS_MODE_ENABLED && scancode != 0x44 /* F10 falls through to ToggleAtlas */ {
                                 handle_atlas_keyboard(scancode);
                                 mutated = true;
                             // ── Bell focused-surface navigation: J/K nav + Enter detail proof ──
-                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_BELL_PLACEHOLDER
+                            } else if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_BELL_PLACEHOLDER
                                 && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C)
                             {
                                 match scancode {
@@ -13096,7 +13146,7 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 mutated = true;
                             // ── Mesh focused-surface navigation: J/K nav + Enter detail proof ──
-                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_MESH
+                            } else if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_MESH
                                 && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C || scancode == 0x59)
                             {
                                 match scancode {
@@ -13134,7 +13184,7 @@ pub extern "C" fn _start() -> ! {
                             // ── Spindle focused-surface: capture printable input + dispatch commands ──
                             // Consumes: Enter, Backspace, Escape, Space, alphanumeric.
                             // All other keys fall through to scancode_to_action unchanged.
-                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_SPINDLE
+                            } else if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_SPINDLE
                                 && (scancode == 0x1C || scancode == 0x0E || scancode == 0x01
                                     || scancode == 0x0F || scancode == 0x39
                                     || (scancode >= 0x02 && scancode <= 0x0B)
@@ -13214,7 +13264,7 @@ pub extern "C" fn _start() -> ! {
                                 }}
                                 mutated = true;
                             // ── Linen focused-surface: Enter/Space → OpenIntent → Quil ──
-                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN
+                            } else if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_LINEN
                                 && (scancode == 0x1C || scancode == 0x39)
                             {
                                 let obj_id = linen_selected_object_id();
@@ -13243,10 +13293,21 @@ pub extern "C" fn _start() -> ! {
                                     serial_println!("[linen.open_intent.skip] reason=no_object");
                                 }
                                 mutated = true;
-                            } else if let Some(action) = scancode_to_action(scancode) {
+                            } else if let Some(action) = reserved_ui_action {
+                                let kbd_ui_focus_old = FOCUSED_SURFACE_ID;
+                                let kbd_ui_frame = frame_for_surface(kbd_ui_focus_old).unwrap_or(0);
+                                let kbd_ui_sid = kbd_ui_focus_old;
+                                serial_println!(
+                                    "[shell.kbd.ui.consume] scancode={} action={} down={} consumed={}",
+                                    scancode, action_name(action), value, 1
+                                );
                                 serial_println!(
                                     "[shell.key.action] scancode={} action={} focused={}",
                                     scancode, action_name(action), FOCUSED_SURFACE_ID
+                                );
+                                serial_println!(
+                                    "[shell.kbd.ui.action] scancode={} action={} focused={} frame={} sid={}",
+                                    scancode, action_name(action), kbd_ui_focus_old, kbd_ui_frame, kbd_ui_sid
                                 );
                                 match action {
                                     SurfaceAction::FocusToggle => {
@@ -13886,6 +13947,25 @@ pub extern "C" fn _start() -> ! {
                                     SurfaceAction::MoveUp |
                                     SurfaceAction::MoveDown => {}
                                 }
+                                let kbd_ui_focus_new = FOCUSED_SURFACE_ID;
+                                if kbd_ui_focus_new != kbd_ui_focus_old {
+                                    let kbd_ui_new_frame = frame_for_surface(kbd_ui_focus_new).unwrap_or(0);
+                                    serial_println!(
+                                        "[shell.kbd.ui.focus] old={} new={} frame={} reason={}",
+                                        kbd_ui_focus_old,
+                                        kbd_ui_focus_new,
+                                        kbd_ui_new_frame,
+                                        action_name(action)
+                                    );
+                                }
+                                serial_println!(
+                                    "[shell.kbd.ui.result] action={} ok={} reason={} frame={} sid={}",
+                                    action_name(action),
+                                    mutated as u8,
+                                    if mutated { "ok" } else { "noop_or_reject" },
+                                    frame_for_surface(FOCUSED_SURFACE_ID).unwrap_or(0),
+                                    FOCUSED_SURFACE_ID
+                                );
                             }
                         }
 
