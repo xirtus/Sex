@@ -229,6 +229,8 @@ const QUIL_STATUS_UNBLOCK_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_STATUS_UNBLOCK_PROOF").is_some();
 const APP_LAUNCHER_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_LAUNCHER_PROOF").is_some();
+const APP_LAUNCHER_MULTI_EXEC_PROOF_ENABLED: bool =
+    option_env!("SEXOS_APP_LAUNCHER_MULTI_EXEC_PROOF").is_some();
 static mut COMMAND_PALETTE_STATUS_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE: bool = false;
 static mut QUIL_STATUS_UNBLOCK_PROOF_DONE: bool = false;
@@ -236,6 +238,8 @@ static mut APP_LAUNCHER_PROOF_DONE: bool = false;
 static mut APP_LAUNCHER_PROOF_ACTIVE: bool = false;
 static mut APP_LAUNCHER_PROOF_STAGE: u8 = 0;
 static mut APP_LAUNCHER_PROOF_SELECTED: u8 = 0;
+static mut APP_LAUNCHER_MULTI_EXEC_PROOF_DONE: bool = false;
+static mut APP_LAUNCHER_MULTI_EXEC_PROOF_ACTIVE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_ACTIVE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_STAGE: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_DONE: bool = false;
@@ -11435,6 +11439,160 @@ unsafe fn maybe_run_app_launcher_proof() {
     serial_println!("[launcher.proof.done] ok={}", all_ok as u8);
 }
 
+/// App launcher multi-exec proof: executes and focuses all 7 keyboard-ready
+/// app launcher rows (Spindle, Quil, Linen, Atlas, Bell, Collar, Mesh).
+///
+/// Unlike APP_LAUNCHER_V1 (which only executed Spindle), this proof exercises
+/// every app row to prove each app can be launched and focused from the
+/// command palette.  Uses the existing palette_execute_selected() path —
+/// no new execution logic.
+///
+/// If an app cannot execute safely, it records ok=0 reason=... but does NOT
+/// block or hang — the proof continues to the next row.
+///
+/// Gate: SEXOS_APP_LAUNCHER_MULTI_EXEC_PROOF=1 (default OFF).
+///
+/// Markers:
+///   [launcher.multi.proof]      stage=N action=NAME ok=N reason=...
+///   [launcher.multi.exec]       idx=N app=NAME ok=N reason=...
+///   [launcher.multi.focus]      app=NAME sid=N ok=N reason=...
+///   [launcher.multi.proof.done] ok=N passed=N failed=N
+unsafe fn maybe_run_app_launcher_multi_exec_proof() {
+    if !APP_LAUNCHER_MULTI_EXEC_PROOF_ENABLED {
+        return;
+    }
+    if APP_LAUNCHER_MULTI_EXEC_PROOF_DONE {
+        return;
+    }
+    // Need a focused surface before palette can operate meaningfully.
+    if FOCUSED_SURFACE_ID == 0 {
+        return;
+    }
+
+    APP_LAUNCHER_MULTI_EXEC_PROOF_ACTIVE = true;
+    serial_println!("[launcher.multi.proof] stage=0 action=start ok=1 reason=multi_exec_proof_begin");
+
+    // Stage 1: Open the palette (launcher view).
+    if !COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+    let open_ok = COMMAND_PALETTE_OPEN;
+    serial_println!(
+        "[launcher.multi.proof] stage=1 action=open ok={} reason={}",
+        open_ok as u8,
+        if open_ok { "palette_opened" } else { "open_failed" }
+    );
+    if !open_ok {
+        APP_LAUNCHER_MULTI_EXEC_PROOF_DONE = true;
+        APP_LAUNCHER_MULTI_EXEC_PROOF_ACTIVE = false;
+        serial_println!("[launcher.multi.proof.done] ok=0 passed=0 failed=0");
+        return;
+    }
+
+    // App rows: (idx, app_name, expected_sid)
+    // Atlas (idx 3) is a toggle overlay — focus check uses ATLAS_MODE_ENABLED
+    // instead of FOCUSED_SURFACE_ID match.
+    let app_rows: [(u8, &str, u64); 7] = [
+        (0, "Spindle", SURFACE_ID_SPINDLE),
+        (1, "Quil",    SURFACE_ID_QUIL),
+        (2, "Linen",   SURFACE_ID_LINEN),
+        (3, "Atlas",   SURFACE_ID_ATLAS_OVERLAY),
+        (4, "Bell",    SURFACE_ID_BELL_PLACEHOLDER),
+        (5, "Collar",  SURFACE_ID_COLLAR),
+        (6, "Mesh",    SURFACE_ID_MESH),
+    ];
+
+    let mut passed: u8 = 0;
+    let mut failed: u8 = 0;
+
+    for (app_idx, app_name, expected_sid) in app_rows.iter() {
+        let idx = *app_idx;
+        let name = *app_name;
+        let sid = *expected_sid;
+
+        // Navigate to the target row.
+        COMMAND_PALETTE_SELECTED = idx;
+        palette_render_list(); // refresh visual selection highlight
+
+        serial_println!(
+            "[launcher.multi.proof] stage={} action={} ok=1 reason=selected",
+            idx + 2,
+            name
+        );
+
+        // Execute the selected launcher item.
+        let exec_ok = palette_execute_selected();
+
+        // Verify focus.
+        // Atlas (idx 3) is a toggle overlay — its surface (151) is
+        // nonfocusable by design in certain lifecycle states.  Focus
+        // check uses ATLAS_MODE_ENABLED rather than FOCUSED_SURFACE_ID.
+        // Pass condition for Atlas: ATLAS_MODE_ENABLED is true (overlay
+        // is open), even if palette_execute_selected returned false
+        // because try_set_focus on a nonfocusable surface was rejected.
+        let focus_ok: bool;
+        if idx == 3 {
+            focus_ok = ATLAS_MODE_ENABLED;
+        } else {
+            focus_ok = exec_ok && FOCUSED_SURFACE_ID == sid;
+        }
+
+        serial_println!(
+            "[launcher.multi.exec] idx={} app={} ok={} reason={}",
+            idx,
+            name,
+            exec_ok as u8,
+            if exec_ok { "launched" } else { "exec_reject" }
+        );
+
+        serial_println!(
+            "[launcher.multi.focus] app={} sid={} ok={} reason={}",
+            name,
+            sid,
+            focus_ok as u8,
+            if focus_ok { "focused" } else {
+                if exec_ok { "focus_mismatch" } else { "exec_failed" }
+            }
+        );
+
+        // Atlas passes if overlay is open (ATLAS_MODE_ENABLED=true).
+        // Other apps pass if both exec and focus succeeded.
+        if idx == 3 {
+            if focus_ok {
+                passed = passed.saturating_add(1);
+            } else {
+                failed = failed.saturating_add(1);
+            }
+        } else {
+            if exec_ok && focus_ok {
+                passed = passed.saturating_add(1);
+            } else {
+                failed = failed.saturating_add(1);
+                // Do NOT block — continue to next app.
+            }
+        }
+    }
+
+    // Stage 9: Close the palette.
+    if COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+    let close_ok = !COMMAND_PALETTE_OPEN;
+    serial_println!(
+        "[launcher.multi.proof] stage=9 action=close ok={} reason={}",
+        close_ok as u8,
+        if close_ok { "palette_closed" } else { "close_failed" }
+    );
+
+    APP_LAUNCHER_MULTI_EXEC_PROOF_DONE = true;
+    APP_LAUNCHER_MULTI_EXEC_PROOF_ACTIVE = false;
+    let all_ok = passed > 0 && failed == 0 && close_ok;
+    serial_println!(
+        "[launcher.multi.proof.done] ok={} passed={} failed={}",
+        all_ok as u8, passed, failed
+    );
+}
+
 unsafe fn palette_batch_emit_app_focus(app: &str, sid: u64, ok: bool, reason: &str) {
     let frame = frame_for_surface(sid).unwrap_or(0);
     serial_println!(
@@ -15111,6 +15269,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_quil_status_unblock_proof(); }
         unsafe { maybe_run_command_palette_daily_proof(); }
         unsafe { maybe_run_app_launcher_proof(); }
+        unsafe { maybe_run_app_launcher_multi_exec_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
