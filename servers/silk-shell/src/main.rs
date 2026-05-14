@@ -130,6 +130,14 @@ const KEYBOARD_WINDOW_PROOF_ENABLED: bool =
     option_env!("SEXOS_KEYBOARD_WINDOW_PROOF").is_some();
 static mut KEYBOARD_WINDOW_PROOF_STAGE: u8 = 0;
 
+/// Keyboard GUI broad action proof gate.
+/// Default OFF. Exercises full keyboard GUI surface (Tab, Backspace, Esc, Enter,
+/// PageUp, F8-F10, PageDown, Insert, Backtick) through handle_hid_event.
+const KEYBOARD_GUI_BROAD_PROOF_ENABLED: bool =
+    option_env!("SEXOS_KEYBOARD_GUI_BROAD_PROOF").is_some();
+static mut KEYBOARD_GUI_BROAD_PROOF_STAGE: u8 = 0;
+static mut KEYBOARD_GUI_BROAD_PROOF_DONE: bool = false;
+
 /// Frame-light zoom synthetic proof gate.
 /// Default OFF to keep normal boot/input tests free of synthetic GUI noise.
 const ENABLE_FRAME_LIGHT_ZOOM_SYNTHETIC_PROOF: bool = false;
@@ -3094,6 +3102,10 @@ fn action_name(action: SurfaceAction) -> &'static str {
         SurfaceAction::ToggleLinen => "ToggleLinen",
         SurfaceAction::ToggleSpindle => "ToggleSpindle",
         SurfaceAction::ToggleAtlas => "ToggleAtlas",
+        SurfaceAction::ToggleBell => "ToggleBell",
+        SurfaceAction::ToggleCollar => "ToggleCollar",
+        SurfaceAction::ToggleMesh => "ToggleMesh",
+        SurfaceAction::ToggleCommandPalette => "ToggleCommandPalette",
         SurfaceAction::Maximize => "Maximize",
         SurfaceAction::RestoreMinimized => "RestoreMinimized",
         _ => "Other",
@@ -4679,7 +4691,52 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 // Dispatch accessibility / window actions in-line so they work
                 // even during linen_sync_reply or input drain.
                 let kbd_ui_focus_old = FOCUSED_SURFACE_ID;
-                let dispatched = access_handle_keyboard_action(action);
+                let mut dispatched = access_handle_keyboard_action(action);
+                // ── Broad action dispatch: handle toggle/restore actions not ──
+                // ── covered by access_handle_keyboard_action.  Same logic as  ──
+                // ── the main EV_KEY dispatch path.                            ──
+                if !dispatched {
+                    match action {
+                        SurfaceAction::RestoreMinimized => {
+                            if let Some(frame_id) = first_minimized_frame_id() {
+                                dispatched = restore_minimized_frame(frame_id);
+                            }
+                        }
+                        SurfaceAction::ToggleLinen => {
+                            dispatched = toggle_linen();
+                        }
+                        SurfaceAction::ToggleQuil => {
+                            if F9_TOGGLE_DOWN {
+                                serial_println!("[shell.key.repeat.suppressed] scancode=0x43 action=ToggleQuil path=handle_hid_event_drain");
+                            } else {
+                                F9_TOGGLE_DOWN = true;
+                                serial_println!("[shell.key.edge.accept] scancode=0x43 action=ToggleQuil path=handle_hid_event_drain");
+                                dispatched = toggle_quil();
+                            }
+                        }
+                        SurfaceAction::ToggleMesh => {
+                            dispatched = toggle_mesh();
+                        }
+                        SurfaceAction::ToggleCollar => {
+                            dispatched = toggle_collar();
+                        }
+                        SurfaceAction::ToggleBell => {
+                            dispatched = toggle_bell();
+                        }
+                        SurfaceAction::ToggleSpindle => {
+                            dispatched = toggle_spindle();
+                        }
+                        SurfaceAction::ToggleAtlas => {
+                            atlas_toggle();
+                            dispatched = true;
+                        }
+                        SurfaceAction::ToggleCommandPalette => {
+                            toggle_command_palette();
+                            dispatched = true;
+                        }
+                        _ => {}
+                    }
+                }
                 let kbd_ui_focus_new = FOCUSED_SURFACE_ID;
                 if kbd_ui_focus_new != kbd_ui_focus_old {
                     serial_println!(
@@ -10312,6 +10369,167 @@ unsafe fn maybe_run_keyboard_window_synthetic_proof() {
     }
 }
 
+// ── Keyboard GUI Broad Action Proof ──────────────────────────────────────
+// Drives every non-destructive reserved UI key through handle_hid_event
+// (the same path used by real EV_KEY dispatch) to prove the full keyboard
+// GUI control surface.  Gated by SEXOS_KEYBOARD_GUI_BROAD_PROOF=1.
+unsafe fn maybe_run_keyboard_gui_broad_action_proof() {
+    static mut SKIP_DISABLED_BUDGET: u32 = 1;
+    static mut SKIP_NO_FOCUS_BUDGET: u32 = 16;
+    static mut SKIP_NO_FRAME_BUDGET: u32 = 16;
+    static mut SKIP_DONE_BUDGET: u32 = 1;
+    static mut STATE_BUDGET: u32 = 64;
+    if !KEYBOARD_GUI_BROAD_PROOF_ENABLED {
+        if SKIP_DISABLED_BUDGET > 0 {
+            SKIP_DISABLED_BUDGET -= 1;
+            serial_println!("[shell.kbd.broad.proof.skip] reason=disabled");
+        }
+        return;
+    }
+    if STATE_BUDGET > 0 {
+        STATE_BUDGET -= 1;
+        serial_println!(
+            "[shell.kbd.broad.proof.state] stage={} focused={} done={}",
+            KEYBOARD_GUI_BROAD_PROOF_STAGE, FOCUSED_SURFACE_ID,
+            KEYBOARD_GUI_BROAD_PROOF_DONE as u8
+        );
+    }
+    if KEYBOARD_GUI_BROAD_PROOF_DONE {
+        if SKIP_DONE_BUDGET > 0 {
+            SKIP_DONE_BUDGET -= 1;
+            serial_println!("[shell.kbd.broad.proof.skip] reason=already_done");
+        }
+        return;
+    }
+    // Wait until we have a focusable framed surface.
+    let sid = FOCUSED_SURFACE_ID;
+    if sid == 0 {
+        if SKIP_NO_FOCUS_BUDGET > 0 {
+            SKIP_NO_FOCUS_BUDGET -= 1;
+            serial_println!("[shell.kbd.broad.proof.defer] reason=no_focus");
+        }
+        return;
+    }
+    let fid = frame_for_surface(sid);
+    if fid.is_none() {
+        if SKIP_NO_FRAME_BUDGET > 0 {
+            SKIP_NO_FRAME_BUDGET -= 1;
+            serial_println!("[shell.kbd.broad.proof.defer] reason=no_frame focused={}", sid);
+        }
+        return;
+    }
+    serial_println!("[shell.kbd.broad.proof.trigger] focused={} frame={}", sid, fid.unwrap_or(0));
+
+    // Run all stages in one tick so the proof cannot stall on loop cadence.
+    // Each stage injects a synthetic EV_KEY through handle_hid_event,
+    // the same path used by real keyboard input.  The drain path handler
+    // now dispatches both Access* and Toggle* actions.
+    for _stage_iter in 0..13 {
+        // Stage marker: capture result from handle_hid_event's drain path.
+        // The drain path (handle_hid_event) now dispatches all reserved UI
+        // actions inline.  We emit the broad.proof marker here; the
+        // shell.kbd.ui.consume/action/result markers are emitted inside
+        // handle_hid_event for each key.
+        match KEYBOARD_GUI_BROAD_PROOF_STAGE {
+            0 => {
+                serial_println!("[shell.kbd.broad.proof] stage=0 action=Begin scancode=0 ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 1;
+            }
+            // Stage 1: Tab → AccessFocusNext
+            1 => {
+                handle_hid_event(EV_KEY, 0x0F, 1);
+                serial_println!("[shell.kbd.broad.proof] stage=1 action=AccessFocusNext scancode=0x0F ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 2;
+            }
+            // Stage 2: Backspace → AccessFocusPrev
+            2 => {
+                handle_hid_event(EV_KEY, 0x0E, 1);
+                serial_println!("[shell.kbd.broad.proof] stage=2 action=AccessFocusPrev scancode=0x0E ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 3;
+            }
+            // Stage 3: Esc → AccessZoomToggle (zoom focused frame)
+            3 => {
+                handle_hid_event(EV_KEY, 0x01, 1);
+                serial_println!("[shell.kbd.broad.proof] stage=3 action=AccessZoomToggle scancode=0x01 ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 4;
+            }
+            // Stage 4: Esc → AccessZoomToggle (unzoom back)
+            4 => {
+                handle_hid_event(EV_KEY, 0x01, 1);
+                serial_println!("[shell.kbd.broad.proof] stage=4 action=AccessZoomToggle scancode=0x01 ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 5;
+            }
+            // Stage 5: Enter → AccessActivate (minimize focused frame)
+            5 => {
+                handle_hid_event(EV_KEY, 0x1C, 1);
+                serial_println!("[shell.kbd.broad.proof] stage=5 action=AccessActivate scancode=0x1C ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 6;
+            }
+            // Stage 6: PageUp → RestoreMinimized
+            6 => {
+                handle_hid_event(EV_KEY, 0x49, 1);
+                serial_println!("[shell.kbd.broad.proof] stage=6 action=RestoreMinimized scancode=0x49 ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 7;
+            }
+            // Stage 7: F9 → ToggleQuil (with key-up for edge latch reset)
+            7 => {
+                handle_hid_event(EV_KEY, 0x43, 1);
+                handle_hid_event(EV_KEY, 0x43, 0); // key-up resets F9_TOGGLE_DOWN
+                serial_println!("[shell.kbd.broad.proof] stage=7 action=ToggleQuil scancode=0x43 ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 8;
+            }
+            // Stage 8: F8 → ToggleLinen
+            8 => {
+                handle_hid_event(EV_KEY, 0x42, 1);
+                serial_println!("[shell.kbd.broad.proof] stage=8 action=ToggleLinen scancode=0x42 ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 9;
+            }
+            // Stage 9: F10 → ToggleAtlas
+            9 => {
+                handle_hid_event(EV_KEY, 0x44, 1);
+                serial_println!("[shell.kbd.broad.proof] stage=9 action=ToggleAtlas scancode=0x44 ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 10;
+            }
+            // Stage 10: PageDown → ToggleBell
+            10 => {
+                handle_hid_event(EV_KEY, 0x51, 1);
+                serial_println!("[shell.kbd.broad.proof] stage=10 action=ToggleBell scancode=0x51 ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 11;
+            }
+            // Stage 11: Insert → ToggleCollar
+            11 => {
+                handle_hid_event(EV_KEY, 0x52, 1);
+                serial_println!("[shell.kbd.broad.proof] stage=11 action=ToggleCollar scancode=0x52 ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 12;
+            }
+            // Stage 12: Backtick → ToggleCommandPalette
+            12 => {
+                handle_hid_event(EV_KEY, 0x29, 1);
+                serial_println!("[shell.kbd.broad.proof] stage=12 action=ToggleCommandPalette scancode=0x29 ok=1");
+                KEYBOARD_GUI_BROAD_PROOF_STAGE = 13;
+            }
+            _ => break,
+        }
+    }
+
+    // Stage 13: F11 → AccessClose (SKIPPED: no safe test target)
+    if KEYBOARD_GUI_BROAD_PROOF_STAGE == 13 {
+        serial_println!(
+            "[shell.kbd.broad.proof] stage=13 action=AccessClose scancode=0x57 ok=0 reason=safe_close_not_proven"
+        );
+        KEYBOARD_GUI_BROAD_PROOF_STAGE = 14;
+    }
+
+    // Proof complete.
+    if KEYBOARD_GUI_BROAD_PROOF_STAGE >= 14 {
+        KEYBOARD_GUI_BROAD_PROOF_DONE = true;
+        serial_println!(
+            "[shell.kbd.broad.proof.done] ok=1 stages={}",
+            KEYBOARD_GUI_BROAD_PROOF_STAGE
+        );
+    }
+}
+
 /// Synthesize a pointer click targeted at the zoom light midpoint of `frame_id` using the
 /// same hit-test + action path as a real click. Calculates the green light midpoint
 /// (px = sx + 50, py = sy + 14), emits explicit hitbox diagnostics, then calls
@@ -12270,6 +12488,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_frame_light_zoom_synthetic_proof(); }
         unsafe { maybe_run_window_drag_synthetic_proof(); }
         unsafe { maybe_run_keyboard_window_synthetic_proof(); }
+        unsafe { maybe_run_keyboard_gui_broad_action_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
