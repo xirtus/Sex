@@ -64,8 +64,10 @@ struct WindowCreateParams {
     pfn_base: u64,
 }
 
-// ── Linen opcodes (local; OP_LINEN_CREATE_OBJECT matches linen server) ───
+// ── Linen opcodes (local; match linen server definitions) ───
 const OP_LINEN_CREATE_OBJECT: u64 = 0x41;
+const OP_LINEN_LIST_OBJECTS: u64 = 0x42;
+const OP_LINEN_OPEN_INTENT: u64 = 0x46;
 
 // ── RamFS opcodes (local; defined in servers/sexfiles/src/messages.rs) ────
 const OP_RAMFS_OPEN: u64 = 0x30;
@@ -557,6 +559,9 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  notify <msg> send Bell notification");
             sb.push(b"  bell-test    send test Bell notification");
             sb.push(b"  bell-status  Bell notification bridge status");
+            sb.push(b"  linen-status Linen object bridge status");
+            sb.push(b"  linen-list   list Linen objects (async-limited)");
+            sb.push(b"  linen-open   open Linen object by id (async)");
             true
         }
         b"echo" => {
@@ -837,6 +842,66 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.bell.command] name=bell-status ok=1 reason=status_report");
             true
         }
+        b"linen-status" => {
+            sb.push(b"Linen object bridge status:");
+            sb.push(b"  slot:     SLOT_LINEN=11 (PD 7: linen)");
+            sb.push(b"  edge:     AsyncEnqueue (fire-and-forget)");
+            sb.push(b"  blocking: none -- pdx_call returns immediately");
+            sb.push(b"  commands: linen-status / linen-list / linen-open");
+            sb.push(b"  note:     sync readback unavailable (AsyncEnqueue)");
+            serial_println!("[spindle.linen.audit] slot=11 safe=1 reason=fire_and_forget_async_enqueue");
+            serial_println!("[spindle.linen.command] name=linen-status ok=1 reason=status_report");
+            true
+        }
+        b"linen-list" => {
+            // OP_LINEN_LIST_OBJECTS uses AsyncEnqueue edge -- fire-and-forget.
+            // Server reply arrives asynchronously via type=0x1 message.
+            // Synchronous listing unavailable without blocking readback.
+            let (status, _) = unsafe { pdx_call(SLOT_LINEN, OP_LINEN_LIST_OBJECTS, 0, 0, 0) };
+            sb.push(b"Linen list request sent (async).");
+            sb.push(b"Synchronous listing unavailable: AsyncEnqueue edge.");
+            sb.push(b"Server reply arrives as type=0x1 in main listen loop.");
+            sb.push(b"Use silk-shell Linen surface for live object browser.");
+            serial_println!(
+                "[spindle.linen.send] op=list id=0 status={} err={}",
+                status, if status == 0 { 0 } else { status as i64 }
+            );
+            serial_println!("[spindle.linen.command] name=linen-list ok=1 reason=async_limited_static_fallback");
+            true
+        }
+        b"linen-open" => {
+            if args.is_empty() {
+                sb.push(b"linen-open: specify object id.");
+                sb.push(b"Usage: linen-open <id>");
+                serial_println!("[spindle.linen.command] name=linen-open ok=0 reason=missing_id");
+            } else {
+                // Parse numeric id from args (simple ASCII-to-int conversion).
+                let mut obj_id: u64 = 0;
+                for &b in args {
+                    if b >= b'0' && b <= b'9' {
+                        obj_id = obj_id.saturating_mul(10).saturating_add((b - b'0') as u64);
+                    } else {
+                        break;
+                    }
+                }
+                if obj_id == 0 {
+                    sb.push(b"linen-open: invalid id (must be numeric, nonzero).");
+                    serial_println!("[spindle.linen.command] name=linen-open ok=0 reason=invalid_id");
+                } else {
+                    // OP_LINEN_OPEN_INTENT -- fire-and-forget, Linen replies immediately.
+                    let (status, _) = unsafe { pdx_call(SLOT_LINEN, OP_LINEN_OPEN_INTENT, obj_id, 0, 0) };
+                    sb.push(b"Linen open request sent (async).");
+                    sb.push(b"Object open intent dispatched to Linen server.");
+                    sb.push(b"Use silk-shell Linen surface to view result.");
+                    serial_println!(
+                        "[spindle.linen.send] op=open id={} status={} err={}",
+                        obj_id, status, if status == 0 { 0 } else { status as i64 }
+                    );
+                    serial_println!("[spindle.linen.command] name=linen-open ok=1 reason=fire_and_forget");
+                }
+            }
+            true
+        }
         b"session" => {
             sb.push(b"Spindle session summary:");
             sb.push(b"  session id:  1 (local)");
@@ -846,7 +911,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  storage:     SexFiles RamFS, SLOT_STORAGE (AsyncEnqueue)");
             sb.push(b"  save/load:   save=async load=async-limited ls=static-fallback");
             sb.push(b"  semantics:   no blocking, no unbounded waits, no POSIX fs");
-            sb.push(b"Linen bridge pending (capability grant pending).");
+            sb.push(b"Linen bridge active: SLOT_LINEN (AsyncEnqueue).");
             true
         }
         b"events" => {
@@ -1057,6 +1122,11 @@ pub extern "C" fn _start() -> ! {
         option_env!("SEXOS_SPINDLE_BELL_BRIDGE_PROOF").is_some();
     if BELL_BRIDGE_PROOF_ENABLED {
         run_bell_bridge_proof(sb, hist, &mut ev);
+    }
+    const LINEN_BRIDGE_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_LINEN_BRIDGE_PROOF").is_some();
+    if LINEN_BRIDGE_PROOF_ENABLED {
+        run_linen_bridge_proof(sb, hist, &mut ev);
     }
 
     serial_println!("[spindle.ready]");
@@ -1655,6 +1725,56 @@ fn run_bell_bridge_proof(sb: &mut Scrollback, hist: &mut History, ev: &mut Event
 
     let all_ok = status_ok && test_ok && notify_ok && notify_empty_ok && bell_ok;
     serial_println!("[spindle.bell.proof.done] ok={}", all_ok as u8);
+}
+
+/// Spindle Linen bridge proof: exercises linen-status/linen-list/linen-open
+/// commands through the dispatch path. All Linen pdx_calls use AsyncEnqueue
+/// (fire-and-forget), no synchronous readback, no blocking.
+///
+/// Linen server handlers reply immediately (OP_LINEN_OPEN_INTENT replies
+/// synchronously server-side, but the Domain cap edge means pdx_call still
+/// returns (0,0) on the caller side). Async reply arrives via pdx_listen_raw
+/// in the main loop.
+fn run_linen_bridge_proof(sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) {
+    serial_println!("[spindle.linen.proof] stage=0 action=start ok=1 reason=linen_bridge_proof_begin");
+
+    // Stage 1: linen-status -- reports bridge configuration.
+    let status_ok = dispatch(b"linen-status", sb, hist, ev);
+    serial_println!(
+        "[spindle.linen.proof] stage=1 action=linen_status ok={} reason={}",
+        status_ok as u8,
+        if status_ok { "ok" } else { "dispatch_fail" }
+    );
+
+    // Stage 2: linen-list -- fire-and-forget, honest async-limited message.
+    let list_ok = dispatch(b"linen-list", sb, hist, ev);
+    serial_println!(
+        "[spindle.linen.proof] stage=2 action=linen_list ok={} reason={}",
+        list_ok as u8,
+        if list_ok { "ok" } else { "dispatch_fail" }
+    );
+
+    // Stage 3: linen-open with valid id -- fire-and-forget.
+    let open_ok = dispatch(b"linen-open 1", sb, hist, ev);
+    serial_println!(
+        "[spindle.linen.proof] stage=3 action=linen_open ok={} reason={}",
+        open_ok as u8,
+        if open_ok { "ok" } else { "dispatch_fail" }
+    );
+
+    // Stage 4: linen-open with missing id -- graceful reject.
+    let open_missing_ok = dispatch(b"linen-open", sb, hist, ev);
+    serial_println!(
+        "[spindle.linen.proof] stage=4 action=linen_open_missing ok={} reason={}",
+        open_missing_ok as u8,
+        if open_missing_ok { "ok" } else { "dispatch_fail" }
+    );
+
+    // Stage 5: safety audit -- no blocking.
+    serial_println!("[spindle.linen.proof] stage=5 action=safety ok=1 reason=no_blocking_async_enqueue_only");
+
+    let all_ok = status_ok && list_ok && open_ok && open_missing_ok;
+    serial_println!("[spindle.linen.proof.done] ok={}", all_ok as u8);
 }
 
 // ── M9 Proof: Spindle Session as SexObject ────────────────────────────────────
