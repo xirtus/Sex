@@ -175,6 +175,15 @@ const ENABLE_FRAME_LIGHT_ZOOM_SYNTHETIC_PROOF: bool = false;
 /// path and emits chrome-size/state diagnostics to prove topbar stays at 28 px.
 const VISIBLE_FOCUS_TOPBAR_PROOF_ENABLED: bool =
     option_env!("SEXOS_VISIBLE_FOCUS_TOPBAR_PROOF").is_some();
+const COMMAND_PALETTE_DAILY_PROOF_ENABLED: bool =
+    option_env!("SEXOS_COMMAND_PALETTE_DAILY_PROOF").is_some();
+static mut COMMAND_PALETTE_DAILY_PROOF_DONE: bool = false;
+static mut COMMAND_PALETTE_DAILY_PROOF_ACTIVE: bool = false;
+static mut COMMAND_PALETTE_DAILY_PROOF_IDX: u8 = 0;
+static mut COMMAND_PALETTE_DAILY_PROOF_EXECUTED: u8 = 0;
+static mut COMMAND_PALETTE_DAILY_PROOF_REJECTED: u8 = 0;
+static mut COMMAND_PALETTE_DAILY_PROOF_SKIPPED: u8 = 0;
+static mut COMMAND_PALETTE_DAILY_PROOF_SKIP_BUDGET: u8 = 16;
 
 // Well-known key ID for scene appearance settings blob.
 const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
@@ -4729,13 +4738,21 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     0x24 => { palette_select_next(); }
                     0x25 => { palette_select_prev(); }
                     0x1C => {
-                        serial_println!("[command_palette.drain.execute] scancode=0x1C");
-                        let _ = palette_execute_selected();
-                        toggle_command_palette();
+                        if !COMMAND_PALETTE_DAILY_PROOF_ACTIVE {
+                            serial_println!("[command_palette.drain.execute] scancode=0x1C");
+                            let _ = palette_execute_selected();
+                            toggle_command_palette();
+                        } else {
+                            serial_println!("[command_palette.drain.execute.skip] reason=daily_proof_active");
+                        }
                     }
                     0x01 | 0x29 => {
-                        serial_println!("[command_palette.drain.close] scancode={:#x}", scancode);
-                        toggle_command_palette();
+                        if !COMMAND_PALETTE_DAILY_PROOF_ACTIVE {
+                            serial_println!("[command_palette.drain.close] scancode={:#x}", scancode);
+                            toggle_command_palette();
+                        } else {
+                            serial_println!("[command_palette.drain.close.skip] scancode={:#x} reason=daily_proof_active", scancode);
+                        }
                     }
                     _ => {}
                 }
@@ -7827,10 +7844,15 @@ static mut SPINDLE_ACTIVE_SESSION: usize = 0;
 #[repr(u8)]
 enum Command {
     FocusSpindle = 0,
-    FocusLinen = 1,
-    FocusQuil = 2,
-    SceneNext = 3,
-    OpenAtlas = 4,
+    FocusQuil = 1,
+    FocusLinen = 2,
+    FocusAtlas = 3,
+    FocusBell = 4,
+    FocusCollar = 5,
+    FocusMesh = 6,
+    RestoreMinimized = 7,
+    ZoomToggle = 8,
+    MinimizeFocused = 9,
 }
 
 /// Static display info for each command in the palette.
@@ -7839,13 +7861,18 @@ struct CommandDef {
     name: &'static str,
 }
 
-/// The five commands available in the command palette.
-const COMMAND_LIST: [CommandDef; 5] = [
+/// Daily-driver commands available in the command palette.
+const COMMAND_LIST: [CommandDef; 10] = [
     CommandDef { command: Command::FocusSpindle, name: "Open Spindle" },
-    CommandDef { command: Command::FocusLinen, name: "Focus Linen" },
-    CommandDef { command: Command::FocusQuil, name: "Focus Quil" },
-    CommandDef { command: Command::SceneNext, name: "Next Scene" },
-    CommandDef { command: Command::OpenAtlas, name: "Open Atlas" },
+    CommandDef { command: Command::FocusQuil, name: "Open Quil" },
+    CommandDef { command: Command::FocusLinen, name: "Open Linen" },
+    CommandDef { command: Command::FocusAtlas, name: "Open Atlas" },
+    CommandDef { command: Command::FocusBell, name: "Open Bell" },
+    CommandDef { command: Command::FocusCollar, name: "Open Collar" },
+    CommandDef { command: Command::FocusMesh, name: "Open Mesh" },
+    CommandDef { command: Command::RestoreMinimized, name: "Restore Minimized" },
+    CommandDef { command: Command::ZoomToggle, name: "Zoom Toggle" },
+    CommandDef { command: Command::MinimizeFocused, name: "Minimize Focused" },
 ];
 
 /// Whether the command palette overlay is currently open.
@@ -9311,10 +9338,15 @@ unsafe fn ensure_command_palette_frame() -> Option<u32> {
 fn command_kind_color(cmd: Command) -> u32 {
     match cmd {
         Command::FocusSpindle => 0x00204060,        // muted teal (Spindle terminal)
-        Command::FocusLinen => 0x00206040,         // muted green
         Command::FocusQuil => 0x00206060,          // muted cyan
-        Command::SceneNext => 0x00303060,          // muted indigo
-        Command::OpenAtlas => 0x00503060,          // muted violet
+        Command::FocusLinen => 0x00206040,         // muted green
+        Command::FocusAtlas => 0x00503060,         // muted violet
+        Command::FocusBell => 0x00604040,          // muted red
+        Command::FocusCollar => 0x00406090,        // muted blue
+        Command::FocusMesh => 0x00405070,          // muted steel
+        Command::RestoreMinimized => 0x00605030,   // muted amber
+        Command::ZoomToggle => 0x00306030,         // muted olive
+        Command::MinimizeFocused => 0x00304030,    // muted slate
     }
 }
 
@@ -9328,10 +9360,15 @@ fn command_palette_selected_accent() -> u32 {
         }
         match COMMAND_LIST[idx].command {
             Command::FocusSpindle => 0x0040C0A0,       // teal (matching Spindle accent)
-            Command::FocusLinen => 0x0040C080,         // green (matching Document)
             Command::FocusQuil => 0x0040C0C0,          // cyan (matching QuilWorkspaceRef)
-            Command::SceneNext => 0x006060C0,          // indigo (matching Reference)
-            Command::OpenAtlas => 0x00A060C0,          // violet (matching MeshDiagnosticRef)
+            Command::FocusLinen => 0x0040C080,         // green (matching Document)
+            Command::FocusAtlas => 0x00A060C0,         // violet (matching MeshDiagnosticRef)
+            Command::FocusBell => 0x00C06060,          // bright red
+            Command::FocusCollar => 0x0060A0C0,        // bright blue
+            Command::FocusMesh => 0x008080C0,          // bright steel
+            Command::RestoreMinimized => 0x00C0A060,   // bright amber
+            Command::ZoomToggle => 0x0080C060,         // bright olive
+            Command::MinimizeFocused => 0x00708080,    // bright slate
         }
     }
 }
@@ -9342,7 +9379,7 @@ fn command_palette_selected_accent() -> u32 {
 ///   0: header bar (selected command accent)
 ///   1: shared list background (neutral dark slate)
 ///   2: selected row highlight (full-width bright accent)
-///   3-7: per-row left accent bars (5px wide, kind-colored)
+///   3-7: per-row left accent bars for the first five rows only
 unsafe fn palette_render_list() {
     let w = COMMAND_PALETTE_BOOT_W;
     let h = COMMAND_PALETTE_BOOT_H;
@@ -9408,6 +9445,10 @@ unsafe fn palette_render_list() {
         serial_println!("[command_palette.row] index={} cmd={} name={} selected={}",
             i, cmd.command as u8, cmd.name, sel);
 
+        if i >= 5 {
+            serial_println!("[command_palette.row_visual.skip] index={} reason=rect_budget", i);
+            continue;
+        }
         let accent_index = i as u64 + 3; // maps to rect_indices 3,4,5,6,7
         let row_y = PALETTE_LIST_HEADER_H
             + i as u32 * (PALETTE_LIST_ROW_H + PALETTE_LIST_ROW_GAP);
@@ -9453,6 +9494,19 @@ unsafe fn toggle_command_palette() -> bool {
         COMMAND_PALETTE_OPEN = true;
         COMMAND_PALETTE_SELECTED = 0;
         palette_show();
+        serial_println!(
+            "[shell.palette.open] ok=1 selected={} count={}",
+            COMMAND_PALETTE_SELECTED,
+            COMMAND_LIST.len()
+        );
+        for (idx, item) in COMMAND_LIST.iter().enumerate() {
+            serial_println!(
+                "[shell.palette.item] idx={} name={} action={}",
+                idx,
+                item.name,
+                item.command as u8
+            );
+        }
         serial_println!("[command_palette.open]");
         true
     }
@@ -9462,8 +9516,10 @@ unsafe fn toggle_command_palette() -> bool {
 unsafe fn palette_select_next() {
     let count = COMMAND_LIST.len() as u8;
     if count <= 1 { return; }
+    let old = COMMAND_PALETTE_SELECTED;
     let next = if COMMAND_PALETTE_SELECTED + 1 >= count { 0 } else { COMMAND_PALETTE_SELECTED + 1 };
     COMMAND_PALETTE_SELECTED = next;
+    serial_println!("[shell.palette.select] old={} new={}", old, next);
     serial_println!("[command_palette.select] index={}", next);
     palette_render_list();
 }
@@ -9472,8 +9528,10 @@ unsafe fn palette_select_next() {
 unsafe fn palette_select_prev() {
     let count = COMMAND_LIST.len() as u8;
     if count <= 1 { return; }
+    let old = COMMAND_PALETTE_SELECTED;
     let prev = if COMMAND_PALETTE_SELECTED == 0 { count - 1 } else { COMMAND_PALETTE_SELECTED - 1 };
     COMMAND_PALETTE_SELECTED = prev;
+    serial_println!("[shell.palette.select] old={} new={}", old, prev);
     serial_println!("[command_palette.select] index={}", prev);
     palette_render_list();
 }
@@ -9481,35 +9539,218 @@ unsafe fn palette_select_prev() {
 /// Execute the currently selected command by routing to its SurfaceAction.
 unsafe fn palette_execute_selected() -> bool {
     let idx = COMMAND_PALETTE_SELECTED as usize;
-    if idx >= COMMAND_LIST.len() { return false; }
+    if idx >= COMMAND_LIST.len() {
+        serial_println!("[shell.palette.exec] idx={} action=INVALID ok=0 reason=oob", idx);
+        return false;
+    }
     let cmd = COMMAND_LIST[idx].command;
+    let action_name = COMMAND_LIST[idx].name;
     serial_println!("[command_palette.execute] cmd={} name={}", cmd as u8, COMMAND_LIST[idx].name);
 
     // Route to existing SurfaceAction handler paths.
     // Each of these reuses the same match arms as keyboard-triggered actions.
-    match cmd {
+    let ok = match cmd {
         Command::FocusSpindle => {
-            serial_println!("[shell.spindle.focus.path] method=command_palette ok=1 sid={} reason=dispatch",
-                SURFACE_ID_SPINDLE);
-            open_spindle_in_active_scene()
-        }
-        Command::FocusLinen => {
-            open_linen_in_active_scene()
+            let open_ok = open_spindle_in_active_scene();
+            let sid = if open_ok { SURFACE_ID_SPINDLE } else { 0 };
+            serial_println!(
+                "[shell.palette.focus.result] target=SPINDLE sid={} ok={}",
+                sid,
+                open_ok as u8
+            );
+            open_ok
         }
         Command::FocusQuil => {
-            open_quil_in_active_scene()
+            let open_ok = open_quil_in_active_scene();
+            let sid = if open_ok { SURFACE_ID_QUIL } else { 0 };
+            serial_println!(
+                "[shell.palette.focus.result] target=QUIL sid={} ok={}",
+                sid,
+                open_ok as u8
+            );
+            open_ok
         }
-        Command::SceneNext => {
-            // Cycle to next scene.
-            let total = 3; // hardcoded scene count
-            let next = if ACTIVE_SCENE_IDX + 1 >= total { 0 } else { ACTIVE_SCENE_IDX + 1 };
-            switch_scene(next);
-            true
+        Command::FocusLinen => {
+            if COMMAND_PALETTE_DAILY_PROOF_ACTIVE {
+                serial_println!(
+                    "[shell.palette.focus.result] target=LINEN sid=0 ok=0"
+                );
+                serial_println!(
+                    "[shell.palette.exec] idx={} action={} ok=0 reason=proof_block_risk",
+                    idx, action_name
+                );
+                return false;
+            }
+            let open_ok = open_linen_in_active_scene();
+            let sid = if open_ok { SURFACE_ID_LINEN } else { 0 };
+            serial_println!(
+                "[shell.palette.focus.result] target=LINEN sid={} ok={}",
+                sid,
+                open_ok as u8
+            );
+            open_ok
         }
-        Command::OpenAtlas => {
+        Command::FocusAtlas => {
             atlas_toggle();
-            true
+            let ok = try_set_focus(SURFACE_ID_ATLAS_OVERLAY);
+            serial_println!(
+                "[shell.palette.focus.result] target=ATLAS sid={} ok={}",
+                SURFACE_ID_ATLAS_OVERLAY,
+                ok as u8
+            );
+            ok
         }
+        Command::FocusBell => {
+            let open_ok = open_bell_in_active_scene();
+            let sid = if open_ok { SURFACE_ID_BELL_PLACEHOLDER } else { 0 };
+            serial_println!(
+                "[shell.palette.focus.result] target=BELL sid={} ok={}",
+                sid,
+                open_ok as u8
+            );
+            open_ok
+        }
+        Command::FocusCollar => {
+            let open_ok = open_collar_in_active_scene();
+            let sid = if open_ok { SURFACE_ID_COLLAR } else { 0 };
+            serial_println!(
+                "[shell.palette.focus.result] target=COLLAR sid={} ok={}",
+                sid,
+                open_ok as u8
+            );
+            open_ok
+        }
+        Command::FocusMesh => {
+            let open_ok = open_mesh_in_active_scene();
+            let sid = if open_ok { SURFACE_ID_MESH } else { 0 };
+            serial_println!(
+                "[shell.palette.focus.result] target=MESH sid={} ok={}",
+                sid,
+                open_ok as u8
+            );
+            open_ok
+        }
+        Command::RestoreMinimized => {
+            access_handle_keyboard_action(SurfaceAction::RestoreMinimized)
+        }
+        Command::ZoomToggle => {
+            access_handle_keyboard_action(SurfaceAction::AccessZoomToggle)
+        }
+        Command::MinimizeFocused => {
+            access_handle_keyboard_action(SurfaceAction::AccessActivate)
+        }
+    };
+    serial_println!(
+        "[shell.palette.exec] idx={} action={} ok={} reason={}",
+        idx,
+        action_name,
+        ok as u8,
+        if ok { "ok" } else { "action_reject" }
+    );
+    ok
+}
+
+unsafe fn maybe_run_command_palette_daily_proof() {
+    if !COMMAND_PALETTE_DAILY_PROOF_ENABLED {
+        if COMMAND_PALETTE_DAILY_PROOF_SKIP_BUDGET > 0 {
+            COMMAND_PALETTE_DAILY_PROOF_SKIP_BUDGET -= 1;
+            serial_println!("[shell.palette.daily.proof.skip] reason=disabled");
+        }
+        return;
+    }
+    if COMMAND_PALETTE_DAILY_PROOF_DONE {
+        if COMMAND_PALETTE_DAILY_PROOF_SKIP_BUDGET > 0 {
+            COMMAND_PALETTE_DAILY_PROOF_SKIP_BUDGET -= 1;
+            serial_println!("[shell.palette.daily.proof.skip] reason=already_done");
+        }
+        return;
+    }
+    if FOCUSED_SURFACE_ID == 0 {
+        if COMMAND_PALETTE_DAILY_PROOF_SKIP_BUDGET > 0 {
+            COMMAND_PALETTE_DAILY_PROOF_SKIP_BUDGET -= 1;
+            serial_println!("[shell.palette.daily.proof.skip] reason=not_ready");
+        }
+        return;
+    }
+    COMMAND_PALETTE_DAILY_PROOF_ACTIVE = true;
+    let total = COMMAND_LIST.len() as u8;
+    serial_println!(
+        "[shell.palette.daily.proof.trigger] selected={} count={}",
+        COMMAND_PALETTE_DAILY_PROOF_IDX,
+        total
+    );
+    if COMMAND_PALETTE_DAILY_PROOF_IDX >= total {
+        COMMAND_PALETTE_DAILY_PROOF_DONE = true;
+        COMMAND_PALETTE_DAILY_PROOF_ACTIVE = false;
+        if COMMAND_PALETTE_OPEN {
+            toggle_command_palette();
+        }
+        let ok = (COMMAND_PALETTE_DAILY_PROOF_EXECUTED + COMMAND_PALETTE_DAILY_PROOF_REJECTED + COMMAND_PALETTE_DAILY_PROOF_SKIPPED) == total;
+        serial_println!(
+            "[shell.palette.daily.proof.done] ok={} executed={} rejected={} skipped={}",
+            ok as u8,
+            COMMAND_PALETTE_DAILY_PROOF_EXECUTED,
+            COMMAND_PALETTE_DAILY_PROOF_REJECTED,
+            COMMAND_PALETTE_DAILY_PROOF_SKIPPED
+        );
+        return;
+    }
+
+    // Run a bounded burst in one loop pass so boot-time blocking work
+    // cannot starve proof progression after the first item.
+    for _ in 0..COMMAND_LIST.len() {
+        if COMMAND_PALETTE_DAILY_PROOF_IDX >= total {
+            break;
+        }
+        if !COMMAND_PALETTE_OPEN {
+            toggle_command_palette();
+        }
+        if !COMMAND_PALETTE_OPEN {
+            serial_println!(
+                "[shell.palette.exec.skip] idx={} action={} ok=0 reason=open_failed",
+                COMMAND_PALETTE_DAILY_PROOF_IDX,
+                COMMAND_LIST[COMMAND_PALETTE_DAILY_PROOF_IDX as usize].name
+            );
+            COMMAND_PALETTE_DAILY_PROOF_SKIPPED = COMMAND_PALETTE_DAILY_PROOF_SKIPPED.saturating_add(1);
+            COMMAND_PALETTE_DAILY_PROOF_IDX = COMMAND_PALETTE_DAILY_PROOF_IDX.saturating_add(1);
+            continue;
+        }
+
+        let idx = COMMAND_PALETTE_DAILY_PROOF_IDX;
+        let old = COMMAND_PALETTE_SELECTED;
+        COMMAND_PALETTE_SELECTED = idx;
+        serial_println!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED);
+        palette_render_list();
+        let ok = palette_execute_selected();
+        serial_println!(
+            "[shell.palette.daily.proof.stage] stage={} idx={} action={} ok={}",
+            idx,
+            idx,
+            COMMAND_LIST[idx as usize].name,
+            ok as u8
+        );
+        if ok {
+            COMMAND_PALETTE_DAILY_PROOF_EXECUTED = COMMAND_PALETTE_DAILY_PROOF_EXECUTED.saturating_add(1);
+        } else {
+            COMMAND_PALETTE_DAILY_PROOF_REJECTED = COMMAND_PALETTE_DAILY_PROOF_REJECTED.saturating_add(1);
+        }
+        COMMAND_PALETTE_DAILY_PROOF_IDX = COMMAND_PALETTE_DAILY_PROOF_IDX.saturating_add(1);
+    }
+
+    if COMMAND_PALETTE_DAILY_PROOF_IDX >= total {
+        COMMAND_PALETTE_DAILY_PROOF_DONE = true;
+        COMMAND_PALETTE_DAILY_PROOF_ACTIVE = false;
+        if COMMAND_PALETTE_OPEN {
+            toggle_command_palette();
+        }
+        let ok = (COMMAND_PALETTE_DAILY_PROOF_EXECUTED + COMMAND_PALETTE_DAILY_PROOF_REJECTED + COMMAND_PALETTE_DAILY_PROOF_SKIPPED) == total;
+        serial_println!(
+            "[shell.palette.daily.proof.done] ok={} executed={} rejected={} skipped={}",
+            ok as u8,
+            COMMAND_PALETTE_DAILY_PROOF_EXECUTED,
+            COMMAND_PALETTE_DAILY_PROOF_REJECTED,
+            COMMAND_PALETTE_DAILY_PROOF_SKIPPED
+        );
     }
 }
 
@@ -12914,6 +13155,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_visible_focus_topbar_proof(); }
         unsafe { maybe_run_keyboard_safe_close_proof(); }
         unsafe { maybe_run_spindle_real_keyboard_focus_proof(); }
+        unsafe { maybe_run_command_palette_daily_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
