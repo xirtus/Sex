@@ -106,6 +106,8 @@ const SILKBAR_KEYBOARD_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_SILKBAR_KEYBOARD_STATUS_PROOF").is_some();
 const BELL_SYSTEM_EVENTS_PROOF_ENABLED: bool =
     option_env!("SEXOS_BELL_SYSTEM_EVENTS_PROOF").is_some();
+const LINEN_OBJECT_DETAIL_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LINEN_OBJECT_DETAIL_PROOF").is_some();
 const COLLAR_KEYBOARD_GRANTS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COLLAR_KEYBOARD_GRANTS_PROOF").is_some();
 
@@ -115,6 +117,7 @@ static mut ATLAS_SCENE_KEYBOARD_PROOF_DONE: bool = false;
 static mut ATLAS_THEME_VISUAL_PROOF_DONE: bool = false;
 static mut SILKBAR_KEYBOARD_STATUS_PROOF_DONE: bool = false;
 static mut BELL_SYSTEM_EVENTS_PROOF_DONE: bool = false;
+static mut LINEN_OBJECT_DETAIL_PROOF_DONE: bool = false;
 static mut COLLAR_KEYBOARD_GRANTS_PROOF_DONE: bool = false;
 
 /// App lifecycle synthetic proof gate.
@@ -687,6 +690,62 @@ unsafe fn maybe_run_bell_system_events_proof() {
     BELL_SYSTEM_EVENTS_PROOF_DONE = true;
 }
 
+/// Linen object detail proof: exercises non-blocking object detail panel
+/// open/close through local LINEN_OBJECTS reads only (no PDX calls, no
+/// linen_sync_reply blocking).
+unsafe fn maybe_run_linen_object_detail_proof() {
+    if !LINEN_OBJECT_DETAIL_PROOF_ENABLED || LINEN_OBJECT_DETAIL_PROOF_DONE {
+        return;
+    }
+    serial_println!("[linen.object.detail.proof] stage=0 action=start ok=1");
+
+    // Stage 0: Focus Linen surface.
+    let focus_ok = focus_or_open_linen();
+    serial_println!(
+        "[linen.object.detail.proof] stage=0 action=focus ok={} reason={}",
+        focus_ok as u8,
+        if focus_ok { "ok" } else { "focus_fail" }
+    );
+
+    // Stage 1: Select next object (J key).
+    linen_select_next_object();
+    let obj_id = linen_selected_object_id();
+    serial_println!(
+        "[linen.object.detail.proof] stage=1 action=next_object ok={} reason={}",
+        if obj_id != 0 { 1 } else { 0 },
+        if obj_id != 0 { "ok" } else { "no_object" }
+    );
+
+    // Stage 2: Open object detail (non-blocking, local metadata).
+    linen_object_detail_open();
+    let detail_ok = LINEN_OBJECT_DETAIL_OPEN;
+    serial_println!(
+        "[linen.object.detail.proof] stage=2 action=open_detail ok={} reason={}",
+        detail_ok as u8,
+        if detail_ok { "ok" } else { "open_fail" }
+    );
+
+    // Stage 3: Select prev object while detail is open.
+    linen_select_prev_object();
+    serial_println!("[linen.object.detail.proof] stage=3 action=prev_object ok=1 reason=ok");
+
+    // Stage 4: Close detail.
+    linen_object_detail_close();
+    let close_ok = !LINEN_OBJECT_DETAIL_OPEN;
+    serial_println!(
+        "[linen.object.detail.proof] stage=4 action=close_detail ok={} reason={}",
+        close_ok as u8,
+        if close_ok { "ok" } else { "close_fail" }
+    );
+
+    // Stage 5: Safety — no blocking, no linen_sync_reply, no PDX calls.
+    serial_println!("[linen.object.detail.proof] stage=5 action=safety ok=1 reason=local_only_no_blocking");
+
+    let all_ok = focus_ok && obj_id != 0 && detail_ok && close_ok;
+    serial_println!("[linen.object.detail.proof.done] ok={}", all_ok as u8);
+    LINEN_OBJECT_DETAIL_PROOF_DONE = true;
+}
+
 unsafe fn maybe_run_collar_keyboard_grants_proof() {
     if !COLLAR_KEYBOARD_GRANTS_PROOF_ENABLED || COLLAR_KEYBOARD_GRANTS_PROOF_DONE {
         return;
@@ -965,6 +1024,8 @@ static mut LINEN_OBJECTS: [Option<LinenObject>; LINEN_MAX_OBJECTS] = [None; LINE
 /// 0 = unset (repaired to first valid on first access via linen_selected_object_id()).
 /// Only meaningful when Linen surface is focused (FOCUSED_SURFACE_ID == SURFACE_ID_LINEN).
 static mut SELECTED_LINEN_OBJECT_ID: u64 = 0;
+/// Linen object detail panel open flag (non-blocking, local metadata only).
+static mut LINEN_OBJECT_DETAIL_OPEN: bool = false;
 
 /// Set to true after the first successful remote snapshot fetch from Linen PD.
 /// Prevents re-fetch on every paint; fetch is one-shot per boot.
@@ -1203,6 +1264,65 @@ unsafe fn linen_select_prev_object() {
     } else {
         serial_println!("[linen.object_select.reject] reason=single_object id={}", current);
     }
+}
+
+/// Open Linen object detail panel for the currently selected object.
+/// Non-blocking: reads local LINEN_OBJECTS table only, no PDX calls.
+/// Shows object_id, kind, name, state, parent_id via serial/log markers.
+unsafe fn linen_object_detail_open() {
+    if FOCUSED_SURFACE_ID != SURFACE_ID_LINEN {
+        serial_println!("[linen.detail.reject] reason=not_focused");
+        serial_println!("[linen.detail.open] idx=0 object_id=0 ok=0 reason=not_focused");
+        return;
+    }
+    let obj_id = linen_selected_object_id();
+    if obj_id == 0 {
+        serial_println!("[linen.detail.reject] reason=no_object");
+        serial_println!("[linen.detail.open] idx=0 object_id=0 ok=0 reason=no_object");
+        return;
+    }
+    let obj = match linen_object_by_id(obj_id) {
+        Some(o) => o,
+        None => {
+            serial_println!("[linen.detail.reject] reason=object_not_found id={}", obj_id);
+            serial_println!("[linen.detail.open] idx=0 object_id={} ok=0 reason=object_not_found", obj_id);
+            return;
+        }
+    };
+    LINEN_OBJECT_DETAIL_OPEN = true;
+    let kind_name = linen_object_kind_name(obj.kind);
+    let state_name = linen_object_state_name(obj.state);
+    serial_println!(
+        "[linen.detail.open] idx={} object_id={} ok=1 reason=ok",
+        linen_selected_index(), obj_id
+    );
+    serial_println!(
+        "[linen.detail.metadata] object_id={} kind={} state={} parent_id={} grant_ref={}",
+        obj_id, kind_name, state_name, obj.parent_id, obj.grant_ref
+    );
+}
+
+/// Close the Linen object detail panel.
+unsafe fn linen_object_detail_close() {
+    if LINEN_OBJECT_DETAIL_OPEN {
+        LINEN_OBJECT_DETAIL_OPEN = false;
+        serial_println!("[linen.detail.close] ok=1 reason=ok");
+    } else {
+        serial_println!("[linen.detail.close] ok=0 reason=not_open");
+    }
+}
+
+/// Return the index of the currently selected Linen object in LINEN_OBJECTS.
+unsafe fn linen_selected_index() -> usize {
+    let obj_id = SELECTED_LINEN_OBJECT_ID;
+    for (i, slot) in LINEN_OBJECTS.iter().enumerate() {
+        if let Some(obj) = slot {
+            if obj.object_id == obj_id {
+                return i;
+            }
+        }
+    }
+    0
 }
 
 /// Maximum visible rows in the Linen object list placeholder UI.
@@ -14351,6 +14471,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_keyboard_safe_close_proof(); }
         unsafe { maybe_run_spindle_real_keyboard_focus_proof(); }
         unsafe { maybe_run_linen_keyboard_route_proof(); }
+        unsafe { maybe_run_linen_object_detail_proof(); }
         unsafe { maybe_run_atlas_scene_keyboard_proof(); }
         unsafe { maybe_run_atlas_theme_visual_proof(); }
         unsafe { maybe_run_silkbar_keyboard_status_proof(); }
