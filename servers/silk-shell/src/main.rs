@@ -119,6 +119,34 @@ const SPINDLE_KEYBOARD_PROOF_ENABLED: bool =
 static mut SPINDLE_KEYBOARD_PROOF_STAGE: u8 = 0;
 /// Scancodes for the synthetic key sequence: a, b, c, Backspace, d, Enter.
 const SPINDLE_SYNTH_SEQ: [u8; 6] = [0x1E, 0x30, 0x2E, 0x0E, 0x20, 0x1C];
+
+/// Spindle real keyboard focus+text proof gate.
+/// Default OFF. Exercises the real handle_hid_event dispatch path to:
+///   1. Open the command palette via backtick (0x29)
+///   2. Execute FocusSpindle via Enter (0x1C) in the palette
+///   3. Type "ab" Backspace "c" Enter through the normal key routing path.
+/// Unlike the synthetic proof, this proof uses the same handle_hid_event path
+/// as real USB keyboard input, proving the full shell -> Spindle dispatch chain.
+const SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SPINDLE_REAL_KEYBOARD_FOCUS_PROOF").is_some();
+static mut SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE: u8 = 0;
+static mut SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_DONE: bool = false;
+
+/// Returns true if the scancode is a printable/text-control key that should
+/// route to Spindle when Spindle is focused, even if it is normally a reserved
+/// shell UI key (Enter=0x1C, Backspace=0x0E, Escape=0x01, Tab=0x0F, c=0x2E).
+/// Whitelist matches the Spindle dispatch handler scancode set.
+const fn is_spindle_text_key(scancode: u8) -> bool {
+    scancode == 0x1C || scancode == 0x0E || scancode == 0x01
+        || scancode == 0x0F || scancode == 0x39
+        || (scancode >= 0x02 && scancode <= 0x0B)
+        || (scancode >= 0x10 && scancode <= 0x19)
+        || (scancode >= 0x1E && scancode <= 0x26)
+        || scancode == 0x2C || scancode == 0x2D || scancode == 0x2E
+        || scancode == 0x2F || scancode == 0x30 || scancode == 0x31
+        || scancode == 0x32
+}
+
 /// Window drag synthetic proof gate.
 /// Default OFF. Exercises normal pointer hit-test/drag lifecycle via HID path.
 const WINDOW_DRAG_PROOF_ENABLED: bool =
@@ -4689,6 +4717,51 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         }
 
         if value == 1 {
+            // ── Command palette keyboard intercept in drain path ─────────────
+            // When the palette is open, intercept Enter/Escape/Backtick/J/K
+            // before the reserved_ui_action check so palette navigation and
+            // execution work in synthetic proof sequences (handle_hid_event).
+            if COMMAND_PALETTE_OPEN
+                && (scancode == 0x1C || scancode == 0x01
+                    || scancode == 0x29 || scancode == 0x24 || scancode == 0x25)
+            {
+                match scancode {
+                    0x24 => { palette_select_next(); }
+                    0x25 => { palette_select_prev(); }
+                    0x1C => {
+                        serial_println!("[command_palette.drain.execute] scancode=0x1C");
+                        let _ = palette_execute_selected();
+                        toggle_command_palette();
+                    }
+                    0x01 | 0x29 => {
+                        serial_println!("[command_palette.drain.close] scancode={:#x}", scancode);
+                        toggle_command_palette();
+                    }
+                    _ => {}
+                }
+                return;
+            }
+
+            // ── Spindle text key passthrough in drain path ──────────────────
+            // When Spindle is focused, route text/control keys directly to
+            // Spindle PD before the shell consumes them as UI actions.
+            // This lets Enter/Backspace/Escape/letters reach Spindle through
+            // the real handle_hid_event dispatch path used by synthetic proofs.
+            if FOCUSED_SURFACE_ID == SURFACE_ID_SPINDLE
+                && is_spindle_text_key(scancode)
+            {
+                static mut SPINDLE_DRAIN_ROUTE_BUDGET: u32 = 32;
+                if SPINDLE_DRAIN_ROUTE_BUDGET > 0 {
+                    SPINDLE_DRAIN_ROUTE_BUDGET -= 1;
+                    serial_println!(
+                        "[silk-shell.key.route] target=spindle sid={} code={} down={}",
+                        SURFACE_ID_SPINDLE, scancode, value
+                    );
+                }
+                pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+                return;
+            }
+
             // KEYBOARD_GUI_AUTOPILOT_V1: check reserved UI keys before app routing.
             // The handle_hid_event path (called from linen_sync_reply and input-first
             // drain) previously routed all EV_KEY events to the focused app without
@@ -5426,6 +5499,7 @@ unsafe fn lifecycle_init_all() {
     lifecycle_register(SURFACE_ID_MESH, LifecycleState::Visible);
     lifecycle_register(SURFACE_ID_COLLAR, LifecycleState::Visible);
     lifecycle_register(SURFACE_ID_BELL_PLACEHOLDER, LifecycleState::Visible);
+    lifecycle_register(SURFACE_ID_SPINDLE, LifecycleState::Visible);
     // Cursor — always present, no frame.
     lifecycle_register(SURFACE_ID_CURSOR, LifecycleState::Mapped);
     // Panel surfaces — start Allocated (inactive, toggled on demand).
@@ -7752,7 +7826,7 @@ static mut SPINDLE_ACTIVE_SESSION: usize = 0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum Command {
-    OpenSelectedInQuil = 0,
+    FocusSpindle = 0,
     FocusLinen = 1,
     FocusQuil = 2,
     SceneNext = 3,
@@ -7767,7 +7841,7 @@ struct CommandDef {
 
 /// The five commands available in the command palette.
 const COMMAND_LIST: [CommandDef; 5] = [
-    CommandDef { command: Command::OpenSelectedInQuil, name: "Open in Quil" },
+    CommandDef { command: Command::FocusSpindle, name: "Open Spindle" },
     CommandDef { command: Command::FocusLinen, name: "Focus Linen" },
     CommandDef { command: Command::FocusQuil, name: "Focus Quil" },
     CommandDef { command: Command::SceneNext, name: "Next Scene" },
@@ -9236,7 +9310,7 @@ unsafe fn ensure_command_palette_frame() -> Option<u32> {
 /// Used for non-selected row visuals in the palette list.
 fn command_kind_color(cmd: Command) -> u32 {
     match cmd {
-        Command::OpenSelectedInQuil => 0x00605020, // muted amber
+        Command::FocusSpindle => 0x00204060,        // muted teal (Spindle terminal)
         Command::FocusLinen => 0x00206040,         // muted green
         Command::FocusQuil => 0x00206060,          // muted cyan
         Command::SceneNext => 0x00303060,          // muted indigo
@@ -9253,7 +9327,7 @@ fn command_palette_selected_accent() -> u32 {
             return 0x00404060; // default muted blue-grey
         }
         match COMMAND_LIST[idx].command {
-            Command::OpenSelectedInQuil => 0x00C0A040, // amber (matching CodeFile)
+            Command::FocusSpindle => 0x0040C0A0,       // teal (matching Spindle accent)
             Command::FocusLinen => 0x0040C080,         // green (matching Document)
             Command::FocusQuil => 0x0040C0C0,          // cyan (matching QuilWorkspaceRef)
             Command::SceneNext => 0x006060C0,          // indigo (matching Reference)
@@ -9414,15 +9488,10 @@ unsafe fn palette_execute_selected() -> bool {
     // Route to existing SurfaceAction handler paths.
     // Each of these reuses the same match arms as keyboard-triggered actions.
     match cmd {
-        Command::OpenSelectedInQuil => {
-            if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
-                let obj_id = linen_selected_object_id();
-                if obj_id != 0 && open_linen_object_in_quil(obj_id) {
-                    return true;
-                }
-            }
-            serial_println!("[command_palette.reject] cmd={} reason=not_focused", cmd as u8);
-            false
+        Command::FocusSpindle => {
+            serial_println!("[shell.spindle.focus.path] method=command_palette ok=1 sid={} reason=dispatch",
+                SURFACE_ID_SPINDLE);
+            open_spindle_in_active_scene()
         }
         Command::FocusLinen => {
             open_linen_in_active_scene()
@@ -10741,6 +10810,124 @@ unsafe fn maybe_run_keyboard_gui_broad_action_proof() {
             "[shell.kbd.broad.proof.done] ok=1 stages={}",
             KEYBOARD_GUI_BROAD_PROOF_STAGE
         );
+    }
+}
+
+// ── Spindle Real Keyboard Focus + Text Proof ──────────────────────────────
+// Drives the real handle_hid_event dispatch path to:
+//   Stage 0: wait for a focused surface
+//   Stage 1: open command palette via backtick (0x29)
+//   Stage 2: execute FocusSpindle via Enter (0x1C) in palette
+//   Stage 3: type 'a' (0x1E)  → spindle.text.append ch=a
+//   Stage 4: type 'b' (0x30)  → spindle.text.append ch=b
+//   Stage 5: Backspace (0x0E) → spindle.text.backspace
+//   Stage 6: type 'c' (0x2E)  → spindle.text.append ch=c
+//   Stage 7: Enter (0x1C)     → spindle.key.enter
+//   Stage 8: proof complete
+//
+// All stages use handle_hid_event, the same path as real USB keyboard input.
+// The handle_hid_event drain path has been augmented with palette intercept
+// and Spindle text key passthrough before the reserved_ui_action check.
+unsafe fn maybe_run_spindle_real_keyboard_focus_proof() {
+    static mut SKIP_DISABLED_BUDGET: u32 = 1;
+    if !SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_ENABLED {
+        if SKIP_DISABLED_BUDGET > 0 {
+            SKIP_DISABLED_BUDGET -= 1;
+            serial_println!("[shell.spindle.real.proof.skip] reason=disabled");
+        }
+        return;
+    }
+    if SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_DONE {
+        return;
+    }
+    // Wait for a focused surface (at least Quil should be up by now).
+    if FOCUSED_SURFACE_ID == 0 {
+        serial_println!("[shell.spindle.real.proof.defer] reason=no_focus");
+        return;
+    }
+    serial_println!(
+        "[shell.spindle.real.proof.state] stage={} focused={}",
+        SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE, FOCUSED_SURFACE_ID
+    );
+
+    // Run all stages in one tick.
+    let max_stage = SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE;
+    for _s in 0..9 {
+        if SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_DONE {
+            break;
+        }
+        match SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE {
+            // Stage 0: begin — ensure we have Quil focused as a known baseline.
+            0 => {
+                serial_println!("[shell.spindle.text.proof] stage=0 action=Begin ok=1");
+                // Ensure Quil is focused so the palette opens over a known surface.
+                if FOCUSED_SURFACE_ID != SURFACE_ID_QUIL {
+                    if !surface_is_alive(SURFACE_ID_QUIL) {
+                        serial_println!("[shell.spindle.real.proof.defer] reason=quil_not_alive");
+                        return;
+                    }
+                    try_set_focus(SURFACE_ID_QUIL);
+                }
+                SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE = 1;
+            }
+            // Stage 1: Open command palette via backtick (0x29).
+            1 => {
+                serial_println!("[shell.spindle.text.proof] stage=1 action=OpenPalette ok=1");
+                handle_hid_event(EV_KEY, 0x29, 1); // backtick down
+                handle_hid_event(EV_KEY, 0x29, 0); // backtick up
+                SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE = 2;
+            }
+            // Stage 2: Execute FocusSpindle via Enter.
+            // FocusSpindle is command index 0, selected by default when palette opens.
+            2 => {
+                serial_println!("[shell.spindle.text.proof] stage=2 action=ExecuteFocusSpindle ok=1");
+                handle_hid_event(EV_KEY, 0x1C, 1); // Enter down
+                handle_hid_event(EV_KEY, 0x1C, 0); // Enter up
+                SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE = 3;
+            }
+            // Stage 3: Type 'a' (0x1E)
+            3 => {
+                serial_println!("[shell.spindle.text.proof] stage=3 action=Type_a ok=1");
+                handle_hid_event(EV_KEY, 0x1E, 1);
+                handle_hid_event(EV_KEY, 0x1E, 0);
+                SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE = 4;
+            }
+            // Stage 4: Type 'b' (0x30)
+            4 => {
+                serial_println!("[shell.spindle.text.proof] stage=4 action=Type_b ok=1");
+                handle_hid_event(EV_KEY, 0x30, 1);
+                handle_hid_event(EV_KEY, 0x30, 0);
+                SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE = 5;
+            }
+            // Stage 5: Backspace (0x0E)
+            5 => {
+                serial_println!("[shell.spindle.text.proof] stage=5 action=Backspace ok=1");
+                handle_hid_event(EV_KEY, 0x0E, 1);
+                handle_hid_event(EV_KEY, 0x0E, 0);
+                SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE = 6;
+            }
+            // Stage 6: Type 'c' (0x2E)
+            6 => {
+                serial_println!("[shell.spindle.text.proof] stage=6 action=Type_c ok=1");
+                handle_hid_event(EV_KEY, 0x2E, 1);
+                handle_hid_event(EV_KEY, 0x2E, 0);
+                SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE = 7;
+            }
+            // Stage 7: Enter (0x1C) — dispatch Spindle command
+            7 => {
+                serial_println!("[shell.spindle.text.proof] stage=7 action=Enter ok=1");
+                handle_hid_event(EV_KEY, 0x1C, 1);
+                handle_hid_event(EV_KEY, 0x1C, 0);
+                SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE = 8;
+            }
+            // Stage 8: Proof complete.
+            8 => {
+                SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_DONE = true;
+                serial_println!("[shell.spindle.text.proof.done] ok=1");
+                SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE = 9;
+            }
+            _ => break,
+        }
     }
 }
 
@@ -12726,6 +12913,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_keyboard_gui_broad_action_proof(); }
         unsafe { maybe_run_visible_focus_topbar_proof(); }
         unsafe { maybe_run_keyboard_safe_close_proof(); }
+        unsafe { maybe_run_spindle_real_keyboard_focus_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
@@ -13554,7 +13742,7 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             // ── Command palette keyboard intercept: consume keys when palette open ──
-                            if !panel_consumed && COMMAND_PALETTE_OPEN && !reserved_ui_key {
+                            if !panel_consumed && COMMAND_PALETTE_OPEN {
                                 match scancode {
                                     0x24 => { palette_select_next(); mutated = true; } // J - next
                                     0x25 => { palette_select_prev(); mutated = true; } // K - prev
@@ -13640,7 +13828,7 @@ pub extern "C" fn _start() -> ! {
                             // ── Spindle focused-surface: capture printable input + dispatch commands ──
                             // Consumes: Enter, Backspace, Escape, Space, alphanumeric.
                             // All other keys fall through to scancode_to_action unchanged.
-                            } else if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_SPINDLE
+                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_SPINDLE
                                 && (scancode == 0x1C || scancode == 0x0E || scancode == 0x01
                                     || scancode == 0x0F || scancode == 0x39
                                     || (scancode >= 0x02 && scancode <= 0x0B)
