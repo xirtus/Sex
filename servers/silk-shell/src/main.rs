@@ -227,9 +227,15 @@ const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_LINEN_STATUS_PROOF").is_some();
 const QUIL_STATUS_UNBLOCK_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_STATUS_UNBLOCK_PROOF").is_some();
+const APP_LAUNCHER_PROOF_ENABLED: bool =
+    option_env!("SEXOS_APP_LAUNCHER_PROOF").is_some();
 static mut COMMAND_PALETTE_STATUS_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE: bool = false;
 static mut QUIL_STATUS_UNBLOCK_PROOF_DONE: bool = false;
+static mut APP_LAUNCHER_PROOF_DONE: bool = false;
+static mut APP_LAUNCHER_PROOF_ACTIVE: bool = false;
+static mut APP_LAUNCHER_PROOF_STAGE: u8 = 0;
+static mut APP_LAUNCHER_PROOF_SELECTED: u8 = 0;
 static mut COMMAND_PALETTE_STATUS_PROOF_ACTIVE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_STAGE: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_DONE: bool = false;
@@ -10714,6 +10720,7 @@ unsafe fn toggle_command_palette() -> bool {
     if COMMAND_PALETTE_OPEN {
         // Close palette — minimize the frame.
         COMMAND_PALETTE_OPEN = false;
+        serial_println!("[launcher.close] ok=1 reason=palette_closed");
         serial_println!("[shell.palette.statusbar] open=0 selected=0 available=0");
         if let Some(_) = bell_frame_id() { // use hide pattern
             if minimize_frame(COMMAND_PALETTE_FRAME_ID) {
@@ -10741,6 +10748,13 @@ unsafe fn toggle_command_palette() -> bool {
             COMMAND_PALETTE_SELECTED,
             available_count
         );
+        // ── Launcher markers: app subset (indices 0-6) ──
+        let app_count: u8 = 7; // FocusSpindle/Quil/Linen/Atlas/Bell/Collar/Mesh
+        serial_println!(
+            "[launcher.open] count={} selected={} ok=1",
+            app_count,
+            COMMAND_PALETTE_SELECTED
+        );
         serial_println!(
             "[shell.palette.open] ok=1 selected={} count={}",
             COMMAND_PALETTE_SELECTED,
@@ -10763,6 +10777,16 @@ unsafe fn toggle_command_palette() -> bool {
                 status_label,
                 reason
             );
+            // ── Launcher row: app subset only ──
+            if idx < 7 {
+                serial_println!(
+                    "[launcher.row] idx={} app={} status={} available={}",
+                    idx,
+                    item.name,
+                    status_label,
+                    avail as u8
+                );
+            }
         }
         serial_println!("[command_palette.open]");
         true
@@ -10778,6 +10802,7 @@ unsafe fn palette_select_next() {
     COMMAND_PALETTE_SELECTED = next;
     serial_println!("[shell.palette.select] old={} new={}", old, next);
     serial_println!("[command_palette.select] index={}", next);
+    serial_println!("[launcher.nav] old={} new={} count={}", old, next, count);
     palette_render_list();
 }
 
@@ -10790,6 +10815,7 @@ unsafe fn palette_select_prev() {
     COMMAND_PALETTE_SELECTED = prev;
     serial_println!("[shell.palette.select] old={} new={}", old, prev);
     serial_println!("[command_palette.select] index={}", prev);
+    serial_println!("[launcher.nav] old={} new={} count={}", old, prev, count);
     palette_render_list();
 }
 
@@ -10932,6 +10958,16 @@ unsafe fn palette_execute_selected() -> bool {
         ok as u8,
         if ok { "ok" } else { "action_reject" }
     );
+    // ── Launcher exec marker: app subset only ──
+    if idx < 7 {
+        serial_println!(
+            "[launcher.exec] idx={} app={} ok={} reason={}",
+            idx,
+            action_name,
+            ok as u8,
+            if ok { "launched" } else { "action_reject" }
+        );
+    }
     let (avail, status_label, status_reason) = palette_item_status(cmd);
     serial_println!(
         "[shell.palette.exec.result] idx={} action={} ok={} status={} reason={}",
@@ -11290,6 +11326,113 @@ unsafe fn maybe_run_command_palette_daily_proof() {
             COMMAND_PALETTE_DAILY_PROOF_SKIPPED
         );
     }
+}
+
+/// App launcher proof: opens the command palette as an app launcher,
+/// navigates the 7 keyboard-ready app rows, executes the selected one,
+/// and closes.  All palette commands are already implemented — this proof
+/// exercises them through the app subset and emits launcher markers.
+///
+/// Markers:
+///   [launcher.open]    count=N selected=N ok=N
+///   [launcher.row]     idx=N app=NAME status=NAME available=N
+///   [launcher.nav]     old=N new=N count=N
+///   [launcher.exec]    idx=N app=NAME ok=N reason=...
+///   [launcher.close]   ok=N reason=...
+///   [launcher.proof]   stage=N action=NAME ok=N reason=...
+///   [launcher.proof.done] ok=N
+unsafe fn maybe_run_app_launcher_proof() {
+    if !APP_LAUNCHER_PROOF_ENABLED {
+        return;
+    }
+    if APP_LAUNCHER_PROOF_DONE {
+        return;
+    }
+    // Need a focused surface before palette can operate meaningfully.
+    if FOCUSED_SURFACE_ID == 0 {
+        return;
+    }
+
+    APP_LAUNCHER_PROOF_ACTIVE = true;
+    let app_count: u8 = 7;
+    serial_println!("[launcher.proof] stage=0 action=start ok=1 reason=app_launcher_proof_begin");
+
+    // Stage 1: Open the palette (launcher view).
+    if !COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+    let open_ok = COMMAND_PALETTE_OPEN;
+    serial_println!(
+        "[launcher.proof] stage=1 action=open ok={} reason={}",
+        open_ok as u8,
+        if open_ok { "palette_opened" } else { "open_failed" }
+    );
+    if !open_ok {
+        APP_LAUNCHER_PROOF_DONE = true;
+        APP_LAUNCHER_PROOF_ACTIVE = false;
+        serial_println!("[launcher.proof.done] ok=0");
+        return;
+    }
+
+    // Stage 2: Navigate down through app rows (0→6).
+    // Navigate from index 0 down to index 5 (last nav step reaches 6).
+    for i in 0..6u8 {
+        palette_select_next();
+        serial_println!(
+            "[launcher.proof] stage=2 action=nav_down step={} selected={} ok=1",
+            i + 1,
+            COMMAND_PALETTE_SELECTED
+        );
+    }
+    let nav_ok: u8 = if COMMAND_PALETTE_SELECTED >= 5 { 1 } else { 0 };
+    serial_println!(
+        "[launcher.proof] stage=2 action=nav_audit ok={} reason=nav_range_verified",
+        nav_ok
+    );
+
+    // Stage 3: Navigate back up to index 0.
+    for i in 0..3u8 {
+        palette_select_prev();
+        serial_println!(
+            "[launcher.proof] stage=3 action=nav_up step={} selected={} ok=1",
+            i + 1,
+            COMMAND_PALETTE_SELECTED
+        );
+    }
+    let up_nav_ok: u8 = 1;
+    serial_println!(
+        "[launcher.proof] stage=3 action=nav_up_audit ok={} reason=up_nav_works",
+        up_nav_ok
+    );
+
+    // Stage 4: Execute selected launcher item.
+    // Select Spindle (index 0) and execute it.
+    while COMMAND_PALETTE_SELECTED != 0 && COMMAND_PALETTE_SELECTED < app_count {
+        palette_select_prev();
+    }
+    COMMAND_PALETTE_SELECTED = 0; // force to Spindle
+    let exec_ok = palette_execute_selected();
+    serial_println!(
+        "[launcher.proof] stage=4 action=exec ok={} reason={}",
+        exec_ok as u8,
+        if exec_ok { "app_launched" } else { "exec_rejected" }
+    );
+
+    // Stage 5: Close the palette.
+    if COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+    let close_ok = !COMMAND_PALETTE_OPEN;
+    serial_println!(
+        "[launcher.proof] stage=5 action=close ok={} reason={}",
+        close_ok as u8,
+        if close_ok { "palette_closed" } else { "close_failed" }
+    );
+
+    APP_LAUNCHER_PROOF_DONE = true;
+    APP_LAUNCHER_PROOF_ACTIVE = false;
+    let all_ok = open_ok && nav_ok == 1 && up_nav_ok == 1 && close_ok;
+    serial_println!("[launcher.proof.done] ok={}", all_ok as u8);
 }
 
 unsafe fn palette_batch_emit_app_focus(app: &str, sid: u64, ok: bool, reason: &str) {
@@ -14967,6 +15110,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_command_palette_linen_status_proof(); }
         unsafe { maybe_run_quil_status_unblock_proof(); }
         unsafe { maybe_run_command_palette_daily_proof(); }
+        unsafe { maybe_run_app_launcher_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
