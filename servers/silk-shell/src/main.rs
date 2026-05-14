@@ -142,6 +142,12 @@ static mut KEYBOARD_GUI_BROAD_PROOF_DONE: bool = false;
 /// Default OFF to keep normal boot/input tests free of synthetic GUI noise.
 const ENABLE_FRAME_LIGHT_ZOOM_SYNTHETIC_PROOF: bool = false;
 
+/// Visible focus + topbar regression proof gate.
+/// Default OFF. Exercises focus/zoom/minimize/restore via existing keyboard action
+/// path and emits chrome-size/state diagnostics to prove topbar stays at 28 px.
+const VISIBLE_FOCUS_TOPBAR_PROOF_ENABLED: bool =
+    option_env!("SEXOS_VISIBLE_FOCUS_TOPBAR_PROOF").is_some();
+
 // Well-known key ID for scene appearance settings blob.
 const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
 
@@ -4060,6 +4066,23 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
             let b = &mut ACCESS_SCENE_PREV_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[access.action.scene_switch] dir=prev"); }
             true
+        }
+
+        // ── D3B: Restore first minimized frame ──
+        SurfaceAction::RestoreMinimized => {
+            if let Some(frame_id) = first_minimized_frame_id() {
+                if restore_minimized_frame(frame_id) {
+                    serial_println!("[shell.window.action] action=RestoreMinimized frame={} ok=1 reason=ok", frame_id);
+                    static mut ACCESS_RESTORE_OK_BUDGET: u32 = 4;
+                    let b = &mut ACCESS_RESTORE_OK_BUDGET;
+                    if *b > 0 { *b -= 1; serial_println!("[access.action.restore] frame={}", frame_id); }
+                    return true;
+                }
+            }
+            static mut ACCESS_RESTORE_NOOP_BUDGET: u32 = 4;
+            let b = &mut ACCESS_RESTORE_NOOP_BUDGET;
+            if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=restore reason=no_minimized_frame"); }
+            false
         }
 
         _ => false,
@@ -9780,6 +9803,10 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
             return false; // geometry unavailable
         }
     }
+    // After 0xEE deactivate + 0xEC reactivate, sexdisplay creates a fresh
+    // Surface slot with chrome_flags=0.  Re-send tab info so the top-bar
+    // chrome bit (and any hover state) is restored immediately.
+    send_frame_tab_info(frame_id);
     // A5: Focus restored surface and emit restore marker.
     try_set_focus(surface_id);
     serial_println!("[frame.light.restore.fsm] frame={} surface={}", frame_id, surface_id);
@@ -9796,6 +9823,7 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
         }
     }
     snap_capture_layout();
+    emit_chrome_diagnostics(frame_id, "restore");
     true
 }
 
@@ -9841,6 +9869,35 @@ unsafe fn frame_has_top_bar(frame_id: u32) -> bool {
         }
     }
     false
+}
+
+/// Emit chrome size and state diagnostics when VISIBLE_FOCUS_TOPBAR_PROOF is
+/// enabled.  Called after restore / zoom / unzoom / focus changes so the
+/// topbar-height regression can be triaged from serial output alone.
+unsafe fn emit_chrome_diagnostics(frame_id: u32, reason: &str) {
+    if !VISIBLE_FOCUS_TOPBAR_PROOF_ENABLED { return; }
+    let surface_id = match active_surface_for_frame(frame_id) {
+        Some(sid) => sid,
+        None => return,
+    };
+    let zoomed = frame_is_zoomed(frame_id);
+    let minimized = frame_is_minimized(frame_id);
+    let focused = FOCUSED_SURFACE_ID == surface_id;
+    let top_bar = frame_has_top_bar(frame_id);
+    let topbar_h = if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { FRAME_RIM_PX };
+    let tab_h = FRAME_TAB_STRIP_PX;
+    let toolbar_h = if top_bar { FRAME_TOP_BAR_HEIGHT_PX } else { 0 };
+    serial_println!("[shell.frame.chrome.size] frame={} sid={} topbar_h={} tab_h={} toolbar_h={} zoomed={} minimized={} focused={} reason={}",
+        frame_id, surface_id, topbar_h, tab_h, toolbar_h, zoomed as u8, minimized as u8, focused as u8, reason);
+    if let Some((sx, sy, sw, sh)) = get_surface_bounds(surface_id) {
+        let active: bool = FRAMES.iter().any(|f| {
+            if let Some(frame) = f {
+                frame.frame_id == frame_id && frame.scene_id == ACTIVE_SCENE_IDX
+            } else { false }
+        });
+        serial_println!("[shell.frame.chrome.state] frame={} sid={} x={} y={} w={} h={} focused={} active={} reason={}",
+            frame_id, surface_id, sx, sy, sw, sh, focused as u8, active as u8, reason);
+    }
 }
 
 /// Set or clear the top bar flag on the given frame.
@@ -9969,6 +10026,7 @@ unsafe fn zoom_frame(frame_id: u32) -> bool {
         }
     }
     snap_capture_layout();
+    emit_chrome_diagnostics(frame_id, "zoom");
     true
 }
 
@@ -10023,6 +10081,7 @@ unsafe fn unzoom_frame(frame_id: u32) -> bool {
     let b = &mut TILE_AFTER_UNZOOM_BUDGET;
     if *b > 0 { *b -= 1; serial_println!("[shell.tile.after_unzoom] frame={}", frame_id); }
     snap_capture_layout();
+    emit_chrome_diagnostics(frame_id, "unzoom");
     true
 }
 
@@ -10363,6 +10422,81 @@ unsafe fn maybe_run_keyboard_window_synthetic_proof() {
                 serial_println!("[shell.keyboard.window.proof.stage] stage=5 action=AccessActivate ok={}", ok as u8);
                 KEYBOARD_WINDOW_PROOF_STAGE = 6;
                 serial_println!("[shell.keyboard.window.proof.done] ok={}", ok as u8);
+            }
+            _ => break,
+        }
+    }
+}
+
+// ── Visible Focus + Topbar Regression Proof ─────────────────────────────
+// Drives focus-next / focus-prev / zoom / unzoom / minimize / restore
+// through the existing keyboard action path and emits chrome-size/state
+// diagnostics.  Gated by SEXOS_VISIBLE_FOCUS_TOPBAR_PROOF=1.
+static mut VISIBLE_FOCUS_TOPBAR_PROOF_STAGE: u8 = 0;
+static mut VISIBLE_FOCUS_TOPBAR_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_visible_focus_topbar_proof() {
+    if !VISIBLE_FOCUS_TOPBAR_PROOF_ENABLED { return; }
+    if VISIBLE_FOCUS_TOPBAR_PROOF_DONE { return; }
+    let sid = FOCUSED_SURFACE_ID;
+    if sid == 0 {
+        static mut NOFOCUS_BUDGET: u32 = 16;
+        if NOFOCUS_BUDGET > 0 { NOFOCUS_BUDGET -= 1; }
+        return;
+    }
+    let frame_id = match frame_for_surface(sid) {
+        Some(fid) => fid,
+        None => {
+            static mut NOFRAME_BUDGET: u32 = 16;
+            if NOFRAME_BUDGET > 0 { NOFRAME_BUDGET -= 1; }
+            return;
+        }
+    };
+    // Run all stages in one trigger to avoid stall on cadence timing.
+    for _ in 0..7 {
+        match VISIBLE_FOCUS_TOPBAR_PROOF_STAGE {
+            0 => {
+                serial_println!("[shell.focus.topbar.proof.stage] stage=0 action=Begin");
+                VISIBLE_FOCUS_TOPBAR_PROOF_STAGE = 1;
+            }
+            1 => {
+                // Focus next frame
+                let ok = access_handle_keyboard_action(SurfaceAction::AccessFocusNext);
+                serial_println!("[shell.focus.topbar.proof.stage] stage=1 action=AccessFocusNext ok={}", ok as u8);
+                VISIBLE_FOCUS_TOPBAR_PROOF_STAGE = 2;
+            }
+            2 => {
+                // Focus prev frame
+                let ok = access_handle_keyboard_action(SurfaceAction::AccessFocusPrev);
+                serial_println!("[shell.focus.topbar.proof.stage] stage=2 action=AccessFocusPrev ok={}", ok as u8);
+                VISIBLE_FOCUS_TOPBAR_PROOF_STAGE = 3;
+            }
+            3 => {
+                // Zoom
+                let ok = access_handle_keyboard_action(SurfaceAction::AccessZoomToggle);
+                serial_println!("[shell.focus.topbar.proof.stage] stage=3 action=AccessZoomToggle ok={}", ok as u8);
+                VISIBLE_FOCUS_TOPBAR_PROOF_STAGE = 4;
+            }
+            4 => {
+                // Unzoom
+                let ok = access_handle_keyboard_action(SurfaceAction::AccessZoomToggle);
+                serial_println!("[shell.focus.topbar.proof.stage] stage=4 action=AccessZoomToggle ok={}", ok as u8);
+                VISIBLE_FOCUS_TOPBAR_PROOF_STAGE = 5;
+            }
+            5 => {
+                // Minimize
+                let ok = access_handle_keyboard_action(SurfaceAction::AccessActivate);
+                serial_println!("[shell.focus.topbar.proof.stage] stage=5 action=AccessActivate(minimize) ok={}", ok as u8);
+                VISIBLE_FOCUS_TOPBAR_PROOF_STAGE = 6;
+            }
+            6 => {
+                // Restore (use explicit RestoreMinimized to avoid AccessActivate
+                // dispatching minimize on the newly-focused non-minimized frame)
+                let ok = access_handle_keyboard_action(SurfaceAction::RestoreMinimized);
+                serial_println!("[shell.focus.topbar.proof.stage] stage=6 action=RestoreMinimized ok={}", ok as u8);
+                VISIBLE_FOCUS_TOPBAR_PROOF_STAGE = 7;
+                VISIBLE_FOCUS_TOPBAR_PROOF_DONE = true;
+                serial_println!("[shell.focus.topbar.proof.done]");
             }
             _ => break,
         }
@@ -11088,12 +11222,33 @@ unsafe fn try_set_focus(sid: u64) -> bool {
             return false;
         }
     }
+    let old_focus = FOCUSED_SURFACE_ID;
     FOCUSED_SURFACE_ID = sid;
     // A4: Sync FocusRef shadow and emit commit marker.
     sync_focus_ref();
     serial_println!("[focus.ref.commit] id={}", sid);
     serial_println!("[shell.focus.set] id={}", sid);
     serial_println!("[shell.interact.focus] sid={}", sid);
+    if VISIBLE_FOCUS_TOPBAR_PROOF_ENABLED {
+        let new_frame = frame_for_surface(sid).unwrap_or(0);
+        let old_frame = frame_for_surface(old_focus).unwrap_or(0);
+        let active_scene: u8 = if new_frame != 0 {
+            let mut in_active = false;
+            for f in FRAMES.iter() {
+                if let Some(frame) = f {
+                    if frame.frame_id == new_frame && frame.scene_id == ACTIVE_SCENE_IDX {
+                        in_active = true; break;
+                    }
+                }
+            }
+            in_active as u8
+        } else { 0u8 };
+        serial_println!("[shell.focus.visible] old={} new={} frame={} sid={} active={} reason=focus_set",
+            old_focus, sid, new_frame, sid, active_scene);
+        if new_frame != 0 {
+            emit_chrome_diagnostics(new_frame, "focus_set");
+        }
+    }
     pdx_call(SLOT_DISPLAY, 0xED, sid, 0, 0);
     // Selected window options: frame, surface, and computed mask.
     unsafe {
@@ -12489,6 +12644,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_window_drag_synthetic_proof(); }
         unsafe { maybe_run_keyboard_window_synthetic_proof(); }
         unsafe { maybe_run_keyboard_gui_broad_action_proof(); }
+        unsafe { maybe_run_visible_focus_topbar_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
