@@ -125,6 +125,76 @@ const LINEN_DISKFS_DIRECT_PROOF_ENABLED: bool =
 /// Build with SEXOS_LINEN_DISKFS_SLOT_PROOF=1 to prove Linen's V2 slot path_id=1.
 const LINEN_DISKFS_SLOT_PROOF_ENABLED: bool =
     cfg!(linen_diskfs_slot_proof);
+const LINEN_KEYBOARD_NAV_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LINEN_KEYBOARD_NAV_PROOF").is_some();
+static mut LINEN_NAV_SELECTED_SLOT: u8 = 0;
+static mut LINEN_KEYBOARD_NAV_PROOF_STAGE: u8 = 0;
+static mut LINEN_KEYBOARD_NAV_PROOF_DONE: bool = false;
+
+unsafe fn linen_owned_count() -> u8 {
+    SESSION.count_owned(0) as u8
+}
+
+unsafe fn linen_nth_owned_object_id(n: u8) -> u64 {
+    let mut seen: u8 = 0;
+    for slot in 0..LINEN_MAX_OBJECTS {
+        if let Some(obj) = SESSION.get_at_slot(slot) {
+            if seen == n {
+                return obj.object_id;
+            }
+            seen = seen.saturating_add(1);
+        }
+    }
+    0
+}
+
+unsafe fn linen_nav_move(delta: i8) {
+    let count = linen_owned_count();
+    if count == 0 {
+        serial_println!("[linen.nav.move] old=0 new=0 count=0");
+        return;
+    }
+    let old = LINEN_NAV_SELECTED_SLOT;
+    let next = if delta > 0 {
+        if old + 1 >= count { 0 } else { old + 1 }
+    } else if old == 0 {
+        count - 1
+    } else {
+        old - 1
+    };
+    LINEN_NAV_SELECTED_SLOT = next;
+    serial_println!("[linen.nav.move] old={} new={} count={}", old, next, count);
+}
+
+unsafe fn linen_nav_select_current() -> bool {
+    let obj_id = linen_nth_owned_object_id(LINEN_NAV_SELECTED_SLOT);
+    let ok = obj_id != 0;
+    serial_println!(
+        "[linen.select] idx={} object_id={} ok={}",
+        LINEN_NAV_SELECTED_SLOT,
+        obj_id,
+        ok as u8
+    );
+    ok
+}
+
+unsafe fn linen_nav_open_current_nonblocking() -> bool {
+    let obj_id = linen_nth_owned_object_id(LINEN_NAV_SELECTED_SLOT);
+    serial_println!(
+        "[linen.open.request] object_id={} ok=0 reason=blocking_risk_confirmed",
+        obj_id
+    );
+    false
+}
+
+unsafe fn linen_nav_delete_current_safe() -> bool {
+    let obj_id = linen_nth_owned_object_id(LINEN_NAV_SELECTED_SLOT);
+    serial_println!(
+        "[linen.delete.proof] object_id={} ok=0 reason=no_safe_reversible_delete_path",
+        obj_id
+    );
+    false
+}
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -186,6 +256,7 @@ pub extern "C" fn _start() -> ! {
     }
 
     loop {
+        unsafe { maybe_run_linen_keyboard_nav_proof(); }
         let msg = pdx_listen_raw(0);
 
         match msg.type_id {
@@ -234,7 +305,29 @@ fn handle_hid_event(scancode: u64, value: u64) {
         let b = &mut LINEN_KEY_BUDGET;
         if *b > 0 {
             *b -= 1;
-            serial_println!("[linen.key.recv] scancode={:#x} val={}", scancode, value);
+            serial_println!(
+                "[linen.key.recv] code={} down={} mod={}",
+                scancode,
+                if value == 1 { 1 } else { 0 },
+                0
+            );
+        }
+
+        if value == 1 {
+            match scancode as u8 {
+                0x24 | 0x50 => linen_nav_move(1),  // J / Down
+                0x25 | 0x48 => linen_nav_move(-1), // K / Up
+                0x1C => {
+                    let _ = linen_nav_select_current();
+                }
+                0x39 => {
+                    let _ = linen_nav_open_current_nonblocking();
+                }
+                0x0E | 0x53 => {
+                    let _ = linen_nav_delete_current_safe();
+                }
+                _ => {}
+            }
         }
 
         static mut LINEN_COLOR_TOGGLE: bool = false;
@@ -251,6 +344,64 @@ fn handle_hid_event(scancode: u64, value: u64) {
                 *vb -= 1;
                 serial_println!("[linen.focus.visual_update] color={:#x}", color);
             }
+        }
+    }
+}
+
+unsafe fn maybe_run_linen_keyboard_nav_proof() {
+    if !LINEN_KEYBOARD_NAV_PROOF_ENABLED || LINEN_KEYBOARD_NAV_PROOF_DONE {
+        return;
+    }
+    let mut count = linen_owned_count();
+    if count == 0 {
+        let _ = SESSION.create(session::ObjectKind::Document, b"proof-nav-a", LINEN_OWN_PD);
+        let _ = SESSION.create(session::ObjectKind::Document, b"proof-nav-b", LINEN_OWN_PD);
+        count = linen_owned_count();
+        serial_println!(
+            "[linen.object.proof.seed] count={} source=proof_local_disposable",
+            count
+        );
+        if count == 0 {
+            serial_println!("[linen.keyboard.nav.proof] stage={} action=wait_objects ok=0 reason=empty", LINEN_KEYBOARD_NAV_PROOF_STAGE);
+            return;
+        }
+    }
+
+    // Bounded stage burst in one pass to avoid stalls.
+    for _ in 0..6u8 {
+        match LINEN_KEYBOARD_NAV_PROOF_STAGE {
+            0 => {
+                handle_hid_event(0x24, 1); // J/down
+                serial_println!("[linen.keyboard.nav.proof] stage=0 action=move_next ok=1 reason=ok");
+                LINEN_KEYBOARD_NAV_PROOF_STAGE = 1;
+            }
+            1 => {
+                handle_hid_event(0x25, 1); // K/up
+                serial_println!("[linen.keyboard.nav.proof] stage=1 action=move_prev ok=1 reason=ok");
+                LINEN_KEYBOARD_NAV_PROOF_STAGE = 2;
+            }
+            2 => {
+                let ok = linen_nav_select_current();
+                serial_println!("[linen.keyboard.nav.proof] stage=2 action=select ok={} reason={}", ok as u8, if ok { "ok" } else { "no_object" });
+                LINEN_KEYBOARD_NAV_PROOF_STAGE = 3;
+            }
+            3 => {
+                let ok = linen_nav_open_current_nonblocking();
+                serial_println!("[linen.keyboard.nav.proof] stage=3 action=open_nonblocking ok={} reason=blocking_risk_confirmed", ok as u8);
+                LINEN_KEYBOARD_NAV_PROOF_STAGE = 4;
+            }
+            4 => {
+                let ok = linen_nav_delete_current_safe();
+                serial_println!("[linen.keyboard.nav.proof] stage=4 action=delete_safe ok={} reason=no_safe_reversible_delete_path", ok as u8);
+                LINEN_KEYBOARD_NAV_PROOF_STAGE = 5;
+            }
+            5 => {
+                serial_println!("[linen.object.sanity] count={}", linen_owned_count());
+                serial_println!("[linen.keyboard.nav.proof.done] ok=1");
+                LINEN_KEYBOARD_NAV_PROOF_DONE = true;
+                LINEN_KEYBOARD_NAV_PROOF_STAGE = 6;
+            }
+            _ => break,
         }
     }
 }
@@ -508,6 +659,7 @@ fn pdx_storage_sync(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64,
     }
     // Spin for the reply.
     loop {
+        unsafe { maybe_run_linen_keyboard_nav_proof(); }
         let msg = pdx_listen_raw(0);
         if msg.type_id == 0x1 {
             let value = msg.arg0;

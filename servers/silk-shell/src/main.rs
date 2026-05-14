@@ -175,6 +175,8 @@ const ENABLE_FRAME_LIGHT_ZOOM_SYNTHETIC_PROOF: bool = false;
 /// path and emits chrome-size/state diagnostics to prove topbar stays at 28 px.
 const VISIBLE_FOCUS_TOPBAR_PROOF_ENABLED: bool =
     option_env!("SEXOS_VISIBLE_FOCUS_TOPBAR_PROOF").is_some();
+const LINEN_KEYBOARD_NAV_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LINEN_KEYBOARD_NAV_PROOF").is_some();
 const PALETTE_REJECTS_APP_OPEN_PROOF_ENABLED: bool =
     option_env!("SEXOS_PALETTE_REJECTS_APP_OPEN_PROOF").is_some();
 const COMMAND_PALETTE_DAILY_PROOF_ENABLED: bool =
@@ -188,6 +190,21 @@ static mut COMMAND_PALETTE_DAILY_PROOF_SKIPPED: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_SKIP_BUDGET: u8 = 16;
 static mut PALETTE_BATCH_PROOF_DONE: bool = false;
 static mut PALETTE_BATCH_PROOF_ACTIVE: bool = false;
+static mut LINEN_KEYBOARD_ROUTE_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_linen_keyboard_route_proof() {
+    if !LINEN_KEYBOARD_NAV_PROOF_ENABLED || LINEN_KEYBOARD_ROUTE_PROOF_DONE {
+        return;
+    }
+    // Focus Linen through existing surface focus path.
+    let _ = try_set_focus(SURFACE_ID_LINEN);
+    // Inject minimal key sequence via normal shell->linen route.
+    for sc in [0x24u64, 0x25u64, 0x1Cu64] {
+        serial_println!("[silk-shell.key.route] target=linen sid={} code={} down=1", SURFACE_ID_LINEN, sc);
+        pdx_call(sex_pdx::SLOT_LINEN, OP_HID_EVENT, sc, 1, EV_KEY);
+    }
+    LINEN_KEYBOARD_ROUTE_PROOF_DONE = true;
+}
 
 // Well-known key ID for scene appearance settings blob.
 const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
@@ -13289,6 +13306,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_visible_focus_topbar_proof(); }
         unsafe { maybe_run_keyboard_safe_close_proof(); }
         unsafe { maybe_run_spindle_real_keyboard_focus_proof(); }
+        unsafe { maybe_run_linen_keyboard_route_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }
         unsafe { maybe_run_command_palette_daily_proof(); }
 
