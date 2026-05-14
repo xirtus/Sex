@@ -181,6 +181,8 @@ const PALETTE_REJECTS_APP_OPEN_PROOF_ENABLED: bool =
     option_env!("SEXOS_PALETTE_REJECTS_APP_OPEN_PROOF").is_some();
 const COMMAND_PALETTE_DAILY_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_DAILY_PROOF").is_some();
+const BELL_KEYBOARD_DETAIL_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BELL_KEYBOARD_DETAIL_PROOF").is_some();
 static mut COMMAND_PALETTE_DAILY_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_DAILY_PROOF_ACTIVE: bool = false;
 static mut COMMAND_PALETTE_DAILY_PROOF_IDX: u8 = 0;
@@ -191,6 +193,7 @@ static mut COMMAND_PALETTE_DAILY_PROOF_SKIP_BUDGET: u8 = 16;
 static mut PALETTE_BATCH_PROOF_DONE: bool = false;
 static mut PALETTE_BATCH_PROOF_ACTIVE: bool = false;
 static mut LINEN_KEYBOARD_ROUTE_PROOF_DONE: bool = false;
+static mut BELL_KEYBOARD_DETAIL_PROOF_DONE: bool = false;
 
 unsafe fn maybe_run_linen_keyboard_route_proof() {
     if !LINEN_KEYBOARD_NAV_PROOF_ENABLED || LINEN_KEYBOARD_ROUTE_PROOF_DONE {
@@ -204,6 +207,50 @@ unsafe fn maybe_run_linen_keyboard_route_proof() {
         pdx_call(sex_pdx::SLOT_LINEN, OP_HID_EVENT, sc, 1, EV_KEY);
     }
     LINEN_KEYBOARD_ROUTE_PROOF_DONE = true;
+}
+
+unsafe fn maybe_run_bell_keyboard_detail_proof() {
+    if !BELL_KEYBOARD_DETAIL_PROOF_ENABLED || BELL_KEYBOARD_DETAIL_PROOF_DONE {
+        return;
+    }
+    let open_ok = focus_or_open_bell();
+    serial_println!(
+        "[bell.keyboard.detail.proof] stage=0 action=open_focus ok={} reason={}",
+        open_ok as u8,
+        if open_ok { "ok" } else { "open_or_focus_reject" }
+    );
+    if !open_ok {
+        serial_println!("[bell.keyboard.detail.proof.done] ok=0");
+        BELL_KEYBOARD_DETAIL_PROOF_DONE = true;
+        return;
+    }
+    // Drive existing Bell keyboard handlers (proof lane, same helpers used by key route).
+    serial_println!("[bell.key.recv] code={} down=1 mod=0", 0x24);
+    bell_select_next_row();
+    serial_println!("[bell.keyboard.detail.proof] stage=1 action=next_event ok=1 reason=ok");
+    serial_println!("[bell.key.recv] code={} down=1 mod=0", 0x25);
+    bell_select_prev_row();
+    serial_println!("[bell.keyboard.detail.proof] stage=2 action=prev_event ok=1 reason=ok");
+    serial_println!("[bell.key.recv] code={} down=1 mod=0", 0x1C);
+    bell_emit_selected_event_detail_proof();
+    let detail_ok = BELL_DETAIL_OPEN;
+    serial_println!(
+        "[bell.keyboard.detail.proof] stage=3 action=open_detail ok={} reason={}",
+        detail_ok as u8,
+        if detail_ok { "ok" } else { "no_event_or_unsupported" }
+    );
+    serial_println!("[bell.key.recv] code={} down=1 mod=0", 0x01);
+    bell_close_detail();
+    serial_println!("[bell.keyboard.detail.proof] stage=4 action=close_detail ok=1 reason=ok");
+    serial_println!("[bell.key.recv] code={} down=1 mod=0", 0x1A);
+    let lane_ok = bell_cycle_lane();
+    serial_println!(
+        "[bell.keyboard.detail.proof] stage=5 action=lane_cycle ok={} reason={}",
+        lane_ok as u8,
+        if lane_ok { "ok" } else { "lane_unavailable" }
+    );
+    serial_println!("[bell.keyboard.detail.proof.done] ok=1");
+    BELL_KEYBOARD_DETAIL_PROOF_DONE = true;
 }
 
 // Well-known key ID for scene appearance settings blob.
@@ -7684,6 +7731,8 @@ const BELL_LIST_ROW_RECTS: u8 = 7;
 /// Currently selected visible row index in the Bell event list.
 /// 0 = newest event row. Repaired during render if ring shrinks.
 static mut BELL_SELECTED_ROW: u8 = 0;
+static mut BELL_DETAIL_OPEN: bool = false;
+static mut BELL_SELECTED_LANE: u8 = 0;
 
 // ── K11: Command Palette Stub ────────────────────────────────────────────
 // Shell-owned action router. No text input, no fuzzy search, no app manifests.
@@ -9145,12 +9194,14 @@ unsafe fn bell_select_next_row() {
     let count = bell_visible_event_count();
     if count <= 1 {
         serial_println!("[bell.selection.reject] reason=single_or_empty count={}", count);
+        serial_println!("[bell.nav.move] old={} new={} total={}", BELL_SELECTED_ROW, BELL_SELECTED_ROW, count);
         return;
     }
     let current = BELL_SELECTED_ROW;
     let next = if current + 1 >= count { 0 } else { current + 1 };
     BELL_SELECTED_ROW = next;
     serial_println!("[bell.selection.next] prev={} next={}", current, next);
+    serial_println!("[bell.nav.move] old={} new={} total={}", current, next, count);
     bell_render_event_list();
 }
 
@@ -9159,12 +9210,14 @@ unsafe fn bell_select_prev_row() {
     let count = bell_visible_event_count();
     if count <= 1 {
         serial_println!("[bell.selection.reject] reason=single_or_empty count={}", count);
+        serial_println!("[bell.nav.move] old={} new={} total={}", BELL_SELECTED_ROW, BELL_SELECTED_ROW, count);
         return;
     }
     let current = BELL_SELECTED_ROW;
     let prev = if current == 0 { count - 1 } else { current - 1 };
     BELL_SELECTED_ROW = prev;
     serial_println!("[bell.selection.prev] prev={} next={}", current, prev);
+    serial_println!("[bell.nav.move] old={} new={} total={}", current, prev, count);
     bell_render_event_list();
 }
 
@@ -9193,27 +9246,48 @@ unsafe fn bell_selected_event_snapshot() -> Option<BellEvent> {
 unsafe fn bell_emit_selected_event_detail_proof() {
     if FOCUSED_SURFACE_ID != SURFACE_ID_BELL_PLACEHOLDER {
         serial_println!("[bell.detail.reject] reason=not_focused");
+        serial_println!("[bell.detail.open] event_id=0 ok=0 reason=not_focused");
         return;
     }
     let ev = match bell_selected_event_snapshot() {
         Some(e) => e,
         None => {
             serial_println!("[bell.detail.reject] reason=no_event");
+            serial_println!("[bell.detail.open] event_id=0 ok=0 reason=no_event");
             return;
         }
     };
     serial_println!("[bell.detail.open] event_id={} kind={:?}", ev.event_id, ev.kind);
+    BELL_DETAIL_OPEN = true;
     match ev.kind {
         BellEventKind::ObjectLinkedToBuffer => {
             serial_println!("[bell.detail.event] event_id={} kind=ObjectLinkedToBuffer object_id={} buffer_id={}",
                 ev.event_id, ev.object_id, ev.buffer_id);
             serial_println!("[bell.detail.object_link] object_id={} buffer_id={}", ev.object_id, ev.buffer_id);
+            serial_println!("[bell.detail.open] event_id={} ok=1 reason=ok", ev.event_id);
         }
         _ => {
             serial_println!("[bell.detail.reject] reason=unsupported_kind kind={:?}", ev.kind);
+            serial_println!("[bell.detail.open] event_id={} ok=0 reason=unsupported_kind", ev.event_id);
         }
     }
     serial_println!("[bell.detail.done] event_id={}", ev.event_id);
+}
+
+unsafe fn bell_close_detail() {
+    if BELL_DETAIL_OPEN {
+        BELL_DETAIL_OPEN = false;
+        serial_println!("[bell.detail.close] ok=1 reason=ok");
+    } else {
+        serial_println!("[bell.detail.close] ok=0 reason=not_open");
+    }
+}
+
+unsafe fn bell_cycle_lane() -> bool {
+    let old = BELL_SELECTED_LANE;
+    BELL_SELECTED_LANE = if old >= 5 { 0 } else { old + 1 };
+    serial_println!("[bell.lane.cycle] old={} new={} ok=1", old, BELL_SELECTED_LANE);
+    true
 }
 
 /// Check whether the Bell surface is currently visible in the active scene.
@@ -13307,6 +13381,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_keyboard_safe_close_proof(); }
         unsafe { maybe_run_spindle_real_keyboard_focus_proof(); }
         unsafe { maybe_run_linen_keyboard_route_proof(); }
+        unsafe { maybe_run_bell_keyboard_detail_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }
         unsafe { maybe_run_command_palette_daily_proof(); }
 
@@ -14166,8 +14241,11 @@ pub extern "C" fn _start() -> ! {
                                 mutated = true;
                             // ── Bell focused-surface navigation: J/K nav + Enter detail proof ──
                             } else if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_BELL_PLACEHOLDER
-                                && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C)
+                                && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C
+                                    || scancode == 0x01 || scancode == 0x0E
+                                    || scancode == 0x1A || scancode == 0x1B)
                             {
+                                serial_println!("[bell.key.recv] code={} down={} mod=0", scancode, value);
                                 match scancode {
                                     0x24 => {
                                         serial_println!("[bell.keyboard.next] sid={}", FOCUSED_SURFACE_ID);
@@ -14180,6 +14258,12 @@ pub extern "C" fn _start() -> ! {
                                     0x1C => {
                                         serial_println!("[bell.keyboard.enter] sid={}", FOCUSED_SURFACE_ID);
                                         bell_emit_selected_event_detail_proof();
+                                    }
+                                    0x01 | 0x0E => {
+                                        bell_close_detail();
+                                    }
+                                    0x1A | 0x1B => {
+                                        let _ = bell_cycle_lane();
                                     }
                                     _ => {}
                                 }
