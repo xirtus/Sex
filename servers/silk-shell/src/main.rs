@@ -124,6 +124,11 @@ const SPINDLE_SYNTH_SEQ: [u8; 6] = [0x1E, 0x30, 0x2E, 0x0E, 0x20, 0x1C];
 const WINDOW_DRAG_PROOF_ENABLED: bool =
     option_env!("SEXOS_WINDOW_DRAG_PROOF").is_some();
 static mut WINDOW_DRAG_PROOF_STAGE: u8 = 0;
+/// Keyboard window-control synthetic proof gate.
+/// Default OFF. Exercises focus/zoom/minimize/restore via existing keyboard action path.
+const KEYBOARD_WINDOW_PROOF_ENABLED: bool =
+    option_env!("SEXOS_KEYBOARD_WINDOW_PROOF").is_some();
+static mut KEYBOARD_WINDOW_PROOF_STAGE: u8 = 0;
 
 /// Frame-light zoom synthetic proof gate.
 /// Default OFF to keep normal boot/input tests free of synthetic GUI noise.
@@ -3078,6 +3083,23 @@ fn scancode_to_action(scancode: u8) -> Option<SurfaceAction> {
 	    }
 	}
 
+fn action_name(action: SurfaceAction) -> &'static str {
+    match action {
+        SurfaceAction::AccessFocusNext => "AccessFocusNext",
+        SurfaceAction::AccessFocusPrev => "AccessFocusPrev",
+        SurfaceAction::AccessActivate => "AccessActivate",
+        SurfaceAction::AccessClose => "AccessClose",
+        SurfaceAction::AccessZoomToggle => "AccessZoomToggle",
+        SurfaceAction::ToggleQuil => "ToggleQuil",
+        SurfaceAction::ToggleLinen => "ToggleLinen",
+        SurfaceAction::ToggleSpindle => "ToggleSpindle",
+        SurfaceAction::ToggleAtlas => "ToggleAtlas",
+        SurfaceAction::Maximize => "Maximize",
+        SurfaceAction::RestoreMinimized => "RestoreMinimized",
+        _ => "Other",
+    }
+}
+
 fn layout_left() -> (i32, i32, u32, u32) {
     (0, P.bar_height, (P.width as u32) / 2, (P.height - P.bar_height) as u32)
 }
@@ -3872,7 +3894,15 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
                             serial_println!("[access.action.focus_next] from={} to={} role={:?} label={}",
                                 current_sid, sid, node.role, label);
                         }
-                        return try_set_focus(sid);
+                        let ok = try_set_focus(sid);
+                        serial_println!(
+                            "[shell.window.action] action={} frame=0 sid={} ok={} reason={}",
+                            if forward { "FocusNext" } else { "FocusPrev" },
+                            sid,
+                            ok as u8,
+                            if ok { "ok" } else { "focus_reject" }
+                        );
+                        return ok;
                     }
                 }
             }
@@ -3913,13 +3943,21 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
                     .unwrap_or(false)
                 {
                     // Minimized → restore
-                    restore_minimized_frame(frame_id_val);
+                    let ok = restore_minimized_frame(frame_id_val);
+                    serial_println!(
+                        "[shell.window.action] action=RestoreMinimized frame={} sid={} ok={} reason={}",
+                        frame_id_val, sid, ok as u8, if ok { "ok" } else { "restore_failed" }
+                    );
                     static mut ACCESS_ACTIVATE_RESTORE_BUDGET: u32 = 4;
                     let b = &mut ACCESS_ACTIVATE_RESTORE_BUDGET;
                     if *b > 0 { *b -= 1; serial_println!("[access.action.allow] action=activate target={} dispatch=restore", sid); }
                 } else {
                     // Visible → minimize
-                    minimize_frame(frame_id_val);
+                    let ok = minimize_frame(frame_id_val);
+                    serial_println!(
+                        "[shell.window.action] action=Minimize frame={} sid={} ok={} reason={}",
+                        frame_id_val, sid, ok as u8, if ok { "ok" } else { "minimize_failed" }
+                    );
                     static mut ACCESS_ACTIVATE_MINIMIZE_BUDGET: u32 = 4;
                     let b = &mut ACCESS_ACTIVATE_MINIMIZE_BUDGET;
                     if *b > 0 { *b -= 1; serial_println!("[access.action.allow] action=activate target={} dispatch=minimize", sid); }
@@ -3949,6 +3987,8 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
                 return false;
             }
             if close_surface_from_frame_light(sid) {
+                let fid = frame_for_surface(sid).unwrap_or(0);
+                serial_println!("[shell.window.action] action=Close frame={} sid={} ok=1 reason=ok", fid, sid);
                 static mut ACCESS_CLOSE_OK_BUDGET: u32 = 8;
                 let b = &mut ACCESS_CLOSE_OK_BUDGET;
                 if *b > 0 { *b -= 1; serial_println!("[access.action.close] target={}", sid); }
@@ -3957,6 +3997,8 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
             static mut ACCESS_CLOSE_FAIL_BUDGET: u32 = 4;
             let b = &mut ACCESS_CLOSE_FAIL_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=close reason=failed target={}", sid); }
+            let fid = frame_for_surface(sid).unwrap_or(0);
+            serial_println!("[shell.window.action] action=Close frame={} sid={} ok=0 reason=close_failed", fid, sid);
             false
         }
 
@@ -3977,6 +4019,7 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
             }
             if let Some(fid) = frame_for_surface(sid) {
                 if toggle_zoom_frame(fid) {
+                    serial_println!("[shell.window.action] action=ZoomToggle frame={} sid={} ok=1 reason=ok", fid, sid);
                     static mut ACCESS_ZOOM_OK_BUDGET: u32 = 8;
                     let b = &mut ACCESS_ZOOM_OK_BUDGET;
                     if *b > 0 { *b -= 1; serial_println!("[access.action.zoom] frame={} target={}", fid, sid); }
@@ -3986,6 +4029,8 @@ unsafe fn access_handle_keyboard_action(action: SurfaceAction) -> bool {
             static mut ACCESS_ZOOM_FAIL_BUDGET: u32 = 4;
             let b = &mut ACCESS_ZOOM_FAIL_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[access.action.reject] action=zoom reason=failed target={}", sid); }
+            let fid = frame_for_surface(sid).unwrap_or(0);
+            serial_println!("[shell.window.action] action=ZoomToggle frame={} sid={} ok=0 reason=zoom_failed", fid, sid);
             false
         }
 
@@ -10098,6 +10143,127 @@ unsafe fn maybe_run_window_drag_synthetic_proof() {
     }
 }
 
+unsafe fn maybe_run_keyboard_window_synthetic_proof() {
+    static mut SKIP_DISABLED_BUDGET: u32 = 1;
+    static mut SKIP_NO_FOCUS_BUDGET: u32 = 16;
+    static mut SKIP_NO_FRAME_BUDGET: u32 = 16;
+    static mut SKIP_ALREADY_DONE_BUDGET: u32 = 1;
+    static mut STATE_BUDGET: u32 = 64;
+    static mut DEFER_BUDGET: u32 = 64;
+    if !KEYBOARD_WINDOW_PROOF_ENABLED {
+        if SKIP_DISABLED_BUDGET > 0 {
+            SKIP_DISABLED_BUDGET -= 1;
+            serial_println!("[shell.keyboard.window.proof.skip] reason=disabled");
+        }
+        if DEFER_BUDGET > 0 {
+            DEFER_BUDGET -= 1;
+            serial_println!("[shell.keyboard.window.proof.defer] stage={} reason=disabled", KEYBOARD_WINDOW_PROOF_STAGE);
+        }
+        return;
+    }
+    if STATE_BUDGET > 0 {
+        STATE_BUDGET -= 1;
+        serial_println!(
+            "[shell.keyboard.window.proof.state] stage={} in_progress={} done={} focused={}",
+            KEYBOARD_WINDOW_PROOF_STAGE,
+            if KEYBOARD_WINDOW_PROOF_STAGE < 6 { 1 } else { 0 },
+            if KEYBOARD_WINDOW_PROOF_STAGE >= 6 { 1 } else { 0 },
+            FOCUSED_SURFACE_ID
+        );
+    }
+    if KEYBOARD_WINDOW_PROOF_STAGE >= 6 {
+        if SKIP_ALREADY_DONE_BUDGET > 0 {
+            SKIP_ALREADY_DONE_BUDGET -= 1;
+            serial_println!("[shell.keyboard.window.proof.skip] reason=already_done");
+        }
+        return;
+    }
+    // Wait until we have a focusable framed surface.
+    let sid = FOCUSED_SURFACE_ID;
+    if sid == 0 {
+        if SKIP_NO_FOCUS_BUDGET > 0 {
+            SKIP_NO_FOCUS_BUDGET -= 1;
+            serial_println!("[shell.keyboard.window.proof.skip] reason=no_focus");
+        }
+        if DEFER_BUDGET > 0 {
+            DEFER_BUDGET -= 1;
+            serial_println!("[shell.keyboard.window.proof.defer] stage={} reason=no_focus", KEYBOARD_WINDOW_PROOF_STAGE);
+        }
+        return;
+    }
+    let fid = frame_for_surface(sid);
+    serial_println!(
+        "[shell.focus.frame.lookup] focused={} frame={} ok={} reason={}",
+        sid,
+        fid.unwrap_or(0),
+        fid.is_some() as u8,
+        if fid.is_some() { "ok" } else { "no_frame" }
+    );
+    if fid.is_none() {
+        static mut FRAME_SURFACE_MAP_BUDGET: u32 = 24;
+        if FRAME_SURFACE_MAP_BUDGET > 0 {
+            FRAME_SURFACE_MAP_BUDGET -= 1;
+            for f in FRAMES.iter() {
+                if let Some(frame) = f {
+                    if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
+                        serial_println!(
+                            "[shell.frame.surface.map] frame={} sid={} kind=active_tab active=1",
+                            frame.frame_id, tab.surface_id
+                        );
+                    }
+                }
+            }
+        }
+        if SKIP_NO_FRAME_BUDGET > 0 {
+            SKIP_NO_FRAME_BUDGET -= 1;
+            serial_println!("[shell.keyboard.window.proof.skip] reason=no_frame focused={}", sid);
+        }
+        if DEFER_BUDGET > 0 {
+            DEFER_BUDGET -= 1;
+            serial_println!("[shell.keyboard.window.proof.defer] stage={} reason=no_frame", KEYBOARD_WINDOW_PROOF_STAGE);
+        }
+        return;
+    }
+    serial_println!("[shell.keyboard.window.proof.trigger] focused={}", sid);
+    // Run all remaining non-destructive stages in one trigger call so proof
+    // cannot stall on loop cadence/defer timing.
+    for _ in 0..6 {
+        match KEYBOARD_WINDOW_PROOF_STAGE {
+            0 => {
+                serial_println!("[shell.keyboard.window.proof.stage] stage=0 action=Begin ok=1");
+                KEYBOARD_WINDOW_PROOF_STAGE = 1;
+            }
+            1 => {
+                let ok = access_handle_keyboard_action(SurfaceAction::AccessFocusNext);
+                serial_println!("[shell.keyboard.window.proof.stage] stage=1 action=AccessFocusNext ok={}", ok as u8);
+                KEYBOARD_WINDOW_PROOF_STAGE = 2;
+            }
+            2 => {
+                let ok = access_handle_keyboard_action(SurfaceAction::AccessZoomToggle);
+                serial_println!("[shell.keyboard.window.proof.stage] stage=2 action=AccessZoomToggle ok={}", ok as u8);
+                KEYBOARD_WINDOW_PROOF_STAGE = 3;
+            }
+            3 => {
+                let ok = access_handle_keyboard_action(SurfaceAction::AccessZoomToggle);
+                serial_println!("[shell.keyboard.window.proof.stage] stage=3 action=AccessZoomToggle ok={}", ok as u8);
+                KEYBOARD_WINDOW_PROOF_STAGE = 4;
+            }
+            4 => {
+                let ok = access_handle_keyboard_action(SurfaceAction::AccessActivate);
+                serial_println!("[shell.keyboard.window.proof.stage] stage=4 action=AccessActivate ok={}", ok as u8);
+                KEYBOARD_WINDOW_PROOF_STAGE = 5;
+            }
+            5 => {
+                let ok = access_handle_keyboard_action(SurfaceAction::AccessActivate);
+                serial_println!("[shell.keyboard.window.proof.stage] stage=5 action=AccessActivate ok={}", ok as u8);
+                KEYBOARD_WINDOW_PROOF_STAGE = 6;
+                serial_println!("[shell.keyboard.window.proof.done] ok={}", ok as u8);
+            }
+            _ => break,
+        }
+    }
+}
+
 /// Synthesize a pointer click targeted at the zoom light midpoint of `frame_id` using the
 /// same hit-test + action path as a real click. Calculates the green light midpoint
 /// (px = sx + 50, py = sy + 14), emits explicit hitbox diagnostics, then calls
@@ -11782,6 +11948,15 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[tab.core.attach] frame=1 tab=0 surface={}", SURFACE_ID_APP);
         serial_println!("[tab.core.attach] frame=1 tab=1 surface={}", SURFACE_ID_STATIC);
 
+        // Ensure boot-visible Quil/Linen surfaces have frame ownership mappings.
+        // Without this, focused surface 201 can exist without frame_for_surface() resolving.
+        if let Some(fid) = ensure_quil_frame() {
+            serial_println!("[shell.frame.surface.map] frame={} sid={} kind=boot_attach active=1", fid, SURFACE_ID_QUIL);
+        }
+        if let Some(fid) = ensure_linen_frame() {
+            serial_println!("[shell.frame.surface.map] frame={} sid={} kind=boot_attach active=1", fid, SURFACE_ID_LINEN);
+        }
+
         // A3: Initialize lifecycle metadata for all known surfaces.
         lifecycle_init_all();
         serial_println!("[silk-shell.spindle.route.ready] slot={} surface={}", SLOT_SPINDLE, SURFACE_ID_SPINDLE);
@@ -12046,6 +12221,7 @@ pub extern "C" fn _start() -> ! {
     loop {
         unsafe { maybe_run_frame_light_zoom_synthetic_proof(); }
         unsafe { maybe_run_window_drag_synthetic_proof(); }
+        unsafe { maybe_run_keyboard_window_synthetic_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
@@ -13068,6 +13244,10 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 mutated = true;
                             } else if let Some(action) = scancode_to_action(scancode) {
+                                serial_println!(
+                                    "[shell.key.action] scancode={} action={} focused={}",
+                                    scancode, action_name(action), FOCUSED_SURFACE_ID
+                                );
                                 match action {
                                     SurfaceAction::FocusToggle => {
                                         let current = FOCUSED_SURFACE_ID;
