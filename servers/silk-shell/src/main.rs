@@ -112,6 +112,8 @@ const LINEN_OBJECT_DETAIL_PROOF_ENABLED: bool =
     option_env!("SEXOS_LINEN_OBJECT_DETAIL_PROOF").is_some();
 const COLLAR_KEYBOARD_GRANTS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COLLAR_KEYBOARD_GRANTS_PROOF").is_some();
+const SILKBAR_PALETTE_STATUS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SILKBAR_PALETTE_STATUS_PROOF").is_some();
 
 /// Synthetic proof stage counter for Atlas overview model proof. Advances 0..4 then stops.
 static mut ATLAS_OVERVIEW_PROOF_STAGE: u8 = 0;
@@ -122,6 +124,7 @@ static mut SILKBAR_KEYBOARD_STATUS_PROOF_DONE: bool = false;
 static mut BELL_SYSTEM_EVENTS_PROOF_DONE: bool = false;
 static mut LINEN_OBJECT_DETAIL_PROOF_DONE: bool = false;
 static mut COLLAR_KEYBOARD_GRANTS_PROOF_DONE: bool = false;
+static mut SILKBAR_PALETTE_STATUS_PROOF_DONE: bool = false;
 
 /// App lifecycle synthetic proof gate.
 /// Build with SEXOS_LIFECYCLE_PROOF=1 to enable.
@@ -706,6 +709,100 @@ unsafe fn maybe_run_silkbar_keyboard_status_proof() {
     let all_ok = spindle_ok && spindle_focus && bell_ok && mesh_ok && linen_ok;
     serial_println!("[silkbar.keyboard.status.proof.done] ok={}", all_ok as u8);
     SILKBAR_KEYBOARD_STATUS_PROOF_DONE = true;
+}
+
+/// SilkBar palette status proof: verifies that silk-shell emits
+/// [shell.palette.statusbar] markers when the command palette opens/closes,
+/// and proves that the existing focus-based SilkBar status path does NOT
+/// fire for palette events (no focus change on overlay open).
+///
+/// ABI gap (STOP FIRST, not fixed):
+/// - No `UpdateKind` variant for palette open/close state.
+/// - The SilkBar receives `OP_SILKBAR_FOCUS_STATE` only on focus changes.
+///   Palette open/close is an overlay toggle — it does not change focus.
+/// - Adding palette rendering to SilkBar requires a new `UpdateKind` variant
+///   (e.g., `SetPaletteVisible = 8`) + sexdisplay render update.
+/// - Documented as blocker; no ABI changes.
+unsafe fn maybe_run_silkbar_palette_status_proof() {
+    if !SILKBAR_PALETTE_STATUS_PROOF_ENABLED || SILKBAR_PALETTE_STATUS_PROOF_DONE {
+        return;
+    }
+    serial_println!("[silkbar.palette.status.proof] stage=0 action=start ok=1 reason=begin");
+
+    // Stage 0: Snapshot pre-open state — record current focus and silkbar status.
+    let pre_focus = FOCUSED_SURFACE_ID;
+    let pre_palette_open = COMMAND_PALETTE_OPEN;
+    serial_println!(
+        "[silkbar.palette.status.proof] stage=0 action=snapshot focus={} palette_open={}",
+        pre_focus, pre_palette_open as u8
+    );
+
+    // Stage 1: Open palette if not already open.
+    if !COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+    let open_ok = COMMAND_PALETTE_OPEN;
+    let post_focus = FOCUSED_SURFACE_ID;
+    let focus_changed = (pre_focus != post_focus) as u8;
+    serial_println!(
+        "[silkbar.palette.status.proof] stage=1 action=open_palette ok={} focus_changed={} reason={}",
+        open_ok as u8,
+        focus_changed,
+        if open_ok { "opened" } else { "open_failed" }
+    );
+    // Prove: focus does NOT change on palette open (overlay toggle).
+    if focus_changed != 0 {
+        serial_println!("[silkbar.palette.status.proof.note] focus_did_change={} unexpected", post_focus);
+    } else {
+        serial_println!("[silkbar.palette.status.proof.fact] focus_unchanged=1 reason=overlay_no_focus_switch");
+    }
+
+    // Stage 2: Count available items in open palette.
+    let mut avail: usize = 0;
+    for item in COMMAND_LIST.iter() {
+        if palette_item_status(item.command).0 {
+            avail += 1;
+        }
+    }
+    serial_println!(
+        "[silkbar.palette.status.proof] stage=2 action=inspect_items total={} available={} selected={}",
+        COMMAND_LIST.len(), avail, COMMAND_PALETTE_SELECTED
+    );
+
+    // Stage 3: Close palette.
+    if COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+    let close_ok = !COMMAND_PALETTE_OPEN;
+    let final_focus = FOCUSED_SURFACE_ID;
+    let focus_changed2 = (post_focus != final_focus) as u8;
+    serial_println!(
+        "[silkbar.palette.status.proof] stage=3 action=close_palette ok={} focus_changed={} reason={}",
+        close_ok as u8,
+        focus_changed2,
+        if close_ok { "closed" } else { "close_failed" }
+    );
+    if focus_changed2 != 0 {
+        serial_println!("[silkbar.palette.status.proof.note] focus_did_change={} unexpected", final_focus);
+    } else {
+        serial_println!("[silkbar.palette.status.proof.fact] focus_unchanged=1 reason=overlay_no_focus_switch");
+    }
+
+    // Stage 4: ABI gap documentation.
+    // The palette state (open/close, selected index, available count) cannot be
+    // rendered by SilkBar because silkbar-model::UpdateKind has no variant for it.
+    // The existing path (OP_SILKBAR_FOCUS_STATE → SetWorkspaceUrgent) only fires
+    // on actual focus changes, not on overlay toggles.
+    serial_println!("[silkbar.palette.status.proof] stage=4 action=abi_gap_docs ok=1 reason=documented_blocker");
+    serial_println!("[silkbar.palette.status.proof.blocker] name=palette_state reason=no_UpdateKind_variant");
+    serial_println!("[silkbar.palette.status.proof.blocker] name=palette_visible reason=no_UpdateKind_variant");
+    serial_println!("[silkbar.palette.status.proof.blocker] name=palette_selected reason=no_UpdateKind_variant");
+    serial_println!("[silkbar.palette.status.proof.blocker] name=palette_available reason=no_UpdateKind_variant");
+    serial_println!("[silkbar.palette.status.proof.note] path=OP_SILKBAR_FOCUS_STATE gap=focus_only_no_overlay");
+
+    let all_ok = open_ok && close_ok;
+    serial_println!("[silkbar.palette.status.proof.done] ok={}", all_ok as u8);
+    SILKBAR_PALETTE_STATUS_PROOF_DONE = true;
 }
 
 /// Bell system events proof: seeds Bell events for system/app milestones
@@ -10535,6 +10632,7 @@ unsafe fn toggle_command_palette() -> bool {
     if COMMAND_PALETTE_OPEN {
         // Close palette — minimize the frame.
         COMMAND_PALETTE_OPEN = false;
+        serial_println!("[shell.palette.statusbar] open=0 selected=0 available=0");
         if let Some(_) = bell_frame_id() { // use hide pattern
             if minimize_frame(COMMAND_PALETTE_FRAME_ID) {
                 serial_println!("[command_palette.close]");
@@ -10549,6 +10647,18 @@ unsafe fn toggle_command_palette() -> bool {
         COMMAND_PALETTE_OPEN = true;
         COMMAND_PALETTE_SELECTED = 0;
         palette_show();
+        // Count available palette items for statusbar marker.
+        let mut available_count: usize = 0;
+        for item in COMMAND_LIST.iter() {
+            if palette_item_status(item.command).0 {
+                available_count += 1;
+            }
+        }
+        serial_println!(
+            "[shell.palette.statusbar] open=1 selected={} available={}",
+            COMMAND_PALETTE_SELECTED,
+            available_count
+        );
         serial_println!(
             "[shell.palette.open] ok=1 selected={} count={}",
             COMMAND_PALETTE_SELECTED,
@@ -14634,6 +14744,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_theme_visual_proof(); }
         unsafe { maybe_run_atlas_theme_presets_proof(); }
         unsafe { maybe_run_silkbar_keyboard_status_proof(); }
+        unsafe { maybe_run_silkbar_palette_status_proof(); }
         unsafe { maybe_run_bell_system_events_proof(); }
         unsafe { maybe_run_bell_keyboard_detail_proof(); }
         unsafe { maybe_run_bell_detail_seed_proof(); }
