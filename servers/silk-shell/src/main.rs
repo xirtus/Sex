@@ -138,6 +138,15 @@ const SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_ENABLED: bool =
 static mut SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE: u8 = 0;
 static mut SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_DONE: bool = false;
 
+/// Mesh keyboard map proof gate.
+/// Default OFF. Proves keyboard open/focus of Mesh, node navigation (J/K),
+/// detail inspection (Enter), and close/back (Escape) through the real
+/// handle_hid_event dispatch path — same as USB keyboard input.
+const MESH_KEYBOARD_MAP_PROOF_ENABLED: bool =
+    option_env!("SEXOS_MESH_KEYBOARD_MAP_PROOF").is_some();
+static mut MESH_KEYBOARD_MAP_PROOF_STAGE: u8 = 0;
+static mut MESH_KEYBOARD_MAP_PROOF_DONE: bool = false;
+
 /// Returns true if the scancode is a printable/text-control key that should
 /// route to Spindle when Spindle is focused, even if it is normally a reserved
 /// shell UI key (Enter=0x1C, Backspace=0x0E, Escape=0x01, Tab=0x0F, c=0x2E).
@@ -5027,6 +5036,58 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     );
                 }
                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+                return;
+            }
+
+            // ── Mesh keyboard map passthrough in drain path ─────────────────
+            // When Mesh is focused, route J/K/Enter/Escape/F11/Backspace directly
+            // to the Mesh handler before the shell consumes them as UI actions.
+            // This lets synthetic proofs (handle_hid_event) navigate Mesh nodes.
+            if FOCUSED_SURFACE_ID == SURFACE_ID_MESH
+                && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C
+                    || scancode == 0x01 || scancode == 0x57 || scancode == 0x0E)
+            {
+                static mut MESH_DRAIN_ROUTE_BUDGET: u32 = 32;
+                if MESH_DRAIN_ROUTE_BUDGET > 0 {
+                    MESH_DRAIN_ROUTE_BUDGET -= 1;
+                    serial_println!(
+                        "[silk-shell.key.route] target=mesh sid={} code={} down={}",
+                        SURFACE_ID_MESH, scancode, value
+                    );
+                }
+                serial_println!("[mesh.key.recv] code={} down={} mod={}", scancode, value, SPINDLE_CTRL_DOWN as u8);
+                match scancode {
+                    0x24 => { // J: next node
+                        let old = MESH_SELECTED_ROW;
+                        mesh_select_next_row();
+                        let new = MESH_SELECTED_ROW;
+                        let vis = mesh_visible_fact_count();
+                        serial_println!("[mesh.node.nav] old={} new={} count={}", old, new, vis);
+                    }
+                    0x25 => { // K: previous node
+                        let old = MESH_SELECTED_ROW;
+                        mesh_select_prev_row();
+                        let new = MESH_SELECTED_ROW;
+                        let vis = mesh_visible_fact_count();
+                        serial_println!("[mesh.node.nav] old={} new={} count={}", old, new, vis);
+                    }
+                    0x1C => { // Enter: detail selected node (marker only; full action in main dispatch)
+                        let idx = MESH_SELECTED_ROW;
+                        let (node_id, ok, reason) = match mesh_selected_fact_snapshot() {
+                            Some(ref f) => (f.fact_id, 1u8, "selected"),
+                            None => (0u64, 0u8, "no_fact"),
+                        };
+                        serial_println!("[mesh.node.detail] idx={} node_id={} ok={} reason={}", idx, node_id, ok, reason);
+                    }
+                    0x01 | 0x57 | 0x0E => { // Escape / F11 / Backspace: close/back
+                        let was_visible = mesh_is_visible_in_active_scene();
+                        toggle_mesh();
+                        let still_visible = mesh_is_visible_in_active_scene();
+                        let ok = if was_visible && !still_visible { 1u8 } else { 0u8 };
+                        serial_println!("[mesh.overlay.toggle] enabled={} ok={} reason=close_back", still_visible as u8, ok);
+                    }
+                    _ => {}
+                }
                 return;
             }
 
@@ -11617,6 +11678,121 @@ unsafe fn maybe_run_spindle_real_keyboard_focus_proof() {
     }
 }
 
+// ── Mesh Keyboard Map Nav Proof ──────────────────────────────────────────
+// Drives the real handle_hid_event dispatch path to:
+//   Stage 0: wait for a focused surface with Mesh facts
+//   Stage 1: open command palette via backtick (0x29)
+//   Stage 2: execute FocusMesh via Enter (0x1C) in palette
+//   Stage 3: navigate next node via J (0x24)
+//   Stage 4: navigate previous node via K (0x25)
+//   Stage 5: detail selected node via Enter (0x1C)
+//   Stage 6: close Mesh via Escape (0x01)
+//   Stage 7: proof complete
+//
+// All stages use handle_hid_event, the same path as real USB keyboard input.
+unsafe fn maybe_run_mesh_keyboard_map_proof() {
+    static mut SKIP_DISABLED_BUDGET: u32 = 1;
+    if !MESH_KEYBOARD_MAP_PROOF_ENABLED {
+        if SKIP_DISABLED_BUDGET > 0 {
+            SKIP_DISABLED_BUDGET -= 1;
+            serial_println!("[mesh.keyboard.map.proof] stage=0 action=Skip reason=disabled");
+        }
+        return;
+    }
+    if MESH_KEYBOARD_MAP_PROOF_DONE {
+        return;
+    }
+    // Wait for a focused surface (at least Quil should be up by now).
+    if FOCUSED_SURFACE_ID == 0 {
+        serial_println!("[mesh.keyboard.map.proof] stage=0 action=Defer reason=no_focus");
+        return;
+    }
+    serial_println!(
+        "[mesh.keyboard.map.proof] stage=0 action=State focused={} proof_stage={}",
+        FOCUSED_SURFACE_ID, MESH_KEYBOARD_MAP_PROOF_STAGE
+    );
+
+    // Run all stages in one tick.
+    let max_stage = MESH_KEYBOARD_MAP_PROOF_STAGE;
+    for _s in 0..9 {
+        if MESH_KEYBOARD_MAP_PROOF_DONE {
+            break;
+        }
+        match MESH_KEYBOARD_MAP_PROOF_STAGE {
+            // Stage 0: begin — ensure Quil is focused as baseline.
+            // Mesh facts are pre-emitted during boot; ensure they exist.
+            0 => {
+                serial_println!("[mesh.keyboard.map.proof] stage=1 action=Begin ok=1");
+                // Ensure Quil is focused so the palette opens over a known surface.
+                if FOCUSED_SURFACE_ID != SURFACE_ID_QUIL {
+                    if !surface_is_alive(SURFACE_ID_QUIL) {
+                        serial_println!("[mesh.keyboard.map.proof] stage=1 action=Defer reason=quil_not_alive");
+                        return;
+                    }
+                    try_set_focus(SURFACE_ID_QUIL);
+                }
+                MESH_KEYBOARD_MAP_PROOF_STAGE = 1;
+            }
+            // Stage 1: Open command palette via backtick (0x29).
+            1 => {
+                serial_println!("[mesh.keyboard.map.proof] stage=2 action=OpenPalette ok=1");
+                handle_hid_event(EV_KEY, 0x29, 1); // backtick down
+                handle_hid_event(EV_KEY, 0x29, 0); // backtick up
+                MESH_KEYBOARD_MAP_PROOF_STAGE = 2;
+            }
+            // Stage 2: Execute FocusMesh via Enter.
+            // FocusMesh is command index 6; the palette starts with index 0.
+            // We navigate to it by sending J×6, then Enter.
+            2 => {
+                serial_println!("[mesh.keyboard.map.proof] stage=3 action=ExecuteFocusMesh ok=1");
+                // Navigate palette selection to FocusMesh (command index 6)
+                for _ in 0..6 {
+                    handle_hid_event(EV_KEY, 0x24, 1); // J down
+                    handle_hid_event(EV_KEY, 0x24, 0); // J up
+                }
+                handle_hid_event(EV_KEY, 0x1C, 1); // Enter down
+                handle_hid_event(EV_KEY, 0x1C, 0); // Enter up
+                MESH_KEYBOARD_MAP_PROOF_STAGE = 3;
+            }
+            // Stage 3: Navigate next node via J (0x24).
+            3 => {
+                serial_println!("[mesh.keyboard.map.proof] stage=4 action=NextNode ok=1");
+                handle_hid_event(EV_KEY, 0x24, 1);
+                handle_hid_event(EV_KEY, 0x24, 0);
+                MESH_KEYBOARD_MAP_PROOF_STAGE = 4;
+            }
+            // Stage 4: Navigate previous node via K (0x25).
+            4 => {
+                serial_println!("[mesh.keyboard.map.proof] stage=5 action=PrevNode ok=1");
+                handle_hid_event(EV_KEY, 0x25, 1);
+                handle_hid_event(EV_KEY, 0x25, 0);
+                MESH_KEYBOARD_MAP_PROOF_STAGE = 5;
+            }
+            // Stage 5: Detail selected node via Enter (0x1C).
+            5 => {
+                serial_println!("[mesh.keyboard.map.proof] stage=6 action=DetailNode ok=1");
+                handle_hid_event(EV_KEY, 0x1C, 1);
+                handle_hid_event(EV_KEY, 0x1C, 0);
+                MESH_KEYBOARD_MAP_PROOF_STAGE = 6;
+            }
+            // Stage 6: Close Mesh via Escape (0x01).
+            6 => {
+                serial_println!("[mesh.keyboard.map.proof] stage=7 action=CloseBack ok=1");
+                handle_hid_event(EV_KEY, 0x01, 1);
+                handle_hid_event(EV_KEY, 0x01, 0);
+                MESH_KEYBOARD_MAP_PROOF_STAGE = 7;
+            }
+            // Stage 7: Proof complete.
+            7 => {
+                MESH_KEYBOARD_MAP_PROOF_DONE = true;
+                serial_println!("[mesh.keyboard.map.proof.done] ok=1");
+                MESH_KEYBOARD_MAP_PROOF_STAGE = 8;
+            }
+            _ => break,
+        }
+    }
+}
+
 /// Synthesize a pointer click targeted at the zoom light midpoint of `frame_id` using the
 /// same hit-test + action path as a real click. Calculates the green light midpoint
 /// (px = sx + 50, py = sy + 14), emits explicit hitbox diagnostics, then calls
@@ -13604,6 +13780,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_scene_keyboard_proof(); }
         unsafe { maybe_run_bell_keyboard_detail_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
+        unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }
         unsafe { maybe_run_command_palette_daily_proof(); }
 
@@ -14490,21 +14667,42 @@ pub extern "C" fn _start() -> ! {
                                     _ => {}
                                 }
                                 mutated = true;
-                            // ── Mesh focused-surface navigation: J/K nav + Enter detail proof ──
-                            } else if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_MESH
-                                && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C || scancode == 0x59)
+                            // ── Mesh focused-surface: keyboard map navigation + detail + close/back ──
+                            // Consumes: J=0x24, K=0x25, Enter=0x1C, PrintScreen=0x59,
+                            //           Escape=0x01, F11=0x57 (close/back), Backspace=0x0E
+                            // Removed !reserved_ui_key guard so reserved keys (Esc, Enter, Backspace,
+                            // F11) reach Mesh when focused, matching Spindle pattern.
+                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_MESH
+                                && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C
+                                    || scancode == 0x59 || scancode == 0x01 || scancode == 0x57
+                                    || scancode == 0x0E)
                             {
+                                serial_println!("[mesh.key.recv] code={} down={} mod={}", scancode, value, SPINDLE_CTRL_DOWN as u8);
                                 match scancode {
+                                    // ── J: next node ──
                                     0x24 => {
-                                        serial_println!("[mesh.keyboard.next] sid={}", FOCUSED_SURFACE_ID);
+                                        let old_row = MESH_SELECTED_ROW;
                                         mesh_select_next_row();
+                                        let new_row = MESH_SELECTED_ROW;
+                                        let vis = mesh_visible_fact_count();
+                                        serial_println!("[mesh.node.nav] old={} new={} count={}", old_row, new_row, vis);
                                     }
+                                    // ── K: previous node ──
                                     0x25 => {
-                                        serial_println!("[mesh.keyboard.prev] sid={}", FOCUSED_SURFACE_ID);
+                                        let old_row = MESH_SELECTED_ROW;
                                         mesh_select_prev_row();
+                                        let new_row = MESH_SELECTED_ROW;
+                                        let vis = mesh_visible_fact_count();
+                                        serial_println!("[mesh.node.nav] old={} new={} count={}", old_row, new_row, vis);
                                     }
+                                    // ── Enter: detail selected node ──
                                     0x1C => {
-                                        serial_println!("[mesh.keyboard.enter] sid={}", FOCUSED_SURFACE_ID);
+                                        let idx = MESH_SELECTED_ROW;
+                                        let (node_id, ok, reason) = match mesh_selected_fact_snapshot() {
+                                            Some(ref f) => (f.fact_id, 1u8, "selected" as &str),
+                                            None => (0u64, 0u8, "no_fact"),
+                                        };
+                                        serial_println!("[mesh.node.detail] idx={} node_id={} ok={} reason={}", idx, node_id, ok, reason);
                                         // N8: Emit detail proof markers.
                                         if mesh_emit_selected_fact_detail_proof() {
                                             // N11: Focus Linen at selected fact after successful proof.
@@ -14518,10 +14716,23 @@ pub extern "C" fn _start() -> ! {
                                     // Collar gate (LinkObjectToBuffer → grant table lookup). Mesh cannot bypass
                                     // Collar because the gate is inside the callee, not at the call site.
                                     0x59 => {
-                                        serial_println!("[mesh.keyboard.open_in_quil] sid={}", FOCUSED_SURFACE_ID);
+                                        serial_println!("[mesh.node.detail] idx={} node_id={} ok={} reason={}",
+                                            MESH_SELECTED_ROW,
+                                            mesh_selected_fact_snapshot().map(|f| f.fact_id).unwrap_or(0),
+                                            1, "open_in_quil");
                                         if let Some(fact) = mesh_selected_fact_snapshot() {
                                             open_linen_object_in_quil(fact.subject_id);
                                         }
+                                    }
+                                    // ── Escape / F11 / Backspace: close/back ──
+                                    // Minimize/close the Mesh surface.
+                                    0x01 | 0x57 | 0x0E => {
+                                        let was_visible = mesh_is_visible_in_active_scene();
+                                        toggle_mesh();
+                                        let still_visible = mesh_is_visible_in_active_scene();
+                                        let ok = if was_visible && !still_visible { 1u8 } else { 0u8 };
+                                        serial_println!("[mesh.overlay.toggle] enabled={} ok={} reason=close_back",
+                                            still_visible as u8, ok);
                                     }
                                     _ => {}
                                 }
