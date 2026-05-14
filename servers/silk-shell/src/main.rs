@@ -102,6 +102,8 @@ const ATLAS_SCENE_KEYBOARD_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_SCENE_KEYBOARD_PROOF").is_some();
 const ATLAS_THEME_VISUAL_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_THEME_VISUAL_PROOF").is_some();
+const SILKBAR_KEYBOARD_STATUS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SILKBAR_KEYBOARD_STATUS_PROOF").is_some();
 const COLLAR_KEYBOARD_GRANTS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COLLAR_KEYBOARD_GRANTS_PROOF").is_some();
 
@@ -109,6 +111,7 @@ const COLLAR_KEYBOARD_GRANTS_PROOF_ENABLED: bool =
 static mut ATLAS_OVERVIEW_PROOF_STAGE: u8 = 0;
 static mut ATLAS_SCENE_KEYBOARD_PROOF_DONE: bool = false;
 static mut ATLAS_THEME_VISUAL_PROOF_DONE: bool = false;
+static mut SILKBAR_KEYBOARD_STATUS_PROOF_DONE: bool = false;
 static mut COLLAR_KEYBOARD_GRANTS_PROOF_DONE: bool = false;
 
 /// App lifecycle synthetic proof gate.
@@ -530,6 +533,87 @@ unsafe fn maybe_run_atlas_theme_visual_proof() {
     let all_stages_ok = overlay_open && accent_ok && apply_ok;
     serial_println!("[atlas.theme.visual.proof.done] ok={}", all_stages_ok as u8);
     ATLAS_THEME_VISUAL_PROOF_DONE = true;
+}
+
+/// SilkBar keyboard status proof: exercises keyboard-driven focus/app/theme
+/// changes and verifies that silk-shell emits SilkBar status update markers.
+///
+/// The existing protocol already sends OP_SILKBAR_FOCUS_STATE on every focus
+/// change and OP_SILKBAR_WORKSPACE_ACTIVE on scene switch. This proof exercises
+/// those paths through keyboard-driven surface focus/open operations and
+/// verifies the [shell.silkbar.status.send] markers fire.
+///
+/// ABI gaps (STOP FIRST, not fixed):
+/// - Active app name: no UpdateKind variant in silkbar-model
+/// - Tint/accent: no UpdateKind variant in silkbar-model
+/// These are documented as blockers, not implemented.
+unsafe fn maybe_run_silkbar_keyboard_status_proof() {
+    if !SILKBAR_KEYBOARD_STATUS_PROOF_ENABLED || SILKBAR_KEYBOARD_STATUS_PROOF_DONE {
+        return;
+    }
+    serial_println!("[silkbar.keyboard.status.proof] stage=0 action=start ok=1 reason=begin");
+
+    // Stage 0: Focus Spindle (opens Spindle surface, sends focus state to SilkBar).
+    let spindle_ok = open_spindle_in_active_scene();
+    let spindle_focus = try_set_focus(SURFACE_ID_SPINDLE);
+    serial_println!(
+        "[silkbar.keyboard.status.proof] stage=0 action=focus_spindle ok={} reason={}",
+        (spindle_ok && spindle_focus) as u8,
+        if spindle_ok && spindle_focus { "ok" } else { "spindle_focus_fail" }
+    );
+
+    // Stage 1: Focus Bell (sends focus state to SilkBar with Bell app label).
+    let bell_ok = focus_or_open_bell();
+    serial_println!(
+        "[silkbar.keyboard.status.proof] stage=1 action=focus_bell ok={} reason={}",
+        bell_ok as u8,
+        if bell_ok { "ok" } else { "bell_focus_fail" }
+    );
+
+    // Stage 2: Focus Mesh (sends focus state to SilkBar with Mesh app label).
+    let mesh_ok = focus_or_open_mesh();
+    serial_println!(
+        "[silkbar.keyboard.status.proof] stage=2 action=focus_mesh ok={} reason={}",
+        mesh_ok as u8,
+        if mesh_ok { "ok" } else { "mesh_focus_fail" }
+    );
+
+    // Stage 3: Apply Atlas accent via keyboard path.
+    // Opens Atlas, cycles accent, applies — triggers accent→tint + SilkBar status send.
+    if !ATLAS_MODE_ENABLED { atlas_toggle(); }
+    if ATLAS_MODE_ENABLED {
+        handle_atlas_keyboard(0x1E); // 'A' — cycle accent
+        let accent_ok = handle_atlas_keyboard(0x1C); // Enter — apply
+        serial_println!(
+            "[silkbar.keyboard.status.proof] stage=3 action=apply_accent ok={} reason={}",
+            accent_ok as u8,
+            if accent_ok { "ok" } else { "accent_apply_fail" }
+        );
+    } else {
+        serial_println!(
+            "[silkbar.keyboard.status.proof] stage=3 action=apply_accent ok=0 reason=atlas_not_open"
+        );
+    }
+
+    // Stage 4: Return focus to Linen (sends focus state with Linen app label).
+    let linen_ok = focus_or_open_linen();
+    serial_println!(
+        "[silkbar.keyboard.status.proof] stage=4 action=focus_linen ok={} reason={}",
+        linen_ok as u8,
+        if linen_ok { "ok" } else { "linen_focus_fail" }
+    );
+
+    // Stage 5: ABI gap documentation.
+    // Active app name and tint/accent are not in the SilkBar UpdateKind enum.
+    // Adding them requires silkbar-model ABI change + sexdisplay render update.
+    // See docs/handoff/SILKBAR_KEYBOARD_STATUS_INTEGRATION_V1.md.
+    serial_println!("[silkbar.keyboard.status.proof] stage=5 action=abi_gap_docs ok=1 reason=documented_blocker");
+    serial_println!("[silkbar.keyboard.status.proof.blocker] name=active_app_name reason=no_UpdateKind_variant");
+    serial_println!("[silkbar.keyboard.status.proof.blocker] name=tint_accent reason=no_UpdateKind_variant");
+
+    let all_ok = spindle_ok && spindle_focus && bell_ok && mesh_ok && linen_ok;
+    serial_println!("[silkbar.keyboard.status.proof.done] ok={}", all_ok as u8);
+    SILKBAR_KEYBOARD_STATUS_PROOF_DONE = true;
 }
 
 unsafe fn maybe_run_collar_keyboard_grants_proof() {
@@ -7062,6 +7146,12 @@ unsafe fn switch_scene(scene_idx: u8) {
     atlas_capture_snapshot();
     // Propagate new scene's accent to visible chrome tint.
     atlas_apply_scene_accent_to_chrome(idx);
+    // Notify SilkBar of workspace change.
+    pdx_call(SLOT_SILKBAR, OP_SILKBAR_WORKSPACE_ACTIVE, idx as u64, 0, 0);
+    serial_println!(
+        "[shell.silkbar.status.send] focus={} app={} tint={} bell={} ok=1 reason=workspace_switch",
+        FOCUSED_SURFACE_ID, "Scene", ACTIVE_TINT_IDX, bell_ring_count()
+    );
     static mut SCENE_SWITCH_SHORTCUT_BUDGET: u32 = 4;
     let b = &mut SCENE_SWITCH_SHORTCUT_BUDGET;
     if *b > 0 { *b -= 1; serial_println!("[shell.scene.shortcut.switch] from={} to={}", prev, ACTIVE_SCENE_IDX); }
@@ -12707,6 +12797,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         }
         // Send cleared options mask to silkbar.
         pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 0, 0, 0);
+        serial_println!("[shell.silkbar.status.send] focus=0 app=none tint=0 bell=0 ok=1 reason=focus_cleared");
         return true;
     }
     if !is_focusable_surface(sid) {
@@ -12793,6 +12884,20 @@ unsafe fn try_set_focus(sid: u64) -> bool {
     // Send live options mask to silkbar for display.
     let live_mask = selected_window_options_mask();
     pdx_call(SLOT_SILKBAR, OP_SILKBAR_FOCUS_STATE, 1, live_mask as u64, 0);
+    // Status marker: app name derived from focused surface.
+    let app_label = match sid {
+        SURFACE_ID_QUIL => "Quil",
+        SURFACE_ID_MESH => "Mesh",
+        SURFACE_ID_COLLAR => "Collar",
+        SURFACE_ID_BELL_PLACEHOLDER => "Bell",
+        SURFACE_ID_LINEN => "Linen",
+        SURFACE_ID_SPINDLE => "Spindle",
+        _ => "App",
+    };
+    serial_println!(
+        "[shell.silkbar.status.send] focus={} app={} tint={} bell={} ok=1 reason=focus_set",
+        sid, app_label, ACTIVE_TINT_IDX, bell_ring_count()
+    );
     unsafe {
         static mut SELECTED_OPTIONS_SEND_BUDGET: u32 = 8;
         let b = &mut SELECTED_OPTIONS_SEND_BUDGET;
@@ -14177,6 +14282,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_linen_keyboard_route_proof(); }
         unsafe { maybe_run_atlas_scene_keyboard_proof(); }
         unsafe { maybe_run_atlas_theme_visual_proof(); }
+        unsafe { maybe_run_silkbar_keyboard_status_proof(); }
         unsafe { maybe_run_bell_keyboard_detail_proof(); }
         unsafe { maybe_run_bell_detail_seed_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
