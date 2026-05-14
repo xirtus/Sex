@@ -102,6 +102,8 @@ const ATLAS_SCENE_KEYBOARD_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_SCENE_KEYBOARD_PROOF").is_some();
 const ATLAS_THEME_VISUAL_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_THEME_VISUAL_PROOF").is_some();
+const ATLAS_THEME_PRESETS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_THEME_PRESETS_PROOF").is_some();
 const SILKBAR_KEYBOARD_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_SILKBAR_KEYBOARD_STATUS_PROOF").is_some();
 const BELL_SYSTEM_EVENTS_PROOF_ENABLED: bool =
@@ -115,6 +117,7 @@ const COLLAR_KEYBOARD_GRANTS_PROOF_ENABLED: bool =
 static mut ATLAS_OVERVIEW_PROOF_STAGE: u8 = 0;
 static mut ATLAS_SCENE_KEYBOARD_PROOF_DONE: bool = false;
 static mut ATLAS_THEME_VISUAL_PROOF_DONE: bool = false;
+static mut ATLAS_THEME_PRESETS_PROOF_DONE: bool = false;
 static mut SILKBAR_KEYBOARD_STATUS_PROOF_DONE: bool = false;
 static mut BELL_SYSTEM_EVENTS_PROOF_DONE: bool = false;
 static mut LINEN_OBJECT_DETAIL_PROOF_DONE: bool = false;
@@ -539,6 +542,89 @@ unsafe fn maybe_run_atlas_theme_visual_proof() {
     let all_stages_ok = overlay_open && accent_ok && apply_ok;
     serial_println!("[atlas.theme.visual.proof.done] ok={}", all_stages_ok as u8);
     ATLAS_THEME_VISUAL_PROOF_DONE = true;
+}
+
+/// Atlas theme presets keyboard proof: verifies that S/W keys cycle the
+/// render token preset (Default/Warm/Cool/HighContrast) while inside Atlas,
+/// and that Enter applies the active preset to visible chrome.
+///
+/// Exercises the full cycle: open Atlas → next preset → prev preset →
+/// apply via Enter → verify preset persisted.  All stages run in a single
+/// call (same pattern as atlas_scene_keyboard_proof).
+unsafe fn maybe_run_atlas_theme_presets_proof() {
+    if !ATLAS_THEME_PRESETS_PROOF_ENABLED || ATLAS_THEME_PRESETS_PROOF_DONE {
+        return;
+    }
+
+    // Stage 0: Open Atlas overlay.
+    if !ATLAS_MODE_ENABLED {
+        atlas_toggle();
+    }
+    if !ATLAS_MODE_ENABLED {
+        serial_println!("[atlas.preset.proof] stage=0 action=open_focus ok=0 reason=overlay_disabled");
+        serial_println!("[atlas.preset.proof.done] ok=0");
+        ATLAS_THEME_PRESETS_PROOF_DONE = true;
+        return;
+    }
+    let initial_preset = SCENE_APPEARANCE_STATE.preset_idx;
+    serial_println!("[atlas.preset.proof] stage=0 action=open_focus ok=1 reason=opened");
+    serial_println!("[atlas.preset.before] preset={} name={}",
+        initial_preset, get_preset_name(initial_preset));
+
+    // Stage 1: Next preset via 'S' key.
+    serial_println!("[atlas.key.recv] code=0x1F down=1 mod=0");
+    let s1_ok = handle_atlas_keyboard(0x1F);
+    serial_println!(
+        "[atlas.preset.proof] stage=1 action=next_preset ok={} reason={}",
+        s1_ok as u8,
+        if s1_ok { "ok" } else { "reject" }
+    );
+
+    // Stage 2: Next preset again via 'S' key.
+    serial_println!("[atlas.key.recv] code=0x1F down=1 mod=0");
+    let s2_ok = handle_atlas_keyboard(0x1F);
+    serial_println!(
+        "[atlas.preset.proof] stage=2 action=next_preset ok={} reason={}",
+        s2_ok as u8,
+        if s2_ok { "ok" } else { "reject" }
+    );
+
+    // Stage 3: Prev preset via 'W' key.
+    serial_println!("[atlas.key.recv] code=0x11 down=1 mod=0");
+    let s3_ok = handle_atlas_keyboard(0x11);
+    serial_println!(
+        "[atlas.preset.proof] stage=3 action=prev_preset ok={} reason={}",
+        s3_ok as u8,
+        if s3_ok { "ok" } else { "reject" }
+    );
+
+    // Stage 4: Apply via Enter — executes atlas_apply_scene_accent_to_chrome
+    // and closes Atlas, so we need to reopen for verify/cleanup.
+    serial_println!("[atlas.key.recv] code=0x1C down=1 mod=0");
+    let apply_ok = handle_atlas_keyboard(0x1C);
+    serial_println!(
+        "[atlas.preset.proof] stage=4 action=apply ok={} reason={}",
+        apply_ok as u8,
+        if apply_ok { "ok" } else { "fail" }
+    );
+
+    // Stage 5: Reopen Atlas to verify preset state persisted, then close.
+    if !ATLAS_MODE_ENABLED {
+        atlas_toggle();
+    }
+    let verified_preset = SCENE_APPEARANCE_STATE.preset_idx;
+    serial_println!(
+        "[atlas.preset.proof] stage=5 action=verify_persist idx={} name={}",
+        verified_preset, get_preset_name(verified_preset)
+    );
+    if ATLAS_MODE_ENABLED {
+        serial_println!("[atlas.key.recv] code=0x01 down=1 mod=0");
+        let _ = handle_atlas_keyboard(0x01);
+    }
+
+    let all_ok = s1_ok && s2_ok && s3_ok && apply_ok;
+    serial_println!("[atlas.preset.proof.done] ok={}", all_ok as u8);
+    ATLAS_THEME_PRESETS_PROOF_DONE = true;
 }
 
 /// SilkBar keyboard status proof: exercises keyboard-driven focus/app/theme
@@ -3308,6 +3394,22 @@ static TOKEN_PRESETS: [TokenPreset; PRESET_COUNT] = [
     [0x00000000, 0x00FFFFFF, 0x00111111, 0x00FFFF00, 0x00555555, 0x00FF4444, 0x00FFDD00, 0x0000FF44],
 ];
 
+/// Human-readable preset names indexed by preset_idx (0..PRESET_COUNT-1).
+/// Used by Atlas preset keyboard cycling proof markers.
+#[rustfmt::skip]
+static PRESET_NAMES: [&str; PRESET_COUNT] = [
+    "Default",      // 0: BottleGlass (default teal)
+    "Warm",         // 1: VioletGlass (purple)
+    "Cool",         // 2: GraphiteGlass (dark neutral)
+    "HighContrast", // 3: HighContrast (accessibility)
+];
+
+/// Return the name string for a preset index. Clamped to PRESET_COUNT-1.
+fn get_preset_name(idx: u8) -> &'static str {
+    let i = (idx as usize).min(PRESET_COUNT - 1);
+    PRESET_NAMES[i]
+}
+
 /// In-memory appearance settings state. No persistence in V1.
 /// Initialized to BottleGlass defaults at compile time.
 #[derive(Clone, Copy)]
@@ -3597,6 +3699,41 @@ unsafe fn cycle_scene_render_token_preset() {
         static mut SAVE_BUDGET: u32 = 16;
         if SAVE_BUDGET > 0 {
             SAVE_BUDGET -= 1;
+            serial_println!("[shell.scene.settings.save] preset={}", SCENE_APPEARANCE_STATE.preset_idx);
+        }
+    }
+}
+
+/// Go backward to previous preset (wrapping), clear custom override, and push resolved tokens.
+unsafe fn cycle_prev_scene_render_token_preset() {
+    SCENE_APPEARANCE_STATE.preset_idx = if SCENE_APPEARANCE_STATE.preset_idx == 0 {
+        PRESET_COUNT as u8 - 1
+    } else {
+        SCENE_APPEARANCE_STATE.preset_idx - 1
+    };
+    SCENE_APPEARANCE_STATE.use_custom_colors = 0;
+    ACTIVE_TINT_IDX = 0;
+    let tokens = resolve_scene_render_tokens();
+    push_token_preset(&tokens);
+    unsafe {
+        static mut CYCLE_PREV_BUDGET: u32 = 16;
+        if CYCLE_PREV_BUDGET > 0 {
+            CYCLE_PREV_BUDGET -= 1;
+            serial_println!("[shell.appearance.preset] idx={}", SCENE_APPEARANCE_STATE.preset_idx);
+        }
+    }
+
+    // ── PERSIST: save new preset_idx to sexstore (fire-and-forget) ──
+    let blob = pack_scene_settings_blob(
+        SCENE_APPEARANCE_STATE.preset_idx,
+        SCENE_APPEARANCE_STATE.chrome_flags,
+        SCENE_APPEARANCE_STATE.accessibility_flags,
+    );
+    pdx_call(SLOT_SEXSTORE, OP_KV_PUT, SCENE_SETTINGS_KEY_APPEARANCE, blob, 0);
+    unsafe {
+        static mut SAVE_PREV_BUDGET: u32 = 16;
+        if SAVE_PREV_BUDGET > 0 {
+            SAVE_PREV_BUDGET -= 1;
             serial_println!("[shell.scene.settings.save] preset={}", SCENE_APPEARANCE_STATE.preset_idx);
         }
     }
@@ -6962,6 +7099,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 atlas_apply_scene_accent_to_chrome(scene_idx);
             }
             serial_println!("[atlas.scene.apply] scene={} accent={} ok=1 reason=ok", scene_idx, SCENES[scene_idx as usize].accent);
+            serial_println!("[atlas.preset.apply] idx={} name={} ok=1", SCENE_APPEARANCE_STATE.preset_idx, get_preset_name(SCENE_APPEARANCE_STATE.preset_idx));
             // C2: Emit focus result after scene activation.
             if FOCUSED_SURFACE_ID != 0 {
                 serial_println!("[atlas.nav.focus.commit] scene={} sid={}", scene_idx, FOCUSED_SURFACE_ID);
@@ -7021,6 +7159,26 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 let b = &mut ATLAS_UI_REJECT_BUDGET;
                 if *b > 0 { *b -= 1; serial_println!("[atlas.scene.settings.ui.reject] fn=accent scene={}", sel); }
             }
+        }
+        0x1F => { // 'S' — next render token preset (cycle forward)
+            let old_preset = SCENE_APPEARANCE_STATE.preset_idx;
+            cycle_scene_render_token_preset();
+            let new_preset = SCENE_APPEARANCE_STATE.preset_idx;
+            if old_preset != new_preset {
+                serial_println!("[atlas.preset.nav] old={} new={} name={}",
+                    old_preset, new_preset, get_preset_name(new_preset));
+            }
+            atlas_render_stub();
+        }
+        0x11 => { // 'W' — prev render token preset (cycle backward)
+            let old_preset = SCENE_APPEARANCE_STATE.preset_idx;
+            cycle_prev_scene_render_token_preset();
+            let new_preset = SCENE_APPEARANCE_STATE.preset_idx;
+            if old_preset != new_preset {
+                serial_println!("[atlas.preset.nav] old={} new={} name={}",
+                    old_preset, new_preset, get_preset_name(new_preset));
+            }
+            atlas_render_stub();
         }
         0x19 => { // 'P' — toggle pinned flag for selected scene
             let sel = ATLAS_SELECTED_SCENE;
@@ -14474,6 +14632,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_linen_object_detail_proof(); }
         unsafe { maybe_run_atlas_scene_keyboard_proof(); }
         unsafe { maybe_run_atlas_theme_visual_proof(); }
+        unsafe { maybe_run_atlas_theme_presets_proof(); }
         unsafe { maybe_run_silkbar_keyboard_status_proof(); }
         unsafe { maybe_run_bell_system_events_proof(); }
         unsafe { maybe_run_bell_keyboard_detail_proof(); }
