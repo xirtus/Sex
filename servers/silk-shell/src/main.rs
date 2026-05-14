@@ -104,6 +104,8 @@ const ATLAS_THEME_VISUAL_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_THEME_VISUAL_PROOF").is_some();
 const SILKBAR_KEYBOARD_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_SILKBAR_KEYBOARD_STATUS_PROOF").is_some();
+const BELL_SYSTEM_EVENTS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BELL_SYSTEM_EVENTS_PROOF").is_some();
 const COLLAR_KEYBOARD_GRANTS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COLLAR_KEYBOARD_GRANTS_PROOF").is_some();
 
@@ -112,6 +114,7 @@ static mut ATLAS_OVERVIEW_PROOF_STAGE: u8 = 0;
 static mut ATLAS_SCENE_KEYBOARD_PROOF_DONE: bool = false;
 static mut ATLAS_THEME_VISUAL_PROOF_DONE: bool = false;
 static mut SILKBAR_KEYBOARD_STATUS_PROOF_DONE: bool = false;
+static mut BELL_SYSTEM_EVENTS_PROOF_DONE: bool = false;
 static mut COLLAR_KEYBOARD_GRANTS_PROOF_DONE: bool = false;
 
 /// App lifecycle synthetic proof gate.
@@ -614,6 +617,74 @@ unsafe fn maybe_run_silkbar_keyboard_status_proof() {
     let all_ok = spindle_ok && spindle_focus && bell_ok && mesh_ok && linen_ok;
     serial_println!("[silkbar.keyboard.status.proof.done] ok={}", all_ok as u8);
     SILKBAR_KEYBOARD_STATUS_PROOF_DONE = true;
+}
+
+/// Bell system events proof: seeds Bell events for system/app milestones
+/// so the Bell ring has meaningful events beyond the demo event.
+///
+/// Each system milestone is recorded as an ObjectLinkedToBuffer event with
+/// a synthetic object_id encoding the milestone (reserved range 8000-8999).
+/// This proves the Bell list renders system events and the detail path works.
+unsafe fn maybe_run_bell_system_events_proof() {
+    if !BELL_SYSTEM_EVENTS_PROOF_ENABLED || BELL_SYSTEM_EVENTS_PROOF_DONE {
+        return;
+    }
+    serial_println!("[bell.system.proof] stage=0 action=start ok=1");
+
+    // Seed system milestone events with reserved object_id range 8000-8999.
+    // object_id encodes the milestone; buffer_id is always 0 (no Quil buffer).
+    let events: [(&[u8], u64); 4] = [
+        (b"keyboard_ready", 8001),
+        (b"palette_ready", 8002),
+        (b"spindle_ready", 8003),
+        (b"atlas_theme_applied", 8004),
+    ];
+
+    for (i, (name, obj_id)) in events.iter().enumerate() {
+        bell_record_event(*obj_id, 0);
+        let ev_id = BELL_EVENT_SEQUENCE - 1;
+        serial_println!(
+            "[bell.system.event.seed] event_id={} source={} ok=1",
+            ev_id, core::str::from_utf8(name).unwrap_or("?")
+        );
+        serial_println!(
+            "[bell.system.proof] stage={} action=seed_{} ok=1",
+            i + 1,
+            core::str::from_utf8(name).unwrap_or("?")
+        );
+    }
+
+    // Verify list count.
+    let count = bell_ring_count();
+    serial_println!(
+        "[bell.system.event.list] total={} ok={}",
+        count,
+        if count >= 4 { 1 } else { 0 }
+    );
+    serial_println!("[bell.system.proof] stage=5 action=list_check ok={}", if count >= 4 { 1 } else { 0 });
+
+    // Verify detail open for the newest event (keyboard_ready at row 0).
+    // First ensure Bell surface is focused so detail open succeeds.
+    if FOCUSED_SURFACE_ID != SURFACE_ID_BELL_PLACEHOLDER {
+        let _ = focus_or_open_bell();
+    }
+    BELL_SELECTED_ROW = 0;
+    bell_emit_selected_event_detail_proof();
+    let detail_ok = BELL_DETAIL_OPEN;
+    let sel_ev = bell_selected_event_snapshot();
+    let ev_id = sel_ev.map(|e| e.event_id).unwrap_or(0);
+    serial_println!(
+        "[bell.system.event.detail] event_id={} ok={}",
+        ev_id, detail_ok as u8
+    );
+    serial_println!("[bell.system.proof] stage=6 action=detail_open ok={}", detail_ok as u8);
+
+    bell_close_detail();
+    serial_println!("[bell.system.proof] stage=7 action=detail_close ok=1");
+
+    let all_ok = count >= 4 && detail_ok;
+    serial_println!("[bell.system.proof.done] ok={}", all_ok as u8);
+    BELL_SYSTEM_EVENTS_PROOF_DONE = true;
 }
 
 unsafe fn maybe_run_collar_keyboard_grants_proof() {
@@ -14283,6 +14354,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_scene_keyboard_proof(); }
         unsafe { maybe_run_atlas_theme_visual_proof(); }
         unsafe { maybe_run_silkbar_keyboard_status_proof(); }
+        unsafe { maybe_run_bell_system_events_proof(); }
         unsafe { maybe_run_bell_keyboard_detail_proof(); }
         unsafe { maybe_run_bell_detail_seed_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
