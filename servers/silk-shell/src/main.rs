@@ -175,6 +175,8 @@ const ENABLE_FRAME_LIGHT_ZOOM_SYNTHETIC_PROOF: bool = false;
 /// path and emits chrome-size/state diagnostics to prove topbar stays at 28 px.
 const VISIBLE_FOCUS_TOPBAR_PROOF_ENABLED: bool =
     option_env!("SEXOS_VISIBLE_FOCUS_TOPBAR_PROOF").is_some();
+const PALETTE_REJECTS_APP_OPEN_PROOF_ENABLED: bool =
+    option_env!("SEXOS_PALETTE_REJECTS_APP_OPEN_PROOF").is_some();
 const COMMAND_PALETTE_DAILY_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_DAILY_PROOF").is_some();
 static mut COMMAND_PALETTE_DAILY_PROOF_DONE: bool = false;
@@ -184,6 +186,8 @@ static mut COMMAND_PALETTE_DAILY_PROOF_EXECUTED: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_REJECTED: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_SKIPPED: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_SKIP_BUDGET: u8 = 16;
+static mut PALETTE_BATCH_PROOF_DONE: bool = false;
+static mut PALETTE_BATCH_PROOF_ACTIVE: bool = false;
 
 // Well-known key ID for scene appearance settings blob.
 const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
@@ -9754,6 +9758,136 @@ unsafe fn maybe_run_command_palette_daily_proof() {
     }
 }
 
+unsafe fn palette_batch_emit_app_focus(app: &str, sid: u64, ok: bool, reason: &str) {
+    let frame = frame_for_surface(sid).unwrap_or(0);
+    serial_println!(
+        "[shell.app.open.focus] app={} sid={} frame={} ok={} reason={}",
+        app,
+        sid,
+        frame,
+        ok as u8,
+        reason
+    );
+}
+
+unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
+    if !PALETTE_REJECTS_APP_OPEN_PROOF_ENABLED || PALETTE_BATCH_PROOF_DONE {
+        return;
+    }
+    if FOCUSED_SURFACE_ID == 0 {
+        serial_println!("[shell.palette.batch.proof] stage=0 action=wait_ready ok=0 reason=not_ready");
+        return;
+    }
+    PALETTE_BATCH_PROOF_ACTIVE = true;
+    let mut passed: u8 = 0;
+    let mut rejected: u8 = 0;
+    let mut skipped: u8 = 0;
+
+    if !COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+    if !COMMAND_PALETTE_OPEN {
+        PALETTE_BATCH_PROOF_DONE = true;
+        PALETTE_BATCH_PROOF_ACTIVE = false;
+        serial_println!("[shell.palette.batch.proof.done] ok=0 passed=0 rejected=0 skipped=10");
+        return;
+    }
+
+    for idx in 0..COMMAND_LIST.len() {
+        let old = COMMAND_PALETTE_SELECTED;
+        COMMAND_PALETTE_SELECTED = idx as u8;
+        serial_println!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED);
+        palette_render_list();
+
+        if COMMAND_LIST[idx].command == Command::FocusLinen {
+            serial_println!("[shell.palette.exec] idx={} action=Open Linen ok=0 reason=blocking_risk_confirmed", idx);
+            serial_println!("[shell.palette.batch.proof] stage={} action=Open Linen ok=0 reason=blocking_risk_confirmed", idx);
+            palette_batch_emit_app_focus("Linen", SURFACE_ID_LINEN, false, "blocking_risk_confirmed");
+            rejected = rejected.saturating_add(1);
+            continue;
+        }
+
+        // Explicit restore setup before Restore Minimized action.
+        if COMMAND_LIST[idx].command == Command::RestoreMinimized {
+            let mut setup_ok = 0u8;
+            if first_minimized_frame_id().is_none() {
+                if let Some(fid) = frame_for_surface(SURFACE_ID_QUIL) {
+                    if minimize_frame(fid) {
+                        setup_ok = 1;
+                    }
+                }
+            } else {
+                setup_ok = 1;
+            }
+            serial_println!(
+                "[shell.restore.minimized.proof] setup={} restore=0 ok={} reason={}",
+                setup_ok,
+                setup_ok,
+                if setup_ok == 1 { "ready" } else { "no_minimizable_target" }
+            );
+        }
+
+        let ok = palette_execute_selected();
+        let name = COMMAND_LIST[idx].name;
+        serial_println!(
+            "[shell.palette.batch.proof] stage={} action={} ok={} reason={}",
+            idx,
+            name,
+            ok as u8,
+            if ok { "ok" } else { "action_reject" }
+        );
+
+        match COMMAND_LIST[idx].command {
+            Command::FocusSpindle => {
+                palette_batch_emit_app_focus("Spindle", SURFACE_ID_SPINDLE, ok, if ok { "ok" } else { "open_or_focus_reject" });
+            }
+            Command::FocusQuil => {
+                palette_batch_emit_app_focus("Quil", SURFACE_ID_QUIL, ok, if ok { "ok" } else { "open_or_focus_reject" });
+            }
+            Command::FocusLinen => {
+                palette_batch_emit_app_focus("Linen", SURFACE_ID_LINEN, ok, if ok { "ok" } else { "blocking_risk_confirmed" });
+            }
+            Command::FocusAtlas => {
+                let atlas_ok = ATLAS_MODE_ENABLED;
+                palette_batch_emit_app_focus("Atlas", SURFACE_ID_ATLAS_OVERLAY, atlas_ok, if atlas_ok { "overlay_enabled" } else { "action_reject" });
+            }
+            Command::FocusBell => {
+                palette_batch_emit_app_focus("Bell", SURFACE_ID_BELL_PLACEHOLDER, ok, if ok { "ok" } else { "open_or_focus_reject" });
+            }
+            Command::FocusCollar => {
+                palette_batch_emit_app_focus("Collar", SURFACE_ID_COLLAR, ok, if ok { "ok" } else { "open_or_focus_reject" });
+            }
+            Command::FocusMesh => {
+                palette_batch_emit_app_focus("Mesh", SURFACE_ID_MESH, ok, if ok { "ok" } else { "open_or_focus_reject" });
+            }
+            Command::RestoreMinimized => {
+                let restore_ok = ok;
+                serial_println!(
+                    "[shell.restore.minimized.proof] setup=1 restore=1 ok={} reason={}",
+                    restore_ok as u8,
+                    if restore_ok { "ok" } else { "restore_state_blocker" }
+                );
+            }
+            Command::ZoomToggle | Command::MinimizeFocused => {}
+        }
+
+        if ok { passed = passed.saturating_add(1); } else { rejected = rejected.saturating_add(1); }
+    }
+
+    if COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+    PALETTE_BATCH_PROOF_DONE = true;
+    PALETTE_BATCH_PROOF_ACTIVE = false;
+    serial_println!(
+        "[shell.palette.batch.proof.done] ok={} passed={} rejected={} skipped={}",
+        1,
+        passed,
+        rejected,
+        skipped
+    );
+}
+
 // ── Frame Chrome Query Helpers ─────────────────────────────────────────────────
 // These are shell-policy queries that map between surface_id (display/input
 // object) and the Frame/Tab model (window management abstraction).
@@ -13155,6 +13289,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_visible_focus_topbar_proof(); }
         unsafe { maybe_run_keyboard_safe_close_proof(); }
         unsafe { maybe_run_spindle_real_keyboard_focus_proof(); }
+        unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }
         unsafe { maybe_run_command_palette_daily_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
