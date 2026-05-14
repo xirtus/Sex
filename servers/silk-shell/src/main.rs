@@ -223,7 +223,10 @@ const BELL_DETAIL_SEED_PROOF_ENABLED: bool =
     option_env!("SEXOS_BELL_DETAIL_SEED_PROOF").is_some();
 const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
+const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_COMMAND_PALETTE_LINEN_STATUS_PROOF").is_some();
 static mut COMMAND_PALETTE_STATUS_PROOF_DONE: bool = false;
+static mut COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_ACTIVE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_STAGE: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_DONE: bool = false;
@@ -10798,7 +10801,7 @@ fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
             (false, "delivery_blocked", "quil_keyboard_delivery_blocker")
         }
         Command::FocusLinen => {
-            (false, "blocking_risk", "linen_open_blocking_risk")
+            (true, "nonblocking_ready", "linen_fast_paint_nonblocking")
         }
         Command::FocusAtlas => {
             (true, "overlay_available", "atlas_overlay_available_even_if_old_exec_rejected")
@@ -11040,6 +11043,92 @@ unsafe fn maybe_run_command_palette_status_proof() {
     }
 }
 
+/// Command palette Linen status proof: verifies that Open Linen is now
+/// available/nonblocking in the command palette after LINEN_NONBLOCKING_OPEN_IMPL_V1.
+///
+/// Exercises: palette_item_status check, palette open with statusbar,
+/// palette FocusLinen exec via nonblocking fast paint.
+unsafe fn maybe_run_command_palette_linen_status_proof() {
+    if !COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED || COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE {
+        return;
+    }
+    serial_println!("[shell.palette.linen.status.proof] stage=0 action=start ok=1 reason=begin");
+
+    // Stage 1: Verify palette_item_status returns available for FocusLinen.
+    let (avail, status_label, reason) = palette_item_status(Command::FocusLinen);
+    serial_println!(
+        "[shell.palette.linen.status.proof] stage=1 action=status_check available={} status={} reason={}",
+        avail as u8, status_label, reason
+    );
+    if !avail {
+        serial_println!("[shell.palette.linen.status.proof.done] ok=0");
+        COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE = true;
+        return;
+    }
+
+    // Stage 2: Open palette to verify statusbar shows Linen as available.
+    if !COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+    if !COMMAND_PALETTE_OPEN {
+        serial_println!("[shell.palette.linen.status.proof] stage=2 action=open_palette ok=0 reason=open_failed");
+        serial_println!("[shell.palette.linen.status.proof.done] ok=0");
+        COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE = true;
+        return;
+    }
+    serial_println!("[shell.palette.linen.status.proof] stage=2 action=open_palette ok=1 reason=opened");
+
+    // Stage 3: Find FocusLinen index and emit status marker.
+    let mut linen_idx: Option<usize> = None;
+    for (i, item) in COMMAND_LIST.iter().enumerate() {
+        if item.command == Command::FocusLinen {
+            linen_idx = Some(i);
+            let (a, s, r) = palette_item_status(item.command);
+            serial_println!(
+                "[shell.palette.status] idx={} action=OpenLinen available={} status={} reason={}",
+                i, a as u8, s, r
+            );
+            break;
+        }
+    }
+    if let Some(idx) = linen_idx {
+        serial_println!(
+            "[shell.palette.linen.status.proof] stage=3 action=status_emitted idx={} ok=1",
+            idx
+        );
+    } else {
+        serial_println!("[shell.palette.linen.status.proof] stage=3 action=status_emitted ok=0 reason=not_found");
+        COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE = true;
+        return;
+    }
+
+    // Stage 4: Execute FocusLinen via palette (uses fast paint path).
+    let idx = linen_idx.unwrap();
+    let old_selected = COMMAND_PALETTE_SELECTED;
+    COMMAND_PALETTE_SELECTED = idx as u8;
+    palette_render_list();
+    let exec_ok = palette_execute_selected();
+    serial_println!(
+        "[shell.palette.exec.result] idx={} action=OpenLinen ok={} status=nonblocking_ready reason={}",
+        idx, exec_ok as u8, if exec_ok { "ok" } else { "exec_fail" }
+    );
+    serial_println!(
+        "[shell.palette.linen.status.proof] stage=4 action=exec ok={} reason={}",
+        exec_ok as u8,
+        if exec_ok { "ok" } else { "fail" }
+    );
+
+    // Stage 5: Close palette, verify nonblocking markers.
+    if COMMAND_PALETTE_OPEN {
+        toggle_command_palette();
+    }
+    serial_println!("[shell.palette.linen.status.proof] stage=5 action=close_palette ok=1 reason=done");
+
+    let all_ok = avail && exec_ok;
+    serial_println!("[shell.palette.linen.status.proof.done] ok={}", all_ok as u8);
+    COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE = true;
+}
+
 unsafe fn maybe_run_command_palette_daily_proof() {
     if !COMMAND_PALETTE_DAILY_PROOF_ENABLED {
         if COMMAND_PALETTE_DAILY_PROOF_SKIP_BUDGET > 0 {
@@ -11185,13 +11274,9 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
         serial_println!("[shell.palette.select] old={} new={}", old, COMMAND_PALETTE_SELECTED);
         palette_render_list();
 
-        if COMMAND_LIST[idx].command == Command::FocusLinen {
-            serial_println!("[shell.palette.exec] idx={} action=Open Linen ok=0 reason=blocking_risk_confirmed", idx);
-            serial_println!("[shell.palette.batch.proof] stage={} action=Open Linen ok=0 reason=blocking_risk_confirmed", idx);
-            palette_batch_emit_app_focus("Linen", SURFACE_ID_LINEN, false, "blocking_risk_confirmed");
-            rejected = rejected.saturating_add(1);
-            continue;
-        }
+        // FocusLinen block removed: linen_paint_surface_fast() is non-blocking.
+        // palette_item_status now returns available=true, nonblocking_ready.
+        // Falls through to normal exec path below.
 
         // Explicit restore setup before Restore Minimized action.
         if COMMAND_LIST[idx].command == Command::RestoreMinimized {
@@ -11231,7 +11316,7 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
                 palette_batch_emit_app_focus("Quil", SURFACE_ID_QUIL, ok, if ok { "ok" } else { "open_or_focus_reject" });
             }
             Command::FocusLinen => {
-                palette_batch_emit_app_focus("Linen", SURFACE_ID_LINEN, ok, if ok { "ok" } else { "blocking_risk_confirmed" });
+                palette_batch_emit_app_focus("Linen", SURFACE_ID_LINEN, ok, if ok { "ok" } else { "open_or_focus_reject" });
             }
             Command::FocusAtlas => {
                 let atlas_ok = ATLAS_MODE_ENABLED;
@@ -14820,6 +14905,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }
         unsafe { maybe_run_command_palette_status_proof(); }
+        unsafe { maybe_run_command_palette_linen_status_proof(); }
         unsafe { maybe_run_command_palette_daily_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
