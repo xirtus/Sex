@@ -60,6 +60,7 @@ const OP_RAMFS_CLOSE: u64 = 0x33;
 const RAMFS_O_CREATE: u32 = 0x01;
 const STORAGE_CAP_PROOF_ENABLED: bool = option_env!("SEXOS_STORAGE_CAP_PROOF").is_some();
 const QUIL_DISKFS_SLOT_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_DISKFS_SLOT_PROOF").is_some();
+const QUIL_KEYBOARD_NAV_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_KEYBOARD_NAV_PROOF").is_some();
 
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
@@ -71,6 +72,14 @@ const QUIL_DISKFS_EXPECT_FLAGS: u64 = 0x3;
 
 /// Fixed document name (fits RamFS 24-byte bound).
 const QUIL_DOC_NAME: &[u8] = b"quil_doc_01";
+
+// ── HID event stash for pdx_call_and_reply skip-loop replay ──────────────
+// During boot proofs, pdx_call_and_reply() spins waiting for storage replies.
+// OP_HID_EVENT messages arriving during that spin were previously discarded.
+// This bounded 8-slot stash captures them for replay before the main loop.
+const HID_STASH_CAPACITY: usize = 8;
+static mut HID_STASH: [(u64, u64, u64); HID_STASH_CAPACITY] = [(0, 0, 0); HID_STASH_CAPACITY];
+static mut HID_STASH_COUNT: usize = 0;
 
 fn quil_storage_cap_probe() {
     // Probe with a bounded fixed name and create flag.
@@ -472,8 +481,24 @@ fn pdx_call_and_reply(slot: u64, opcode: u64, arg0: u64, arg1: u64, arg2: u64) -
         if msg.type_id == 0x1 {
             return (0, msg.arg0);
         }
-        // Non-reply message before reply arrived — log and keep waiting.
-        serial_println!("[quil.sync.skip] type_id={:#x}", msg.type_id);
+        // Non-reply message before reply arrived.
+        // OP_HID_EVENT: stash for later replay instead of discarding.
+        // Other types: log and keep waiting.
+        if msg.type_id == OP_HID_EVENT {
+            unsafe {
+                if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                    let idx = HID_STASH_COUNT;
+                    HID_STASH[idx] = (msg.arg0, msg.arg1, msg.arg2);
+                    HID_STASH_COUNT += 1;
+                    serial_println!("[quil.hid.stash] idx={} code={:#x} down={} mod={} ok=1 reason=stashed",
+                        idx, msg.arg0, msg.arg1, msg.arg2);
+                } else {
+                    serial_println!("[quil.hid.stash.drop] code={:#x} reason=full", msg.arg0);
+                }
+            }
+        } else {
+            serial_println!("[quil.sync.skip] type_id={:#x}", msg.type_id);
+        }
     }
 }
 
@@ -736,6 +761,113 @@ fn quil_load() -> Result<(), i64> {
     Ok(())
 }
 
+/// Dispatch a single palette key event. Used by both the main event loop
+/// and the HID replay path (stashed events replayed after boot proofs).
+fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut bool, selected_row: &mut u8) {
+    unsafe {
+        static mut QUIL_KEY_BUDGET: u32 = 16;
+        let b = &mut QUIL_KEY_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[quil.key.recv] scancode={:#x} val={}", scancode, value);
+        }
+    }
+
+    if value == 1 {
+        let action = decode_palette_key(scancode);
+        unsafe {
+            static mut QUIL_PALETTE_KEY_BUDGET: u32 = 24;
+            let kb = &mut QUIL_PALETTE_KEY_BUDGET;
+            if *kb > 0 {
+                *kb -= 1;
+                serial_println!("[quil.palette.key] scancode={:#x} action={}", scancode, action);
+            }
+        }
+
+        match action {
+            1 => { // Up
+                if *palette_active {
+                    *selected_row = if *selected_row == 0 {
+                        QUIL_ROWS - 1
+                    } else {
+                        *selected_row - 1
+                    };
+                    draw_palette(*selected_row);
+                } else {
+                    serial_println!("[quil.palette.reject] action=up reason=inactive");
+                }
+            }
+            2 => { // Down
+                if *palette_active {
+                    *selected_row = (*selected_row + 1) % QUIL_ROWS;
+                    draw_palette(*selected_row);
+                } else {
+                    serial_println!("[quil.palette.reject] action=down reason=inactive");
+                }
+            }
+            3 => { // Enter
+                if *palette_active {
+                    let cmd = palette_command_for_row(*selected_row);
+                    serial_println!("[quil.palette.action] row={} cmd={}", *selected_row, cmd);
+                    match cmd {
+                        CMD_SAVE_DOCUMENT => {
+                            if let Err(e) = quil_save() {
+                                serial_println!("[quil.palette.save.fail] error={}", e);
+                            }
+                        }
+                        CMD_LOAD_DOCUMENT => {
+                            if let Err(e) = quil_load() {
+                                serial_println!("[quil.palette.load.fail] error={}", e);
+                            }
+                        }
+                        _ => {
+                            serial_println!("[quil.palette.stub] cmd={}", cmd);
+                        }
+                    }
+                } else {
+                    serial_println!("[quil.palette.reject] action=enter reason=inactive");
+                }
+            }
+            4 => { // Esc
+                if *palette_active {
+                    *palette_active = false;
+                    // Clear palette area via rect0.
+                    pdx_call(
+                        SLOT_DISPLAY,
+                        0xEF,
+                        SURFACE_ID_QUIL,
+                        (QUIL_PANEL_Y << 32) | QUIL_PANEL_X,
+                        (QUIL_LINE_BG << 32) | (QUIL_PANEL_H << 16) | QUIL_PANEL_W,
+                    );
+                    serial_println!("[quil.palette.action] kind=esc clear=1");
+                } else {
+                    serial_println!("[quil.palette.reject] action=esc reason=inactive");
+                }
+            }
+            _ => {
+                // Liveness fallback for non-palette keys: color toggle.
+                unsafe {
+                    static mut QUIL_COLOR_TOGGLE: bool = false;
+                    QUIL_COLOR_TOGGLE = !QUIL_COLOR_TOGGLE;
+                    let color = if QUIL_COLOR_TOGGLE {
+                        0x00FF00FFu64
+                    } else {
+                        0x0000FFFFu64
+                    };
+                    pdx_call(
+                        SLOT_DISPLAY,
+                        0xEF,
+                        SURFACE_ID_QUIL,
+                        0,
+                        (color << 32) | (2000u64 << 16) | 2000u64,
+                    );
+                }
+                serial_println!("[quil.palette.reject] action=key reason=unmapped");
+            }
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[quil.init.start]");
@@ -782,6 +914,7 @@ pub extern "C" fn _start() -> ! {
 
     // Palette (rect_index=0, redrawn on each keypress).
     let mut selected_row: u8 = 0;
+    let mut palette_active = true;
     draw_palette(selected_row);
     serial_println!("[quil.boot.draw.ok]");
     serial_println!("[quil.ready]");
@@ -790,12 +923,78 @@ pub extern "C" fn _start() -> ! {
         run_quil_diskfs_slot_min_proof();
     }
 
+    // ── Replay any HID events stashed during diskfs proof ─────────────
+    // pdx_call_and_reply() may have stashed keyboard events during the
+    // diskfs slot proof spin.  Replay them before the next proof stage.
+    unsafe {
+        let stash_count = HID_STASH_COUNT;
+        if stash_count > 0 {
+            serial_println!("[quil.hid.replay.begin] count={} phase=after_diskfs", stash_count);
+            for i in 0..stash_count {
+                let (scancode, value, _arg2) = HID_STASH[i];
+                serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}",
+                    i, scancode, value, _arg2);
+                quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+            }
+            HID_STASH_COUNT = 0;
+            serial_println!("[quil.hid.replay.done] count={}", stash_count);
+        }
+    }
+
     // ── Boot-time sexfiles persistence proof ──────────────────────────────
     // SEXFILES_QUIL_REBOOT_PERSISTENCE_PROOF_V1
     // Proves: open, write, read, match, deny.
     // Replay_match not yet available (disk persistence blocker — see handoff).
     const PERSISTENCE_PROOF_ENABLED: bool =
         cfg!(sexfiles_quil_persistence_proof);
+
+    // ── Keyboard nav proof: synthetic stash/replay exercise ──────────────
+    // Must run BEFORE sexfiles persistence proof (which can hang).
+    // Seeds synthetic HID events into the stash, then replays them.
+    if QUIL_KEYBOARD_NAV_PROOF_ENABLED {
+        unsafe {
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                // Synthetic down-arrow key (scancode=0x50, value=1).
+                HID_STASH[idx] = (0x50, 1, 0);
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.keyboard.nav.proof] stage=0 action=seed_stash idx={} code=0x50", idx);
+            }
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                // Synthetic up-arrow key (scancode=0x48, value=1).
+                HID_STASH[idx] = (0x48, 1, 0);
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.keyboard.nav.proof] stage=1 action=seed_stash idx={} code=0x48", idx);
+            }
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                // Synthetic Enter key (scancode=0x1C, value=1).
+                HID_STASH[idx] = (0x1C, 1, 0);
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.keyboard.nav.proof] stage=2 action=seed_stash idx={} code=0x1C", idx);
+            }
+            serial_println!("[quil.keyboard.nav.proof] stage=3 action=stash_done count={}", HID_STASH_COUNT);
+        }
+
+        // Replay synthetic stashed events.
+        unsafe {
+            let stash_count = HID_STASH_COUNT;
+            if stash_count > 0 {
+                serial_println!("[quil.hid.replay.begin] count={} phase=synthetic_proof", stash_count);
+                for i in 0..stash_count {
+                    let (scancode, value, _arg2) = HID_STASH[i];
+                    serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}",
+                        i, scancode, value, _arg2);
+                    quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+                }
+                HID_STASH_COUNT = 0;
+                serial_println!("[quil.hid.replay.done] count={}", stash_count);
+            }
+        }
+
+        serial_println!("[quil.keyboard.nav.proof.done] ok=1");
+    }
 
     if PERSISTENCE_PROOF_ENABLED {
         serial_println!("[quil.sexfiles.proof.start]");
@@ -879,7 +1078,26 @@ pub extern "C" fn _start() -> ! {
         quil_storage_cap_probe();
     }
 
-    let mut palette_active = true;
+    // ── Replay stashed HID events (captured during sexfiles proof sync loop) ──
+    // If the sexfiles proof completed, replay any real HID events stashed
+    // during pdx_call_and_reply spins.  Synthetic events were already replayed
+    // before the proof (see keyboard nav proof section above).
+    unsafe {
+        let stash_count = HID_STASH_COUNT;
+        if stash_count > 0 {
+            serial_println!("[quil.hid.replay.begin] count={} phase=after_proofs", stash_count);
+            for i in 0..stash_count {
+                let (scancode, value, _arg2) = HID_STASH[i];
+                serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}",
+                    i, scancode, value, _arg2);
+                quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+            }
+            HID_STASH_COUNT = 0;
+            serial_println!("[quil.hid.replay.done] count={}", stash_count);
+        } else {
+            serial_println!("[quil.hid.replay.empty] count=0");
+        }
+    }
 
     loop {
         let msg = pdx_listen_raw(0);
@@ -905,110 +1123,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             OP_HID_EVENT => {
-                let scancode = msg.arg0;
-                let value = msg.arg1;
-                unsafe {
-                    static mut QUIL_KEY_BUDGET: u32 = 16;
-                    let b = &mut QUIL_KEY_BUDGET;
-                    if *b > 0 {
-                        *b -= 1;
-                        serial_println!("[quil.key.recv] scancode={:#x} val={}", scancode, value);
-                    }
-                }
-
-                if value == 1 {
-                    let action = decode_palette_key(scancode);
-                    unsafe {
-                        static mut QUIL_PALETTE_KEY_BUDGET: u32 = 24;
-                        let kb = &mut QUIL_PALETTE_KEY_BUDGET;
-                        if *kb > 0 {
-                            *kb -= 1;
-                            serial_println!("[quil.palette.key] scancode={:#x} action={}", scancode, action);
-                        }
-                    }
-
-                    match action {
-                        1 => {
-                            if palette_active {
-                                selected_row = if selected_row == 0 {
-                                    QUIL_ROWS - 1
-                                } else {
-                                    selected_row - 1
-                                };
-                                draw_palette(selected_row);
-                            } else {
-                                serial_println!("[quil.palette.reject] action=up reason=inactive");
-                            }
-                        }
-                        2 => {
-                            if palette_active {
-                                selected_row = (selected_row + 1) % QUIL_ROWS;
-                                draw_palette(selected_row);
-                            } else {
-                                serial_println!("[quil.palette.reject] action=down reason=inactive");
-                            }
-                        }
-                        3 => {
-                            if palette_active {
-                                let cmd = palette_command_for_row(selected_row);
-                                serial_println!("[quil.palette.action] row={} cmd={}", selected_row, cmd);
-                                match cmd {
-                                    CMD_SAVE_DOCUMENT => {
-                                        if let Err(e) = quil_save() {
-                                            serial_println!("[quil.palette.save.fail] error={}", e);
-                                        }
-                                    }
-                                    CMD_LOAD_DOCUMENT => {
-                                        if let Err(e) = quil_load() {
-                                            serial_println!("[quil.palette.load.fail] error={}", e);
-                                        }
-                                    }
-                                    _ => {
-                                        serial_println!("[quil.palette.stub] cmd={}", cmd);
-                                    }
-                                }
-                            } else {
-                                serial_println!("[quil.palette.reject] action=enter reason=inactive");
-                            }
-                        }
-                        4 => {
-                            if palette_active {
-                                palette_active = false;
-                                // Clear palette area via rect0.
-                                pdx_call(
-                                    SLOT_DISPLAY,
-                                    0xEF,
-                                    SURFACE_ID_QUIL,
-                                    (QUIL_PANEL_Y << 32) | QUIL_PANEL_X,
-                                    (QUIL_LINE_BG << 32) | (QUIL_PANEL_H << 16) | QUIL_PANEL_W,
-                                );
-                                serial_println!("[quil.palette.action] kind=esc clear=1");
-                            } else {
-                                serial_println!("[quil.palette.reject] action=esc reason=inactive");
-                            }
-                        }
-                        _ => {
-                            // Existing liveness fallback for non-palette keys.
-                            static mut QUIL_COLOR_TOGGLE: bool = false;
-                            unsafe {
-                                QUIL_COLOR_TOGGLE = !QUIL_COLOR_TOGGLE;
-                                let color = if QUIL_COLOR_TOGGLE {
-                                    0x00FF00FFu64
-                                } else {
-                                    0x0000FFFFu64
-                                };
-                                pdx_call(
-                                    SLOT_DISPLAY,
-                                    0xEF,
-                                    SURFACE_ID_QUIL,
-                                    0,
-                                    (color << 32) | (2000u64 << 16) | 2000u64,
-                                );
-                            }
-                            serial_println!("[quil.palette.reject] action=key reason=unmapped");
-                        }
-                    }
-                }
+                quil_dispatch_palette_key(msg.arg0, msg.arg1, &mut palette_active, &mut selected_row);
             }
             _ => {
                 unsafe {
