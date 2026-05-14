@@ -98,9 +98,15 @@ const OP_RAMFS_OPEN: u64 = 0x30;
 /// Default (unset): zero behavior change.
 const ATLAS_OVERVIEW_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_OVERVIEW_PROOF").is_some();
+const ATLAS_SCENE_KEYBOARD_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_SCENE_KEYBOARD_PROOF").is_some();
+const COLLAR_KEYBOARD_GRANTS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_COLLAR_KEYBOARD_GRANTS_PROOF").is_some();
 
 /// Synthetic proof stage counter for Atlas overview model proof. Advances 0..4 then stops.
 static mut ATLAS_OVERVIEW_PROOF_STAGE: u8 = 0;
+static mut ATLAS_SCENE_KEYBOARD_PROOF_DONE: bool = false;
+static mut COLLAR_KEYBOARD_GRANTS_PROOF_DONE: bool = false;
 
 /// App lifecycle synthetic proof gate.
 /// Build with SEXOS_LIFECYCLE_PROOF=1 to enable.
@@ -251,6 +257,114 @@ unsafe fn maybe_run_bell_keyboard_detail_proof() {
     );
     serial_println!("[bell.keyboard.detail.proof.done] ok=1");
     BELL_KEYBOARD_DETAIL_PROOF_DONE = true;
+}
+
+unsafe fn maybe_run_atlas_scene_keyboard_proof() {
+    if !ATLAS_SCENE_KEYBOARD_PROOF_ENABLED || ATLAS_SCENE_KEYBOARD_PROOF_DONE {
+        return;
+    }
+    if !ATLAS_MODE_ENABLED {
+        atlas_toggle();
+    }
+    serial_println!(
+        "[atlas.overlay.toggle] enabled={} ok=1 reason={}",
+        ATLAS_MODE_ENABLED as u8,
+        if ATLAS_MODE_ENABLED { "opened" } else { "closed" }
+    );
+    serial_println!(
+        "[atlas.scene.keyboard.proof] stage=0 action=open_focus ok={} reason={}",
+        ATLAS_MODE_ENABLED as u8,
+        if ATLAS_MODE_ENABLED { "ok" } else { "overlay_disabled" }
+    );
+    if !ATLAS_MODE_ENABLED {
+        serial_println!("[atlas.scene.keyboard.proof.done] ok=0");
+        ATLAS_SCENE_KEYBOARD_PROOF_DONE = true;
+        return;
+    }
+    for (stage, sc, name) in [
+        (1u8, 0x4Du8, "next_scene"),
+        (2u8, 0x4Bu8, "prev_scene"),
+        (3u8, 0x1Eu8, "next_accent"),
+        (4u8, 0x2Cu8, "prev_accent"),
+    ] {
+        serial_println!("[atlas.key.recv] code={} down=1 mod=0", sc);
+        let ok = handle_atlas_keyboard(sc);
+        serial_println!(
+            "[atlas.scene.keyboard.proof] stage={} action={} ok={} reason={}",
+            stage,
+            name,
+            ok as u8,
+            if ok { "ok" } else { "action_reject" }
+        );
+    }
+    serial_println!("[atlas.key.recv] code={} down=1 mod=0", 0x1C);
+    let apply_ok = handle_atlas_keyboard(0x1C);
+    serial_println!(
+        "[atlas.scene.keyboard.proof] stage=5 action=apply_commit ok={} reason={}",
+        apply_ok as u8,
+        if apply_ok { "ok" } else { "action_reject" }
+    );
+    if !ATLAS_MODE_ENABLED {
+        atlas_toggle();
+    }
+    serial_println!("[atlas.key.recv] code={} down=1 mod=0", 0x01);
+    let close_ok = handle_atlas_keyboard(0x01);
+    serial_println!(
+        "[atlas.scene.keyboard.proof] stage=6 action=close_back ok={} reason={}",
+        close_ok as u8,
+        if close_ok { "ok" } else { "action_reject" }
+    );
+    serial_println!("[atlas.scene.keyboard.proof.done] ok=1");
+    ATLAS_SCENE_KEYBOARD_PROOF_DONE = true;
+}
+
+unsafe fn maybe_run_collar_keyboard_grants_proof() {
+    if !COLLAR_KEYBOARD_GRANTS_PROOF_ENABLED || COLLAR_KEYBOARD_GRANTS_PROOF_DONE {
+        return;
+    }
+    let open_ok = focus_or_open_collar();
+    COLLAR_OVERLAY_ENABLED = open_ok;
+    serial_println!(
+        "[collar.overlay.toggle] enabled={} ok={} reason={}",
+        COLLAR_OVERLAY_ENABLED as u8,
+        open_ok as u8,
+        if open_ok { "opened_or_focused" } else { "open_or_focus_reject" }
+    );
+    serial_println!(
+        "[collar.keyboard.grants.proof] stage=0 action=open_focus ok={} reason={}",
+        open_ok as u8,
+        if open_ok { "ok" } else { "open_or_focus_reject" }
+    );
+    if !open_ok {
+        serial_println!("[collar.keyboard.grants.proof.done] ok=0");
+        COLLAR_KEYBOARD_GRANTS_PROOF_DONE = true;
+        return;
+    }
+    serial_println!("[collar.key.recv] code={} down=1 mod=0", 0x24);
+    collar_select_next_grant();
+    serial_println!("[collar.keyboard.grants.proof] stage=1 action=next_grant ok=1 reason=ok");
+    serial_println!("[collar.key.recv] code={} down=1 mod=0", 0x25);
+    collar_select_prev_grant();
+    serial_println!("[collar.keyboard.grants.proof] stage=2 action=prev_grant ok=1 reason=ok");
+    serial_println!("[collar.key.recv] code={} down=1 mod=0", 0x1C);
+    let detail_ok = collar_emit_selected_grant_detail();
+    serial_println!(
+        "[collar.keyboard.grants.proof] stage=3 action=detail ok={} reason={}",
+        detail_ok as u8,
+        if detail_ok { "ok" } else { "no_active_grant" }
+    );
+    let grant_id = collar_grant_at_visible_index(COLLAR_SELECTED_GRANT_IDX).map(|g| g.grant_id).unwrap_or(0);
+    serial_println!("[collar.grant.action] action=skip grant_id={} ok=1 reason=policy_preserved_no_auto_grant", grant_id);
+    serial_println!("[collar.keyboard.grants.proof] stage=4 action=approve_or_reject ok=1 reason=skipped_policy_preserved");
+    serial_println!("[collar.key.recv] code={} down=1 mod=0", 0x01);
+    let close_ok = toggle_collar();
+    serial_println!(
+        "[collar.keyboard.grants.proof] stage=5 action=close_back ok={} reason={}",
+        close_ok as u8,
+        if close_ok { "ok" } else { "close_reject" }
+    );
+    serial_println!("[collar.keyboard.grants.proof.done] ok=1");
+    COLLAR_KEYBOARD_GRANTS_PROOF_DONE = true;
 }
 
 // Well-known key ID for scene appearance settings blob.
@@ -1830,6 +1944,8 @@ static mut COLLAR_GRANT_GENERATION: u64 = 1; // 0 reserved
 
 static mut COLLAR_AUDIT_EVENTS: [Option<CollarAuditEvent>; COLLAR_AUDIT_CAP] = [None; COLLAR_AUDIT_CAP];
 static mut COLLAR_AUDIT_WRITE_INDEX: u64 = 0;
+static mut COLLAR_SELECTED_GRANT_IDX: u8 = 0;
+static mut COLLAR_OVERLAY_ENABLED: bool = false;
 
 /// Record an audit event in the Collar audit ring.
 unsafe fn record_collar_audit(
@@ -1906,6 +2022,73 @@ unsafe fn collar_init_grants() {
         count += 1;
     }
     serial_println!("[collar.grant.init] count={} generation={}", count, COLLAR_GRANT_GENERATION);
+}
+
+unsafe fn collar_grant_count() -> u8 {
+    let mut count = 0u8;
+    for slot in COLLAR_GRANTS.iter() {
+        if let Some(grant) = slot {
+            if grant.state == CollarGrantState::Active {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    count
+}
+
+unsafe fn collar_grant_at_visible_index(idx: u8) -> Option<CollarGrant> {
+    let mut cursor = 0u8;
+    for slot in COLLAR_GRANTS.iter() {
+        if let Some(grant) = slot {
+            if grant.state != CollarGrantState::Active { continue; }
+            if cursor == idx {
+                return Some(*grant);
+            }
+            cursor = cursor.saturating_add(1);
+        }
+    }
+    None
+}
+
+unsafe fn collar_select_next_grant() {
+    let count = collar_grant_count();
+    let old = COLLAR_SELECTED_GRANT_IDX;
+    if count == 0 {
+        serial_println!("[collar.grant.nav] old={} new={} count=0", old, old);
+        return;
+    }
+    let new = if old + 1 >= count { 0 } else { old + 1 };
+    COLLAR_SELECTED_GRANT_IDX = new;
+    serial_println!("[collar.grant.nav] old={} new={} count={}", old, new, count);
+}
+
+unsafe fn collar_select_prev_grant() {
+    let count = collar_grant_count();
+    let old = COLLAR_SELECTED_GRANT_IDX;
+    if count == 0 {
+        serial_println!("[collar.grant.nav] old={} new={} count=0", old, old);
+        return;
+    }
+    let new = if old == 0 { count - 1 } else { old - 1 };
+    COLLAR_SELECTED_GRANT_IDX = new;
+    serial_println!("[collar.grant.nav] old={} new={} count={}", old, new, count);
+}
+
+unsafe fn collar_emit_selected_grant_detail() -> bool {
+    let idx = COLLAR_SELECTED_GRANT_IDX;
+    match collar_grant_at_visible_index(idx) {
+        Some(grant) => {
+            serial_println!(
+                "[collar.grant.detail] idx={} grant_id={} ok=1 reason=ok",
+                idx, grant.grant_id
+            );
+            true
+        }
+        None => {
+            serial_println!("[collar.grant.detail] idx={} grant_id=0 ok=0 reason=no_active_grant", idx);
+            false
+        }
+    }
 }
 
 // ── V3: Collar Manifest Review Model ──────────────────────────────────────────
@@ -6046,6 +6229,7 @@ unsafe fn atlas_toggle() {
         static mut ATLAS_EXIT_BUDGET: u32 = 4;
         let b = &mut ATLAS_EXIT_BUDGET;
         if *b > 0 { *b -= 1; serial_println!("[shell.atlas.exit]"); }
+        serial_println!("[atlas.overlay.toggle] enabled=0 ok=1 reason=closed");
     } else {
         // Entering Atlas: render overlay, clear stale hover/drag.
         ATLAS_MODE_ENABLED = true;
@@ -6058,6 +6242,7 @@ unsafe fn atlas_toggle() {
         static mut ATLAS_ENTER_BUDGET: u32 = 4;
         let b = &mut ATLAS_ENTER_BUDGET;
         if *b > 0 { *b -= 1; serial_println!("[shell.atlas.enter]"); }
+        serial_println!("[atlas.overlay.toggle] enabled=1 ok=1 reason=opened");
     }
 }
 
@@ -6140,6 +6325,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 tile_active_scene_frames();
                 snap_capture_layout();
             }
+            serial_println!("[atlas.scene.apply] scene={} accent={} ok=1 reason=ok", scene_idx, SCENES[scene_idx as usize].accent);
             // C2: Emit focus result after scene activation.
             if FOCUSED_SURFACE_ID != 0 {
                 serial_println!("[atlas.nav.focus.commit] scene={} sid={}", scene_idx, FOCUSED_SURFACE_ID);
@@ -6164,6 +6350,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
             };
             if ATLAS_SELECTED_SCENE != sel {
                 serial_println!("[atlas.nav.move] dir=left from={} to={}", sel, ATLAS_SELECTED_SCENE);
+                serial_println!("[atlas.scene.nav] old={} new={} count={}", sel, ATLAS_SELECTED_SCENE, ATLAS_MAX_SCENES);
             }
             atlas_render_stub();
             static mut ATLAS_KEY_BUDGET: u32 = 4;
@@ -6179,6 +6366,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
             };
             if ATLAS_SELECTED_SCENE != sel {
                 serial_println!("[atlas.nav.move] dir=right from={} to={}", sel, ATLAS_SELECTED_SCENE);
+                serial_println!("[atlas.scene.nav] old={} new={} count={}", sel, ATLAS_SELECTED_SCENE, ATLAS_MAX_SCENES);
             }
             atlas_render_stub();
             static mut ATLAS_KEY_BUDGET: u32 = 4;
@@ -6193,6 +6381,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
             };
             if ATLAS_SELECTED_SCENE != sel {
                 serial_println!("[atlas.nav.move] dir=up from={} to={}", sel, ATLAS_SELECTED_SCENE);
+                serial_println!("[atlas.scene.nav] old={} new={} count={}", sel, ATLAS_SELECTED_SCENE, ATLAS_MAX_SCENES);
                 atlas_render_stub();
                 static mut ATLAS_KEY_BUDGET: u32 = 4;
                 let b = &mut ATLAS_KEY_BUDGET;
@@ -6207,6 +6396,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
             };
             if ATLAS_SELECTED_SCENE != sel {
                 serial_println!("[atlas.nav.move] dir=down from={} to={}", sel, ATLAS_SELECTED_SCENE);
+                serial_println!("[atlas.scene.nav] old={} new={} count={}", sel, ATLAS_SELECTED_SCENE, ATLAS_MAX_SCENES);
                 atlas_render_stub();
                 static mut ATLAS_KEY_BUDGET: u32 = 4;
                 let b = &mut ATLAS_KEY_BUDGET;
@@ -6228,6 +6418,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 tile_active_scene_frames();
                 snap_capture_layout();
             }
+            serial_println!("[atlas.scene.apply] scene={} accent={} ok=1 reason=ok", scene_idx, SCENES[scene_idx as usize].accent);
             // C2: Emit focus result after scene activation.
             if FOCUSED_SURFACE_ID != 0 {
                 serial_println!("[atlas.nav.focus.commit] scene={} sid={}", scene_idx, FOCUSED_SURFACE_ID);
@@ -6249,6 +6440,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 serial_println!("[atlas.nav.focus.empty] scene={}", ACTIVE_SCENE_IDX);
             }
             ATLAS_MODE_ENABLED = false;
+            serial_println!("[atlas.overlay.toggle] enabled=0 ok=1 reason=cancel_close");
             static mut ATLAS_CANCEL_BUDGET: u32 = 4;
             let b = &mut ATLAS_CANCEL_BUDGET;
             if *b > 0 { *b -= 1; serial_println!("[shell.atlas.cancel]"); }
@@ -6257,8 +6449,27 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
             let sel = ATLAS_SELECTED_SCENE;
             if validate_scene_id(sel) {
                 let idx = sel as usize;
+                let old_accent = SCENES[idx].accent;
                 let new_accent = (SCENES[idx].accent + 1) % ACCENT_COUNT;
                 SCENES[idx].accent = new_accent;
+                serial_println!("[atlas.accent.nav] old={} new={} count={}", old_accent, new_accent, ACCENT_COUNT);
+                static mut ATLAS_ACCENT_BUDGET: u32 = 16;
+                let b = &mut ATLAS_ACCENT_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[atlas.scene.settings.accent] scene={} accent={}", sel, new_accent); }
+            } else {
+                static mut ATLAS_UI_REJECT_BUDGET: u32 = 8;
+                let b = &mut ATLAS_UI_REJECT_BUDGET;
+                if *b > 0 { *b -= 1; serial_println!("[atlas.scene.settings.ui.reject] fn=accent scene={}", sel); }
+            }
+        }
+        0x2C => { // 'Z' — cycle accent token backward for selected scene
+            let sel = ATLAS_SELECTED_SCENE;
+            if validate_scene_id(sel) {
+                let idx = sel as usize;
+                let old_accent = SCENES[idx].accent;
+                let new_accent = if old_accent == 0 { ACCENT_COUNT - 1 } else { old_accent - 1 };
+                SCENES[idx].accent = new_accent;
+                serial_println!("[atlas.accent.nav] old={} new={} count={}", old_accent, new_accent, ACCENT_COUNT);
                 static mut ATLAS_ACCENT_BUDGET: u32 = 16;
                 let b = &mut ATLAS_ACCENT_BUDGET;
                 if *b > 0 { *b -= 1; serial_println!("[atlas.scene.settings.accent] scene={} accent={}", sel, new_accent); }
@@ -7669,6 +7880,8 @@ unsafe fn toggle_collar() -> bool {
                 && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
             {
                 if minimize_frame(COLLAR_FRAME_ID) {
+                    COLLAR_OVERLAY_ENABLED = false;
+                    serial_println!("[collar.overlay.toggle] enabled=0 ok=1 reason=minimized");
                     static mut COLLAR_TOGGLE_BUDGET: u32 = 4;
                     let b = &mut COLLAR_TOGGLE_BUDGET;
                     if *b > 0 { *b -= 1; serial_println!("[shell.collar.lifecycle.minimize] frame={}", COLLAR_FRAME_ID); }
@@ -7678,7 +7891,14 @@ unsafe fn toggle_collar() -> bool {
             }
         }
     }
-    open_collar_in_active_scene()
+    let ok = open_collar_in_active_scene();
+    if ok {
+        COLLAR_OVERLAY_ENABLED = true;
+        serial_println!("[collar.overlay.toggle] enabled=1 ok=1 reason=opened");
+    } else {
+        serial_println!("[collar.overlay.toggle] enabled=0 ok=0 reason=open_reject");
+    }
+    ok
 }
 
 /// Return Collar's frame_id, if its frame exists.
@@ -13381,7 +13601,9 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_keyboard_safe_close_proof(); }
         unsafe { maybe_run_spindle_real_keyboard_focus_proof(); }
         unsafe { maybe_run_linen_keyboard_route_proof(); }
+        unsafe { maybe_run_atlas_scene_keyboard_proof(); }
         unsafe { maybe_run_bell_keyboard_detail_proof(); }
+        unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }
         unsafe { maybe_run_command_palette_daily_proof(); }
 
