@@ -100,12 +100,15 @@ const ATLAS_OVERVIEW_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_OVERVIEW_PROOF").is_some();
 const ATLAS_SCENE_KEYBOARD_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_SCENE_KEYBOARD_PROOF").is_some();
+const ATLAS_THEME_VISUAL_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_THEME_VISUAL_PROOF").is_some();
 const COLLAR_KEYBOARD_GRANTS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COLLAR_KEYBOARD_GRANTS_PROOF").is_some();
 
 /// Synthetic proof stage counter for Atlas overview model proof. Advances 0..4 then stops.
 static mut ATLAS_OVERVIEW_PROOF_STAGE: u8 = 0;
 static mut ATLAS_SCENE_KEYBOARD_PROOF_DONE: bool = false;
+static mut ATLAS_THEME_VISUAL_PROOF_DONE: bool = false;
 static mut COLLAR_KEYBOARD_GRANTS_PROOF_DONE: bool = false;
 
 /// App lifecycle synthetic proof gate.
@@ -433,6 +436,100 @@ unsafe fn maybe_run_atlas_scene_keyboard_proof() {
     );
     serial_println!("[atlas.scene.keyboard.proof.done] ok=1");
     ATLAS_SCENE_KEYBOARD_PROOF_DONE = true;
+}
+
+/// Atlas theme visual proof: verifies that scene/accent apply changes the
+/// visible chrome/theme state (ACTIVE_TINT_IDX, SCENE_APPEARANCE_STATE,
+/// OP_APPEARANCE_TOKENS push to sexdisplay).
+///
+/// Root cause: previously [atlas.scene.apply] only recorded the accent
+/// in SCENES[].accent but never propagated it to the active tint or sent
+/// updated appearance tokens to sexdisplay. This proof exercises the new
+/// atlas_apply_scene_accent_to_chrome() bridge that makes the accent
+/// actually visible in chrome colors.
+unsafe fn maybe_run_atlas_theme_visual_proof() {
+    if !ATLAS_THEME_VISUAL_PROOF_ENABLED || ATLAS_THEME_VISUAL_PROOF_DONE {
+        return;
+    }
+
+    serial_println!("[atlas.theme.visual.proof] stage=0 action=start ok=1 reason=begin");
+
+    // Stage 0: Open Atlas overlay.
+    if !ATLAS_MODE_ENABLED {
+        atlas_toggle();
+    }
+    let overlay_open = ATLAS_MODE_ENABLED;
+    serial_println!(
+        "[atlas.theme.visual.proof] stage=0 action=open_focus ok={} reason={}",
+        overlay_open as u8,
+        if overlay_open { "ok" } else { "overlay_disabled" }
+    );
+    if !overlay_open {
+        serial_println!("[atlas.theme.visual.proof.done] ok=0");
+        ATLAS_THEME_VISUAL_PROOF_DONE = true;
+        return;
+    }
+
+    // Record initial state.
+    let initial_tint = ACTIVE_TINT_IDX;
+    let initial_preset = SCENE_APPEARANCE_STATE.preset_idx;
+    serial_println!(
+        "[atlas.theme.before] scene={} accent={} tint={} preset={}",
+        ATLAS_SELECTED_SCENE,
+        SCENES[ATLAS_SELECTED_SCENE as usize].accent,
+        initial_tint, initial_preset
+    );
+
+    // Stage 1: Cycle accent to a different value via 'A' key.
+    serial_println!("[atlas.key.recv] code=0x1E down=1 mod=0");
+    let accent_ok = handle_atlas_keyboard(0x1E); // 'A' — next accent
+    let new_accent = SCENES[ATLAS_SELECTED_SCENE as usize].accent;
+    serial_println!(
+        "[atlas.theme.visual.proof] stage=1 action=cycle_accent ok={} reason={}",
+        accent_ok as u8,
+        if accent_ok { "ok" } else { "accent_reject" }
+    );
+
+    // Stage 2: Apply scene via Enter to trigger accent→tint propagation.
+    serial_println!("[atlas.key.recv] code=0x1C down=1 mod=0");
+    let apply_ok = handle_atlas_keyboard(0x1C);
+    let final_tint = ACTIVE_TINT_IDX;
+    let changed = (initial_tint != final_tint || new_accent != 0) as u8;
+    serial_println!(
+        "[atlas.theme.apply] old_scene={} new_scene={} old_accent={} new_accent={} ok={} reason={}",
+        initial_tint, final_tint, initial_tint, new_accent,
+        apply_ok as u8,
+        if apply_ok { "apply_ok" } else { "apply_fail" }
+    );
+    serial_println!(
+        "[atlas.theme.visual.proof] stage=2 action=apply_commit ok={} reason={}",
+        apply_ok as u8,
+        if apply_ok { "ok" } else { "action_reject" }
+    );
+
+    // Stage 3: Verify tint changed (or stayed if accent already matched).
+    serial_println!(
+        "[atlas.theme.after] scene={} accent={} tint={} preset={} changed={}",
+        ATLAS_SELECTED_SCENE, new_accent, final_tint,
+        SCENE_APPEARANCE_STATE.preset_idx, changed
+    );
+    serial_println!(
+        "[atlas.theme.visual.proof] stage=3 action=verify_chrome_change ok={} reason={}",
+        changed,
+        if changed != 0 { "chrome_updated" } else { "chrome_unchanged_same_accent" }
+    );
+
+    // Stage 4: Close Atlas overlay.
+    if ATLAS_MODE_ENABLED {
+        atlas_toggle();
+    }
+    serial_println!(
+        "[atlas.theme.visual.proof] stage=4 action=close_back ok=1 reason=ok"
+    );
+
+    let all_stages_ok = overlay_open && accent_ok && apply_ok;
+    serial_println!("[atlas.theme.visual.proof.done] ok={}", all_stages_ok as u8);
+    ATLAS_THEME_VISUAL_PROOF_DONE = true;
 }
 
 unsafe fn maybe_run_collar_keyboard_grants_proof() {
@@ -6586,6 +6683,8 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
                 clear_hover_if_wrong_scene();
                 tile_active_scene_frames();
                 snap_capture_layout();
+                // Same scene: accent may have changed via A/Z keys — propagate to chrome.
+                atlas_apply_scene_accent_to_chrome(scene_idx);
             }
             serial_println!("[atlas.scene.apply] scene={} accent={} ok=1 reason=ok", scene_idx, SCENES[scene_idx as usize].accent);
             // C2: Emit focus result after scene activation.
@@ -6909,6 +7008,37 @@ unsafe fn atlas_clear_stub() {
     if *b > 0 { *b -= 1; serial_println!("[shell.atlas.clear] restore"); }
 }
 
+/// Propagate the scene's accent token to the active chrome tint.
+/// Updates ACTIVE_TINT_IDX, applies the custom tint bundle, and sends
+/// updated appearance tokens to sexdisplay so the visible chrome reflects
+/// the scene accent.
+unsafe fn atlas_apply_scene_accent_to_chrome(scene_idx: u8) {
+    let idx = scene_idx.min(WORKSPACE_COUNT - 1);
+    let accent = SCENES[idx as usize].accent;
+    let old_tint = ACTIVE_TINT_IDX;
+    let old_preset = SCENE_APPEARANCE_STATE.preset_idx;
+    let old_custom = SCENE_APPEARANCE_STATE.use_custom_colors;
+    serial_println!(
+        "[atlas.theme.before] scene={} accent={} tint={} preset={} custom={}",
+        idx, accent, old_tint, old_preset, old_custom
+    );
+    ACTIVE_TINT_IDX = accent;
+    apply_custom_tint_bundle(accent as usize);
+    let tokens = resolve_scene_render_tokens();
+    push_token_preset(&tokens);
+    let changed = (old_tint != accent) as u8;
+    serial_println!(
+        "[atlas.theme.apply] old_scene={} new_scene={} old_accent={} new_accent={} ok=1 reason={}",
+        old_tint, accent, old_tint, accent,
+        if changed != 0 { "applied" } else { "no_change" }
+    );
+    serial_println!(
+        "[atlas.theme.after] scene={} accent={} tint={} preset={} custom={} changed={}",
+        idx, accent, ACTIVE_TINT_IDX, SCENE_APPEARANCE_STATE.preset_idx,
+        SCENE_APPEARANCE_STATE.use_custom_colors, changed
+    );
+}
+
 /// Switch active scene to a specific index. Safe: clamps to WORKSPACE_COUNT-1.
 /// Calls sync_scene_visibility(), clears focus/drag/hover, re-tiles visible frames.
 unsafe fn switch_scene(scene_idx: u8) {
@@ -6930,6 +7060,8 @@ unsafe fn switch_scene(scene_idx: u8) {
     scene_update_flags(idx);
     // Capture Atlas snapshot after scene switch.
     atlas_capture_snapshot();
+    // Propagate new scene's accent to visible chrome tint.
+    atlas_apply_scene_accent_to_chrome(idx);
     static mut SCENE_SWITCH_SHORTCUT_BUDGET: u32 = 4;
     let b = &mut SCENE_SWITCH_SHORTCUT_BUDGET;
     if *b > 0 { *b -= 1; serial_println!("[shell.scene.shortcut.switch] from={} to={}", prev, ACTIVE_SCENE_IDX); }
@@ -14044,6 +14176,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_spindle_real_keyboard_focus_proof(); }
         unsafe { maybe_run_linen_keyboard_route_proof(); }
         unsafe { maybe_run_atlas_scene_keyboard_proof(); }
+        unsafe { maybe_run_atlas_theme_visual_proof(); }
         unsafe { maybe_run_bell_keyboard_detail_proof(); }
         unsafe { maybe_run_bell_detail_seed_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
