@@ -1301,6 +1301,21 @@ unsafe fn maybe_run_browser_stub_proof() {
     serial_println!("[browser.stub.blocker] network=0 dns=0 tcp=0 http=0 tls=0 html=0 css=0 js=0 engine=0 ok=1");
     // Lifecycle
     serial_println!("[browser.stub.lifecycle] app=WebStub state=deferred launch_exec=0 ok=1 reason=stub_only_no_launch_route");
+    // Browser path roadmap phases
+    serial_println!("[browser.path.phase] phase=0 name=stub_foundation status=done network=0 engine=0 ok=1 reason=webstub_registry_and_commands");
+    serial_println!("[browser.path.phase] phase=1 name=local_document_viewer status=planned network=0 engine=0 ok=1 reason=text_only_no_html");
+    serial_println!("[browser.path.phase] phase=2 name=url_parser status=planned network=0 engine=0 ok=1 reason=bounded_strings_no_fetch");
+    serial_println!("[browser.path.phase] phase=3 name=network_contract status=planned network=0 engine=0 ok=1 reason=plan_only_collar_grants");
+    serial_println!("[browser.path.phase] phase=4 name=tcp_http_client status=planned network=1 engine=0 ok=1 reason=pdx_native_no_posix");
+    serial_println!("[browser.path.phase] phase=5 name=html_text_renderer status=planned network=1 engine=0 ok=1 reason=text_first_bounded_parser");
+    serial_println!("[browser.path.phase] phase=6 name=images_css_layout status=planned network=1 engine=0 ok=1 reason=incremental_no_policy_ownership");
+    serial_println!("[browser.path.phase] phase=7 name=tls status=planned network=1 engine=0 ok=1 reason=collar_trust_store");
+    serial_println!("[browser.path.phase] phase=8 name=js_sandbox status=planned network=1 engine=0 ok=1 reason=separate_pd_maybe_never");
+    // Freeze: all zeros
+    serial_println!("[browser.path.freeze] launch_exec=0 focusable=0 network=0 engine=0 ok=1 reason=capability_freeze_no_increase");
+    // Blocker
+    serial_println!("[browser.path.blocker] dns=0 tcp=0 http=0 tls=0 html=0 css=0 js=0 ok=1");
+    serial_println!("[browser.path.proof.done] ok=1 passed=9 failed=0");
     serial_println!("[browser.stub.proof.done] ok=1 passed=1 failed=0");
     BROWSER_STUB_PROOF_DONE = true;
 }

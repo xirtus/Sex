@@ -1478,6 +1478,22 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  network=0: cannot resolve or connect.");
             true
         }
+        b"browser-roadmap" => {
+            sb.push(b"Browser Path Roadmap (8 phases):");
+            sb.push(b"  Phase 0: WebStub launch/status -- DONE");
+            sb.push(b"  Phase 1: local text/document viewer");
+            sb.push(b"  Phase 2: URL parser / object model");
+            sb.push(b"  Phase 3: network capability contract (plan)");
+            sb.push(b"  Phase 4: DNS + TCP + HTTP client");
+            sb.push(b"  Phase 5: HTML text renderer");
+            sb.push(b"  Phase 6: images/CSS/layout");
+            sb.push(b"  Phase 7: TLS");
+            sb.push(b"  Phase 8: JS sandbox (maybe never)");
+            sb.push(b"Freeze: launch_exec=0 focusable=0 network=0 engine=0.");
+            sb.push(b"See docs/handoff/BROWSER_PATH_STUBS_PACK_V1.md");
+            serial_println!("[browser.path.command] name=browser-roadmap ok=1 reason=phase_ladder");
+            true
+        }
         b"url-status" => {
             sb.push(b"URL intent status:");
             sb.push(b"  stored:   local bounded buffer (32 bytes max)");

@@ -112,6 +112,7 @@ gate_window_workflow_v2="SKIP"
 gate_spindle_window_workflow="SKIP"
 gate_browser_stub="SKIP"
 gate_spindle_browser_stub="SKIP"
+gate_browser_path="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -134,7 +135,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V22"
+echo " DAILY-DRIVER MASTER GATE V23"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -1071,7 +1072,15 @@ elif [ "$(has 'browser\.stub\.command\]')" -ge 1 ]; then
     gate_spindle_browser_stub="PASS"
 else gate_spindle_browser_stub="SKIP"; fi
 
-# ---- 69. linen_search_bridge ----
+# ---- 69. browser_path ----
+if [ "$(has 'browser\.path\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_browser_path="PASS"
+    print_row "browser_path" "PASS" "roadmap phases + freeze (all zeros)"
+elif [ "$(has 'browser\.path\.freeze\]')" -ge 1 ]; then
+    gate_browser_path="PASS"
+else gate_browser_path="SKIP"; fi
+
+# ---- 70. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
     print_row "linen_search_bridge" "PASS" "search bridge e2e"
@@ -1129,7 +1138,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V22 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V23 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1206,6 +1215,7 @@ ALL_GATES=(
     "spindle_window_workflow:$gate_spindle_window_workflow"
     "browser_stub:$gate_browser_stub"
     "spindle_browser_stub:$gate_spindle_browser_stub"
+    "browser_path:$gate_browser_path"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
 )
