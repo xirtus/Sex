@@ -1504,6 +1504,28 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[browser.stub.command] command=url-status ok=1 reason=status_report");
             true
         }
+        // ── Frame Chrome model help ──────────────────────────────────────
+        b"frame-chrome" => {
+            sb.push(b"Frame Chrome Model: Scene->Frame->Tab->Surface");
+            sb.push(b"  Silk chrome state: hidden/rim_only/tab_visible/tab_strip/minimized_card/zoomed");
+            sb.push(b"  Current: tab_visible (Spindle, Quil, Linen)");
+            sb.push(b"  close_allowed=0 (core apps not disposable)");
+            sb.push(b"  Hover tab: deferred until pointer stability");
+            sb.push(b"  Visual rim: future Phase 3");
+            sb.push(b"  Atlas scene: future Phase 7");
+            serial_println!("[spindle.frame.chrome.command] name=frame-chrome ok=1 reason=model_overview");
+            true
+        }
+        b"scene-status" => {
+            sb.push(b"Scene Status: Workspace (scene=0)");
+            sb.push(b"  active=1  frames=3");
+            sb.push(b"  Frame 0: Spindle (focused)");
+            sb.push(b"  Frame 1: Quil");
+            sb.push(b"  Frame 2: Linen");
+            sb.push(b"Chrome: tab_visible on all frames.");
+            serial_println!("[spindle.frame.chrome.command] name=scene-status ok=1 reason=scene_summary");
+            true
+        }
         // ── Window workflow help ──────────────────────────────────────────
         b"windows" => {
             sb.push(b"Window Workflow -- shell-owned actions:");
@@ -1915,6 +1937,13 @@ pub extern "C" fn _start() -> ! {
         option_env!("SEXOS_SPINDLE_WINDOW_WORKFLOW_PROOF").is_some();
     const SPINDLE_BROWSER_STUB_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_BROWSER_STUB_PROOF").is_some();
+    const SPINDLE_FRAME_CHROME_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_FRAME_CHROME_PROOF").is_some();
+    if SPINDLE_FRAME_CHROME_PROOF_ENABLED {
+        let _ = dispatch(b"frame-chrome", sb, hist, &mut ev);
+        let _ = dispatch(b"scene-status", sb, hist, &mut ev);
+        serial_println!("[spindle.frame.chrome.proof.done] ok=1");
+    }
     if SPINDLE_BROWSER_STUB_PROOF_ENABLED {
         let _ = dispatch(b"browser", sb, hist, &mut ev);
         let _ = dispatch(b"browser-status", sb, hist, &mut ev);

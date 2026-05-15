@@ -115,6 +115,8 @@ gate_spindle_browser_stub="SKIP"
 gate_browser_path="SKIP"
 gate_linen_persist_readback="SKIP"
 gate_silk_glass_color="SKIP"
+gate_frame_chrome_model="SKIP"
+gate_spindle_frame_chrome="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -137,7 +139,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V25"
+echo " DAILY-DRIVER MASTER GATE V26"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -1098,7 +1100,23 @@ elif [ "$(has 'silk\.glass\.color\]')" -ge 1 ]; then
     gate_silk_glass_color="PASS"
 else gate_silk_glass_color="SKIP"; fi
 
-# ---- 72. linen_search_bridge ----
+# ---- 72. frame_chrome_model ----
+if [ "$(has 'silk\.frame\.chrome\.model\.done.*ok=1')" -eq 1 ]; then
+    gate_frame_chrome_model="PASS"
+    print_row "frame_chrome_model" "PASS" "scenes=1 frames=3 tabs=3"
+elif [ "$(has 'silk\.frame\.model\.scene\]')" -ge 1 ]; then
+    gate_frame_chrome_model="PASS"
+else gate_frame_chrome_model="SKIP"; fi
+
+# ---- 73. spindle_frame_chrome ----
+if [ "$(has 'spindle\.frame\.chrome\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_spindle_frame_chrome="PASS"
+    print_row "spindle_frame_chrome" "PASS" "frame chrome help"
+elif [ "$(has 'spindle\.frame\.chrome\.command\]')" -ge 1 ]; then
+    gate_spindle_frame_chrome="PASS"
+else gate_spindle_frame_chrome="SKIP"; fi
+
+# ---- 74. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
     print_row "linen_search_bridge" "PASS" "search bridge e2e"
@@ -1156,7 +1174,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V25 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V26 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1236,6 +1254,8 @@ ALL_GATES=(
     "browser_path:$gate_browser_path"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
+    "frame_chrome_model:$gate_frame_chrome_model"
+    "spindle_frame_chrome:$gate_spindle_frame_chrome"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
 )

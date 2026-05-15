@@ -213,8 +213,12 @@ export SEXOS_SPINDLE_BROWSER_STUB_PROOF=1
 # ── Linen persist readback model proof ──
 export SEXOS_LINEN_PERSIST_READBACK_PROOF=1
 
+# ── Frame Chrome model proof ──
+export SEXOS_FRAME_CHROME_MODEL_PROOF=1
+export SEXOS_SPINDLE_FRAME_CHROME_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V25"
+echo " DAILY-DRIVER PROOF PROFILE V26"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

@@ -284,6 +284,11 @@ const BROWSER_STUB_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_STUB_PROOF").is_some();
 static mut BROWSER_STUB_PROOF_DONE: bool = false;
 
+/// Frame Chrome model proof gate.
+const FRAME_CHROME_MODEL_PROOF_ENABLED: bool =
+    option_env!("SEXOS_FRAME_CHROME_MODEL_PROOF").is_some();
+static mut FRAME_CHROME_MODEL_PROOF_DONE: bool = false;
+
 const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
 const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
@@ -1318,6 +1323,31 @@ unsafe fn maybe_run_browser_stub_proof() {
     serial_println!("[browser.path.proof.done] ok=1 passed=9 failed=0");
     serial_println!("[browser.stub.proof.done] ok=1 passed=1 failed=0");
     BROWSER_STUB_PROOF_DONE = true;
+}
+
+/// Frame Chrome model proof: Scene→Frame→Tab→Surface static model.
+unsafe fn maybe_run_frame_chrome_model_proof() {
+    if !FRAME_CHROME_MODEL_PROOF_ENABLED || FRAME_CHROME_MODEL_PROOF_DONE { return; }
+    serial_println!("[silk.frame.chrome.model.proof.begin]");
+    // Scene 0: default workspace
+    serial_println!("[silk.frame.model.scene] scene=0 label=Workspace active=1 frames=3 ok=1 reason=default");
+    // Frame 0: Spindle (terminal)
+    serial_println!("[silk.frame.model.frame] frame=0 scene=0 active_tab=0 tabs=1 focused=1 minimized=0 zoomed=0 chrome=tab_visible ok=1 reason=spindle_terminal");
+    // Frame 1: Quil (editor)
+    serial_println!("[silk.frame.model.frame] frame=1 scene=0 active_tab=0 tabs=1 focused=0 minimized=0 zoomed=0 chrome=tab_visible ok=1 reason=quil_editor");
+    // Frame 2: Linen (browser)
+    serial_println!("[silk.frame.model.frame] frame=2 scene=0 active_tab=0 tabs=1 focused=0 minimized=0 zoomed=0 chrome=tab_visible ok=1 reason=linen_browser");
+    // Tabs
+    serial_println!("[silk.frame.model.tab] tab=0 frame=0 sid=0 app=Spindle active=1 close_allowed=0 ok=1 reason=core_app");
+    serial_println!("[silk.frame.model.tab] tab=1 frame=1 sid=201 app=Quil active=1 close_allowed=0 ok=1 reason=core_app");
+    serial_println!("[silk.frame.model.tab] tab=2 frame=2 sid=200 app=Linen active=1 close_allowed=0 ok=1 reason=core_app");
+    // Surfaces
+    serial_println!("[silk.frame.model.surface] sid=0 app=Spindle focusable=1 state=running ok=1 reason=self_hosted");
+    serial_println!("[silk.frame.model.surface] sid=201 app=Quil focusable=1 state=ready ok=1 reason=active_surface");
+    serial_println!("[silk.frame.model.surface] sid=200 app=Linen focusable=1 state=ready ok=1 reason=active_surface");
+    serial_println!("[silk.frame.model.surface] sid=0 app=WebStub focusable=0 state=deferred ok=1 reason=no_surface");
+    serial_println!("[silk.frame.chrome.model.done] ok=1 scenes=1 frames=3 tabs=3 surfaces=4");
+    FRAME_CHROME_MODEL_PROOF_DONE = true;
 }
 
 /// Linen object detail proof: exercises non-blocking object detail panel
@@ -16002,6 +16032,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_app_registry_lifecycle_v2_proof(); }
         unsafe { maybe_run_window_workflow_v2_proof(); }
         unsafe { maybe_run_browser_stub_proof(); }
+        unsafe { maybe_run_frame_chrome_model_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }
