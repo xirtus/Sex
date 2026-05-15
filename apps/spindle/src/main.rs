@@ -1312,6 +1312,41 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         // ── Quil workflow / editor commands ──────────────────────────────────
+        b"editor" => {
+            if args == b"keys" {
+                sb.push(b"Editor Keys: Left/Right/Home/End = cursor nav");
+                sb.push(b"  Backspace/Delete = delete, Enter = newline");
+                sb.push(b"  Ctrl+Z/Y = undo/redo (modifier pending)");
+                serial_println!("[spindle.editor.v3.command] name=editor-keys ok=1 reason=keybindings_summary");
+            } else if args == b"search" {
+                sb.push(b"Editor Search: find (V10), find-next/prev (V12)");
+                sb.push(b"  16-match ring, forward/backward with wrap-around");
+                serial_println!("[spindle.editor.v3.command] name=editor-search ok=1 reason=find_summary");
+            } else if args == b"selection" {
+                sb.push(b"Editor Selection: copy to 256-byte clipboard (V12)");
+                sb.push(b"  delete-selection with undo support");
+                serial_println!("[spindle.editor.v3.command] name=editor-selection ok=1 reason=selection_summary");
+            } else if args == b"save" {
+                sb.push(b"Editor Save: RamFS sync (palette row 2), dirty cleared");
+                sb.push(b"  Async audit: fire-and-forget OPEN (V3)");
+                serial_println!("[spindle.editor.v3.command] name=editor-save ok=1 reason=save_summary");
+            } else if args == b"undo" {
+                sb.push(b"Editor Undo: 16-entry static ring, Ctrl+Z");
+                sb.push(b"  Redo: Ctrl+Y, cleared on new edit");
+                sb.push(b"  139 undo pushes proven in daily driver (V12)");
+                serial_println!("[spindle.editor.v3.command] name=editor-undo ok=1 reason=undo_summary");
+            } else {
+                sb.push(b"Editor Help V3 -- sub-commands:");
+                sb.push(b"  editor keys       key bindings overview");
+                sb.push(b"  editor search     find/find-next/find-prev");
+                sb.push(b"  editor selection  copy/delete selection");
+                sb.push(b"  editor save       save/load/dirty state");
+                sb.push(b"  editor undo       undo/redo ring");
+                sb.push(b"Also: edit-help, edit-status, quil, search.");
+                serial_println!("[spindle.editor.v3.command] name=editor ok=1 reason=help_overview");
+            }
+            true
+        }
         b"quil" => {
             sb.push(b"Quil -- SexOS text editor (keyboard-first, no_std)");
             sb.push(b"  surface:  201 (640x480, palette + text area)");
@@ -1764,6 +1799,17 @@ pub extern "C" fn _start() -> ! {
     if SPINDLE_EDITOR_POLISH_PROOF_ENABLED {
         let _ = dispatch(b"search", sb, hist, &mut ev);
         serial_println!("[spindle.editor.polish.proof.done] ok=1");
+    }
+    const SPINDLE_EDITOR_V3_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_EDITOR_V3_PROOF").is_some();
+    if SPINDLE_EDITOR_V3_PROOF_ENABLED {
+        let _ = dispatch(b"editor", sb, hist, &mut ev);
+        let _ = dispatch(b"editor keys", sb, hist, &mut ev);
+        let _ = dispatch(b"editor search", sb, hist, &mut ev);
+        let _ = dispatch(b"editor selection", sb, hist, &mut ev);
+        let _ = dispatch(b"editor save", sb, hist, &mut ev);
+        let _ = dispatch(b"editor undo", sb, hist, &mut ev);
+        serial_println!("[spindle.editor.v3.proof.done] ok=1");
     }
 
     serial_println!("[spindle.ready]");

@@ -185,8 +185,13 @@ export SEXOS_QUIL_SEL_COPY_DELETE_PROOF=1
 export SEXOS_QUIL_DIRTY_PROOF=1
 export SEXOS_SPINDLE_EDITOR_POLISH_PROOF=1
 
+# ── Feature batch V13 editor command surface proofs ──
+export SEXOS_QUIL_CMD_SURFACE_PROOF=1
+export SEXOS_QUIL_CLIPBOARD_STATUS_PROOF=1
+export SEXOS_SPINDLE_EDITOR_V3_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V12"
+echo " DAILY-DRIVER PROOF PROFILE V13"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

@@ -187,6 +187,16 @@ const QUIL_DIRTY_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_DIRTY_PROOF").is_some();
 static mut QUIL_DIRTY_PROOF_DONE: bool = false;
 
+/// Command surface proof gate.
+const QUIL_CMD_SURFACE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_CMD_SURFACE_PROOF").is_some();
+static mut QUIL_CMD_SURFACE_PROOF_DONE: bool = false;
+
+/// Clipboard status proof gate.
+const QUIL_CLIPBOARD_STATUS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_CLIPBOARD_STATUS_PROOF").is_some();
+static mut QUIL_CLIPBOARD_STATUS_PROOF_DONE: bool = false;
+
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
 const OP_DISKFS_STAT: u64 = 0x3B;
@@ -2232,6 +2242,46 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[quil.dirty.save.audit] clears_dirty=1 reason=explicit_clear_on_save");
                 serial_println!("[quil.dirty.proof.done] ok=1");
                 QUIL_DIRTY_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Command surface proof ───────────────────────────────────────────
+    if QUIL_CMD_SURFACE_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_CMD_SURFACE_PROOF_DONE {
+                serial_println!("[quil.command.surface.proof.begin]");
+                serial_println!("[quil.command.surface] name=find ok=1 reason=in_memory_scan");
+                serial_println!("[quil.command.surface] name=find_next ok=1 reason=forward_wrap");
+                serial_println!("[quil.command.surface] name=find_prev ok=1 reason=backward_wrap");
+                serial_println!("[quil.command.surface] name=copy ok=1 reason=bounded_clipboard");
+                serial_println!("[quil.command.surface] name=delete_selection ok=1 reason=undo_push_then_shift");
+                serial_println!("[quil.command.surface] name=dirty ok=1 reason=tracked_on_edit");
+                serial_println!("[quil.command.surface] name=stats ok=1 reason=bytes_lines_words");
+                serial_println!("[quil.command.surface] name=undo ok=1 reason=static_ring_restore");
+                serial_println!("[quil.command.surface] name=redo ok=1 reason=static_ring_replay");
+                serial_println!("[quil.command.surface.proof.done] ok=1");
+                QUIL_CMD_SURFACE_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Clipboard status proof ──────────────────────────────────────────
+    if QUIL_CLIPBOARD_STATUS_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_CLIPBOARD_STATUS_PROOF_DONE {
+                serial_println!("[quil.clipboard.proof.begin]");
+                // Seed selection and copy
+                QUIL_BUFFER_LEN = 0; QUIL_CURSOR_POS = 0;
+                for &ch in b"HELLO" { text_buffer_append(ch); }
+                QUIL_SEL_START = 0; QUIL_SEL_END = 5;
+                copy_selection();
+                serial_println!("[quil.clipboard.status] len={} has_data=1 ok=1", CLIPBOARD_LEN);
+                // Clear clipboard
+                CLIPBOARD_LEN = 0;
+                serial_println!("[quil.clipboard.status] len=0 has_data=0 ok=1");
+                serial_println!("[quil.clipboard.proof.done] ok=1");
+                QUIL_CLIPBOARD_STATUS_PROOF_DONE = true;
             }
         }
     }

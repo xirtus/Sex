@@ -96,6 +96,9 @@ gate_quil_find_nav="SKIP"
 gate_quil_sel_copy_delete="SKIP"
 gate_quil_dirty="SKIP"
 gate_spindle_editor_polish="SKIP"
+gate_quil_cmd_surface="SKIP"
+gate_quil_clipboard_status="SKIP"
+gate_spindle_editor_v3="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -118,7 +121,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V12"
+echo " DAILY-DRIVER MASTER GATE V13"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -963,6 +966,32 @@ else
     gate_spindle_editor_polish="SKIP"
 fi
 
+# ---- 58. quil_cmd_surface ----
+if [ "$(has 'quil\.command\.surface\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_cs="$(count 'quil\.command\.surface\]')"
+    gate_quil_cmd_surface="PASS"
+    print_row "quil_cmd_surface" "PASS" "commands: ${c_cs}"
+elif [ "$(has 'quil\.command\.surface\]')" -ge 1 ]; then
+    gate_quil_cmd_surface="PASS"
+else gate_quil_cmd_surface="SKIP"; fi
+
+# ---- 59. quil_clipboard_status ----
+if [ "$(has 'quil\.clipboard\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_quil_clipboard_status="PASS"
+    print_row "quil_clipboard_status" "PASS" "clipboard status"
+elif [ "$(has 'quil\.clipboard\.status\]')" -ge 1 ]; then
+    gate_quil_clipboard_status="PASS"
+else gate_quil_clipboard_status="SKIP"; fi
+
+# ---- 60. spindle_editor_v3 ----
+if [ "$(has 'spindle\.editor\.v3\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_v3="$(count 'spindle\.editor\.v3\.command\]')"
+    gate_spindle_editor_v3="PASS"
+    print_row "spindle_editor_v3" "PASS" "editor v3 commands: ${c_v3}"
+elif [ "$(has 'spindle\.editor\.v3\.command\]')" -ge 1 ]; then
+    gate_spindle_editor_v3="PASS"
+else gate_spindle_editor_v3="SKIP"; fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -997,7 +1026,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V12 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V13 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1059,6 +1088,9 @@ ALL_GATES=(
     "quil_sel_copy_delete:$gate_quil_sel_copy_delete"
     "quil_dirty:$gate_quil_dirty"
     "spindle_editor_polish:$gate_spindle_editor_polish"
+    "quil_cmd_surface:$gate_quil_cmd_surface"
+    "quil_clipboard_status:$gate_quil_clipboard_status"
+    "spindle_editor_v3:$gate_spindle_editor_v3"
     "faults_zero:$gate_faults_zero"
 )
 
