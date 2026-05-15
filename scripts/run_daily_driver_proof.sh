@@ -226,7 +226,7 @@ export SEXOS_FRAME_LIGHTS_STUB_PROOF=1
 export SEXOS_SPINDLE_FRAME_LIGHTS_PROOF=1
 
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V29"
+echo " DAILY-DRIVER PROOF PROFILE V31"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

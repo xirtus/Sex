@@ -850,6 +850,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 b"atlas" => Some((4, "palette_owned")),
                 b"collar" => Some((5, "palette_owned")),
                 b"mesh" => Some((6, "palette_owned")),
+                b"browser" | b"webstub" => Some((7, "shell_placeholder")),
                 _ => None,
             };
             if let Some((app_id, _launch_method)) = known {
@@ -1843,6 +1844,7 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"app-info spindle", sb, hist, &mut ev);
         let _ = dispatch(b"launch quil", sb, hist, &mut ev);
         let _ = dispatch(b"launch linen", sb, hist, &mut ev);
+        let _ = dispatch(b"launch browser", sb, hist, &mut ev);
         serial_println!("[spindle.app.proof.done] ok=1");
     }
     const SPINDLE_LAUNCH_EXEC_PROOF_ENABLED: bool =

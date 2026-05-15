@@ -123,6 +123,7 @@ gate_frame_rim_visual="SKIP"
 gate_frame_lights_stub="SKIP"
 gate_spindle_frame_lights="SKIP"
 gate_crosspd_launch="SKIP"
+gate_browser_placeholder="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -145,7 +146,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V30"
+echo " DAILY-DRIVER MASTER GATE V31"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -1169,7 +1170,18 @@ elif [ "$(has 'spindle\.launch\.request.*status=0')" -eq 1 ]; then
     gate_crosspd_launch="PASS"
 else gate_crosspd_launch="SKIP"; fi
 
-# ---- 80. linen_search_bridge ----
+# ---- 80. browser_placeholder ----
+if [ "$(has 'browser\.placeholder\.truth.*network=0.*engine=0')" -eq 1 ]; then
+    gate_browser_placeholder="PASS"
+    print_row "browser_placeholder" "PASS" "placeholder (no surface, network=0)"
+elif [ "$(has 'spindle\.launch\.request.*browser.*status=0')" -eq 1 ]; then
+    gate_browser_placeholder="PASS"
+    print_row "browser_placeholder" "PASS" "launch request sent"
+elif [ "$(has 'browser\.placeholder\.open\]')" -ge 1 ]; then
+    gate_browser_placeholder="PASS"
+else gate_browser_placeholder="SKIP"; fi
+
+# ---- 81. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
     print_row "linen_search_bridge" "PASS" "search bridge e2e"
@@ -1227,7 +1239,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V30 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V31 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1315,6 +1327,7 @@ ALL_GATES=(
     "frame_lights_stub:$gate_frame_lights_stub"
     "spindle_frame_lights:$gate_spindle_frame_lights"
     "crosspd_launch:$gate_crosspd_launch"
+    "browser_placeholder:$gate_browser_placeholder"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
 )

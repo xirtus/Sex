@@ -8807,6 +8807,11 @@ unsafe fn open_app_in_active_scene_by_sid(sid: u64) {
     match sid {
         200 => { open_linen_in_active_scene(); }
         201 => { open_quil_in_active_scene();   }
+        202 => {
+            // WebStub placeholder — no surface exists yet
+            serial_println!("[browser.placeholder.open] app=WebStub sid=202 network=0 engine=0 fetched=0 parsed=0 ok=0 reason=no_surface_placeholder_only");
+            serial_println!("[browser.placeholder.truth] focusable=0 launch_exec=1 lifecycle=placeholder_requested network=0 engine=0 ok=1 reason=honest_no_surface");
+        }
         _ => {}
     }
 }
@@ -16709,6 +16714,7 @@ pub extern "C" fn _start() -> ! {
                     let app_name = match app_id {
                         0 => "Spindle", 1 => "Quil", 2 => "Linen",
                         3 => "Bell", 4 => "Atlas", 5 => "Collar", 6 => "Mesh",
+                        7 => "WebStub",
                         _ => "Unknown",
                     };
                     serial_println!("[shell.launch.request.recv] app={} ok=1 reason=received_via_slot_shell", app_name);
@@ -16716,6 +16722,7 @@ pub extern "C" fn _start() -> ! {
                     let sid: u64 = match app_id {
                         1 => 201, // Quil
                         2 => 200, // Linen
+                        7 => 202, // WebStub placeholder
                         _ => 0,
                     };
                     let executed = sid != 0;
