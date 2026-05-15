@@ -252,6 +252,8 @@ const APP_REGISTRY_READONLY_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_REGISTRY_READONLY_PROOF").is_some();
 const APP_REGISTRY_FILTER_SORT_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_REGISTRY_FILTER_SORT_PROOF").is_some();
+const APP_REGISTRY_LAUNCH_INTENT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_APP_REGISTRY_LAUNCH_INTENT_PROOF").is_some();
 static mut COMMAND_PALETTE_STATUS_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE: bool = false;
 static mut QUIL_STATUS_UNBLOCK_PROOF_DONE: bool = false;
@@ -267,6 +269,7 @@ static mut BELL_FILTER_PROOF_DONE: bool = false;
 static mut ATLAS_PREVIEW_PROOF_DONE: bool = false;
 static mut APP_REGISTRY_READONLY_PROOF_DONE: bool = false;
 static mut APP_REGISTRY_FILTER_SORT_PROOF_DONE: bool = false;
+static mut APP_REGISTRY_LAUNCH_INTENT_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_ACTIVE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_STAGE: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_DONE: bool = false;
@@ -11741,6 +11744,50 @@ unsafe fn maybe_run_app_registry_filter_sort_proof() {
     APP_REGISTRY_FILTER_SORT_PROOF_DONE = true;
 }
 
+unsafe fn maybe_run_app_registry_launch_intent_proof() {
+    if !APP_REGISTRY_LAUNCH_INTENT_PROOF_ENABLED || APP_REGISTRY_LAUNCH_INTENT_PROOF_DONE {
+        return;
+    }
+    let mut rows: u8 = 0;
+    let mut runnable: u8 = 0;
+    for slot in LINEN_OBJECTS.iter() {
+        if let Some(obj) = slot {
+            let can_launch = matches!(
+                obj.kind,
+                LinenObjectKind::Project
+                    | LinenObjectKind::Document
+                    | LinenObjectKind::CodeFile
+                    | LinenObjectKind::MediaAsset
+                    | LinenObjectKind::BuildArtifact
+                    | LinenObjectKind::Folder
+            );
+            serial_println!(
+                "[app.registry.intent] app_id={} kind={} status={} ok={}",
+                obj.object_id,
+                linen_object_kind_name(obj.kind),
+                if can_launch { "runnable" } else { "blocked" },
+                can_launch as u8
+            );
+            if can_launch {
+                runnable = runnable.saturating_add(1);
+            } else {
+                serial_println!(
+                    "[app.registry.intent.reject] app_id={} reason=unsupported_kind ok=1",
+                    obj.object_id
+                );
+            }
+            rows = rows.saturating_add(1);
+        }
+    }
+    serial_println!(
+        "[app.registry.intent.done] rows={} runnable={} ok={}",
+        rows,
+        runnable,
+        (rows > 0) as u8
+    );
+    APP_REGISTRY_LAUNCH_INTENT_PROOF_DONE = true;
+}
+
 /// App launcher multi-exec proof: executes and focuses all 7 keyboard-ready
 /// app launcher rows (Spindle, Quil, Linen, Atlas, Bell, Collar, Mesh).
 ///
@@ -15605,6 +15652,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_preview_proof(); }
         unsafe { maybe_run_app_registry_readonly_proof(); }
         unsafe { maybe_run_app_registry_filter_sort_proof(); }
+        unsafe { maybe_run_app_registry_launch_intent_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
