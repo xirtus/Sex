@@ -1403,15 +1403,17 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         // ── Search help ────────────────────────────────────────────────────
         b"search" => {
-            sb.push(b"Search/Find Help V2:");
-            sb.push(b"  Quil find:   local buffer scan, 32-byte query (V10)");
-            sb.push(b"  Quil stats:  bytes/lines/words/cursor counts (V11)");
-            sb.push(b"  Quil word:   word-left/word-right navigation (V11)");
-            sb.push(b"  Quil mod:    shift tracking, lowercase support (V11)");
-            sb.push(b"  Linen search: ABI-blocked (OP_LINEN_SEARCH_OBJECTS=0x47)");
-            sb.push(b"  Files:       ls filename prefix filter (client-side)");
+            sb.push(b"Search/Find Help V3:");
+            sb.push(b"  Quil find:     buffer scan, 32-byte query (V10)");
+            sb.push(b"  Quil find-nav: next/prev over last query (V12)");
+            sb.push(b"  Quil select:   copy to clipboard, delete selection (V12)");
+            sb.push(b"  Quil dirty:    dirty flag, cleared on save (V12)");
+            sb.push(b"  Quil stats:    bytes/lines/words/cursor (V11)");
+            sb.push(b"  Quil word:     word-left/right nav (V11)");
+            sb.push(b"  Quil mod:      shift tracking, lowercase (V11)");
+            sb.push(b"  Linen search:  ABI-blocked (OP_LINEN_SEARCH_OBJECTS=0x47)");
             sb.push(b"See: object-search, linen-search, edit-help, edit-status.");
-            serial_println!("[spindle.editor.quality.help] ok=1 commands=6");
+            serial_println!("[spindle.editor.polish.help] ok=1 commands=8");
             true
         }
         // ── Linen search from Spindle audit ──────────────────────────────────
@@ -1756,6 +1758,12 @@ pub extern "C" fn _start() -> ! {
     if SPINDLE_EDITOR_QUALITY_PROOF_ENABLED {
         let _ = dispatch(b"search", sb, hist, &mut ev);
         serial_println!("[spindle.editor.quality.proof.done] ok=1");
+    }
+    const SPINDLE_EDITOR_POLISH_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_EDITOR_POLISH_PROOF").is_some();
+    if SPINDLE_EDITOR_POLISH_PROOF_ENABLED {
+        let _ = dispatch(b"search", sb, hist, &mut ev);
+        serial_println!("[spindle.editor.polish.proof.done] ok=1");
     }
 
     serial_println!("[spindle.ready]");

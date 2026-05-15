@@ -179,8 +179,14 @@ export SEXOS_QUIL_WORD_NAV_PROOF=1
 export SEXOS_QUIL_LINE_STATS_PROOF=1
 export SEXOS_SPINDLE_EDITOR_QUALITY_PROOF=1
 
+# ── Feature batch V12 editor polish proofs ──
+export SEXOS_QUIL_FIND_NAV_PROOF=1
+export SEXOS_QUIL_SEL_COPY_DELETE_PROOF=1
+export SEXOS_QUIL_DIRTY_PROOF=1
+export SEXOS_SPINDLE_EDITOR_POLISH_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V11"
+echo " DAILY-DRIVER PROOF PROFILE V12"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

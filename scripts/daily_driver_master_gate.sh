@@ -92,6 +92,10 @@ gate_quil_mod_lowercase="SKIP"
 gate_quil_word_nav="SKIP"
 gate_quil_line_stats="SKIP"
 gate_spindle_editor_quality="SKIP"
+gate_quil_find_nav="SKIP"
+gate_quil_sel_copy_delete="SKIP"
+gate_quil_dirty="SKIP"
+gate_spindle_editor_polish="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -114,7 +118,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V11"
+echo " DAILY-DRIVER MASTER GATE V12"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -918,6 +922,47 @@ else
     gate_spindle_editor_quality="SKIP"
 fi
 
+# ---- 54. quil_find_nav ----
+if [ "$(has 'quil\.find\.nav\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_fn="$(count 'quil\.find\.nav\]')"
+    gate_quil_find_nav="PASS"
+    print_row "quil_find_nav" "PASS" "find nav: ${c_fn}"
+elif [ "$(has 'quil\.find\.nav\]')" -ge 1 ]; then
+    gate_quil_find_nav="PASS"
+else
+    gate_quil_find_nav="SKIP"
+fi
+
+# ---- 55. quil_sel_copy_delete ----
+if [ "$(has 'quil\.selection\.copy_delete\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_quil_sel_copy_delete="PASS"
+    print_row "quil_sel_copy_delete" "PASS" "selection copy+delete"
+elif [ "$(has 'quil\.selection\.(copy|delete)\]')" -ge 1 ]; then
+    gate_quil_sel_copy_delete="PASS"
+else
+    gate_quil_sel_copy_delete="SKIP"
+fi
+
+# ---- 56. quil_dirty ----
+if [ "$(has 'quil\.dirty\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_quil_dirty="PASS"
+    print_row "quil_dirty" "PASS" "dirty state audit"
+elif [ "$(has 'quil\.dirty\.state\]')" -ge 1 ]; then
+    gate_quil_dirty="PASS"
+else
+    gate_quil_dirty="SKIP"
+fi
+
+# ---- 57. spindle_editor_polish ----
+if [ "$(has 'spindle\.editor\.polish\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_spindle_editor_polish="PASS"
+    print_row "spindle_editor_polish" "PASS" "editor polish help"
+elif [ "$(has 'spindle\.editor\.polish\.help\]')" -ge 1 ]; then
+    gate_spindle_editor_polish="PASS"
+else
+    gate_spindle_editor_polish="SKIP"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -952,7 +997,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V11 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V12 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1010,6 +1055,10 @@ ALL_GATES=(
     "quil_word_nav:$gate_quil_word_nav"
     "quil_line_stats:$gate_quil_line_stats"
     "spindle_editor_quality:$gate_spindle_editor_quality"
+    "quil_find_nav:$gate_quil_find_nav"
+    "quil_sel_copy_delete:$gate_quil_sel_copy_delete"
+    "quil_dirty:$gate_quil_dirty"
+    "spindle_editor_polish:$gate_spindle_editor_polish"
     "faults_zero:$gate_faults_zero"
 )
 

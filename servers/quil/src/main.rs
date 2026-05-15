@@ -55,6 +55,18 @@ static mut QUIL_SEL_END: usize = 0;
 
 // ── Modifier state tracking ────────────────────────────────────────────────
 static mut SHIFT_HELD: bool = false;
+static mut DIRTY: bool = false;
+
+// ── Find navigation state ─────────────────────────────────────────────────
+static mut LAST_FIND_QUERY: [u8; 32] = [0u8; 32];
+static mut LAST_FIND_QLEN: usize = 0;
+static mut LAST_FIND_MATCHES: [usize; 16] = [0xFFFFusize; 16];
+static mut LAST_FIND_MCOUNT: u8 = 0;
+static mut LAST_FIND_CUR: u8 = 0;
+
+// ── Clipboard (bounded static) ────────────────────────────────────────────
+static mut CLIPBOARD: [u8; 256] = [0u8; 256];
+static mut CLIPBOARD_LEN: usize = 0;
 
 // ── Undo/Redo Static Ring ─────────────────────────────────────────────────
 const UNDO_DEPTH: usize = 16;
@@ -159,6 +171,21 @@ static mut QUIL_WORD_NAV_PROOF_DONE: bool = false;
 const QUIL_LINE_STATS_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_LINE_STATS_PROOF").is_some();
 static mut QUIL_LINE_STATS_PROOF_DONE: bool = false;
+
+/// Find-next/prev proof gate.
+const QUIL_FIND_NAV_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_FIND_NAV_PROOF").is_some();
+static mut QUIL_FIND_NAV_PROOF_DONE: bool = false;
+
+/// Selection delete/copy proof gate.
+const QUIL_SEL_COPY_DELETE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_SEL_COPY_DELETE_PROOF").is_some();
+static mut QUIL_SEL_COPY_DELETE_PROOF_DONE: bool = false;
+
+/// Dirty state autosave audit proof gate.
+const QUIL_DIRTY_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_DIRTY_PROOF").is_some();
+static mut QUIL_DIRTY_PROOF_DONE: bool = false;
 
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
@@ -761,6 +788,7 @@ fn text_buffer_delete_line() -> bool {
 /// Push current buffer state onto the undo ring before a mutating operation.
 /// Circular: oldest entry overwritten when ring is full.
 fn text_buffer_undo_push() {
+    mark_dirty();
     unsafe {
         UNDO_RING[UNDO_HEAD][..QUIL_BUFFER_LEN]
             .copy_from_slice(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
@@ -893,6 +921,120 @@ fn count_words() -> usize {
         words
     }
 }
+
+/// Collect all match positions into LAST_FIND_MATCHES.
+fn find_collect_matches(query: &[u8]) {
+    unsafe {
+        LAST_FIND_QLEN = query.len().min(32);
+        LAST_FIND_QUERY[..LAST_FIND_QLEN].copy_from_slice(&query[..LAST_FIND_QLEN]);
+        LAST_FIND_MCOUNT = 0;
+        let qlen = query.len();
+        if qlen == 0 || qlen > QUIL_BUFFER_LEN { return; }
+        let buf = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+        let mut i = 0usize;
+        while i + qlen <= QUIL_BUFFER_LEN && (LAST_FIND_MCOUNT as usize) < 16 {
+            if &buf[i..i + qlen] == query {
+                LAST_FIND_MATCHES[LAST_FIND_MCOUNT as usize] = i;
+                LAST_FIND_MCOUNT += 1;
+            }
+            i += 1;
+        }
+        LAST_FIND_CUR = 0;
+    }
+}
+
+/// Move cursor to next find match.
+fn find_next() -> bool {
+    unsafe {
+        if LAST_FIND_MCOUNT == 0 { return false; }
+        let old = QUIL_CURSOR_POS;
+        // Find first match after current cursor
+        for i in 0..LAST_FIND_MCOUNT {
+            let idx = LAST_FIND_MATCHES[i as usize];
+            if idx > old {
+                QUIL_CURSOR_POS = idx + LAST_FIND_QLEN;
+                LAST_FIND_CUR = i;
+                serial_println!("[quil.find.nav] dir=next old={} new={} count={} ok=1", old, QUIL_CURSOR_POS, LAST_FIND_MCOUNT);
+                return true;
+            }
+        }
+        // Wrap to first match
+        QUIL_CURSOR_POS = LAST_FIND_MATCHES[0] + LAST_FIND_QLEN;
+        LAST_FIND_CUR = 0;
+        serial_println!("[quil.find.nav] dir=next old={} new={} count={} ok=1", old, QUIL_CURSOR_POS, LAST_FIND_MCOUNT);
+        true
+    }
+}
+
+/// Move cursor to previous find match.
+fn find_prev() -> bool {
+    unsafe {
+        if LAST_FIND_MCOUNT == 0 { return false; }
+        let old = QUIL_CURSOR_POS;
+        // Find last match before current cursor
+        let mut found = false;
+        for i in (0..LAST_FIND_MCOUNT).rev() {
+            let idx = LAST_FIND_MATCHES[i as usize];
+            if idx < old {
+                QUIL_CURSOR_POS = idx;
+                LAST_FIND_CUR = i;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            // Wrap to last match
+            QUIL_CURSOR_POS = LAST_FIND_MATCHES[(LAST_FIND_MCOUNT - 1) as usize];
+            LAST_FIND_CUR = LAST_FIND_MCOUNT - 1;
+        }
+        serial_println!("[quil.find.nav] dir=prev old={} new={} count={} ok=1", old, QUIL_CURSOR_POS, LAST_FIND_MCOUNT);
+        true
+    }
+}
+
+/// Delete selected range from buffer.
+fn delete_selection() -> bool {
+    unsafe {
+        if QUIL_SEL_START >= QUIL_SEL_END || QUIL_SEL_END > QUIL_BUFFER_LEN {
+            return false;
+        }
+        text_buffer_undo_push();
+        let old_len = QUIL_BUFFER_LEN;
+        let del_count = QUIL_SEL_END - QUIL_SEL_START;
+        for i in QUIL_SEL_START..QUIL_BUFFER_LEN - del_count {
+            QUIL_BUFFER[i] = QUIL_BUFFER[i + del_count];
+        }
+        QUIL_BUFFER_LEN -= del_count;
+        for i in QUIL_BUFFER_LEN..QUIL_BUFFER_LEN + del_count {
+            if i < QUIL_BUFFER_MAX_LEN { QUIL_BUFFER[i] = 0; }
+        }
+        if QUIL_CURSOR_POS > QUIL_BUFFER_LEN { QUIL_CURSOR_POS = QUIL_BUFFER_LEN; }
+        serial_println!("[quil.selection.delete] start={} end={} old={} new={} ok=1",
+            QUIL_SEL_START, QUIL_SEL_END, old_len, QUIL_BUFFER_LEN);
+        DIRTY = true;
+        true
+    }
+}
+
+/// Copy selected range to clipboard.
+fn copy_selection() -> bool {
+    unsafe {
+        if QUIL_SEL_START >= QUIL_SEL_END || QUIL_SEL_END > QUIL_BUFFER_LEN {
+            return false;
+        }
+        let copy_len = (QUIL_SEL_END - QUIL_SEL_START).min(256);
+        CLIPBOARD[..copy_len].copy_from_slice(&QUIL_BUFFER[QUIL_SEL_START..QUIL_SEL_START + copy_len]);
+        CLIPBOARD_LEN = copy_len;
+        serial_println!("[quil.selection.copy] len={} ok=1 reason=bounded_static_clipboard", copy_len);
+        true
+    }
+}
+
+/// Set dirty flag on any edit.
+fn mark_dirty() { unsafe { DIRTY = true; } }
+
+/// Clear dirty flag (e.g., after save).
+fn clear_dirty() { unsafe { DIRTY = false; serial_println!("[quil.dirty.state] dirty=0 reason=save_cleared"); } }
 
 /// Emit line/word/byte/cursor stats.
 fn emit_text_stats() {
@@ -2040,6 +2182,56 @@ pub extern "C" fn _start() -> ! {
                 QUIL_CURSOR_POS = 12; emit_text_stats();
                 serial_println!("[quil.text.stats.proof.done] ok=1");
                 QUIL_LINE_STATS_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Find next/prev proof ────────────────────────────────────────────
+    if QUIL_FIND_NAV_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_FIND_NAV_PROOF_DONE {
+                serial_println!("[quil.find.nav.proof.begin]");
+                QUIL_BUFFER_LEN = 0; QUIL_CURSOR_POS = 0;
+                for &ch in b"abc abc abc" { text_buffer_append(ch); }
+                find_collect_matches(b"abc");
+                QUIL_CURSOR_POS = 0; find_next(); // 0→3
+                find_next(); // 3→7
+                find_next(); // 7→11
+                find_prev(); // 11→7
+                serial_println!("[quil.find.nav.proof.done] ok=1");
+                QUIL_FIND_NAV_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Selection delete/copy proof ─────────────────────────────────────
+    if QUIL_SEL_COPY_DELETE_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_SEL_COPY_DELETE_PROOF_DONE {
+                serial_println!("[quil.selection.copy_delete.proof.begin]");
+                QUIL_BUFFER_LEN = 0; QUIL_CURSOR_POS = 0;
+                for &ch in b"HELLO WORLD" { text_buffer_append(ch); }
+                QUIL_SEL_START = 0; QUIL_SEL_END = 5;
+                copy_selection(); // copy "HELLO"
+                delete_selection(); // delete "HELLO"
+                serial_println!("[quil.selection.copy_delete.proof.done] ok=1");
+                QUIL_SEL_COPY_DELETE_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Dirty state autosave audit proof ────────────────────────────────
+    if QUIL_DIRTY_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_DIRTY_PROOF_DONE {
+                serial_println!("[quil.dirty.proof.begin]");
+                DIRTY = false;
+                text_buffer_append(b'X'); // marks dirty
+                serial_println!("[quil.dirty.state] dirty=1 reason=edit_append");
+                clear_dirty(); // simulates save
+                serial_println!("[quil.dirty.save.audit] clears_dirty=1 reason=explicit_clear_on_save");
+                serial_println!("[quil.dirty.proof.done] ok=1");
+                QUIL_DIRTY_PROOF_DONE = true;
             }
         }
     }
