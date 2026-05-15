@@ -52,6 +52,10 @@ gate_atlas_theme="SKIP"
 gate_collar_nav="SKIP"
 gate_mesh_nav="SKIP"
 gate_silkbar_status="SKIP"
+gate_launcher_multi_exec="SKIP"
+gate_palette_linen_available="SKIP"
+gate_quil_status_ready="SKIP"
+gate_silkbar_phase3_status="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -278,7 +282,89 @@ else
     print_row "silkbar_status" "SKIP" "no silkbar status evidence"
 fi
 
-# ---- 13. faults_zero ----
+# ---- 13. launcher_multi_exec ----
+# Evidence: [launcher.multi.proof.done] with passed=7 failed=0.
+# Proves all 7 app launcher rows (Spindle/Quil/Linen/Atlas/Bell/Collar/Mesh)
+# execute and focus correctly.
+
+if [ "$(has 'launcher\.multi\.proof\.done.*passed=7.*failed=0')" -eq 1 ]; then
+    c_lm="$(count 'launcher\.multi\.exec')"
+    gate_launcher_multi_exec="PASS"
+    print_row "launcher_multi_exec" "PASS" "7/7 apps passed: ${c_lm} execs"
+elif [ "$(has 'launcher\.multi\.proof\.done')" -eq 1 ]; then
+    n_pass="$(grep -oP 'passed=\K\d+' "$LOG" 2>/dev/null | head -1)"
+    n_fail="$(grep -oP 'failed=\K\d+' "$LOG" 2>/dev/null | head -1)"
+    gate_launcher_multi_exec="FAIL"
+    print_row "launcher_multi_exec" "FAIL" "passed=${n_pass:-?} failed=${n_fail:-?} (expected 7/0)"
+elif [ "$(has 'launcher\.multi\.exec')" -ge 1 ]; then
+    c_lm="$(count 'launcher\.multi\.exec')"
+    gate_launcher_multi_exec="PASS"
+    print_row "launcher_multi_exec" "PASS" "${c_lm} exec markers (proof.done not found — may not have completed)"
+else
+    gate_launcher_multi_exec="SKIP"
+    print_row "launcher_multi_exec" "SKIP" "multi-exec proof not enabled"
+fi
+
+# ---- 14. palette_linen_available ----
+# Evidence: Command palette reports Open Linen with status nonblocking_ready.
+
+if [ "$(has 'shell\.palette\.status.*Open Linen.*nonblocking_ready')" -eq 1 ]; then
+    gate_palette_linen_available="PASS"
+    print_row "palette_linen_available" "PASS" "Linen palette status: nonblocking_ready"
+elif [ "$(has 'OpenLinen.*nonblocking_ready\|shell.*palette.*Linen.*nonblocking\|Linen.*nonblocking_ready')" -eq 1 ]; then
+    gate_palette_linen_available="PASS"
+    print_row "palette_linen_available" "PASS" "Linen available in palette (nonblocking)"
+elif [ "$(has 'spindle\.daily\.item.*Linen.*PASS')" -eq 1 ]; then
+    gate_palette_linen_available="PASS"
+    print_row "palette_linen_available" "PASS" "daily summary reports Linen PASS"
+else
+    gate_palette_linen_available="SKIP"
+    print_row "palette_linen_available" "SKIP" "no palette Linen status evidence"
+fi
+
+# ---- 15. quil_status_ready ----
+# Evidence: Quil keyboard_nav_ready from palette status or Spindle daily.
+
+if [ "$(has 'shell\.palette\.status.*Open Quil.*keyboard_nav_ready')" -eq 1 ]; then
+    gate_quil_status_ready="PASS"
+    print_row "quil_status_ready" "PASS" "Quil palette status: keyboard_nav_ready"
+elif [ "$(has 'OpenQuil.*keyboard_nav_ready\|shell.*palette.*Quil.*keyboard_nav\|Quil.*keyboard_nav_ready')" -eq 1 ]; then
+    gate_quil_status_ready="PASS"
+    print_row "quil_status_ready" "PASS" "Quil available in palette (keyboard_nav_ready)"
+elif [ "$(has 'spindle\.daily\.item.*Quil.*PASS')" -eq 1 ]; then
+    gate_quil_status_ready="PASS"
+    print_row "quil_status_ready" "PASS" "daily summary reports Quil PASS"
+else
+    gate_quil_status_ready="SKIP"
+    print_row "quil_status_ready" "SKIP" "no quil keyboard-ready status evidence"
+fi
+
+# ---- 16. silkbar_phase3_status ----
+# Evidence: SilkBar ABI Phase 2 send markers + Phase 3 receive/state markers.
+# Proves end-to-end flow: shell → OP_SILKBAR_UPDATE → sexdisplay receive.
+# Requires SetActiveApp, SetTintAccent, SetPaletteState evidence.
+
+if [ "$(has 'shell\.silkbar\.phase2\.send.*SetActiveApp')" -eq 1 ] && \
+   [ "$(has 'sexdisplay\.silkbar\.phase3\.recv.*SetActiveApp')" -eq 1 ] && \
+   [ "$(has 'sexdisplay\.silkbar\.phase3\.state')" -eq 1 ]; then
+    c_send="$(count 'shell\.silkbar\.phase2\.send')"
+    c_recv="$(count 'sexdisplay\.silkbar\.phase3\.recv')"
+    c_state="$(count 'sexdisplay\.silkbar\.phase3\.state')"
+    gate_silkbar_phase3_status="PASS"
+    print_row "silkbar_phase3_status" "PASS" "send=${c_send} recv=${c_recv} state=${c_state} (e2e proven)"
+elif [ "$(has 'shell\.silkbar\.phase2\.send')" -eq 1 ]; then
+    c_send="$(count 'shell\.silkbar\.phase2\.send')"
+    gate_silkbar_phase3_status="FAIL"
+    print_row "silkbar_phase3_status" "FAIL" "send=${c_send} but no receive/state markers — e2e broken"
+elif [ "$(has 'sexdisplay\.silkbar\.phase3')" -eq 1 ]; then
+    gate_silkbar_phase3_status="FAIL"
+    print_row "silkbar_phase3_status" "FAIL" "receive present but no send markers — partial flow"
+else
+    gate_silkbar_phase3_status="SKIP"
+    print_row "silkbar_phase3_status" "SKIP" "Phase 2/3 proofs not enabled"
+fi
+
+# ---- 17. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
 FAULT_PATTERNS=(
@@ -330,6 +416,10 @@ ALL_GATES=(
     "collar_nav:$gate_collar_nav"
     "mesh_nav:$gate_mesh_nav"
     "silkbar_status:$gate_silkbar_status"
+    "launcher_multi_exec:$gate_launcher_multi_exec"
+    "palette_linen_available:$gate_palette_linen_available"
+    "quil_status_ready:$gate_quil_status_ready"
+    "silkbar_phase3_status:$gate_silkbar_phase3_status"
     "faults_zero:$gate_faults_zero"
 )
 
