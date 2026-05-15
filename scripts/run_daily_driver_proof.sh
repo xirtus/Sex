@@ -210,8 +210,11 @@ export SEXOS_SPINDLE_WINDOW_WORKFLOW_PROOF=1
 export SEXOS_BROWSER_STUB_PROOF=1
 export SEXOS_SPINDLE_BROWSER_STUB_PROOF=1
 
+# ── Linen persist readback model proof ──
+export SEXOS_LINEN_PERSIST_READBACK_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V22"
+echo " DAILY-DRIVER PROOF PROFILE V24"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
