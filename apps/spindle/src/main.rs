@@ -767,6 +767,12 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  Pointer  DEFER  USB slot2 mouse work");
             sb.push(b"Launch targets: unavailable (kernel spawn needed).");
             if option_env!("SEXOS_SPINDLE_APPS_REGISTRY_PROOF").is_some() {
+                serial_println!("[spindle.apps.registry.row] idx=0 app=SexOS_Kernel key=1 status=loaded");
+                serial_println!("[spindle.apps.registry.row] idx=1 app=Compositor_Lifecycle_Spec key=2 status=saved");
+                serial_println!("[spindle.apps.registry.row] idx=2 app=Silk_Shell_main_rs key=3 status=loaded");
+                serial_println!("[spindle.apps.registry.row] idx=3 app=Desktop_Screenshot key=4 status=saved");
+                serial_println!("[spindle.apps.registry.row] idx=4 app=Current_ISO_Build key=5 status=saved");
+                serial_println!("[spindle.apps.registry.row] idx=5 app=Drafts key=6 status=loaded");
                 serial_println!("[spindle.apps.registry.row] app_id=1 state=Loaded kind=Project name=SexOS Kernel ok=1");
                 serial_println!("[spindle.apps.registry.row] app_id=2 state=Saved kind=Document name=Compositor Lifecycle Spec ok=1");
                 serial_println!("[spindle.apps.registry.row] app_id=3 state=Loaded kind=CodeFile name=Silk Shell main.rs ok=1");

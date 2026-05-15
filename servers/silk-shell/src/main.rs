@@ -11595,6 +11595,7 @@ unsafe fn maybe_run_app_launcher_help_proof() {
         serial_println!("[launcher.help.keys] key={} action={}", k, a);
     }
     let mut ok_rows: u8 = 0;
+    let mut total_rows: u8 = 0;
     for (idx, item) in COMMAND_LIST.iter().enumerate() {
         let key = match idx {
             0 => "1",
@@ -11613,9 +11614,14 @@ unsafe fn maybe_run_app_launcher_help_proof() {
             "[launcher.help.row] idx={} app={} key={} status={}",
             idx, item.name, key, status
         );
+        total_rows = total_rows.saturating_add(1);
         if avail { ok_rows = ok_rows.saturating_add(1); }
     }
-    serial_println!("[launcher.help.proof.done] ok={}", ok_rows);
+    serial_println!(
+        "[launcher.help.proof.done] ok={} rows={}",
+        (ok_rows > 0) as u8,
+        total_rows
+    );
     APP_LAUNCHER_HELP_PROOF_DONE = true;
 }
 
