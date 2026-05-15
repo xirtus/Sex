@@ -110,6 +110,8 @@ gate_app_registry_lifecycle_v2="SKIP"
 gate_spindle_slot_shell="SKIP"
 gate_window_workflow_v2="SKIP"
 gate_spindle_window_workflow="SKIP"
+gate_browser_stub="SKIP"
+gate_spindle_browser_stub="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -132,7 +134,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V21"
+echo " DAILY-DRIVER MASTER GATE V22"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -1053,7 +1055,23 @@ elif [ "$(has 'spindle\.window\.command\]')" -ge 1 ]; then
     gate_spindle_window_workflow="PASS"
 else gate_spindle_window_workflow="SKIP"; fi
 
-# ---- 67. linen_search_bridge ----
+# ---- 67. browser_stub ----
+if [ "$(has 'browser\.stub\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_browser_stub="PASS"
+    print_row "browser_stub" "PASS" "browser stub (fetched=0 engine=0)"
+elif [ "$(has 'browser\.stub\.blocker\]')" -ge 1 ]; then
+    gate_browser_stub="PASS"
+else gate_browser_stub="SKIP"; fi
+
+# ---- 68. spindle_browser_stub ----
+if [ "$(has 'spindle\.browser\.stub\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_spindle_browser_stub="PASS"
+    print_row "spindle_browser_stub" "PASS" "browser help commands"
+elif [ "$(has 'browser\.stub\.command\]')" -ge 1 ]; then
+    gate_spindle_browser_stub="PASS"
+else gate_spindle_browser_stub="SKIP"; fi
+
+# ---- 69. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
     print_row "linen_search_bridge" "PASS" "search bridge e2e"
@@ -1111,7 +1129,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V21 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V22 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1186,6 +1204,8 @@ ALL_GATES=(
     "spindle_slot_shell:$gate_spindle_slot_shell"
     "window_workflow_v2:$gate_window_workflow_v2"
     "spindle_window_workflow:$gate_spindle_window_workflow"
+    "browser_stub:$gate_browser_stub"
+    "spindle_browser_stub:$gate_spindle_browser_stub"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
 )

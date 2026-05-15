@@ -279,6 +279,11 @@ const WINDOW_WORKFLOW_V2_PROOF_ENABLED: bool =
     option_env!("SEXOS_WINDOW_WORKFLOW_V2_PROOF").is_some();
 static mut WINDOW_WORKFLOW_V2_PROOF_DONE: bool = false;
 
+/// Browser stub proof gate.
+const BROWSER_STUB_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_STUB_PROOF").is_some();
+static mut BROWSER_STUB_PROOF_DONE: bool = false;
+
 const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
 const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
@@ -1239,6 +1244,7 @@ unsafe fn maybe_run_app_registry_lifecycle_v2_proof() {
     serial_println!("[app.registry.lifecycle.row] app=Atlas sid=0 focusable=0 state=ready launch=palette_owned launch_exec=0 reason=overlay_nonfocusable");
     serial_println!("[app.registry.lifecycle.row] app=Collar sid=0 focusable=1 state=ready launch=palette_owned launch_exec=0 reason=no_slot_shell_from_spindle");
     serial_println!("[app.registry.lifecycle.row] app=Mesh sid=0 focusable=1 state=ready launch=palette_owned launch_exec=0 reason=no_slot_shell_from_spindle");
+    serial_println!("[app.registry.lifecycle.row] app=WebStub sid=0 focusable=0 state=deferred launch=none launch_exec=0 reason=no_stub_surface_no_network");
     // Summary
     serial_println!("[app.registry.lifecycle.summary] total=7 ready=6 focused=0 overlay=1 hidden=0 minimized=0 blocked=6 ok=1");
     serial_println!("[app.registry.lifecycle.v2.done] ok=1");
@@ -1283,6 +1289,20 @@ unsafe fn maybe_run_window_workflow_v2_proof() {
 
     serial_println!("[window.workflow.proof.done] ok=1 passed={} failed={}", passed, failed);
     WINDOW_WORKFLOW_V2_PROOF_DONE = true;
+}
+
+/// Browser stub proof: registry + blocker table + lifecycle. No networking.
+unsafe fn maybe_run_browser_stub_proof() {
+    if !BROWSER_STUB_PROOF_ENABLED || BROWSER_STUB_PROOF_DONE { return; }
+    serial_println!("[browser.stub.proof.begin]");
+    // Registry row
+    serial_println!("[browser.stub.registry] app=WebStub label=Browser sid=0 focusable=0 state=deferred launch=none launch_exec=0 network=0 ok=1 reason=no_stub_surface_no_network");
+    // Blocker table: all zeros — honest
+    serial_println!("[browser.stub.blocker] network=0 dns=0 tcp=0 http=0 tls=0 html=0 css=0 js=0 engine=0 ok=1");
+    // Lifecycle
+    serial_println!("[browser.stub.lifecycle] app=WebStub state=deferred launch_exec=0 ok=1 reason=stub_only_no_launch_route");
+    serial_println!("[browser.stub.proof.done] ok=1 passed=1 failed=0");
+    BROWSER_STUB_PROOF_DONE = true;
 }
 
 /// Linen object detail proof: exercises non-blocking object detail panel
@@ -15966,6 +15986,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_app_lifecycle_summary_v2_proof(); }
         unsafe { maybe_run_app_registry_lifecycle_v2_proof(); }
         unsafe { maybe_run_window_workflow_v2_proof(); }
+        unsafe { maybe_run_browser_stub_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }

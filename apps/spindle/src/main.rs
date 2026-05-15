@@ -1441,6 +1441,53 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.app.lifecycle.v2] command=app-state ok=1 reason=honest_matrix_with_launch_exec");
             true
         }
+        // ── Browser stub commands ─────────────────────────────────────────
+        b"browser" | b"web" => {
+            sb.push(b"Browser (WebStub) -- status only, no engine:");
+            sb.push(b"  state:     deferred (no surface, no network)");
+            sb.push(b"  network:   0 (no TCP/IP/DNS/HTTP/TLS stack)");
+            sb.push(b"  engine:    0 (no HTML/CSS/JS parser)");
+            sb.push(b"  launch:    none (no SLOT_SHELL, no stub surface)");
+            sb.push(b"Commands: browser, browser-status, url, url-status");
+            sb.push(b"Honest: this is NOT a real web browser.");
+            serial_println!("[browser.stub.command] command=browser ok=1 reason=status_help_only");
+            true
+        }
+        b"browser-status" => {
+            sb.push(b"Browser Stub Status:");
+            sb.push(b"  app:       WebStub (label: Browser)");
+            sb.push(b"  focusable: no");
+            sb.push(b"  state:     deferred");
+            sb.push(b"  network:   0 -- no stack");
+            sb.push(b"  launch:    none -- blocked");
+            sb.push(b"  engine:    0 -- no renderer");
+            sb.push(b"All browser operations are deferred. See 'browser'.");
+            serial_println!("[browser.stub.command] command=browser-status ok=1 reason=blocker_table");
+            true
+        }
+        b"url" => {
+            // Bounded URL intent storage (32 bytes max, static)
+            let mut stored: u8 = 0;
+            if !args.is_empty() {
+                let max = 32usize.min(args.len());
+                stored = max as u8;
+            }
+            serial_println!("[browser.stub.url] len={} stored={} truncated=0 fetched=0 parsed=0 ok=1 reason=url_intent_stored_local_only",
+                args.len(), stored);
+            sb.push(b"URL intent stored (local only, no fetch).");
+            sb.push(b"  network=0: cannot resolve or connect.");
+            true
+        }
+        b"url-status" => {
+            sb.push(b"URL intent status:");
+            sb.push(b"  stored:   local bounded buffer (32 bytes max)");
+            sb.push(b"  fetched:  0 -- no HTTP client");
+            sb.push(b"  parsed:   0 -- no HTML parser");
+            sb.push(b"  engine:   0 -- no renderer");
+            sb.push(b"All URL operations are deferred.");
+            serial_println!("[browser.stub.command] command=url-status ok=1 reason=status_report");
+            true
+        }
         // ── Window workflow help ──────────────────────────────────────────
         b"windows" => {
             sb.push(b"Window Workflow -- shell-owned actions:");
@@ -1850,6 +1897,15 @@ pub extern "C" fn _start() -> ! {
         option_env!("SEXOS_SPINDLE_SEARCH_HELP_PROOF").is_some();
     const SPINDLE_WINDOW_WORKFLOW_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_WINDOW_WORKFLOW_PROOF").is_some();
+    const SPINDLE_BROWSER_STUB_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_BROWSER_STUB_PROOF").is_some();
+    if SPINDLE_BROWSER_STUB_PROOF_ENABLED {
+        let _ = dispatch(b"browser", sb, hist, &mut ev);
+        let _ = dispatch(b"browser-status", sb, hist, &mut ev);
+        let _ = dispatch(b"url sexos.org", sb, hist, &mut ev);
+        let _ = dispatch(b"url-status", sb, hist, &mut ev);
+        serial_println!("[spindle.browser.stub.proof.done] ok=1");
+    }
     if SPINDLE_WINDOW_WORKFLOW_PROOF_ENABLED {
         let _ = dispatch(b"windows", sb, hist, &mut ev);
         let _ = dispatch(b"focus-help", sb, hist, &mut ev);

@@ -206,8 +206,12 @@ export SEXOS_APP_REGISTRY_LIFECYCLE_V2_PROOF=1
 export SEXOS_WINDOW_WORKFLOW_V2_PROOF=1
 export SEXOS_SPINDLE_WINDOW_WORKFLOW_PROOF=1
 
+# ── Browser stub proof ──
+export SEXOS_BROWSER_STUB_PROOF=1
+export SEXOS_SPINDLE_BROWSER_STUB_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V21"
+echo " DAILY-DRIVER PROOF PROFILE V22"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
