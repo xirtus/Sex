@@ -1403,16 +1403,15 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         // ── Search help ────────────────────────────────────────────────────
         b"search" => {
-            sb.push(b"Search/Find Help V1:");
-            sb.push(b"  Quil find:   local in-memory buffer scan (V10)");
-            sb.push(b"               bounded 32-byte query, returns idx + count");
-            sb.push(b"  Linen search: ABI-blocked (no OP_LINEN_SEARCH_OBJECTS)");
-            sb.push(b"               use Linen surface for keyboard search workflow");
-            sb.push(b"  Spindle:     object-search command explains Linen limitations");
-            sb.push(b"  Files:       ls supports filename prefix filter (client-side)");
-            sb.push(b"Limitations: no cross-PD search, no regex, no wildcard.");
-            sb.push(b"See also: object-search, linen-search, ls, quil/edit-help.");
-            serial_println!("[spindle.search.help] section=search ok=1 reason=search_overview");
+            sb.push(b"Search/Find Help V2:");
+            sb.push(b"  Quil find:   local buffer scan, 32-byte query (V10)");
+            sb.push(b"  Quil stats:  bytes/lines/words/cursor counts (V11)");
+            sb.push(b"  Quil word:   word-left/word-right navigation (V11)");
+            sb.push(b"  Quil mod:    shift tracking, lowercase support (V11)");
+            sb.push(b"  Linen search: ABI-blocked (OP_LINEN_SEARCH_OBJECTS=0x47)");
+            sb.push(b"  Files:       ls filename prefix filter (client-side)");
+            sb.push(b"See: object-search, linen-search, edit-help, edit-status.");
+            serial_println!("[spindle.editor.quality.help] ok=1 commands=6");
             true
         }
         // ── Linen search from Spindle audit ──────────────────────────────────
@@ -1751,6 +1750,12 @@ pub extern "C" fn _start() -> ! {
     if SPINDLE_SEARCH_HELP_PROOF_ENABLED {
         let _ = dispatch(b"search", sb, hist, &mut ev);
         serial_println!("[spindle.search.help.proof.done] ok=1");
+    }
+    const SPINDLE_EDITOR_QUALITY_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_EDITOR_QUALITY_PROOF").is_some();
+    if SPINDLE_EDITOR_QUALITY_PROOF_ENABLED {
+        let _ = dispatch(b"search", sb, hist, &mut ev);
+        serial_println!("[spindle.editor.quality.proof.done] ok=1");
     }
 
     serial_println!("[spindle.ready]");

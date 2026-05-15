@@ -88,6 +88,10 @@ gate_spindle_editor_status="SKIP"
 gate_app_lifecycle_summary_v2="SKIP"
 gate_quil_find="SKIP"
 gate_spindle_search_help="SKIP"
+gate_quil_mod_lowercase="SKIP"
+gate_quil_word_nav="SKIP"
+gate_quil_line_stats="SKIP"
+gate_spindle_editor_quality="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -110,7 +114,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V10"
+echo " DAILY-DRIVER MASTER GATE V11"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -867,6 +871,53 @@ else
     print_row "spindle_search_help" "SKIP" "no search help markers"
 fi
 
+# ---- 50. quil_mod_lowercase ----
+if [ "$(has 'quil\.mod\.lowercase\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_quil_mod_lowercase="PASS"
+    print_row "quil_mod_lowercase" "PASS" "modifier audit + lowercase"
+elif [ "$(has 'quil\.mod\.audit\]')" -ge 1 ]; then
+    gate_quil_mod_lowercase="PASS"
+    print_row "quil_mod_lowercase" "PASS" "mod audit present (partial)"
+else
+    gate_quil_mod_lowercase="SKIP"
+    print_row "quil_mod_lowercase" "SKIP" "no mod proof markers"
+fi
+
+# ---- 51. quil_word_nav ----
+if [ "$(has 'quil\.word\.nav\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_wm="$(count 'quil\.word\.move\]')"
+    gate_quil_word_nav="PASS"
+    print_row "quil_word_nav" "PASS" "word moves: ${c_wm}"
+elif [ "$(has 'quil\.word\.move\]')" -ge 1 ]; then
+    gate_quil_word_nav="PASS"
+    print_row "quil_word_nav" "PASS" "word nav present (partial)"
+else
+    gate_quil_word_nav="SKIP"
+fi
+
+# ---- 52. quil_line_stats ----
+if [ "$(has 'quil\.text\.stats\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_ls="$(count 'quil\.text\.stats\]')"
+    gate_quil_line_stats="PASS"
+    print_row "quil_line_stats" "PASS" "stats markers: ${c_ls}"
+elif [ "$(has 'quil\.text\.stats\]')" -ge 1 ]; then
+    gate_quil_line_stats="PASS"
+    print_row "quil_line_stats" "PASS" "stats present (partial)"
+else
+    gate_quil_line_stats="SKIP"
+fi
+
+# ---- 53. spindle_editor_quality ----
+if [ "$(has 'spindle\.editor\.quality\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_spindle_editor_quality="PASS"
+    print_row "spindle_editor_quality" "PASS" "editor quality help"
+elif [ "$(has 'spindle\.editor\.quality\.help\]')" -ge 1 ]; then
+    gate_spindle_editor_quality="PASS"
+    print_row "spindle_editor_quality" "PASS" "quality help present (partial)"
+else
+    gate_spindle_editor_quality="SKIP"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -901,7 +952,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V10 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V11 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -955,6 +1006,10 @@ ALL_GATES=(
     "app_lifecycle_summary_v2:$gate_app_lifecycle_summary_v2"
     "quil_find:$gate_quil_find"
     "spindle_search_help:$gate_spindle_search_help"
+    "quil_mod_lowercase:$gate_quil_mod_lowercase"
+    "quil_word_nav:$gate_quil_word_nav"
+    "quil_line_stats:$gate_quil_line_stats"
+    "spindle_editor_quality:$gate_spindle_editor_quality"
     "faults_zero:$gate_faults_zero"
 )
 

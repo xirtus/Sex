@@ -173,8 +173,14 @@ export SEXOS_APP_LIFECYCLE_SUMMARY_V2_PROOF=1
 export SEXOS_QUIL_FIND_PROOF=1
 export SEXOS_SPINDLE_SEARCH_HELP_PROOF=1
 
+# ── Feature batch V11 editor text quality proofs ──
+export SEXOS_QUIL_MOD_LOWERCASE_PROOF=1
+export SEXOS_QUIL_WORD_NAV_PROOF=1
+export SEXOS_QUIL_LINE_STATS_PROOF=1
+export SEXOS_SPINDLE_EDITOR_QUALITY_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V10"
+echo " DAILY-DRIVER PROOF PROFILE V11"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

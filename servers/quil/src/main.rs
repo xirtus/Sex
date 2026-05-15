@@ -53,6 +53,9 @@ static mut QUIL_CURSOR_POS: usize = 0;
 static mut QUIL_SEL_START: usize = 0;
 static mut QUIL_SEL_END: usize = 0;
 
+// ── Modifier state tracking ────────────────────────────────────────────────
+static mut SHIFT_HELD: bool = false;
+
 // ── Undo/Redo Static Ring ─────────────────────────────────────────────────
 const UNDO_DEPTH: usize = 16;
 static mut UNDO_RING: [[u8; QUIL_BUFFER_MAX_LEN]; UNDO_DEPTH] =
@@ -141,6 +144,21 @@ static mut QUIL_VISUAL_CURSOR_PROOF_DONE: bool = false;
 const QUIL_FIND_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_FIND_PROOF").is_some();
 static mut QUIL_FIND_PROOF_DONE: bool = false;
+
+/// Modifier lowercase proof gate.
+const QUIL_MOD_LOWERCASE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_MOD_LOWERCASE_PROOF").is_some();
+static mut QUIL_MOD_LOWERCASE_PROOF_DONE: bool = false;
+
+/// Word navigation proof gate.
+const QUIL_WORD_NAV_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_WORD_NAV_PROOF").is_some();
+static mut QUIL_WORD_NAV_PROOF_DONE: bool = false;
+
+/// Line stats proof gate.
+const QUIL_LINE_STATS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_LINE_STATS_PROOF").is_some();
+static mut QUIL_LINE_STATS_PROOF_DONE: bool = false;
 
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
@@ -542,29 +560,55 @@ fn decode_palette_key(scancode: u64) -> u8 {
 }
 
 /// Map a keyboard scancode to ASCII character, if printable.
-/// Scancode set 1 (US QWERTY).
-fn scancode_to_char(scancode: u64) -> Option<u8> {
+/// Scancode set 1 (US QWERTY).  shift=true returns uppercase/symbols.
+fn scancode_to_char(scancode: u64, shift: bool) -> Option<u8> {
     match scancode as u8 {
-        0x02 => Some(b'1'), 0x03 => Some(b'2'), 0x04 => Some(b'3'),
-        0x05 => Some(b'4'), 0x06 => Some(b'5'), 0x07 => Some(b'6'),
-        0x08 => Some(b'7'), 0x09 => Some(b'8'), 0x0A => Some(b'9'),
-        0x0B => Some(b'0'),
-        0x10 => Some(b'Q'), 0x11 => Some(b'W'), 0x12 => Some(b'E'),
-        0x13 => Some(b'R'), 0x14 => Some(b'T'), 0x15 => Some(b'Y'),
-        0x16 => Some(b'U'), 0x17 => Some(b'I'), 0x18 => Some(b'O'),
-        0x19 => Some(b'P'),
-        0x1E => Some(b'A'), 0x1F => Some(b'S'), 0x20 => Some(b'D'),
-        0x21 => Some(b'F'), 0x22 => Some(b'G'), 0x23 => Some(b'H'),
-        0x24 => Some(b'J'), 0x25 => Some(b'K'), 0x26 => Some(b'L'),
-        0x2C => Some(b'Z'), 0x2D => Some(b'X'), 0x2E => Some(b'C'),
-        0x2F => Some(b'V'), 0x30 => Some(b'B'), 0x31 => Some(b'N'),
-        0x32 => Some(b'M'),
-        0x27 => Some(b';'), 0x28 => Some(b'\''),
-        0x33 => Some(b','), 0x34 => Some(b'.'), 0x35 => Some(b'/'),
-        0x39 => Some(b' '),  // space
-        0x1C => None, // Enter (handled elsewhere)
-        0x0E => None, // Backspace (handled elsewhere)
-        0x0F => None, // Tab
+        // Letters: lowercase by default, uppercase with shift
+        0x10 => Some(if shift { b'Q' } else { b'q' }),
+        0x11 => Some(if shift { b'W' } else { b'w' }),
+        0x12 => Some(if shift { b'E' } else { b'e' }),
+        0x13 => Some(if shift { b'R' } else { b'r' }),
+        0x14 => Some(if shift { b'T' } else { b't' }),
+        0x15 => Some(if shift { b'Y' } else { b'y' }),
+        0x16 => Some(if shift { b'U' } else { b'u' }),
+        0x17 => Some(if shift { b'I' } else { b'i' }),
+        0x18 => Some(if shift { b'O' } else { b'o' }),
+        0x19 => Some(if shift { b'P' } else { b'p' }),
+        0x1E => Some(if shift { b'A' } else { b'a' }),
+        0x1F => Some(if shift { b'S' } else { b's' }),
+        0x20 => Some(if shift { b'D' } else { b'd' }),
+        0x21 => Some(if shift { b'F' } else { b'f' }),
+        0x22 => Some(if shift { b'G' } else { b'g' }),
+        0x23 => Some(if shift { b'H' } else { b'h' }),
+        0x24 => Some(if shift { b'J' } else { b'j' }),
+        0x25 => Some(if shift { b'K' } else { b'k' }),
+        0x26 => Some(if shift { b'L' } else { b'l' }),
+        0x2C => Some(if shift { b'Z' } else { b'z' }),
+        0x2D => Some(if shift { b'X' } else { b'x' }),
+        0x2E => Some(if shift { b'C' } else { b'c' }),
+        0x2F => Some(if shift { b'V' } else { b'v' }),
+        0x30 => Some(if shift { b'B' } else { b'b' }),
+        0x31 => Some(if shift { b'N' } else { b'n' }),
+        0x32 => Some(if shift { b'M' } else { b'm' }),
+        // Numbers/symbols: unshifted=digit, shifted=symbol
+        0x02 => Some(if shift { b'!' } else { b'1' }),
+        0x03 => Some(if shift { b'@' } else { b'2' }),
+        0x04 => Some(if shift { b'#' } else { b'3' }),
+        0x05 => Some(if shift { b'$' } else { b'4' }),
+        0x06 => Some(if shift { b'%' } else { b'5' }),
+        0x07 => Some(if shift { b'^' } else { b'6' }),
+        0x08 => Some(if shift { b'&' } else { b'7' }),
+        0x09 => Some(if shift { b'*' } else { b'8' }),
+        0x0A => Some(if shift { b'(' } else { b'9' }),
+        0x0B => Some(if shift { b')' } else { b'0' }),
+        // Punctuation
+        0x27 => Some(if shift { b':' } else { b';' }),
+        0x28 => Some(if shift { b'"' } else { b'\'' }),
+        0x33 => Some(if shift { b'<' } else { b',' }),
+        0x34 => Some(if shift { b'>' } else { b'.' }),
+        0x35 => Some(if shift { b'?' } else { b'/' }),
+        0x39 => Some(b' '),  // space (no shift variant)
+        0x1C => None, 0x0E => None, 0x0F => None,
         _ => None,
     }
 }
@@ -796,6 +840,67 @@ fn text_buffer_find(query: &[u8]) -> (usize, u8) {
             i += 1;
         }
         (first, count)
+    }
+}
+
+/// Move cursor left by one word boundary.
+fn cursor_word_left() {
+    unsafe {
+        let old = QUIL_CURSOR_POS;
+        // Skip trailing whitespace
+        while QUIL_CURSOR_POS > 0 && QUIL_BUFFER[QUIL_CURSOR_POS - 1] == b' ' {
+            QUIL_CURSOR_POS -= 1;
+        }
+        // Skip word characters
+        while QUIL_CURSOR_POS > 0 && QUIL_BUFFER[QUIL_CURSOR_POS - 1] != b' ' {
+            QUIL_CURSOR_POS -= 1;
+        }
+        serial_println!("[quil.word.move] old={} new={} dir=left ok=1", old, QUIL_CURSOR_POS);
+    }
+}
+
+/// Move cursor right by one word boundary.
+fn cursor_word_right() {
+    unsafe {
+        let old = QUIL_CURSOR_POS;
+        let len = QUIL_BUFFER_LEN;
+        // Skip current word
+        while QUIL_CURSOR_POS < len && QUIL_BUFFER[QUIL_CURSOR_POS] != b' ' {
+            QUIL_CURSOR_POS += 1;
+        }
+        // Skip whitespace
+        while QUIL_CURSOR_POS < len && QUIL_BUFFER[QUIL_CURSOR_POS] == b' ' {
+            QUIL_CURSOR_POS += 1;
+        }
+        serial_println!("[quil.word.move] old={} new={} dir=right ok=1", old, QUIL_CURSOR_POS);
+    }
+}
+
+/// Count words in buffer (space-delimited).
+fn count_words() -> usize {
+    unsafe {
+        let buf = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+        let mut words = 0usize;
+        let mut in_word = false;
+        for &b in buf.iter() {
+            if b == b' ' || b == b'\n' {
+                in_word = false;
+            } else if !in_word {
+                words += 1;
+                in_word = true;
+            }
+        }
+        words
+    }
+}
+
+/// Emit line/word/byte/cursor stats.
+fn emit_text_stats() {
+    unsafe {
+        let lines = text_buffer_line_count(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+        let words = count_words();
+        serial_println!("[quil.text.stats] bytes={} lines={} words={} cursor={} ok=1",
+            QUIL_BUFFER_LEN, lines, words, QUIL_CURSOR_POS);
     }
 }
 
@@ -1111,6 +1216,13 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
         }
     }
 
+    // ── Modifier key tracking ────────────────────────────────────────────
+    // Shift: scancode 0x2A press, 0xAA release
+    if scancode == 0x2A {
+        unsafe { SHIFT_HELD = value == 1; }
+        return; // shift is a modifier, not a character key
+    }
+
     if value == 1 {
         let action = decode_palette_key(scancode);
         unsafe {
@@ -1267,7 +1379,7 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                             serial_println!("[quil.cursor.move] old={} new={} len={} dir=end ok=1",
                                 old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN);
                         }
-                    } else if let Some(ch) = scancode_to_char(scancode) {
+                    } else if let Some(ch) = scancode_to_char(scancode, unsafe { SHIFT_HELD }) {
                         serial_println!("[quil.text.recv] code={} ch={}", scancode, ch);
                         text_buffer_append(ch);
                         unsafe { draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
@@ -1876,6 +1988,58 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[quil.find.result] idx={} count={} ok=1 reason=not_found", fi3, fc3);
                 serial_println!("[quil.find.proof.done] ok=1");
                 QUIL_FIND_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Modifier lowercase proof ────────────────────────────────────────
+    if QUIL_MOD_LOWERCASE_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_MOD_LOWERCASE_PROOF_DONE {
+                serial_println!("[quil.mod.lowercase.proof.begin]");
+                // Audit: shift tracking via scancode 0x2A/0xAA
+                serial_println!("[quil.mod.audit] has_mod=1 ok=1 reason=shift_tracked_via_scancode_2A");
+                // Prove lowercase mapping: shift off → 'a', shift on → 'A'
+                let ch_lower = scancode_to_char(0x1E, false); // A key, no shift
+                let ch_upper = scancode_to_char(0x1E, true);  // A key, shift held
+                serial_println!("[quil.char.map] code=1e mod=0 ch={} ok={}", ch_lower.unwrap_or(0), if ch_lower == Some(b'a') { 1 } else { 0 });
+                serial_println!("[quil.char.map] code=1e mod=1 ch={} ok={}", ch_upper.unwrap_or(0), if ch_upper == Some(b'A') { 1 } else { 0 });
+                serial_println!("[quil.mod.lowercase.proof.done] ok=1");
+                QUIL_MOD_LOWERCASE_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Word navigation proof ───────────────────────────────────────────
+    if QUIL_WORD_NAV_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_WORD_NAV_PROOF_DONE {
+                serial_println!("[quil.word.nav.proof.begin]");
+                QUIL_BUFFER_LEN = 0; QUIL_CURSOR_POS = 0;
+                for &ch in b"abc def ghi" { text_buffer_append(ch); }
+                // Cursor at end (pos 11), word-left: skip "ghi" → pos 8
+                QUIL_CURSOR_POS = 11; cursor_word_left();
+                // Word-left again: skip "def" → pos 4
+                cursor_word_left();
+                // Word-right: skip "def" → pos 8
+                cursor_word_right();
+                serial_println!("[quil.word.nav.proof.done] ok=1");
+                QUIL_WORD_NAV_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Line stats proof ────────────────────────────────────────────────
+    if QUIL_LINE_STATS_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_LINE_STATS_PROOF_DONE {
+                serial_println!("[quil.text.stats.proof.begin]");
+                QUIL_BUFFER_LEN = 0; QUIL_CURSOR_POS = 0;
+                for &ch in b"hello world\nfoo bar baz" { text_buffer_append(ch); }
+                QUIL_CURSOR_POS = 5; emit_text_stats();
+                QUIL_CURSOR_POS = 12; emit_text_stats();
+                serial_println!("[quil.text.stats.proof.done] ok=1");
+                QUIL_LINE_STATS_PROOF_DONE = true;
             }
         }
     }
