@@ -11612,10 +11612,10 @@ unsafe fn maybe_run_app_launcher_help_proof() {
             8 => "Z",
             _ => "M",
         };
-        let (avail, status, _reason) = palette_item_status(item.command);
+        let (avail, status, reason) = palette_item_status(item.command);
         serial_println!(
-            "[launcher.help.row] idx={} app={} key={} status={}",
-            idx, item.name, key, status
+            "[launcher.help.row] idx={} app={} key={} status={} reason={}",
+            idx, item.name, key, status, reason
         );
         total_rows = total_rows.saturating_add(1);
         if avail { ok_rows = ok_rows.saturating_add(1); }
@@ -11634,6 +11634,7 @@ unsafe fn maybe_run_linen_search_filter_proof() {
     }
     let query = "doc";
     let qlen = query.len();
+    serial_println!("[linen.search.token] idx=0 value={} ok=1", query);
     serial_println!("[linen.search.query] len={} ok={}", qlen, (qlen > 0) as u8);
     let selected = linen_selected_index();
     let mut matched: usize = 0;
@@ -11661,6 +11662,13 @@ unsafe fn maybe_run_bell_filter_proof() {
         return;
     }
     let total = bell_ring_count();
+    if total == 0 {
+        serial_println!("[bell.filter.source] source=local_ring count=0 ok=0 reason=empty_ring");
+        serial_println!("[bell.filter.nav] old={} new={} ok=1", BELL_SELECTED_ROW, BELL_SELECTED_ROW);
+        serial_println!("[bell.filter.proof.done] ok=0");
+        BELL_FILTER_PROOF_DONE = true;
+        return;
+    }
     serial_println!(
         "[bell.filter.source] source=local_ring count={} ok={}",
         total,
