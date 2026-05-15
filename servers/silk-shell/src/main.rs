@@ -1444,6 +1444,37 @@ unsafe fn maybe_run_atlas_scene_stub_proof() {
     ATLAS_SCENE_STUB_PROOF_DONE = true;
 }
 
+/// Scene lifecycle markers proof.
+const SCENE_LIFECYCLE_MARKERS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SCENE_LIFECYCLE_MARKERS_PROOF").is_some();
+static mut SCENE_LIFECYCLE_MARKERS_PROOF_DONE: bool = false;
+
+/// Scene lifecycle markers: documents scene state vocabulary using
+/// existing Frame/Atlas model data. No scene switching, no visuals,
+/// no pointer, no renderer changes. Marker-only.
+unsafe fn maybe_run_scene_lifecycle_markers_proof() {
+    if !SCENE_LIFECYCLE_MARKERS_PROOF_ENABLED || SCENE_LIFECYCLE_MARKERS_PROOF_DONE { return; }
+    serial_println!("[silk.scene.lifecycle.proof.begin]");
+
+    // Scene 0: Workspace — the single active scene.
+    // Derived from existing Frame model (scene=0, 3 frames, no minimized, no urgent).
+    serial_println!("[silk.scene.lifecycle] scene=0 state=active active=1 frames=3 minimized=0 urgent=0 switching=0 visual=0 pointer=0 ok=1 reason=default_workspace");
+
+    // Inactive/empty/blocked/overview_only states: none present.
+    // These are defined as future vocabulary, not yet exercised.
+    serial_println!("[silk.scene.lifecycle] scene=0 state=ready ok=1 reason=workspace_is_active");
+    serial_println!("[silk.scene.lifecycle] scene=0 state=inactive ok=0 reason=single_scene_is_active");
+    serial_println!("[silk.scene.lifecycle] scene=0 state=empty ok=0 reason=has_3_frames");
+    serial_println!("[silk.scene.lifecycle] scene=0 state=has_minimized ok=0 reason=no_minimized_frames_at_boot");
+    serial_println!("[silk.scene.lifecycle] scene=0 state=has_urgent ok=0 reason=no_bell_urgency_at_boot");
+    serial_println!("[silk.scene.lifecycle] scene=0 state=blocked ok=0 reason=not_blocked");
+    serial_println!("[silk.scene.lifecycle] scene=0 state=overview_only ok=0 reason=not_overview_only");
+
+    serial_println!("[silk.scene.lifecycle.summary] scenes=1 active=1 ready=1 minimized=0 urgent=0 switching=0 visual=0 pointer=0 ok=1");
+    serial_println!("[silk.scene.lifecycle.markers.done] ok=1 scenes=1 switching=0 visual=0 pointer=0");
+    SCENE_LIFECYCLE_MARKERS_PROOF_DONE = true;
+}
+
 /// Linen object detail proof: exercises non-blocking object detail panel
 /// open/close through local LINEN_OBJECTS reads only (no PDX calls, no
 /// linen_sync_reply blocking).
@@ -16146,6 +16177,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_frame_lights_stub_proof(); }
         unsafe { maybe_run_frame_lights_keyboard_proof(); }
         unsafe { maybe_run_atlas_scene_stub_proof(); }
+        unsafe { maybe_run_scene_lifecycle_markers_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }

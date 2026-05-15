@@ -229,6 +229,7 @@ export SEXOS_FRAME_LIGHTS_KEYBOARD_PROOF=1
 # ── Atlas Scene status stub proof ──
 export SEXOS_ATLAS_SCENE_STUB_PROOF=1
 export SEXOS_SPINDLE_ATLAS_PROOF=1
+export SEXOS_SCENE_LIFECYCLE_MARKERS_PROOF=1
 
 echo "============================================"
 echo " DAILY-DRIVER PROOF PROFILE V32"

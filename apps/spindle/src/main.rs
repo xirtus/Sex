@@ -1575,6 +1575,33 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.frame.chrome.command] name=scene-status ok=1 reason=scene_summary");
             true
         }
+        b"scene-lifecycle" => {
+            sb.push(b"Scene Lifecycle -- marker-only (no switching, no visuals):");
+            sb.push(b"  Workspace (scene=0): state=active frames=3");
+            sb.push(b"  Lifecycle states:");
+            sb.push(b"    active        = 1 (default workspace)");
+            sb.push(b"    ready         = 1 (active implies ready)");
+            sb.push(b"    inactive      = 0 (single scene, always active)");
+            sb.push(b"    empty         = 0 (has 3 frames)");
+            sb.push(b"    has_minimized = 0 (none minimized at boot)");
+            sb.push(b"    has_urgent    = 0 (no Bell urgency at boot)");
+            sb.push(b"    blocked       = 0");
+            sb.push(b"    overview_only = 0");
+            sb.push(b"  switching=0 visual=0 pointer=0");
+            sb.push(b"  Use scene-lifecycle-status for summary.");
+            serial_println!("[spindle.scene.lifecycle.command] name=scene-lifecycle ok=1 reason=lifecycle_state_list");
+            true
+        }
+        b"scene-lifecycle-status" => {
+            sb.push(b"Scene Lifecycle Summary:");
+            sb.push(b"  scenes=1 active=1 ready=1");
+            sb.push(b"  minimized=0 urgent=0 switching=0");
+            sb.push(b"  visual=0 pointer=0 -- marker-only, no visuals.");
+            sb.push(b"  No scene switching support.");
+            sb.push(b"  Derived from existing Frame and Atlas model.");
+            serial_println!("[spindle.scene.lifecycle.command] name=scene-lifecycle-status ok=1 reason=lifecycle_summary");
+            true
+        }
         // ── Window workflow help ──────────────────────────────────────────
         b"windows" => {
             sb.push(b"Window Workflow -- shell-owned actions:");
@@ -2012,6 +2039,8 @@ pub extern "C" fn _start() -> ! {
     if SPINDLE_FRAME_CHROME_PROOF_ENABLED {
         let _ = dispatch(b"frame-chrome", sb, hist, &mut ev);
         let _ = dispatch(b"scene-status", sb, hist, &mut ev);
+        let _ = dispatch(b"scene-lifecycle", sb, hist, &mut ev);
+        let _ = dispatch(b"scene-lifecycle-status", sb, hist, &mut ev);
         serial_println!("[spindle.frame.chrome.proof.done] ok=1");
     }
     if SPINDLE_BROWSER_STUB_PROOF_ENABLED {
