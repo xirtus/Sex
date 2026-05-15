@@ -11646,9 +11646,10 @@ unsafe fn maybe_run_linen_search_filter_proof() {
         }
     }
     serial_println!(
-        "[linen.search.result] count={} selected={}",
+        "[linen.search.result] count={} selected={} reason={}",
         matched,
-        selected
+        selected,
+        if matched > 0 { "kind_document_match" } else { "no_match" }
     );
     serial_println!(
         "[linen.filter.proof.done] ok={} mode=kind_document",
@@ -11695,7 +11696,7 @@ unsafe fn maybe_run_atlas_preview_proof() {
     let accent = SCENES[preset as usize].accent;
     let color = ATLAS_ACCENT_COLORS[(accent as usize) % (ATLAS_ACCENT_COLORS.len())];
     serial_println!(
-        "[atlas.preview] preset={} accent={} color={:#010x} ok=1",
+        "[atlas.preview] preset={} accent={} color={:#010x} ok=1 reason=pre_apply_marker",
         preset, accent, color
     );
     serial_println!("[atlas.preview.proof.done] ok=1");
@@ -11758,8 +11759,23 @@ unsafe fn maybe_run_app_registry_launch_intent_proof() {
     }
     let mut rows: u8 = 0;
     let mut runnable: u8 = 0;
+    let mut projects: u8 = 0;
+    let mut documents: u8 = 0;
+    let mut codefiles: u8 = 0;
+    let mut media_assets: u8 = 0;
+    let mut build_artifacts: u8 = 0;
+    let mut folders: u8 = 0;
     for slot in LINEN_OBJECTS.iter() {
         if let Some(obj) = slot {
+            match obj.kind {
+                LinenObjectKind::Project => projects = projects.saturating_add(1),
+                LinenObjectKind::Document => documents = documents.saturating_add(1),
+                LinenObjectKind::CodeFile => codefiles = codefiles.saturating_add(1),
+                LinenObjectKind::MediaAsset => media_assets = media_assets.saturating_add(1),
+                LinenObjectKind::BuildArtifact => build_artifacts = build_artifacts.saturating_add(1),
+                LinenObjectKind::Folder => folders = folders.saturating_add(1),
+                _ => {}
+            }
             let can_launch = matches!(
                 obj.kind,
                 LinenObjectKind::Project
@@ -11787,6 +11803,15 @@ unsafe fn maybe_run_app_registry_launch_intent_proof() {
             rows = rows.saturating_add(1);
         }
     }
+    serial_println!(
+        "[app.registry.kind.matrix] project={} document={} codefile={} media={} build={} folder={} ok=1",
+        projects,
+        documents,
+        codefiles,
+        media_assets,
+        build_artifacts,
+        folders
+    );
     serial_println!(
         "[app.registry.intent.done] rows={} runnable={} ok={}",
         rows,

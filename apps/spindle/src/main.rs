@@ -662,6 +662,13 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.help.command] name=shortcut_altf4_close ok=1");
             serial_println!("[spindle.help.command] name=shortcut_arrows_nav ok=1");
             serial_println!("[spindle.help.command] name=shortcut_vi_mode ok=1");
+            serial_println!("[spindle.alias.help.row] idx=0 alias=d target=daily ok=1");
+            serial_println!("[spindle.alias.help.row] idx=1 alias=b target=blockers ok=1");
+            serial_println!("[spindle.alias.help.row] idx=2 alias=k target=keys ok=1");
+            serial_println!("[spindle.alias.help.row] idx=3 alias=a target=apps ok=1");
+            serial_println!("[spindle.alias.help.row] idx=4 alias=q target=status ok=1");
+            serial_println!("[spindle.alias.help.row] idx=5 alias=n target=notify ok=1");
+            serial_println!("[spindle.alias.help.done] rows=6 ok=1");
 
             sb.push(b"");
             sb.push(b"Type 'daily' for full daily-driver readiness summary.");
