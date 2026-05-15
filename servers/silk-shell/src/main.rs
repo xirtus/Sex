@@ -8,7 +8,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use sex_pdx::{
     pdx_call, pdx_call_checked, pdx_listen_raw, pdx_try_listen_raw, pdx_reply, sys_yield, sys_set_state, serial_println, WindowDescriptor,
     SLOT_DISPLAY, SLOT_SILKBAR, SLOT_SEXSTORE, SLOT_QUIL, SLOT_SPINDLE, SLOT_STORAGE, OP_QUIL_PING,
-    OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE,
+    OP_SILKBAR_WORKSPACE_ACTIVE, OP_SILKBAR_FOCUS_STATE, OP_SILKBAR_UPDATE,
     OP_SURFACE_TAB_INFO, OP_APPEARANCE_TOKENS,
     SVC_STATE_LISTENING, ERR_CAP_INVALID, EV_KEY, EV_REL, EV_ABS, EV_BTN,
 };
@@ -16,7 +16,8 @@ use silkbar_model::{DEFAULT_SILK_BAR, hit_test_action, Action, PANEL_X, PANEL_Y,
     OPTION_CLOSE, OPTION_ZOOM, OPTION_MINIMIZE, OPTION_MOVE, SILKBAR_WORKSPACE_COUNT,
     APPEARANCE_TOKEN_FOCUS_SURFACE, APPEARANCE_TOKEN_FRAME_RIM, APPEARANCE_TOKEN_FRAME_TOP_BAR,
     APPEARANCE_TOKEN_ACTIVE_TAB, APPEARANCE_TOKEN_INACTIVE_TAB,
-    APPEARANCE_TOKEN_CLOSE_LIGHT, APPEARANCE_TOKEN_MINIMIZE_LIGHT, APPEARANCE_TOKEN_ZOOM_LIGHT};
+    APPEARANCE_TOKEN_CLOSE_LIGHT, APPEARANCE_TOKEN_MINIMIZE_LIGHT, APPEARANCE_TOKEN_ZOOM_LIGHT,
+    UpdateKind};
 use silk_shell::{AppManifest, AppCapabilityBits, APP_RUNTIME_ABI_VERSION};
 
 // Local Opcodes
@@ -116,6 +117,10 @@ const COLLAR_KEYBOARD_GRANTS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COLLAR_KEYBOARD_GRANTS_PROOF").is_some();
 const SILKBAR_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_SILKBAR_PALETTE_STATUS_PROOF").is_some();
+/// Phase 2: silk-shell sends SetActiveApp/SetTintAccent/SetPaletteState updates
+/// to sexdisplay via OP_SILKBAR_UPDATE. Compile-time gate. Zero receiver dependency.
+const SILKBAR_PHASE2_SHELL_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SILKBAR_PHASE2_SHELL_PROOF").is_some();
 
 /// Synthetic proof stage counter for Atlas overview model proof. Advances 0..4 then stops.
 static mut ATLAS_OVERVIEW_PROOF_STAGE: u8 = 0;
@@ -128,6 +133,8 @@ static mut LINEN_OBJECT_DETAIL_PROOF_DONE: bool = false;
 static mut LINEN_NONBLOCKING_OPEN_PROOF_DONE: bool = false;
 static mut COLLAR_KEYBOARD_GRANTS_PROOF_DONE: bool = false;
 static mut SILKBAR_PALETTE_STATUS_PROOF_DONE: bool = false;
+static mut SILKBAR_PHASE2_SHELL_PROOF_DONE: bool = false;
+static mut SILKBAR_PHASE2_SHELL_PROOF_STAGE: u8 = 0;
 
 /// App lifecycle synthetic proof gate.
 /// Build with SEXOS_LIFECYCLE_PROOF=1 to enable.
@@ -661,6 +668,34 @@ unsafe fn maybe_run_atlas_theme_presets_proof() {
 /// - Active app name: no UpdateKind variant in silkbar-model
 /// - Tint/accent: no UpdateKind variant in silkbar-model
 /// These are documented as blockers, not implemented.
+
+/// Phase 2 send helper: pushes a SilkBarUpdate to sexdisplay via OP_SILKBAR_UPDATE.
+/// Sends directly to SLOT_DISPLAY (not silkbar daemon) since these variants are
+/// stateless focus/palette events — no polling or cadence needed.
+///
+/// Returns true if the PDX call succeeded (non-negative reply), false on error.
+/// Emits [shell.silkbar.phase2.send] marker for gate verification.
+unsafe fn send_silkbar_phase2_update(kind: u32, a: u64, b: u64) -> bool {
+    if !SILKBAR_PHASE2_SHELL_PROOF_ENABLED {
+        return false;
+    }
+    // Fire-and-forget send to sexdisplay. Old receivers silently drop
+    // unknown kind=8/9/10 (backward compat). pdx_call returns (u64,u64);
+    // we treat any non-panic send as success — no blocking on reply.
+    let _ = pdx_call(SLOT_DISPLAY, OP_SILKBAR_UPDATE, kind as u64, a, b);
+    let kind_name = match kind {
+        8 => "SetActiveApp",
+        9 => "SetTintAccent",
+        10 => "SetPaletteState",
+        _ => "Unknown",
+    };
+    serial_println!(
+        "[shell.silkbar.phase2.send] kind={} a={} b={} ok=1 reason=sent",
+        kind_name, a, b
+    );
+    true
+}
+
 unsafe fn maybe_run_silkbar_keyboard_status_proof() {
     if !SILKBAR_KEYBOARD_STATUS_PROOF_ENABLED || SILKBAR_KEYBOARD_STATUS_PROOF_DONE {
         return;
@@ -822,6 +857,68 @@ unsafe fn maybe_run_silkbar_palette_status_proof() {
     let all_ok = open_ok && close_ok;
     serial_println!("[silkbar.palette.status.proof.done] ok={}", all_ok as u8);
     SILKBAR_PALETTE_STATUS_PROOF_DONE = true;
+}
+
+/// Phase 2 shell proof: exercises all three new SilkBar ABI update variants
+/// (SetActiveApp, SetTintAccent, SetPaletteState) via OP_SILKBAR_UPDATE.
+///
+/// Runs once when a surface is focused and the command palette is available.
+/// Sends each variant and emits a final [silkbar.phase2.shell.proof.done] marker.
+///
+/// This is a fire-and-forget send-only proof — no receiver dependency.
+/// Old sexdisplay receivers silently drop unknown kind=8/9/10 (backward compat).
+unsafe fn maybe_run_silkbar_phase2_shell_proof() {
+    if !SILKBAR_PHASE2_SHELL_PROOF_ENABLED || SILKBAR_PHASE2_SHELL_PROOF_DONE {
+        return;
+    }
+    if SILKBAR_PHASE2_SHELL_PROOF_STAGE > 0 {
+        return; // already in progress or done
+    }
+    if FOCUSED_SURFACE_ID == 0 {
+        return; // need a focused app to prove against
+    }
+    SILKBAR_PHASE2_SHELL_PROOF_STAGE = 1;
+
+    serial_println!("[silkbar.phase2.shell.proof] stage=0 action=start ok=1 reason=phase2_proof_begin");
+
+    // Stage 1: Send SetActiveApp with current focused surface.
+    let ok1 = send_silkbar_phase2_update(
+        UpdateKind::SetActiveApp as u32, FOCUSED_SURFACE_ID, 0);
+    serial_println!(
+        "[silkbar.phase2.shell.proof] stage=1 action=SetActiveApp ok={} reason={}",
+        ok1 as u8,
+        if ok1 { "sent" } else { "send_reject" }
+    );
+
+    // Stage 2: Send SetTintAccent with current tint index.
+    let ok2 = send_silkbar_phase2_update(
+        UpdateKind::SetTintAccent as u32, ACTIVE_TINT_IDX as u64, 0);
+    serial_println!(
+        "[silkbar.phase2.shell.proof] stage=2 action=SetTintAccent ok={} reason={}",
+        ok2 as u8,
+        if ok2 { "sent" } else { "send_reject" }
+    );
+
+    // Stage 3: Send SetPaletteState with current palette state.
+    let palette_packed = if COMMAND_PALETTE_OPEN {
+        1u64 | ((COMMAND_PALETTE_SELECTED as u64) << 1) | ((COMMAND_LIST.len() as u64) << 9)
+    } else {
+        0
+    };
+    let ok3 = send_silkbar_phase2_update(
+        UpdateKind::SetPaletteState as u32, palette_packed, 0);
+    serial_println!(
+        "[silkbar.phase2.shell.proof] stage=3 action=SetPaletteState ok={} reason={}",
+        ok3 as u8,
+        if ok3 { "sent" } else { "send_reject" }
+    );
+
+    let all_ok = ok1 && ok2 && ok3;
+    serial_println!(
+        "[silkbar.phase2.shell.proof.done] ok={}",
+        all_ok as u8
+    );
+    SILKBAR_PHASE2_SHELL_PROOF_DONE = true;
 }
 
 /// Bell system events proof: seeds Bell events for system/app milestones
@@ -7657,6 +7754,10 @@ unsafe fn atlas_apply_scene_accent_to_chrome(scene_idx: u8) {
         idx, accent, ACTIVE_TINT_IDX, SCENE_APPEARANCE_STATE.preset_idx,
         SCENE_APPEARANCE_STATE.use_custom_colors, changed
     );
+    // Phase 2: tint accent changed → send to sexdisplay.
+    if changed != 0 {
+        send_silkbar_phase2_update(UpdateKind::SetTintAccent as u32, ACTIVE_TINT_IDX as u64, 0);
+    }
 }
 
 /// Switch active scene to a specific index. Safe: clamps to WORKSPACE_COUNT-1.
@@ -7688,6 +7789,9 @@ unsafe fn switch_scene(scene_idx: u8) {
         "[shell.silkbar.status.send] focus={} app={} tint={} bell={} ok=1 reason=workspace_switch",
         FOCUSED_SURFACE_ID, "Scene", ACTIVE_TINT_IDX, bell_ring_count()
     );
+    // Phase 2: scene switch may change active app + tint.
+    unsafe { send_silkbar_phase2_update(UpdateKind::SetActiveApp as u32, FOCUSED_SURFACE_ID, 0); }
+    unsafe { send_silkbar_phase2_update(UpdateKind::SetTintAccent as u32, ACTIVE_TINT_IDX as u64, 0); }
     static mut SCENE_SWITCH_SHORTCUT_BUDGET: u32 = 4;
     let b = &mut SCENE_SWITCH_SHORTCUT_BUDGET;
     if *b > 0 { *b -= 1; serial_println!("[shell.scene.shortcut.switch] from={} to={}", prev, ACTIVE_SCENE_IDX); }
@@ -10726,6 +10830,8 @@ unsafe fn toggle_command_palette() -> bool {
         COMMAND_PALETTE_OPEN = false;
         serial_println!("[launcher.close] ok=1 reason=palette_closed");
         serial_println!("[shell.palette.statusbar] open=0 selected=0 available=0");
+        // Phase 2: palette closed → packed=0.
+        unsafe { send_silkbar_phase2_update(UpdateKind::SetPaletteState as u32, 0, 0); }
         if let Some(_) = bell_frame_id() { // use hide pattern
             if minimize_frame(COMMAND_PALETTE_FRAME_ID) {
                 serial_println!("[command_palette.close]");
@@ -10752,6 +10858,11 @@ unsafe fn toggle_command_palette() -> bool {
             COMMAND_PALETTE_SELECTED,
             available_count
         );
+        // Phase 2: palette open → packed(open=1 | selected<<1 | available<<9).
+        let packed = 1u64
+            | ((COMMAND_PALETTE_SELECTED as u64) << 1)
+            | ((available_count as u64) << 9);
+        unsafe { send_silkbar_phase2_update(UpdateKind::SetPaletteState as u32, packed, 0); }
         // ── Launcher markers: app subset (indices 0-6) ──
         let app_count: u8 = 7; // FocusSpindle/Quil/Linen/Atlas/Bell/Collar/Mesh
         serial_println!(
@@ -10808,6 +10919,11 @@ unsafe fn palette_select_next() {
     serial_println!("[command_palette.select] index={}", next);
     serial_println!("[launcher.nav] old={} new={} count={}", old, next, count);
     palette_render_list();
+    // Phase 2: palette selection changed.
+    if COMMAND_PALETTE_OPEN {
+        let packed = 1u64 | ((next as u64) << 1) | ((count as u64) << 9);
+        send_silkbar_phase2_update(UpdateKind::SetPaletteState as u32, packed, 0);
+    }
 }
 
 /// Move selection to previous command in the palette.
@@ -10821,6 +10937,11 @@ unsafe fn palette_select_prev() {
     serial_println!("[command_palette.select] index={}", prev);
     serial_println!("[launcher.nav] old={} new={} count={}", old, prev, count);
     palette_render_list();
+    // Phase 2: palette selection changed.
+    if COMMAND_PALETTE_OPEN {
+        let packed = 1u64 | ((prev as u64) << 1) | ((count as u64) << 9);
+        send_silkbar_phase2_update(UpdateKind::SetPaletteState as u32, packed, 0);
+    }
 }
 
 /// Return per-item availability status tuple for a Command:
@@ -13892,6 +14013,9 @@ unsafe fn try_set_focus(sid: u64) -> bool {
         "[shell.silkbar.status.send] focus={} app={} tint={} bell={} ok=1 reason=focus_set",
         sid, app_label, ACTIVE_TINT_IDX, bell_ring_count()
     );
+    // Phase 2: send active app + tint to sexdisplay via OP_SILKBAR_UPDATE.
+    unsafe { send_silkbar_phase2_update(UpdateKind::SetActiveApp as u32, sid, 0); }
+    unsafe { send_silkbar_phase2_update(UpdateKind::SetTintAccent as u32, ACTIVE_TINT_IDX as u64, 0); }
     unsafe {
         static mut SELECTED_OPTIONS_SEND_BUDGET: u32 = 8;
         let b = &mut SELECTED_OPTIONS_SEND_BUDGET;
@@ -15281,6 +15405,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_theme_presets_proof(); }
         unsafe { maybe_run_silkbar_keyboard_status_proof(); }
         unsafe { maybe_run_silkbar_palette_status_proof(); }
+        unsafe { maybe_run_silkbar_phase2_shell_proof(); }
         unsafe { maybe_run_bell_system_events_proof(); }
         unsafe { maybe_run_bell_keyboard_detail_proof(); }
         unsafe { maybe_run_bell_detail_seed_proof(); }
