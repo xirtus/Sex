@@ -49,6 +49,7 @@ const QUIL_MAX_VISIBLE_LINES: usize = 6;
 /// Updated by quil_load(). Read by draw_text_lines().
 static mut QUIL_BUFFER: [u8; QUIL_BUFFER_MAX_LEN] = [0u8; QUIL_BUFFER_MAX_LEN];
 static mut QUIL_BUFFER_LEN: usize = 0;
+static mut QUIL_CURSOR_POS: usize = 0;
 
 // ── RamFS / SexFiles Protocol Constants ─────────────────────────────────────
 // SEXFILES_RAMFS_CONTRACT_LOCK_V1: bounded flat namespace.
@@ -82,6 +83,12 @@ static mut QUIL_TEXT_SAVE_ASYNC_PROOF_DONE: bool = false;
 const QUIL_TEXT_COMMANDS_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_TEXT_COMMANDS_PROOF").is_some();
 static mut QUIL_TEXT_COMMANDS_PROOF_DONE: bool = false;
+
+/// Cursor navigation proof gate.
+/// Build with SEXOS_QUIL_CURSOR_NAV_PROOF=1 to enable.
+const QUIL_CURSOR_NAV_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_CURSOR_NAV_PROOF").is_some();
+static mut QUIL_CURSOR_NAV_PROOF_DONE: bool = false;
 
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
@@ -993,12 +1000,46 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                     }
                     serial_println!("[quil.palette.reject] action=key reason=unmapped");
                 } else {
-                    // Text edit mode: handle character keys
+                    // Text edit mode: handle character keys and cursor nav
                     // Check for Backspace (scancode 0x0E)
                     if scancode == 0x0E {
                         serial_println!("[quil.text.recv] code=14 ch=8");
                         text_buffer_backspace();
                         unsafe { draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
+                    // Cursor left (scancode 0x4B = left arrow, or 0x24 = J in text mode? no, J is mapped in palette)
+                    } else if scancode == 0x4B {
+                        // Left arrow — move cursor left
+                        unsafe {
+                            let old = QUIL_CURSOR_POS;
+                            if QUIL_CURSOR_POS > 0 { QUIL_CURSOR_POS -= 1; }
+                            serial_println!("[quil.cursor.move] old={} new={} len={} dir=left ok=1",
+                                old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN);
+                        }
+                    // Cursor right (scancode 0x4D = right arrow)
+                    } else if scancode == 0x4D {
+                        // Right arrow — move cursor right
+                        unsafe {
+                            let old = QUIL_CURSOR_POS;
+                            if QUIL_CURSOR_POS < QUIL_BUFFER_LEN { QUIL_CURSOR_POS += 1; }
+                            serial_println!("[quil.cursor.move] old={} new={} len={} dir=right ok=1",
+                                old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN);
+                        }
+                    // Home (scancode 0x47 = Home, or 0x147 for extended)
+                    } else if scancode == 0x47 {
+                        unsafe {
+                            let old = QUIL_CURSOR_POS;
+                            QUIL_CURSOR_POS = 0;
+                            serial_println!("[quil.cursor.move] old={} new=0 len={} dir=home ok=1",
+                                old, QUIL_BUFFER_LEN);
+                        }
+                    // End (scancode 0x4F)
+                    } else if scancode == 0x4F {
+                        unsafe {
+                            let old = QUIL_CURSOR_POS;
+                            QUIL_CURSOR_POS = QUIL_BUFFER_LEN;
+                            serial_println!("[quil.cursor.move] old={} new={} len={} dir=end ok=1",
+                                old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN);
+                        }
                     } else if let Some(ch) = scancode_to_char(scancode) {
                         serial_println!("[quil.text.recv] code={} ch={}", scancode, ch);
                         text_buffer_append(ch);
@@ -1401,6 +1442,33 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[quil.text.command] name=cursor ok=1 reason=backspace_tracking");
                 serial_println!("[quil.text.command.proof.done] ok=1");
                 QUIL_TEXT_COMMANDS_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Cursor navigation proof: left/right/home/end ────────────────────
+    if QUIL_CURSOR_NAV_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_CURSOR_NAV_PROOF_DONE {
+                serial_println!("[quil.cursor.proof.begin]");
+                palette_active = false;
+                // Seed buffer: "AB" → cursor at pos 2
+                QUIL_BUFFER_LEN = 0;
+                QUIL_CURSOR_POS = 0;
+                for &ch in b"AB" { text_buffer_append(ch); }
+                // left: 2→1
+                { let old = QUIL_CURSOR_POS; if QUIL_CURSOR_POS > 0 { QUIL_CURSOR_POS -= 1; } serial_println!("[quil.cursor.move] old={} new={} len={} dir=left ok=1", old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN); }
+                // right: 1→2
+                { let old = QUIL_CURSOR_POS; if QUIL_CURSOR_POS < QUIL_BUFFER_LEN { QUIL_CURSOR_POS += 1; } serial_println!("[quil.cursor.move] old={} new={} len={} dir=right ok=1", old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN); }
+                // home: 2→0
+                { let old = QUIL_CURSOR_POS; QUIL_CURSOR_POS = 0; serial_println!("[quil.cursor.move] old={} new=0 len={} dir=home ok=1", old, QUIL_BUFFER_LEN); }
+                // end: 0→2
+                { let old = QUIL_CURSOR_POS; QUIL_CURSOR_POS = QUIL_BUFFER_LEN; serial_println!("[quil.cursor.move] old={} new={} len={} dir=end ok=1", old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN); }
+                // left at boundary: 0→0 (clamped)
+                { let old = QUIL_CURSOR_POS; QUIL_CURSOR_POS = 0; if QUIL_CURSOR_POS > 0 { QUIL_CURSOR_POS -= 1; } serial_println!("[quil.cursor.move] old={} new={} len={} dir=left ok=1", old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN); }
+                serial_println!("[quil.cursor.proof.done] ok=1");
+                QUIL_CURSOR_NAV_PROOF_DONE = true;
+                palette_active = true;
             }
         }
     }

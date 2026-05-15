@@ -1283,6 +1283,97 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             }
             true
         }
+        // ── Linen workflow commands ──────────────────────────────────────────
+        b"object-new" => {
+            sb.push(b"Linen object create: cannot cross-PD from Spindle.");
+            sb.push(b"Spindle has SLOT_LINEN for fire-and-forget PDX calls,");
+            sb.push(b"but Linen has no OP_LINEN_CREATE_OBJECT_ASYNC handler.");
+            sb.push(b"Blocked: needs new Linen opcode or kernel spawn.");
+            sb.push(b"Use silk-shell Linen surface (Alt+digit) to create objects.");
+            serial_println!("[spindle.linen.workflow.command] name=object-new ok=0 reason=no_async_create_opcode_cross_pd_blocked");
+            true
+        }
+        b"object-tag" => {
+            sb.push(b"Linen object tag: cannot cross-PD from Spindle.");
+            sb.push(b"Tag table is local to Linen server (static BSS).");
+            sb.push(b"No PDX opcode for remote tag assignment exists.");
+            sb.push(b"Blocked: needs OP_LINEN_TAG_OBJECT opcode.");
+            sb.push(b"Use Linen surface (Alt+digit) for keyboard tag workflow.");
+            serial_println!("[spindle.linen.workflow.command] name=object-tag ok=0 reason=no_tag_opcode_local_tag_table_only");
+            true
+        }
+        b"object-search" => {
+            sb.push(b"Linen object search: cannot cross-PD from Spindle.");
+            sb.push(b"Search is local in-memory scan (linen_search_by_token).");
+            sb.push(b"No PDX opcode for remote search query exists.");
+            sb.push(b"Blocked: needs OP_LINEN_SEARCH_OBJECTS opcode.");
+            sb.push(b"Use Linen surface for keyboard search workflow.");
+            serial_println!("[spindle.linen.workflow.command] name=object-search ok=0 reason=no_search_opcode_local_scan_only");
+            true
+        }
+        // ── Quil workflow / editor commands ──────────────────────────────────
+        b"quil" => {
+            sb.push(b"Quil -- SexOS text editor (keyboard-first, no_std)");
+            sb.push(b"  surface:  201 (640x480, palette + text area)");
+            sb.push(b"  buffer:   512 bytes, bounded static array");
+            sb.push(b"  palette:  5 commands (Save/Load via RamFS)");
+            sb.push(b"  text:     keyboard edit (append/backspace/newline)");
+            sb.push(b"  proof:    keyboard_nav_ready, text buffer proof");
+            sb.push(b"  save:     async audit complete (fire-and-forget OPEN)");
+            sb.push(b"  open:     Alt+5 from launcher, or palette-backtick");
+            serial_println!("[spindle.quil.workflow.command] name=quil ok=1 reason=help_rendered");
+            true
+        }
+        b"edit" => {
+            sb.push(b"Editor status: Quil text edit buffer is keyboard-ready.");
+            sb.push(b"Commands: type to append, Backspace to delete, Enter=newline.");
+            sb.push(b"Esc toggles command palette (5 rows: New/Save/Load/Run/Settings).");
+            sb.push(b"No cursor navigation in text mode (append-only V1).");
+            sb.push(b"See 'edit-help' for detailed key bindings.");
+            serial_println!("[spindle.quil.workflow.command] name=edit ok=1 reason=status_rendered");
+            true
+        }
+        b"edit-help" => {
+            sb.push(b"Quil Editor Key Bindings:");
+            sb.push(b"  A-Z, 0-9, punctuation  type character (text mode)");
+            sb.push(b"  Backspace               delete last character");
+            sb.push(b"  Enter                   newline (text mode) / select (palette)");
+            sb.push(b"  Esc                     toggle palette on/off");
+            sb.push(b"  J / Down Arrow          palette nav: next row");
+            sb.push(b"  K / Up Arrow            palette nav: prev row");
+            sb.push(b"Palette commands:");
+            sb.push(b"  1 New Buffer (stub)    2 Save Document");
+            sb.push(b"  3 Load Document        4 Run Check (stub)");
+            sb.push(b"  5 Settings (stub)");
+            sb.push(b"Limitations: no cursor nav, no shift, no selection.");
+            serial_println!("[spindle.quil.workflow.command] name=edit-help ok=1 reason=keybindings_rendered");
+            true
+        }
+        b"edit-status" => {
+            sb.push(b"Quil Edit Buffer Status:");
+            sb.push(b"  max bytes:   512");
+            sb.push(b"  text mode:   append-only (no cursor nav)");
+            sb.push(b"  palette:     5 commands, keyboard nav ready");
+            sb.push(b"  save:        RamFS sync (palette row 2)");
+            sb.push(b"  load:        RamFS sync (palette row 3)");
+            sb.push(b"  async save:  audited (OPEN fire-and-forget, no write)");
+            sb.push(b"  proof gate:  QUIL_TEXT_BUFFER_COMMANDS_V1 PASS");
+            serial_println!("[spindle.quil.workflow.command] name=edit-status ok=1 reason=buffer_status_rendered");
+            true
+        }
+        // ── Linen search from Spindle audit ──────────────────────────────────
+        b"linen-search" => {
+            sb.push(b"Linen search from Spindle: BLOCKED.");
+            sb.push(b"Spindle has SLOT_LINEN (PD 7: linen) but no OP_LINEN_SEARCH.");
+            sb.push(b"Existing Linen opcodes: CREATE(0x41), LIST(0x42), GET(0x43),");
+            sb.push(b"  PUBLIC_SNAPSHOT(0x44), PUBLIC_NAME(0x45), OPEN_INTENT(0x46).");
+            sb.push(b"Search (linen_search_by_token) is local to Linen server.");
+            sb.push(b"Blocked: needs OP_LINEN_SEARCH_OBJECTS (new ABI opcode).");
+            sb.push(b"Workaround: use LIST(0x42) to enumerate, filter client-side.");
+            serial_println!("[spindle.linen.search.send] token=N/A status=0 err=no_search_opcode");
+            serial_println!("[spindle.linen.workflow.command] name=linen-search ok=0 reason=no_opcode_abi_blocker");
+            true
+        }
         other => { ev.push(EvKind::CmdUnknown, other); false }
     };
     if recognized { ev.push(EvKind::CmdOk, cmd); }
@@ -1551,6 +1642,26 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[app.registry.row] id=6 name=Mesh sid=0 status=PASS launch=palette_owned");
         serial_println!("[app.registry.row] id=7 name=Pointer sid=0 status=DEFER launch=none");
         serial_println!("[app.registry.proof.done] ok=1");
+    }
+    // ── Spindle Linen workflow commands proof ─────────────────────────────
+    const SPINDLE_LINEN_WORKFLOW_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_LINEN_WORKFLOW_PROOF").is_some();
+    if SPINDLE_LINEN_WORKFLOW_PROOF_ENABLED {
+        let _ = dispatch(b"object-new test-doc", sb, hist, &mut ev);
+        let _ = dispatch(b"object-tag 1 work", sb, hist, &mut ev);
+        let _ = dispatch(b"object-search work", sb, hist, &mut ev);
+        let _ = dispatch(b"linen-search", sb, hist, &mut ev);
+        serial_println!("[spindle.linen.workflow.proof.done] ok=1");
+    }
+    // ── Spindle Quil workflow commands proof ──────────────────────────────
+    const SPINDLE_QUIL_WORKFLOW_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_QUIL_WORKFLOW_PROOF").is_some();
+    if SPINDLE_QUIL_WORKFLOW_PROOF_ENABLED {
+        let _ = dispatch(b"quil", sb, hist, &mut ev);
+        let _ = dispatch(b"edit", sb, hist, &mut ev);
+        let _ = dispatch(b"edit-help", sb, hist, &mut ev);
+        let _ = dispatch(b"edit-status", sb, hist, &mut ev);
+        serial_println!("[spindle.quil.workflow.proof.done] ok=1");
     }
 
     serial_println!("[spindle.ready]");

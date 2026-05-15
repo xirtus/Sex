@@ -142,8 +142,13 @@ export SEXOS_LINEN_OBJECT_SCHEMA_PROOF=1
 export SEXOS_QUIL_TEXT_COMMANDS_PROOF=1
 export SEXOS_BELL_WORKFLOW_DETAIL_PROOF=1
 
+# ── Feature batch V5 workflow usability proofs ──
+export SEXOS_SPINDLE_LINEN_WORKFLOW_PROOF=1
+export SEXOS_SPINDLE_QUIL_WORKFLOW_PROOF=1
+export SEXOS_QUIL_CURSOR_NAV_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V4"
+echo " DAILY-DRIVER PROOF PROFILE V5"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

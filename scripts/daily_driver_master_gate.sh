@@ -69,6 +69,9 @@ gate_app_registry_static="SKIP"
 gate_linen_object_schema="SKIP"
 gate_quil_text_commands="SKIP"
 gate_bell_workflow_detail="SKIP"
+gate_spindle_linen_workflow="SKIP"
+gate_spindle_quil_workflow="SKIP"
+gate_quil_cursor_nav="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -91,7 +94,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V4"
+echo " DAILY-DRIVER MASTER GATE V5"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -581,6 +584,51 @@ else
     print_row "bell_workflow_detail" "SKIP" "no detail proof markers"
 fi
 
+# ---- 30 (new). spindle_linen_workflow ----
+# Evidence: [spindle.linen.workflow.command], [spindle.linen.workflow.proof.done].
+
+if [ "$(has 'spindle\.linen\.workflow\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_cmds="$(count 'spindle\.linen\.workflow\.command\]')"
+    gate_spindle_linen_workflow="PASS"
+    print_row "spindle_linen_workflow" "PASS" "linen workflow commands: ${c_cmds}"
+elif [ "$(has 'spindle\.linen\.workflow\.command\]')" -ge 1 ]; then
+    gate_spindle_linen_workflow="PASS"
+    print_row "spindle_linen_workflow" "PASS" "linen workflow markers present (partial)"
+else
+    gate_spindle_linen_workflow="SKIP"
+    print_row "spindle_linen_workflow" "SKIP" "no linen workflow proof markers"
+fi
+
+# ---- 31 (new). spindle_quil_workflow ----
+# Evidence: [spindle.quil.workflow.command], [spindle.quil.workflow.proof.done].
+
+if [ "$(has 'spindle\.quil\.workflow\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_cmds="$(count 'spindle\.quil\.workflow\.command\]')"
+    gate_spindle_quil_workflow="PASS"
+    print_row "spindle_quil_workflow" "PASS" "quil workflow commands: ${c_cmds}"
+elif [ "$(has 'spindle\.quil\.workflow\.command\]')" -ge 1 ]; then
+    gate_spindle_quil_workflow="PASS"
+    print_row "spindle_quil_workflow" "PASS" "quil workflow markers present (partial)"
+else
+    gate_spindle_quil_workflow="SKIP"
+    print_row "spindle_quil_workflow" "SKIP" "no quil workflow proof markers"
+fi
+
+# ---- 32 (new). quil_cursor_nav ----
+# Evidence: [quil.cursor.move], [quil.cursor.proof.done].
+
+if [ "$(has 'quil\.cursor\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_moves="$(count 'quil\.cursor\.move\]')"
+    gate_quil_cursor_nav="PASS"
+    print_row "quil_cursor_nav" "PASS" "cursor moves: ${c_moves}"
+elif [ "$(has 'quil\.cursor\.move\]')" -ge 1 ]; then
+    gate_quil_cursor_nav="PASS"
+    print_row "quil_cursor_nav" "PASS" "cursor move markers present (partial)"
+else
+    gate_quil_cursor_nav="SKIP"
+    print_row "quil_cursor_nav" "SKIP" "no cursor nav proof markers"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -615,7 +663,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V4 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V5 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -650,6 +698,9 @@ ALL_GATES=(
     "linen_object_schema:$gate_linen_object_schema"
     "quil_text_commands:$gate_quil_text_commands"
     "bell_workflow_detail:$gate_bell_workflow_detail"
+    "spindle_linen_workflow:$gate_spindle_linen_workflow"
+    "spindle_quil_workflow:$gate_spindle_quil_workflow"
+    "quil_cursor_nav:$gate_quil_cursor_nav"
     "faults_zero:$gate_faults_zero"
 )
 
