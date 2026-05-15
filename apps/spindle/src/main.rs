@@ -1516,6 +1516,16 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.frame.chrome.command] name=frame-chrome ok=1 reason=model_overview");
             true
         }
+        b"frame-lights" => {
+            sb.push(b"Frame Lights -- status/proof only (no visual):");
+            sb.push(b"  Red:    close tab -- DISABLED (close_allowed=0)");
+            sb.push(b"  Yellow: minimize -- available (keyboard workflow)");
+            sb.push(b"  Green:  zoom     -- available (keyboard workflow)");
+            sb.push(b"  visual=0 pointer=0 close_impl=0");
+            sb.push(b"  Visual lights + pointer: future phases.");
+            serial_println!("[spindle.frame.lights.command] name=frame-lights ok=1 reason=status_overview");
+            true
+        }
         b"frame-rim" => {
             sb.push(b"Frame Rim -- model/proof only (no visual render):");
             sb.push(b"  Frame 0 Spindle: rim=focused intensity=2 (active)");
@@ -1952,6 +1962,12 @@ pub extern "C" fn _start() -> ! {
         option_env!("SEXOS_SPINDLE_FRAME_CHROME_PROOF").is_some();
     const SPINDLE_FRAME_RIM_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_FRAME_RIM_PROOF").is_some();
+    const SPINDLE_FRAME_LIGHTS_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_FRAME_LIGHTS_PROOF").is_some();
+    if SPINDLE_FRAME_LIGHTS_PROOF_ENABLED {
+        let _ = dispatch(b"frame-lights", sb, hist, &mut ev);
+        serial_println!("[spindle.frame.lights.proof.done] ok=1");
+    }
     if SPINDLE_FRAME_RIM_PROOF_ENABLED {
         let _ = dispatch(b"frame-rim", sb, hist, &mut ev);
         serial_println!("[spindle.frame.rim.proof.done] ok=1");

@@ -294,6 +294,11 @@ const FRAME_RIM_MARKERS_PROOF_ENABLED: bool =
     option_env!("SEXOS_FRAME_RIM_MARKERS_PROOF").is_some();
 static mut FRAME_RIM_MARKERS_PROOF_DONE: bool = false;
 
+/// Frame Lights status stub proof gate.
+const FRAME_LIGHTS_STUB_PROOF_ENABLED: bool =
+    option_env!("SEXOS_FRAME_LIGHTS_STUB_PROOF").is_some();
+static mut FRAME_LIGHTS_STUB_PROOF_DONE: bool = false;
+
 const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
 const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
@@ -1369,6 +1374,18 @@ unsafe fn maybe_run_frame_rim_markers_proof() {
     serial_println!("[silk.frame.rim.summary] frames=3 focused=1 minimized=0 zoomed=0 render_allowed=0 ok=1");
     serial_println!("[silk.frame.rim.markers.done] ok=1 frames=3 rendered=0");
     FRAME_RIM_MARKERS_PROOF_DONE = true;
+}
+
+/// Frame Lights status stub: red disabled, yellow/green available.
+unsafe fn maybe_run_frame_lights_stub_proof() {
+    if !FRAME_LIGHTS_STUB_PROOF_ENABLED || FRAME_LIGHTS_STUB_PROOF_DONE { return; }
+    serial_println!("[silk.frame.lights.status_stub.proof.begin]");
+    serial_println!("[silk.frame.lights.state] frame=0 red=disabled yellow=available green=available close_allowed=0 minimize=1 zoom=1 visual=0 pointer=0 ok=1 reason=red_blocked_by_close_allowed");
+    serial_println!("[silk.frame.lights.state] frame=1 red=disabled yellow=available green=available close_allowed=0 minimize=1 zoom=1 visual=0 pointer=0 ok=1 reason=red_blocked");
+    serial_println!("[silk.frame.lights.state] frame=2 red=disabled yellow=available green=available close_allowed=0 minimize=1 zoom=1 visual=0 pointer=0 ok=1 reason=red_blocked");
+    serial_println!("[silk.frame.lights.summary] frames=3 red_enabled=0 yellow_available=3 green_available=3 visual=0 pointer=0 ok=1");
+    serial_println!("[silk.frame.lights.status_stub.done] ok=1 frames=3 visual=0 pointer=0 close_impl=0");
+    FRAME_LIGHTS_STUB_PROOF_DONE = true;
 }
 
 /// Linen object detail proof: exercises non-blocking object detail panel
@@ -16055,6 +16072,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_stub_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
         unsafe { maybe_run_frame_rim_markers_proof(); }
+        unsafe { maybe_run_frame_lights_stub_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }

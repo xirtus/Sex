@@ -120,6 +120,8 @@ gate_spindle_frame_chrome="SKIP"
 gate_frame_rim_markers="SKIP"
 gate_spindle_frame_rim="SKIP"
 gate_frame_rim_visual="SKIP"
+gate_frame_lights_stub="SKIP"
+gate_spindle_frame_lights="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -142,7 +144,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V28"
+echo " DAILY-DRIVER MASTER GATE V29"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -1143,7 +1145,22 @@ elif [ "$(has 'silk\.frame\.rim\.render\]')" -ge 1 ]; then
     gate_frame_rim_visual="PASS"
 else gate_frame_rim_visual="SKIP"; fi
 
-# ---- 77. linen_search_bridge ----
+# ---- 77. frame_lights_stub ----
+if [ "$(has 'silk\.frame\.lights\.status_stub\.done.*ok=1')" -eq 1 ]; then
+    gate_frame_lights_stub="PASS"
+    print_row "frame_lights_stub" "PASS" "red=disabled yellow/green=available"
+elif [ "$(has 'silk\.frame\.lights\.state\]')" -ge 1 ]; then
+    gate_frame_lights_stub="PASS"
+else gate_frame_lights_stub="SKIP"; fi
+
+# ---- 78. spindle_frame_lights ----
+if [ "$(has 'spindle\.frame\.lights\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_spindle_frame_lights="PASS"
+elif [ "$(has 'spindle\.frame\.lights\.command\]')" -ge 1 ]; then
+    gate_spindle_frame_lights="PASS"
+else gate_spindle_frame_lights="SKIP"; fi
+
+# ---- 79. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
     print_row "linen_search_bridge" "PASS" "search bridge e2e"
@@ -1201,7 +1218,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V28 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V29 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1286,6 +1303,8 @@ ALL_GATES=(
     "frame_rim_markers:$gate_frame_rim_markers"
     "spindle_frame_rim:$gate_spindle_frame_rim"
     "frame_rim_visual:$gate_frame_rim_visual"
+    "frame_lights_stub:$gate_frame_lights_stub"
+    "spindle_frame_lights:$gate_spindle_frame_lights"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
 )

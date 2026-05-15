@@ -221,8 +221,12 @@ export SEXOS_SPINDLE_FRAME_CHROME_PROOF=1
 export SEXOS_FRAME_RIM_MARKERS_PROOF=1
 export SEXOS_SPINDLE_FRAME_RIM_PROOF=1
 
+# ── Frame Lights status stub proof ──
+export SEXOS_FRAME_LIGHTS_STUB_PROOF=1
+export SEXOS_SPINDLE_FRAME_LIGHTS_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V28"
+echo " DAILY-DRIVER PROOF PROFILE V29"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
