@@ -56,6 +56,7 @@ gate_launcher_multi_exec="SKIP"
 gate_palette_linen_available="SKIP"
 gate_quil_status_ready="SKIP"
 gate_silkbar_phase3_status="SKIP"
+gate_silkbar_phase5_pixels="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -364,7 +365,24 @@ else
     print_row "silkbar_phase3_status" "SKIP" "Phase 2/3 proofs not enabled"
 fi
 
-# ---- 17. faults_zero ----
+# ---- 17. silkbar_phase5_pixels ----
+# Evidence: [sexdisplay.silkbar.phase5.draw] markers with active/tint/palette state.
+# Proves tiny pixel indicators (active app dot, tint swatch, palette dot) are rendered
+# inside the SilkBar top strip.
+
+if [ "$(has 'sexdisplay\.silkbar\.phase5\.draw')" -eq 1 ]; then
+    c_p5="$(count 'sexdisplay\.silkbar\.phase5\.draw')"
+    gate_silkbar_phase5_pixels="PASS"
+    print_row "silkbar_phase5_pixels" "PASS" "${c_p5} draw markers (pixel indicators rendered)"
+elif [ "$(has 'silkbar_phase3_status.*PASS')" -eq 1 ] || [ "$(has 'sexdisplay\.silkbar\.phase3\.recv')" -eq 1 ]; then
+    gate_silkbar_phase5_pixels="FAIL"
+    print_row "silkbar_phase5_pixels" "FAIL" "phase3 receive present but no phase5 draw markers"
+else
+    gate_silkbar_phase5_pixels="SKIP"
+    print_row "silkbar_phase5_pixels" "SKIP" "Phase 5 pixel proof not enabled"
+fi
+
+# ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
 FAULT_PATTERNS=(
@@ -420,6 +438,7 @@ ALL_GATES=(
     "palette_linen_available:$gate_palette_linen_available"
     "quil_status_ready:$gate_quil_status_ready"
     "silkbar_phase3_status:$gate_silkbar_phase3_status"
+    "silkbar_phase5_pixels:$gate_silkbar_phase5_pixels"
     "faults_zero:$gate_faults_zero"
 )
 
