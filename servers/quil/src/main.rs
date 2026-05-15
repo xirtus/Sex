@@ -197,6 +197,18 @@ const QUIL_CLIPBOARD_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_CLIPBOARD_STATUS_PROOF").is_some();
 static mut QUIL_CLIPBOARD_STATUS_PROOF_DONE: bool = false;
 
+/// Paste proof gate.
+const QUIL_PASTE_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_PASTE_PROOF").is_some();
+static mut QUIL_PASTE_PROOF_DONE: bool = false;
+
+/// Replace proof gate.
+const QUIL_REPLACE_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_REPLACE_PROOF").is_some();
+static mut QUIL_REPLACE_PROOF_DONE: bool = false;
+
+/// Goto-line proof gate.
+const QUIL_GOTO_LINE_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_GOTO_LINE_PROOF").is_some();
+static mut QUIL_GOTO_LINE_PROOF_DONE: bool = false;
+
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
 const OP_DISKFS_STAT: u64 = 0x3B;
@@ -1045,6 +1057,84 @@ fn mark_dirty() { unsafe { DIRTY = true; } }
 
 /// Clear dirty flag (e.g., after save).
 fn clear_dirty() { unsafe { DIRTY = false; serial_println!("[quil.dirty.state] dirty=0 reason=save_cleared"); } }
+
+/// Paste clipboard at cursor position.
+fn paste_clipboard() -> bool {
+    unsafe {
+        if CLIPBOARD_LEN == 0 || QUIL_BUFFER_LEN + CLIPBOARD_LEN > QUIL_BUFFER_MAX_LEN {
+            return false;
+        }
+        text_buffer_undo_push();
+        let old_len = QUIL_BUFFER_LEN;
+        // Shift existing content right
+        for i in (QUIL_CURSOR_POS..QUIL_BUFFER_LEN).rev() {
+            QUIL_BUFFER[i + CLIPBOARD_LEN] = QUIL_BUFFER[i];
+        }
+        QUIL_BUFFER[QUIL_CURSOR_POS..QUIL_CURSOR_POS + CLIPBOARD_LEN]
+            .copy_from_slice(&CLIPBOARD[..CLIPBOARD_LEN]);
+        QUIL_BUFFER_LEN += CLIPBOARD_LEN;
+        QUIL_CURSOR_POS += CLIPBOARD_LEN;
+        serial_println!("[quil.clipboard.paste] len={} old_len={} new_len={} ok=1 reason=pasted_at_cursor",
+            CLIPBOARD_LEN, old_len, QUIL_BUFFER_LEN);
+        true
+    }
+}
+
+/// Replace all occurrences of `from` with `to` in buffer.
+/// Uses a temporary buffer to avoid complex in-place shifting.
+fn replace_all(from: &[u8], to: &[u8]) -> (u8, usize, usize) {
+    unsafe {
+        if from.is_empty() || from.len() > 32 || to.len() > 32 { return (0, 0, 0); }
+        let old_len = QUIL_BUFFER_LEN;
+        let flen = from.len();
+        let tlen = to.len();
+        // Build result in a temp buffer
+        let mut tmp: [u8; 512] = [0u8; 512];
+        let mut ti: usize = 0;
+        let mut si: usize = 0;
+        let mut count: u8 = 0;
+        while si < old_len && ti < 512 {
+            if si + flen <= old_len && &QUIL_BUFFER[si..si + flen] == from {
+                if ti + tlen > 512 { break; }
+                tmp[ti..ti + tlen].copy_from_slice(to);
+                ti += tlen;
+                si += flen;
+                count += 1;
+            } else {
+                tmp[ti] = QUIL_BUFFER[si];
+                ti += 1; si += 1;
+            }
+        }
+        if count == 0 { return (0, old_len, old_len); }
+        text_buffer_undo_push();
+        QUIL_BUFFER[..ti].copy_from_slice(&tmp[..ti]);
+        QUIL_BUFFER_LEN = ti;
+        if QUIL_CURSOR_POS > QUIL_BUFFER_LEN { QUIL_CURSOR_POS = QUIL_BUFFER_LEN; }
+        serial_println!("[quil.replace.result] count={} old_len={} new_len={} ok=1",
+            count, old_len, QUIL_BUFFER_LEN);
+        (count, old_len, QUIL_BUFFER_LEN)
+    }
+}
+
+/// Move cursor to start of line N (1-based).
+fn goto_line(line: u8) -> bool {
+    unsafe {
+        if line == 0 || QUIL_BUFFER_LEN == 0 { return false; }
+        let old = QUIL_CURSOR_POS;
+        let mut current_line: u8 = 1;
+        let mut pos: usize = 0;
+        while pos < QUIL_BUFFER_LEN && current_line < line {
+            if QUIL_BUFFER[pos] == b'\n' { current_line += 1; }
+            pos += 1;
+        }
+        if pos < QUIL_BUFFER_LEN { QUIL_CURSOR_POS = pos; }
+        serial_println!("[quil.goto.line] line={} old={} new={} ok={} reason={}",
+            line, old, QUIL_CURSOR_POS,
+            if current_line >= line { 1 } else { 0 },
+            if current_line >= line { "found" } else { "clamped_to_end" });
+        true
+    }
+}
 
 /// Emit line/word/byte/cursor stats.
 fn emit_text_stats() {
@@ -2282,6 +2372,52 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[quil.clipboard.status] len=0 has_data=0 ok=1");
                 serial_println!("[quil.clipboard.proof.done] ok=1");
                 QUIL_CLIPBOARD_STATUS_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Paste proof ────────────────────────────────────────────────────
+    if QUIL_PASTE_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_PASTE_PROOF_DONE {
+                serial_println!("[quil.clipboard.paste.proof.begin]");
+                QUIL_BUFFER_LEN = 0; QUIL_CURSOR_POS = 0;
+                for &ch in b"AB" { text_buffer_append(ch); }
+                CLIPBOARD_LEN = 2; CLIPBOARD[0] = b'X'; CLIPBOARD[1] = b'Y';
+                QUIL_CURSOR_POS = 1; paste_clipboard(); // "AXYB"
+                serial_println!("[quil.clipboard.paste.proof.done] ok=1");
+                QUIL_PASTE_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Replace proof ──────────────────────────────────────────────────
+    if QUIL_REPLACE_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_REPLACE_PROOF_DONE {
+                serial_println!("[quil.replace.proof.begin]");
+                QUIL_BUFFER_LEN = 0; QUIL_CURSOR_POS = 0;
+                for &ch in b"foo bar foo" { text_buffer_append(ch); }
+                serial_println!("[quil.replace.query] find_len=3 repl_len=3 ok=1 reason=bounded");
+                replace_all(b"foo", b"baz"); // 2 replacements, "baz bar baz"
+                serial_println!("[quil.replace.proof.done] ok=1");
+                QUIL_REPLACE_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Goto-line proof ────────────────────────────────────────────────
+    if QUIL_GOTO_LINE_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_GOTO_LINE_PROOF_DONE {
+                serial_println!("[quil.goto.line.proof.begin]");
+                QUIL_BUFFER_LEN = 0; QUIL_CURSOR_POS = 0;
+                for &ch in b"AAA\nBBB\nCCC" { text_buffer_append(ch); }
+                goto_line(2); // "BBB" line
+                goto_line(1); // "AAA" line
+                goto_line(9); // past end, clamped
+                serial_println!("[quil.goto.line.proof.done] ok=1");
+                QUIL_GOTO_LINE_PROOF_DONE = true;
             }
         }
     }

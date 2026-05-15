@@ -190,8 +190,14 @@ export SEXOS_QUIL_CMD_SURFACE_PROOF=1
 export SEXOS_QUIL_CLIPBOARD_STATUS_PROOF=1
 export SEXOS_SPINDLE_EDITOR_V3_PROOF=1
 
+# ── Feature batch V14 editor finishing proofs ──
+export SEXOS_QUIL_PASTE_PROOF=1
+export SEXOS_QUIL_REPLACE_PROOF=1
+export SEXOS_QUIL_GOTO_LINE_PROOF=1
+export SEXOS_SPINDLE_EDITOR_FINISH_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V13"
+echo " DAILY-DRIVER PROOF PROFILE V14"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

@@ -99,6 +99,10 @@ gate_spindle_editor_polish="SKIP"
 gate_quil_cmd_surface="SKIP"
 gate_quil_clipboard_status="SKIP"
 gate_spindle_editor_v3="SKIP"
+gate_quil_paste="SKIP"
+gate_quil_replace="SKIP"
+gate_quil_goto_line="SKIP"
+gate_spindle_editor_finish="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -121,7 +125,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V13"
+echo " DAILY-DRIVER MASTER GATE V14"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -992,6 +996,19 @@ elif [ "$(has 'spindle\.editor\.v3\.command\]')" -ge 1 ]; then
     gate_spindle_editor_v3="PASS"
 else gate_spindle_editor_v3="SKIP"; fi
 
+# ---- 61-64 V14 gates ----
+for gate in "quil_paste:quil\.clipboard\.paste\.proof\.done.*ok=1" \
+            "quil_replace:quil\.replace\.proof\.done.*ok=1" \
+            "quil_goto_line:quil\.goto\.line\.proof\.done.*ok=1" \
+            "spindle_editor_finish:spindle\.editor\.finish\.proof\.done.*ok=1"; do
+  gname="${gate%%:*}"; gpat="${gate#*:}"
+  if [ "$(has "$gpat")" -eq 1 ]; then
+    eval "gate_${gname}=PASS"; print_row "${gname}" "PASS" "V14 proof"
+  else
+    eval "gate_${gname}=SKIP"; print_row "${gname}" "SKIP" "not enabled"
+  fi
+done
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -1026,7 +1043,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V13 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V14 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1091,6 +1108,10 @@ ALL_GATES=(
     "quil_cmd_surface:$gate_quil_cmd_surface"
     "quil_clipboard_status:$gate_quil_clipboard_status"
     "spindle_editor_v3:$gate_spindle_editor_v3"
+    "quil_paste:$gate_quil_paste"
+    "quil_replace:$gate_quil_replace"
+    "quil_goto_line:$gate_quil_goto_line"
+    "spindle_editor_finish:$gate_spindle_editor_finish"
     "faults_zero:$gate_faults_zero"
 )
 

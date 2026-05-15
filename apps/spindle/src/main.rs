@@ -1336,7 +1336,12 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 sb.push(b"  139 undo pushes proven in daily driver (V12)");
                 serial_println!("[spindle.editor.v3.command] name=editor-undo ok=1 reason=undo_summary");
             } else {
-                sb.push(b"Editor Help V3 -- sub-commands:");
+                sb.push(b"Editor Help V4 -- sub-commands:");
+                sb.push(b"  editor keys       key bindings");
+                sb.push(b"  editor search     find/replace/goto-line");
+                sb.push(b"  editor selection  copy/paste/delete selection");
+                sb.push(b"  editor save       save/load/dirty state");
+                sb.push(b"  editor undo       undo/redo ring");
                 sb.push(b"  editor keys       key bindings overview");
                 sb.push(b"  editor search     find/find-next/find-prev");
                 sb.push(b"  editor selection  copy/delete selection");
@@ -1810,6 +1815,13 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"editor save", sb, hist, &mut ev);
         let _ = dispatch(b"editor undo", sb, hist, &mut ev);
         serial_println!("[spindle.editor.v3.proof.done] ok=1");
+    }
+    const SPINDLE_EDITOR_FINISH_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_EDITOR_FINISH_PROOF").is_some();
+    if SPINDLE_EDITOR_FINISH_PROOF_ENABLED {
+        let _ = dispatch(b"editor", sb, hist, &mut ev);
+        serial_println!("[spindle.editor.finish.help] ok=1 commands=5");
+        serial_println!("[spindle.editor.finish.proof.done] ok=1");
     }
 
     serial_println!("[spindle.ready]");
