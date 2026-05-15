@@ -19,6 +19,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use sex_pdx::{serial_println, sys_yield, SLOT_USB_HOST, pdx_call_checked};
 
 const SEXUSB_SYNTHETIC: bool = false; // FORCED OFF
+const SEXUSB_SLOT2_OWNERSHIP_PROOF: bool =
+    option_env!("SEXUSB_SLOT2_OWNERSHIP_PROOF").is_some();
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -3855,6 +3857,34 @@ pub extern "C" fn _start() -> ! {
                 intr_residue = ev_d2 & 0xFFFFFF;
                 let slot = (ev_d3 >> 24) & 0xFF;
                 let ep = (ev_d3 >> 16) & 0x1F;
+                let mut matched_idx: i32 = -1;
+                for midx in 0..device_count {
+                    let d = &devices[midx];
+                    if d.active && slot == d.slot_id && ep == d.intr_dci {
+                        matched_idx = midx as i32;
+                        break;
+                    }
+                }
+                if SEXUSB_SLOT2_OWNERSHIP_PROOF {
+                    unsafe {
+                        static mut OWN_BUDGET: u32 = 64;
+                        static mut OWN_MISS_BUDGET: u32 = 8;
+                        if OWN_BUDGET > 0 {
+                            OWN_BUDGET -= 1;
+                            serial_println!(
+                                "[sexusb.slot.ownership.event] slot={} ep={} cc={} matched_idx={} devices={}",
+                                slot, ep, cc, matched_idx, device_count
+                            );
+                        }
+                        if matched_idx < 0 && OWN_MISS_BUDGET > 0 {
+                            OWN_MISS_BUDGET -= 1;
+                            serial_println!(
+                                "[sexusb.slot.ownership.invariant.miss] reason=no_device_match slot={} ep={} cc={}",
+                                slot, ep, cc
+                            );
+                        }
+                    }
+                }
                 // C2B: bounded event match (one check per outer iteration).
                 {
                     for midx in 0..device_count {
