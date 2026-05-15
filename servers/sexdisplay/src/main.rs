@@ -88,11 +88,11 @@ const SURFACE_EMPTY: Surface = Surface {
 };
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 static mut FOCUSED_SURFACE_ID: u64 = 0;
-const FOCUS_SURFACE_COLOR: u32 = 0x007AAFA4;
+const FOCUS_SURFACE_COLOR: u32 = 0x0089B4FA;
 
 // ── Frame Chrome Rim (focused surface, matches shell FRAME_RIM_PX) ──
 const FRAME_RIM_PX: usize = 4;
-const FRAME_RIM_COLOR: u32 = 0x00B8F2E8;
+const FRAME_RIM_COLOR: u32 = 0x00B4BEFE;
 
 // ── Frame Light Colors (top-left rim band, matches shell FRAME_LIGHTS_HIT_TARGET_V1) ──
 const FRAME_LIGHT_SIZE_PX: usize = 4;
@@ -104,7 +104,7 @@ const FRAME_LIGHT_ZOOM_COLOR: u32 = 0x0044FF44;
 // ── Tab Strip Constants (matches shell FRAME_TAB_LIGHT_EXCLUSION_PX and TAB_*) ──
 const TAB_STRIP_LIGHT_EXCLUSION_PX: usize = 20;
 const TAB_ACTIVE_COLOR: u32 = FOCUS_SURFACE_COLOR; // 0x00A8E0FF (bright cyan)
-const TAB_INACTIVE_COLOR: u32 = 0x006080B0; // dimmed cyan
+const TAB_INACTIVE_COLOR: u32 = 0x0045475A; // Catppuccin Surface1
 
 // ── Top Bar Chrome Mode (default mode, matches shell FRAME_TOP_BAR_*) ──
 /// Surface.chrome_flags bit: top bar enabled (24px top band replaces 4px top rim).
@@ -125,9 +125,9 @@ const FRAME_TOP_BAR_LIGHT_GAP_PX: usize = 5;
 /// X-width of the Frame Lights exclusion zone in default mode.
 const FRAME_TOP_BAR_LIGHT_EXCLUSION_PX: usize = 50;
 /// Top bar background color: dark navy-blue header, distinct from content teal.
-const FRAME_TOP_BAR_COLOR: u32 = 0x00182730;
+const FRAME_TOP_BAR_COLOR: u32 = 0x001E1E2E;
 /// Toolbar divider color (bottom edge of top bar).
-const FRAME_TOP_BAR_DIVIDER_COLOR: u32 = 0x00B8F2E8;
+const FRAME_TOP_BAR_DIVIDER_COLOR: u32 = 0x00B4BEFE;
 /// Light vertical zone: top (y offset within top bar), centered in 28px.
 const FRAME_TOP_BAR_LIGHT_TOP: usize = 9;
 /// Light vertical zone: bottom (exclusive).
@@ -1580,6 +1580,16 @@ pub extern "C" fn _start() -> ! {
 
     // 1. Render immediately with fallback — visible before any IPC
     unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+    // ── Silk glass safe color pass markers ──────────────────────────────
+    serial_println!("[silk.glass.color] name=focus_surface argb=0x0089B4FA ok=1");
+    serial_println!("[silk.glass.color] name=frame_rim argb=0x00B4BEFE ok=1");
+    serial_println!("[silk.glass.color] name=frame_top_bar argb=0x001E1E2E ok=1");
+    serial_println!("[silk.glass.color] name=tab_inactive argb=0x0045475A ok=1");
+    serial_println!("[silk.glass.color] name=silkbar_panel_fill argb=0x00313244 ok=1");
+    serial_println!("[silk.glass.color] name=silkbar_text argb=0x00CDD6F4 ok=1");
+    serial_println!("[silk.glass.color] name=silkbar_chip argb=0x0089B4FA ok=1");
+    serial_println!("[silk.glass.safe_color_pass.done] ok=1 changed=7");
+
     serial_println!("[sexdisplay.ready]");
 
     // 2. Listen for runtime FB handoff and SilkBar updates

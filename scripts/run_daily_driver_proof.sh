@@ -214,7 +214,7 @@ export SEXOS_SPINDLE_BROWSER_STUB_PROOF=1
 export SEXOS_LINEN_PERSIST_READBACK_PROOF=1
 
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V24"
+echo " DAILY-DRIVER PROOF PROFILE V25"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

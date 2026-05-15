@@ -841,13 +841,13 @@ pub const DEFAULT_SILK_BAR: SilkBar = SilkBar {
 
 pub const DEFAULT_THEME: Theme = Theme {
     bg_top:      0x00081424,
-    bg_bottom:   0x00281848,
-    panel_fill:  0x00182040,
-    panel_glow:  0x00385078,
-    text:        0x00C8D8FF,
+    bg_bottom:   0x001E1E2E,
+    panel_fill:  0x00313244,
+    panel_glow:  0x0045475A,
+    text:        0x00CDD6F4,
     muted:       0x00304068,
     active:      0x00A8A0FF,
     urgent:      0x00FF6666,
-    chip_fill:   0x004C8DFF,
+    chip_fill:   0x0089B4FA,
     chip_border: 0x006F86A8,
 };
