@@ -11,6 +11,17 @@ Scope: docs/ only — real-hardware boot checklist and manual proof sequence
 | **PASS** | Checklist and proof sequence documented. Zero source changes. |
 | **STOP FIRST** | No code edits. No kernel/ABI/USB/display changes. This is a boot plan only. |
 
+### Architecture Constraints (unconditionally preserved)
+
+| Constraint | Why |
+|-----------|-----|
+| `no_std` Rust microkernel | No libc, no POSIX, no threads. PDX-only IPC. |
+| MPK/PKU/PKEY isolation | Per-server memory protection domains. No shared heaps. |
+| No kernel edits | Kernel is stable. Hardware issues are NOT kernel bugs until proven. |
+| No sex-pdx/ABI edits | PDX opcodes, slots, wire format frozen. |
+| No sexusb/sexinput/sexdisplay edits | Drivers are stable. Debug at protocol/log level first. |
+| **Do NOT edit source to debug hardware** | Reproduce in QEMU preflight first. Capture photo/video/log. Create a separate hardware-blocker handoff if failure occurs. Never hot-patch source on hardware. |
+
 ## 2. Current Baseline
 
 | Metric | Value |
@@ -23,21 +34,37 @@ Scope: docs/ only — real-hardware boot checklist and manual proof sequence
 | Key codes | 0x29=backtick (palette), F10=Atlas, J/K=nav, Enter=execute |
 | Pointer/slot2 | Deferred — not tested on hardware |
 
-## 3. QEMU Preflight (MANDATORY)
-
-Run before every hardware boot attempt:
+## 3. QEMU Preflight (MANDATORY — run before every hardware boot)
 
 ```bash
-# 1. Clean build with full proof profile
+# 0. Verify clean git state (no uncommitted hardware hacks)
+git status --short
+# Must show zero modified source files (docs/ and scripts/ changes OK).
+# If servers/ or crates/ show modified: STASH OR COMMIT before proceeding.
+
+# 1. QEMU build + boot + gate scan (full proof profile)
 ./scripts/run_daily_driver_proof.sh /tmp/sexos_pre_hardware_daily_driver.log
 
-# Expected output:
-#   PASS gates: 18
-#   FAIL gates: 0
-#   FINAL: PASS (18 gates proved, 0 skipped, 0 faults)
+# 2. Verify results
+grep -E "PASS gates|FAIL gates|FINAL|fault" /tmp/sexos_pre_hardware_daily_driver.log
 ```
 
-If QEMU preflight fails: **DO NOT boot hardware.** Fix QEMU first.
+**Required output:**
+```
+PASS gates: 18
+FAIL gates: 0
+FINAL: PASS (18 gates proved, 0 skipped, 0 faults)
+faults_zero: PASS   0 fault markers
+```
+
+| Check | Threshold | Action if fail |
+|-------|-----------|---------------|
+| PASS gates | 18 exactly | **STOP.** Fix QEMU before touching hardware. |
+| FAIL gates | 0 | **STOP.** Any FAIL is a regression. |
+| Faults | 0 | **STOP.** Kernel fault = build broken. |
+| Git status | No source diffs | Stash/commit. Never boot hardware with dirty source. |
+
+**If any check fails: DO NOT boot hardware.** Resolve in QEMU first.
 
 ## 4. Hardware Boot Checklist
 
@@ -171,7 +198,23 @@ umount /mnt/ventoy
 | **Freeze on boot** | Deadlock in proof function | Rebuild without `SEXOS_*_PROOF=1` env vars and re-test |
 | **Wrong resolution** | EDID / GOP framebuffer mismatch | Note exact resolution; compare with QEMU fallback 1280×800 |
 | **SilkBar missing or garbled** | FB handoff failed or BAR_BG_BUF overflow | Check that FB_W ≤ 2560; SilkBar only supports y<51 |
-| **#PF / #GP / panic** | Kernel fault | **STOP.** Rebuild ISO and re-run QEMU preflight. If QEMU passes, hardware-only issue — record exact register state if visible. |
+| **#PF / #GP / panic** | Kernel fault | **STOP immediately.** Do NOT reboot and retry — record exact visible state (photo). Re-run QEMU preflight. If QEMU passes but hardware faults, create `docs/handoff/HARDWARE_FAULT_<date>.md` with: photo, exact ISO build, git commit, boot sequence, visible register dump if any. |
+| **Reboot loop** | Triple fault or watchdog | **STOP.** Same as #PF/#GP — record, don't retry blindly. Create hardware-fault handoff. |
+| **SilkBar indicators missing** | Phase 5 proof not enabled | Verify `SEXOS_SILKBAR_PHASE5_PIXEL_PROOF=1` in build. Re-run QEMU preflight. |
+| **Palette missing rows** | Proof env vars missing | Verify all 41 env vars; check `grep "export SEXOS" scripts/run_daily_driver_proof.sh | wc -l` = 41. |
+| **Slow / stuttering render** | QEMU vs hardware timing delta | Normal — hardware may be faster. Note if 60+ seconds with no response = freeze. |
+
+### 6.1 Hardware Failure Protocol (DO NOT SKIP)
+
+```
+1. STOP touching the keyboard.
+2. Take a photo of the screen.
+3. Note exact: ISO build time, git commit hash, boot sequence steps.
+4. Re-run QEMU preflight. If QEMU passes = hardware-specific issue.
+5. Create docs/handoff/HARDWARE_BLOCKER_<date>_<symptom>.md
+6. Do NOT edit source to "try things" on hardware.
+7. Wait for root-cause analysis before next hardware boot.
+```
 | **SilkBar indicators missing** | Phase 5 proof not enabled | Verify `SEXOS_SILKBAR_PHASE5_PIXEL_PROOF=1` in build |
 | **Palette missing rows** | Proof env vars missing | Verify all 41 env vars are exported during build |
 | **Slow / stuttering render** | QEMU vs hardware timing delta | Normal — hardware may be faster. Note if 60+ seconds with no response = freeze. |
