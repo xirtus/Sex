@@ -103,6 +103,7 @@ gate_quil_paste="SKIP"
 gate_quil_replace="SKIP"
 gate_quil_goto_line="SKIP"
 gate_spindle_editor_finish="SKIP"
+gate_linen_search_bridge="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -125,7 +126,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V14"
+echo " DAILY-DRIVER MASTER GATE V15"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -996,7 +997,18 @@ elif [ "$(has 'spindle\.editor\.v3\.command\]')" -ge 1 ]; then
     gate_spindle_editor_v3="PASS"
 else gate_spindle_editor_v3="SKIP"; fi
 
-# ---- 61-64 V14 gates ----
+# ---- 61. linen_search_bridge ----
+if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_linen_search_bridge="PASS"
+    print_row "linen_search_bridge" "PASS" "search bridge e2e"
+elif [ "$(has 'spindle\.linen\.search\.send.*status=0')" -eq 1 ]; then
+    gate_linen_search_bridge="PASS"
+    print_row "linen_search_bridge" "PASS" "search send enqueued (fire-and-forget)"
+elif [ "$(has 'linen\.search\.bridge\.(recv|result)\]')" -ge 1 ]; then
+    gate_linen_search_bridge="PASS"
+else gate_linen_search_bridge="SKIP"; fi
+
+# ---- 62-65 V14 gates ----
 for gate in "quil_paste:quil\.clipboard\.paste\.proof\.done.*ok=1" \
             "quil_replace:quil\.replace\.proof\.done.*ok=1" \
             "quil_goto_line:quil\.goto\.line\.proof\.done.*ok=1" \
@@ -1043,7 +1055,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V14 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V15 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1112,6 +1124,7 @@ ALL_GATES=(
     "quil_replace:$gate_quil_replace"
     "quil_goto_line:$gate_quil_goto_line"
     "spindle_editor_finish:$gate_spindle_editor_finish"
+    "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
 )
 

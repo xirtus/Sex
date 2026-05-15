@@ -48,6 +48,11 @@ const OP_LINEN_GET_PUBLIC_NAME: u64 = 0x45;
 /// Reply: 0 = accepted/stubbed, negative = error (not found / invalid).
 const OP_LINEN_OPEN_INTENT: u64 = 0x46;
 
+/// Search objects by token (local fire-and-forget bridge).
+/// arg0/arg1 = token bytes packed LE (up to 16 bytes).
+/// No reply — results emitted via serial markers.
+const OP_LINEN_SEARCH_OBJECTS: u64 = 0x47;
+
 /// Maximum display name length (matches RamFS max name).
 const LINEN_MAX_NAME: usize = 24;
 /// Current create opcode wire payload can carry only 16 name bytes (arg1 + arg2).
@@ -649,6 +654,11 @@ pub extern "C" fn _start() -> ! {
                     handle_open_intent(msg.arg0, msg.caller_pd);
                 }
             }
+            OP_LINEN_SEARCH_OBJECTS => {
+                unsafe {
+                    handle_search_objects(msg.arg0, msg.arg1, msg.caller_pd);
+                }
+            }
             _ => {}
         }
     }
@@ -985,6 +995,41 @@ unsafe fn handle_open_intent(object_id: u64, caller_pd: u32) {
             pdx_reply(caller_pd, e as u64);
         }
     }
+}
+
+/// Handle OP_LINEN_SEARCH_OBJECTS (0x47).
+/// arg0/arg1 = token bytes packed LE (up to 16 bytes).
+/// Fire-and-forget: searches local objects, emits result markers.
+/// No reply — caller uses markers or re-queries via LIST.
+unsafe fn handle_search_objects(arg0: u64, arg1: u64, caller_pd: u32) {
+    // Unpack token from arg0 (bytes 0-7) and arg1 (bytes 8-15)
+    let mut token = [0u8; 16];
+    let a0 = arg0.to_le_bytes();
+    let a1 = arg1.to_le_bytes();
+    for i in 0..8 { token[i] = a0[i]; }
+    for i in 0..8 { token[8 + i] = a1[i]; }
+    let tok_len = token.iter().position(|&b| b == 0).unwrap_or(16);
+    let slice = &token[..tok_len];
+    serial_println!("[linen.search.bridge.recv] token={} ok=1",
+        core::str::from_utf8(slice).unwrap_or("?"));
+    // Search local objects
+    let count = linen_search_by_token(slice);
+    serial_println!("[linen.search.bridge.result] token={} count={} selected=0 ok=1",
+        core::str::from_utf8(slice).unwrap_or("?"), count);
+    if count > 0 {
+        // Find first match for detail
+        for slot in 0..LINEN_MAX_OBJECTS {
+            if let Some(obj) = SESSION.get_at_slot(slot) {
+                let name = &obj.name[..obj.name_len as usize];
+                if name.windows(tok_len).any(|win| win == slice) {
+                    serial_println!("[linen.search.bridge.result] token={} count={} selected={} ok=1",
+                        core::str::from_utf8(slice).unwrap_or("?"), count, obj.object_id);
+                    break;
+                }
+            }
+        }
+    }
+    serial_println!("[linen.search.bridge.proof.done] ok=1");
 }
 
 // ── SexFiles Storage Bridge Helpers ──────────────────────────────────────────

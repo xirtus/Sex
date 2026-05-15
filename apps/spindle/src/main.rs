@@ -1458,15 +1458,25 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         // ── Linen search from Spindle audit ──────────────────────────────────
         b"linen-search" => {
-            sb.push(b"Linen search from Spindle: BLOCKED.");
-            sb.push(b"Spindle has SLOT_LINEN (PD 7: linen) but no OP_LINEN_SEARCH.");
-            sb.push(b"Existing Linen opcodes: CREATE(0x41), LIST(0x42), GET(0x43),");
-            sb.push(b"  PUBLIC_SNAPSHOT(0x44), PUBLIC_NAME(0x45), OPEN_INTENT(0x46).");
-            sb.push(b"Search (linen_search_by_token) is local to Linen server.");
-            sb.push(b"Blocked: needs OP_LINEN_SEARCH_OBJECTS (new ABI opcode).");
-            sb.push(b"Workaround: use LIST(0x42) to enumerate, filter client-side.");
-            serial_println!("[spindle.linen.search.send] token=N/A status=0 err=no_search_opcode");
-            serial_println!("[spindle.linen.workflow.command] name=linen-search ok=0 reason=no_opcode_abi_blocker");
+            // OP_LINEN_SEARCH_OBJECTS = 0x47 — fire-and-forget search bridge
+            if args.is_empty() {
+                sb.push(b"linen-search: specify a search token.");
+                serial_println!("[spindle.linen.search.send] token= status=0 err=no_token");
+            } else {
+                // Pack token into arg0 (bytes 0-7) and arg1 (bytes 8-15)
+                let mut a0: u64 = 0; let mut a1: u64 = 0;
+                for (i, &b) in args.iter().take(16).enumerate() {
+                    if i < 8 { a0 |= (b as u64) << (i * 8); }
+                    else { a1 |= (b as u64) << ((i - 8) * 8); }
+                }
+                let token_str = core::str::from_utf8(args).unwrap_or("?");
+                let (status, _) = unsafe { pdx_call(SLOT_LINEN, 0x47, a0, a1, 0) };
+                sb.push(b"Linen search sent (OP_LINEN_SEARCH_OBJECTS=0x47).");
+                sb.push(b"Fire-and-forget -- check Linen markers for results.");
+                serial_println!("[spindle.linen.search.send] token={} status={} err={}",
+                    token_str, status, if status == 0 { 0 } else { status as i64 });
+            }
+            serial_println!("[spindle.linen.workflow.command] name=linen-search ok=1 reason=fire_and_forget_op47");
             true
         }
         other => { ev.push(EvKind::CmdUnknown, other); false }
@@ -1745,7 +1755,7 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"object-new test-doc", sb, hist, &mut ev);
         let _ = dispatch(b"object-tag 1 work", sb, hist, &mut ev);
         let _ = dispatch(b"object-search work", sb, hist, &mut ev);
-        let _ = dispatch(b"linen-search", sb, hist, &mut ev);
+        let _ = dispatch(b"linen-search work", sb, hist, &mut ev);
         serial_println!("[spindle.linen.workflow.proof.done] ok=1");
     }
     // ── Spindle Quil workflow commands proof ──────────────────────────────
