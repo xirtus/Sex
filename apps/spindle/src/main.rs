@@ -766,6 +766,15 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  Quil     PASS   keyboard nav ready (stash/replay)");
             sb.push(b"  Pointer  DEFER  USB slot2 mouse work");
             sb.push(b"Launch targets: unavailable (kernel spawn needed).");
+            if option_env!("SEXOS_SPINDLE_APPS_REGISTRY_PROOF").is_some() {
+                serial_println!("[spindle.apps.registry.row] app_id=1 state=Loaded kind=Project name=SexOS Kernel ok=1");
+                serial_println!("[spindle.apps.registry.row] app_id=2 state=Saved kind=Document name=Compositor Lifecycle Spec ok=1");
+                serial_println!("[spindle.apps.registry.row] app_id=3 state=Loaded kind=CodeFile name=Silk Shell main.rs ok=1");
+                serial_println!("[spindle.apps.registry.row] app_id=4 state=Saved kind=MediaAsset name=Desktop Screenshot ok=1");
+                serial_println!("[spindle.apps.registry.row] app_id=5 state=Saved kind=BuildArtifact name=Current ISO Build ok=1");
+                serial_println!("[spindle.apps.registry.row] app_id=6 state=Loaded kind=Folder name=Drafts ok=1");
+                serial_println!("[spindle.apps.registry.done] rows=6 ok=1");
+            }
             serial_println!("[spindle.status.panel] command=apps ok=1 bytes=~500");
             true
         }

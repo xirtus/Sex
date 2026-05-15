@@ -250,6 +250,8 @@ const ATLAS_PREVIEW_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_PREVIEW_PROOF").is_some();
 const APP_REGISTRY_READONLY_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_REGISTRY_READONLY_PROOF").is_some();
+const APP_REGISTRY_FILTER_SORT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_APP_REGISTRY_FILTER_SORT_PROOF").is_some();
 static mut COMMAND_PALETTE_STATUS_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE: bool = false;
 static mut QUIL_STATUS_UNBLOCK_PROOF_DONE: bool = false;
@@ -264,6 +266,7 @@ static mut LINEN_SEARCH_FILTER_PROOF_DONE: bool = false;
 static mut BELL_FILTER_PROOF_DONE: bool = false;
 static mut ATLAS_PREVIEW_PROOF_DONE: bool = false;
 static mut APP_REGISTRY_READONLY_PROOF_DONE: bool = false;
+static mut APP_REGISTRY_FILTER_SORT_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_ACTIVE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_STAGE: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_DONE: bool = false;
@@ -11697,6 +11700,31 @@ unsafe fn maybe_run_app_registry_readonly_proof() {
     APP_REGISTRY_READONLY_PROOF_DONE = true;
 }
 
+unsafe fn maybe_run_app_registry_filter_sort_proof() {
+    if !APP_REGISTRY_FILTER_SORT_PROOF_ENABLED || APP_REGISTRY_FILTER_SORT_PROOF_DONE {
+        return;
+    }
+    let mut total: u8 = 0;
+    let mut doc_only: u8 = 0;
+    let mut prev_id: u64 = 0;
+    let mut sorted_ok: u8 = 1;
+    for slot in LINEN_OBJECTS.iter() {
+        if let Some(obj) = slot {
+            total = total.saturating_add(1);
+            if obj.kind == LinenObjectKind::Document {
+                doc_only = doc_only.saturating_add(1);
+            }
+            if prev_id > obj.object_id {
+                sorted_ok = 0;
+            }
+            prev_id = obj.object_id;
+        }
+    }
+    serial_println!("[app.registry.filter] mode=kind_document total={} count={} ok={}", total, doc_only, (doc_only > 0) as u8);
+    serial_println!("[app.registry.sort] key=app_id order=asc ok={}", sorted_ok);
+    APP_REGISTRY_FILTER_SORT_PROOF_DONE = true;
+}
+
 /// App launcher multi-exec proof: executes and focuses all 7 keyboard-ready
 /// app launcher rows (Spindle, Quil, Linen, Atlas, Bell, Collar, Mesh).
 ///
@@ -15560,6 +15588,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_bell_filter_proof(); }
         unsafe { maybe_run_atlas_preview_proof(); }
         unsafe { maybe_run_app_registry_readonly_proof(); }
+        unsafe { maybe_run_app_registry_filter_sort_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
