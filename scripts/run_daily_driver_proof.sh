@@ -147,8 +147,13 @@ export SEXOS_SPINDLE_LINEN_WORKFLOW_PROOF=1
 export SEXOS_SPINDLE_QUIL_WORKFLOW_PROOF=1
 export SEXOS_QUIL_CURSOR_NAV_PROOF=1
 
+# ── Feature batch V6 arch and editor proofs ──
+export SEXOS_QUIL_TEXT_SELECTION_PROOF=1
+export SEXOS_QUIL_TEXT_DELETE_PROOF=1
+export SEXOS_SPINDLE_EDITOR_V2_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V5"
+echo " DAILY-DRIVER PROOF PROFILE V6"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

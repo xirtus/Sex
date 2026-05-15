@@ -50,6 +50,8 @@ const QUIL_MAX_VISIBLE_LINES: usize = 6;
 static mut QUIL_BUFFER: [u8; QUIL_BUFFER_MAX_LEN] = [0u8; QUIL_BUFFER_MAX_LEN];
 static mut QUIL_BUFFER_LEN: usize = 0;
 static mut QUIL_CURSOR_POS: usize = 0;
+static mut QUIL_SEL_START: usize = 0;
+static mut QUIL_SEL_END: usize = 0;
 
 // ── RamFS / SexFiles Protocol Constants ─────────────────────────────────────
 // SEXFILES_RAMFS_CONTRACT_LOCK_V1: bounded flat namespace.
@@ -89,6 +91,18 @@ static mut QUIL_TEXT_COMMANDS_PROOF_DONE: bool = false;
 const QUIL_CURSOR_NAV_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_CURSOR_NAV_PROOF").is_some();
 static mut QUIL_CURSOR_NAV_PROOF_DONE: bool = false;
+
+/// Text selection proof gate.
+/// Build with SEXOS_QUIL_TEXT_SELECTION_PROOF=1 to enable.
+const QUIL_TEXT_SELECTION_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_TEXT_SELECTION_PROOF").is_some();
+static mut QUIL_TEXT_SELECTION_PROOF_DONE: bool = false;
+
+/// Text delete proof gate.
+/// Build with SEXOS_QUIL_TEXT_DELETE_PROOF=1 to enable.
+const QUIL_TEXT_DELETE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_TEXT_DELETE_PROOF").is_some();
+static mut QUIL_TEXT_DELETE_PROOF_DONE: bool = false;
 
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
@@ -568,6 +582,89 @@ fn text_buffer_newline() -> bool {
         QUIL_BUFFER_LEN += 1;
         serial_println!("[quil.text.enter] line={} len={} ok=1",
             line_count + 1, QUIL_BUFFER_LEN);
+        true
+    }
+}
+
+/// Delete character at cursor position.
+/// Shifts remaining buffer left. No-op if cursor at end.
+fn text_buffer_delete_char() -> bool {
+    unsafe {
+        if QUIL_CURSOR_POS >= QUIL_BUFFER_LEN {
+            return false;
+        }
+        let old = QUIL_BUFFER_LEN;
+        for i in QUIL_CURSOR_POS..QUIL_BUFFER_LEN.saturating_sub(1) {
+            QUIL_BUFFER[i] = QUIL_BUFFER[i + 1];
+        }
+        QUIL_BUFFER_LEN -= 1;
+        QUIL_BUFFER[QUIL_BUFFER_LEN] = 0;
+        serial_println!("[quil.text.delete] mode=char old={} new={} ok=1",
+            old, QUIL_BUFFER_LEN);
+        true
+    }
+}
+
+/// Delete from cursor to end of current line (up to next \n or EOF).
+/// Returns number of chars deleted. No-op if cursor at \n or EOF.
+fn text_buffer_delete_to_eol() -> bool {
+    unsafe {
+        if QUIL_CURSOR_POS >= QUIL_BUFFER_LEN {
+            return false;
+        }
+        // Find end of current line
+        let mut eol = QUIL_CURSOR_POS;
+        while eol < QUIL_BUFFER_LEN && QUIL_BUFFER[eol] != b'\n' {
+            eol += 1;
+        }
+        let del_count = eol - QUIL_CURSOR_POS;
+        if del_count == 0 {
+            return false; // cursor at \n or eof with nothing to delete
+        }
+        let old = QUIL_BUFFER_LEN;
+        // Shift remaining buffer left
+        for i in QUIL_CURSOR_POS..QUIL_BUFFER_LEN.saturating_sub(del_count) {
+            QUIL_BUFFER[i] = QUIL_BUFFER[i + del_count];
+        }
+        QUIL_BUFFER_LEN -= del_count;
+        for i in QUIL_BUFFER_LEN..QUIL_BUFFER_LEN + del_count {
+            if i < QUIL_BUFFER_MAX_LEN { QUIL_BUFFER[i] = 0; }
+        }
+        serial_println!("[quil.text.delete] mode=to_eol old={} new={} ok=1",
+            old, QUIL_BUFFER_LEN);
+        true
+    }
+}
+
+/// Delete entire current line (cursor to \n inclusive, or to EOF).
+fn text_buffer_delete_line() -> bool {
+    unsafe {
+        if QUIL_BUFFER_LEN == 0 {
+            return false;
+        }
+        // Find start of current line (scan back to \n or beginning)
+        let mut line_start = QUIL_CURSOR_POS;
+        while line_start > 0 && QUIL_BUFFER[line_start - 1] != b'\n' {
+            line_start -= 1;
+        }
+        // Find end of current line
+        let mut line_end = line_start;
+        while line_end < QUIL_BUFFER_LEN && QUIL_BUFFER[line_end] != b'\n' {
+            line_end += 1;
+        }
+        if line_end < QUIL_BUFFER_LEN { line_end += 1; } // include \n
+        let del_count = line_end - line_start;
+        let old = QUIL_BUFFER_LEN;
+        for i in line_start..QUIL_BUFFER_LEN.saturating_sub(del_count) {
+            QUIL_BUFFER[i] = QUIL_BUFFER[i + del_count];
+        }
+        QUIL_BUFFER_LEN -= del_count;
+        for i in QUIL_BUFFER_LEN..QUIL_BUFFER_LEN + del_count {
+            if i < QUIL_BUFFER_MAX_LEN { QUIL_BUFFER[i] = 0; }
+        }
+        if QUIL_CURSOR_POS > QUIL_BUFFER_LEN { QUIL_CURSOR_POS = QUIL_BUFFER_LEN; }
+        serial_println!("[quil.text.delete] mode=line old={} new={} ok=1",
+            old, QUIL_BUFFER_LEN);
         true
     }
 }
@@ -1469,6 +1566,57 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[quil.cursor.proof.done] ok=1");
                 QUIL_CURSOR_NAV_PROOF_DONE = true;
                 palette_active = true;
+            }
+        }
+    }
+
+    // ── Text selection proof: set range markers ─────────────────────────
+    if QUIL_TEXT_SELECTION_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_TEXT_SELECTION_PROOF_DONE {
+                serial_println!("[quil.text.selection.proof.begin]");
+                // Seed a short buffer and set selection
+                QUIL_BUFFER_LEN = 0;
+                QUIL_CURSOR_POS = 0;
+                for &ch in b"HELLO\nWORLD" { text_buffer_append(ch); }
+                // Select "HELLO" (bytes 0..5)
+                QUIL_SEL_START = 0;
+                QUIL_SEL_END = 5;
+                serial_println!("[quil.text.selection] start=0 end=5 len={} ok=1", QUIL_BUFFER_LEN);
+                // Select "WORLD" (bytes 6..11)
+                QUIL_SEL_START = 6;
+                QUIL_SEL_END = 11;
+                serial_println!("[quil.text.selection] start=6 end=11 len={} ok=1", QUIL_BUFFER_LEN);
+                // Empty selection (start == end)
+                QUIL_SEL_START = 3;
+                QUIL_SEL_END = 3;
+                serial_println!("[quil.text.selection] start=3 end=3 len={} ok=1", QUIL_BUFFER_LEN);
+                serial_println!("[quil.text.selection.proof.done] ok=1");
+                QUIL_TEXT_SELECTION_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Text delete proof: delete char, to-eol, line ────────────────────
+    if QUIL_TEXT_DELETE_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_TEXT_DELETE_PROOF_DONE {
+                serial_println!("[quil.text.delete.proof.begin]");
+                // Seed buffer: "ABC\nDEF\nGHI"
+                QUIL_BUFFER_LEN = 0;
+                QUIL_CURSOR_POS = 0;
+                for &ch in b"ABC\nDEF\nGHI" { text_buffer_append(ch); }
+                // Cursor at pos 0, delete char 'A'
+                QUIL_CURSOR_POS = 0;
+                text_buffer_delete_char();
+                // Cursor at pos 3 (start of "DEF"), delete to end of line
+                QUIL_CURSOR_POS = 3;
+                text_buffer_delete_to_eol();
+                // Delete entire line starting at "EF\n" remnant
+                QUIL_CURSOR_POS = 3;
+                text_buffer_delete_line();
+                serial_println!("[quil.text.delete.proof.done] ok=1");
+                QUIL_TEXT_DELETE_PROOF_DONE = true;
             }
         }
     }

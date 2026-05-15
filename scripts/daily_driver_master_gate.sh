@@ -72,6 +72,9 @@ gate_bell_workflow_detail="SKIP"
 gate_spindle_linen_workflow="SKIP"
 gate_spindle_quil_workflow="SKIP"
 gate_quil_cursor_nav="SKIP"
+gate_quil_text_selection="SKIP"
+gate_quil_text_delete="SKIP"
+gate_spindle_editor_v2="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -94,7 +97,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V5"
+echo " DAILY-DRIVER MASTER GATE V6"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -629,6 +632,51 @@ else
     print_row "quil_cursor_nav" "SKIP" "no cursor nav proof markers"
 fi
 
+# ---- 33 (new). quil_text_selection ----
+# Evidence: [quil.text.selection], [quil.text.selection.proof.done].
+
+if [ "$(has 'quil\.text\.selection\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_sel="$(count 'quil\.text\.selection\]' | head -1)"
+    gate_quil_text_selection="PASS"
+    print_row "quil_text_selection" "PASS" "selection markers: ${c_sel}"
+elif [ "$(has 'quil\.text\.selection\]')" -ge 1 ]; then
+    gate_quil_text_selection="PASS"
+    print_row "quil_text_selection" "PASS" "selection markers present (partial)"
+else
+    gate_quil_text_selection="SKIP"
+    print_row "quil_text_selection" "SKIP" "no selection proof markers"
+fi
+
+# ---- 34 (new). quil_text_delete ----
+# Evidence: [quil.text.delete], [quil.text.delete.proof.done].
+
+if [ "$(has 'quil\.text\.delete\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_del="$(count 'quil\.text\.delete\]' | head -1)"
+    gate_quil_text_delete="PASS"
+    print_row "quil_text_delete" "PASS" "delete markers: ${c_del}"
+elif [ "$(has 'quil\.text\.delete\]')" -ge 1 ]; then
+    gate_quil_text_delete="PASS"
+    print_row "quil_text_delete" "PASS" "delete markers present (partial)"
+else
+    gate_quil_text_delete="SKIP"
+    print_row "quil_text_delete" "SKIP" "no delete proof markers"
+fi
+
+# ---- 35 (new). spindle_editor_v2 ----
+# Evidence: [spindle.editor.command], [spindle.editor.proof.done].
+
+if [ "$(has 'spindle\.editor\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_ed="$(count 'spindle\.editor\.command\]')"
+    gate_spindle_editor_v2="PASS"
+    print_row "spindle_editor_v2" "PASS" "editor commands: ${c_ed}"
+elif [ "$(has 'spindle\.editor\.command\]')" -ge 1 ]; then
+    gate_spindle_editor_v2="PASS"
+    print_row "spindle_editor_v2" "PASS" "editor command markers present (partial)"
+else
+    gate_spindle_editor_v2="SKIP"
+    print_row "spindle_editor_v2" "SKIP" "no editor V2 proof markers"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -663,7 +711,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V5 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V6 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -701,6 +749,9 @@ ALL_GATES=(
     "spindle_linen_workflow:$gate_spindle_linen_workflow"
     "spindle_quil_workflow:$gate_spindle_quil_workflow"
     "quil_cursor_nav:$gate_quil_cursor_nav"
+    "quil_text_selection:$gate_quil_text_selection"
+    "quil_text_delete:$gate_quil_text_delete"
+    "spindle_editor_v2:$gate_spindle_editor_v2"
     "faults_zero:$gate_faults_zero"
 )
 

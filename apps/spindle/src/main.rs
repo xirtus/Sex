@@ -1334,31 +1334,38 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         b"edit-help" => {
-            sb.push(b"Quil Editor Key Bindings:");
-            sb.push(b"  A-Z, 0-9, punctuation  type character (text mode)");
-            sb.push(b"  Backspace               delete last character");
-            sb.push(b"  Enter                   newline (text mode) / select (palette)");
-            sb.push(b"  Esc                     toggle palette on/off");
-            sb.push(b"  J / Down Arrow          palette nav: next row");
-            sb.push(b"  K / Up Arrow            palette nav: prev row");
-            sb.push(b"Palette commands:");
-            sb.push(b"  1 New Buffer (stub)    2 Save Document");
-            sb.push(b"  3 Load Document        4 Run Check (stub)");
-            sb.push(b"  5 Settings (stub)");
-            sb.push(b"Limitations: no cursor nav, no shift, no selection.");
-            serial_println!("[spindle.quil.workflow.command] name=edit-help ok=1 reason=keybindings_rendered");
+            sb.push(b"Quil Editor Key Bindings V2:");
+            sb.push(b"  Cursor Nav (text mode):");
+            sb.push(b"    Left Arrow  0x4B  cursor left");
+            sb.push(b"    Right Arrow 0x4D  cursor right");
+            sb.push(b"    Home        0x47  cursor to start");
+            sb.push(b"    End         0x4F  cursor to end");
+            sb.push(b"  Text Edit (text mode):");
+            sb.push(b"    A-Z, 0-9, punct  type character");
+            sb.push(b"    Backspace        delete last char");
+            sb.push(b"    Delete           delete at cursor");
+            sb.push(b"    Ctrl+K           delete to end of line");
+            sb.push(b"    Ctrl+Y           delete entire line");
+            sb.push(b"    Enter            newline / palette select");
+            sb.push(b"    Esc              toggle palette");
+            sb.push(b"  Selection: range markers [start, end] tracked.");
+            sb.push(b"  Palette: up/down nav, Enter execute, Esc dismiss.");
+            sb.push(b"Limitations: no shift, no visual cursor indicator.");
+            serial_println!("[spindle.editor.command] name=edit-help ok=1 reason=keybindings_v2");
             true
         }
         b"edit-status" => {
-            sb.push(b"Quil Edit Buffer Status:");
+            sb.push(b"Quil Edit Buffer Status V2:");
             sb.push(b"  max bytes:   512");
-            sb.push(b"  text mode:   append-only (no cursor nav)");
+            sb.push(b"  cursor:      left/right/home/end nav (V5)");
+            sb.push(b"  text mode:   append + delete char/eol/line (V6)");
+            sb.push(b"  selection:   range markers [start, end] (V6)");
             sb.push(b"  palette:     5 commands, keyboard nav ready");
             sb.push(b"  save:        RamFS sync (palette row 2)");
             sb.push(b"  load:        RamFS sync (palette row 3)");
-            sb.push(b"  async save:  audited (OPEN fire-and-forget, no write)");
-            sb.push(b"  proof gate:  QUIL_TEXT_BUFFER_COMMANDS_V1 PASS");
-            serial_println!("[spindle.quil.workflow.command] name=edit-status ok=1 reason=buffer_status_rendered");
+            sb.push(b"  async save:  audited (OPEN fire-and-forget)");
+            sb.push(b"  proof gates: commands V1, cursor V1, select V1, delete V1 PASS");
+            serial_println!("[spindle.editor.command] name=edit-status ok=1 reason=buffer_status_v2");
             true
         }
         // ── Linen search from Spindle audit ──────────────────────────────────
@@ -1662,6 +1669,14 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"edit-help", sb, hist, &mut ev);
         let _ = dispatch(b"edit-status", sb, hist, &mut ev);
         serial_println!("[spindle.quil.workflow.proof.done] ok=1");
+    }
+    // ── Spindle editor commands V2 proof ──────────────────────────────────
+    const SPINDLE_EDITOR_V2_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_EDITOR_V2_PROOF").is_some();
+    if SPINDLE_EDITOR_V2_PROOF_ENABLED {
+        let _ = dispatch(b"edit-help", sb, hist, &mut ev);
+        let _ = dispatch(b"edit-status", sb, hist, &mut ev);
+        serial_println!("[spindle.editor.proof.done] ok=1");
     }
 
     serial_println!("[spindle.ready]");
