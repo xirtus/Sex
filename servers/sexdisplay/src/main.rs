@@ -24,6 +24,12 @@ const DRAIN_MAX: usize = 8;
 const SILKBAR_PHASE3_RECEIVE_PROOF_ENABLED: bool =
     option_env!("SEXOS_SILKBAR_PHASE3_RECEIVE_PROOF").is_some();
 
+/// Phase 5: minimal pixel indicators for active app, tint swatch, and palette state.
+/// Adds tiny colored dots/swatches drawn inside the SilkBar strip (y<50).
+/// Build: SEXOS_SILKBAR_PHASE5_PIXEL_PROOF=1
+const SILKBAR_PHASE5_PIXEL_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SILKBAR_PHASE5_PIXEL_PROOF").is_some();
+
 const BAR_BG_W_CAP: usize = 2560;
 const BAR_BG_H: usize = 50;
 
@@ -651,6 +657,85 @@ fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     None
 }
 
+// ── Phase 5: Pixel Indicators (tiny bounded dots/swatches, y<50) ────────────
+
+/// Surface ID → indicator color mapping for active app dot.
+const fn app_indicator_color(sid: u32) -> Option<u32> {
+    match sid {
+        200 => Some(0x00A6E3A1), // Linen  → green
+        201 => Some(0x00CBA6F7), // Quil   → mauve
+        202 => Some(0x0094E2D5), // Mesh   → teal
+        203 => Some(0x00FAB387), // Collar → peach
+        204 => Some(0x00F38BA8), // Bell   → red
+        153 => Some(0x0089B4FA), // Spindle→ blue
+        0   => None,            // no active app
+        _   => Some(0x00444444), // unknown → dim gray
+    }
+}
+
+/// Accent index → RGB color (Atlas 8-accent palette).
+const fn accent_swatch_color(idx: u8) -> u32 {
+    const ACCENT: [u32; 8] = [
+        0x0089B4FA, // 0: Blue
+        0x00A6E3A1, // 1: Green
+        0x00F9E2AF, // 2: Yellow
+        0x00FAB387, // 3: Peach
+        0x00F38BA8, // 4: Red
+        0x00CBA6F7, // 5: Mauve
+        0x00F5C2E7, // 6: Pink
+        0x0094E2D5, // 7: Teal
+    ];
+    if (idx as usize) < 8 { ACCENT[idx as usize] } else { 0x00444444 }
+}
+
+/// Phase 5: active app indicator — 4x4 colored dot near launcher.
+/// Position: x=155..159, y=22..25 (right of options dots at x=135).
+fn phase5_active_app_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+    if !SILKBAR_PHASE5_PIXEL_PROOF_ENABLED { return None; }
+    if bar.phase1.active_app_sid == 0 { return None; }
+    const DOT_X: usize = 155;
+    const DOT_Y: usize = 22;
+    const DOT_SZ: usize = 4;
+    if x >= DOT_X && x < DOT_X + DOT_SZ && y >= DOT_Y && y < DOT_Y + DOT_SZ {
+        app_indicator_color(bar.phase1.active_app_sid)
+    } else {
+        None
+    }
+}
+
+/// Phase 5: tint/accent swatch — 4x4 colored square near right side.
+/// Position: x=1045..1049, y=22..25 (between Bell at x=1020 and Clock at x=1090).
+fn phase5_tint_swatch_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+    if !SILKBAR_PHASE5_PIXEL_PROOF_ENABLED { return None; }
+    const SX: usize = 1045;
+    const SY: usize = 22;
+    const SS: usize = 4;
+    if x >= SX && x < SX + SS && y >= SY && y < SY + SS {
+        Some(accent_swatch_color(bar.phase1.accent_tint_idx))
+    } else {
+        None
+    }
+}
+
+/// Phase 5: palette open indicator — 3x3 green/red dot near right side.
+/// Green when palette_open=true, dim when closed.
+/// Position: x=1060..1063, y=23..26 (right of tint swatch).
+fn phase5_palette_dot_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+    if !SILKBAR_PHASE5_PIXEL_PROOF_ENABLED { return None; }
+    const PX: usize = 1060;
+    const PY: usize = 23;
+    const PS: usize = 3;
+    if x >= PX && x < PX + PS && y >= PY && y < PY + PS {
+        if bar.phase1.palette_open {
+            Some(0x0044FF44) // bright green
+        } else {
+            Some(0x00224422) // dim/dark green
+        }
+    } else {
+        None
+    }
+}
+
 fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
     const R6_BAR_ALPHA: u8 = 196;
     const R6_EDGE_ALPHA: u8 = 72;
@@ -1157,6 +1242,20 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                 );
             }
         }
+        // Phase 5: budgeted draw marker — prove indicators are being rendered.
+        if SILKBAR_PHASE5_PIXEL_PROOF_ENABLED {
+            static mut PHASE5_DRAW_BUDGET: u32 = 8;
+            let b = &mut PHASE5_DRAW_BUDGET;
+            if *b > 0 {
+                *b -= 1;
+                serial_println!(
+                    "[sexdisplay.silkbar.phase5.draw] active={} tint={} palette_open={}",
+                    bar.phase1.active_app_sid,
+                    bar.phase1.accent_tint_idx,
+                    bar.phase1.palette_open as u8
+                );
+            }
+        }
     }
     // Top strip boundary: rows 0..50. Keep in sync with BAR_H constant.
     // Row 50 = glow edge; rows 0..49 = SilkBar panel fill + modules.
@@ -1166,6 +1265,12 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                 if let Some(fg) = clock_fg_at(x, y, bar) {
                     fg
                 } else if let Some(fg) = bell_badge_at(x, y, bar) {
+                    fg
+                } else if let Some(fg) = phase5_active_app_at(x, y, bar) {
+                    fg
+                } else if let Some(fg) = phase5_tint_swatch_at(x, y, bar) {
+                    fg
+                } else if let Some(fg) = phase5_palette_dot_at(x, y, bar) {
                     fg
                 } else {
                     bar_color(x, y, bar)
