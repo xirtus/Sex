@@ -124,6 +124,8 @@ gate_frame_lights_stub="SKIP"
 gate_spindle_frame_lights="SKIP"
 gate_crosspd_launch="SKIP"
 gate_browser_placeholder="SKIP"
+gate_atlas_scene_stub="SKIP"
+gate_spindle_atlas="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -146,7 +148,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V31"
+echo " DAILY-DRIVER MASTER GATE V32"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -1181,7 +1183,22 @@ elif [ "$(has 'browser\.placeholder\.open\]')" -ge 1 ]; then
     gate_browser_placeholder="PASS"
 else gate_browser_placeholder="SKIP"; fi
 
-# ---- 81. linen_search_bridge ----
+# ---- 81. atlas_scene_stub ----
+if [ "$(has 'silk\.atlas\.status_stub\.done.*ok=1')" -eq 1 ]; then
+    gate_atlas_scene_stub="PASS"
+    print_row "atlas_scene_stub" "PASS" "1 scene visual=0 thumbnails=0"
+elif [ "$(has 'silk\.atlas\.scene\]')" -ge 1 ]; then
+    gate_atlas_scene_stub="PASS"
+else gate_atlas_scene_stub="SKIP"; fi
+
+# ---- 82. spindle_atlas ----
+if [ "$(has 'spindle\.atlas\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_spindle_atlas="PASS"
+elif [ "$(has 'spindle\.atlas\.command\]')" -ge 1 ]; then
+    gate_spindle_atlas="PASS"
+else gate_spindle_atlas="SKIP"; fi
+
+# ---- 83. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
     print_row "linen_search_bridge" "PASS" "search bridge e2e"
@@ -1239,7 +1256,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V31 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V32 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1328,6 +1345,8 @@ ALL_GATES=(
     "spindle_frame_lights:$gate_spindle_frame_lights"
     "crosspd_launch:$gate_crosspd_launch"
     "browser_placeholder:$gate_browser_placeholder"
+    "atlas_scene_stub:$gate_atlas_scene_stub"
+    "spindle_atlas:$gate_spindle_atlas"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
 )

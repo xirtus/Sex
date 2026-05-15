@@ -1501,6 +1501,15 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         // ── Frame Chrome model help ──────────────────────────────────────
+        b"atlas" => {
+            sb.push(b"Atlas -- Scene overview (status only, no visuals):");
+            sb.push(b"  mode:     overview (static model)");
+            sb.push(b"  scenes:   1 (Workspace)");
+            sb.push(b"  visual=0  thumbnails=0  pointer=0  drag=0");
+            sb.push(b"  Atlas visual + thumbnails: future phases.");
+            serial_println!("[spindle.atlas.command] name=atlas ok=1 reason=status_overview");
+            true
+        }
         b"frame-chrome" => {
             sb.push(b"Frame Chrome Model: Scene->Frame->Tab->Surface");
             sb.push(b"  Silk chrome state: hidden/rim_only/tab_visible/tab_strip/minimized_card/zoomed");
@@ -1962,6 +1971,12 @@ pub extern "C" fn _start() -> ! {
         option_env!("SEXOS_SPINDLE_FRAME_RIM_PROOF").is_some();
     const SPINDLE_FRAME_LIGHTS_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_FRAME_LIGHTS_PROOF").is_some();
+    const SPINDLE_ATLAS_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_ATLAS_PROOF").is_some();
+    if SPINDLE_ATLAS_PROOF_ENABLED {
+        let _ = dispatch(b"atlas", sb, hist, &mut ev);
+        serial_println!("[spindle.atlas.proof.done] ok=1");
+    }
     if SPINDLE_FRAME_LIGHTS_PROOF_ENABLED {
         let _ = dispatch(b"frame-lights", sb, hist, &mut ev);
         serial_println!("[spindle.frame.lights.proof.done] ok=1");

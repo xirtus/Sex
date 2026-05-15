@@ -299,6 +299,11 @@ const FRAME_LIGHTS_STUB_PROOF_ENABLED: bool =
     option_env!("SEXOS_FRAME_LIGHTS_STUB_PROOF").is_some();
 static mut FRAME_LIGHTS_STUB_PROOF_DONE: bool = false;
 
+/// Atlas Scene status stub proof gate.
+const ATLAS_SCENE_STUB_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_SCENE_STUB_PROOF").is_some();
+static mut ATLAS_SCENE_STUB_PROOF_DONE: bool = false;
+
 const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
 const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
@@ -1386,6 +1391,17 @@ unsafe fn maybe_run_frame_lights_stub_proof() {
     serial_println!("[silk.frame.lights.summary] frames=3 red_enabled=0 yellow_available=3 green_available=3 visual=0 pointer=0 ok=1");
     serial_println!("[silk.frame.lights.status_stub.done] ok=1 frames=3 visual=0 pointer=0 close_impl=0");
     FRAME_LIGHTS_STUB_PROOF_DONE = true;
+}
+
+/// Atlas Scene status stub: model markers, no visuals.
+unsafe fn maybe_run_atlas_scene_stub_proof() {
+    if !ATLAS_SCENE_STUB_PROOF_ENABLED || ATLAS_SCENE_STUB_PROOF_DONE { return; }
+    serial_println!("[silk.atlas.status_stub.proof.begin]");
+    serial_println!("[silk.atlas.mode] mode=overview scenes=1 active=0 selected=0 visual=0 pointer=0 drag=0 ok=1 reason=static_model");
+    serial_println!("[silk.atlas.scene] scene=0 label=Workspace active=1 frames=3 minimized=0 urgent=0 layout=tiled safe_preview=0 ok=1 reason=current_active");
+    serial_println!("[silk.atlas.summary] scenes=1 thumbnails=0 visual=0 pointer=0 drag=0 ok=1");
+    serial_println!("[silk.atlas.status_stub.done] ok=1 scenes=1 visual=0 thumbnails=0 pointer=0 drag=0");
+    ATLAS_SCENE_STUB_PROOF_DONE = true;
 }
 
 /// Linen object detail proof: exercises non-blocking object detail panel
@@ -16088,6 +16104,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_frame_chrome_model_proof(); }
         unsafe { maybe_run_frame_rim_markers_proof(); }
         unsafe { maybe_run_frame_lights_stub_proof(); }
+        unsafe { maybe_run_atlas_scene_stub_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }
