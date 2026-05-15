@@ -17,6 +17,13 @@ const HIGH_HALF_BASE: u64 = 0xffff_8000_0000_0000;
 const MAX_FB_W: usize = 8192;
 const MAX_FB_H: usize = 4320;
 const DRAIN_MAX: usize = 8;
+
+/// Phase 3: receive+render proof for new SilkBar ABI v4 variants (8/9/10).
+/// When enabled, emits [sexdisplay.silkbar.phase3.recv/state] markers.
+/// Build: SEXOS_SILKBAR_PHASE3_RECEIVE_PROOF=1
+const SILKBAR_PHASE3_RECEIVE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SILKBAR_PHASE3_RECEIVE_PROOF").is_some();
+
 const BAR_BG_W_CAP: usize = 2560;
 const BAR_BG_H: usize = 50;
 
@@ -1134,6 +1141,22 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                     bar.clock_hh, bar.clock_mm, bar.clock_ss, src);
             }
         }
+        // Phase 3: state marker — prove phase1 fields are populated after receives.
+        if SILKBAR_PHASE3_RECEIVE_PROOF_ENABLED {
+            static mut PHASE3_STATE_BUDGET: u32 = 8;
+            let b = &mut PHASE3_STATE_BUDGET;
+            if *b > 0 {
+                *b -= 1;
+                serial_println!(
+                    "[sexdisplay.silkbar.phase3.state] active={} tint={} palette_open={} selected={} available={}",
+                    bar.phase1.active_app_sid,
+                    bar.phase1.accent_tint_idx,
+                    bar.phase1.palette_open as u8,
+                    bar.phase1.palette_selected,
+                    bar.phase1.palette_available
+                );
+            }
+        }
     }
     // Top strip boundary: rows 0..50. Keep in sync with BAR_H constant.
     // Row 50 = glow edge; rows 0..49 = SilkBar panel fill + modules.
@@ -1402,6 +1425,27 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> 
                 serial_println!("[sexdisplay.bell.render] total={} redacted={} flags={:#x}",
                     bar.bell_state.total_visible, bar.bell_state.redacted_count, bar.bell_state.flags);
             }
+        }
+    }
+    // Phase 3: receive markers for new ABI v4 variants (8/9/10).
+    if ok {
+        match kind {
+            8 => {
+                serial_println!(
+                    "[sexdisplay.silkbar.phase3.recv] kind=SetActiveApp a={} b={} ok=1",
+                    bar.phase1.active_app_sid, 0);
+            }
+            9 => {
+                serial_println!(
+                    "[sexdisplay.silkbar.phase3.recv] kind=SetTintAccent a={} b={} ok=1",
+                    bar.phase1.accent_tint_idx, 0);
+            }
+            10 => {
+                serial_println!(
+                    "[sexdisplay.silkbar.phase3.recv] kind=SetPaletteState a={} b={} ok=1",
+                    update.a as u32, 0);
+            }
+            _ => {}
         }
     }
     (ok, kind)
