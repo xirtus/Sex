@@ -571,7 +571,22 @@ pub extern "C" fn _start() -> ! {
         unsafe { linen_init_session(); }
     }
 
+    // ── Object workflow/schema proofs: run BEFORE table-filling session proof ──
+    // Timing: session proof fills the 16-object table, starving workflow proofs.
+    // Reordered: workflow → persist → schema run first, then session proof fills
+    // remaining slots without disrupting these proofs.
+    if LINEN_OBJECT_WORKFLOW_PROOF_ENABLED {
+        unsafe { run_linen_object_workflow_proof(); }
+    }
+    if LINEN_OBJECT_PERSIST_PROOF_ENABLED && LINEN_OBJECT_WORKFLOW_PROOF_ENABLED {
+        unsafe { run_linen_object_persist_proof(); }
+    }
+    if LINEN_OBJECT_SCHEMA_PROOF_ENABLED {
+        unsafe { run_linen_object_schema_proof(); }
+    }
+
     // ── Synthetic proof: Linen session object model ──
+    // NOTE: runs after workflow proofs.  Fills remaining table slots.
     if LINEN_SESSION_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED {
         unsafe { run_session_proof(); }
     }
@@ -589,21 +604,6 @@ pub extern "C" fn _start() -> ! {
     // ── Linen disk object proof: save/load through SexFiles RamFS ──
     if LINEN_DISK_OBJECT_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED {
         unsafe { run_linen_disk_object_proof(); }
-    }
-
-    // ── Object workflow proof: create/tag/search/detail ──
-    if LINEN_OBJECT_WORKFLOW_PROOF_ENABLED {
-        unsafe { run_linen_object_workflow_proof(); }
-    }
-
-    // ── Object persist async proof: fire-and-forget CREATE_OWNER for workflow objects ──
-    if LINEN_OBJECT_PERSIST_PROOF_ENABLED && LINEN_OBJECT_WORKFLOW_PROOF_ENABLED {
-        unsafe { run_linen_object_persist_proof(); }
-    }
-
-    // ── Object kind schema proof: taxonomy markers ──
-    if LINEN_OBJECT_SCHEMA_PROOF_ENABLED {
-        unsafe { run_linen_object_schema_proof(); }
     }
 
     loop {
