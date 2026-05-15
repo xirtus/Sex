@@ -20,3 +20,16 @@ Status: PASS
 
 ## Baseline Constraint
 - Any follow-up implementation must preserve `18/18 PASS`, `faults=0`.
+
+## Follow-up Implementation Completed
+From this batch bridge, both candidate implementation missions were executed and pushed:
+
+1. `APP_REGISTRY_READONLY_VIEW_V1`
+- Commit: `e1a467e`
+- Result: added read-only app registry proof markers in `silk-shell`
+- Gate: `18/18 PASS`, `faults=0`
+
+2. `SLOT2_EVENT_OWNERSHIP_MARKER_AUDIT_V1`
+- Commit: `17a58b5`
+- Result: added slot ownership demux audit markers in `sexusb`
+- Gate: `18/18 PASS`, `faults=0`
