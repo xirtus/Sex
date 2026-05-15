@@ -11520,6 +11520,15 @@ unsafe fn maybe_run_app_launcher_multi_exec_proof() {
             name
         );
 
+        // Atlas (idx 3): ensure overlay is closed before exec so the
+        // toggle inside palette_execute_selected() reliably opens it.
+        // If overlay was already open (e.g. from batch proof that ran
+        // earlier), atlas_toggle() would close it and the proof would
+        // incorrectly count Atlas as failed.
+        if idx == 3 && ATLAS_MODE_ENABLED {
+            atlas_toggle(); // close — exec toggle will open it
+        }
+
         // Execute the selected launcher item.
         let exec_ok = palette_execute_selected();
 
@@ -11537,20 +11546,34 @@ unsafe fn maybe_run_app_launcher_multi_exec_proof() {
             focus_ok = exec_ok && FOCUSED_SURFACE_ID == sid;
         }
 
-        serial_println!(
-            "[launcher.multi.exec] idx={} app={} ok={} reason={}",
-            idx,
-            name,
-            exec_ok as u8,
-            if exec_ok { "launched" } else { "exec_reject" }
-        );
+        // Exec marker: for Atlas, report overlay status instead of
+        // try_set_focus result (which is always 0 for nonfocusable 151).
+        if idx == 3 {
+            serial_println!(
+                "[launcher.multi.exec] idx={} app={} ok={} reason={}",
+                idx,
+                name,
+                focus_ok as u8,
+                if focus_ok { "overlay_enabled_nonfocusable" } else { "exec_reject" }
+            );
+        } else {
+            serial_println!(
+                "[launcher.multi.exec] idx={} app={} ok={} reason={}",
+                idx,
+                name,
+                exec_ok as u8,
+                if exec_ok { "launched" } else { "exec_reject" }
+            );
+        }
 
         serial_println!(
             "[launcher.multi.focus] app={} sid={} ok={} reason={}",
             name,
             sid,
             focus_ok as u8,
-            if focus_ok { "focused" } else {
+            if focus_ok {
+                if idx == 3 { "overlay_enabled_nonfocusable" } else { "focused" }
+            } else {
                 if exec_ok { "focus_mismatch" } else { "exec_failed" }
             }
         );
