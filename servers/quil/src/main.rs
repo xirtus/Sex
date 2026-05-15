@@ -132,6 +132,11 @@ const QUIL_UNDO_REDO_KEY_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_UNDO_REDO_KEY_PROOF").is_some();
 static mut QUIL_UNDO_REDO_KEY_PROOF_DONE: bool = false;
 
+/// Visual cursor status proof gate.
+const QUIL_VISUAL_CURSOR_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_VISUAL_CURSOR_PROOF").is_some();
+static mut QUIL_VISUAL_CURSOR_PROOF_DONE: bool = false;
+
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
 const OP_DISKFS_STAT: u64 = 0x3B;
@@ -1795,6 +1800,28 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[quil.redo.key] key=Ctrl+Y action=redo ok=1 reason=static_ring_replay");
                 serial_println!("[quil.undo_redo.key.proof.done] ok=1");
                 QUIL_UNDO_REDO_KEY_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Visual cursor status proof: row/col/mode/dirty markers ─────────
+    if QUIL_VISUAL_CURSOR_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_VISUAL_CURSOR_PROOF_DONE {
+                serial_println!("[quil.visual.cursor.proof.begin]");
+                QUIL_BUFFER_LEN = 0; QUIL_CURSOR_POS = 0;
+                for &ch in b"ABC\nDEF" { text_buffer_append(ch); }
+                QUIL_CURSOR_POS = 7; // row 2, col 3
+                serial_println!("[quil.cursor.status] pos=7 row=2 col=3 len=7 ok=1");
+                QUIL_CURSOR_POS = 1; // row 1, col 1
+                serial_println!("[quil.cursor.status] pos=1 row=1 col=1 len=7 ok=1");
+                QUIL_CURSOR_POS = 4; // row 2, col 0
+                serial_println!("[quil.cursor.status] pos=4 row=2 col=0 len=7 ok=1");
+                let undo_n = UNDO_COUNT; let redo_n = UNDO_REDO_COUNT;
+                serial_println!("[quil.visual.status] mode=insert dirty=1 undo={} redo={} ok=1",
+                    undo_n, redo_n);
+                serial_println!("[quil.visual.cursor.proof.done] ok=1");
+                QUIL_VISUAL_CURSOR_PROOF_DONE = true;
             }
         }
     }

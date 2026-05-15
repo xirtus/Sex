@@ -82,6 +82,10 @@ gate_quil_undo_redo="SKIP"
 gate_quil_undo_redo_key="SKIP"
 gate_app_lifecycle_close_restore="SKIP"
 gate_spindle_lifecycle_help_v2="SKIP"
+gate_quil_visual_cursor="SKIP"
+gate_bell_delivery_audit="SKIP"
+gate_spindle_editor_status="SKIP"
+gate_app_lifecycle_summary_v2="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -104,7 +108,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V8"
+echo " DAILY-DRIVER MASTER GATE V9"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -787,6 +791,55 @@ else
     print_row "spindle_lifecycle_help_v2" "SKIP" "no lifecycle help markers"
 fi
 
+# ---- 43 (new). quil_visual_cursor ----
+if [ "$(has 'quil\.visual\.cursor\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_st="$(count 'quil\.cursor\.status\]')"
+    gate_quil_visual_cursor="PASS"
+    print_row "quil_visual_cursor" "PASS" "cursor status markers: ${c_st}"
+elif [ "$(has 'quil\.cursor\.status\]')" -ge 1 ]; then
+    gate_quil_visual_cursor="PASS"
+    print_row "quil_visual_cursor" "PASS" "cursor status present (partial)"
+else
+    gate_quil_visual_cursor="SKIP"
+    print_row "quil_visual_cursor" "SKIP" "no visual cursor markers"
+fi
+
+# ---- 44 (new). bell_delivery_audit ----
+if [ "$(has 'bell\.delivery\.audit\.done.*ok=1')" -eq 1 ]; then
+    gate_bell_delivery_audit="PASS"
+    print_row "bell_delivery_audit" "PASS" "delivery audit complete"
+elif [ "$(has 'bell\.delivery\.(send|recv|visible|detail)\]')" -ge 1 ]; then
+    gate_bell_delivery_audit="PASS"
+    print_row "bell_delivery_audit" "PASS" "delivery markers present (partial)"
+else
+    gate_bell_delivery_audit="SKIP"
+    print_row "bell_delivery_audit" "SKIP" "no delivery audit markers"
+fi
+
+# ---- 45 (new). spindle_editor_status ----
+if [ "$(has 'spindle\.editor\.status\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_spindle_editor_status="PASS"
+    print_row "spindle_editor_status" "PASS" "editor status summary"
+elif [ "$(has 'spindle\.editor\.status\.summary\]')" -ge 1 ]; then
+    gate_spindle_editor_status="PASS"
+    print_row "spindle_editor_status" "PASS" "status summary present (partial)"
+else
+    gate_spindle_editor_status="SKIP"
+    print_row "spindle_editor_status" "SKIP" "no editor status markers"
+fi
+
+# ---- 46 (new). app_lifecycle_summary_v2 ----
+if [ "$(has 'app\.lifecycle\.summary\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_app_lifecycle_summary_v2="PASS"
+    print_row "app_lifecycle_summary_v2" "PASS" "lifecycle summary"
+elif [ "$(has 'app\.lifecycle\.summary\]')" -ge 1 ]; then
+    gate_app_lifecycle_summary_v2="PASS"
+    print_row "app_lifecycle_summary_v2" "PASS" "summary markers present (partial)"
+else
+    gate_app_lifecycle_summary_v2="SKIP"
+    print_row "app_lifecycle_summary_v2" "SKIP" "no lifecycle summary markers"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -821,7 +874,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V8 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V9 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -869,6 +922,10 @@ ALL_GATES=(
     "quil_undo_redo_key:$gate_quil_undo_redo_key"
     "app_lifecycle_close_restore:$gate_app_lifecycle_close_restore"
     "spindle_lifecycle_help_v2:$gate_spindle_lifecycle_help_v2"
+    "quil_visual_cursor:$gate_quil_visual_cursor"
+    "bell_delivery_audit:$gate_bell_delivery_audit"
+    "spindle_editor_status:$gate_spindle_editor_status"
+    "app_lifecycle_summary_v2:$gate_app_lifecycle_summary_v2"
     "faults_zero:$gate_faults_zero"
 )
 

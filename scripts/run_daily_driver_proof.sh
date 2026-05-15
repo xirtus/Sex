@@ -163,8 +163,14 @@ export SEXOS_QUIL_UNDO_REDO_KEY_PROOF=1
 export SEXOS_APP_LIFECYCLE_CLOSE_RESTORE_PROOF=1
 export SEXOS_SPINDLE_LIFECYCLE_HELP_V2_PROOF=1
 
+# ── Feature batch V9 editor/visual/bell proofs ──
+export SEXOS_QUIL_VISUAL_CURSOR_PROOF=1
+export SEXOS_BELL_DELIVERY_AUDIT_PROOF=1
+export SEXOS_SPINDLE_EDITOR_STATUS_PROOF=1
+export SEXOS_APP_LIFECYCLE_SUMMARY_V2_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V8"
+echo " DAILY-DRIVER PROOF PROFILE V9"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
