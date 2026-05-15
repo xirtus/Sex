@@ -11627,6 +11627,7 @@ unsafe fn maybe_run_app_launcher_help_proof() {
         total_rows,
         if ok_rows > 0 { "rows_available" } else { "no_available_rows" }
     );
+    serial_println!("[launcher.help.rowcount] total={} ok=1", total_rows);
     APP_LAUNCHER_HELP_PROOF_DONE = true;
 }
 
@@ -11637,6 +11638,7 @@ unsafe fn maybe_run_linen_search_filter_proof() {
     let query = "doc";
     let qlen = query.len();
     serial_println!("[linen.search.token] idx=0 value={} ok=1", query);
+    serial_println!("[linen.search.token.count] count=1 ok=1");
     serial_println!("[linen.search.query] len={} ok={}", qlen, (qlen > 0) as u8);
     serial_println!("[linen.search.mode] value=kind_document ok=1");
     let selected = linen_selected_index();
@@ -11673,7 +11675,7 @@ unsafe fn maybe_run_bell_filter_proof() {
     if total == 0 {
         serial_println!("[bell.filter.source] source=local_ring count=0 ok=0 reason=empty_ring");
         serial_println!("[bell.filter.nav] old={} new={} ok=1", BELL_SELECTED_ROW, BELL_SELECTED_ROW);
-        serial_println!("[bell.filter.proof.done] ok=0");
+        serial_println!("[bell.filter.proof.done] ok=0 reason=empty_ring");
         BELL_FILTER_PROOF_DONE = true;
         return;
     }

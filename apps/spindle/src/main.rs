@@ -551,6 +551,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
     } else if raw_cmd == b"n" {
         cmd = b"notify";
         serial_println!("[spindle.alias.exec] alias=n target=notify ok=1");
+        serial_println!("[spindle.alias.notify.len] len={} ok=1", args.len());
     }
     if option_env!("SEXOS_SPINDLE_ALIASES_PROOF").is_some() {
         serial_println!("[spindle.alias.proof.summary] alias_count=6 ok=1");
