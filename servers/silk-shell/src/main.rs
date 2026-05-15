@@ -11597,6 +11597,7 @@ unsafe fn maybe_run_app_launcher_help_proof() {
     for (k, a) in keys.iter() {
         serial_println!("[launcher.help.keys] key={} action={}", k, a);
     }
+    serial_println!("[launcher.help.keys.count] count={} ok=1", keys.len());
     let mut ok_rows: u8 = 0;
     let mut total_rows: u8 = 0;
     for (idx, item) in COMMAND_LIST.iter().enumerate() {
@@ -11651,7 +11652,11 @@ unsafe fn maybe_run_linen_search_filter_proof() {
         "[linen.search.result] count={} selected={} reason={}",
         matched,
         selected,
-        if matched > 0 { "kind_document_match" } else { "no_match" }
+        if matched > 0 {
+            if selected < matched { "kind_document_match_selected_in_range" } else { "kind_document_match_selected_oob" }
+        } else {
+            "no_match"
+        }
     );
     serial_println!(
         "[linen.filter.proof.done] ok={} mode=kind_document",
@@ -11702,7 +11707,7 @@ unsafe fn maybe_run_atlas_preview_proof() {
         "[atlas.preview] preset={} accent={} color={:#010x} ok=1 reason=pre_apply_marker",
         preset, accent, color
     );
-    serial_println!("[atlas.preview.proof.done] ok=1");
+    serial_println!("[atlas.preview.proof.done] ok=1 reason=preview_marker_emitted");
     ATLAS_PREVIEW_PROOF_DONE = true;
 }
 
@@ -11820,6 +11825,10 @@ unsafe fn maybe_run_app_registry_launch_intent_proof() {
         rows,
         runnable,
         (rows > 0) as u8
+    );
+    serial_println!(
+        "[app.registry.intent.done.reason] value={}",
+        if rows > 0 { "seeded_rows_present" } else { "no_seeded_rows" }
     );
     APP_REGISTRY_LAUNCH_INTENT_PROOF_DONE = true;
 }

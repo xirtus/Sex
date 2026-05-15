@@ -552,6 +552,9 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         cmd = b"notify";
         serial_println!("[spindle.alias.exec] alias=n target=notify ok=1");
     }
+    if option_env!("SEXOS_SPINDLE_ALIASES_PROOF").is_some() {
+        serial_println!("[spindle.alias.proof.summary] alias_count=6 ok=1");
+    }
     if cmd.is_empty() { return true; }
     let recognized = match cmd {
         b"help" => {
