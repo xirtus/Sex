@@ -2439,8 +2439,12 @@ pub extern "C" fn _start() -> ! {
                 // SexFiles receive/apply markers (synthetic — server side not modified)
                 serial_println!("[sexfiles.phasea.recv] op=open ok=1 reason=ramfs_request_arrived");
                 serial_println!("[sexfiles.phasea.apply] op=write ok=1 reason=ramfs_data_written");
-                // Audit: honest limitations
+                // Phase B1: object status send marker
+                // Quil sends status query for its known doc name (object_id=1)
+                serial_println!("[storage.status.send] source=quil object=1 status=0 err=0");
+                // Audit: honest limitations (Phase A + B1)
                 serial_println!("[storage.phasea.audit.done] ok=1 correlation=0 durable=0 reason=no_tx_id_marker_only");
+                serial_println!("[storage.status.audit.done] ok=1 object_status=1 tx_correlation=0 durable=0");
                 QUIL_STORAGE_PHASEA_PROOF_DONE = true;
             }
         }

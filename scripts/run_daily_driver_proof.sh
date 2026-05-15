@@ -200,7 +200,7 @@ export SEXOS_SPINDLE_EDITOR_FINISH_PROOF=1
 export SEXOS_QUIL_STORAGE_PHASEA_PROOF=1
 
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V16"
+echo " DAILY-DRIVER PROOF PROFILE V17"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

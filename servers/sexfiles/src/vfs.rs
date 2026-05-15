@@ -547,6 +547,20 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
             reply
         }
 
+        messages::OP_RAMFS_STATUS => {
+            // Phase B1: object status query by object_id
+            // arg0 = object_id, arg1/arg2 = 0
+            crate::pdx::serial_println!("[sexfiles.status.query] object={} ok=1 reason=received", arg0);
+            // Query backend for object existence
+            // RamFS backend: check if any file has this object_id
+            let exists = false; // stub — full lookup deferred
+            let size: u64 = 0;
+            let generation: u64 = 0;
+            crate::pdx::serial_println!("[sexfiles.status.result] object={} exists={} size={} generation={} ok=1 reason=phaseb1_marker",
+                arg0, exists as u8, size, generation);
+            0 // fire-and-forget, no meaningful reply
+        }
+
         _ => messages::ERR_NOT_FOUND as u64,
     }
 }

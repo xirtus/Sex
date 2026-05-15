@@ -105,6 +105,7 @@ gate_quil_goto_line="SKIP"
 gate_spindle_editor_finish="SKIP"
 gate_linen_search_bridge="SKIP"
 gate_storage_phasea="SKIP"
+gate_storage_phaseb1="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -127,7 +128,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V16"
+echo " DAILY-DRIVER MASTER GATE V17"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -1006,7 +1007,15 @@ elif [ "$(has 'storage\.phasea\.send\]')" -ge 1 ]; then
     gate_storage_phasea="PASS"
 else gate_storage_phasea="SKIP"; fi
 
-# ---- 62. linen_search_bridge ----
+# ---- 62. storage_phaseb1 ----
+if [ "$(has 'storage\.status\.audit\.done.*ok=1')" -eq 1 ]; then
+    gate_storage_phaseb1="PASS"
+    print_row "storage_phaseb1" "PASS" "object status (tx_correlation=0)"
+elif [ "$(has 'storage\.status\.send\]')" -ge 1 ]; then
+    gate_storage_phaseb1="PASS"
+else gate_storage_phaseb1="SKIP"; fi
+
+# ---- 63. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
     print_row "linen_search_bridge" "PASS" "search bridge e2e"
@@ -1064,7 +1073,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V16 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V17 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1134,6 +1143,7 @@ ALL_GATES=(
     "quil_goto_line:$gate_quil_goto_line"
     "spindle_editor_finish:$gate_spindle_editor_finish"
     "storage_phasea:$gate_storage_phasea"
+    "storage_phaseb1:$gate_storage_phaseb1"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
 )

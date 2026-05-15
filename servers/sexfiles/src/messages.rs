@@ -114,6 +114,16 @@ pub const DISKFS_MAX_READ: usize = 8;
 /// Fixed DiskFS object size in bytes.
 pub const DISKFS_OBJECT_SIZE: u64 = 4096;
 
+// ── Object status query (Phase B1) ──────────────────────────────────────
+/// Opcode: Query object status by object_id.
+/// arg0 = object_id (from OP_RAMFS_OBJECT_ID or known constant)
+/// arg1 = 0, arg2 = 0
+/// Returns: packed { exists: u8 in bit 0, size: u16 in bits 1-16,
+///   generation: u32 in bits 17-48, error bits in upper 16 }
+/// No reply wait required by producers — fire-and-forget status query.
+/// Correlation=0 (no tx_id), durable=0 (RamFS only, not DiskFS).
+pub const OP_RAMFS_STATUS: u64 = 0x3F;
+
 // ── Error constants ──
 pub const ERR_INVALID_HANDLE: i64 = -1;
 pub const ERR_NAME_TOO_LONG: i64 = -2;
