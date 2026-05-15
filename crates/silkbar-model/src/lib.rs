@@ -53,10 +53,12 @@ pub const LAYOUT_COUNT: usize = 11;
 
 /// ABI version for SilkBar model layout (not the PDX wire protocol).
 /// Increment when `SilkBarUpdate` layout or `UpdateKind` discriminants change.
+/// v4: added SetActiveApp(8), SetTintAccent(9), SetPaletteState(10); SilkBar
+///     struct extended with active_app_sid, accent_tint_idx, palette_* fields.
 /// Consumers query `SILKBAR_ABI_VERSION` for PDX compatibility, not this value.
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 /// Must equal `ABI_VERSION`. Checked by `validate_contract()` at startup.
-pub const SILK_DE_BAR_ABI_V1: u32 = 3;
+pub const SILK_DE_BAR_ABI_V1: u32 = 4;
 pub const SILK_DE_REQUIRED_MODULES: usize = LAYOUT_COUNT;
 pub const SILK_DE_REQUIRED_CHIPS: usize = MAX_CHIPS;
 pub const SILKBAR_WORKSPACE_COUNT: usize = WORKSPACE_COUNT;
@@ -71,8 +73,9 @@ pub const SILKBAR_CHIP_IDX_MAX: u8 = (MAX_CHIPS - 1) as u8;
 
 /// PDX-facing ABI version (u64 for register-width return).
 /// Distinct from `ABI_VERSION` (model layout version).
+/// v3: new UpdateKind variants 8/9/10 (SetActiveApp, SetTintAccent, SetPaletteState).
 /// Returned by `OP_SILKBAR_GET_ABI`. Consumers use this for PDX compat checks.
-pub const SILKBAR_ABI_VERSION: u64 = 2;
+pub const SILKBAR_ABI_VERSION: u64 = 3;
 
 /// Opcode: ping → returns 0 (connectivity check).
 pub const OP_SILKBAR_PING: u64 = 0xF0;
@@ -176,6 +179,9 @@ pub struct SilkBar {
     pub selected_options_mask: u32,
     /// Bell event presence state (V1: aggregate counts from OP_BELL_LIST poll).
     pub bell_state: BellState,
+    /// Phase 1 ABI extension (v4): active app / tint / palette state.
+    /// Populated by SetActiveApp(8), SetTintAccent(9), SetPaletteState(10).
+    pub phase1: SilkBarPhase1Ext,
 }
 
 /// Aggregate Bell event state for privacy-safe SilkBar presence display.
@@ -191,6 +197,25 @@ pub struct BellState {
     /// Bits 1-7: reserved (future: mute indicator, overflow flag, etc.).
     pub flags: u8,
     _pad: u8,
+}
+
+/// Phase 1 ABI extension (v4): fields added after BellState.
+/// Populated by SetActiveApp(8), SetTintAccent(9), SetPaletteState(10) updates.
+/// Zero-initialized in DEFAULT_SILK_BAR; old consumers receive 0s (no-op).
+#[derive(Clone, Copy)]
+pub struct SilkBarPhase1Ext {
+    /// Focused surface ID (0 = none). e.g. 200=Linen, 201=Quil, 153=Spindle.
+    pub active_app_sid: u32,
+    /// Active accent/tint index (0-7, Atlas palette).
+    pub accent_tint_idx: u8,
+    /// Command palette visible (true = open).
+    pub palette_open: bool,
+    /// Selected row index in command palette (0-255).
+    pub palette_selected: u8,
+    /// Available row count in command palette (0-255).
+    pub palette_available: u8,
+    /// Explicit padding to keep struct naturally aligned.
+    _pad: [u8; 1],
 }
 
 // ── Theme (v2: 10 semantic tokens) ─────────────────────────────────────────
@@ -331,6 +356,15 @@ pub enum UpdateKind {
     SetSelectedOptions = 6,
     /// Bell presence: a=packed (total_visible|redacted<<8|flags<<16), b=0.
     SetBellPresence = 7,
+    /// Active app surface ID: a=surface_id (0=none), index=0, b=0.
+    /// silk-shell producer sends FOCUSED_SURFACE_ID on focus/scene change.
+    SetActiveApp = 8,
+    /// Active accent/tint index: a=accent_idx (0-7), index=0, b=0.
+    /// silk-shell producer sends ACTIVE_TINT_IDX on focus/scene change.
+    SetTintAccent = 9,
+    /// Command palette state: a=packed(open<<0 | selected<<1 | available<<9), b=0.
+    /// silk-shell producer sends on palette toggle/selection change.
+    SetPaletteState = 10,
 }
 
 /// ABI-stable update message for mutating a `SilkBar` from a PDX caller.
@@ -455,6 +489,26 @@ pub fn apply_update(bar: &mut SilkBar, update: SilkBarUpdate) -> bool {
             bar.bell_state.total_visible = update.a as u8;
             bar.bell_state.redacted_count = (update.a >> 8) as u8;
             bar.bell_state.flags = (update.a >> 16) as u8;
+            true
+        }
+        8 => {
+            // SetActiveApp: a = surface_id (0 = none)
+            bar.phase1.active_app_sid = update.a;
+            true
+        }
+        9 => {
+            // SetTintAccent: a = accent_idx (0-7)
+            if update.a > 7 {
+                return false;
+            }
+            bar.phase1.accent_tint_idx = update.a as u8;
+            true
+        }
+        10 => {
+            // SetPaletteState: a = packed(open<<0 | selected<<1 | available<<9)
+            bar.phase1.palette_open      = (update.a & 1) != 0;
+            bar.phase1.palette_selected  = ((update.a >> 1) & 0xFF) as u8;
+            bar.phase1.palette_available = ((update.a >> 9) & 0xFF) as u8;
             true
         }
         _ => false,
@@ -681,6 +735,11 @@ pub fn validate_deterministic_vectors() -> bool {
         SilkBarUpdate::new(UpdateKind::SetClock as u32, 0, 23, (59u32 << 8) | 58u32),
         // Selected-window options
         SilkBarUpdate::new(UpdateKind::SetSelectedOptions as u32, 0, OPTION_MOVE, 0),
+        // Phase 1 ABI extension (v4): new variants
+        SilkBarUpdate::new(UpdateKind::SetActiveApp as u32, 0, 200, 0),  // Linen SID
+        SilkBarUpdate::new(UpdateKind::SetTintAccent as u32, 0, 3, 0),    // accent index 3
+        SilkBarUpdate::new(UpdateKind::SetPaletteState as u32, 0,
+            1 | (2 << 1) | (7 << 9), 0),  // open=true, selected=2, available=7
     ];
 
     for update in vectors {
@@ -690,7 +749,7 @@ pub fn validate_deterministic_vectors() -> bool {
     }
 
     let applied = q.drain_into(&mut bar);
-    if applied != 7 {
+    if applied != 10 {
         return false;
     }
 
@@ -710,6 +769,21 @@ pub fn validate_deterministic_vectors() -> bool {
         return false;
     }
     if bar.selected_options_mask != OPTION_MOVE {
+        return false;
+    }
+    if bar.phase1.active_app_sid != 200 {
+        return false;
+    }
+    if bar.phase1.accent_tint_idx != 3 {
+        return false;
+    }
+    if !bar.phase1.palette_open {
+        return false;
+    }
+    if bar.phase1.palette_selected != 2 {
+        return false;
+    }
+    if bar.phase1.palette_available != 7 {
         return false;
     }
 
@@ -754,6 +828,14 @@ pub const DEFAULT_SILK_BAR: SilkBar = SilkBar {
         redacted_count: 0,
         flags: 0,
         _pad: 0,
+    },
+    phase1: SilkBarPhase1Ext {
+        active_app_sid: 0,
+        accent_tint_idx: 0,
+        palette_open: false,
+        palette_selected: 0,
+        palette_available: 0,
+        _pad: [0],
     },
 };
 
