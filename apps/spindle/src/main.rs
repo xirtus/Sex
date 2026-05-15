@@ -531,7 +531,27 @@ fn tokenize(line: &[u8]) -> (&[u8], &[u8]) {
 /// Dispatch a command line. Pushes output lines to scrollback.
 /// Returns true if the command was recognized, false for unknown.
 fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) -> bool {
-    let (cmd, args) = tokenize(line);
+    let (raw_cmd, args) = tokenize(line);
+    let mut cmd = raw_cmd;
+    if raw_cmd == b"d" {
+        cmd = b"daily";
+        serial_println!("[spindle.alias.exec] alias=d target=daily ok=1");
+    } else if raw_cmd == b"b" {
+        cmd = b"blockers";
+        serial_println!("[spindle.alias.exec] alias=b target=blockers ok=1");
+    } else if raw_cmd == b"k" {
+        cmd = b"keys";
+        serial_println!("[spindle.alias.exec] alias=k target=keys ok=1");
+    } else if raw_cmd == b"a" {
+        cmd = b"apps";
+        serial_println!("[spindle.alias.exec] alias=a target=apps ok=1");
+    } else if raw_cmd == b"q" {
+        cmd = b"status";
+        serial_println!("[spindle.alias.exec] alias=q target=status ok=1");
+    } else if raw_cmd == b"n" {
+        cmd = b"notify";
+        serial_println!("[spindle.alias.exec] alias=n target=notify ok=1");
+    }
     if cmd.is_empty() { return true; }
     let recognized = match cmd {
         b"help" => {
@@ -1363,6 +1383,18 @@ pub extern "C" fn _start() -> ! {
         option_env!("SEXOS_SPINDLE_HELP_POLISH_PROOF").is_some();
     if HELP_POLISH_PROOF_ENABLED {
         run_help_polish_proof(sb, hist, &mut ev);
+    }
+    const SPINDLE_ALIASES_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_ALIASES_PROOF").is_some();
+    if SPINDLE_ALIASES_PROOF_ENABLED {
+        let ok_d = dispatch(b"d", sb, hist, &mut ev);
+        let ok_b = dispatch(b"b", sb, hist, &mut ev);
+        let ok_k = dispatch(b"k", sb, hist, &mut ev);
+        let ok_a = dispatch(b"a", sb, hist, &mut ev);
+        let ok_q = dispatch(b"q", sb, hist, &mut ev);
+        let ok_n = dispatch(b"n spindle-alias-proof", sb, hist, &mut ev);
+        let all_ok = ok_d && ok_b && ok_k && ok_a && ok_q && ok_n;
+        serial_println!("[spindle.alias.proof.done] ok={}", all_ok as u8);
     }
 
     serial_println!("[spindle.ready]");

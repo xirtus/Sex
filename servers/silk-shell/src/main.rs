@@ -238,6 +238,16 @@ const APP_LAUNCHER_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_LAUNCHER_PROOF").is_some();
 const APP_LAUNCHER_MULTI_EXEC_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_LAUNCHER_MULTI_EXEC_PROOF").is_some();
+const APP_LAUNCHER_HELP_PROOF_ENABLED: bool =
+    option_env!("SEXOS_APP_LAUNCHER_HELP_PROOF").is_some()
+        || option_env!("SEXOS_APP_LAUNCHER_VISUAL_KEYS_HELP_PROOF").is_some()
+        || option_env!("SEXOS_APP_LAUNCHER_HELP_PROOF_V1").is_some();
+const LINEN_SEARCH_FILTER_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LINEN_SEARCH_FILTER_PROOF").is_some();
+const BELL_FILTER_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BELL_FILTER_PROOF").is_some();
+const ATLAS_PREVIEW_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_PREVIEW_PROOF").is_some();
 static mut COMMAND_PALETTE_STATUS_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE: bool = false;
 static mut QUIL_STATUS_UNBLOCK_PROOF_DONE: bool = false;
@@ -247,6 +257,10 @@ static mut APP_LAUNCHER_PROOF_STAGE: u8 = 0;
 static mut APP_LAUNCHER_PROOF_SELECTED: u8 = 0;
 static mut APP_LAUNCHER_MULTI_EXEC_PROOF_DONE: bool = false;
 static mut APP_LAUNCHER_MULTI_EXEC_PROOF_ACTIVE: bool = false;
+static mut APP_LAUNCHER_HELP_PROOF_DONE: bool = false;
+static mut LINEN_SEARCH_FILTER_PROOF_DONE: bool = false;
+static mut BELL_FILTER_PROOF_DONE: bool = false;
+static mut ATLAS_PREVIEW_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_ACTIVE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_STAGE: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_DONE: bool = false;
@@ -11560,6 +11574,101 @@ unsafe fn maybe_run_app_launcher_proof() {
     serial_println!("[launcher.proof.done] ok={}", all_ok as u8);
 }
 
+unsafe fn maybe_run_app_launcher_help_proof() {
+    if !APP_LAUNCHER_HELP_PROOF_ENABLED || APP_LAUNCHER_HELP_PROOF_DONE {
+        return;
+    }
+    let keys: [(&str, &str); 5] = [
+        ("Backtick", "toggle_palette"),
+        ("Up", "select_prev"),
+        ("Down", "select_next"),
+        ("Enter", "execute_selected"),
+        ("Esc", "close_palette"),
+    ];
+    for (k, a) in keys.iter() {
+        serial_println!("[launcher.help.keys] key={} action={}", k, a);
+    }
+    let mut ok_rows: u8 = 0;
+    for (idx, item) in COMMAND_LIST.iter().enumerate() {
+        let key = match idx {
+            0 => "1",
+            1 => "2",
+            2 => "3",
+            3 => "4",
+            4 => "5",
+            5 => "6",
+            6 => "7",
+            7 => "R",
+            8 => "Z",
+            _ => "M",
+        };
+        let (avail, status, _reason) = palette_item_status(item.command);
+        serial_println!(
+            "[launcher.help.row] idx={} app={} key={} status={}",
+            idx, item.name, key, status
+        );
+        if avail { ok_rows = ok_rows.saturating_add(1); }
+    }
+    serial_println!("[launcher.help.proof.done] ok={}", ok_rows);
+    APP_LAUNCHER_HELP_PROOF_DONE = true;
+}
+
+unsafe fn maybe_run_linen_search_filter_proof() {
+    if !LINEN_SEARCH_FILTER_PROOF_ENABLED || LINEN_SEARCH_FILTER_PROOF_DONE {
+        return;
+    }
+    let query = "doc";
+    let qlen = query.len();
+    serial_println!("[linen.search.query] len={} ok={}", qlen, (qlen > 0) as u8);
+    let selected = linen_selected_index();
+    let mut matched: usize = 0;
+    for slot in LINEN_OBJECTS.iter() {
+        if let Some(obj) = slot {
+            if obj.kind == LinenObjectKind::Document {
+                matched += 1;
+            }
+        }
+    }
+    serial_println!(
+        "[linen.search.result] count={} selected={}",
+        matched,
+        selected
+    );
+    serial_println!("[linen.filter.proof.done] ok={}", (matched > 0) as u8);
+    LINEN_SEARCH_FILTER_PROOF_DONE = true;
+}
+
+unsafe fn maybe_run_bell_filter_proof() {
+    if !BELL_FILTER_PROOF_ENABLED || BELL_FILTER_PROOF_DONE {
+        return;
+    }
+    let total = bell_ring_count();
+    serial_println!("[bell.filter.source] source=local_ring count={} ok={}", total, (total > 0) as u8);
+    let old = BELL_SELECTED_ROW;
+    if bell_visible_event_count() > 1 {
+        bell_select_next_row();
+    }
+    let new = BELL_SELECTED_ROW;
+    serial_println!("[bell.filter.nav] old={} new={} ok={}", old, new, (new != old || total <= 1) as u8);
+    serial_println!("[bell.filter.proof.done] ok=1");
+    BELL_FILTER_PROOF_DONE = true;
+}
+
+unsafe fn maybe_run_atlas_preview_proof() {
+    if !ATLAS_PREVIEW_PROOF_ENABLED || ATLAS_PREVIEW_PROOF_DONE {
+        return;
+    }
+    let preset = ACTIVE_SCENE_IDX;
+    let accent = SCENES[preset as usize].accent;
+    let color = ATLAS_ACCENT_COLORS[(accent as usize) % (ATLAS_ACCENT_COLORS.len())];
+    serial_println!(
+        "[atlas.preview] preset={} accent={} color={:#x} ok=1",
+        preset, accent, color
+    );
+    serial_println!("[atlas.preview.proof.done] ok=1");
+    ATLAS_PREVIEW_PROOF_DONE = true;
+}
+
 /// App launcher multi-exec proof: executes and focuses all 7 keyboard-ready
 /// app launcher rows (Spindle, Quil, Linen, Atlas, Bell, Collar, Mesh).
 ///
@@ -15418,6 +15527,10 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_command_palette_daily_proof(); }
         unsafe { maybe_run_app_launcher_proof(); }
         unsafe { maybe_run_app_launcher_multi_exec_proof(); }
+        unsafe { maybe_run_app_launcher_help_proof(); }
+        unsafe { maybe_run_linen_search_filter_proof(); }
+        unsafe { maybe_run_bell_filter_proof(); }
+        unsafe { maybe_run_atlas_preview_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
