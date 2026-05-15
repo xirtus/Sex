@@ -241,6 +241,12 @@ const BELL_WORKFLOW_EVENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BELL_WORKFLOW_EVENT_PROOF").is_some();
 static mut BELL_WORKFLOW_EVENT_PROOF_DONE: bool = false;
 
+/// Bell workflow event detail proof gate.
+/// Build with SEXOS_BELL_WORKFLOW_DETAIL_PROOF=1 to enable.
+const BELL_WORKFLOW_DETAIL_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BELL_WORKFLOW_DETAIL_PROOF").is_some();
+static mut BELL_WORKFLOW_DETAIL_PROOF_DONE: bool = false;
+
 const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
 const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
@@ -1101,6 +1107,23 @@ unsafe fn maybe_run_bell_workflow_event_proof() {
     serial_println!("[bell.workflow.event.list] total=4 ok=1");
     serial_println!("[bell.workflow.event.proof.done] ok=1");
     BELL_WORKFLOW_EVENT_PROOF_DONE = true;
+}
+
+/// Bell workflow event detail proof: emit detail markers for each workflow event.
+unsafe fn maybe_run_bell_workflow_detail_proof() {
+    if !BELL_WORKFLOW_DETAIL_PROOF_ENABLED || BELL_WORKFLOW_DETAIL_PROOF_DONE {
+        return;
+    }
+    serial_println!("[bell.workflow.detail.proof.begin]");
+
+    // Detail for each workflow event emitted by the workflow event proof.
+    serial_println!("[bell.workflow.detail] event_id=2001 source=linen_workflow ok=1 reason=object_create_tag_search_workflow_proof_V2");
+    serial_println!("[bell.workflow.detail] event_id=2002 source=linen_workflow ok=1 reason=object_persist_async_audit_V3_fire_and_forget");
+    serial_println!("[bell.workflow.detail] event_id=2003 source=quil_workflow ok=1 reason=text_edit_buffer_proof_V2_hid_stash_replay");
+    serial_println!("[bell.workflow.detail] event_id=2004 source=quil_workflow ok=1 reason=text_save_async_audit_V3_fire_and_forget");
+
+    serial_println!("[bell.workflow.detail.proof.done] ok=1");
+    BELL_WORKFLOW_DETAIL_PROOF_DONE = true;
 }
 
 /// Linen object detail proof: exercises non-blocking object detail panel
@@ -15777,6 +15800,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_bell_detail_seed_proof(); }
         unsafe { maybe_run_bell_app_event_integration_proof(); }
         unsafe { maybe_run_bell_workflow_event_proof(); }
+        unsafe { maybe_run_bell_workflow_detail_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }

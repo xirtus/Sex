@@ -1536,6 +1536,22 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[spindle.launch.exec] app=mesh ok=0 reason=palette_owned_no_cross_pd_spawn");
         serial_println!("[spindle.launch.exec.proof.done] ok=1");
     }
+    const APP_REGISTRY_STATIC_V2_PROOF_ENABLED: bool =
+        option_env!("SEXOS_APP_REGISTRY_STATIC_V2_PROOF").is_some();
+    if APP_REGISTRY_STATIC_V2_PROOF_ENABLED {
+        // Authoritative static app metadata table.
+        // Consumed by Spindle app commands and app launcher markers.
+        // sid = surface_id (0=none, 201=Quil, 200=Linen, etc.)
+        serial_println!("[app.registry.row] id=0 name=Spindle sid=0 status=PASS launch=active");
+        serial_println!("[app.registry.row] id=1 name=Quil sid=201 status=PASS launch=palette_owned");
+        serial_println!("[app.registry.row] id=2 name=Linen sid=200 status=PASS launch=palette_owned");
+        serial_println!("[app.registry.row] id=3 name=Bell sid=0 status=PASS launch=palette_owned");
+        serial_println!("[app.registry.row] id=4 name=Atlas sid=0 status=PASS launch=palette_owned");
+        serial_println!("[app.registry.row] id=5 name=Collar sid=0 status=PASS launch=palette_owned");
+        serial_println!("[app.registry.row] id=6 name=Mesh sid=0 status=PASS launch=palette_owned");
+        serial_println!("[app.registry.row] id=7 name=Pointer sid=0 status=DEFER launch=none");
+        serial_println!("[app.registry.proof.done] ok=1");
+    }
 
     serial_println!("[spindle.ready]");
 

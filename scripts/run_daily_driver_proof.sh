@@ -136,8 +136,14 @@ export SEXOS_QUIL_TEXT_SAVE_ASYNC_PROOF=1
 export SEXOS_SPINDLE_APP_LAUNCH_EXEC_PROOF=1
 export SEXOS_BELL_WORKFLOW_EVENT_PROOF=1
 
+# ── Feature batch V4 registry/schema proofs ──
+export SEXOS_APP_REGISTRY_STATIC_V2_PROOF=1
+export SEXOS_LINEN_OBJECT_SCHEMA_PROOF=1
+export SEXOS_QUIL_TEXT_COMMANDS_PROOF=1
+export SEXOS_BELL_WORKFLOW_DETAIL_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V3"
+echo " DAILY-DRIVER PROOF PROFILE V4"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

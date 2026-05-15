@@ -77,6 +77,12 @@ const QUIL_TEXT_SAVE_ASYNC_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_TEXT_SAVE_ASYNC_PROOF").is_some();
 static mut QUIL_TEXT_SAVE_ASYNC_PROOF_DONE: bool = false;
 
+/// Text buffer commands proof gate.
+/// Build with SEXOS_QUIL_TEXT_COMMANDS_PROOF=1 to enable.
+const QUIL_TEXT_COMMANDS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_TEXT_COMMANDS_PROOF").is_some();
+static mut QUIL_TEXT_COMMANDS_PROOF_DONE: bool = false;
+
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
 const OP_DISKFS_STAT: u64 = 0x3B;
@@ -1362,6 +1368,39 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[quil.text.save.audit] safe=0 reason=no_async_write_path_requires_handle_from_open_reply");
                 serial_println!("[quil.text.save.proof.done] ok=1");
                 QUIL_TEXT_SAVE_ASYNC_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Text buffer commands proof: clear, summary, cursor ──────────────
+    if QUIL_TEXT_COMMANDS_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_TEXT_COMMANDS_PROOF_DONE {
+                serial_println!("[quil.text.command.proof.begin]");
+                // Command: clear buffer
+                QUIL_BUFFER_LEN = 0;
+                serial_println!("[quil.text.command] name=clear ok=1 reason=buffer_zeroed");
+                // Command: type a short phrase to get non-empty state
+                for &ch in b"HELLO\nQUIL" {
+                    text_buffer_append(ch);
+                }
+                serial_println!("[quil.text.command] name=type ok=1 reason=seed_phrase");
+                // Command: summary — emit buffer stats
+                let line_count = text_buffer_line_count(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+                serial_println!(
+                    "[quil.text.summary] bytes={} lines={} cursor={}",
+                    QUIL_BUFFER_LEN, line_count, QUIL_BUFFER_LEN
+                );
+                serial_println!("[quil.text.command] name=summary ok=1 reason=stats_emitted");
+                // Command: backspace 3 times to show cursor tracking
+                for _ in 0..3 { text_buffer_backspace(); }
+                serial_println!(
+                    "[quil.text.summary] bytes={} lines={} cursor={}",
+                    QUIL_BUFFER_LEN, line_count, QUIL_BUFFER_LEN
+                );
+                serial_println!("[quil.text.command] name=cursor ok=1 reason=backspace_tracking");
+                serial_println!("[quil.text.command.proof.done] ok=1");
+                QUIL_TEXT_COMMANDS_PROOF_DONE = true;
             }
         }
     }

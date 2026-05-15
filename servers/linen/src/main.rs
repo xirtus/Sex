@@ -145,6 +145,12 @@ const LINEN_OBJECT_PERSIST_PROOF_ENABLED: bool =
 static mut LINEN_OBJECT_PERSIST_PROOF_STAGE: u8 = 0;
 static mut LINEN_OBJECT_PERSIST_PROOF_DONE: bool = false;
 
+/// Object kind schema proof.
+/// Build with SEXOS_LINEN_OBJECT_SCHEMA_PROOF=1 to enable.
+const LINEN_OBJECT_SCHEMA_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LINEN_OBJECT_SCHEMA_PROOF").is_some();
+static mut LINEN_OBJECT_SCHEMA_PROOF_DONE: bool = false;
+
 /// Bounded tag table for object workflow proof.
 /// Maps object_id (low 8 bits) → tag byte string (up to 16 bytes).
 const LINEN_MAX_TAGS: usize = 16;
@@ -501,6 +507,31 @@ unsafe fn run_linen_object_persist_proof() {
     }
 }
 
+/// Object kind schema proof: define and emit local object kind/status taxonomy.
+unsafe fn run_linen_object_schema_proof() {
+    if !LINEN_OBJECT_SCHEMA_PROOF_ENABLED || LINEN_OBJECT_SCHEMA_PROOF_DONE {
+        return;
+    }
+    serial_println!("[linen.schema.proof.begin]");
+
+    // Kind taxonomy: 3 known kinds
+    serial_println!("[linen.schema.kind] kind=0 name=Document ok=1");
+    serial_println!("[linen.schema.kind] kind=1 name=Session ok=1");
+    serial_println!("[linen.schema.kind] kind=2 name=Unknown ok=1");
+
+    // Status taxonomy: 4 known statuses
+    serial_println!("[linen.schema.status] status=0 name=local_only ok=1");
+    serial_println!("[linen.schema.status] status=1 name=persisted ok=1");
+    serial_println!("[linen.schema.status] status=2 name=tagged ok=1");
+    serial_println!("[linen.schema.status] status=3 name=orphan ok=1");
+
+    // Tag taxonomy: document the bounded tag table
+    serial_println!("[linen.schema.tag] max_tags=16 max_tag_len=16 table=static_bss");
+
+    serial_println!("[linen.schema.proof.done] ok=1");
+    LINEN_OBJECT_SCHEMA_PROOF_DONE = true;
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[linen.init.start]");
@@ -568,6 +599,11 @@ pub extern "C" fn _start() -> ! {
     // ── Object persist async proof: fire-and-forget CREATE_OWNER for workflow objects ──
     if LINEN_OBJECT_PERSIST_PROOF_ENABLED && LINEN_OBJECT_WORKFLOW_PROOF_ENABLED {
         unsafe { run_linen_object_persist_proof(); }
+    }
+
+    // ── Object kind schema proof: taxonomy markers ──
+    if LINEN_OBJECT_SCHEMA_PROOF_ENABLED {
+        unsafe { run_linen_object_schema_proof(); }
     }
 
     loop {

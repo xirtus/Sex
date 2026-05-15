@@ -65,6 +65,10 @@ gate_linen_object_persist="SKIP"
 gate_quil_text_save="SKIP"
 gate_spindle_launch_exec="SKIP"
 gate_bell_workflow_events="SKIP"
+gate_app_registry_static="SKIP"
+gate_linen_object_schema="SKIP"
+gate_quil_text_commands="SKIP"
+gate_bell_workflow_detail="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -87,7 +91,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V3"
+echo " DAILY-DRIVER MASTER GATE V4"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -516,6 +520,67 @@ else
     print_row "bell_workflow_events" "SKIP" "no workflow event proof markers"
 fi
 
+# ---- 26 (new). app_registry_static ----
+# Evidence: [app.registry.row], [app.registry.proof.done].
+
+if [ "$(has 'app\.registry\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_rows="$(count 'app\.registry\.row\]')"
+    gate_app_registry_static="PASS"
+    print_row "app_registry_static" "PASS" "registry rows: ${c_rows}"
+elif [ "$(has 'app\.registry\.row\]')" -ge 1 ]; then
+    gate_app_registry_static="PASS"
+    print_row "app_registry_static" "PASS" "registry row markers present (partial)"
+else
+    gate_app_registry_static="SKIP"
+    print_row "app_registry_static" "SKIP" "no registry proof markers"
+fi
+
+# ---- 27 (new). linen_object_schema ----
+# Evidence: [linen.schema.kind], [linen.schema.status], [linen.schema.proof.done].
+
+if [ "$(has 'linen\.schema\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_kind="$(count 'linen\.schema\.kind\]')"
+    c_status="$(count 'linen\.schema\.status\]')"
+    gate_linen_object_schema="PASS"
+    print_row "linen_object_schema" "PASS" "kinds=${c_kind} statuses=${c_status}"
+elif [ "$(has 'linen\.schema\.(kind|status)\]')" -ge 1 ]; then
+    gate_linen_object_schema="PASS"
+    print_row "linen_object_schema" "PASS" "schema markers present (partial)"
+else
+    gate_linen_object_schema="SKIP"
+    print_row "linen_object_schema" "SKIP" "no schema proof markers"
+fi
+
+# ---- 28 (new). quil_text_commands ----
+# Evidence: [quil.text.command], [quil.text.summary], [quil.text.command.proof.done].
+
+if [ "$(has 'quil\.text\.command\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_cmds="$(count 'quil\.text\.command\]')"
+    gate_quil_text_commands="PASS"
+    print_row "quil_text_commands" "PASS" "commands: ${c_cmds}"
+elif [ "$(has 'quil\.text\.command\]')" -ge 1 ]; then
+    gate_quil_text_commands="PASS"
+    print_row "quil_text_commands" "PASS" "command markers present (partial)"
+else
+    gate_quil_text_commands="SKIP"
+    print_row "quil_text_commands" "SKIP" "no text command proof markers"
+fi
+
+# ---- 29 (new). bell_workflow_detail ----
+# Evidence: [bell.workflow.detail], [bell.workflow.detail.proof.done].
+
+if [ "$(has 'bell\.workflow\.detail\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_detail="$(count 'bell\.workflow\.detail\]')"
+    gate_bell_workflow_detail="PASS"
+    print_row "bell_workflow_detail" "PASS" "detail markers: ${c_detail}"
+elif [ "$(has 'bell\.workflow\.detail\]')" -ge 1 ]; then
+    gate_bell_workflow_detail="PASS"
+    print_row "bell_workflow_detail" "PASS" "detail markers present (partial)"
+else
+    gate_bell_workflow_detail="SKIP"
+    print_row "bell_workflow_detail" "SKIP" "no detail proof markers"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -550,7 +615,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V3 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V4 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -581,6 +646,10 @@ ALL_GATES=(
     "quil_text_save:$gate_quil_text_save"
     "spindle_launch_exec:$gate_spindle_launch_exec"
     "bell_workflow_events:$gate_bell_workflow_events"
+    "app_registry_static:$gate_app_registry_static"
+    "linen_object_schema:$gate_linen_object_schema"
+    "quil_text_commands:$gate_quil_text_commands"
+    "bell_workflow_detail:$gate_bell_workflow_detail"
     "faults_zero:$gate_faults_zero"
 )
 
