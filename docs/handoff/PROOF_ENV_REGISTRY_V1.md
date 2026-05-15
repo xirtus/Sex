@@ -31,3 +31,7 @@
 - SEXOS_ATLAS_THEME_VISUAL_PROOF
 - SEXOS_ATLAS_THEME_PRESETS_PROOF
 - SEXOS_ATLAS_SCENE_KEYBOARD_PROOF
+
+## Gate Truth (Daily-Driver Master)
+- Expected baseline gate: `18/18 PASS`, `faults=0`
+- Verification command: `./scripts/run_daily_driver_proof.sh <log_path>`
