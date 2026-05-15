@@ -124,6 +124,12 @@ export SEXOS_SEXFILES_EXTENT_PROOF=1
 export SEXOS_SEXOBJECT_VIEW_PROOF=1
 export SEXOS_SEXOBJECT_OQ=1
 
+# ── Feature batch 2.6 V2 proofs ──
+export SEXOS_APP_LAUNCH_COMMANDS_PROOF=1
+export SEXOS_LINEN_OBJECT_WORKFLOW_PROOF=1
+export SEXOS_QUIL_TEXT_BUFFER_PROOF=1
+export SEXOS_BELL_APP_EVENT_INTEGRATION_PROOF=1
+
 echo "============================================"
 echo " DAILY-DRIVER PROOF PROFILE V1"
 echo "============================================"

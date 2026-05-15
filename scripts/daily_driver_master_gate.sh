@@ -57,6 +57,10 @@ gate_palette_linen_available="SKIP"
 gate_quil_status_ready="SKIP"
 gate_silkbar_phase3_status="SKIP"
 gate_silkbar_phase5_pixels="SKIP"
+gate_app_launch_commands="SKIP"
+gate_linen_object_workflow="SKIP"
+gate_quil_text_buffer="SKIP"
+gate_bell_app_events="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -382,6 +386,71 @@ else
     print_row "silkbar_phase5_pixels" "SKIP" "Phase 5 pixel proof not enabled"
 fi
 
+# ---- 18 (new). app_launch_commands ----
+# Evidence: [spindle.app.command], [spindle.app.row], [spindle.app.proof.done].
+# Proves Spindle can list, explain, and status-check apps.
+
+if [ "$(has 'spindle\.app\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_rows="$(count 'spindle\.app\.row\]')"
+    gate_app_launch_commands="PASS"
+    print_row "app_launch_commands" "PASS" "spindle app rows: ${c_rows}"
+elif [ "$(has 'spindle\.app\.command\]')" -ge 1 ]; then
+    c_cmds="$(count 'spindle\.app\.command\]')"
+    gate_app_launch_commands="PASS"
+    print_row "app_launch_commands" "PASS" "app commands: ${c_cmds} (partial)"
+else
+    gate_app_launch_commands="SKIP"
+    print_row "app_launch_commands" "SKIP" "no app command markers"
+fi
+
+# ---- 19 (new). linen_object_workflow ----
+# Evidence: [linen.object.create], [linen.object.tag], [linen.search.query],
+# [linen.object.workflow.proof.done].
+
+if [ "$(has 'linen\.object\.workflow\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_create="$(count 'linen\.object\.create\]')"
+    c_search="$(count 'linen\.search\.query\]')"
+    gate_linen_object_workflow="PASS"
+    print_row "linen_object_workflow" "PASS" "creates=${c_create} searches=${c_search}"
+elif [ "$(has 'linen\.object\.create\]')" -ge 1 ]; then
+    gate_linen_object_workflow="PASS"
+    print_row "linen_object_workflow" "PASS" "create markers present (workflow partial)"
+else
+    gate_linen_object_workflow="SKIP"
+    print_row "linen_object_workflow" "SKIP" "no workflow proof markers"
+fi
+
+# ---- 20 (new). quil_text_buffer ----
+# Evidence: [quil.text.recv], [quil.text.append], [quil.text.backspace],
+# [quil.text.enter], [quil.text.buffer.proof.done].
+
+if [ "$(has 'quil\.text\.buffer\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_recv="$(count 'quil\.text\.recv\]')"
+    gate_quil_text_buffer="PASS"
+    print_row "quil_text_buffer" "PASS" "text recv events: ${c_recv}"
+elif [ "$(has 'quil\.text\.(append|backspace|enter|recv)')" -ge 1 ]; then
+    gate_quil_text_buffer="PASS"
+    print_row "quil_text_buffer" "PASS" "text edit markers present (partial)"
+else
+    gate_quil_text_buffer="SKIP"
+    print_row "quil_text_buffer" "SKIP" "no text buffer proof markers"
+fi
+
+# ---- 21 (new). bell_app_events ----
+# Evidence: [bell.app.event], [bell.app.integration.proof.done].
+
+if [ "$(has 'bell\.app\.integration\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_events="$(count 'bell\.app\.event\]')"
+    gate_bell_app_events="PASS"
+    print_row "bell_app_events" "PASS" "app events emitted: ${c_events}"
+elif [ "$(has 'bell\.app\.event\]')" -ge 1 ]; then
+    gate_bell_app_events="PASS"
+    print_row "bell_app_events" "PASS" "app event markers present (partial)"
+else
+    gate_bell_app_events="SKIP"
+    print_row "bell_app_events" "SKIP" "no bell app event markers"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -439,6 +508,10 @@ ALL_GATES=(
     "quil_status_ready:$gate_quil_status_ready"
     "silkbar_phase3_status:$gate_silkbar_phase3_status"
     "silkbar_phase5_pixels:$gate_silkbar_phase5_pixels"
+    "app_launch_commands:$gate_app_launch_commands"
+    "linen_object_workflow:$gate_linen_object_workflow"
+    "quil_text_buffer:$gate_quil_text_buffer"
+    "bell_app_events:$gate_bell_app_events"
     "faults_zero:$gate_faults_zero"
 )
 

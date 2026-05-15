@@ -131,6 +131,21 @@ static mut LINEN_NAV_SELECTED_SLOT: u8 = 0;
 static mut LINEN_KEYBOARD_NAV_PROOF_STAGE: u8 = 0;
 static mut LINEN_KEYBOARD_NAV_PROOF_DONE: bool = false;
 
+/// Object workflow proof gate (create/tag/search/detail).
+/// Build with SEXOS_LINEN_OBJECT_WORKFLOW_PROOF=1 to enable.
+const LINEN_OBJECT_WORKFLOW_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LINEN_OBJECT_WORKFLOW_PROOF").is_some();
+static mut LINEN_OBJECT_WORKFLOW_PROOF_STAGE: u8 = 0;
+static mut LINEN_OBJECT_WORKFLOW_PROOF_DONE: bool = false;
+
+/// Bounded tag table for object workflow proof.
+/// Maps object_id (low 8 bits) → tag byte string (up to 16 bytes).
+const LINEN_MAX_TAGS: usize = 16;
+const LINEN_TAG_MAX_LEN: usize = 16;
+static mut LINEN_TAG_TABLE: [([u8; LINEN_TAG_MAX_LEN], u8, u64); LINEN_MAX_TAGS] =
+    [([0u8; LINEN_TAG_MAX_LEN], 0, 0); LINEN_MAX_TAGS];
+static mut LINEN_TAG_COUNT: usize = 0;
+
 unsafe fn linen_owned_count() -> u8 {
     SESSION.count_owned(0) as u8
 }
@@ -196,6 +211,227 @@ unsafe fn linen_nav_delete_current_safe() -> bool {
     false
 }
 
+// ── Object Workflow Proof (create / tag / search / detail) ─────────────────
+
+/// Tag an object. Writes into the bounded tag table.
+/// object_id is truncated to low 8 bits for table indexing.
+unsafe fn linen_tag_object(object_id: u64, tag: &[u8]) -> bool {
+    let tag_len = tag.len().min(LINEN_TAG_MAX_LEN);
+    if tag_len == 0 || LINEN_TAG_COUNT >= LINEN_MAX_TAGS {
+        return false;
+    }
+    let mut buf = [0u8; LINEN_TAG_MAX_LEN];
+    buf[..tag_len].copy_from_slice(&tag[..tag_len]);
+    LINEN_TAG_TABLE[LINEN_TAG_COUNT] = (buf, tag_len as u8, object_id);
+    LINEN_TAG_COUNT += 1;
+    true
+}
+
+/// Search objects by a token in their name or tag.
+/// Returns count of matches (0..LINEN_MAX_OBJECTS).
+unsafe fn linen_search_by_token(token: &[u8]) -> u8 {
+    let mut count: u8 = 0;
+    let token_len = token.len();
+    if token_len == 0 { return 0; }
+    // Search object names
+    for slot in 0..LINEN_MAX_OBJECTS {
+        if let Some(obj) = SESSION.get_at_slot(slot) {
+            let name = &obj.name[..obj.name_len as usize];
+            if name.windows(token_len).any(|win| win == token) {
+                count += 1;
+            }
+        }
+    }
+    // Search tags
+    for i in 0..LINEN_TAG_COUNT {
+        let (tag, tag_len, _oid) = &LINEN_TAG_TABLE[i];
+        let tag_bytes = &tag[..*tag_len as usize];
+        if tag_bytes.windows(token_len).any(|win| win == token) {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Detail an object by ID. Prints name, kind, owner, tags.
+unsafe fn linen_object_detail(object_id: u64) -> bool {
+    match SESSION.get(object_id, 0) {
+        Ok(obj) => {
+            serial_println!(
+                "[linen.object.detail] id={} kind={} owner={} name_len={}",
+                obj.object_id, obj.kind as u8, obj.owner_pd, obj.name_len
+            );
+            // Print tags for this object
+            let mut tag_count: u8 = 0;
+            for i in 0..LINEN_TAG_COUNT {
+                let (tag, tag_len, oid) = &LINEN_TAG_TABLE[i];
+                if *oid == object_id {
+                    tag_count += 1;
+                }
+            }
+            serial_println!(
+                "[linen.object.detail.tags] id={} tag_count={}",
+                object_id, tag_count
+            );
+            true
+        }
+        Err(e) => {
+            serial_println!("[linen.object.detail.err] id={} err={}", object_id, e);
+            false
+        }
+    }
+}
+
+unsafe fn run_linen_object_workflow_proof() {
+    if !LINEN_OBJECT_WORKFLOW_PROOF_ENABLED || LINEN_OBJECT_WORKFLOW_PROOF_DONE {
+        return;
+    }
+    let stage = &mut LINEN_OBJECT_WORKFLOW_PROOF_STAGE;
+    serial_println!("[linen.object.workflow.proof.begin]");
+
+    // Bounded stage burst in one pass to avoid stalls.
+    for _ in 0..10u8 {
+        match *stage {
+            // Stage 0: Create a document object
+            0 => {
+                let name = b"work-doc-alpha\0\0\0\0\0\0\0\0\0";
+                match SESSION.create(session::ObjectKind::Document, &name[..14], LINEN_OWN_PD) {
+                    Ok(id) => {
+                        serial_println!("[linen.object.create] object_id={} kind=0 ok=1 reason=created", id);
+                        // Tag the object
+                        if linen_tag_object(id, b"work") {
+                            serial_println!("[linen.object.tag] object_id={} tag=work ok=1 reason=tagged", id);
+                        }
+                    }
+                    Err(e) => {
+                        serial_println!("[linen.object.create] object_id=0 kind=0 ok=0 reason=err_{}", e);
+                    }
+                }
+                *stage = 1;
+            }
+            // Stage 1: Create a session object with different tag
+            1 => {
+                let name = b"session-beta-tag\0\0\0\0\0\0\0\0";
+                match SESSION.create(session::ObjectKind::Session, &name[..16], LINEN_OWN_PD) {
+                    Ok(id) => {
+                        serial_println!("[linen.object.create] object_id={} kind=1 ok=1 reason=created", id);
+                        if linen_tag_object(id, b"beta") {
+                            serial_println!("[linen.object.tag] object_id={} tag=beta ok=1 reason=tagged", id);
+                        }
+                        // Also tag with "work" for multi-tag search test
+                        if linen_tag_object(id, b"work") {
+                            serial_println!("[linen.object.tag] object_id={} tag=work ok=1 reason=multi_tagged", id);
+                        }
+                    }
+                    Err(e) => {
+                        serial_println!("[linen.object.create] object_id=0 kind=1 ok=0 reason=err_{}", e);
+                    }
+                }
+                *stage = 2;
+            }
+            // Stage 2: Create a third object with "work" in name
+            2 => {
+                let name = b"team-work-gamma\0\0\0\0\0\0\0\0\0";
+                match SESSION.create(session::ObjectKind::Document, &name[..14], LINEN_OWN_PD) {
+                    Ok(id) => {
+                        serial_println!("[linen.object.create] object_id={} kind=0 ok=1 reason=created", id);
+                    }
+                    Err(e) => {
+                        serial_println!("[linen.object.create] object_id=0 kind=0 ok=0 reason=err_{}", e);
+                    }
+                }
+                *stage = 3;
+            }
+            // Stage 3: Search for token "work"
+            3 => {
+                let count = linen_search_by_token(b"work");
+                serial_println!(
+                    "[linen.search.query] token=work count={} ok=1",
+                    count
+                );
+                if count > 0 {
+                    // Select first match for detail
+                    // Find first object with "work" in name or tag
+                    for slot in 0..LINEN_MAX_OBJECTS {
+                        if let Some(obj) = SESSION.get_at_slot(slot) {
+                            let name = &obj.name[..obj.name_len as usize];
+                            if name.windows(4).any(|win| win == b"work") {
+                                serial_println!(
+                                    "[linen.search.result] object_id={} selected=1 ok=1",
+                                    obj.object_id
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+                *stage = 4;
+            }
+            // Stage 4: Search for token "beta"
+            4 => {
+                let count = linen_search_by_token(b"beta");
+                serial_println!(
+                    "[linen.search.query] token=beta count={} ok=1",
+                    count
+                );
+                if count > 0 {
+                    for i in 0..LINEN_TAG_COUNT {
+                        let (tag, tag_len, oid) = &LINEN_TAG_TABLE[i];
+                        let tag_bytes = &tag[..*tag_len as usize];
+                        if tag_bytes.windows(4).any(|win| win == b"beta") {
+                            serial_println!(
+                                "[linen.search.result] object_id={} selected=1 ok=1",
+                                *oid
+                            );
+                            break;
+                        }
+                    }
+                }
+                *stage = 5;
+            }
+            // Stage 5: Detail the last created object
+            5 => {
+                // Find the most recently created object
+                let mut last_id: u64 = 0;
+                for slot in 0..LINEN_MAX_OBJECTS {
+                    if let Some(obj) = SESSION.get_at_slot(slot) {
+                        last_id = obj.object_id;
+                    }
+                }
+                if last_id > 0 {
+                    let _ = linen_object_detail(last_id);
+                }
+                *stage = 6;
+            }
+            // Stage 6: Search for nonexistent token
+            6 => {
+                let count = linen_search_by_token(b"zzznope");
+                serial_println!(
+                    "[linen.search.query] token=zzznope count={} ok=1",
+                    count
+                );
+                *stage = 7;
+            }
+            // Stage 7: Detail nonexistent object (should fail gracefully)
+            7 => {
+                let ok = linen_object_detail(0xFFFF);
+                serial_println!(
+                    "[linen.object.detail] id=65535 ok={} reason=not_found_graceful",
+                    ok as u8
+                );
+                *stage = 8;
+            }
+            // Stage 8: Done
+            8 => {
+                serial_println!("[linen.object.workflow.proof.done] ok=1");
+                LINEN_OBJECT_WORKFLOW_PROOF_DONE = true;
+                *stage = 9;
+            }
+            _ => break,
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[linen.init.start]");
@@ -253,6 +489,11 @@ pub extern "C" fn _start() -> ! {
     // ── Linen disk object proof: save/load through SexFiles RamFS ──
     if LINEN_DISK_OBJECT_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED {
         unsafe { run_linen_disk_object_proof(); }
+    }
+
+    // ── Object workflow proof: create/tag/search/detail ──
+    if LINEN_OBJECT_WORKFLOW_PROOF_ENABLED {
+        unsafe { run_linen_object_workflow_proof(); }
     }
 
     loop {

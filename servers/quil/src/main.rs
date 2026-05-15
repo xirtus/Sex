@@ -64,6 +64,13 @@ const QUIL_KEYBOARD_NAV_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_KEYBOARD_N
 const QUIL_KEYBOARD_BUFFER_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_KEYBOARD_BUFFER_PROOF").is_some();
 static mut QUIL_BUFFER_PROOF_ACTIVE: bool = false;
 
+/// Text edit buffer proof gate.
+/// Build with SEXOS_QUIL_TEXT_BUFFER_PROOF=1 to enable.
+const QUIL_TEXT_BUFFER_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_TEXT_BUFFER_PROOF").is_some();
+static mut QUIL_TEXT_BUFFER_PROOF_STAGE: u8 = 0;
+static mut QUIL_TEXT_BUFFER_PROOF_DONE: bool = false;
+
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
 const OP_DISKFS_STAT: u64 = 0x3B;
@@ -463,6 +470,89 @@ fn decode_palette_key(scancode: u64) -> u8 {
     }
 }
 
+/// Map a keyboard scancode to ASCII character, if printable.
+/// Scancode set 1 (US QWERTY).
+fn scancode_to_char(scancode: u64) -> Option<u8> {
+    match scancode as u8 {
+        0x02 => Some(b'1'), 0x03 => Some(b'2'), 0x04 => Some(b'3'),
+        0x05 => Some(b'4'), 0x06 => Some(b'5'), 0x07 => Some(b'6'),
+        0x08 => Some(b'7'), 0x09 => Some(b'8'), 0x0A => Some(b'9'),
+        0x0B => Some(b'0'),
+        0x10 => Some(b'Q'), 0x11 => Some(b'W'), 0x12 => Some(b'E'),
+        0x13 => Some(b'R'), 0x14 => Some(b'T'), 0x15 => Some(b'Y'),
+        0x16 => Some(b'U'), 0x17 => Some(b'I'), 0x18 => Some(b'O'),
+        0x19 => Some(b'P'),
+        0x1E => Some(b'A'), 0x1F => Some(b'S'), 0x20 => Some(b'D'),
+        0x21 => Some(b'F'), 0x22 => Some(b'G'), 0x23 => Some(b'H'),
+        0x24 => Some(b'J'), 0x25 => Some(b'K'), 0x26 => Some(b'L'),
+        0x2C => Some(b'Z'), 0x2D => Some(b'X'), 0x2E => Some(b'C'),
+        0x2F => Some(b'V'), 0x30 => Some(b'B'), 0x31 => Some(b'N'),
+        0x32 => Some(b'M'),
+        0x27 => Some(b';'), 0x28 => Some(b'\''),
+        0x33 => Some(b','), 0x34 => Some(b'.'), 0x35 => Some(b'/'),
+        0x39 => Some(b' '),  // space
+        0x1C => None, // Enter (handled elsewhere)
+        0x0E => None, // Backspace (handled elsewhere)
+        0x0F => None, // Tab
+        _ => None,
+    }
+}
+
+/// Append a single character to the text buffer.
+/// Returns true if appended, false if buffer full or invalid.
+fn text_buffer_append(ch: u8) -> bool {
+    unsafe {
+        if QUIL_BUFFER_LEN >= QUIL_BUFFER_MAX_LEN {
+            serial_println!("[quil.text.append] len={} ch={} ok=0 reason=buffer_full",
+                QUIL_BUFFER_LEN, ch as char as u32);
+            return false;
+        }
+        if ch < 0x20 && ch != b'\n' {
+            return false;
+        }
+        QUIL_BUFFER[QUIL_BUFFER_LEN] = ch;
+        QUIL_BUFFER_LEN += 1;
+        serial_println!("[quil.text.append] len={} ch={}",
+            QUIL_BUFFER_LEN, ch as char as u32);
+        true
+    }
+}
+
+/// Delete the last character from the text buffer (backspace).
+/// Returns true if a character was deleted, false if buffer empty.
+fn text_buffer_backspace() -> bool {
+    unsafe {
+        if QUIL_BUFFER_LEN == 0 {
+            serial_println!("[quil.text.backspace] old=0 new=0 ok=0 reason=empty");
+            return false;
+        }
+        let old = QUIL_BUFFER_LEN;
+        QUIL_BUFFER_LEN -= 1;
+        QUIL_BUFFER[QUIL_BUFFER_LEN] = 0;
+        serial_println!("[quil.text.backspace] old={} new={} ok=1",
+            old, QUIL_BUFFER_LEN);
+        true
+    }
+}
+
+/// Insert a newline into the text buffer.
+/// Returns true if inserted, false if buffer full.
+fn text_buffer_newline() -> bool {
+    unsafe {
+        if QUIL_BUFFER_LEN >= QUIL_BUFFER_MAX_LEN {
+            serial_println!("[quil.text.enter] line=0 len={} ok=0 reason=buffer_full",
+                QUIL_BUFFER_LEN);
+            return false;
+        }
+        let line_count = text_buffer_line_count(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+        QUIL_BUFFER[QUIL_BUFFER_LEN] = b'\n';
+        QUIL_BUFFER_LEN += 1;
+        serial_println!("[quil.text.enter] line={} len={} ok=1",
+            line_count + 1, QUIL_BUFFER_LEN);
+        true
+    }
+}
+
 // ── Synchronous PDX Call Wrapper ──────────────────────────────────────────────
 //
 // inter-PD pdx_call is fire-and-forget (kernel ipc::traverse_edge AsyncEnqueue
@@ -846,7 +936,9 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                         }
                     }
                 } else {
-                    serial_println!("[quil.palette.reject] action=enter reason=inactive");
+                    // Text edit mode: Enter = newline
+                    text_buffer_newline();
+                    unsafe { draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
                 }
             }
             4 => { // Esc
@@ -862,28 +954,64 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                     );
                     serial_println!("[quil.palette.action] kind=esc clear=1");
                 } else {
-                    serial_println!("[quil.palette.reject] action=esc reason=inactive");
+                    // Toggle palette back on
+                    *palette_active = true;
+                    draw_palette(*selected_row);
+                    serial_println!("[quil.palette.action] kind=esc toggle_on=1");
                 }
             }
             _ => {
-                // Liveness fallback for non-palette keys: color toggle.
-                unsafe {
-                    static mut QUIL_COLOR_TOGGLE: bool = false;
-                    QUIL_COLOR_TOGGLE = !QUIL_COLOR_TOGGLE;
-                    let color = if QUIL_COLOR_TOGGLE {
-                        0x00FF00FFu64
+                if *palette_active {
+                    // Palette is active, non-palette key: liveness color toggle
+                    unsafe {
+                        static mut QUIL_COLOR_TOGGLE: bool = false;
+                        QUIL_COLOR_TOGGLE = !QUIL_COLOR_TOGGLE;
+                        let color = if QUIL_COLOR_TOGGLE {
+                            0x00FF00FFu64
+                        } else {
+                            0x0000FFFFu64
+                        };
+                        pdx_call(
+                            SLOT_DISPLAY,
+                            0xEF,
+                            SURFACE_ID_QUIL,
+                            0,
+                            (color << 32) | (2000u64 << 16) | 2000u64,
+                        );
+                    }
+                    serial_println!("[quil.palette.reject] action=key reason=unmapped");
+                } else {
+                    // Text edit mode: handle character keys
+                    // Check for Backspace (scancode 0x0E)
+                    if scancode == 0x0E {
+                        serial_println!("[quil.text.recv] code=14 ch=8");
+                        text_buffer_backspace();
+                        unsafe { draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
+                    } else if let Some(ch) = scancode_to_char(scancode) {
+                        serial_println!("[quil.text.recv] code={} ch={}", scancode, ch);
+                        text_buffer_append(ch);
+                        unsafe { draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
                     } else {
-                        0x0000FFFFu64
-                    };
-                    pdx_call(
-                        SLOT_DISPLAY,
-                        0xEF,
-                        SURFACE_ID_QUIL,
-                        0,
-                        (color << 32) | (2000u64 << 16) | 2000u64,
-                    );
+                        // Unmapped key in text mode: color toggle (liveness)
+                        unsafe {
+                            static mut QUIL_TEXT_COLOR_TOGGLE: bool = false;
+                            QUIL_TEXT_COLOR_TOGGLE = !QUIL_TEXT_COLOR_TOGGLE;
+                            let color = if QUIL_TEXT_COLOR_TOGGLE {
+                                0x00FF00FFu64
+                            } else {
+                                0x0000FFFFu64
+                            };
+                            pdx_call(
+                                SLOT_DISPLAY,
+                                0xEF,
+                                SURFACE_ID_QUIL,
+                                0,
+                                (color << 32) | (2000u64 << 16) | 2000u64,
+                            );
+                        }
+                        serial_println!("[quil.text.recv] code={} ch=0 reason=unmapped", scancode);
+                    }
                 }
-                serial_println!("[quil.palette.reject] action=key reason=unmapped");
             }
         }
     }
@@ -1077,6 +1205,132 @@ pub extern "C" fn _start() -> ! {
 
         serial_println!("[quil.keyboard.buffer.proof.done] ok=1");
         unsafe { QUIL_BUFFER_PROOF_ACTIVE = false; }
+    }
+
+    // ── Text buffer edit proof: synthetic character typing ─────────────────
+    // Seeds synthetic keystrokes for text editing (palette off),
+    // exercises append, backspace, enter, and redraw.
+    if QUIL_TEXT_BUFFER_PROOF_ENABLED {
+        unsafe { QUIL_BUFFER_PROOF_ACTIVE = true; }
+        serial_println!("[quil.text.buffer.proof.begin]");
+        // Ensure palette is off for text editing mode
+        palette_active = false;
+
+        // Stage 0: type 'H'
+        unsafe {
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x23, 1, 0); // H scancode
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.text.buffer.proof] stage=0 action=seed_H idx={} code=0x23", idx);
+            }
+        }
+        // Stage 1: type 'e'
+        unsafe {
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x12, 1, 0); // E scancode
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.text.buffer.proof] stage=1 action=seed_e idx={} code=0x12", idx);
+            }
+        }
+        // Stage 2: type 'l' (x2)
+        unsafe {
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x26, 1, 0); // L scancode
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.text.buffer.proof] stage=2a action=seed_l idx={} code=0x26", idx);
+            }
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x26, 1, 0); // L scancode
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.text.buffer.proof] stage=2b action=seed_l idx={} code=0x26", idx);
+            }
+        }
+        // Stage 3: type 'o'
+        unsafe {
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x18, 1, 0); // O scancode
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.text.buffer.proof] stage=3 action=seed_o idx={} code=0x18", idx);
+            }
+        }
+        // Stage 4: Enter (newline)
+        unsafe {
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x1C, 1, 0); // Enter
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.text.buffer.proof] stage=4 action=seed_enter idx={} code=0x1C", idx);
+            }
+        }
+        // Stage 5: type 'Q' 'u' 'i' 'l'
+        unsafe {
+            for (stage, sc) in [(5u8, 0x10u64), (6, 0x16), (7, 0x17), (8, 0x26)] {
+                if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                    let idx = HID_STASH_COUNT;
+                    HID_STASH[idx] = (sc, 1, 0);
+                    HID_STASH_COUNT += 1;
+                    serial_println!("[quil.text.buffer.proof] stage={} action=seed_char idx={} code={:#x}", stage, idx, sc);
+                }
+            }
+        }
+        // Stage 9: Backspace (delete last char 'l')
+        unsafe {
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x0E, 1, 0); // Backspace
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.text.buffer.proof] stage=9 action=seed_backspace idx={} code=0x0E", idx);
+            }
+        }
+        // Stage 10: type '!' then Enter
+        unsafe {
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x02, 1, 0); // 1/! key
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.text.buffer.proof] stage=10 action=seed_excl idx={} code=0x02", idx);
+            }
+            if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                let idx = HID_STASH_COUNT;
+                HID_STASH[idx] = (0x1C, 1, 0); // Enter
+                HID_STASH_COUNT += 1;
+                serial_println!("[quil.text.buffer.proof] stage=11 action=seed_enter2 idx={} code=0x1C", idx);
+            }
+        }
+        serial_println!("[quil.text.buffer.proof] stage=12 action=seed_done count={}", unsafe { HID_STASH_COUNT });
+
+        // Replay all stashed events
+        unsafe {
+            let stash_count = HID_STASH_COUNT;
+            if stash_count > 0 {
+                serial_println!("[quil.text.buffer.proof] stage=13 action=replay_begin count={}", stash_count);
+                for i in 0..stash_count {
+                    let (scancode, value, _arg2) = HID_STASH[i];
+                    serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}",
+                        i, scancode, value, _arg2);
+                    quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+                }
+                HID_STASH_COUNT = 0;
+                serial_println!("[quil.hid.replay.done] count={}", stash_count);
+            }
+        }
+
+        // Verify buffer content
+        unsafe {
+            let buf = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+            let line_count = text_buffer_line_count(buf);
+            serial_println!("[quil.text.buffer.proof] stage=14 action=verify len={} lines={}",
+                QUIL_BUFFER_LEN, line_count);
+            serial_println!("[quil.text.buffer.proof.done] ok=1");
+        }
+        unsafe { QUIL_BUFFER_PROOF_ACTIVE = false; }
+        // Restore palette active
+        palette_active = true;
     }
 
     if PERSISTENCE_PROOF_ENABLED {
