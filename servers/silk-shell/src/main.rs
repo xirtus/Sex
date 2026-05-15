@@ -11658,14 +11658,21 @@ unsafe fn maybe_run_bell_filter_proof() {
         return;
     }
     let total = bell_ring_count();
-    serial_println!("[bell.filter.source] source=local_ring count={} ok={}", total, (total > 0) as u8);
+    serial_println!(
+        "[bell.filter.source] source=local_ring count={} ok={}",
+        total,
+        (total > 0) as u8
+    );
     let old = BELL_SELECTED_ROW;
     if bell_visible_event_count() > 1 {
         bell_select_next_row();
     }
     let new = BELL_SELECTED_ROW;
     serial_println!("[bell.filter.nav] old={} new={} ok={}", old, new, (new != old || total <= 1) as u8);
-    serial_println!("[bell.filter.proof.done] ok=1");
+    serial_println!(
+        "[bell.filter.proof.done] ok={}",
+        ((total > 0) && (new != old || total <= 1)) as u8
+    );
     BELL_FILTER_PROOF_DONE = true;
 }
 
@@ -11677,7 +11684,7 @@ unsafe fn maybe_run_atlas_preview_proof() {
     let accent = SCENES[preset as usize].accent;
     let color = ATLAS_ACCENT_COLORS[(accent as usize) % (ATLAS_ACCENT_COLORS.len())];
     serial_println!(
-        "[atlas.preview] preset={} accent={} color={:#x} ok=1",
+        "[atlas.preview] preset={} accent={} color={:#010x} ok=1",
         preset, accent, color
     );
     serial_println!("[atlas.preview.proof.done] ok=1");
