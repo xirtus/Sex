@@ -842,8 +842,6 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         b"launch" => {
-            // Static app mirror: app name → known id and launch method.
-            // Spindle cannot cross-PD spawn — all apps are palette-owned.
             let known = match args {
                 b"spindle" => Some((0, "active")),
                 b"quil" => Some((1, "palette_owned")),
@@ -854,23 +852,20 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 b"mesh" => Some((6, "palette_owned")),
                 _ => None,
             };
-            if let Some((app_id, launch_method)) = known {
-                serial_println!("[spindle.app.command] name=launch ok=1 reason=honest_palette_owned");
-                serial_println!("[spindle.app.row] app={} status=PASS launch={}", core::str::from_utf8(args).unwrap_or("?"), launch_method);
-                if launch_method == "active" {
-                    sb.push(b"Spindle is already active (this terminal).");
-                } else {
-                    sb.push(b"launch: app is palette-owned.");
-                    sb.push(b"Cannot cross-PD spawn from Spindle.");
-                    sb.push(b"Use silk-shell palette (Alt+digit) or app launcher.");
-                    sb.push(b"Shortcut hint: check 'keys' command for nav map.");
+            if let Some((app_id, _launch_method)) = known {
+                // Send launch request via SLOT_SHELL (fire-and-forget)
+                let (status, _) = unsafe { pdx_call(SLOT_SHELL, 0x15, app_id as u64, 0, 0) };
+                let app_name = core::str::from_utf8(args).unwrap_or("?");
+                serial_println!("[spindle.launch.request] app={} slot=6 status={} err={} reason=fire_and_forget_slotshell",
+                    app_name, status, if status == 0 { 0 } else { status as i64 });
+                sb.push(b"Launch request sent to silk-shell (SLOT_SHELL).");
+                sb.push(b"Fire-and-forget -- shell handles focus/open.");
+                if status != 0 {
+                    sb.push(b"WARNING: SLOT_SHELL enqueue failed.");
                 }
             } else if args.is_empty() {
-                serial_println!("[spindle.app.command] name=launch ok=0 reason=no_target");
                 sb.push(b"launch: specify an app. Use 'apps' to list.");
-                sb.push(b"Known: spindle quil linen bell atlas collar mesh");
             } else {
-                serial_println!("[spindle.app.command] name=launch ok=0 reason=unknown_target");
                 sb.push(b"launch: unknown target. Use 'apps' to list.");
             }
             true
@@ -1847,6 +1842,7 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"app-status", sb, hist, &mut ev);
         let _ = dispatch(b"app-info spindle", sb, hist, &mut ev);
         let _ = dispatch(b"launch quil", sb, hist, &mut ev);
+        let _ = dispatch(b"launch linen", sb, hist, &mut ev);
         serial_println!("[spindle.app.proof.done] ok=1");
     }
     const SPINDLE_LAUNCH_EXEC_PROOF_ENABLED: bool =

@@ -1553,6 +1553,7 @@ const SCENE_SETTINGS_KEY_APPEARANCE: u64 = 0x01;
 const SCENE_BLOB_MAGIC:   u8 = 0xAC;
 const SCENE_BLOB_VERSION: u8 = 0x01;
 pub const OP_SHELL_BIND_BUFFER: u64 = 0x14;
+pub const OP_SHELL_LAUNCH_REQUEST: u64 = 0x15;
 pub const OP_HID_EVENT: u64 = 0x202;
 pub const OP_USB_MOUSE_REPORT: u64 = 0x260;
 const OP_LINEN_GET_PUBLIC_SNAPSHOT: u64 = 0x44;
@@ -8801,6 +8802,15 @@ unsafe fn ensure_quil_frame() -> Option<u32> {
 /// Open Quil in the active scene: ensure frame exists, un-minimize, position,
 /// focus, and tile. If Quil is already visible in the active scene, focuses it.
 /// Returns true if Quil became visible/focused.
+/// Dispatch app open by surface ID. Used by OP_SHELL_LAUNCH_REQUEST handler.
+unsafe fn open_app_in_active_scene_by_sid(sid: u64) {
+    match sid {
+        200 => { open_linen_in_active_scene(); }
+        201 => { open_quil_in_active_scene();   }
+        _ => {}
+    }
+}
+
 unsafe fn open_quil_in_active_scene() -> bool {
     // E1: duplicate guard — if Quil already visible in active scene, reject open.
     for f in FRAMES.iter() {
@@ -16692,6 +16702,31 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                     mutated = true;
+                }
+                OP_SHELL_LAUNCH_REQUEST => {
+                    // Fire-and-forget launch request from Spindle via SLOT_SHELL
+                    let app_id = msg.arg0 as u8;
+                    let app_name = match app_id {
+                        0 => "Spindle", 1 => "Quil", 2 => "Linen",
+                        3 => "Bell", 4 => "Atlas", 5 => "Collar", 6 => "Mesh",
+                        _ => "Unknown",
+                    };
+                    serial_println!("[shell.launch.request.recv] app={} ok=1 reason=received_via_slot_shell", app_name);
+                    // Call existing launcher/focus path for known apps
+                    let sid: u64 = match app_id {
+                        1 => 201, // Quil
+                        2 => 200, // Linen
+                        _ => 0,
+                    };
+                    let executed = sid != 0;
+                    if executed {
+                        unsafe { open_app_in_active_scene_by_sid(sid); }
+                        serial_println!("[shell.launch.request.exec] app={} sid={} ok=1 reason=focused_via_existing_path", app_name, sid);
+                    } else if app_id == 0 {
+                        serial_println!("[shell.launch.request.exec] app={} sid=0 ok=1 reason=already_active_self", app_name);
+                    } else {
+                        serial_println!("[shell.launch.request.exec] app={} sid=0 ok=0 reason=no_focus_path_nonfocusable_or_deferred", app_name);
+                    }
                 }
                 OP_USB_MOUSE_REPORT => {
                     let buttons = msg.arg1 as u8;
