@@ -196,8 +196,11 @@ export SEXOS_QUIL_REPLACE_PROOF=1
 export SEXOS_QUIL_GOTO_LINE_PROOF=1
 export SEXOS_SPINDLE_EDITOR_FINISH_PROOF=1
 
+# ── Storage Phase A markers proof ──
+export SEXOS_QUIL_STORAGE_PHASEA_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V14"
+echo " DAILY-DRIVER PROOF PROFILE V16"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
