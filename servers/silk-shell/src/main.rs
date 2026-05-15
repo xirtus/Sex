@@ -248,6 +248,8 @@ const BELL_FILTER_PROOF_ENABLED: bool =
     option_env!("SEXOS_BELL_FILTER_PROOF").is_some();
 const ATLAS_PREVIEW_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_PREVIEW_PROOF").is_some();
+const APP_REGISTRY_READONLY_PROOF_ENABLED: bool =
+    option_env!("SEXOS_APP_REGISTRY_READONLY_PROOF").is_some();
 static mut COMMAND_PALETTE_STATUS_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_LINEN_STATUS_PROOF_DONE: bool = false;
 static mut QUIL_STATUS_UNBLOCK_PROOF_DONE: bool = false;
@@ -261,6 +263,7 @@ static mut APP_LAUNCHER_HELP_PROOF_DONE: bool = false;
 static mut LINEN_SEARCH_FILTER_PROOF_DONE: bool = false;
 static mut BELL_FILTER_PROOF_DONE: bool = false;
 static mut ATLAS_PREVIEW_PROOF_DONE: bool = false;
+static mut APP_REGISTRY_READONLY_PROOF_DONE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_ACTIVE: bool = false;
 static mut COMMAND_PALETTE_STATUS_PROOF_STAGE: u8 = 0;
 static mut COMMAND_PALETTE_DAILY_PROOF_DONE: bool = false;
@@ -11669,6 +11672,31 @@ unsafe fn maybe_run_atlas_preview_proof() {
     ATLAS_PREVIEW_PROOF_DONE = true;
 }
 
+unsafe fn maybe_run_app_registry_readonly_proof() {
+    if !APP_REGISTRY_READONLY_PROOF_ENABLED || APP_REGISTRY_READONLY_PROOF_DONE {
+        return;
+    }
+    let mut rows: u8 = 0;
+    for slot in LINEN_OBJECTS.iter() {
+        if let Some(obj) = slot {
+            serial_println!(
+                "[app.registry.row] app_id={} state={} kind={} name={} ok=1",
+                obj.object_id,
+                linen_object_state_name(obj.state),
+                linen_object_kind_name(obj.kind),
+                obj.display_name
+            );
+            rows = rows.saturating_add(1);
+        }
+    }
+    serial_println!(
+        "[app.registry.readonly.proof.done] rows={} ok={}",
+        rows,
+        (rows > 0) as u8
+    );
+    APP_REGISTRY_READONLY_PROOF_DONE = true;
+}
+
 /// App launcher multi-exec proof: executes and focuses all 7 keyboard-ready
 /// app launcher rows (Spindle, Quil, Linen, Atlas, Bell, Collar, Mesh).
 ///
@@ -15531,6 +15559,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_linen_search_filter_proof(); }
         unsafe { maybe_run_bell_filter_proof(); }
         unsafe { maybe_run_atlas_preview_proof(); }
+        unsafe { maybe_run_app_registry_readonly_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).
