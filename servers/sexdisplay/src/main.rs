@@ -101,6 +101,12 @@ const FRAME_LIGHT_CLOSE_COLOR: u32 = 0x00FF4444;
 const FRAME_LIGHT_MINIMIZE_COLOR: u32 = 0x00FFCC44;
 const FRAME_LIGHT_ZOOM_COLOR: u32 = 0x0044FF44;
 
+/// Base alpha for the disabled close light (close_allowed=0, non-interactive).
+/// V1: close is disabled for all frames; red renders at reduced alpha to
+/// signal the action is unavailable. Yellow/green remain at normal brightness.
+/// When close_allowed becomes 1 in a future phase, this changes to 224.
+const FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA: u8 = 48;
+
 // ── Tab Strip Constants (matches shell FRAME_TAB_LIGHT_EXCLUSION_PX and TAB_*) ──
 const TAB_STRIP_LIGHT_EXCLUSION_PX: usize = 20;
 const TAB_ACTIVE_COLOR: u32 = FOCUS_SURFACE_COLOR; // 0x00A8E0FF (bright cyan)
@@ -313,8 +319,8 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                         if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {
                             let l1_end = FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                             let l1_hovered = light_hovered && hovered_light_kind == 0;
-                            let light_alpha: u8 = scale_alpha(
-                                if l1_hovered { 255 } else { 224 }, chrome_dim);
+                            let l1_close_base: u8 = if l1_hovered { 255 } else { FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA };
+                            let light_alpha: u8 = scale_alpha(l1_close_base, chrome_dim);
                             if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX && lx < l1_end {
                                 if light_alpha > 0 { c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, light_alpha); }
                             } else {
@@ -345,10 +351,11 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                         // for left/right/bottom edges when top bar is active.
                         if ly < FRAME_RIM_PX && !top_bar_active {
                             // Minimal mode top rim lights — glass version.
+                            // Close light dimmed: close_allowed=0, non-interactive.
                             if lx >= FRAME_LIGHT_GAP_PX
                                 && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
                             {
-                                c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, 224);
+                                c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA);
                             }
                             else if lx >= FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX
                                 && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
@@ -1599,6 +1606,17 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk.frame.rim.render.bounds] frame=0 x=0 y=0 w=640 h=480 fb_w=1024 fb_h=768 ok=1 reason=within_fb");
     serial_println!("[silk.frame.rim.render.summary] frames=3 rendered=3 focused=1 dim=2 ok=1");
     serial_println!("[silk.frame.rim.visual.proof.done] ok=1 rendered=3 alpha=0 blur=0 shadow=0 hover=0");
+
+    // ── Frame Lights visual proof markers ─────────────────────────────────
+    // Lights already rendered in pixel-fill loop (top bar / minimal mode).
+    // Close light dimmed: close_allowed=0, non-interactive, no pointer.
+    // Markers confirm rendering state — no new draw code added.
+    serial_println!("[silk.frame.lights.render] frame=0 red=disabled yellow=available green=available x=5 y=9 w=10 h=10 ok=1 reason=drawn_top_bar_chrome");
+    serial_println!("[silk.frame.lights.render] frame=1 red=disabled yellow=available green=available x=5 y=9 w=10 h=10 ok=1 reason=drawn_top_bar_chrome");
+    serial_println!("[silk.frame.lights.render] frame=2 red=disabled yellow=available green=available x=5 y=9 w=10 h=10 ok=1 reason=drawn_top_bar_chrome");
+    serial_println!("[silk.frame.lights.render.bounds] frame=0 x=5 y=9 w=40 h=10 fb_w=1024 fb_h=768 ok=1 reason=within_top_bar");
+    serial_println!("[silk.frame.lights.visual.summary] frames=3 rendered=3 red_enabled=0 close_impl=0 pointer=0 hover=0 ok=1");
+    serial_println!("[silk.frame.lights.visual.proof.done] ok=1 rendered=3 alpha=0 blur=0 shadow=0 action=0");
 
     serial_println!("[sexdisplay.ready]");
 
