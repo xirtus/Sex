@@ -1426,19 +1426,19 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         b"app-state" => {
-            sb.push(b"App Lifecycle State Matrix:");
-            sb.push(b"  app     sid   state     focusable  launch");
-            sb.push(b"  Spindle 0     running   yes        active");
-            sb.push(b"  Quil    201   ready     yes        palette_owned");
-            sb.push(b"  Linen   200   ready     yes        palette_owned");
-            sb.push(b"  Bell    0     ready     yes        palette_owned");
-            sb.push(b"  Atlas   0     ready     yes        palette_owned");
-            sb.push(b"  Collar  0     ready     yes        palette_owned");
-            sb.push(b"  Mesh    0     ready     yes        palette_owned");
-            sb.push(b"Lifecycle states: running > ready > deferred > closed.");
-            sb.push(b"Focus: Alt+1-7 or app launcher (silk-shell palette).");
-            sb.push(b"Cross-PD spawn: blocked (SLOT_SHELL needed).");
-            serial_println!("[spindle.lifecycle.command] name=app-state ok=1 reason=state_matrix_rendered");
+            sb.push(b"App Lifecycle State Matrix V2:");
+            sb.push(b"  app     sid   focus  state   launch_mode   launch_exec");
+            sb.push(b"  Spindle 0     yes    running active        yes (self)");
+            sb.push(b"  Quil    201   yes    ready   palette_owned no (no slot)");
+            sb.push(b"  Linen   200   yes    ready   palette_owned no (no slot)");
+            sb.push(b"  Bell    0     yes    ready   palette_owned no (no slot)");
+            sb.push(b"  Atlas   0     no     ready   palette_owned no (overlay)");
+            sb.push(b"  Collar  0     yes    ready   palette_owned no (no slot)");
+            sb.push(b"  Mesh    0     yes    ready   palette_owned no (no slot)");
+            sb.push(b"Launch exec: Spindle can NOT launch apps (no SLOT_SHELL).");
+            sb.push(b"Focus: silk-shell palette (Alt+digit) or app launcher.");
+            sb.push(b"STOP FIRST: cross-PD launch blocked. See handoff doc.");
+            serial_println!("[spindle.app.lifecycle.v2] command=app-state ok=1 reason=honest_matrix_with_launch_exec");
             true
         }
         // ── Search help ────────────────────────────────────────────────────

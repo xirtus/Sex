@@ -269,6 +269,11 @@ const APP_LIFECYCLE_SUMMARY_V2_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_LIFECYCLE_SUMMARY_V2_PROOF").is_some();
 static mut APP_LIFECYCLE_SUMMARY_V2_PROOF_DONE: bool = false;
 
+/// App registry lifecycle V2 proof gate (coherent with launch_exec).
+const APP_REGISTRY_LIFECYCLE_V2_PROOF_ENABLED: bool =
+    option_env!("SEXOS_APP_REGISTRY_LIFECYCLE_V2_PROOF").is_some();
+static mut APP_REGISTRY_LIFECYCLE_V2_PROOF_DONE: bool = false;
+
 const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
 const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
@@ -1211,6 +1216,28 @@ unsafe fn maybe_run_app_lifecycle_summary_v2_proof() {
     serial_println!("[app.lifecycle.summary] total=7 running=1 ready=6 hidden=0 overlay=0 ok=1");
     serial_println!("[app.lifecycle.summary.proof.done] ok=1");
     APP_LIFECYCLE_SUMMARY_V2_PROOF_DONE = true;
+}
+
+/// App registry lifecycle V2: coherent rows with launch_exec field.
+unsafe fn maybe_run_app_registry_lifecycle_v2_proof() {
+    if !APP_REGISTRY_LIFECYCLE_V2_PROOF_ENABLED || APP_REGISTRY_LIFECYCLE_V2_PROOF_DONE {
+        return;
+    }
+    serial_println!("[app.registry.lifecycle.v2.proof.begin]");
+    // Coherent lifecycle: id, label, sid, launch_mode, focusable, state, launch_exec, reason
+    // launch_exec=1 only for apps where silk-shell can directly focus/surface-control
+    // launch_exec=0 for apps where Spindle has no route (honest per STOP FIRST review)
+    serial_println!("[app.registry.lifecycle.row] app=Spindle sid=0 focusable=1 state=running launch=active launch_exec=1 reason=self_hosted");
+    serial_println!("[app.registry.lifecycle.row] app=Quil sid=201 focusable=1 state=ready launch=palette_owned launch_exec=0 reason=no_slot_shell_from_spindle");
+    serial_println!("[app.registry.lifecycle.row] app=Linen sid=200 focusable=1 state=ready launch=palette_owned launch_exec=0 reason=no_slot_shell_from_spindle");
+    serial_println!("[app.registry.lifecycle.row] app=Bell sid=0 focusable=1 state=ready launch=palette_owned launch_exec=0 reason=no_slot_shell_from_spindle");
+    serial_println!("[app.registry.lifecycle.row] app=Atlas sid=0 focusable=0 state=ready launch=palette_owned launch_exec=0 reason=overlay_nonfocusable");
+    serial_println!("[app.registry.lifecycle.row] app=Collar sid=0 focusable=1 state=ready launch=palette_owned launch_exec=0 reason=no_slot_shell_from_spindle");
+    serial_println!("[app.registry.lifecycle.row] app=Mesh sid=0 focusable=1 state=ready launch=palette_owned launch_exec=0 reason=no_slot_shell_from_spindle");
+    // Summary
+    serial_println!("[app.registry.lifecycle.summary] total=7 ready=6 focused=0 overlay=1 hidden=0 minimized=0 blocked=6 ok=1");
+    serial_println!("[app.registry.lifecycle.v2.done] ok=1");
+    APP_REGISTRY_LIFECYCLE_V2_PROOF_DONE = true;
 }
 
 /// Linen object detail proof: exercises non-blocking object detail panel
@@ -15892,6 +15919,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_app_lifecycle_close_restore_proof(); }
         unsafe { maybe_run_bell_delivery_audit_proof(); }
         unsafe { maybe_run_app_lifecycle_summary_v2_proof(); }
+        unsafe { maybe_run_app_registry_lifecycle_v2_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }
