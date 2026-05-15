@@ -552,10 +552,29 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[linen] Fill rect 0xEF sent to sexdisplay");
     serial_println!("[linen.ready]");
 
+    // ── Object workflow/schema proofs: run FIRST before any storage-blocking proofs ──
+    // V8 fix: DiskFS slot proof calls pdx_storage_sync() which blocks waiting for
+    // storage replies. If storage isn't ready, workflow proofs never run.
+    // Solution: run workflow/persist/schema (no storage deps) before diskfs proofs.
+    // These create only local session objects — no RamFS/DiskFS calls.
+    if LINEN_OBJECT_WORKFLOW_PROOF_ENABLED {
+        unsafe { run_linen_object_workflow_proof(); }
+    }
+    if LINEN_OBJECT_PERSIST_PROOF_ENABLED && LINEN_OBJECT_WORKFLOW_PROOF_ENABLED {
+        unsafe { run_linen_object_persist_proof(); }
+    }
+    if LINEN_OBJECT_SCHEMA_PROOF_ENABLED {
+        unsafe { run_linen_object_schema_proof(); }
+    }
+
+    // Timing stabilize marker: confirm workflow proofs ran before storage-blocking proofs
+    if LINEN_OBJECT_WORKFLOW_PROOF_ENABLED || LINEN_OBJECT_SCHEMA_PROOF_ENABLED {
+        serial_println!("[linen.timing.stabilize] strategy=v8_move_workflow_before_diskfs ok=1 reason=non_storage_proofs_complete_before_blocking_diskfs");
+        serial_println!("[linen.timing.stabilize.done] ok=1");
+    }
+
     // ── Linen direct DiskFS bridge proof: save/load through DiskFS opcodes ──
-    // Runs BEFORE session init and RamFS proofs to avoid blocking on
-    // pdx_storage_sync before SexFiles reaches its message loop.
-    // Contains a long spin delay to cover SexFiles startup time.
+    // NOTE: may block on pdx_storage_sync.  Workflow proofs already completed above.
     if LINEN_DISKFS_DIRECT_PROOF_ENABLED {
         unsafe { run_linen_diskfs_direct_proof(); }
     }
@@ -569,20 +588,6 @@ pub extern "C" fn _start() -> ! {
     // Skipped during bridge proof runs to avoid pdx_storage_sync deadlock.
     if !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_SLOT_PROOF_ENABLED {
         unsafe { linen_init_session(); }
-    }
-
-    // ── Object workflow/schema proofs: run BEFORE table-filling session proof ──
-    // Timing: session proof fills the 16-object table, starving workflow proofs.
-    // Reordered: workflow → persist → schema run first, then session proof fills
-    // remaining slots without disrupting these proofs.
-    if LINEN_OBJECT_WORKFLOW_PROOF_ENABLED {
-        unsafe { run_linen_object_workflow_proof(); }
-    }
-    if LINEN_OBJECT_PERSIST_PROOF_ENABLED && LINEN_OBJECT_WORKFLOW_PROOF_ENABLED {
-        unsafe { run_linen_object_persist_proof(); }
-    }
-    if LINEN_OBJECT_SCHEMA_PROOF_ENABLED {
-        unsafe { run_linen_object_schema_proof(); }
     }
 
     // ── Synthetic proof: Linen session object model ──
