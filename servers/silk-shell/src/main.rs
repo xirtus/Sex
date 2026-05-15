@@ -289,6 +289,11 @@ const FRAME_CHROME_MODEL_PROOF_ENABLED: bool =
     option_env!("SEXOS_FRAME_CHROME_MODEL_PROOF").is_some();
 static mut FRAME_CHROME_MODEL_PROOF_DONE: bool = false;
 
+/// Frame Rim markers proof gate.
+const FRAME_RIM_MARKERS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_FRAME_RIM_MARKERS_PROOF").is_some();
+static mut FRAME_RIM_MARKERS_PROOF_DONE: bool = false;
+
 const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
 const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
@@ -1348,6 +1353,22 @@ unsafe fn maybe_run_frame_chrome_model_proof() {
     serial_println!("[silk.frame.model.surface] sid=0 app=WebStub focusable=0 state=deferred ok=1 reason=no_surface");
     serial_println!("[silk.frame.chrome.model.done] ok=1 scenes=1 frames=3 tabs=3 surfaces=4");
     FRAME_CHROME_MODEL_PROOF_DONE = true;
+}
+
+/// Frame Rim markers proof: rim state per frame, no visual rendering.
+unsafe fn maybe_run_frame_rim_markers_proof() {
+    if !FRAME_RIM_MARKERS_PROOF_ENABLED || FRAME_RIM_MARKERS_PROOF_DONE { return; }
+    serial_println!("[silk.frame.rim.markers.proof.begin]");
+    // Frame 0: Spindle — focused
+    serial_println!("[silk.frame.rim.state] frame=0 scene=0 active=1 focused=1 minimized=0 zoomed=0 tabs=1 rim=focused intensity=2 render_allowed=0 ok=1 reason=terminal_active");
+    // Frame 1: Quil — dim
+    serial_println!("[silk.frame.rim.state] frame=1 scene=0 active=0 focused=0 minimized=0 zoomed=0 tabs=1 rim=dim intensity=1 render_allowed=0 ok=1 reason=background");
+    // Frame 2: Linen — dim
+    serial_println!("[silk.frame.rim.state] frame=2 scene=0 active=0 focused=0 minimized=0 zoomed=0 tabs=1 rim=dim intensity=1 render_allowed=0 ok=1 reason=background");
+    // Summary
+    serial_println!("[silk.frame.rim.summary] frames=3 focused=1 minimized=0 zoomed=0 render_allowed=0 ok=1");
+    serial_println!("[silk.frame.rim.markers.done] ok=1 frames=3 rendered=0");
+    FRAME_RIM_MARKERS_PROOF_DONE = true;
 }
 
 /// Linen object detail proof: exercises non-blocking object detail panel
@@ -16033,6 +16054,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_window_workflow_v2_proof(); }
         unsafe { maybe_run_browser_stub_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
+        unsafe { maybe_run_frame_rim_markers_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }

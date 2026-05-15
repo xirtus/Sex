@@ -217,8 +217,12 @@ export SEXOS_LINEN_PERSIST_READBACK_PROOF=1
 export SEXOS_FRAME_CHROME_MODEL_PROOF=1
 export SEXOS_SPINDLE_FRAME_CHROME_PROOF=1
 
+# ── Frame Rim markers proof ──
+export SEXOS_FRAME_RIM_MARKERS_PROOF=1
+export SEXOS_SPINDLE_FRAME_RIM_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V26"
+echo " DAILY-DRIVER PROOF PROFILE V27"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

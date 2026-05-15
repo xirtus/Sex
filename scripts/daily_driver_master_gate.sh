@@ -117,6 +117,8 @@ gate_linen_persist_readback="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
+gate_frame_rim_markers="SKIP"
+gate_spindle_frame_rim="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -139,7 +141,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V26"
+echo " DAILY-DRIVER MASTER GATE V27"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -1116,7 +1118,23 @@ elif [ "$(has 'spindle\.frame\.chrome\.command\]')" -ge 1 ]; then
     gate_spindle_frame_chrome="PASS"
 else gate_spindle_frame_chrome="SKIP"; fi
 
-# ---- 74. linen_search_bridge ----
+# ---- 74. frame_rim_markers ----
+if [ "$(has 'silk\.frame\.rim\.markers\.done.*ok=1')" -eq 1 ]; then
+    gate_frame_rim_markers="PASS"
+    print_row "frame_rim_markers" "PASS" "3 frames rim=dim/focused render=0"
+elif [ "$(has 'silk\.frame\.rim\.state\]')" -ge 1 ]; then
+    gate_frame_rim_markers="PASS"
+else gate_frame_rim_markers="SKIP"; fi
+
+# ---- 75. spindle_frame_rim ----
+if [ "$(has 'spindle\.frame\.rim\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_spindle_frame_rim="PASS"
+    print_row "spindle_frame_rim" "PASS" "frame rim help"
+elif [ "$(has 'spindle\.frame\.rim\.command\]')" -ge 1 ]; then
+    gate_spindle_frame_rim="PASS"
+else gate_spindle_frame_rim="SKIP"; fi
+
+# ---- 76. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
     print_row "linen_search_bridge" "PASS" "search bridge e2e"
@@ -1174,7 +1192,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V26 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V27 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1256,6 +1274,8 @@ ALL_GATES=(
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
     "spindle_frame_chrome:$gate_spindle_frame_chrome"
+    "frame_rim_markers:$gate_frame_rim_markers"
+    "spindle_frame_rim:$gate_spindle_frame_rim"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
 )

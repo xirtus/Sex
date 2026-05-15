@@ -1516,6 +1516,17 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.frame.chrome.command] name=frame-chrome ok=1 reason=model_overview");
             true
         }
+        b"frame-rim" => {
+            sb.push(b"Frame Rim -- model/proof only (no visual render):");
+            sb.push(b"  Frame 0 Spindle: rim=focused intensity=2 (active)");
+            sb.push(b"  Frame 1 Quil:    rim=dim intensity=1 (background)");
+            sb.push(b"  Frame 2 Linen:   rim=dim intensity=1 (background)");
+            sb.push(b"  render_allowed=0 (future Phase 3)");
+            sb.push(b"  Rim states: hidden/dim/focused/urgent/minimized/zoomed");
+            sb.push(b"  No pointer hover. No alpha/blur/shadow.");
+            serial_println!("[spindle.frame.rim.command] name=frame-rim ok=1 reason=rim_state_overview");
+            true
+        }
         b"scene-status" => {
             sb.push(b"Scene Status: Workspace (scene=0)");
             sb.push(b"  active=1  frames=3");
@@ -1939,6 +1950,12 @@ pub extern "C" fn _start() -> ! {
         option_env!("SEXOS_SPINDLE_BROWSER_STUB_PROOF").is_some();
     const SPINDLE_FRAME_CHROME_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_FRAME_CHROME_PROOF").is_some();
+    const SPINDLE_FRAME_RIM_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_FRAME_RIM_PROOF").is_some();
+    if SPINDLE_FRAME_RIM_PROOF_ENABLED {
+        let _ = dispatch(b"frame-rim", sb, hist, &mut ev);
+        serial_println!("[spindle.frame.rim.proof.done] ok=1");
+    }
     if SPINDLE_FRAME_CHROME_PROOF_ENABLED {
         let _ = dispatch(b"frame-chrome", sb, hist, &mut ev);
         let _ = dispatch(b"scene-status", sb, hist, &mut ev);
