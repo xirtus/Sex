@@ -152,8 +152,13 @@ export SEXOS_QUIL_TEXT_SELECTION_PROOF=1
 export SEXOS_QUIL_TEXT_DELETE_PROOF=1
 export SEXOS_SPINDLE_EDITOR_V2_PROOF=1
 
+# ── Feature batch V7 lifecycle/editor proofs ──
+export SEXOS_QUIL_EDITOR_KEYBINDINGS_PROOF=1
+export SEXOS_APP_LIFECYCLE_STATE_PROOF=1
+export SEXOS_SPINDLE_APP_LIFECYCLE_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V6"
+echo " DAILY-DRIVER PROOF PROFILE V7"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

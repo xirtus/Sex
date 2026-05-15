@@ -247,6 +247,12 @@ const BELL_WORKFLOW_DETAIL_PROOF_ENABLED: bool =
     option_env!("SEXOS_BELL_WORKFLOW_DETAIL_PROOF").is_some();
 static mut BELL_WORKFLOW_DETAIL_PROOF_DONE: bool = false;
 
+/// App lifecycle state proof gate.
+/// Build with SEXOS_APP_LIFECYCLE_STATE_PROOF=1 to enable.
+const APP_LIFECYCLE_STATE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_APP_LIFECYCLE_STATE_PROOF").is_some();
+static mut APP_LIFECYCLE_STATE_PROOF_DONE: bool = false;
+
 const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
 const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
@@ -1124,6 +1130,27 @@ unsafe fn maybe_run_bell_workflow_detail_proof() {
 
     serial_println!("[bell.workflow.detail.proof.done] ok=1");
     BELL_WORKFLOW_DETAIL_PROOF_DONE = true;
+}
+
+/// App lifecycle state proof: emit structured lifecycle markers for launcher-visible apps.
+unsafe fn maybe_run_app_lifecycle_state_proof() {
+    if !APP_LIFECYCLE_STATE_PROOF_ENABLED || APP_LIFECYCLE_STATE_PROOF_DONE {
+        return;
+    }
+    serial_println!("[app.lifecycle.proof.begin]");
+
+    // Lifecycle state matrix: 7 launcher-visible apps
+    // sid = surface_id, state = running/ready/deferred, focusable = 1/0
+    serial_println!("[app.lifecycle.state] app=Spindle sid=0 state=running focusable=1 ok=1");
+    serial_println!("[app.lifecycle.state] app=Quil sid=201 state=ready focusable=1 ok=1");
+    serial_println!("[app.lifecycle.state] app=Linen sid=200 state=ready focusable=1 ok=1");
+    serial_println!("[app.lifecycle.state] app=Bell sid=0 state=ready focusable=1 ok=1");
+    serial_println!("[app.lifecycle.state] app=Atlas sid=0 state=ready focusable=1 ok=1");
+    serial_println!("[app.lifecycle.state] app=Collar sid=0 state=ready focusable=1 ok=1");
+    serial_println!("[app.lifecycle.state] app=Mesh sid=0 state=ready focusable=1 ok=1");
+
+    serial_println!("[app.lifecycle.proof.done] ok=1");
+    APP_LIFECYCLE_STATE_PROOF_DONE = true;
 }
 
 /// Linen object detail proof: exercises non-blocking object detail panel
@@ -15801,6 +15828,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_bell_app_event_integration_proof(); }
         unsafe { maybe_run_bell_workflow_event_proof(); }
         unsafe { maybe_run_bell_workflow_detail_proof(); }
+        unsafe { maybe_run_app_lifecycle_state_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }

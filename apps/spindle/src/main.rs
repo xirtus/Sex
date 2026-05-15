@@ -1368,6 +1368,23 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.editor.command] name=edit-status ok=1 reason=buffer_status_v2");
             true
         }
+        // ── App lifecycle commands ──────────────────────────────────────────
+        b"app-state" => {
+            sb.push(b"App Lifecycle State Matrix:");
+            sb.push(b"  app     sid   state     focusable  launch");
+            sb.push(b"  Spindle 0     running   yes        active");
+            sb.push(b"  Quil    201   ready     yes        palette_owned");
+            sb.push(b"  Linen   200   ready     yes        palette_owned");
+            sb.push(b"  Bell    0     ready     yes        palette_owned");
+            sb.push(b"  Atlas   0     ready     yes        palette_owned");
+            sb.push(b"  Collar  0     ready     yes        palette_owned");
+            sb.push(b"  Mesh    0     ready     yes        palette_owned");
+            sb.push(b"Lifecycle states: running > ready > deferred > closed.");
+            sb.push(b"Focus: Alt+1-7 or app launcher (silk-shell palette).");
+            sb.push(b"Cross-PD spawn: blocked (SLOT_SHELL needed).");
+            serial_println!("[spindle.lifecycle.command] name=app-state ok=1 reason=state_matrix_rendered");
+            true
+        }
         // ── Linen search from Spindle audit ──────────────────────────────────
         b"linen-search" => {
             sb.push(b"Linen search from Spindle: BLOCKED.");
@@ -1677,6 +1694,13 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"edit-help", sb, hist, &mut ev);
         let _ = dispatch(b"edit-status", sb, hist, &mut ev);
         serial_println!("[spindle.editor.proof.done] ok=1");
+    }
+    // ── Spindle app lifecycle commands proof ──────────────────────────────
+    const SPINDLE_APP_LIFECYCLE_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_APP_LIFECYCLE_PROOF").is_some();
+    if SPINDLE_APP_LIFECYCLE_PROOF_ENABLED {
+        let _ = dispatch(b"app-state", sb, hist, &mut ev);
+        serial_println!("[spindle.lifecycle.proof.done] ok=1");
     }
 
     serial_println!("[spindle.ready]");

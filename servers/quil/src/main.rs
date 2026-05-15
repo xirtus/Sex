@@ -104,6 +104,12 @@ const QUIL_TEXT_DELETE_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_TEXT_DELETE_PROOF").is_some();
 static mut QUIL_TEXT_DELETE_PROOF_DONE: bool = false;
 
+/// Editor keybindings proof gate.
+/// Build with SEXOS_QUIL_EDITOR_KEYBINDINGS_PROOF=1 to enable.
+const QUIL_EDITOR_KEYBINDINGS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_EDITOR_KEYBINDINGS_PROOF").is_some();
+static mut QUIL_EDITOR_KEYBINDINGS_PROOF_DONE: bool = false;
+
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
 const OP_DISKFS_STAT: u64 = 0x3B;
@@ -1617,6 +1623,40 @@ pub extern "C" fn _start() -> ! {
                 text_buffer_delete_line();
                 serial_println!("[quil.text.delete.proof.done] ok=1");
                 QUIL_TEXT_DELETE_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Editor keybindings proof: map keys to actions ──────────────────
+    if QUIL_EDITOR_KEYBINDINGS_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_EDITOR_KEYBINDINGS_PROOF_DONE {
+                serial_println!("[quil.editor.keybind.proof.begin]");
+                palette_active = false;
+                QUIL_BUFFER_LEN = 0;
+                QUIL_CURSOR_POS = 0;
+                // Seed "AB" for navigation context
+                for &ch in b"AB" { text_buffer_append(ch); }
+                // Key → Action map (proof exercise, not from real keyboard)
+                // Left arrow → cursor left
+                { let old = QUIL_CURSOR_POS; if QUIL_CURSOR_POS > 0 { QUIL_CURSOR_POS -= 1; } serial_println!("[quil.editor.keybind] key=LeftArrow action=cursor_left old={} new={} ok=1", old, QUIL_CURSOR_POS); }
+                // Right arrow → cursor right
+                { let old = QUIL_CURSOR_POS; if QUIL_CURSOR_POS < QUIL_BUFFER_LEN { QUIL_CURSOR_POS += 1; } serial_println!("[quil.editor.keybind] key=RightArrow action=cursor_right old={} new={} ok=1", old, QUIL_CURSOR_POS); }
+                // Home → cursor to start
+                { let old = QUIL_CURSOR_POS; QUIL_CURSOR_POS = 0; serial_println!("[quil.editor.keybind] key=Home action=cursor_home old={} ok=1", old); }
+                // End → cursor to end
+                { let old = QUIL_CURSOR_POS; QUIL_CURSOR_POS = QUIL_BUFFER_LEN; serial_println!("[quil.editor.keybind] key=End action=cursor_end old={} new={} ok=1", old, QUIL_CURSOR_POS); }
+                // Backspace → delete last char
+                { let old_len = QUIL_BUFFER_LEN; text_buffer_backspace(); serial_println!("[quil.editor.keybind] key=Backspace action=delete_last old={} new={} ok=1", old_len, QUIL_BUFFER_LEN); }
+                // Delete → delete at cursor
+                { QUIL_CURSOR_POS = 0; let old_len = QUIL_BUFFER_LEN; text_buffer_delete_char(); serial_println!("[quil.editor.keybind] key=Delete action=delete_char old={} new={} ok=1", old_len, QUIL_BUFFER_LEN); }
+                // Enter → newline
+                { let old_len = QUIL_BUFFER_LEN; text_buffer_newline(); serial_println!("[quil.editor.keybind] key=Enter action=newline old={} new={} ok=1", old_len, QUIL_BUFFER_LEN); }
+                // Character 'X' → append
+                { let old_len = QUIL_BUFFER_LEN; text_buffer_append(b'X'); serial_println!("[quil.editor.keybind] key=X action=append_char old={} new={} ok=1", old_len, QUIL_BUFFER_LEN); }
+                serial_println!("[quil.editor.keybind.proof.done] ok=1");
+                QUIL_EDITOR_KEYBINDINGS_PROOF_DONE = true;
+                palette_active = true;
             }
         }
     }

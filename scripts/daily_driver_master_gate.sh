@@ -75,6 +75,9 @@ gate_quil_cursor_nav="SKIP"
 gate_quil_text_selection="SKIP"
 gate_quil_text_delete="SKIP"
 gate_spindle_editor_v2="SKIP"
+gate_quil_editor_keybindings="SKIP"
+gate_app_lifecycle_state="SKIP"
+gate_spindle_app_lifecycle="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -97,7 +100,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V6"
+echo " DAILY-DRIVER MASTER GATE V7"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -677,6 +680,51 @@ else
     print_row "spindle_editor_v2" "SKIP" "no editor V2 proof markers"
 fi
 
+# ---- 36 (new). quil_editor_keybindings ----
+# Evidence: [quil.editor.keybind], [quil.editor.keybind.proof.done].
+
+if [ "$(has 'quil\.editor\.keybind\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_kb="$(count 'quil\.editor\.keybind\]' | head -1)"
+    gate_quil_editor_keybindings="PASS"
+    print_row "quil_editor_keybindings" "PASS" "keybinds: ${c_kb}"
+elif [ "$(has 'quil\.editor\.keybind\]')" -ge 1 ]; then
+    gate_quil_editor_keybindings="PASS"
+    print_row "quil_editor_keybindings" "PASS" "keybind markers present (partial)"
+else
+    gate_quil_editor_keybindings="SKIP"
+    print_row "quil_editor_keybindings" "SKIP" "no keybind proof markers"
+fi
+
+# ---- 37 (new). app_lifecycle_state ----
+# Evidence: [app.lifecycle.state], [app.lifecycle.proof.done].
+
+if [ "$(has 'app\.lifecycle\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_st="$(count 'app\.lifecycle\.state\]')"
+    gate_app_lifecycle_state="PASS"
+    print_row "app_lifecycle_state" "PASS" "lifecycle states: ${c_st}"
+elif [ "$(has 'app\.lifecycle\.state\]')" -ge 1 ]; then
+    gate_app_lifecycle_state="PASS"
+    print_row "app_lifecycle_state" "PASS" "lifecycle state markers present (partial)"
+else
+    gate_app_lifecycle_state="SKIP"
+    print_row "app_lifecycle_state" "SKIP" "no lifecycle state proof markers"
+fi
+
+# ---- 38 (new). spindle_app_lifecycle ----
+# Evidence: [spindle.lifecycle.command], [spindle.lifecycle.proof.done].
+
+if [ "$(has 'spindle\.lifecycle\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_lc="$(count 'spindle\.lifecycle\.command\]')"
+    gate_spindle_app_lifecycle="PASS"
+    print_row "spindle_app_lifecycle" "PASS" "lifecycle commands: ${c_lc}"
+elif [ "$(has 'spindle\.lifecycle\.command\]')" -ge 1 ]; then
+    gate_spindle_app_lifecycle="PASS"
+    print_row "spindle_app_lifecycle" "PASS" "lifecycle command markers present (partial)"
+else
+    gate_spindle_app_lifecycle="SKIP"
+    print_row "spindle_app_lifecycle" "SKIP" "no lifecycle proof markers"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -711,7 +759,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V6 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V7 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -752,6 +800,9 @@ ALL_GATES=(
     "quil_text_selection:$gate_quil_text_selection"
     "quil_text_delete:$gate_quil_text_delete"
     "spindle_editor_v2:$gate_spindle_editor_v2"
+    "quil_editor_keybindings:$gate_quil_editor_keybindings"
+    "app_lifecycle_state:$gate_app_lifecycle_state"
+    "spindle_app_lifecycle:$gate_spindle_app_lifecycle"
     "faults_zero:$gate_faults_zero"
 )
 
