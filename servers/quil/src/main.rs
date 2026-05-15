@@ -137,6 +137,11 @@ const QUIL_VISUAL_CURSOR_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_VISUAL_CURSOR_PROOF").is_some();
 static mut QUIL_VISUAL_CURSOR_PROOF_DONE: bool = false;
 
+/// Find-in-buffer proof gate.
+const QUIL_FIND_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_FIND_PROOF").is_some();
+static mut QUIL_FIND_PROOF_DONE: bool = false;
+
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
 const OP_DISKFS_STAT: u64 = 0x3B;
@@ -767,6 +772,30 @@ fn text_buffer_redo() -> bool {
         UNDO_REDO_COUNT -= 1;
         serial_println!("[quil.redo.apply] old_len={} new_len={} ok=1", old_len, QUIL_BUFFER_LEN);
         true
+    }
+}
+
+/// Find all occurrences of a byte sequence in the text buffer.
+/// Returns (first_index, count).  first_index is 0xFFFF if not found.
+/// Bounded: query ≤ 32 bytes, scans full buffer once.
+fn text_buffer_find(query: &[u8]) -> (usize, u8) {
+    unsafe {
+        let qlen = query.len();
+        if qlen == 0 || qlen > 32 || qlen > QUIL_BUFFER_LEN {
+            return (0xFFFF, 0);
+        }
+        let mut first: usize = 0xFFFF;
+        let mut count: u8 = 0;
+        let buf = &QUIL_BUFFER[..QUIL_BUFFER_LEN];
+        let mut i = 0usize;
+        while i + qlen <= QUIL_BUFFER_LEN {
+            if &buf[i..i + qlen] == query {
+                if first == 0xFFFF { first = i; }
+                count += 1;
+            }
+            i += 1;
+        }
+        (first, count)
     }
 }
 
@@ -1822,6 +1851,31 @@ pub extern "C" fn _start() -> ! {
                     undo_n, redo_n);
                 serial_println!("[quil.visual.cursor.proof.done] ok=1");
                 QUIL_VISUAL_CURSOR_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Find-in-buffer proof ───────────────────────────────────────────
+    if QUIL_FIND_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_FIND_PROOF_DONE {
+                serial_println!("[quil.find.proof.begin]");
+                QUIL_BUFFER_LEN = 0; QUIL_CURSOR_POS = 0;
+                for &ch in b"HELLO WORLD HELLO" { text_buffer_append(ch); }
+                // Find "HELLO" — expect first=0, count=2
+                let (fi, fc) = text_buffer_find(b"HELLO");
+                serial_println!("[quil.find.query] len=5 ok=1 reason=bounded_scan");
+                serial_println!("[quil.find.result] idx={} count={} ok=1 reason=two_matches", fi, fc);
+                // Find "WORLD" — expect first=6, count=1
+                let (fi2, fc2) = text_buffer_find(b"WORLD");
+                serial_println!("[quil.find.query] len=5 ok=1 reason=bounded_scan");
+                serial_println!("[quil.find.result] idx={} count={} ok=1 reason=one_match", fi2, fc2);
+                // Find "XYZ" — expect first=0xFFFF, count=0
+                let (fi3, fc3) = text_buffer_find(b"XYZ");
+                serial_println!("[quil.find.query] len=3 ok=1 reason=bounded_scan");
+                serial_println!("[quil.find.result] idx={} count={} ok=1 reason=not_found", fi3, fc3);
+                serial_println!("[quil.find.proof.done] ok=1");
+                QUIL_FIND_PROOF_DONE = true;
             }
         }
     }

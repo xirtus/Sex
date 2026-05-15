@@ -169,8 +169,12 @@ export SEXOS_BELL_DELIVERY_AUDIT_PROOF=1
 export SEXOS_SPINDLE_EDITOR_STATUS_PROOF=1
 export SEXOS_APP_LIFECYCLE_SUMMARY_V2_PROOF=1
 
+# ── Feature batch V10 search/find proofs ──
+export SEXOS_QUIL_FIND_PROOF=1
+export SEXOS_SPINDLE_SEARCH_HELP_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V9"
+echo " DAILY-DRIVER PROOF PROFILE V10"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

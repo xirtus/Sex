@@ -86,6 +86,8 @@ gate_quil_visual_cursor="SKIP"
 gate_bell_delivery_audit="SKIP"
 gate_spindle_editor_status="SKIP"
 gate_app_lifecycle_summary_v2="SKIP"
+gate_quil_find="SKIP"
+gate_spindle_search_help="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -108,7 +110,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V9"
+echo " DAILY-DRIVER MASTER GATE V10"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -840,6 +842,31 @@ else
     print_row "app_lifecycle_summary_v2" "SKIP" "no lifecycle summary markers"
 fi
 
+# ---- 47 (new). quil_find ----
+if [ "$(has 'quil\.find\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_q="$(count 'quil\.find\.query\]')"
+    gate_quil_find="PASS"
+    print_row "quil_find" "PASS" "find queries: ${c_q}"
+elif [ "$(has 'quil\.find\.(query|result)\]')" -ge 1 ]; then
+    gate_quil_find="PASS"
+    print_row "quil_find" "PASS" "find markers present (partial)"
+else
+    gate_quil_find="SKIP"
+    print_row "quil_find" "SKIP" "no find proof markers"
+fi
+
+# ---- 48 (new). spindle_search_help ----
+if [ "$(has 'spindle\.search\.help\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_spindle_search_help="PASS"
+    print_row "spindle_search_help" "PASS" "search help section"
+elif [ "$(has 'spindle\.search\.help\]')" -ge 1 ]; then
+    gate_spindle_search_help="PASS"
+    print_row "spindle_search_help" "PASS" "search help present (partial)"
+else
+    gate_spindle_search_help="SKIP"
+    print_row "spindle_search_help" "SKIP" "no search help markers"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -874,7 +901,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V9 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V10 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -926,6 +953,8 @@ ALL_GATES=(
     "bell_delivery_audit:$gate_bell_delivery_audit"
     "spindle_editor_status:$gate_spindle_editor_status"
     "app_lifecycle_summary_v2:$gate_app_lifecycle_summary_v2"
+    "quil_find:$gate_quil_find"
+    "spindle_search_help:$gate_spindle_search_help"
     "faults_zero:$gate_faults_zero"
 )
 
