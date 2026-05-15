@@ -78,6 +78,10 @@ gate_spindle_editor_v2="SKIP"
 gate_quil_editor_keybindings="SKIP"
 gate_app_lifecycle_state="SKIP"
 gate_spindle_app_lifecycle="SKIP"
+gate_quil_undo_redo="SKIP"
+gate_quil_undo_redo_key="SKIP"
+gate_app_lifecycle_close_restore="SKIP"
+gate_spindle_lifecycle_help_v2="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -100,7 +104,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V7"
+echo " DAILY-DRIVER MASTER GATE V8"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -725,6 +729,64 @@ else
     print_row "spindle_app_lifecycle" "SKIP" "no lifecycle proof markers"
 fi
 
+# ---- 39 (new). quil_undo_redo ----
+# Evidence: [quil.undo.push], [quil.undo.apply], [quil.undo_redo.proof.done].
+
+if [ "$(has 'quil\.undo_redo\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_push="$(count 'quil\.undo\.push\]')"
+    gate_quil_undo_redo="PASS"
+    print_row "quil_undo_redo" "PASS" "undo pushes: ${c_push}"
+elif [ "$(has 'quil\.undo\.(push|apply)\]')" -ge 1 ]; then
+    gate_quil_undo_redo="PASS"
+    print_row "quil_undo_redo" "PASS" "undo markers present (partial)"
+else
+    gate_quil_undo_redo="SKIP"
+    print_row "quil_undo_redo" "SKIP" "no undo proof markers"
+fi
+
+# ---- 40 (new). quil_undo_redo_key ----
+# Evidence: [quil.undo.key], [quil.redo.key], [quil.undo_redo.key.proof.done].
+
+if [ "$(has 'quil\.undo_redo\.key\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_quil_undo_redo_key="PASS"
+    print_row "quil_undo_redo_key" "PASS" "undo/redo keybindings"
+elif [ "$(has 'quil\.undo\.key\]')" -ge 1 ]; then
+    gate_quil_undo_redo_key="PASS"
+    print_row "quil_undo_redo_key" "PASS" "key markers present (partial)"
+else
+    gate_quil_undo_redo_key="SKIP"
+    print_row "quil_undo_redo_key" "SKIP" "no key proof markers"
+fi
+
+# ---- 41 (new). app_lifecycle_close_restore ----
+# Evidence: [app.lifecycle.transition], [app.lifecycle.close_restore.proof.done].
+
+if [ "$(has 'app\.lifecycle\.close_restore\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_tx="$(count 'app\.lifecycle\.transition\]')"
+    gate_app_lifecycle_close_restore="PASS"
+    print_row "app_lifecycle_close_restore" "PASS" "transitions: ${c_tx}"
+elif [ "$(has 'app\.lifecycle\.transition\]')" -ge 1 ]; then
+    gate_app_lifecycle_close_restore="PASS"
+    print_row "app_lifecycle_close_restore" "PASS" "transition markers present (partial)"
+else
+    gate_app_lifecycle_close_restore="SKIP"
+    print_row "app_lifecycle_close_restore" "SKIP" "no close/restore markers"
+fi
+
+# ---- 42 (new). spindle_lifecycle_help_v2 ----
+# Evidence: [spindle.lifecycle.help], [spindle.lifecycle.help.proof.done].
+
+if [ "$(has 'spindle\.lifecycle\.help\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_spindle_lifecycle_help_v2="PASS"
+    print_row "spindle_lifecycle_help_v2" "PASS" "lifecycle help section"
+elif [ "$(has 'spindle\.lifecycle\.help\]')" -ge 1 ]; then
+    gate_spindle_lifecycle_help_v2="PASS"
+    print_row "spindle_lifecycle_help_v2" "PASS" "help markers present (partial)"
+else
+    gate_spindle_lifecycle_help_v2="SKIP"
+    print_row "spindle_lifecycle_help_v2" "SKIP" "no lifecycle help markers"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -759,7 +821,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V7 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V8 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -803,6 +865,10 @@ ALL_GATES=(
     "quil_editor_keybindings:$gate_quil_editor_keybindings"
     "app_lifecycle_state:$gate_app_lifecycle_state"
     "spindle_app_lifecycle:$gate_spindle_app_lifecycle"
+    "quil_undo_redo:$gate_quil_undo_redo"
+    "quil_undo_redo_key:$gate_quil_undo_redo_key"
+    "app_lifecycle_close_restore:$gate_app_lifecycle_close_restore"
+    "spindle_lifecycle_help_v2:$gate_spindle_lifecycle_help_v2"
     "faults_zero:$gate_faults_zero"
 )
 

@@ -1369,6 +1369,20 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         // ── App lifecycle commands ──────────────────────────────────────────
+        b"lifecycle" => {
+            sb.push(b"App Lifecycle Help V2:");
+            sb.push(b"  States:     running > ready > minimized > hidden > closed");
+            sb.push(b"  Transitions: open, focus, minimize, restore, hide, show, close");
+            sb.push(b"  Commands:   app-state (matrix), lifecycle (this help)");
+            sb.push(b"  Keys:       Alt+F4 close, Alt+Z zoom, Alt+M minimize");
+            sb.push(b"  Editor:     Ctrl+Z undo, Ctrl+Y redo (Quil V8 static ring)");
+            sb.push(b"  Restore:    via launcher re-select or Alt+digit palette");
+            sb.push(b"  Close:      surface destroyed, state lost (no restore yet)");
+            sb.push(b"  Spindle:    always running, self-close returns to launcher");
+            sb.push(b"Limitations: no PD persistence across close, no save-on-close.");
+            serial_println!("[spindle.lifecycle.help] section=lifecycle ok=1");
+            true
+        }
         b"app-state" => {
             sb.push(b"App Lifecycle State Matrix:");
             sb.push(b"  app     sid   state     focusable  launch");
@@ -1700,7 +1714,15 @@ pub extern "C" fn _start() -> ! {
         option_env!("SEXOS_SPINDLE_APP_LIFECYCLE_PROOF").is_some();
     if SPINDLE_APP_LIFECYCLE_PROOF_ENABLED {
         let _ = dispatch(b"app-state", sb, hist, &mut ev);
+        let _ = dispatch(b"lifecycle", sb, hist, &mut ev);
         serial_println!("[spindle.lifecycle.proof.done] ok=1");
+    }
+    // ── Spindle lifecycle help V2 proof ──────────────────────────────────
+    const SPINDLE_LIFECYCLE_HELP_V2_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_LIFECYCLE_HELP_V2_PROOF").is_some();
+    if SPINDLE_LIFECYCLE_HELP_V2_PROOF_ENABLED {
+        let _ = dispatch(b"lifecycle", sb, hist, &mut ev);
+        serial_println!("[spindle.lifecycle.help.proof.done] ok=1");
     }
 
     serial_println!("[spindle.ready]");

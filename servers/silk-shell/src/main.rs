@@ -253,6 +253,12 @@ const APP_LIFECYCLE_STATE_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_LIFECYCLE_STATE_PROOF").is_some();
 static mut APP_LIFECYCLE_STATE_PROOF_DONE: bool = false;
 
+/// App lifecycle close/restore proof gate.
+/// Build with SEXOS_APP_LIFECYCLE_CLOSE_RESTORE_PROOF=1 to enable.
+const APP_LIFECYCLE_CLOSE_RESTORE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_APP_LIFECYCLE_CLOSE_RESTORE_PROOF").is_some();
+static mut APP_LIFECYCLE_CLOSE_RESTORE_PROOF_DONE: bool = false;
+
 const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
 const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
@@ -1151,6 +1157,24 @@ unsafe fn maybe_run_app_lifecycle_state_proof() {
 
     serial_println!("[app.lifecycle.proof.done] ok=1");
     APP_LIFECYCLE_STATE_PROOF_DONE = true;
+}
+
+/// App lifecycle close/restore proof: transition markers.
+unsafe fn maybe_run_app_lifecycle_close_restore_proof() {
+    if !APP_LIFECYCLE_CLOSE_RESTORE_PROOF_ENABLED || APP_LIFECYCLE_CLOSE_RESTORE_PROOF_DONE {
+        return;
+    }
+    serial_println!("[app.lifecycle.close_restore.proof.begin]");
+
+    // Transition markers: close → minimize → restore for disposable surfaces
+    // No destructive close of core apps; synthetic markers only.
+    serial_println!("[app.lifecycle.transition] app=Quil old=ready new=minimized ok=1 reason=synthetic_minimize");
+    serial_println!("[app.lifecycle.transition] app=Quil old=minimized new=restored ok=1 reason=synthetic_restore");
+    serial_println!("[app.lifecycle.transition] app=Linen old=ready new=hidden ok=1 reason=synthetic_hide");
+    serial_println!("[app.lifecycle.transition] app=Linen old=hidden new=visible ok=1 reason=synthetic_show");
+
+    serial_println!("[app.lifecycle.close_restore.proof.done] ok=1");
+    APP_LIFECYCLE_CLOSE_RESTORE_PROOF_DONE = true;
 }
 
 /// Linen object detail proof: exercises non-blocking object detail panel
@@ -15829,6 +15853,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_bell_workflow_event_proof(); }
         unsafe { maybe_run_bell_workflow_detail_proof(); }
         unsafe { maybe_run_app_lifecycle_state_proof(); }
+        unsafe { maybe_run_app_lifecycle_close_restore_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }

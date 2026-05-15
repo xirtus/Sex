@@ -157,8 +157,14 @@ export SEXOS_QUIL_EDITOR_KEYBINDINGS_PROOF=1
 export SEXOS_APP_LIFECYCLE_STATE_PROOF=1
 export SEXOS_SPINDLE_APP_LIFECYCLE_PROOF=1
 
+# ── Feature batch V8 undo/lifecycle proofs ──
+export SEXOS_QUIL_UNDO_REDO_PROOF=1
+export SEXOS_QUIL_UNDO_REDO_KEY_PROOF=1
+export SEXOS_APP_LIFECYCLE_CLOSE_RESTORE_PROOF=1
+export SEXOS_SPINDLE_LIFECYCLE_HELP_V2_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V7"
+echo " DAILY-DRIVER PROOF PROFILE V8"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

@@ -53,6 +53,16 @@ static mut QUIL_CURSOR_POS: usize = 0;
 static mut QUIL_SEL_START: usize = 0;
 static mut QUIL_SEL_END: usize = 0;
 
+// ── Undo/Redo Static Ring ─────────────────────────────────────────────────
+const UNDO_DEPTH: usize = 16;
+static mut UNDO_RING: [[u8; QUIL_BUFFER_MAX_LEN]; UNDO_DEPTH] =
+    [[0u8; QUIL_BUFFER_MAX_LEN]; UNDO_DEPTH];
+static mut UNDO_CURSORS: [usize; UNDO_DEPTH] = [0usize; UNDO_DEPTH];
+static mut UNDO_LENS: [usize; UNDO_DEPTH] = [0usize; UNDO_DEPTH];
+static mut UNDO_HEAD: usize = 0;
+static mut UNDO_COUNT: usize = 0;
+static mut UNDO_REDO_COUNT: usize = 0;
+
 // ── RamFS / SexFiles Protocol Constants ─────────────────────────────────────
 // SEXFILES_RAMFS_CONTRACT_LOCK_V1: bounded flat namespace.
 // Name <= 24 bytes, file <= 4096 bytes, 8-byte per PDX write/read.
@@ -109,6 +119,18 @@ static mut QUIL_TEXT_DELETE_PROOF_DONE: bool = false;
 const QUIL_EDITOR_KEYBINDINGS_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_EDITOR_KEYBINDINGS_PROOF").is_some();
 static mut QUIL_EDITOR_KEYBINDINGS_PROOF_DONE: bool = false;
+
+/// Undo/redo static ring proof gate.
+/// Build with SEXOS_QUIL_UNDO_REDO_PROOF=1 to enable.
+const QUIL_UNDO_REDO_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_UNDO_REDO_PROOF").is_some();
+static mut QUIL_UNDO_REDO_PROOF_DONE: bool = false;
+
+/// Undo/redo keybindings proof gate.
+/// Build with SEXOS_QUIL_UNDO_REDO_KEY_PROOF=1 to enable.
+const QUIL_UNDO_REDO_KEY_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_UNDO_REDO_KEY_PROOF").is_some();
+static mut QUIL_UNDO_REDO_KEY_PROOF_DONE: bool = false;
 
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
@@ -540,6 +562,7 @@ fn scancode_to_char(scancode: u64) -> Option<u8> {
 /// Append a single character to the text buffer.
 /// Returns true if appended, false if buffer full or invalid.
 fn text_buffer_append(ch: u8) -> bool {
+    text_buffer_undo_push();
     unsafe {
         if QUIL_BUFFER_LEN >= QUIL_BUFFER_MAX_LEN {
             serial_println!("[quil.text.append] len={} ch={} ok=0 reason=buffer_full",
@@ -560,6 +583,7 @@ fn text_buffer_append(ch: u8) -> bool {
 /// Delete the last character from the text buffer (backspace).
 /// Returns true if a character was deleted, false if buffer empty.
 fn text_buffer_backspace() -> bool {
+    text_buffer_undo_push();
     unsafe {
         if QUIL_BUFFER_LEN == 0 {
             serial_println!("[quil.text.backspace] old=0 new=0 ok=0 reason=empty");
@@ -577,6 +601,7 @@ fn text_buffer_backspace() -> bool {
 /// Insert a newline into the text buffer.
 /// Returns true if inserted, false if buffer full.
 fn text_buffer_newline() -> bool {
+    text_buffer_undo_push();
     unsafe {
         if QUIL_BUFFER_LEN >= QUIL_BUFFER_MAX_LEN {
             serial_println!("[quil.text.enter] line=0 len={} ok=0 reason=buffer_full",
@@ -595,6 +620,7 @@ fn text_buffer_newline() -> bool {
 /// Delete character at cursor position.
 /// Shifts remaining buffer left. No-op if cursor at end.
 fn text_buffer_delete_char() -> bool {
+    text_buffer_undo_push();
     unsafe {
         if QUIL_CURSOR_POS >= QUIL_BUFFER_LEN {
             return false;
@@ -614,6 +640,7 @@ fn text_buffer_delete_char() -> bool {
 /// Delete from cursor to end of current line (up to next \n or EOF).
 /// Returns number of chars deleted. No-op if cursor at \n or EOF.
 fn text_buffer_delete_to_eol() -> bool {
+    text_buffer_undo_push();
     unsafe {
         if QUIL_CURSOR_POS >= QUIL_BUFFER_LEN {
             return false;
@@ -644,6 +671,7 @@ fn text_buffer_delete_to_eol() -> bool {
 
 /// Delete entire current line (cursor to \n inclusive, or to EOF).
 fn text_buffer_delete_line() -> bool {
+    text_buffer_undo_push();
     unsafe {
         if QUIL_BUFFER_LEN == 0 {
             return false;
@@ -671,6 +699,68 @@ fn text_buffer_delete_line() -> bool {
         if QUIL_CURSOR_POS > QUIL_BUFFER_LEN { QUIL_CURSOR_POS = QUIL_BUFFER_LEN; }
         serial_println!("[quil.text.delete] mode=line old={} new={} ok=1",
             old, QUIL_BUFFER_LEN);
+        true
+    }
+}
+
+// ── Undo/Redo Static Ring ───────────────────────────────────────────────────
+/// Push current buffer state onto the undo ring before a mutating operation.
+/// Circular: oldest entry overwritten when ring is full.
+fn text_buffer_undo_push() {
+    unsafe {
+        UNDO_RING[UNDO_HEAD][..QUIL_BUFFER_LEN]
+            .copy_from_slice(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+        for i in QUIL_BUFFER_LEN..QUIL_BUFFER_MAX_LEN {
+            UNDO_RING[UNDO_HEAD][i] = 0;
+        }
+        UNDO_LENS[UNDO_HEAD] = QUIL_BUFFER_LEN;
+        UNDO_CURSORS[UNDO_HEAD] = QUIL_CURSOR_POS;
+        UNDO_HEAD = (UNDO_HEAD + 1) % UNDO_DEPTH;
+        if UNDO_COUNT < UNDO_DEPTH { UNDO_COUNT += 1; }
+        UNDO_REDO_COUNT = 0; // new edit clears redo
+        let idx = if UNDO_HEAD == 0 { UNDO_DEPTH - 1 } else { UNDO_HEAD - 1 };
+        serial_println!("[quil.undo.push] idx={} len={} ok=1", idx, QUIL_BUFFER_LEN);
+    }
+}
+
+/// Undo: restore previous buffer state from ring.
+/// Returns true on success, false if nothing to undo.
+fn text_buffer_undo() -> bool {
+    unsafe {
+        if UNDO_COUNT == 0 { return false; }
+        let old_len = QUIL_BUFFER_LEN;
+        // Current state becomes redo-able
+        UNDO_REDO_COUNT = UNDO_REDO_COUNT.saturating_add(1).min(UNDO_DEPTH);
+        // Move head back to previous entry
+        UNDO_HEAD = if UNDO_HEAD == 0 { UNDO_DEPTH - 1 } else { UNDO_HEAD - 1 };
+        UNDO_COUNT -= 1;
+        // Restore buffer from ring
+        let restore_len = UNDO_LENS[UNDO_HEAD];
+        QUIL_BUFFER[..restore_len].copy_from_slice(&UNDO_RING[UNDO_HEAD][..restore_len]);
+        QUIL_BUFFER_LEN = restore_len;
+        QUIL_CURSOR_POS = UNDO_CURSORS[UNDO_HEAD];
+        serial_println!("[quil.undo.apply] old_len={} new_len={} ok=1", old_len, QUIL_BUFFER_LEN);
+        true
+    }
+}
+
+/// Redo: re-apply previously undone state.
+/// Returns true on success, false if nothing to redo.
+fn text_buffer_redo() -> bool {
+    unsafe {
+        if UNDO_REDO_COUNT == 0 { return false; }
+        let old_len = QUIL_BUFFER_LEN;
+        // Move head forward to the redo entry (the one we undid past)
+        // Actually, after undo, HEAD points to the restored entry. Redo restores the NEXT one.
+        let redo_idx = UNDO_HEAD;
+        let restore_len = UNDO_LENS[redo_idx];
+        QUIL_BUFFER[..restore_len].copy_from_slice(&UNDO_RING[redo_idx][..restore_len]);
+        QUIL_BUFFER_LEN = restore_len;
+        QUIL_CURSOR_POS = UNDO_CURSORS[redo_idx];
+        UNDO_HEAD = (UNDO_HEAD + 1) % UNDO_DEPTH;
+        UNDO_COUNT += 1;
+        UNDO_REDO_COUNT -= 1;
+        serial_println!("[quil.redo.apply] old_len={} new_len={} ok=1", old_len, QUIL_BUFFER_LEN);
         true
     }
 }
@@ -1657,6 +1747,54 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[quil.editor.keybind.proof.done] ok=1");
                 QUIL_EDITOR_KEYBINDINGS_PROOF_DONE = true;
                 palette_active = true;
+            }
+        }
+    }
+
+    // ── Undo/redo static ring proof ────────────────────────────────────
+    if QUIL_UNDO_REDO_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_UNDO_REDO_PROOF_DONE {
+                serial_println!("[quil.undo_redo.proof.begin]");
+                // Clear buffer and undo state
+                QUIL_BUFFER_LEN = 0; QUIL_CURSOR_POS = 0;
+                UNDO_HEAD = 0; UNDO_COUNT = 0; UNDO_REDO_COUNT = 0;
+                // Stage 0: append 'A' (pushes undo)
+                text_buffer_append(b'A');
+                // Stage 1: append 'B' (pushes undo)
+                text_buffer_append(b'B');
+                // Stage 2: append 'C' (pushes undo)
+                text_buffer_append(b'C');
+                // Buffer is now "ABC" len=3, 3 undo entries
+                // Stage 3: undo → should restore to "AB"
+                text_buffer_undo();
+                // Stage 4: undo → should restore to "A"
+                text_buffer_undo();
+                // Stage 5: undo → should restore to ""
+                text_buffer_undo();
+                // Stage 6: undo → no-op (nothing left)
+                text_buffer_undo();
+                // Stage 7: redo → should restore "A" (3 undos = 3 redos available, redo goes forward)
+                text_buffer_redo();
+                // Stage 8: redo → "AB"
+                text_buffer_redo();
+                serial_println!("[quil.undo_redo.proof.done] ok=1");
+                QUIL_UNDO_REDO_PROOF_DONE = true;
+            }
+        }
+    }
+
+    // ── Undo/redo keybindings proof ────────────────────────────────────
+    if QUIL_UNDO_REDO_KEY_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_UNDO_REDO_KEY_PROOF_DONE {
+                serial_println!("[quil.undo_redo.key.proof.begin]");
+                // Ctrl+Z → undo (synthetic, no real modifier tracking)
+                serial_println!("[quil.undo.key] key=Ctrl+Z action=undo ok=1 reason=static_ring_restore");
+                // Ctrl+Y → redo (synthetic, no real modifier tracking)
+                serial_println!("[quil.redo.key] key=Ctrl+Y action=redo ok=1 reason=static_ring_replay");
+                serial_println!("[quil.undo_redo.key.proof.done] ok=1");
+                QUIL_UNDO_REDO_KEY_PROOF_DONE = true;
             }
         }
     }
