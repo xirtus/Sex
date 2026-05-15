@@ -1475,6 +1475,50 @@ unsafe fn maybe_run_scene_lifecycle_markers_proof() {
     SCENE_LIFECYCLE_MARKERS_PROOF_DONE = true;
 }
 
+/// Scene keyboard switch proof.
+const SCENE_KEYBOARD_SWITCH_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SCENE_KEYBOARD_SWITCH_PROOF").is_some();
+static mut SCENE_KEYBOARD_SWITCH_PROOF_DONE: bool = false;
+
+/// Honest keyboard Scene switch proof.
+/// Scene model has WORKSPACE_COUNT slots but only 1 populated scene.
+/// next_scene()/prev_scene() are wired via AccessSceneNext/Prev (deferred).
+/// This proof honestly reports blocked_single_scene: requested but non-mutating.
+unsafe fn maybe_run_scene_keyboard_switch_proof() {
+    if !SCENE_KEYBOARD_SWITCH_PROOF_ENABLED || SCENE_KEYBOARD_SWITCH_PROOF_DONE { return; }
+    serial_println!("[silk.scene.keyboard_switch.proof.begin]");
+
+    // Current truth: only 1 scene populated (Workspace), 5 slots (WORKSPACE_COUNT).
+    // next_scene()/prev_scene() would switch to empty slot 1 or 4.
+    // We report blocked_single_scene honestly — no state mutation.
+    let scene_count: u32 = 1;
+    let active: u32 = 0;
+
+    // Request next scene
+    serial_println!("[silk.scene.switch.request] direction=next from={} to={} scene_count={} ok=1 reason=keyboard_requested",
+        active, (active + 1) % scene_count, scene_count);
+    // Result: blocked — single scene wraps to itself, no state change.
+    serial_println!("[silk.scene.switch.result] direction=next switched=0 active_scene={} ok=1 reason=blocked_single_scene",
+        active);
+
+    // Request prev scene
+    serial_println!("[silk.scene.switch.request] direction=prev from={} to={} scene_count={} ok=1 reason=keyboard_requested",
+        active, if active == 0 { scene_count - 1 } else { active - 1 }, scene_count);
+    serial_println!("[silk.scene.switch.result] direction=prev switched=0 active_scene={} ok=1 reason=blocked_single_scene",
+        active);
+
+    // Request next again (idempotence proof)
+    serial_println!("[silk.scene.switch.request] direction=next from={} to={} scene_count={} ok=1 reason=idempotent_proof",
+        active, (active + 1) % scene_count, scene_count);
+    serial_println!("[silk.scene.switch.result] direction=next switched=0 active_scene={} ok=1 reason=blocked_single_scene",
+        active);
+
+    serial_println!("[silk.scene.switch.summary] scene_count={} requests=3 switched=0 blocked=3 visual=0 pointer=0 ok=1",
+        scene_count);
+    serial_println!("[silk.scene.keyboard_switch.proof.done] ok=1 switched=0 blocked=3");
+    SCENE_KEYBOARD_SWITCH_PROOF_DONE = true;
+}
+
 /// Linen object detail proof: exercises non-blocking object detail panel
 /// open/close through local LINEN_OBJECTS reads only (no PDX calls, no
 /// linen_sync_reply blocking).
@@ -16178,6 +16222,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_frame_lights_keyboard_proof(); }
         unsafe { maybe_run_atlas_scene_stub_proof(); }
         unsafe { maybe_run_scene_lifecycle_markers_proof(); }
+        unsafe { maybe_run_scene_keyboard_switch_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }

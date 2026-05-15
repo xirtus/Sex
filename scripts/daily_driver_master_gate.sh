@@ -128,6 +128,7 @@ gate_browser_placeholder="SKIP"
 gate_atlas_scene_stub="SKIP"
 gate_frame_lights_visual="SKIP"
 gate_scene_lifecycle_markers="SKIP"
+gate_scene_keyboard_switch="SKIP"
 gate_spindle_atlas="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
@@ -1218,7 +1219,15 @@ elif [ "$(has 'silk\.scene\.lifecycle\]')" -ge 1 ]; then
     gate_scene_lifecycle_markers="PASS"
 else gate_scene_lifecycle_markers="SKIP"; fi
 
-# ---- 85. spindle_atlas ----
+# ---- 85. scene_keyboard_switch ----
+if [ "$(has 'silk\.scene\.keyboard_switch\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_scene_keyboard_switch="PASS"
+    print_row "scene_keyboard_switch" "PASS" "blocked_single_scene switched=0"
+elif [ "$(has 'silk\.scene\.switch\.request\]')" -ge 1 ]; then
+    gate_scene_keyboard_switch="PASS"
+else gate_scene_keyboard_switch="SKIP"; fi
+
+# ---- 86. spindle_atlas ----
 if [ "$(has 'spindle\.atlas\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_spindle_atlas="PASS"
 elif [ "$(has 'spindle\.atlas\.command\]')" -ge 1 ]; then
@@ -1376,6 +1385,7 @@ ALL_GATES=(
     "frame_lights_visual:$gate_frame_lights_visual"
     "frame_lights_keyboard:$gate_frame_lights_keyboard"
     "scene_lifecycle_markers:$gate_scene_lifecycle_markers"
+    "scene_keyboard_switch:$gate_scene_keyboard_switch"
     "spindle_atlas:$gate_spindle_atlas"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"

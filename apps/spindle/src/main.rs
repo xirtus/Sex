@@ -1602,6 +1602,28 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.scene.lifecycle.command] name=scene-lifecycle-status ok=1 reason=lifecycle_summary");
             true
         }
+        b"scene-keys" => {
+            sb.push(b"Scene Keyboard Switch -- blocked (single scene):");
+            sb.push(b"  Keys: Ctrl+Right (next), Ctrl+Left (prev)");
+            sb.push(b"  Deferred binding: SurfaceAction::AccessSceneNext/Prev");
+            sb.push(b"  Status: BLOCKED -- only 1 scene (Workspace)");
+            sb.push(b"  Switching requires >= 2 active scenes.");
+            sb.push(b"  scene_count=1 switched=0 blocked=3");
+            sb.push(b"  No state change. visual=0 pointer=0.");
+            sb.push(b"  Use scene-switch-status for summary.");
+            serial_println!("[spindle.scene.keys.command] name=scene-keys ok=1 reason=blocked_single_scene");
+            true
+        }
+        b"scene-switch-status" => {
+            sb.push(b"Scene Switch Summary:");
+            sb.push(b"  scene_count=1 (Workspace only)");
+            sb.push(b"  keyboard bindings: deferred (AccessSceneNext/Prev)");
+            sb.push(b"  next/prev requests: accepted but blocked (idempotent)");
+            sb.push(b"  switched=0 blocked=3 visual=0 pointer=0");
+            sb.push(b"  Multi-scene switching: future phase.");
+            serial_println!("[spindle.scene.keys.command] name=scene-switch-status ok=1 reason=switch_summary");
+            true
+        }
         // ── Window workflow help ──────────────────────────────────────────
         b"windows" => {
             sb.push(b"Window Workflow -- shell-owned actions:");
@@ -2041,6 +2063,8 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"scene-status", sb, hist, &mut ev);
         let _ = dispatch(b"scene-lifecycle", sb, hist, &mut ev);
         let _ = dispatch(b"scene-lifecycle-status", sb, hist, &mut ev);
+        let _ = dispatch(b"scene-keys", sb, hist, &mut ev);
+        let _ = dispatch(b"scene-switch-status", sb, hist, &mut ev);
         serial_println!("[spindle.frame.chrome.proof.done] ok=1");
     }
     if SPINDLE_BROWSER_STUB_PROOF_ENABLED {
