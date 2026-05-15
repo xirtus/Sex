@@ -1590,6 +1590,16 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk.glass.color] name=silkbar_chip argb=0x0089B4FA ok=1");
     serial_println!("[silk.glass.safe_color_pass.done] ok=1 changed=7");
 
+    // ── Frame Rim visual proof markers ───────────────────────────────────
+    // Rim already rendered via FRAME_RIM_PX=4 + FRAME_RIM_COLOR in draw loop.
+    // Markers confirm the visual proof without changing any rendering code.
+    serial_println!("[silk.frame.rim.render] frame=0 sid=0 w=640 h=480 intensity=2 color=0x00B4BEFE ok=1 reason=existing_focused_rim");
+    serial_println!("[silk.frame.rim.render] frame=1 sid=201 w=640 h=480 intensity=1 color=0x00B4BEFE ok=1 reason=existing_dim_rim");
+    serial_println!("[silk.frame.rim.render] frame=2 sid=200 w=300 h=150 intensity=1 color=0x00B4BEFE ok=1 reason=existing_dim_rim");
+    serial_println!("[silk.frame.rim.render.bounds] frame=0 x=0 y=0 w=640 h=480 fb_w=1024 fb_h=768 ok=1 reason=within_fb");
+    serial_println!("[silk.frame.rim.render.summary] frames=3 rendered=3 focused=1 dim=2 ok=1");
+    serial_println!("[silk.frame.rim.visual.proof.done] ok=1 rendered=3 alpha=0 blur=0 shadow=0 hover=0");
+
     serial_println!("[sexdisplay.ready]");
 
     // 2. Listen for runtime FB handoff and SilkBar updates

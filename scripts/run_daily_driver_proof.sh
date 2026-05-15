@@ -222,7 +222,7 @@ export SEXOS_FRAME_RIM_MARKERS_PROOF=1
 export SEXOS_SPINDLE_FRAME_RIM_PROOF=1
 
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V27"
+echo " DAILY-DRIVER PROOF PROFILE V28"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
