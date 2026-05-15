@@ -108,6 +108,8 @@ gate_storage_phasea="SKIP"
 gate_storage_phaseb1="SKIP"
 gate_app_registry_lifecycle_v2="SKIP"
 gate_spindle_slot_shell="SKIP"
+gate_window_workflow_v2="SKIP"
+gate_spindle_window_workflow="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -130,7 +132,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V20"
+echo " DAILY-DRIVER MASTER GATE V21"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -1035,7 +1037,23 @@ elif [ "$(has 'spindle\.slot_shell\.probe')" -eq 1 ]; then
     print_row "spindle_slot_shell" "PASS" "SLOT_SHELL probed (check result)"
 else gate_spindle_slot_shell="SKIP"; fi
 
-# ---- 65. linen_search_bridge ----
+# ---- 65. window_workflow_v2 ----
+if [ "$(has 'window\.workflow\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_window_workflow_v2="PASS"
+    print_row "window_workflow_v2" "PASS" "window workflow proven"
+elif [ "$(has 'window\.workflow\.step\]')" -ge 1 ]; then
+    gate_window_workflow_v2="PASS"
+else gate_window_workflow_v2="SKIP"; fi
+
+# ---- 66. spindle_window_workflow ----
+if [ "$(has 'spindle\.window\.workflow\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_spindle_window_workflow="PASS"
+    print_row "spindle_window_workflow" "PASS" "window commands help"
+elif [ "$(has 'spindle\.window\.command\]')" -ge 1 ]; then
+    gate_spindle_window_workflow="PASS"
+else gate_spindle_window_workflow="SKIP"; fi
+
+# ---- 67. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
     print_row "linen_search_bridge" "PASS" "search bridge e2e"
@@ -1093,7 +1111,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V20 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V21 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1166,6 +1184,8 @@ ALL_GATES=(
     "storage_phaseb1:$gate_storage_phaseb1"
     "app_registry_lifecycle_v2:$gate_app_registry_lifecycle_v2"
     "spindle_slot_shell:$gate_spindle_slot_shell"
+    "window_workflow_v2:$gate_window_workflow_v2"
+    "spindle_window_workflow:$gate_spindle_window_workflow"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
 )

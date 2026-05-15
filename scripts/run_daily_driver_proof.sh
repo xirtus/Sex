@@ -202,8 +202,12 @@ export SEXOS_QUIL_STORAGE_PHASEA_PROOF=1
 # ── App registry lifecycle V2 proof ──
 export SEXOS_APP_REGISTRY_LIFECYCLE_V2_PROOF=1
 
+# ── Window workflow V2 proof ──
+export SEXOS_WINDOW_WORKFLOW_V2_PROOF=1
+export SEXOS_SPINDLE_WINDOW_WORKFLOW_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V20"
+echo " DAILY-DRIVER PROOF PROFILE V21"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

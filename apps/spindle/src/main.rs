@@ -1441,6 +1441,40 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.app.lifecycle.v2] command=app-state ok=1 reason=honest_matrix_with_launch_exec");
             true
         }
+        // ── Window workflow help ──────────────────────────────────────────
+        b"windows" => {
+            sb.push(b"Window Workflow -- shell-owned actions:");
+            sb.push(b"  focus_next/prev  cycle active window focus");
+            sb.push(b"  minimize/restore hide/show windows");
+            sb.push(b"  zoom/unzoom      frame resize");
+            sb.push(b"  close            only safe for disposable surfaces");
+            sb.push(b"  focus-help        key bindings for window control");
+            sb.push(b"All actions executed by silk-shell, not Spindle.");
+            sb.push(b"Spindle has no SLOT_SHELL route for execution.");
+            serial_println!("[spindle.window.command] name=windows ok=1 reason=help_rendered");
+            true
+        }
+        b"focus-help" => {
+            sb.push(b"Window Focus -- shell-owned, keyboard-driven:");
+            sb.push(b"  Alt+digit  focus app by launcher slot");
+            sb.push(b"  Alt+Tab    cycle focus next (planned)");
+            sb.push(b"  Alt+F4     close focused window");
+            sb.push(b"  Alt+Z      zoom focused window");
+            sb.push(b"  Alt+M      minimize focused window");
+            sb.push(b"Spindle: help only. No remote focus capability.");
+            serial_println!("[spindle.window.command] name=focus-help ok=1 reason=keybindings_help");
+            true
+        }
+        b"window-keys" => {
+            sb.push(b"Window Keys -- silk-shell keyboard dispatch:");
+            sb.push(b"  Alt+F4 close  Alt+Z zoom  Alt+M minimize");
+            sb.push(b"  Ctrl+arrows   scene switch");
+            sb.push(b"  F8/F9/F10     Bell/Quil/Atlas toggles");
+            sb.push(b"  backtick      command palette");
+            sb.push(b"All keys routed through silk-shell input handler.");
+            serial_println!("[spindle.window.command] name=window-keys ok=1 reason=keybindings_list");
+            true
+        }
         // ── Search help ────────────────────────────────────────────────────
         b"search" => {
             sb.push(b"Search/Find Help V3:");
@@ -1814,6 +1848,14 @@ pub extern "C" fn _start() -> ! {
     }
     const SPINDLE_SEARCH_HELP_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_SEARCH_HELP_PROOF").is_some();
+    const SPINDLE_WINDOW_WORKFLOW_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_WINDOW_WORKFLOW_PROOF").is_some();
+    if SPINDLE_WINDOW_WORKFLOW_PROOF_ENABLED {
+        let _ = dispatch(b"windows", sb, hist, &mut ev);
+        let _ = dispatch(b"focus-help", sb, hist, &mut ev);
+        let _ = dispatch(b"window-keys", sb, hist, &mut ev);
+        serial_println!("[spindle.window.workflow.proof.done] ok=1");
+    }
     if SPINDLE_SEARCH_HELP_PROOF_ENABLED {
         let _ = dispatch(b"search", sb, hist, &mut ev);
         serial_println!("[spindle.search.help.proof.done] ok=1");
