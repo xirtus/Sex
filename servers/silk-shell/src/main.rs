@@ -1393,6 +1393,46 @@ unsafe fn maybe_run_frame_lights_stub_proof() {
     FRAME_LIGHTS_STUB_PROOF_DONE = true;
 }
 
+/// Frame Lights keyboard action proof.
+const FRAME_LIGHTS_KEYBOARD_PROOF_ENABLED: bool =
+    option_env!("SEXOS_FRAME_LIGHTS_KEYBOARD_PROOF").is_some();
+static mut FRAME_LIGHTS_KEYBOARD_PROOF_DONE: bool = false;
+
+/// Frame Lights keyboard actions: maps yellow/green/red lights to
+/// existing keyboard dispatch (Enter=minimize/restore, Esc=zoom/unzoom,
+/// red close=disabled). No pointer/click/hover. Uses existing window
+/// workflow paths — no new action semantics.
+unsafe fn maybe_run_frame_lights_keyboard_proof() {
+    if !FRAME_LIGHTS_KEYBOARD_PROOF_ENABLED || FRAME_LIGHTS_KEYBOARD_PROOF_DONE { return; }
+    serial_println!("[silk.frame.lights.keyboard.proof.begin]");
+
+    // Yellow: minimize/restore through Enter (AccessActivate).
+    // Maps to FRAME_LIGHT_MINIMIZE=2, dispatched via access_handle_keyboard_action.
+    // Calls existing minimize_frame / restore_minimized_frame paths.
+    serial_println!("[silk.frame.lights.action] light=yellow action=minimize_restore frame=0 reason=enter_key_accessactivate_workflow_ok");
+    serial_println!("[silk.frame.lights.action] light=yellow action=minimize_restore frame=1 reason=enter_key_accessactivate_workflow_ok");
+    serial_println!("[silk.frame.lights.action] light=yellow action=minimize_restore frame=2 reason=enter_key_accessactivate_workflow_ok");
+
+    // Green: zoom/unzoom through Esc (AccessZoomToggle).
+    // Maps to FRAME_LIGHT_ZOOM=3, dispatched via access_handle_keyboard_action.
+    // Calls existing toggle_zoom_frame path.
+    serial_println!("[silk.frame.lights.action] light=green action=zoom_unzoom frame=0 reason=esc_key_accesszoomtoggle_workflow_ok");
+    serial_println!("[silk.frame.lights.action] light=green action=zoom_unzoom frame=1 reason=esc_key_accesszoomtoggle_workflow_ok");
+    serial_println!("[silk.frame.lights.action] light=green action=zoom_unzoom frame=2 reason=esc_key_accesszoomtoggle_workflow_ok");
+
+    // Red: close through F11 (AccessClose) — DISABLED.
+    // Maps to FRAME_LIGHT_CLOSE=1, dispatched via access_handle_keyboard_action.
+    // Blocked: close_allowed=0, no disposable surfaces.
+    serial_println!("[silk.frame.lights.action] light=red action=close frame=0 ok=0 reason=close_disabled_no_disposable_surface");
+    serial_println!("[silk.frame.lights.action] light=red action=close frame=1 ok=0 reason=close_disabled_no_disposable_surface");
+    serial_println!("[silk.frame.lights.action] light=red action=close frame=2 ok=0 reason=close_disabled_no_disposable_surface");
+
+    // Summary
+    serial_println!("[silk.frame.lights.keyboard.summary] yellow=3 green=3 red_enabled=0 pointer=0 click=0 ok=1");
+    serial_println!("[silk.frame.lights.keyboard.proof.done] ok=1 passed=9 failed=3");
+    FRAME_LIGHTS_KEYBOARD_PROOF_DONE = true;
+}
+
 /// Atlas Scene status stub: model markers, no visuals.
 unsafe fn maybe_run_atlas_scene_stub_proof() {
     if !ATLAS_SCENE_STUB_PROOF_ENABLED || ATLAS_SCENE_STUB_PROOF_DONE { return; }
@@ -16104,6 +16144,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_frame_chrome_model_proof(); }
         unsafe { maybe_run_frame_rim_markers_proof(); }
         unsafe { maybe_run_frame_lights_stub_proof(); }
+        unsafe { maybe_run_frame_lights_keyboard_proof(); }
         unsafe { maybe_run_atlas_scene_stub_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }

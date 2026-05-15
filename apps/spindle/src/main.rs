@@ -1522,13 +1522,36 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         b"frame-lights" => {
-            sb.push(b"Frame Lights -- status/proof only (no visual):");
+            sb.push(b"Frame Lights -- keyboard actions (no pointer):");
             sb.push(b"  Red:    close tab -- DISABLED (close_allowed=0)");
-            sb.push(b"  Yellow: minimize -- available (keyboard workflow)");
-            sb.push(b"  Green:  zoom     -- available (keyboard workflow)");
-            sb.push(b"  visual=0 pointer=0 close_impl=0");
-            sb.push(b"  Visual lights + pointer: future phases.");
+            sb.push(b"  Yellow: minimize -- Enter key (AccessActivate)");
+            sb.push(b"  Green:  zoom     -- Esc key (AccessZoomToggle)");
+            sb.push(b"  Key mapping: Enter=minimize/restore, Esc=zoom/unzoom");
+            sb.push(b"  Red disabled: no close key mapping, pointer=0");
+            sb.push(b"  Visual: rendered (dim close, normal yellow/green)");
+            sb.push(b"  Use frame-lights-keys for keyboard dispatch detail.");
             serial_println!("[spindle.frame.lights.command] name=frame-lights ok=1 reason=status_overview");
+            true
+        }
+        b"frame-lights-keys" => {
+            sb.push(b"Frame Lights Keyboard Dispatch:");
+            sb.push(b"  Yellow minimize/restore:");
+            sb.push(b"    Key: Enter (scancode 0x1C)");
+            sb.push(b"    Action: SurfaceAction::AccessActivate");
+            sb.push(b"    Dispatch: toggle_minimize_focused_frame()");
+            sb.push(b"    Mapped to FRAME_LIGHT_MINIMIZE=2");
+            sb.push(b"  Green zoom/unzoom:");
+            sb.push(b"    Key: Esc (scancode 0x01)");
+            sb.push(b"    Action: SurfaceAction::AccessZoomToggle");
+            sb.push(b"    Dispatch: toggle_zoom_focused_frame()");
+            sb.push(b"    Mapped to FRAME_LIGHT_ZOOM=3");
+            sb.push(b"  Red close -- DISABLED:");
+            sb.push(b"    Key: F11 (scancode 0x57) mapped to SurfaceAction::AccessClose");
+            sb.push(b"    Dispatch: close_focused_tab_or_frame_safe()");
+            sb.push(b"    Blocked: close_allowed=0, no disposable surfaces");
+            sb.push(b"    Mapped to FRAME_LIGHT_CLOSE=1 (ok=0)");
+            sb.push(b"  pointer=0 click=0 hover=0 -- keyboard only.");
+            serial_println!("[spindle.frame.lights.keys.command] name=frame-lights-keys ok=1 reason=keyboard_dispatch_detail");
             true
         }
         b"frame-rim" => {
@@ -1979,6 +2002,7 @@ pub extern "C" fn _start() -> ! {
     }
     if SPINDLE_FRAME_LIGHTS_PROOF_ENABLED {
         let _ = dispatch(b"frame-lights", sb, hist, &mut ev);
+        let _ = dispatch(b"frame-lights-keys", sb, hist, &mut ev);
         serial_println!("[spindle.frame.lights.proof.done] ok=1");
     }
     if SPINDLE_FRAME_RIM_PROOF_ENABLED {

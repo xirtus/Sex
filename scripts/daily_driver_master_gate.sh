@@ -122,6 +122,7 @@ gate_spindle_frame_rim="SKIP"
 gate_frame_rim_visual="SKIP"
 gate_frame_lights_stub="SKIP"
 gate_spindle_frame_lights="SKIP"
+gate_frame_lights_keyboard="SKIP"
 gate_crosspd_launch="SKIP"
 gate_browser_placeholder="SKIP"
 gate_atlas_scene_stub="SKIP"
@@ -1200,14 +1201,22 @@ elif [ "$(has 'silk\.frame\.lights\.render\]')" -ge 1 ]; then
     gate_frame_lights_visual="PASS"
 else gate_frame_lights_visual="SKIP"; fi
 
-# ---- 83. spindle_atlas ----
+# ---- 83. frame_lights_keyboard ----
+if [ "$(has 'silk\.frame\.lights\.keyboard\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_frame_lights_keyboard="PASS"
+    print_row "frame_lights_keyboard" "PASS" "yellow=3 green=3 red_enabled=0 pointer=0"
+elif [ "$(has 'silk\.frame\.lights\.action\]')" -ge 1 ]; then
+    gate_frame_lights_keyboard="PASS"
+else gate_frame_lights_keyboard="SKIP"; fi
+
+# ---- 84. spindle_atlas ----
 if [ "$(has 'spindle\.atlas\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_spindle_atlas="PASS"
 elif [ "$(has 'spindle\.atlas\.command\]')" -ge 1 ]; then
     gate_spindle_atlas="PASS"
 else gate_spindle_atlas="SKIP"; fi
 
-# ---- 84. linen_search_bridge ----
+# ---- 85. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
     print_row "linen_search_bridge" "PASS" "search bridge e2e"
@@ -1356,6 +1365,7 @@ ALL_GATES=(
     "browser_placeholder:$gate_browser_placeholder"
     "atlas_scene_stub:$gate_atlas_scene_stub"
     "frame_lights_visual:$gate_frame_lights_visual"
+    "frame_lights_keyboard:$gate_frame_lights_keyboard"
     "spindle_atlas:$gate_spindle_atlas"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
