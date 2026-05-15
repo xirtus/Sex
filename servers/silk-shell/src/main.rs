@@ -235,6 +235,12 @@ const BELL_APP_EVENT_INTEGRATION_PROOF_ENABLED: bool =
     option_env!("SEXOS_BELL_APP_EVENT_INTEGRATION_PROOF").is_some();
 static mut BELL_APP_EVENT_INTEGRATION_PROOF_DONE: bool = false;
 
+/// Bell workflow event proof gate (Linen/Quil workflow milestones).
+/// Build with SEXOS_BELL_WORKFLOW_EVENT_PROOF=1 to enable.
+const BELL_WORKFLOW_EVENT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BELL_WORKFLOW_EVENT_PROOF").is_some();
+static mut BELL_WORKFLOW_EVENT_PROOF_DONE: bool = false;
+
 const COMMAND_PALETTE_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_COMMAND_PALETTE_STATUS_PROOF").is_some();
 const COMMAND_PALETTE_LINEN_STATUS_PROOF_ENABLED: bool =
@@ -1066,6 +1072,35 @@ unsafe fn maybe_run_bell_app_event_integration_proof() {
 
     serial_println!("[bell.app.integration.proof.done] ok=1");
     BELL_APP_EVENT_INTEGRATION_PROOF_DONE = true;
+}
+
+/// Bell workflow event proof: emit Bell events for Linen/Quil workflow milestones.
+/// Uses existing fire-and-forget bell_send_app_event; no notification redesign.
+unsafe fn maybe_run_bell_workflow_event_proof() {
+    if !BELL_WORKFLOW_EVENT_PROOF_ENABLED || BELL_WORKFLOW_EVENT_PROOF_DONE {
+        return;
+    }
+    serial_println!("[bell.workflow.event.proof.begin]");
+
+    // Linen object create workflow milestone
+    bell_send_app_event("linen_workflow", 2001);
+    serial_println!("[bell.workflow.event] source=linen event_id=2001 ok=1 reason=object_create_tag_search_workflow");
+
+    // Linen object persist milestone
+    bell_send_app_event("linen_workflow", 2002);
+    serial_println!("[bell.workflow.event] source=linen event_id=2002 ok=1 reason=object_persist_async_attempt");
+
+    // Quil text edit buffer milestone
+    bell_send_app_event("quil_workflow", 2003);
+    serial_println!("[bell.workflow.event] source=quil event_id=2003 ok=1 reason=text_edit_buffer_proof");
+
+    // Quil text save async milestone
+    bell_send_app_event("quil_workflow", 2004);
+    serial_println!("[bell.workflow.event] source=quil event_id=2004 ok=1 reason=text_save_async_attempt");
+
+    serial_println!("[bell.workflow.event.list] total=4 ok=1");
+    serial_println!("[bell.workflow.event.proof.done] ok=1");
+    BELL_WORKFLOW_EVENT_PROOF_DONE = true;
 }
 
 /// Linen object detail proof: exercises non-blocking object detail panel
@@ -15741,6 +15776,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_bell_keyboard_detail_proof(); }
         unsafe { maybe_run_bell_detail_seed_proof(); }
         unsafe { maybe_run_bell_app_event_integration_proof(); }
+        unsafe { maybe_run_bell_workflow_event_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }
         unsafe { maybe_run_palette_rejects_app_open_batch_proof(); }

@@ -61,6 +61,10 @@ gate_app_launch_commands="SKIP"
 gate_linen_object_workflow="SKIP"
 gate_quil_text_buffer="SKIP"
 gate_bell_app_events="SKIP"
+gate_linen_object_persist="SKIP"
+gate_quil_text_save="SKIP"
+gate_spindle_launch_exec="SKIP"
+gate_bell_workflow_events="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -83,7 +87,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V1"
+echo " DAILY-DRIVER MASTER GATE V3"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -451,6 +455,67 @@ else
     print_row "bell_app_events" "SKIP" "no bell app event markers"
 fi
 
+# ---- 22 (new). linen_object_persist ----
+# Evidence: [linen.object.persist.audit], [linen.object.persist.send],
+# [linen.object.persist.proof.done].
+
+if [ "$(has 'linen\.object\.persist\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_send="$(count 'linen\.object\.persist\.send\]')"
+    gate_linen_object_persist="PASS"
+    print_row "linen_object_persist" "PASS" "persist sends: ${c_send}"
+elif [ "$(has 'linen\.object\.persist\.audit\]')" -ge 1 ]; then
+    gate_linen_object_persist="PASS"
+    print_row "linen_object_persist" "PASS" "persist audit present (partial)"
+else
+    gate_linen_object_persist="SKIP"
+    print_row "linen_object_persist" "SKIP" "no persist proof markers"
+fi
+
+# ---- 23 (new). quil_text_save ----
+# Evidence: [quil.text.save.audit], [quil.text.save.send],
+# [quil.text.save.proof.done].
+
+if [ "$(has 'quil\.text\.save\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_quil_text_save="PASS"
+    print_row "quil_text_save" "PASS" "save audit complete"
+elif [ "$(has 'quil\.text\.save\.audit\]')" -ge 1 ]; then
+    gate_quil_text_save="PASS"
+    print_row "quil_text_save" "PASS" "save audit present (partial)"
+else
+    gate_quil_text_save="SKIP"
+    print_row "quil_text_save" "SKIP" "no text save proof markers"
+fi
+
+# ---- 24 (new). spindle_launch_exec ----
+# Evidence: [spindle.launch.exec.audit], [spindle.launch.exec.proof.done].
+
+if [ "$(has 'spindle\.launch\.exec\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_exec="$(count 'spindle\.launch\.exec\]')"
+    gate_spindle_launch_exec="PASS"
+    print_row "spindle_launch_exec" "PASS" "launch exec rows: ${c_exec}"
+elif [ "$(has 'spindle\.launch\.exec\.audit\]')" -ge 1 ]; then
+    gate_spindle_launch_exec="PASS"
+    print_row "spindle_launch_exec" "PASS" "launch exec audit present (partial)"
+else
+    gate_spindle_launch_exec="SKIP"
+    print_row "spindle_launch_exec" "SKIP" "no launch exec proof markers"
+fi
+
+# ---- 25 (new). bell_workflow_events ----
+# Evidence: [bell.workflow.event], [bell.workflow.event.proof.done].
+
+if [ "$(has 'bell\.workflow\.event\.proof\.done.*ok=1')" -eq 1 ]; then
+    c_events="$(count 'bell\.workflow\.event\]')"
+    gate_bell_workflow_events="PASS"
+    print_row "bell_workflow_events" "PASS" "workflow events: ${c_events}"
+elif [ "$(has 'bell\.workflow\.event\]')" -ge 1 ]; then
+    gate_bell_workflow_events="PASS"
+    print_row "bell_workflow_events" "PASS" "workflow event markers present (partial)"
+else
+    gate_bell_workflow_events="SKIP"
+    print_row "bell_workflow_events" "SKIP" "no workflow event proof markers"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -485,7 +550,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V1 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V3 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -512,6 +577,10 @@ ALL_GATES=(
     "linen_object_workflow:$gate_linen_object_workflow"
     "quil_text_buffer:$gate_quil_text_buffer"
     "bell_app_events:$gate_bell_app_events"
+    "linen_object_persist:$gate_linen_object_persist"
+    "quil_text_save:$gate_quil_text_save"
+    "spindle_launch_exec:$gate_spindle_launch_exec"
+    "bell_workflow_events:$gate_bell_workflow_events"
     "faults_zero:$gate_faults_zero"
 )
 

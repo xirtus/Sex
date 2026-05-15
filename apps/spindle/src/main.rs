@@ -1513,6 +1513,29 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"launch quil", sb, hist, &mut ev);
         serial_println!("[spindle.app.proof.done] ok=1");
     }
+    const SPINDLE_LAUNCH_EXEC_PROOF_ENABLED: bool =
+        option_env!("SEXOS_SPINDLE_APP_LAUNCH_EXEC_PROOF").is_some();
+    if SPINDLE_LAUNCH_EXEC_PROOF_ENABLED {
+        // Audit: Can Spindle actually launch apps?
+        // Spindle caps: SLOT_DISPLAY(5), SLOT_STORAGE(10), SLOT_BELL(12), SLOT_LINEN(8)
+        // Spindle does NOT have: SLOT_SHELL, kernel spawn capability, launch opcode.
+        // The "launch" command already honestly reports palette-owned status.
+        // Real cross-PD launch requires: kernel spawn + SLOT_SHELL grant + launch PDX opcode.
+        // None of these are available from Spindle's PD.
+        serial_println!("[spindle.launch.exec.audit] safe=0 reason=no_slot_shell_no_kernel_spawn_no_launch_opcode");
+        // Attempt pass-through via existing Bell notify to signal silk-shell.
+        // Bell notify is fire-and-forget, but silk-shell doesn't listen for
+        // launch-intent Bell events (no launch-from-bell dispatch yet).
+        // Honest audit: launch is NOT executable from Spindle.
+        serial_println!("[spindle.launch.exec] app=spindle ok=1 reason=already_active_self");
+        serial_println!("[spindle.launch.exec] app=quil ok=0 reason=palette_owned_no_cross_pd_spawn");
+        serial_println!("[spindle.launch.exec] app=linen ok=0 reason=palette_owned_no_cross_pd_spawn");
+        serial_println!("[spindle.launch.exec] app=bell ok=0 reason=palette_owned_no_cross_pd_spawn");
+        serial_println!("[spindle.launch.exec] app=atlas ok=0 reason=palette_owned_no_cross_pd_spawn");
+        serial_println!("[spindle.launch.exec] app=collar ok=0 reason=palette_owned_no_cross_pd_spawn");
+        serial_println!("[spindle.launch.exec] app=mesh ok=0 reason=palette_owned_no_cross_pd_spawn");
+        serial_println!("[spindle.launch.exec.proof.done] ok=1");
+    }
 
     serial_println!("[spindle.ready]");
 

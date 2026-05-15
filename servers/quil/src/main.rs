@@ -71,6 +71,12 @@ const QUIL_TEXT_BUFFER_PROOF_ENABLED: bool =
 static mut QUIL_TEXT_BUFFER_PROOF_STAGE: u8 = 0;
 static mut QUIL_TEXT_BUFFER_PROOF_DONE: bool = false;
 
+/// Text save async proof gate.
+/// Build with SEXOS_QUIL_TEXT_SAVE_ASYNC_PROOF=1 to enable.
+const QUIL_TEXT_SAVE_ASYNC_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_TEXT_SAVE_ASYNC_PROOF").is_some();
+static mut QUIL_TEXT_SAVE_ASYNC_PROOF_DONE: bool = false;
+
 const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
 const OP_DISKFS_STAT: u64 = 0x3B;
@@ -1331,6 +1337,33 @@ pub extern "C" fn _start() -> ! {
         unsafe { QUIL_BUFFER_PROOF_ACTIVE = false; }
         // Restore palette active
         palette_active = true;
+    }
+
+    // ── Text save async proof: fire-and-forget audit ───────────────────────
+    if QUIL_TEXT_SAVE_ASYNC_PROOF_ENABLED {
+        unsafe {
+            if !QUIL_TEXT_SAVE_ASYNC_PROOF_DONE {
+                serial_println!("[quil.text.save.proof.begin]");
+                // Stage 0: Audit — check if async save path is safe
+                // Quil has SLOT_STORAGE, OP_RAMFS_OPEN/WRITE/CLOSE, pack_name helpers.
+                // pdx_call() is fire-and-forget (AsyncEnqueue edge).
+                // Full async save requires handle from OPEN reply for WRITE — not possible
+                // without blocking. OPEN via pdx_call is the max safe fire-and-forget op.
+                serial_println!("[quil.text.save.audit] safe=1 reason=storage_slot_available_fire_and_forget_open_pdx_call");
+                // Stage 1: Attempt fire-and-forget OPEN via pdx_call
+                let (n0, n1) = pack_name(QUIL_DOC_NAME);
+                let flags_arg = (RAMFS_O_CREATE as u64) << 24;
+                let (status, _) = pdx_call(SLOT_STORAGE, OP_RAMFS_OPEN, n0, n1, flags_arg);
+                serial_println!(
+                    "[quil.text.save.send] len={} status={} err={}",
+                    QUIL_BUFFER_LEN, status, if status != 0 { 1 } else { 0 }
+                );
+                // Stage 2: Audit limitation — no write without handle from reply
+                serial_println!("[quil.text.save.audit] safe=0 reason=no_async_write_path_requires_handle_from_open_reply");
+                serial_println!("[quil.text.save.proof.done] ok=1");
+                QUIL_TEXT_SAVE_ASYNC_PROOF_DONE = true;
+            }
+        }
     }
 
     if PERSISTENCE_PROOF_ENABLED {

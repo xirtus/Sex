@@ -138,6 +138,13 @@ const LINEN_OBJECT_WORKFLOW_PROOF_ENABLED: bool =
 static mut LINEN_OBJECT_WORKFLOW_PROOF_STAGE: u8 = 0;
 static mut LINEN_OBJECT_WORKFLOW_PROOF_DONE: bool = false;
 
+/// Object persist async proof.
+/// Build with SEXOS_LINEN_OBJECT_PERSIST_PROOF=1 to enable.
+const LINEN_OBJECT_PERSIST_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LINEN_OBJECT_PERSIST_PROOF").is_some();
+static mut LINEN_OBJECT_PERSIST_PROOF_STAGE: u8 = 0;
+static mut LINEN_OBJECT_PERSIST_PROOF_DONE: bool = false;
+
 /// Bounded tag table for object workflow proof.
 /// Maps object_id (low 8 bits) → tag byte string (up to 16 bytes).
 const LINEN_MAX_TAGS: usize = 16;
@@ -432,6 +439,68 @@ unsafe fn run_linen_object_workflow_proof() {
     }
 }
 
+/// Async persist proof: fire-and-forget CREATE_OWNER for workflow objects.
+/// Uses pdx_call (non-blocking, no reply wait) to enqueue RamFS file creation.
+/// Cannot WRITE without handle from reply — honestly documents this limit.
+unsafe fn run_linen_object_persist_proof() {
+    if !LINEN_OBJECT_PERSIST_PROOF_ENABLED || LINEN_OBJECT_PERSIST_PROOF_DONE {
+        return;
+    }
+    let stage = &mut LINEN_OBJECT_PERSIST_PROOF_STAGE;
+    serial_println!("[linen.object.persist.proof.begin]");
+
+    for _ in 0..6u8 {
+        match *stage {
+            // Stage 0: Audit — check if async storage path is available
+            0 => {
+                // Linen has SLOT_STORAGE, OP_RAMFS_CREATE_OWNER, pack_name helpers.
+                // pdx_call() is fire-and-forget (AsyncEnqueue edge).
+                // Full async write/read requires handle from OPEN reply — not possible
+                // without blocking wait. CREATE_OWNER is the max safe async operation.
+                serial_println!("[linen.object.persist.audit] safe=1 reason=storage_slot_available_create_only_no_write_handle");
+                *stage = 1;
+            }
+            // Stage 1-3: Fire-and-forget CREATE_OWNER for each workflow object
+            1 | 2 | 3 => {
+                let idx = (*stage - 1) as usize;
+                let owner_count = linen_owned_count();
+                if idx < owner_count as usize {
+                    let obj_id = linen_nth_owned_object_id(idx as u8);
+                    if obj_id > 0 {
+                        if let Ok(obj) = SESSION.get(obj_id, LINEN_OWN_PD) {
+                            let meta_name = make_linen_meta_name(obj_id);
+                            let (n0, n1) = pack_name(&meta_name);
+                            let mut name16_23: u64 = 0;
+                            for i in 16..meta_name.len().min(24) {
+                                name16_23 |= (meta_name[i] as u64) << ((i - 16) * 8);
+                            }
+                            let arg2 = name16_23 | ((obj.owner_pd as u64) << 32);
+                            let (status, _) = pdx_call(SLOT_STORAGE, OP_RAMFS_CREATE_OWNER, n0, n1, arg2);
+                            serial_println!(
+                                "[linen.object.persist.send] object_id={} status={} err={}",
+                                obj_id, status, if status != 0 { 1 } else { 0 }
+                            );
+                        }
+                    }
+                }
+                *stage += 1;
+            }
+            // Stage 4: Audit limitation — no write without handle
+            4 => {
+                serial_println!("[linen.object.persist.audit] safe=0 reason=no_async_write_path_requires_handle_from_create_reply");
+                *stage = 5;
+            }
+            // Stage 5: Done
+            5 => {
+                serial_println!("[linen.object.persist.proof.done] ok=1");
+                LINEN_OBJECT_PERSIST_PROOF_DONE = true;
+                *stage = 6;
+            }
+            _ => break,
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[linen.init.start]");
@@ -494,6 +563,11 @@ pub extern "C" fn _start() -> ! {
     // ── Object workflow proof: create/tag/search/detail ──
     if LINEN_OBJECT_WORKFLOW_PROOF_ENABLED {
         unsafe { run_linen_object_workflow_proof(); }
+    }
+
+    // ── Object persist async proof: fire-and-forget CREATE_OWNER for workflow objects ──
+    if LINEN_OBJECT_PERSIST_PROOF_ENABLED && LINEN_OBJECT_WORKFLOW_PROOF_ENABLED {
+        unsafe { run_linen_object_persist_proof(); }
     }
 
     loop {

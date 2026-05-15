@@ -130,8 +130,14 @@ export SEXOS_LINEN_OBJECT_WORKFLOW_PROOF=1
 export SEXOS_QUIL_TEXT_BUFFER_PROOF=1
 export SEXOS_BELL_APP_EVENT_INTEGRATION_PROOF=1
 
+# ── Feature batch V3 persistence proofs ──
+export SEXOS_LINEN_OBJECT_PERSIST_PROOF=1
+export SEXOS_QUIL_TEXT_SAVE_ASYNC_PROOF=1
+export SEXOS_SPINDLE_APP_LAUNCH_EXEC_PROOF=1
+export SEXOS_BELL_WORKFLOW_EVENT_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V1"
+echo " DAILY-DRIVER PROOF PROFILE V3"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
