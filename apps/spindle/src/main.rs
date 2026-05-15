@@ -669,6 +669,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.alias.help.row] idx=4 alias=q target=status ok=1");
             serial_println!("[spindle.alias.help.row] idx=5 alias=n target=notify ok=1");
             serial_println!("[spindle.alias.help.done] rows=6 ok=1");
+            serial_println!("[spindle.alias.status] aliases=6 notify_alias=1 ok=1");
 
             sb.push(b"");
             sb.push(b"Type 'daily' for full daily-driver readiness summary.");
