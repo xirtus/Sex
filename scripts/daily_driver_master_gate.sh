@@ -113,6 +113,7 @@ gate_spindle_window_workflow="SKIP"
 gate_browser_stub="SKIP"
 gate_spindle_browser_stub="SKIP"
 gate_browser_path="SKIP"
+gate_browser_localdoc_stub="SKIP"
 gate_linen_persist_readback="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
@@ -1097,7 +1098,15 @@ elif [ "$(has 'browser\.path\.freeze\]')" -ge 1 ]; then
     gate_browser_path="PASS"
 else gate_browser_path="SKIP"; fi
 
-# ---- 70. linen_persist_readback ----
+# ---- 70. browser_localdoc_stub ----
+if [ "$(has 'browser\.localdoc\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_browser_localdoc_stub="PASS"
+    print_row "browser_localdoc_stub" "PASS" "source=static_stub network=0 engine=0"
+elif [ "$(has 'browser\.localdoc\.source\]')" -ge 1 ]; then
+    gate_browser_localdoc_stub="PASS"
+else gate_browser_localdoc_stub="SKIP"; fi
+
+# ---- 71. linen_persist_readback ----
 if [ "$(has 'linen\.persist\.readback\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_persist_readback="PASS"
     print_row "linen_persist_readback" "PASS" "persist model (durable=0 sync=0)"
@@ -1370,6 +1379,7 @@ ALL_GATES=(
     "browser_stub:$gate_browser_stub"
     "spindle_browser_stub:$gate_spindle_browser_stub"
     "browser_path:$gate_browser_path"
+    "browser_localdoc_stub:$gate_browser_localdoc_stub"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"

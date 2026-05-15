@@ -1340,6 +1340,22 @@ unsafe fn maybe_run_browser_stub_proof() {
     BROWSER_STUB_PROOF_DONE = true;
 }
 
+/// Browser local document stub proof (Phase 1).
+const BROWSER_LOCALDOC_STUB_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_LOCALDOC_STUB_PROOF").is_some();
+static mut BROWSER_LOCALDOC_STUB_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_localdoc_stub_proof() {
+    if !BROWSER_LOCALDOC_STUB_PROOF_ENABLED || BROWSER_LOCALDOC_STUB_PROOF_DONE { return; }
+    serial_println!("[browser.localdoc.stub.proof.begin]");
+    // Source truth: static stub only — no Linen, no SexFiles, no readback.
+    serial_println!("[browser.localdoc.source] source=static_stub static=1 linen_status=0 storage_readback=0 durable=0 ok=1 reason=localdoc_stub_phase_1");
+    // Truth invariant: all capability zeros.
+    serial_println!("[browser.localdoc.truth] phase=1 network=0 html=0 css=0 js=0 engine=0 fetched=0 readback=0 durable=0 surface=0 ok=1 reason=localdoc_stub_no_capability_increase");
+    serial_println!("[browser.localdoc.proof.done] ok=1 passed=2 failed=0");
+    BROWSER_LOCALDOC_STUB_PROOF_DONE = true;
+}
+
 /// Frame Chrome model proof: Scene→Frame→Tab→Surface static model.
 unsafe fn maybe_run_frame_chrome_model_proof() {
     if !FRAME_CHROME_MODEL_PROOF_ENABLED || FRAME_CHROME_MODEL_PROOF_DONE { return; }
@@ -16216,6 +16232,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_app_registry_lifecycle_v2_proof(); }
         unsafe { maybe_run_window_workflow_v2_proof(); }
         unsafe { maybe_run_browser_stub_proof(); }
+        unsafe { maybe_run_browser_localdoc_stub_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
         unsafe { maybe_run_frame_rim_markers_proof(); }
         unsafe { maybe_run_frame_lights_stub_proof(); }

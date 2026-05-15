@@ -1474,6 +1474,28 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  network=0: cannot resolve or connect.");
             true
         }
+        b"browser-localdoc" => {
+            sb.push(b"Browser Local Doc -- stub/status only (Phase 1):");
+            sb.push(b"  source=static_stub (no real documents)");
+            sb.push(b"  network=0 html=0 css=0 js=0 engine=0");
+            sb.push(b"  readback=0 durable=0 surface=0");
+            sb.push(b"  No storage readback, no POSIX paths, no HTTP.");
+            sb.push(b"  Future: Linen object status, proven SexFiles readback.");
+            sb.push(b"  Use browser-localdoc-status for summary.");
+            serial_println!("[browser.localdoc.command] name=browser-localdoc ok=1 reason=localdoc_stub_status");
+            true
+        }
+        b"browser-localdoc-status" => {
+            sb.push(b"Browser Local Doc Status:");
+            sb.push(b"  phase=1 (local text/document viewer stub)");
+            sb.push(b"  source=static_stub static=1 linen_status=0");
+            sb.push(b"  storage_readback=0 durable=0 surface=0");
+            sb.push(b"  network=0 html=0 css=0 js=0 engine=0 fetched=0");
+            sb.push(b"  No network. No HTML. No storage access.");
+            sb.push(b"  Capability freeze: all zeros except SLOT_SHELL launch route.");
+            serial_println!("[browser.localdoc.command] name=browser-localdoc-status ok=1 reason=localdoc_status_summary");
+            true
+        }
         b"browser-roadmap" => {
             sb.push(b"Browser Path Roadmap (8 phases):");
             sb.push(b"  Phase 0: WebStub launch/status -- DONE");
@@ -2072,6 +2094,8 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"browser-status", sb, hist, &mut ev);
         let _ = dispatch(b"url sexos.org", sb, hist, &mut ev);
         let _ = dispatch(b"url-status", sb, hist, &mut ev);
+        let _ = dispatch(b"browser-localdoc", sb, hist, &mut ev);
+        let _ = dispatch(b"browser-localdoc-status", sb, hist, &mut ev);
         serial_println!("[spindle.browser.stub.proof.done] ok=1");
     }
     if SPINDLE_WINDOW_WORKFLOW_PROOF_ENABLED {
