@@ -547,8 +547,16 @@ pub fn init() {
                     spindle_id
                 );
             }
-            serial_println!("[kernel.cap.spindle] storage={} bell={} linen={}",
-                sexfiles_id != 0, sexbell_id != 0, linen_id != 0);
+            if silkshell_id != 0 {
+                pd.grant_capability(sex_pdx::SLOT_SHELL, CapabilityData::Domain(silkshell_id));
+                serial_println!("[kernel.cap.shell.spindle] spindle->silkshell slot={}", sex_pdx::SLOT_SHELL);
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_SHELL target={} ok=1 optional=1]",
+                    spindle_id, silkshell_id
+                );
+            }
+            serial_println!("[kernel.cap.spindle] storage={} bell={} linen={} shell={}",
+                sexfiles_id != 0, sexbell_id != 0, linen_id != 0, silkshell_id != 0);
         } else {
             serial_println!(
                 "[bootgraph.cap.grant from=kernel to={} slot=SLOT_STORAGE target={} ok=0 optional=1 reason=pd_missing]",

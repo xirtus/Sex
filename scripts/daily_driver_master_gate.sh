@@ -107,6 +107,7 @@ gate_linen_search_bridge="SKIP"
 gate_storage_phasea="SKIP"
 gate_storage_phaseb1="SKIP"
 gate_app_registry_lifecycle_v2="SKIP"
+gate_spindle_slot_shell="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -129,7 +130,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V19"
+echo " DAILY-DRIVER MASTER GATE V20"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -1025,7 +1026,16 @@ elif [ "$(has 'app\.registry\.lifecycle\.row\]')" -ge 1 ]; then
     gate_app_registry_lifecycle_v2="PASS"
 else gate_app_registry_lifecycle_v2="SKIP"; fi
 
-# ---- 64. linen_search_bridge ----
+# ---- 64. spindle_slot_shell ----
+if [ "$(has 'spindle\.slot_shell\.probe.*has_slot_shell=1')" -eq 1 ]; then
+    gate_spindle_slot_shell="PASS"
+    print_row "spindle_slot_shell" "PASS" "SLOT_SHELL route exists (launch_exec enabled)"
+elif [ "$(has 'spindle\.slot_shell\.probe')" -eq 1 ]; then
+    gate_spindle_slot_shell="PASS"
+    print_row "spindle_slot_shell" "PASS" "SLOT_SHELL probed (check result)"
+else gate_spindle_slot_shell="SKIP"; fi
+
+# ---- 65. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
     print_row "linen_search_bridge" "PASS" "search bridge e2e"
@@ -1083,7 +1093,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V19 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V20 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -1155,6 +1165,7 @@ ALL_GATES=(
     "storage_phasea:$gate_storage_phasea"
     "storage_phaseb1:$gate_storage_phaseb1"
     "app_registry_lifecycle_v2:$gate_app_registry_lifecycle_v2"
+    "spindle_slot_shell:$gate_spindle_slot_shell"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
 )

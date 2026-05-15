@@ -47,7 +47,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 use sex_pdx::{
     pdx_call, serial_println,
     OP_WINDOW_CREATE, SLOT_DISPLAY, SLOT_STORAGE,
-    SLOT_BELL, SLOT_LINEN, OP_BELL_NOTIFY,
+    SLOT_BELL, SLOT_LINEN, SLOT_SHELL, OP_BELL_NOTIFY,
 };
 use sex_graphics::{WindowBuffer, font};
 
@@ -1731,6 +1731,21 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[spindle.launch.exec] app=collar ok=0 reason=palette_owned_no_cross_pd_spawn");
         serial_println!("[spindle.launch.exec] app=mesh ok=0 reason=palette_owned_no_cross_pd_spawn");
         serial_println!("[spindle.launch.exec.proof.done] ok=1");
+    }
+    // ── SLOT_SHELL launch authority probe ──────────────────────────────
+    // Probe whether Spindle's PD has SLOT_SHELL capability grant.
+    // If ERR_CAP_INVALID → launch_exec=0. If status=0 → route exists.
+    // Uses pdx_call (fire-and-forget) with opcode=0 (null probe).
+    {
+        let (status, _) = unsafe { pdx_call(SLOT_SHELL, 0, 0, 0, 0) };
+        let has_slot_shell = status == 0;
+        serial_println!("[spindle.slot_shell.probe] has_slot_shell={} status={} ok=1",
+            has_slot_shell as u8, status);
+        if has_slot_shell {
+            serial_println!("[spindle.launch.authority] route=SLOT_SHELL exists=1 launch_exec_enabled=1");
+        } else {
+            serial_println!("[spindle.launch.authority] route=SLOT_SHELL exists=0 launch_exec_enabled=0 reason=no_slot_shell_grant");
+        }
     }
     const APP_REGISTRY_STATIC_V2_PROOF_ENABLED: bool =
         option_env!("SEXOS_APP_REGISTRY_STATIC_V2_PROOF").is_some();
