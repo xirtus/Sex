@@ -448,10 +448,29 @@ fn derive_lane_first_proof(urgency_hint: u8) -> (u8, u8, Option<&'static str>) {
     }
 }
 
+/// Bell Bridge status stub proof gate (Phase 1 of BELL_BRIDGE_APP_LAUNCH_PLAN_V1).
+/// Emits marker-only proof that Bell Bridge is present but inert: no IPC,
+/// no launch, no focus, no renderer integration.
+const BELL_BRIDGE_STUB_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BELL_BRIDGE_STUB_PROOF").is_some();
+static mut BELL_BRIDGE_STUB_PROOF_DONE: bool = false;
+
+/// Bell Bridge status stub: marker-only proof (Phase 1).
+/// No IPC, no opcodes, no launch, no focus, no render changes.
+unsafe fn maybe_run_bell_bridge_status_stub() {
+    if !BELL_BRIDGE_STUB_PROOF_ENABLED || BELL_BRIDGE_STUB_PROOF_DONE { return; }
+    serial_println!("[bell.bridge.status.stub] phase=1 ipc=0 launch=0 focus=0 render=0");
+    serial_println!("[bell.bridge.status.ready] ok=1");
+    BELL_BRIDGE_STUB_PROOF_DONE = true;
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexbell.init.start]");
     serial_println!("[bell.boot]");
+
+    // ── Bell Bridge status stub (Phase 1): marker-only, no IPC ──
+    unsafe { maybe_run_bell_bridge_status_stub(); }
 
     // ── Demo self-notify (V1): push one notification to exercise Bell→SilkBar→sexdisplay pipe ──
     // caller_pd=0 marks internal Bell event. No sender validation needed for self-generated events.
