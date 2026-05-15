@@ -11646,7 +11646,10 @@ unsafe fn maybe_run_linen_search_filter_proof() {
         matched,
         selected
     );
-    serial_println!("[linen.filter.proof.done] ok={}", (matched > 0) as u8);
+    serial_println!(
+        "[linen.filter.proof.done] ok={} mode=kind_document",
+        (matched > 0) as u8
+    );
     LINEN_SEARCH_FILTER_PROOF_DONE = true;
 }
 
