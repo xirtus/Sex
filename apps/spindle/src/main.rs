@@ -1601,15 +1601,13 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         b"browser-surface" => {
             sb.push(b"Browser Surface Status:");
-            sb.push(b"  sid=0 focusable=0 surface=0 rendered=0");
-            sb.push(b"  BLOCKED: SID 202 collision with Mesh placeholder.");
-            sb.push(b"  Mesh uses SURFACE_ID_MESH=202 for live surface.");
-            sb.push(b"  WebStub needs a new SID (e.g., 205) or");
-            sb.push(b"  SID collision resolution before surface can exist.");
-            sb.push(b"  launch_exec=1 through SLOT_SHELL but opens sid=202");
-            sb.push(b"  which is already Mesh's surface -- honest no-op.");
+            sb.push(b"  sid=205 focusable=0 surface=0 rendered=0");
+            sb.push(b"  FIXED: SID collision resolved (202 -> 205).");
+            sb.push(b"  Mesh owns SID 202; WebStub now uses SID 205.");
+            sb.push(b"  launch_exec=1 through SLOT_SHELL, SID 205.");
+            sb.push(b"  No surface created yet (deferred).");
             sb.push(b"  network=0 engine=0 fetched=0 -- capability freeze.");
-            serial_println!("[spindle.browser.surface.command] name=browser-surface ok=1 reason=sid_collision_documented");
+            serial_println!("[spindle.browser.surface.command] name=browser-surface ok=1 reason=sid_205_collision_free");
             true
         }
         b"browser-roadmap" => {

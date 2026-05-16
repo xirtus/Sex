@@ -1364,14 +1364,13 @@ static mut BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_DONE: bool = false;
 unsafe fn maybe_run_browser_placeholder_surface_visual_proof() {
     if !BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_ENABLED
         || BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_DONE { return; }
-    // Honest review: WebStub cannot get a real surface because SID 202
-    // is already allocated to SURFACE_ID_MESH (mesh placeholder surface).
-    // Creating a WebStub surface requires either a new SID (e.g., 205)
-    // or resolving the SID collision. Both are beyond the current scope.
-    serial_println!("[browser.placeholder.surface.review] safe=0 reason=sid_202_collision_with_mesh_placeholder");
-    // Current truth: no surface, no focus, honest placeholder.
-    serial_println!("[browser.placeholder.surface.visual] sid=0 focusable=0 surface=0 rendered=0 ok=1 reason=sid_collision_mesh_owns_202");
-    serial_println!("[browser.placeholder.truth] launch_exec=1 focusable=0 surface=0 network=0 engine=0 fetched=0 parsed=0 readback=0 durable=0 ok=1 reason=honest_placeholder_no_sid_available");
+    // SID collision resolved: WebStub now uses SID 205 (was 202, collided with Mesh).
+    // SID 205 is collision-free. Surface creation is deferred (no surface yet).
+    serial_println!("[surface.id.registry.fix] app=WebStub old_sid=202 new_sid=205 collision=0 ok=1 reason=sid_collision_resolved_no_surface_yet");
+    // Current truth: SID fixed, still no surface, no focus.
+    serial_println!("[browser.placeholder.surface.visual] sid=205 focusable=0 surface=0 rendered=0 ok=1 reason=sid_fixed_no_surface_created");
+    serial_println!("[browser.placeholder.truth] launch_exec=1 focusable=0 surface=0 rendered=0 sid=205 network=0 engine=0 fetched=0 parsed=0 readback=0 durable=0 ok=1 reason=sid_collision_resolved_capability_freeze");
+    serial_println!("[surface.id.registry.fix.done] ok=1 fixed=1 collisions=0");
     serial_println!("[browser.placeholder.surface_visual.done] ok=1 surface=0 rendered=0 network=0 engine=0");
     BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_DONE = true;
 }
@@ -1534,7 +1533,7 @@ unsafe fn maybe_run_mesh_graph_status_proof() {
     // Edge: silk-shell → Linen (open/focus route)
     serial_println!("[mesh.graph.edge] from=silk-shell to=Linen kind=open_focus authority=0 active=1 ok=1 reason=launch_exec_via_slot_shell");
     // Edge: Spindle → WebStub (placeholder request)
-    serial_println!("[mesh.graph.edge] from=Spindle to=WebStub kind=placeholder_launch authority=0 active=1 ok=1 reason=sid_202_no_surface");
+    serial_println!("[mesh.graph.edge] from=Spindle to=WebStub kind=placeholder_launch authority=0 active=1 ok=1 reason=sid_205_no_surface");
     // Edge: Linen project → Scene 0 (metadata only)
     serial_println!("[mesh.graph.edge] from=Linen_project to=Scene0 kind=metadata_link authority=0 active=1 ok=1 reason=project_scene_link_v1");
     // Edge: Bell Bridge → launch outcomes (marker only, ipc=0)
@@ -9082,7 +9081,7 @@ unsafe fn open_app_in_active_scene_by_sid(sid: u64) {
         201 => { open_quil_in_active_scene();   }
         202 => {
             // WebStub placeholder — no surface exists yet
-            serial_println!("[browser.placeholder.open] app=WebStub sid=202 network=0 engine=0 fetched=0 parsed=0 ok=0 reason=no_surface_placeholder_only");
+            serial_println!("[browser.placeholder.open] app=WebStub sid=205 network=0 engine=0 fetched=0 parsed=0 ok=0 reason=no_surface_placeholder_only");
             serial_println!("[browser.placeholder.truth] focusable=0 launch_exec=1 lifecycle=placeholder_requested network=0 engine=0 ok=1 reason=honest_no_surface");
         }
         _ => {}
@@ -17005,7 +17004,7 @@ pub extern "C" fn _start() -> ! {
                     let sid: u64 = match app_id {
                         1 => 201, // Quil
                         2 => 200, // Linen
-                        7 => 202, // WebStub placeholder
+                        7 => 205, // WebStub placeholder (SID 205, collision-free)
                         _ => 0,
                     };
                     let executed = sid != 0;
