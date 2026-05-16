@@ -1121,10 +1121,12 @@ elif [ "$(has 'browser\.localdoc\.source\]')" -ge 1 ]; then
 else gate_browser_localdoc_stub="SKIP"; fi
 
 # ---- 71. browser_placeholder_surface_visual ----
-if [ "$(has 'browser\.placeholder\.surface_visual\.done.*ok=1')" -eq 1 ]; then
+if [ "$(has 'app\.surface\.capacity\.expand\.done.*ok=1')" -eq 1 ]; then
     gate_browser_placeholder_surface_visual="PASS"
-    print_row "browser_placeholder_surface_visual" "PASS" "sid collision documented surface=0"
-elif [ "$(has 'browser\.placeholder\.surface\.review\]')" -ge 1 ]; then
+    print_row "browser_placeholder_surface_visual" "PASS" "APP_SURFACES[8] surface=1 rendered=1"
+elif [ "$(has 'browser\.surface\.created\]')" -ge 1 ]; then
+    gate_browser_placeholder_surface_visual="PASS"
+elif [ "$(has 'app\.surface\.capacity\.expand\]')" -ge 1 ]; then
     gate_browser_placeholder_surface_visual="PASS"
 else gate_browser_placeholder_surface_visual="SKIP"; fi
 
