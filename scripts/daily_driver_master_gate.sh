@@ -177,6 +177,10 @@ gate_e1000_rx_desc_link="SKIP"
 gate_e1000_tx_desc_link="SKIP"
 gate_e1000_desc_link_truth="SKIP"
 gate_e1000_descriptor_link_proof_done="SKIP"
+gate_e1000_rx_desc_readback="SKIP"
+gate_e1000_tx_desc_readback="SKIP"
+gate_e1000_desc_readback_truth="SKIP"
+gate_e1000_descriptor_readback_proof_done="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1559,6 +1563,39 @@ elif [ "$(has 'e1000.descriptor.link.proof.done.*ok=0')" -eq 1 ]; then
     print_row "e1000_descriptor_link_proof_done" "FAIL" "proof not completed"
 else gate_e1000_descriptor_link_proof_done="SKIP"; fi
 
+# ---- 149. e1000_rx_desc_readback ----
+if [ "$(has 'e1000.rx.desc.readback.*checked=8.*matched=8.*status_zero=1.*length_zero=1.*ok=1')" -eq 1 ]; then
+    gate_e1000_rx_desc_readback="PASS"
+    print_row "e1000_rx_desc_readback" "PASS" "checked=8 matched=8 status_zero=1 length_zero=1 ok=1"
+elif [ "$(has 'e1000.rx.desc.readback.*ok=0')" -eq 1 ]; then
+    gate_e1000_rx_desc_readback="FAIL"
+    print_row "e1000_rx_desc_readback" "FAIL" "RX descriptor readback mismatch"
+else gate_e1000_rx_desc_readback="SKIP"; fi
+
+# ---- 150. e1000_tx_desc_readback ----
+if [ "$(has 'e1000.tx.desc.readback.*checked=8.*matched=8.*cmd_zero=1.*status_zero=1.*length_zero=1.*ok=1')" -eq 1 ]; then
+    gate_e1000_tx_desc_readback="PASS"
+    print_row "e1000_tx_desc_readback" "PASS" "checked=8 matched=8 cmd_zero=1 status_zero=1 length_zero=1 ok=1"
+elif [ "$(has 'e1000.tx.desc.readback.*ok=0')" -eq 1 ]; then
+    gate_e1000_tx_desc_readback="FAIL"
+    print_row "e1000_tx_desc_readback" "FAIL" "TX descriptor readback mismatch"
+else gate_e1000_tx_desc_readback="SKIP"; fi
+
+# ---- 151. e1000_desc_readback_truth ----
+if [ "$(has 'e1000.desc.readback.truth.*reads=1.*writes=0.*device_visible=0.*mmio_writes=0.*dma=0.*rings_enabled=0.*packets=0.*ok=1')" -eq 1 ]; then
+    gate_e1000_desc_readback_truth="PASS"
+    print_row "e1000_desc_readback_truth" "PASS" "reads=1 writes=0 device_visible=0 mmio_writes=0 dma=0 rings_enabled=0 packets=0"
+else gate_e1000_desc_readback_truth="SKIP"; fi
+
+# ---- 152. e1000_descriptor_readback_proof_done ----
+if [ "$(has 'e1000.descriptor.readback.proof.done.*ok=1.*rx_matched=8.*tx_matched=8.*packets=0')" -eq 1 ]; then
+    gate_e1000_descriptor_readback_proof_done="PASS"
+    print_row "e1000_descriptor_readback_proof_done" "PASS" "ok=1 rx_matched=8 tx_matched=8 packets=0"
+elif [ "$(has 'e1000.descriptor.readback.proof.done.*ok=0')" -eq 1 ]; then
+    gate_e1000_descriptor_readback_proof_done="FAIL"
+    print_row "e1000_descriptor_readback_proof_done" "FAIL" "readback proof not completed"
+else gate_e1000_descriptor_readback_proof_done="SKIP"; fi
+
 # ---- 94. clock_visible_seconds ----
 first_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
 first_nonzero_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\].* s=[1-9][0-9]* ' "$LOG" | head -n1 | cut -d: -f1 || true)"
@@ -2020,6 +2057,10 @@ ALL_GATES=(
     "e1000_tx_desc_link:$gate_e1000_tx_desc_link"
     "e1000_desc_link_truth:$gate_e1000_desc_link_truth"
     "e1000_descriptor_link_proof_done:$gate_e1000_descriptor_link_proof_done"
+    "e1000_rx_desc_readback:$gate_e1000_rx_desc_readback"
+    "e1000_tx_desc_readback:$gate_e1000_tx_desc_readback"
+    "e1000_desc_readback_truth:$gate_e1000_desc_readback_truth"
+    "e1000_descriptor_readback_proof_done:$gate_e1000_descriptor_readback_proof_done"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"

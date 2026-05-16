@@ -291,6 +291,60 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         serial_println!("[e1000.desc.link.truth] descriptor_linked=1 device_visible=0 mmio_writes=0 dma=0 rings_enabled=0 packets=0 ok=1 reason=descriptor_link_memory_only");
                         serial_println!("[browser.nic.truth] slot_net_grant=0 network=0 fetched=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=no_network_capability");
                         serial_println!("[e1000.descriptor.link.proof.done] ok=1 rx_linked=8 tx_linked=8 packets=0");
+
+                        // E1000_DESCRIPTOR_READBACK_PROOF_V1
+                        // read_volatile from UC alias ring memory. No writes. No MMIO. No RX/TX enable. No packets.
+                        let mut rx_matched: u64 = 0;
+                        let mut rx_status_zero: u64 = 1;
+                        let mut rx_length_zero: u64 = 1;
+                        let mut rx_first_phys: u64 = 0;
+                        let mut tx_matched: u64 = 0;
+                        let mut tx_status_zero: u64 = 1;
+                        let mut tx_cmd_zero: u64 = 1;
+                        let mut tx_length_zero: u64 = 1;
+                        let mut tx_first_phys: u64 = 0;
+                        unsafe {
+                            for i in 0usize..8 {
+                                let page_idx = i / 2;
+                                let buf_off  = if i & 1 == 0 { 0u64 } else { 2048u64 };
+                                let expected = pkt_pages[page_idx] + buf_off;
+                                let desc_off = (i * 16) as u64;
+                                let got_addr: u64 = core::ptr::read_volatile((rx_ring_uc + desc_off)      as *const u64);
+                                let got_len:  u16 = core::ptr::read_volatile((rx_ring_uc + desc_off + 8)  as *const u16);
+                                let got_stat: u8  = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                if i == 0 { rx_first_phys = got_addr; }
+                                if got_addr == expected { rx_matched += 1; }
+                                if got_len  != 0 { rx_length_zero = 0; }
+                                if got_stat != 0 { rx_status_zero = 0; }
+                            }
+                            for i in 0usize..8 {
+                                let page_idx = i / 2 + 4;
+                                let buf_off  = if i & 1 == 0 { 0u64 } else { 2048u64 };
+                                let expected = pkt_pages[page_idx] + buf_off;
+                                let desc_off = (i * 16) as u64;
+                                let got_addr: u64 = core::ptr::read_volatile((tx_ring_uc + desc_off)      as *const u64);
+                                let got_len:  u16 = core::ptr::read_volatile((tx_ring_uc + desc_off + 8)  as *const u16);
+                                let got_cmd:  u8  = core::ptr::read_volatile((tx_ring_uc + desc_off + 11) as *const u8);
+                                let got_stat: u8  = core::ptr::read_volatile((tx_ring_uc + desc_off + 12) as *const u8);
+                                if i == 0 { tx_first_phys = got_addr; }
+                                if got_addr == expected { tx_matched += 1; }
+                                if got_len  != 0 { tx_length_zero = 0; }
+                                if got_cmd  != 0 { tx_cmd_zero    = 0; }
+                                if got_stat != 0 { tx_status_zero = 0; }
+                            }
+                        }
+                        let rx_ok  = if rx_matched == 8 && rx_status_zero == 1 && rx_length_zero == 1 { 1u8 } else { 0u8 };
+                        let tx_ok  = if tx_matched == 8 && tx_status_zero == 1 && tx_cmd_zero == 1 && tx_length_zero == 1 { 1u8 } else { 0u8 };
+                        let all_ok = if rx_ok == 1 && tx_ok == 1 { 1u8 } else { 0u8 };
+                        serial_println!("[e1000.rx.desc.readback] checked=8 matched={} first_phys=0x{:016X} status_zero={} length_zero={} ok={} reason=read_volatile_uc_alias",
+                            rx_matched, rx_first_phys, rx_status_zero, rx_length_zero, rx_ok);
+                        serial_println!("[e1000.tx.desc.readback] checked=8 matched={} first_phys=0x{:016X} cmd_zero={} status_zero={} length_zero={} ok={} reason=read_volatile_uc_alias",
+                            tx_matched, tx_first_phys, tx_cmd_zero, tx_status_zero, tx_length_zero, tx_ok);
+                        serial_println!("[e1000.desc.readback.truth] reads=1 writes=0 device_visible=0 mmio_writes=0 dma=0 rings_enabled=0 packets=0 ok={} reason=readback_memory_only",
+                            all_ok);
+                        serial_println!("[browser.nic.truth] slot_net_grant=0 network=0 fetched=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=no_network_capability");
+                        serial_println!("[e1000.descriptor.readback.proof.done] ok={} rx_matched={} tx_matched={} packets=0",
+                            all_ok, rx_matched, tx_matched);
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");
                         serial_println!("[e1000.packet.buffer.uc] pages=8 aliases=0 flags=NO_CACHE|WRITE_THROUGH flush=0 ok=0 reason=alloc_failed_no_pages");
