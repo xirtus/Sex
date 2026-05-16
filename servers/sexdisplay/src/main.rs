@@ -122,6 +122,8 @@ const SURFACE_CHROME_LIGHT_HOVER: u8 = 1 << 2;
 /// chrome_flags bits 3-4: hovered light kind (0=close, 1=minimize, 2=zoom).
 const SURFACE_CHROME_LIGHT_KIND_MASK: u8 = 0x18; // bits 3-4
 const SURFACE_CHROME_LIGHT_KIND_SHIFT: u8 = 3;
+/// chrome_flags bit 5: close action allowed for this frame's active surface.
+const SURFACE_CHROME_CLOSE_ALLOWED: u8 = 1 << 5;
 /// Height of the top bar chrome band in default mode.
 const FRAME_TOP_BAR_HEIGHT_PX: usize = 28;
 /// Width and height of each frame light in default mode.
@@ -282,6 +284,7 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                     let frame_hovered = (surf.chrome_flags & SURFACE_CHROME_FRAME_HOVER) != 0;
                     let light_hovered = (surf.chrome_flags & SURFACE_CHROME_LIGHT_HOVER) != 0;
                     let hovered_light_kind = (surf.chrome_flags & SURFACE_CHROME_LIGHT_KIND_MASK) >> SURFACE_CHROME_LIGHT_KIND_SHIFT;
+                    let close_allowed = (surf.chrome_flags & SURFACE_CHROME_CLOSE_ALLOWED) != 0;
                     let single_tab = surf.tab_count <= 1;
 
                     // One-shot reveal mode marker.
@@ -340,9 +343,28 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                         // Frame lights: glass background with light color overlay.
                         // Dimmed for single-tab non-hover; full bright for hovered light.
                         if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {
+                            unsafe {
+                                static mut FRAME_LIGHT_STARTUP_RENDER_BUDGET: u32 = 32;
+                                if FRAME_LIGHT_STARTUP_RENDER_BUDGET > 0 && lx == FRAME_TOP_BAR_LIGHT_GAP_PX && ly == FRAME_TOP_BAR_LIGHT_TOP {
+                                    FRAME_LIGHT_STARTUP_RENDER_BUDGET -= 1;
+                                    serial_println!(
+                                        "[sexdisplay.frame.light.startup.render] sid={} red={} close_allowed={} reason={}",
+                                        surf.surface_id,
+                                        if close_allowed { "enabled" } else { "disabled" },
+                                        close_allowed as u8,
+                                        if close_allowed { "close_allowed" } else { "default_disabled_or_protected" }
+                                    );
+                                }
+                            }
                             let l1_end = FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX;
                             let l1_hovered = light_hovered && hovered_light_kind == 0;
-                            let l1_close_base: u8 = if l1_hovered { 255 } else { FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA };
+                            let l1_close_base: u8 = if close_allowed {
+                                if l1_hovered { 255 } else { 224 }
+                            } else if l1_hovered {
+                                255
+                            } else {
+                                FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA
+                            };
                             let light_alpha: u8 = scale_alpha(l1_close_base, chrome_dim);
                             if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX && lx < l1_end {
                                 if light_alpha > 0 { c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, light_alpha); }
@@ -375,10 +397,11 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                         if ly < FRAME_RIM_PX && !top_bar_active {
                             // Minimal mode top rim lights — glass version.
                             // Close light dimmed: close_allowed=0, non-interactive.
+                            let l1_alpha: u8 = if close_allowed { 224 } else { FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA };
                             if lx >= FRAME_LIGHT_GAP_PX
                                 && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
                             {
-                                c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA);
+                                c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, l1_alpha);
                             }
                             else if lx >= FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX
                                 && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
@@ -2311,6 +2334,7 @@ pub extern "C" fn _start() -> ! {
                     let raw_arg2 = msg.arg2;
                     let active_tab_raw = raw_arg2 as u8;
                     let chrome_flags_raw = ((raw_arg2 >> 8) & 0xff) as u8;
+                    let close_allowed = ((chrome_flags_raw & SURFACE_CHROME_CLOSE_ALLOWED) != 0) as u8;
                     let active_tab = if tab_count > 0 {
                         active_tab_raw.min(tab_count.saturating_sub(1))
                     } else { 0 };
@@ -2341,6 +2365,10 @@ pub extern "C" fn _start() -> ! {
                                 *b -= 1;
                                 serial_println!("[sexdisplay.surface.tab.info] surface={} tabs={} active={} chrome={}",
                                     surface_id, tab_count, active_tab, chrome_flags_raw);
+                                serial_println!(
+                                    "[sexdisplay.frame.light.chrome.recv] frame={} sid={} close_allowed={} flags=0x{:02x}",
+                                    active_tab as u32, surface_id, close_allowed, chrome_flags_raw
+                                );
                             }
                             // Hover state marker: log when hover flags change.
                             let hover = (chrome_flags_raw & SURFACE_CHROME_FRAME_HOVER) != 0;

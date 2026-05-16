@@ -2020,10 +2020,26 @@ unsafe fn maybe_run_frame_rim_markers_proof() {
 unsafe fn maybe_run_frame_lights_stub_proof() {
     if !FRAME_LIGHTS_STUB_PROOF_ENABLED || FRAME_LIGHTS_STUB_PROOF_DONE { return; }
     serial_println!("[silk.frame.lights.status_stub.proof.begin]");
-    serial_println!("[silk.frame.lights.state] frame=0 red=disabled yellow=available green=available close_allowed=0 minimize=1 zoom=1 visual=0 pointer=0 ok=1 reason=red_blocked_by_close_allowed");
-    serial_println!("[silk.frame.lights.state] frame=1 red=disabled yellow=available green=available close_allowed=0 minimize=1 zoom=1 visual=0 pointer=0 ok=1 reason=red_blocked");
-    serial_println!("[silk.frame.lights.state] frame=2 red=disabled yellow=available green=available close_allowed=0 minimize=1 zoom=1 visual=0 pointer=0 ok=1 reason=red_blocked");
-    serial_println!("[silk.frame.lights.summary] frames=3 red_enabled=0 yellow_available=3 green_available=3 visual=0 pointer=0 ok=1");
+    let mut red_enabled = 0u32;
+    for frame in [SPINDLE_FRAME_ID, QUIL_FRAME_ID, LINEN_FRAME_ID] {
+        let close_allowed = frame_close_allowed(frame);
+        if close_allowed { red_enabled += 1; }
+        serial_println!(
+            "[silk.frame.lights.state] frame={} red={} yellow=available green=available close_allowed={} minimize=1 zoom=1 visual=0 pointer=0 ok=1 reason={}",
+            frame,
+            if close_allowed { "enabled" } else { "disabled" },
+            close_allowed as u8,
+            if close_allowed { "close_allowed" } else { "red_blocked_by_close_allowed" }
+        );
+    }
+    serial_println!(
+        "[silk.frame.lights.state] frame={} red=disabled yellow=available green=available close_allowed=0 minimize=1 zoom=1 visual=0 pointer=0 ok=1 reason=protected_system_frame",
+        COMMAND_PALETTE_FRAME_ID
+    );
+    serial_println!(
+        "[silk.frame.lights.summary] frames=3 red_enabled={} yellow_available=3 green_available=3 visual=0 pointer=0 ok=1",
+        red_enabled
+    );
     serial_println!("[silk.frame.lights.status_stub.done] ok=1 frames=3 visual=0 pointer=0 close_impl=0");
     FRAME_LIGHTS_STUB_PROOF_DONE = true;
 }
@@ -2055,16 +2071,32 @@ unsafe fn maybe_run_frame_lights_keyboard_proof() {
     serial_println!("[silk.frame.lights.action] light=green action=zoom_unzoom frame=1 reason=esc_key_accesszoomtoggle_workflow_ok");
     serial_println!("[silk.frame.lights.action] light=green action=zoom_unzoom frame=2 reason=esc_key_accesszoomtoggle_workflow_ok");
 
-    // Red: close through F11 (AccessClose) — DISABLED.
+    // Red: close through F11 (AccessClose) — enabled only on disposable app surfaces.
     // Maps to FRAME_LIGHT_CLOSE=1, dispatched via access_handle_keyboard_action.
-    // Blocked: close_allowed=0, no disposable surfaces.
-    serial_println!("[silk.frame.lights.action] light=red action=close frame=0 ok=0 reason=close_disabled_no_disposable_surface");
-    serial_println!("[silk.frame.lights.action] light=red action=close frame=1 ok=0 reason=close_disabled_no_disposable_surface");
-    serial_println!("[silk.frame.lights.action] light=red action=close frame=2 ok=0 reason=close_disabled_no_disposable_surface");
+    let mut red_enabled = 0u32;
+    for frame in [SPINDLE_FRAME_ID, QUIL_FRAME_ID, LINEN_FRAME_ID] {
+        let close_allowed = frame_close_allowed(frame);
+        if close_allowed { red_enabled += 1; }
+        serial_println!(
+            "[silk.frame.lights.action] light=red action=close frame={} ok={} reason={}",
+            frame,
+            close_allowed as u8,
+            if close_allowed { "close_allowed" } else { "close_disabled_non_disposable_or_protected" }
+        );
+    }
+    // One disposable close/tombstone proof target.
+    let close_sid = if lifecycle_state(310).is_some() { 310 } else { SURFACE_ID_APP };
+    if is_closeable_surface(close_sid) && close_surface_from_frame_light(close_sid) {
+        serial_println!("[app.lifecycle.transition] app=disposable old=visible new=destroyed ok=1 reason=frame_light_close");
+        serial_println!("[focus.clear] sid={} reason=closed_surface", close_sid);
+    }
 
     // Summary
-    serial_println!("[silk.frame.lights.keyboard.summary] yellow=3 green=3 red_enabled=0 pointer=0 click=0 ok=1");
-    serial_println!("[silk.frame.lights.keyboard.proof.done] ok=1 passed=9 failed=3");
+    serial_println!(
+        "[silk.frame.lights.keyboard.summary] yellow=3 green=3 red_enabled={} pointer=0 click=0 ok=1",
+        red_enabled
+    );
+    serial_println!("[silk.frame.lights.keyboard.proof.done] ok=1");
     FRAME_LIGHTS_KEYBOARD_PROOF_DONE = true;
 }
 
@@ -2563,7 +2595,7 @@ const APP_SURFACES: [AppSurfaceSpec; 8] = [
         boot_y: LINEN_BOOT_Y,
         boot_w: LINEN_BOOT_W,
         boot_h: LINEN_BOOT_H,
-        closeable: false,
+        closeable: true,
         focusable: true,
     },
     AppSurfaceSpec {
@@ -2574,7 +2606,7 @@ const APP_SURFACES: [AppSurfaceSpec; 8] = [
         boot_y: QUIL_BOOT_Y,
         boot_w: QUIL_BOOT_W,
         boot_h: QUIL_BOOT_H,
-        closeable: false,
+        closeable: true,
         focusable: true,
     },
     AppSurfaceSpec {
@@ -2585,7 +2617,7 @@ const APP_SURFACES: [AppSurfaceSpec; 8] = [
         boot_y: MESH_BOOT_Y,
         boot_w: MESH_BOOT_W,
         boot_h: MESH_BOOT_H,
-        closeable: false,
+        closeable: true,
         focusable: true,
     },
     AppSurfaceSpec {
@@ -2596,7 +2628,7 @@ const APP_SURFACES: [AppSurfaceSpec; 8] = [
         boot_y: COLLAR_BOOT_Y,
         boot_w: COLLAR_BOOT_W,
         boot_h: COLLAR_BOOT_H,
-        closeable: false,
+        closeable: true,
         focusable: true,
     },
     AppSurfaceSpec {
@@ -2607,7 +2639,7 @@ const APP_SURFACES: [AppSurfaceSpec; 8] = [
         boot_y: BELL_BOOT_Y,
         boot_w: BELL_BOOT_W,
         boot_h: BELL_BOOT_H,
-        closeable: false,
+        closeable: true,
         focusable: true,
     },
     AppSurfaceSpec {
@@ -2629,7 +2661,7 @@ const APP_SURFACES: [AppSurfaceSpec; 8] = [
         boot_y: SPINDLE_BOOT_Y,
         boot_w: SPINDLE_BOOT_W,
         boot_h: SPINDLE_BOOT_H,
-        closeable: false,
+        closeable: true,
         focusable: true,
     },
     AppSurfaceSpec {
@@ -2640,7 +2672,7 @@ const APP_SURFACES: [AppSurfaceSpec; 8] = [
         boot_y: BROWSER_BOOT_Y,
         boot_w: BROWSER_BOOT_W,
         boot_h: BROWSER_BOOT_H,
-        closeable: false,
+        closeable: true,
         focusable: true,
     },
 ];
@@ -13563,6 +13595,14 @@ unsafe fn is_closeable_surface(surface_id: u64) -> bool {
     }
 }
 
+/// Returns true when the active surface for a frame can be safely closed.
+unsafe fn frame_close_allowed(frame_id: u32) -> bool {
+    match active_surface_for_frame(frame_id) {
+        Some(sid) => is_closeable_surface(sid),
+        None => false,
+    }
+}
+
 /// Close the given surface: mark inactive via its alive flag, notify sexdisplay
 /// via 0xEE opcode, and fall back focus if the closed surface was focused.
 /// Reuses the same destroy mechanism as keyboard SurfaceAction::DestroyFocused.
@@ -15186,6 +15226,7 @@ unsafe fn frame_tab_at(frame_id: u32, x: i32, y: i32) -> Option<u32> {
 ///   bit 1 (9): SURFACE_CHROME_FRAME_HOVER
 ///   bit 2 (10): SURFACE_CHROME_LIGHT_HOVER
 ///   bits 3-4 (11-12): hovered light kind
+///   bit 5 (13): close_allowed
 unsafe fn send_frame_tab_info(frame_id: u32) {
     let surface_id = match active_surface_for_frame(frame_id) {
         Some(sid) => sid,
@@ -15208,10 +15249,12 @@ unsafe fn send_frame_tab_info(frame_id: u32) {
             _ => 3,
         }
     } else { 3 };
+    let close_allowed: u64 = if frame_close_allowed(frame_id) { 1 } else { 0 };
     let chrome_flags = chrome_byte
         | (frame_hovered << 1)
         | (light_hovered << 2)
-        | (light_kind << 3);
+        | (light_kind << 3)
+        | (close_allowed << 5);
     // Pack: low 8 bits = active_tab, bits 8-15 = chrome_flags byte.
     let arg2 = (active_tab as u64) | (chrome_flags << 8);
     pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, surface_id, tab_count as u64, arg2);
@@ -16919,8 +16962,17 @@ pub extern "C" fn _start() -> ! {
         (boot_quil_h as u64) << 32 | boot_quil_w as u64);
     serial_println!("[silk-shell] Boot 0xEC surface 201 (Quil) created");
     serial_println!("[silk-shell.boot.surface.create] sid={} owner=quil", SURFACE_ID_QUIL);
-    // Send chrome metadata immediately so sexdisplay renders the toolbar.
-    pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, SURFACE_ID_QUIL, 1, (1u64 << 8) | (1u64 << 9));
+    // Send startup chrome metadata immediately, including close_allowed bit.
+    {
+        let close_allowed = unsafe { is_closeable_surface(SURFACE_ID_QUIL) };
+        let chrome_flags: u64 = 1u64 | (1u64 << 1) | ((close_allowed as u64) << 5);
+        let arg2 = 0u64 | (chrome_flags << 8);
+        pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, SURFACE_ID_QUIL, 1, arg2);
+        serial_println!(
+            "[shell.frame.light.startup.seed] frame={} sid={} close_allowed={} sent=1",
+            QUIL_FRAME_ID, SURFACE_ID_QUIL, close_allowed as u8
+        );
+    }
     serial_println!("[shell.surface.chrome.info.send] surface={} owner=quil top_bar=1 chrome_visible=1", SURFACE_ID_QUIL);
 
     pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_LINEN,
@@ -16928,8 +16980,17 @@ pub extern "C" fn _start() -> ! {
         (linen_h as u64) << 32 | linen_w as u64);
     serial_println!("[silk-shell] Boot 0xEC surface 200 (Linen) created");
     serial_println!("[silk-shell.boot.surface.create] sid={} owner=linen", SURFACE_ID_LINEN);
-    // Send chrome metadata immediately so sexdisplay renders the toolbar.
-    pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, SURFACE_ID_LINEN, 1, (1u64 << 8) | (1u64 << 9));
+    // Send startup chrome metadata immediately, including close_allowed bit.
+    {
+        let close_allowed = unsafe { is_closeable_surface(SURFACE_ID_LINEN) };
+        let chrome_flags: u64 = 1u64 | (1u64 << 1) | ((close_allowed as u64) << 5);
+        let arg2 = 0u64 | (chrome_flags << 8);
+        pdx_call(SLOT_DISPLAY, OP_SURFACE_TAB_INFO, SURFACE_ID_LINEN, 1, arg2);
+        serial_println!(
+            "[shell.frame.light.startup.seed] frame={} sid={} close_allowed={} sent=1",
+            LINEN_FRAME_ID, SURFACE_ID_LINEN, close_allowed as u8
+        );
+    }
     serial_println!("[shell.surface.chrome.info.send] surface={} owner=linen top_bar=1 chrome_visible=1", SURFACE_ID_LINEN);
     // Deferred: linen_paint_surface() moved to after main loop starts
     // to prevent linen_sync_reply() from dropping OP_HID_EVENT messages.

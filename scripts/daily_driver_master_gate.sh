@@ -1468,11 +1468,35 @@ elif [ "$(has 'silk\.frame\.rim\.render\]')" -ge 1 ]; then
 else gate_frame_rim_visual="SKIP"; fi
 
 # ---- 77. frame_lights_stub ----
-if [ "$(has 'silk\.frame\.lights\.status_stub\.done.*ok=1')" -eq 1 ]; then
-    gate_frame_lights_stub="PASS"
-    print_row "frame_lights_stub" "PASS" "red=disabled yellow/green=available"
+first_light_render_line="$(grep -n '\[sexdisplay\.frame\.light\.startup\.render\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
+first_light_enabled_line="$(grep -n '\[sexdisplay\.frame\.light\.startup\.render\].*red=enabled.*close_allowed=1' "$LOG" | head -n1 | cut -d: -f1 || true)"
+light_enable_max_distance=240
+if [ "$(has 'silk\.frame\.lights\.status_stub\.done.*ok=1')" -eq 1 ] \
+   && [ "$(has 'silk\.frame\.lights\.summary.*red_enabled=[1-9][0-9]*.*ok=1')" -ge 1 ] \
+   && [ "$(has 'silk\.frame\.lights\.state.*reason=protected_system_frame')" -ge 1 ] \
+   && [ "$(has 'silk\.frame\.lights\.state.*close_allowed=0')" -ge 1 ] \
+   && [ -n "${first_light_render_line:-}" ] \
+   && [ -n "${first_light_enabled_line:-}" ]; then
+    light_enable_distance=$(( first_light_enabled_line - first_light_render_line ))
+    if [ "$light_enable_distance" -le "$light_enable_max_distance" ]; then
+        gate_frame_lights_stub="PASS"
+        print_row "frame_lights_stub" "PASS" \
+            "startup red enable first=${first_light_render_line} first_enabled=${first_light_enabled_line} distance=${light_enable_distance}; protected close_allowed=0"
+    else
+        gate_frame_lights_stub="FAIL"
+        print_row "frame_lights_stub" "FAIL" \
+            "startup red enable too late first=${first_light_render_line} first_enabled=${first_light_enabled_line} distance=${light_enable_distance}>${light_enable_max_distance}"
+    fi
+elif [ "$(has 'sexdisplay\.frame\.light\.startup\.render.*red=disabled')" -ge 16 ] \
+     && [ "$(has 'sexdisplay\.frame\.light\.startup\.render.*red=enabled')" -eq 0 ]; then
+    gate_frame_lights_stub="FAIL"
+    print_row "frame_lights_stub" "FAIL" "first startup render window all red=disabled"
+elif [ "$(has 'silk\.frame\.lights\.summary.*red_enabled=0')" -ge 1 ]; then
+    gate_frame_lights_stub="FAIL"
+    print_row "frame_lights_stub" "FAIL" "all red frame lights disabled"
 elif [ "$(has 'silk\.frame\.lights\.state\]')" -ge 1 ]; then
-    gate_frame_lights_stub="PASS"
+    gate_frame_lights_stub="FAIL"
+    print_row "frame_lights_stub" "FAIL" "missing close-allow policy proof"
 else gate_frame_lights_stub="SKIP"; fi
 
 # ---- 78. spindle_frame_lights ----
@@ -1512,17 +1536,23 @@ else gate_atlas_scene_stub="SKIP"; fi
 # ---- 82. frame_lights_visual ----
 if [ "$(has 'silk\.frame\.lights\.visual\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_frame_lights_visual="PASS"
-    print_row "frame_lights_visual" "PASS" "3 frames rendered red=disabled alpha=0 blur=0"
+    print_row "frame_lights_visual" "PASS" "3 frames rendered alpha=0 blur=0"
 elif [ "$(has 'silk\.frame\.lights\.render\]')" -ge 1 ]; then
     gate_frame_lights_visual="PASS"
 else gate_frame_lights_visual="SKIP"; fi
 
 # ---- 83. frame_lights_keyboard ----
-if [ "$(has 'silk\.frame\.lights\.keyboard\.proof\.done.*ok=1')" -eq 1 ]; then
+if [ "$(has 'silk\.frame\.lights\.keyboard\.proof\.done.*ok=1')" -eq 1 ] \
+   && [ "$(has 'silk\.frame\.lights\.action.*light=red.*ok=1.*reason=close_allowed')" -ge 1 ] \
+   && [ "$(has 'frame\.light\.close\.fsm\]')" -ge 1 ]; then
     gate_frame_lights_keyboard="PASS"
-    print_row "frame_lights_keyboard" "PASS" "yellow=3 green=3 red_enabled=0 pointer=0"
+    print_row "frame_lights_keyboard" "PASS" "red close enabled + close fsm proven"
+elif [ "$(has 'silk\.frame\.lights\.keyboard\.summary.*red_enabled=0')" -ge 1 ]; then
+    gate_frame_lights_keyboard="FAIL"
+    print_row "frame_lights_keyboard" "FAIL" "red_enabled=0"
 elif [ "$(has 'silk\.frame\.lights\.action\]')" -ge 1 ]; then
-    gate_frame_lights_keyboard="PASS"
+    gate_frame_lights_keyboard="FAIL"
+    print_row "frame_lights_keyboard" "FAIL" "missing red close success/fsm markers"
 else gate_frame_lights_keyboard="SKIP"; fi
 
 # ---- 84. scene_lifecycle_markers ----
