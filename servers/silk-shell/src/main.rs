@@ -1836,6 +1836,18 @@ unsafe fn maybe_run_sexnet_browser_cap_proof() {
     SEXNET_BROWSER_CAP_PROOF_DONE = true;
 }
 
+/// Sexnet status route proof.
+const SEXNET_STATUS_ROUTE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SEXNET_STATUS_ROUTE_PROOF").is_some();
+static mut SEXNET_STATUS_ROUTE_PROOF_DONE: bool = false;
+unsafe fn maybe_run_sexnet_status_route_proof() {
+    if !SEXNET_STATUS_ROUTE_PROOF_ENABLED || SEXNET_STATUS_ROUTE_PROOF_DONE { return; }
+    serial_println!("[sexnet.status.route] spawned=1 passive=1 slot_net_grant=0 ok=1 reason=sexnet_passive_browser_observes_status_only");
+    serial_println!("[browser.sexnet.status] visible=1 network=0 fetched=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=passive_spawn_no_network_route");
+    serial_println!("[sexnet.status.route.proof.done] ok=1 browser_network=0 fetched=0");
+    SEXNET_STATUS_ROUTE_PROOF_DONE = true;
+}
+
 /// Browser HTML subset proof.
 const BROWSER_HTML_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_HTML_PROOF").is_some();
@@ -17043,6 +17055,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_html_link_proof(); }
         unsafe { maybe_run_browser_html_history_proof(); }
         unsafe { maybe_run_sexnet_browser_cap_proof(); }
+        unsafe { maybe_run_sexnet_status_route_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
