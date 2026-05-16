@@ -1626,6 +1626,32 @@ unsafe fn maybe_run_browser_tabs_proof() {
     BROWSER_TABS_PROOF_DONE = true;
 }
 
+/// Browser page actions stub proof.
+const BROWSER_ACTIONS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_ACTIONS_PROOF").is_some();
+static mut BROWSER_ACTIONS_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_actions_proof() {
+    if !BROWSER_ACTIONS_PROOF_ENABLED || BROWSER_ACTIONS_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let ylw: u64 = 0x00F9E2AF;
+    let dim: u64 = 0x006C7086;
+
+    serial_println!("[browser.action.intent] action=open tab=0 fetched=0 ok=1 reason=marker_only");
+    serial_println!("[browser.action.intent] action=refresh tab=0 fetched=0 ok=1 reason=marker_only");
+    serial_println!("[browser.action.intent] action=stop tab=0 fetched=0 ok=1 reason=marker_only");
+    serial_println!("[browser.action.intent] action=reload tab=0 fetched=0 ok=1 reason=marker_only");
+
+    shell_draw_text(sid, b"Actions: open refresh stop reload", ylw);
+    shell_draw_text(sid, b"  tab 0: sexos.org", dim);
+    shell_draw_text(sid, b"  all actions: marker-only, fetched=0", dim);
+    shell_draw_text(sid, b"  network=0 engine=0 -- no real browsing", dim);
+
+    serial_println!("[browser.action.draw] sid={} action=summary ok=1", sid);
+    serial_println!("[browser.action.proof.done] ok=1");
+    BROWSER_ACTIONS_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16728,6 +16754,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_history_proof(); }
         unsafe { maybe_run_browser_bookmarks_proof(); }
         unsafe { maybe_run_browser_tabs_proof(); }
+        unsafe { maybe_run_browser_actions_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
