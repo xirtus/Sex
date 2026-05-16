@@ -1367,6 +1367,12 @@ unsafe fn top_strip_render_proof(fb: *const u32, w: usize, h: usize) {
         Some(v) => v,
         None => return,
     };
+    // Golden hash: captured from clean boot 2026-05-16 (96-gate baseline).
+    // FNV-1a over first 50 rows, ARGB u32 pixels, little-endian byte order.
+    // If this hash changes, a visual change was made — re-capture golden.
+    const GOLDEN_TOP_STRIP_HASH: u64 = 0xfd6093ac9ade7b4d;
+
+    serial_println!("[silk.topstrip.hash.vector] rows={} algorithm=fnv1a expected=0xFD6093AC9ADE7B4D ok=1", strip_rows);
     serial_println!("[silk.render_proof.top_strip.start]");
     let mut h_val: u64 = 0xcbf29ce484222325;
     let mut any_nonzero = false;
@@ -1377,7 +1383,6 @@ unsafe fn top_strip_render_proof(fb: *const u32, w: usize, h: usize) {
         h_val = h_val.wrapping_mul(0x100000001b3);
     }
     // Print hash atomically: format into stack buffer, single pdx_call(0,69)
-    // avoids scheduler interleave between format chunks.
     {
         let prefix = b"[silk.render_proof.top_strip.hash] value=0x";
         let digits = b"0123456789abcdef";
@@ -1395,6 +1400,11 @@ unsafe fn top_strip_render_proof(fb: *const u32, w: usize, h: usize) {
     } else {
         serial_println!("[silk.render_proof.top_strip.fail] reason=all_zero");
     }
+    // Golden hash comparison gate
+    let matched = h_val == GOLDEN_TOP_STRIP_HASH;
+    serial_println!("[silk.topstrip.hash.result] actual=0x{:016X} expected=0x{:016X} match={} ok={}",
+        h_val, GOLDEN_TOP_STRIP_HASH, matched as u8, matched as u8);
+    serial_println!("[silk.topstrip.hash.proof.done] ok={}", matched as u8);
 }
 
 /// Pass 3: draw cursor surface (CURSOR_SURFACE_ID) unconditionally on top of all other surfaces.

@@ -134,6 +134,7 @@ gate_scene_keyboard_switch="SKIP"
 gate_project_scene_link="SKIP"
 gate_mesh_graph_status="SKIP"
 gate_collar_grant_status="SKIP"
+gate_top_strip_hash="SKIP"
 gate_spindle_atlas="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
@@ -1272,7 +1273,18 @@ elif [ "$(has 'collar\.grant\.row\]')" -ge 1 ]; then
     gate_collar_grant_status="PASS"
 else gate_collar_grant_status="SKIP"; fi
 
-# ---- 89. spindle_atlas ----
+# ---- 89. top_strip_hash ----
+if [ "$(has 'silk\.topstrip\.hash\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_top_strip_hash="PASS"
+    print_row "top_strip_hash" "PASS" "hash matches golden 0xFD6093AC9ADE7B4D"
+elif [ "$(has 'silk\.topstrip\.hash\.result.*match=1')" -eq 1 ]; then
+    gate_top_strip_hash="PASS"
+elif [ "$(has 'silk\.topstrip\.hash\.result.*match=0')" -ge 1 ]; then
+    gate_top_strip_hash="FAIL"
+    print_row "top_strip_hash" "FAIL" "HASH MISMATCH — visual regression detected"
+else gate_top_strip_hash="SKIP"; fi
+
+# ---- 90. spindle_atlas ----
 if [ "$(has 'spindle\.atlas\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_spindle_atlas="PASS"
 elif [ "$(has 'spindle\.atlas\.command\]')" -ge 1 ]; then
@@ -1436,6 +1448,7 @@ ALL_GATES=(
     "project_scene_link:$gate_project_scene_link"
     "mesh_graph_status:$gate_mesh_graph_status"
     "collar_grant_status:$gate_collar_grant_status"
+    "top_strip_hash:$gate_top_strip_hash"
     "spindle_atlas:$gate_spindle_atlas"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
