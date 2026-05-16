@@ -168,6 +168,11 @@ gate_e1000_ring_phys="SKIP"
 gate_e1000_ring_truth="SKIP"
 gate_browser_nic_truth="SKIP"
 gate_dma_ring_alloc_proof_done="SKIP"
+gate_e1000_packet_buffer_alloc="SKIP"
+gate_e1000_packet_buffer_uc="SKIP"
+gate_e1000_packet_buffer_sample="SKIP"
+gate_e1000_packet_buffer_truth="SKIP"
+gate_e1000_packet_buffer_uc_alias_proof_done="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1478,6 +1483,45 @@ elif [ "$(has 'dma.static.ring.allocation.proof.done.*ok=0')" -eq 1 ]; then
     print_row "dma_ring_alloc_proof_done" "FAIL" "proof not completed"
 else gate_dma_ring_alloc_proof_done="SKIP"; fi
 
+# ---- 140. e1000_packet_buffer_alloc ----
+if [ "$(has 'e1000.packet.buffer.alloc.*pages=8.*buffers=16.*allocated=1.*ok=1')" -eq 1 ]; then
+    gate_e1000_packet_buffer_alloc="PASS"
+    print_row "e1000_packet_buffer_alloc" "PASS" "pages=8 buffers=16 rx=8 tx=8 allocated=1"
+elif [ "$(has 'e1000.packet.buffer.alloc.*allocated=0.*ok=0')" -eq 1 ]; then
+    gate_e1000_packet_buffer_alloc="FAIL"
+    print_row "e1000_packet_buffer_alloc" "FAIL" "alloc_frame_page_failed"
+else gate_e1000_packet_buffer_alloc="SKIP"; fi
+
+# ---- 141. e1000_packet_buffer_uc ----
+if [ "$(has 'e1000.packet.buffer.uc.*aliases=8.*ok=1')" -eq 1 ]; then
+    gate_e1000_packet_buffer_uc="PASS"
+    print_row "e1000_packet_buffer_uc" "PASS" "pages=8 aliases=8 flush=1 UC mapped"
+elif [ "$(has 'e1000.packet.buffer.uc.*aliases=0.*ok=0')" -eq 1 ]; then
+    gate_e1000_packet_buffer_uc="FAIL"
+    print_row "e1000_packet_buffer_uc" "FAIL" "aliases=0 UC mapping failed"
+else gate_e1000_packet_buffer_uc="SKIP"; fi
+
+# ---- 142. e1000_packet_buffer_sample ----
+if [ "$(has 'e1000.packet.buffer.sample.*idx=0.*role=RX.*ok=1')" -eq 1 ]; then
+    gate_e1000_packet_buffer_sample="PASS"
+    print_row "e1000_packet_buffer_sample" "PASS" "RX(0)+TX(8) phys/alias sampled"
+else gate_e1000_packet_buffer_sample="SKIP"; fi
+
+# ---- 143. e1000_packet_buffer_truth ----
+if [ "$(has 'e1000.packet.buffer.truth.*descriptor_linked=0.*device_visible=0.*mmio_writes=0.*dma=0.*packets=0.*ok=1')" -eq 1 ]; then
+    gate_e1000_packet_buffer_truth="PASS"
+    print_row "e1000_packet_buffer_truth" "PASS" "descriptor_linked=0 device_visible=0 mmio_writes=0 dma=0 packets=0"
+else gate_e1000_packet_buffer_truth="SKIP"; fi
+
+# ---- 144. e1000_packet_buffer_uc_alias_proof_done ----
+if [ "$(has 'e1000.packet.buffer.uc.alias.proof.done.*ok=1.*allocated=16.*descriptor_linked=0.*packets=0')" -eq 1 ]; then
+    gate_e1000_packet_buffer_uc_alias_proof_done="PASS"
+    print_row "e1000_packet_buffer_uc_alias_proof_done" "PASS" "ok=1 allocated=16 descriptor_linked=0 packets=0"
+elif [ "$(has 'e1000.packet.buffer.uc.alias.proof.done.*ok=0')" -eq 1 ]; then
+    gate_e1000_packet_buffer_uc_alias_proof_done="FAIL"
+    print_row "e1000_packet_buffer_uc_alias_proof_done" "FAIL" "proof not completed"
+else gate_e1000_packet_buffer_uc_alias_proof_done="SKIP"; fi
+
 # ---- 94. clock_visible_seconds ----
 first_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
 first_nonzero_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\].* s=[1-9][0-9]* ' "$LOG" | head -n1 | cut -d: -f1 || true)"
@@ -1930,6 +1974,11 @@ ALL_GATES=(
     "e1000_ring_truth:$gate_e1000_ring_truth"
     "browser_nic_truth:$gate_browser_nic_truth"
     "dma_ring_alloc_proof_done:$gate_dma_ring_alloc_proof_done"
+    "e1000_packet_buffer_alloc:$gate_e1000_packet_buffer_alloc"
+    "e1000_packet_buffer_uc:$gate_e1000_packet_buffer_uc"
+    "e1000_packet_buffer_sample:$gate_e1000_packet_buffer_sample"
+    "e1000_packet_buffer_truth:$gate_e1000_packet_buffer_truth"
+    "e1000_packet_buffer_uc_alias_proof_done:$gate_e1000_packet_buffer_uc_alias_proof_done"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"

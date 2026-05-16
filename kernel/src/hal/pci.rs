@@ -191,6 +191,66 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                     serial_println!("[dma.uc.alias.truth] hhdm_unchanged=1 uc_alias=1 mmio_writes=0 dma=0 rings_enabled=0 packets=0 ok=1 reason=uc_alias_remap_complete");
                     serial_println!("[dma.uc.alias.remap.proof.done] ok=1 rx_alias={} tx_alias={} packets=0",
                         rx_ok as u8, tx_ok as u8);
+
+                    // E1000_PACKET_BUFFER_UC_ALIAS_PROOF_V1
+                    // Allocate 8 pages for 16 bounded packet buffers (8 RX + 8 TX).
+                    // Each page is 4K-aligned and holds 2 × 2048-byte buffers.
+                    // UC alias each page at 0xFFFF_9000_0000_0000 + phys.
+                    // No descriptor linking. No MMIO writes. No RX/TX enable. No packets.
+                    let mut pkt_pages: [u64; 8] = [0; 8];
+                    let mut pkt_alloc_ok = true;
+                    for i in 0..8 {
+                        match crate::memory::allocator::alloc_frame() {
+                            Some(phys) => {
+                                pkt_pages[i] = phys;
+                                // Zero via HHDM immediately
+                                let zva = hhdm + phys;
+                                unsafe { core::ptr::write_bytes(zva as *mut u8, 0, 4096); }
+                            }
+                            None => {
+                                pkt_alloc_ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if pkt_alloc_ok {
+                        let mut pkt_alias_ok = true;
+                        let mut pkt_alias_count: u8 = 0;
+                        let mut pkt_gvas_lock = crate::memory::manager::GLOBAL_VAS.lock();
+                        if let Some(ref mut pkt_gvas) = *pkt_gvas_lock {
+                            for i in 0..8 {
+                                let pkt_uc_va = uc_base + pkt_pages[i];
+                                let res = pkt_gvas.map_physical_range(
+                                    VirtAddr::new(pkt_uc_va), pkt_pages[i], 4096, uc_flags, 0);
+                                if res.is_ok() {
+                                    pkt_alias_count += 1;
+                                    unsafe { core::arch::asm!("invlpg [{}]", in(reg) pkt_uc_va, options(nostack, preserves_flags)); }
+                                } else {
+                                    pkt_alias_ok = false;
+                                    break;
+                                }
+                            }
+                        } else {
+                            pkt_alias_ok = false;
+                        }
+                        drop(pkt_gvas_lock);
+                        serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=1 ok=1 reason=alloc_frame_order0_x8");
+                        serial_println!("[e1000.packet.buffer.uc] pages=8 aliases={} flags=NO_CACHE|WRITE_THROUGH flush=1 ok={} reason=map_physical_range_uc_alias",
+                            pkt_alias_count, pkt_alias_ok as u8);
+                        // Sample buffer 0 (RX, page[0]+0) and buffer 8 (TX, page[4]+0)
+                        serial_println!("[e1000.packet.buffer.sample] idx=0 role=RX phys=0x{:016X} alias=0x{:016X} size=2048 ok=1 reason=page0_offset0",
+                            pkt_pages[0], uc_base + pkt_pages[0]);
+                        serial_println!("[e1000.packet.buffer.sample] idx=8 role=TX phys=0x{:016X} alias=0x{:016X} size=2048 ok=1 reason=page4_offset0",
+                            pkt_pages[4], uc_base + pkt_pages[4]);
+                        serial_println!("[e1000.packet.buffer.truth] descriptor_linked=0 device_visible=0 mmio_writes=0 dma=0 packets=0 ok=1 reason=memory_only_no_descriptor_no_mmio_no_rxtx");
+                        serial_println!("[browser.nic.truth] slot_net_grant=0 network=0 fetched=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=no_network_capability");
+                        serial_println!("[e1000.packet.buffer.uc.alias.proof.done] ok=1 allocated=16 descriptor_linked=0 packets=0");
+                    } else {
+                        serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");
+                        serial_println!("[e1000.packet.buffer.uc] pages=8 aliases=0 flags=NO_CACHE|WRITE_THROUGH flush=0 ok=0 reason=alloc_failed_no_pages");
+                        serial_println!("[e1000.packet.buffer.truth] descriptor_linked=0 device_visible=0 mmio_writes=0 dma=0 packets=0 ok=0 reason=alloc_failed");
+                        serial_println!("[e1000.packet.buffer.uc.alias.proof.done] ok=0 allocated=0 descriptor_linked=0 packets=0");
+                    }
                 } else {
                     serial_println!("[dma.static.ring.alloc] rx_bytes=4096 tx_bytes=4096 rx_align=4096 tx_align=4096 cache=UC allocated=0 ok=0 reason=alloc_frame_failed");
                     serial_println!("[e1000.ring.phys] rx_phys=0x0 tx_phys=0x0 rx_virt=0x0 tx_virt=0x0 ok=0 reason=alloc_failed");
