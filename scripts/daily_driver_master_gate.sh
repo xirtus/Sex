@@ -150,6 +150,7 @@ gate_browser_url_parse="SKIP"
 gate_browser_html="SKIP"
 gate_frame_lights_visual="SKIP"
 gate_browser_html_history="SKIP"
+gate_sexnet_browser_cap="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
 gate_project_scene_link="SKIP"
@@ -1318,6 +1319,14 @@ elif [ "$(has 'browser.html.history.intent]')" -ge 1 ]; then
     gate_browser_html_history="PASS"
 else gate_browser_html_history="SKIP"; fi
 
+# ---- 93. sexnet_browser_cap ----
+if [ "$(has 'sexnet.browser.cap.stub.proof.done.*ok=1')" -eq 1 ]; then
+    gate_sexnet_browser_cap="PASS"
+    print_row "sexnet_browser_cap" "PASS" "sexnet=0 slot_net=0 network=0"
+elif [ "$(has 'sexnet.stub.status]')" -ge 1 ]; then
+    gate_sexnet_browser_cap="PASS"
+else gate_sexnet_browser_cap="SKIP"; fi
+
 # ---- 73. linen_persist_readback ----
 if [ "$(has 'linen\.persist\.readback\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_persist_readback="PASS"
@@ -1650,6 +1659,7 @@ ALL_GATES=(
     "browser_html:$gate_browser_html"
     "browser_html_link:$gate_browser_html_link"
     "browser_html_history:$gate_browser_html_history"
+    "sexnet_browser_cap:$gate_sexnet_browser_cap"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"

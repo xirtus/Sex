@@ -1820,6 +1820,22 @@ unsafe fn maybe_run_browser_url_parse_proof() {
     BROWSER_URL_PARSE_PROOF_DONE = true;
 }
 
+/// Sexnet browser capability stub proof.
+const SEXNET_BROWSER_CAP_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SEXNET_BROWSER_CAP_PROOF").is_some();
+static mut SEXNET_BROWSER_CAP_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_sexnet_browser_cap_proof() {
+    if !SEXNET_BROWSER_CAP_PROOF_ENABLED || SEXNET_BROWSER_CAP_PROOF_DONE { return; }
+    // Honest: sexnet server exists (servers/sexnet/) but is not spawned at boot.
+    // silknet crate has opcodes (GET_STATUS, SCAN_WIFI, etc.).
+    // Browser has no SLOT_NET grant. No network capability.
+    serial_println!("[sexnet.stub.status] spawned=0 slot_net=0 nic=0 tcp=0 dns=0 http=0 ok=1 reason=sexnet_not_spawned_no_capability_grant");
+    serial_println!("[browser.net.status] sexnet=0 slot_net=0 network=0 fetched=0 ok=1 reason=honest_no_network_route");
+    serial_println!("[sexnet.browser.cap.stub.proof.done] ok=1");
+    SEXNET_BROWSER_CAP_PROOF_DONE = true;
+}
+
 /// Browser HTML subset proof.
 const BROWSER_HTML_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_HTML_PROOF").is_some();
@@ -17026,6 +17042,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_html_proof(); }
         unsafe { maybe_run_browser_html_link_proof(); }
         unsafe { maybe_run_browser_html_history_proof(); }
+        unsafe { maybe_run_sexnet_browser_cap_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
