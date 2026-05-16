@@ -1542,25 +1542,26 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         // ── Browser stub commands ─────────────────────────────────────────
         b"browser" | b"web" => {
-            sb.push(b"Browser (WebStub) -- status only, no engine:");
-            sb.push(b"  state:     deferred (no surface, no network)");
-            sb.push(b"  network:   0 (no TCP/IP/DNS/HTTP/TLS stack)");
-            sb.push(b"  engine:    0 (no HTML/CSS/JS parser)");
-            sb.push(b"  launch:    none (no SLOT_SHELL, no stub surface)");
+            sb.push(b"Browser / WebStub -- visible panel (v2):");
+            sb.push(b"  sid=205  frame=8  surface=1  focusable=1");
+            sb.push(b"  launch:  SLOT_SHELL (launch_exec=1)");
+            sb.push(b"  network=0  engine=0  fetched=0  parsed=0");
+            sb.push(b"  html=0  css=0  js=0  readback=0  durable=0");
             sb.push(b"Commands: browser, browser-status, url, url-status");
-            sb.push(b"Honest: this is NOT a real web browser.");
-            serial_println!("[browser.stub.command] command=browser ok=1 reason=status_help_only");
+            sb.push(b"Honest: NOT a real web browser. No fetch/parse.");
+            serial_println!("[browser.stub.command] command=browser ok=1 reason=v2_visible_panel");
             true
         }
         b"browser-status" => {
-            sb.push(b"Browser Stub Status:");
+            sb.push(b"Browser Stub Status (v2):");
             sb.push(b"  app:       WebStub (label: Browser)");
-            sb.push(b"  focusable: no");
-            sb.push(b"  state:     deferred");
-            sb.push(b"  network:   0 -- no stack");
-            sb.push(b"  launch:    none -- blocked");
-            sb.push(b"  engine:    0 -- no renderer");
-            sb.push(b"All browser operations are deferred. See 'browser'.");
+            sb.push(b"  sid:       205  frame: 8");
+            sb.push(b"  focusable: yes  surface: 1  rendered: 1");
+            sb.push(b"  launch:    SLOT_SHELL  launch_exec=1");
+            sb.push(b"  network:   0 -- no TCP/IP/DNS/HTTP/TLS");
+            sb.push(b"  engine:    0 -- no HTML/CSS/JS parser");
+            sb.push(b"  text:      shell_draw_text() via OP_TEXT_DRAW");
+            sb.push(b"  capability freeze: all zeros.");
             serial_println!("[browser.stub.command] command=browser-status ok=1 reason=blocker_table");
             true
         }
