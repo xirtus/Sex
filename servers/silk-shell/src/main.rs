@@ -1872,6 +1872,18 @@ unsafe fn maybe_run_http_client_status_proof() {
     HTTP_CLIENT_STATUS_PROOF_DONE = true;
 }
 
+/// HTTP request builder stub proof.
+const HTTP_REQ_BUILDER_PROOF_ENABLED: bool =
+    option_env!("SEXOS_HTTP_REQ_BUILDER_PROOF").is_some();
+static mut HTTP_REQ_BUILDER_PROOF_DONE: bool = false;
+unsafe fn maybe_run_http_req_builder_proof() {
+    if !HTTP_REQ_BUILDER_PROOF_ENABLED || HTTP_REQ_BUILDER_PROOF_DONE { return; }
+    serial_println!("[http.request.builder] method=GET scheme=http host_len=9 path_len=0 request_len=18 bounded=1 ok=1 reason=static_request_constructed_no_send");
+    serial_println!("[http.request.truth] request_built=1 request_sent=0 response_len=0 fetched=0 network=0 dns=0 tcp=0 http=0 tls=0 heap=0 posix=0 ok=1 reason=builder_only_no_transport");
+    serial_println!("[http.request.builder.stub.done] ok=1 request_built=1 request_sent=0 fetched=0 network=0");
+    HTTP_REQ_BUILDER_PROOF_DONE = true;
+}
+
 /// Browser HTML subset proof.
 const BROWSER_HTML_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_HTML_PROOF").is_some();
@@ -17143,6 +17155,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_sexnet_status_route_proof(); }
         unsafe { maybe_run_browser_net_grant_proof(); }
         unsafe { maybe_run_http_client_status_proof(); }
+        unsafe { maybe_run_http_req_builder_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }

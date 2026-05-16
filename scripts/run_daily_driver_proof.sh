@@ -238,6 +238,7 @@ export SEXOS_SEXNET_STATUS_ROUTE_PROOF=1
 # ── Linen persist readback model proof ──
 export SEXOS_HTTP_CLIENT_STATUS_PROOF=1
 export SEXOS_BROWSER_NET_GRANT_PROOF=1
+export SEXOS_HTTP_REQ_BUILDER_PROOF=1
 export SEXOS_LINEN_PERSIST_READBACK_PROOF=1
 
 # ── Frame Chrome model proof ──
