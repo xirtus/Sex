@@ -205,7 +205,30 @@ static ANIM_PROOF_LOGGED: core::sync::atomic::AtomicBool =
 static R6_GLASS_PROOF_LOGGED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 /// Clock source for redraw marker: 0=silkbar, 1=fallback
-static mut CLOCK_REDRAW_SOURCE: u8 = 0;
+/// Start in fallback until first valid SetClock is applied.
+static mut CLOCK_REDRAW_SOURCE: u8 = 1;
+/// Canonical clock state for visible redraw path.
+static mut CLOCK_CANON_HH: u8 = 10;
+static mut CLOCK_CANON_MM: u8 = 42;
+static mut CLOCK_CANON_SS: u8 = 0;
+
+#[inline(always)]
+fn clock_canon_store(hh: u8, mm: u8, ss: u8) {
+    unsafe {
+        CLOCK_CANON_HH = hh;
+        CLOCK_CANON_MM = mm;
+        CLOCK_CANON_SS = ss;
+    }
+}
+
+#[inline(always)]
+fn clock_canon_apply_to_bar(bar: &mut SilkBar) {
+    unsafe {
+        bar.clock_hh = CLOCK_CANON_HH;
+        bar.clock_mm = CLOCK_CANON_MM;
+        bar.clock_ss = CLOCK_CANON_SS;
+    }
+}
 
 /// Clamp a surface rectangle against framebuffer dimensions.
 /// Returns `(x, y, w, h)` guaranteed to be within FB bounds and below the bar.
@@ -1231,6 +1254,10 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                 let src = if CLOCK_REDRAW_SOURCE == 1 { "fallback" } else { "silkbar" };
                 serial_println!("[sexdisplay.clock.redraw] h={} m={} s={} source={}",
                     bar.clock_hh, bar.clock_mm, bar.clock_ss, src);
+                serial_println!(
+                    "[sexdisplay.clock.redraw.source_check] redraw_ss={} canonical_ss={} source={}",
+                    bar.clock_ss, CLOCK_CANON_SS, src
+                );
                 // Visible seconds proof: confirms the exact seconds value that
                 // will be drawn in the subsequent pixel loop (clock_fg_at).
                 serial_println!("[clock.visible.seconds] h={} m={} s={} drawn=1 ok=1 reason=pixel_loop_follows",
@@ -1374,9 +1401,9 @@ unsafe fn top_strip_render_proof(fb: *const u32, w: usize, h: usize) {
     // Golden hash: captured from clean boot 2026-05-16 (96-gate baseline).
     // FNV-1a over first 50 rows, ARGB u32 pixels, little-endian byte order.
     // If this hash changes, a visual change was made — re-capture golden.
-    const GOLDEN_TOP_STRIP_HASH: u64 = 0xfd6093ac9ade7b4d;
+    const GOLDEN_TOP_STRIP_HASH: u64 = 0xd83b049a7ed0ee21;
 
-    serial_println!("[silk.topstrip.hash.vector] rows={} algorithm=fnv1a expected=0xFD6093AC9ADE7B4D ok=1", strip_rows);
+    serial_println!("[silk.topstrip.hash.vector] rows={} algorithm=fnv1a expected=0xD83B049A7ED0EE21 ok=1", strip_rows);
     serial_println!("[silk.render_proof.top_strip.start]");
     let mut h_val: u64 = 0xcbf29ce484222325;
     let mut any_nonzero = false;
@@ -1602,6 +1629,7 @@ pub extern "C" fn _start() -> ! {
 
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
+    clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
     let mut last_clock_tick = sex_pdx::get_ticks();     // raw ticks for fallback
     let mut clock_from_silkbar = false;
     let mut display_loop_counter: u64 = 0;
@@ -1609,6 +1637,7 @@ pub extern "C" fn _start() -> ! {
     let mut last_silkbar_second: u8 = bar.clock_ss;
     let mut repeated_silkbar_second_msgs: u32 = 0;
     let mut fallback_idle_loops: u16 = 0;
+    let mut silkbar_clock_seen = false;
     let mut fb_live = false;
     let mut render_proof_done = false;
     let mut loop_iter: u64 = 0;
@@ -1706,6 +1735,7 @@ pub extern "C" fn _start() -> ! {
             if bar.clock_ss >= 60 { bar.clock_ss = 0; bar.clock_mm = bar.clock_mm.wrapping_add(1); }
             if bar.clock_mm >= 60 { bar.clock_mm = 0; bar.clock_hh = bar.clock_hh.wrapping_add(1); }
             if bar.clock_hh >= 24 { bar.clock_hh = 0; }
+            clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
             if fb_live {
                 needs_top_strip_redraw = true;
                 unsafe { CLOCK_REDRAW_SOURCE = 1; } // fallback source
@@ -1724,14 +1754,21 @@ pub extern "C" fn _start() -> ! {
         } else if !clock_from_silkbar {
             // Raw ticks may stall under emulation; keep fallback visibly alive
             // using bounded loop-progress cadence while preserving monotonic time.
-            const FALLBACK_SYNTH_TICK_LOOPS: u16 = 64;
+            const FALLBACK_SYNTH_TICK_LOOPS_STARTUP: u16 = 1;
+            const FALLBACK_SYNTH_TICK_LOOPS_STEADY: u16 = 64;
+            let synth_tick_loops = if silkbar_clock_seen {
+                FALLBACK_SYNTH_TICK_LOOPS_STEADY
+            } else {
+                FALLBACK_SYNTH_TICK_LOOPS_STARTUP
+            };
             fallback_idle_loops = fallback_idle_loops.wrapping_add(1);
-            if fallback_idle_loops >= FALLBACK_SYNTH_TICK_LOOPS {
+            if fallback_idle_loops >= synth_tick_loops {
                 fallback_idle_loops = 0;
                 bar.clock_ss = bar.clock_ss.wrapping_add(1);
                 if bar.clock_ss >= 60 { bar.clock_ss = 0; bar.clock_mm = bar.clock_mm.wrapping_add(1); }
                 if bar.clock_mm >= 60 { bar.clock_mm = 0; bar.clock_hh = bar.clock_hh.wrapping_add(1); }
                 if bar.clock_hh >= 24 { bar.clock_hh = 0; }
+                clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
                 if fb_live {
                     needs_top_strip_redraw = true;
                     unsafe { CLOCK_REDRAW_SOURCE = 1; } // fallback source
@@ -1790,6 +1827,7 @@ pub extern "C" fn _start() -> ! {
                     let (applied, kind) = handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
                     if applied {
                         if kind == UpdateKind::SetClock as u32 {
+                            silkbar_clock_seen = true;
                             let changed = in_hh != old_hh || in_mm != old_mm || in_ss != old_ss;
                             // Trust SilkBar while updates are fresh; stale fallback gate
                             // can reclaim ownership if messages stop/repeat too long.
@@ -1812,6 +1850,7 @@ pub extern "C" fn _start() -> ! {
                                 repeated_silkbar_second_msgs = 0;
                                 last_silkbar_second = in_ss as u8;
                             }
+                            clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
                             unsafe { CLOCK_REDRAW_SOURCE = 0; } // silkbar source
                             unsafe {
                                 static mut CLOCK_SOURCE_APPLY_BUDGET: u32 = 64;
@@ -2345,6 +2384,7 @@ pub extern "C" fn _start() -> ! {
 
         // ── Post-drain redraws ──
         if !did_primary_fb_render {
+            clock_canon_apply_to_bar(&mut bar);
             if needs_surface_redraw {
                 unsafe { redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
             }

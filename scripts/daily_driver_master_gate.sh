@@ -1339,11 +1339,67 @@ elif [ "$(has 'sexnet.status.route]')" -ge 1 ]; then
 else gate_sexnet_status_route="SKIP"; fi
 
 # ---- 94. clock_visible_seconds ----
-if [ "$(has 'clock.visible.seconds.*s=[1-9].*drawn=1')" -ge 1 ]; then
-    gate_clock_visible_seconds="PASS"
-    print_row "clock_visible_seconds" "PASS" "clock seconds proven drawn >0"
-elif [ "$(has 'clock.visible.seconds]')" -ge 1 ]; then
-    gate_clock_visible_seconds="PASS"
+first_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
+first_nonzero_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\].* s=[1-9][0-9]* ' "$LOG" | head -n1 | cut -d: -f1 || true)"
+redraw_sample_window=16
+redraw_nonzero_max_distance=240
+zero_only_window="0"
+if [ -n "${first_redraw_line:-}" ]; then
+    zero_only_window="$(
+        grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" \
+        | awk -F: -v max="$redraw_sample_window" '
+            NR<=max {
+                if ($0 !~ / s=0 /) { z=0; seen=1; exit }
+                z=1; seen=1
+            }
+            END {
+                if (!seen) print 0;
+                else if (z==1) print 1;
+                else print 0;
+            }'
+    )"
+fi
+source_check_mismatch_count="$(
+    grep '\[sexdisplay\.clock\.redraw\.source_check\]' "$LOG" \
+    | awk '
+        /canonical_ss=[1-9][0-9]*/ {
+            rs=-1; cs=-2;
+            for (i=1; i<=NF; i++) {
+                if ($i ~ /^redraw_ss=/) { split($i, a, "="); rs=a[2]+0; }
+                else if ($i ~ /^canonical_ss=/) { split($i, a, "="); cs=a[2]+0; }
+            }
+            if (rs != cs) bad++;
+            seen++;
+        }
+        END {
+            if (seen==0) print -1;
+            else print bad+0;
+        }'
+)"
+if [ -n "${first_redraw_line:-}" ] && [ -n "${first_nonzero_redraw_line:-}" ] \
+   && [ "$zero_only_window" -eq 0 ] \
+   && [ "$source_check_mismatch_count" -eq 0 ]; then
+    redraw_distance=$(( first_nonzero_redraw_line - first_redraw_line ))
+    if [ "$redraw_distance" -le "$redraw_nonzero_max_distance" ]; then
+        gate_clock_visible_seconds="PASS"
+        print_row "clock_visible_seconds" "PASS" \
+            "first=${first_redraw_line} first_nonzero=${first_nonzero_redraw_line} distance=${redraw_distance} source_check=equal"
+    else
+        gate_clock_visible_seconds="FAIL"
+        print_row "clock_visible_seconds" "FAIL" \
+            "nonzero redraw too late first=${first_redraw_line} first_nonzero=${first_nonzero_redraw_line} distance=${redraw_distance}>${redraw_nonzero_max_distance}"
+    fi
+elif [ "$zero_only_window" -eq 1 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" \
+        "first ${redraw_sample_window} redraw markers all s=0"
+elif [ "$source_check_mismatch_count" -gt 0 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" \
+        "source_check mismatch count=${source_check_mismatch_count}"
+elif [ "$(has 'sexdisplay.clock.redraw]')" -ge 1 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" "missing bounded nonzero redraw proof"
 else gate_clock_visible_seconds="SKIP"; fi
 
 # ---- 94. sexnet_passive ----
@@ -1512,7 +1568,7 @@ else gate_collar_grant_status="SKIP"; fi
 # ---- 89. top_strip_hash ----
 if [ "$(has 'silk\.topstrip\.hash\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_top_strip_hash="PASS"
-    print_row "top_strip_hash" "PASS" "hash matches golden 0xFD6093AC9ADE7B4D"
+    print_row "top_strip_hash" "PASS" "hash matches golden 0xD83B049A7ED0EE21"
 elif [ "$(has 'silk\.topstrip\.hash\.result.*match=1')" -eq 1 ]; then
     gate_top_strip_hash="PASS"
 elif [ "$(has 'silk\.topstrip\.hash\.result.*match=0')" -ge 1 ]; then
