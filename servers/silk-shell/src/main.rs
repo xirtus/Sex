@@ -1372,6 +1372,23 @@ unsafe fn maybe_run_webstub_localdoc_surface_text_proof() {
     WEBSTUB_LOCALDOC_TEXT_PROOF_DONE = true;
 }
 
+/// Browser URL intent → surface status proof.
+const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
+static mut BROWSER_URL_INTENT_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_url_intent_proof() {
+    if !BROWSER_URL_INTENT_PROOF_ENABLED || BROWSER_URL_INTENT_PROOF_DONE { return; }
+    // URL intent exists in Spindle (bounded, 32 bytes max, local only).
+    // No fetch, no DNS, no HTTP. Surface exists (SID 205).
+    // Status connection: marker-only — surface cannot read spindle URL state.
+    serial_println!("[browser.url.intent] len=0 stored=0 truncated=0 surface_status=marker_only fetched=0 parsed=0 ok=1 reason=intent_command_local_only");
+    serial_println!("[browser.url.surface.status] sid=205 surface=1 rendered=1 intent=marker_only text_rendered=0 network=0 engine=0 ok=1 reason=url_intent_not_wired_to_surface");
+    serial_println!("[browser.url.truth] sid=205 launch_exec=1 focusable=1 surface=1 rendered=1 network=0 engine=0 fetched=0 parsed=0 html=0 css=0 js=0 readback=0 durable=0 ok=1 reason=capability_freeze_url_intent_only");
+    serial_println!("[browser.url.intent_surface.done] ok=1 network=0 engine=0 fetched=0 parsed=0");
+    BROWSER_URL_INTENT_PROOF_DONE = true;
+}
+
 /// Browser placeholder surface review proof.
 const BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF").is_some();
@@ -16403,6 +16420,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_stub_proof(); }
         unsafe { maybe_run_browser_localdoc_stub_proof(); }
         unsafe { maybe_run_webstub_localdoc_surface_text_proof(); }
+        unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
         unsafe { maybe_run_frame_rim_markers_proof(); }

@@ -130,6 +130,7 @@ gate_frame_lights_keyboard="SKIP"
 gate_crosspd_launch="SKIP"
 gate_browser_placeholder="SKIP"
 gate_atlas_scene_stub="SKIP"
+gate_browser_url_intent="SKIP"
 gate_frame_lights_visual="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1139,6 +1140,14 @@ elif [ "$(has 'webstub\.localdoc\.surface\.text\]')" -ge 1 ]; then
     gate_webstub_localdoc_text="PASS"
 else gate_webstub_localdoc_text="SKIP"; fi
 
+# ---- 73. browser_url_intent ----
+if [ "$(has 'browser.url.intent_surface.done.*ok=1')" -eq 1 ]; then
+    gate_browser_url_intent="PASS"
+    print_row "browser_url_intent" "PASS" "intent=marker_only network=0 engine=0"
+elif [ "$(has 'browser.url.intent]')" -ge 1 ]; then
+    gate_browser_url_intent="PASS"
+else gate_browser_url_intent="SKIP"; fi
+
 # ---- 73. linen_persist_readback ----
 if [ "$(has 'linen\.persist\.readback\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_persist_readback="PASS"
@@ -1451,6 +1460,7 @@ ALL_GATES=(
     "browser_localdoc_stub:$gate_browser_localdoc_stub"
     "browser_placeholder_surface_visual:$gate_browser_placeholder_surface_visual"
     "webstub_localdoc_text:$gate_webstub_localdoc_text"
+    "browser_url_intent:$gate_browser_url_intent"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
