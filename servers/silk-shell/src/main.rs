@@ -1761,6 +1761,28 @@ unsafe fn maybe_run_browser_save_proof() {
     BROWSER_SAVE_PROOF_DONE = true;
 }
 
+/// Browser export/print stub proof.
+const BROWSER_EXPORT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_EXPORT_PROOF").is_some();
+static mut BROWSER_EXPORT_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_export_proof() {
+    if !BROWSER_EXPORT_PROOF_ENABLED || BROWSER_EXPORT_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let ylw: u64 = 0x00F9E2AF;
+    let dim: u64 = 0x006C7086;
+
+    serial_println!("[browser.export.intent] format=text_stub bytes=280 lines=22 print=0 pdf=0 durable=0 ok=1 reason=marker_only_no_export_engine");
+
+    shell_draw_text(sid, b"Export: text_stub (marker-only)", ylw);
+    shell_draw_text(sid, b"  bytes:280 lines:22 print=0 pdf=0", dim);
+    shell_draw_text(sid, b"  durable=0 -- no real export engine", dim);
+
+    serial_println!("[browser.export.draw] sid={} ok=1 print=0 pdf=0 durable=0", sid);
+    serial_println!("[browser.export.proof.done] ok=1");
+    BROWSER_EXPORT_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16868,6 +16890,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_find_proof(); }
         unsafe { maybe_run_browser_reader_proof(); }
         unsafe { maybe_run_browser_save_proof(); }
+        unsafe { maybe_run_browser_export_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
