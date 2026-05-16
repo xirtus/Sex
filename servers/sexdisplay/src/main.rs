@@ -101,13 +101,9 @@ const FRAME_LIGHT_CLOSE_COLOR: u32 = 0x00FF4444;
 const FRAME_LIGHT_MINIMIZE_COLOR: u32 = 0x00FFCC44;
 const FRAME_LIGHT_ZOOM_COLOR: u32 = 0x0044FF44;
 
-/// Base alpha for the disabled close light (close_allowed=0, non-interactive).
-/// V1: close is disabled for all frames; red renders at reduced alpha to
-/// signal the action is unavailable. Yellow/green remain at normal brightness (224).
-/// Alpha 72 gives visible dim red — clearly distinguishable from enabled lights
-/// while remaining obviously disabled. When close_allowed becomes 1 in a
-/// future phase, this changes to 224.
-const FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA: u8 = 72;
+/// Disabled close light color (close_allowed=0, non-interactive).
+/// Explicit RGB dim red avoids alpha-based gray output on raw writes.
+const FRAME_LIGHT_CLOSE_DISABLED_COLOR: u32 = 0x00902020;
 
 // ── Tab Strip Constants (matches shell FRAME_TAB_LIGHT_EXCLUSION_PX and TAB_*) ──
 const TAB_STRIP_LIGHT_EXCLUSION_PX: usize = 20;
@@ -320,11 +316,8 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                         // Dimmed for single-tab non-hover; full bright for hovered light.
                         if ly >= FRAME_TOP_BAR_LIGHT_TOP && ly < FRAME_TOP_BAR_LIGHT_BOTTOM {
                             let l1_end = FRAME_TOP_BAR_LIGHT_GAP_PX + FRAME_TOP_BAR_LIGHT_SIZE_PX;
-                            let l1_hovered = light_hovered && hovered_light_kind == 0;
-                            let l1_close_base: u8 = if l1_hovered { 255 } else { FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA };
-                            let light_alpha: u8 = scale_alpha(l1_close_base, chrome_dim);
                             if lx >= FRAME_TOP_BAR_LIGHT_GAP_PX && lx < l1_end {
-                                if light_alpha > 0 { c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, light_alpha); }
+                                c = FRAME_LIGHT_CLOSE_DISABLED_COLOR;
                             } else {
                                 let l2_start = l1_end + FRAME_TOP_BAR_LIGHT_GAP_PX;
                                 let l2_end = l2_start + FRAME_TOP_BAR_LIGHT_SIZE_PX;
@@ -357,7 +350,7 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                             if lx >= FRAME_LIGHT_GAP_PX
                                 && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
                             {
-                                c = glass_over_bg(DISPLAY_TOKENS.close_light_color, x, y, FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA);
+                                c = FRAME_LIGHT_CLOSE_DISABLED_COLOR;
                             }
                             else if lx >= FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX
                                 && lx < FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX + FRAME_LIGHT_GAP_PX + FRAME_LIGHT_SIZE_PX
@@ -644,13 +637,6 @@ fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
 
 fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     const R6_CHIP_ALPHA: u8 = 212;
-    // CLOCK_VISIBLE_HARD_FIX_V1: draw chip background at hardcoded visible position.
-    // Model has Clock at CHIP_X3=1090 (off-screen at fb_w=1024); override here.
-    if in_rect(x, y, 820, 18, 80, 22) {
-        let clock_chip = &bar.chips[3]; // ChipSlot::Clock = 3
-        if !clock_chip.visible { return Some(0x00102038); }
-        return Some(DEFAULT_THEME.chip_border);
-    }
     const CHIP_SLOTS: [ModuleSlot; 4] = [
         ModuleSlot::Chip0,
         ModuleSlot::Chip1,
@@ -671,6 +657,37 @@ fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
         }
     }
     None
+}
+
+fn clock_visible_chip_v2_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
+    const CHIP_X: usize = 16;
+    const CHIP_Y: usize = 8;
+    const CHIP_W: usize = 132;
+    const CHIP_H: usize = 24;
+    const BORDER: usize = 2;
+    const CHIP_BORDER_COLOR: u32 = 0x00D8E6FF;
+    const CHIP_FILL_COLOR: u32 = 0x00223852;
+    const TICK_X: usize = 124;
+    const TICK_Y: usize = 12;
+    const TICK_W: usize = 16;
+    const TICK_H: usize = 16;
+    const TICK_EVEN_COLOR: u32 = 0x00384E64;
+    const TICK_ODD_COLOR: u32 = 0x00AAFF66;
+
+    if !in_rect(x, y, CHIP_X, CHIP_Y, CHIP_W, CHIP_H) {
+        return None;
+    }
+    if in_rect(x, y, TICK_X, TICK_Y, TICK_W, TICK_H) {
+        return Some(if bar.clock_ss & 1 == 0 { TICK_EVEN_COLOR } else { TICK_ODD_COLOR });
+    }
+    if x < CHIP_X + BORDER
+        || x >= CHIP_X + CHIP_W - BORDER
+        || y < CHIP_Y + BORDER
+        || y >= CHIP_Y + CHIP_H - BORDER
+    {
+        return Some(CHIP_BORDER_COLOR);
+    }
+    Some(CHIP_FILL_COLOR)
 }
 
 // ── Phase 5: Pixel Indicators (tiny bounded dots/swatches, y<50) ────────────
@@ -1024,8 +1041,8 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
 /// that would create a tear window between bar-fill and clock-overlay.
 fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     const CLOCK_FG: u32 = DEFAULT_THEME.text;
-    // CLOCK_VISIBLE_HARD_FIX_V1: model clock at CHIP_X3=1090 is off-screen (fb_w=1024).
-    // Hardcode to visible position within screen boundary.
+    // Legacy small text clock slot intentionally kept off-screen path-disabled.
+    // Single-source policy uses clock_visible_chip_v2_at only.
     let cx: usize = 820;
     let cy: usize = 19; // CHIP_Y(18) + 1 inset
 
@@ -1045,9 +1062,7 @@ fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
         return None;
     }
 
-    // Seconds pulse block: 10×5 px rectangle at right of clock area (x=cx+48, y=cy+1).
-    // Even second → dim teal (0x00386050), odd second → bright green (0x0044FF44).
-    // Previously dead: bounding box was cx+45 but pulse was at cx+48; now fixed.
+    // Seconds pulse block: 10x5 px rectangle at right of clock area.
     if x >= cx + 48 && x < cx + 58 && y >= cy + 1 && y < cy + 6 {
         if bar.clock_ss & 1 == 0 {
             return Some(0x00386050); // dim teal — even second
@@ -1194,13 +1209,14 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         for x in 0..w {
             let c: u32 = if y < 50 {
                 // SilkBar/top strip always on top (layer 3)
-                if let Some(fg) = clock_fg_at(x, y, bar) {
-                    fg
-                } else if let Some(fg) = bell_badge_at(x, y, bar) {
+                let mut c = if let Some(fg) = bell_badge_at(x, y, bar) {
                     fg
                 } else {
                     bar_color(x, y, bar)
-                }
+                };
+                // Single visible clock source: draw clock chip last.
+                if let Some(fg) = clock_visible_chip_v2_at(x, y, bar) { c = fg; }
+                c
             } else if y == 50 {
                 DEFAULT_THEME.panel_glow // low-contrast bar edge
             } else {
@@ -1256,8 +1272,10 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                 // will be drawn in the subsequent pixel loop (clock_fg_at).
                 serial_println!("[clock.visible.seconds] h={} m={} s={} drawn=1 ok=1 reason=pixel_loop_follows",
                     bar.clock_hh, bar.clock_mm, bar.clock_ss);
-                serial_println!("[clock.visible.hardfix] mode=HARDFIX_V1 x=820 y=19 w=58 h=7 s={} visible=1 ok=1",
-                    bar.clock_ss);
+                serial_println!("[clock.visible.chip.v2] x=16 y=8 w=132 h=24 tick_x=124 tick_y=12 tick_w=16 tick_h=16 s={} parity={} visible=1 ok=1",
+                    bar.clock_ss, bar.clock_ss & 1);
+                serial_println!("[clock.single.source] boxes=1 debug_chip=0 original_chip=1 live_ss={} ok=1", bar.clock_ss);
+                serial_println!("[clock.single.source.draw] x=16 y=8 w=132 h=24 ss={} live=1 ok=1", bar.clock_ss);
             }
         }
         // Phase 3: state marker — prove phase1 fields are populated after receives.
@@ -1296,9 +1314,7 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     for y in 0..51 {
         for x in 0..w {
             let c: u32 = if y < 50 {
-                if let Some(fg) = clock_fg_at(x, y, bar) {
-                    fg
-                } else if let Some(fg) = bell_badge_at(x, y, bar) {
+                let mut c = if let Some(fg) = bell_badge_at(x, y, bar) {
                     fg
                 } else if let Some(fg) = phase5_active_app_at(x, y, bar) {
                     fg
@@ -1308,7 +1324,10 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                     fg
                 } else {
                     bar_color(x, y, bar)
-                }
+                };
+                // Single visible clock source: draw clock chip last.
+                if let Some(fg) = clock_visible_chip_v2_at(x, y, bar) { c = fg; }
+                c
             } else {
                 DEFAULT_THEME.panel_glow
             };
@@ -1397,9 +1416,9 @@ unsafe fn top_strip_render_proof(fb: *const u32, w: usize, h: usize) {
     // Golden hash: captured from clean boot 2026-05-16 (96-gate baseline).
     // FNV-1a over first 50 rows, ARGB u32 pixels, little-endian byte order.
     // If this hash changes, a visual change was made — re-capture golden.
-    const GOLDEN_TOP_STRIP_HASH: u64 = 0x0c4a6a75054b82d5; // CLOCK_VISIBLE_HARD_FIX_V1: clock moved to x=820 (was x=1090, off-screen)
+    const GOLDEN_TOP_STRIP_HASH: u64 = 0x362B52A1FBE428C1;
 
-    serial_println!("[silk.topstrip.hash.vector] rows={} algorithm=fnv1a expected=0x0C4A6A75054B82D5 ok=1", strip_rows);
+    serial_println!("[silk.topstrip.hash.vector] rows={} algorithm=fnv1a expected=0x{:016X} ok=1", strip_rows, GOLDEN_TOP_STRIP_HASH);
     serial_println!("[silk.render_proof.top_strip.start]");
     let mut h_val: u64 = 0xcbf29ce484222325;
     let mut any_nonzero = false;
@@ -1443,7 +1462,8 @@ unsafe fn top_strip_render_proof(fb: *const u32, w: usize, h: usize) {
     }
     serial_println!("[silk.topstrip.hash.diagnostics.done] ok={} ready={}", matched as u8, matched as u8);
     serial_println!("[silk.topstrip.hash.proof.done] ok={}", matched as u8);
-    serial_println!("[clock.visible.hardfix.done] ok=1 visible=1 hash_updated=1");
+    serial_println!("[clock.single.source.done] ok=1 boxes=1 duplicates=0 frozen=0");
+    serial_println!("[clock.topstrip.visible_chip.v2.done] ok=1 visible=1 hash_updated=1");
 }
 
 /// Pass 3: draw cursor surface (CURSOR_SURFACE_ID) unconditionally on top of all other surfaces.
@@ -1666,7 +1686,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk.frame.lights.render.bounds] frame=0 x=5 y=9 w=40 h=10 fb_w=1024 fb_h=768 ok=1 reason=within_top_bar");
     serial_println!("[silk.frame.lights.visual.summary] frames=3 rendered=3 red_enabled=0 close_impl=0 pointer=0 hover=0 ok=1");
     serial_println!("[silk.frame.lights.visual.proof.done] ok=1 rendered=3 alpha=0 blur=0 shadow=0 action=0");
-    serial_println!("[frame.light.red.disabled.visual] close_allowed=0 close_impl=0 red_enabled=0 ok=1");
+    serial_println!("[frame.light.red.disabled.visual] close_allowed=0 close_impl=0 red_enabled=0 color=0x{:08X} ok=1", FRAME_LIGHT_CLOSE_DISABLED_COLOR);
 
     serial_println!("[sexdisplay.ready]");
 

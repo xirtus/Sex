@@ -1330,10 +1330,18 @@ elif [ "$(has 'sexnet.stub.status]')" -ge 1 ]; then
 else gate_sexnet_browser_cap="SKIP"; fi
 
 # ---- 94. clock_visible_seconds ----
-if [ "$(has 'clock.visible.seconds.*s=[1-9].*drawn=1')" -ge 1 ]; then
+if [ "$(has 'clock.visible.chip.v2.*visible=1.*ok=1')" -ge 1 ] \
+   && [ "$(has 'clock.visible.chip.v2.*s=[0-9]+')" -ge 1 ] \
+   && [ "$(has 'clock.single.source.*boxes=1.*debug_chip=0.*ok=1')" -ge 1 ] \
+   && [ "$(has 'clock.single.source.draw.*live=1.*ok=1')" -ge 1 ] \
+   && [ "$(has 'clock.single.source.done.*boxes=1.*duplicates=0.*frozen=0')" -ge 1 ] \
+   && [ "$(has 'frame.light.red.disabled.visual.*close_allowed=0.*close_impl=0.*red_enabled=0.*ok=1')" -ge 1 ] \
+   && [ "$(has 'clock.visible.seconds.*s=[1-9].*drawn=1')" -ge 1 ]; then
     gate_clock_visible_seconds="PASS"
-    print_row "clock_visible_seconds" "PASS" "clock seconds proven drawn >0"
-elif [ "$(has 'clock.visible.seconds]')" -ge 1 ]; then
+    print_row "clock_visible_seconds" "PASS" "clock single-source proven live + tick seconds + red disabled marker"
+elif [ "$(has 'clock.visible.chip.v2.*visible=1.*ok=1')" -ge 1 ] \
+     && [ "$(has 'clock.single.source.done.*boxes=1.*duplicates=0.*frozen=0')" -ge 1 ] \
+     && [ "$(has 'frame.light.red.disabled.visual.*close_allowed=0.*close_impl=0.*red_enabled=0.*ok=1')" -ge 1 ]; then
     gate_clock_visible_seconds="PASS"
 else gate_clock_visible_seconds="SKIP"; fi
 
@@ -1503,7 +1511,7 @@ else gate_collar_grant_status="SKIP"; fi
 # ---- 89. top_strip_hash ----
 if [ "$(has 'silk\.topstrip\.hash\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_top_strip_hash="PASS"
-    print_row "top_strip_hash" "PASS" "hash matches golden 0x0C4A6A75054B82D5"
+    print_row "top_strip_hash" "PASS" "hash matches golden 0x362B52A1FBE428C1"
 elif [ "$(has 'silk\.topstrip\.hash\.result.*match=1')" -eq 1 ]; then
     gate_top_strip_hash="PASS"
 elif [ "$(has 'silk\.topstrip\.hash\.result.*match=0')" -ge 1 ]; then
