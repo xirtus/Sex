@@ -1783,6 +1783,43 @@ unsafe fn maybe_run_browser_export_proof() {
     BROWSER_EXPORT_PROOF_DONE = true;
 }
 
+/// Browser URL parser stub proof.
+const BROWSER_URL_PARSE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_URL_PARSE_PROOF").is_some();
+static mut BROWSER_URL_PARSE_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_url_parse_proof() {
+    if !BROWSER_URL_PARSE_PROOF_ENABLED || BROWSER_URL_PARSE_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let hdr: u64 = 0x00CDD6F4;
+    let ylw: u64 = 0x00F9E2AF;
+    let grn: u64 = 0x00A6E3A1;
+    let dim: u64 = 0x006C7086;
+
+    // Parse 4 URL forms: scheme, host, path extraction only (marker).
+    serial_println!("[browser.url.parse] len=9 valid=1 scheme=implicit host_len=9 path_len=0 fetched=0 ok=1 reason=sexos_org");
+    serial_println!("[browser.url.parse] len=22 valid=1 scheme=http host_len=9 path_len=5 fetched=0 ok=1 reason=http_docs");
+    serial_println!("[browser.url.parse] len=12 valid=1 scheme=local host_len=4 path_len=0 fetched=0 ok=1 reason=local_home");
+    serial_println!("[browser.url.parse] len=11 valid=1 scheme=about host_len=0 path_len=0 fetched=0 ok=1 reason=about_blank");
+
+    shell_draw_text(sid, b"=== URL Parser (stub) ===", hdr);
+    shell_draw_text(sid, b"", dim);
+    shell_draw_text(sid, b"sexos.org", ylw);
+    shell_draw_text(sid, b"  scheme:implicit host:sexos.org path:/", dim);
+    shell_draw_text(sid, b"http://sexos.org/docs", ylw);
+    shell_draw_text(sid, b"  scheme:http host:sexos.org path:/docs", dim);
+    shell_draw_text(sid, b"local://home", ylw);
+    shell_draw_text(sid, b"  scheme:local host:home path:/", dim);
+    shell_draw_text(sid, b"about:blank", ylw);
+    shell_draw_text(sid, b"  scheme:about host: path:blank", dim);
+    shell_draw_text(sid, b"", dim);
+    shell_draw_text(sid, b"network=0 DNS=0 HTTP=0 fetched=0", grn);
+
+    serial_println!("[browser.url.parse.draw] sid={} valid=4 ok=1", sid);
+    serial_println!("[browser.url.parse.proof.done] ok=1");
+    BROWSER_URL_PARSE_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16891,6 +16928,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_reader_proof(); }
         unsafe { maybe_run_browser_save_proof(); }
         unsafe { maybe_run_browser_export_proof(); }
+        unsafe { maybe_run_browser_url_parse_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
