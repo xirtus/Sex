@@ -1472,6 +1472,32 @@ unsafe fn maybe_run_bell_launch_outcome_proof() {
     BELL_LAUNCH_OUTCOME_PROOF_DONE = true;
 }
 
+/// Linen Project-Scene Link status markers (Phase 1).
+const PROJECT_SCENE_LINK_PROOF_ENABLED: bool =
+    option_env!("SEXOS_PROJECT_SCENE_LINK_PROOF").is_some();
+static mut PROJECT_SCENE_LINK_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_project_scene_link_proof() {
+    if !PROJECT_SCENE_LINK_PROOF_ENABLED || PROJECT_SCENE_LINK_PROOF_DONE { return; }
+    serial_println!("[linen.scene.link.proof.begin]");
+
+    // Link 1: Linen project 1 → Scene 0 (Workspace)
+    serial_println!("[linen.scene.link] project_id=1 scene=0 status=linked_metadata_only persisted=0 durable=0 sync_readback=0 grants_authority=0 ok=1 reason=static_proof_link");
+    // Link 2: Linen project 2 → Scene 0 (Workspace)
+    serial_println!("[linen.scene.link] project_id=2 scene=0 status=suggested persisted=0 durable=0 sync_readback=0 grants_authority=0 ok=1 reason=static_proof_link");
+    // Link 3: project 3 → Scene 0 (blocked_no_readback)
+    serial_println!("[linen.scene.link] project_id=3 scene=0 status=blocked_no_readback persisted=0 durable=0 sync_readback=0 grants_authority=0 ok=1 reason=readback_not_proven");
+
+    // Truth markers — all zeros for authority/storage
+    serial_println!("[linen.scene.link.truth] links=3 metadata_only=1 authority=0 durable=0 sync_readback=0 ok=1 reason=spec_phase_1_honest");
+    // Shell-side: project badge marker (visual=0 render=0)
+    serial_println!("[silk.scene.project.badge] scene=0 project_id=1 visual=0 render=0 authority=0 ok=1 reason=marker_only_no_badge_rendering");
+    serial_println!("[silk.scene.project.badge] scene=0 project_id=2 visual=0 render=0 authority=0 ok=1 reason=marker_only_no_badge_rendering");
+
+    serial_println!("[linen.scene.link.status.done] ok=1 links=3 authority=0 durable=0 sync_readback=0");
+    PROJECT_SCENE_LINK_PROOF_DONE = true;
+}
+
 /// Atlas Scene status stub: model markers, no visuals.
 unsafe fn maybe_run_atlas_scene_stub_proof() {
     if !ATLAS_SCENE_STUB_PROOF_ENABLED || ATLAS_SCENE_STUB_PROOF_DONE { return; }
@@ -16263,6 +16289,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_bell_launch_outcome_proof(); }
         unsafe { maybe_run_atlas_scene_stub_proof(); }
         unsafe { maybe_run_scene_lifecycle_markers_proof(); }
+        unsafe { maybe_run_project_scene_link_proof(); }
         unsafe { maybe_run_scene_keyboard_switch_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }

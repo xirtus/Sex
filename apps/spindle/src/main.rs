@@ -1132,6 +1132,27 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.bell.launch.command] name=bell-launch-events ok=1 reason=bell_bridge_truth");
             true
         }
+        b"project-scene-link" => {
+            sb.push(b"Project-Scene Links (metadata only, no authority):");
+            sb.push(b"  project_id=1 scene=0 status=linked_metadata_only");
+            sb.push(b"  project_id=2 scene=0 status=suggested");
+            sb.push(b"  project_id=3 scene=0 status=blocked_no_readback");
+            sb.push(b"  persisted=0 durable=0 sync_readback=0");
+            sb.push(b"  grants_authority=0 -- links are passive metadata.");
+            sb.push(b"  Use project-scene-status for summary.");
+            serial_println!("[spindle.project.scene.command] name=project-scene-link ok=1 reason=link_status_table");
+            true
+        }
+        b"project-scene-status" => {
+            sb.push(b"Project-Scene Link Summary:");
+            sb.push(b"  links=3 metadata_only=1 authority=0");
+            sb.push(b"  durable=0 sync_readback=0 persisted=0");
+            sb.push(b"  No authority transfer. No durable storage.");
+            sb.push(b"  Shell badge: visual=0 render=0 (marker only).");
+            sb.push(b"  See docs/handoff/LINEN_PROJECT_SCENE_LINK_SPEC_V1.md");
+            serial_println!("[spindle.project.scene.command] name=project-scene-status ok=1 reason=link_summary");
+            true
+        }
         b"linen-status" => {
             sb.push(b"Linen object bridge status:");
             sb.push(b"  slot:     SLOT_LINEN=11 (PD 7: linen)");
@@ -2109,6 +2130,8 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"scene-lifecycle-status", sb, hist, &mut ev);
         let _ = dispatch(b"scene-keys", sb, hist, &mut ev);
         let _ = dispatch(b"scene-switch-status", sb, hist, &mut ev);
+        let _ = dispatch(b"project-scene-link", sb, hist, &mut ev);
+        let _ = dispatch(b"project-scene-status", sb, hist, &mut ev);
         serial_println!("[spindle.frame.chrome.proof.done] ok=1");
     }
     if SPINDLE_BROWSER_STUB_PROOF_ENABLED {
