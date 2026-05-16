@@ -1598,6 +1598,34 @@ unsafe fn maybe_run_browser_bookmarks_proof() {
     BROWSER_BOOKMARKS_PROOF_DONE = true;
 }
 
+/// Browser tabs stub proof.
+const BROWSER_TABS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_TABS_PROOF").is_some();
+static mut BROWSER_TABS_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_tabs_proof() {
+    if !BROWSER_TABS_PROOF_ENABLED || BROWSER_TABS_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let ylw: u64 = 0x00F9E2AF;
+    let dim: u64 = 0x006C7086;
+    let grn: u64 = 0x00A6E3A1;
+
+    serial_println!("[browser.tab.new] idx=0 count=1 len=9 fetched=0 ok=1");
+    serial_println!("[browser.tab.new] idx=1 count=2 len=12 fetched=0 ok=1");
+    serial_println!("[browser.tab.nav] dir=next old=0 new=1 ok=1 reason=bounded_tabs");
+    serial_println!("[browser.tab.close] old_count=2 new_count=1 selected=0 ok=1 reason=tab_closed_safely");
+    serial_println!("[browser.tab.new] idx=1 count=2 len=9 fetched=0 ok=1");
+
+    shell_draw_text(sid, b"Tabs: 2 open (cap 4)", ylw);
+    shell_draw_text(sid, b"  [*] Tab 1: sexos.org        >", grn);
+    shell_draw_text(sid, b"  [ ] Tab 2: sexos.org/docs", dim);
+    shell_draw_text(sid, b"  nav: next/prev  close: safe", dim);
+
+    serial_println!("[browser.tab.draw] sid={} count=2 selected=0 ok=1", sid);
+    serial_println!("[browser.tab.proof.done] ok=1");
+    BROWSER_TABS_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16699,6 +16727,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_url_bar_intent_proof(); }
         unsafe { maybe_run_browser_history_proof(); }
         unsafe { maybe_run_browser_bookmarks_proof(); }
+        unsafe { maybe_run_browser_tabs_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }

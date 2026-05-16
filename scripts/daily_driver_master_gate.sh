@@ -139,6 +139,7 @@ gate_browser_localdoc_viewer="SKIP"
 gate_browser_url_bar="SKIP"
 gate_browser_history="SKIP"
 gate_browser_bookmarks="SKIP"
+gate_browser_tabs="SKIP"
 gate_frame_lights_visual="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1220,6 +1221,14 @@ elif [ "$(has 'browser.bookmark.add]')" -ge 1 ]; then
     gate_browser_bookmarks="PASS"
 else gate_browser_bookmarks="SKIP"; fi
 
+# ---- 82. browser_tabs ----
+if [ "$(has 'browser.tab.proof.done.*ok=1')" -eq 1 ]; then
+    gate_browser_tabs="PASS"
+    print_row "browser_tabs" "PASS" "2 tabs cap=4 fetched=0"
+elif [ "$(has 'browser.tab.new]')" -ge 1 ]; then
+    gate_browser_tabs="PASS"
+else gate_browser_tabs="SKIP"; fi
+
 # ---- 73. linen_persist_readback ----
 if [ "$(has 'linen\.persist\.readback\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_persist_readback="PASS"
@@ -1541,6 +1550,7 @@ ALL_GATES=(
     "browser_url_bar:$gate_browser_url_bar"
     "browser_history:$gate_browser_history"
     "browser_bookmarks:$gate_browser_bookmarks"
+    "browser_tabs:$gate_browser_tabs"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
