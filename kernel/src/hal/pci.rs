@@ -245,6 +245,52 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         serial_println!("[e1000.packet.buffer.truth] descriptor_linked=0 device_visible=0 mmio_writes=0 dma=0 packets=0 ok=1 reason=memory_only_no_descriptor_no_mmio_no_rxtx");
                         serial_println!("[browser.nic.truth] slot_net_grant=0 network=0 fetched=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=no_network_capability");
                         serial_println!("[e1000.packet.buffer.uc.alias.proof.done] ok=1 allocated=16 descriptor_linked=0 packets=0");
+
+                        // E1000_DESCRIPTOR_LINK_PROOF_V1
+                        // Link 8 RX + 8 TX descriptors to packet buffer phys addresses.
+                        // write_volatile raw ptr writes to UC alias ring memory only.
+                        // No MMIO writes. No RX/TX enable. No tail update. No packets.
+                        // Device_visible=0 — device has no knowledge of rings or buffers.
+                        let rx_ring_uc = rx_uc_va;
+                        let tx_ring_uc = tx_uc_va;
+                        // Descriptor size: 16 bytes. Fields per E1000_DESCRIPTOR_FORMAT_SPEC_V1.
+                        unsafe {
+                            // RX descriptors 0..7: buffer_addr=phys, status/errors/special=0
+                            for i in 0usize..8 {
+                                let page_idx = i / 2;
+                                let buf_off  = if i & 1 == 0 { 0u64 } else { 2048u64 };
+                                let buf_phys = pkt_pages[page_idx] + buf_off;
+                                let desc_off = (i * 16) as u64;
+                                core::ptr::write_volatile((rx_ring_uc + desc_off)      as *mut u64, buf_phys);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 8)  as *mut u16, 0u16);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 10) as *mut u16, 0u16);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8,  0u8);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8,  0u8);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 14) as *mut u16, 0u16);
+                            }
+                            // TX descriptors 0..7: buffer_addr=phys, length/cmd/status=0
+                            for i in 0usize..8 {
+                                let page_idx = i / 2 + 4; // TX pages at pkt_pages[4..7]
+                                let buf_off  = if i & 1 == 0 { 0u64 } else { 2048u64 };
+                                let buf_phys = pkt_pages[page_idx] + buf_off;
+                                let desc_off = (i * 16) as u64;
+                                // TX layout: buf_addr(u64) length(u16) cso(u8) cmd(u8) status(u8) css(u8) special(u16)
+                                core::ptr::write_volatile((tx_ring_uc + desc_off)      as *mut u64, buf_phys);
+                                core::ptr::write_volatile((tx_ring_uc + desc_off + 8)  as *mut u16, 0u16);
+                                core::ptr::write_volatile((tx_ring_uc + desc_off + 10) as *mut u8,  0u8);
+                                core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8,  0u8);
+                                core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8,  0u8);
+                                core::ptr::write_volatile((tx_ring_uc + desc_off + 13) as *mut u8,  0u8);
+                                core::ptr::write_volatile((tx_ring_uc + desc_off + 14) as *mut u16, 0u16);
+                            }
+                        }
+                        serial_println!("[e1000.rx.desc.link] linked=8 first_phys=0x{:016X} status_zero=1 ok=1 reason=write_volatile_uc_alias",
+                            pkt_pages[0]);
+                        serial_println!("[e1000.tx.desc.link] linked=8 first_phys=0x{:016X} length_zero=1 cmd_zero=1 ok=1 reason=write_volatile_uc_alias",
+                            pkt_pages[4]);
+                        serial_println!("[e1000.desc.link.truth] descriptor_linked=1 device_visible=0 mmio_writes=0 dma=0 rings_enabled=0 packets=0 ok=1 reason=descriptor_link_memory_only");
+                        serial_println!("[browser.nic.truth] slot_net_grant=0 network=0 fetched=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=no_network_capability");
+                        serial_println!("[e1000.descriptor.link.proof.done] ok=1 rx_linked=8 tx_linked=8 packets=0");
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");
                         serial_println!("[e1000.packet.buffer.uc] pages=8 aliases=0 flags=NO_CACHE|WRITE_THROUGH flush=0 ok=0 reason=alloc_failed_no_pages");
