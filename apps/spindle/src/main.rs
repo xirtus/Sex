@@ -1602,12 +1602,13 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"browser-surface" => {
             sb.push(b"Browser Surface Status:");
             sb.push(b"  sid=205 focusable=0 surface=0 rendered=0");
-            sb.push(b"  FIXED: SID collision resolved (202 -> 205).");
-            sb.push(b"  Mesh owns SID 202; WebStub now uses SID 205.");
-            sb.push(b"  launch_exec=1 through SLOT_SHELL, SID 205.");
-            sb.push(b"  No surface created yet (deferred).");
+            sb.push(b"  SID collision resolved (202 -> 205).");
+            sb.push(b"  Surface deferred: needs APP_SURFACES entry +");
+            sb.push(b"    BROWSER_FRAME_ID + geometry constants.");
+            sb.push(b"  APP_SURFACES is [7] entries; adding 8th requires");
+            sb.push(b"    array expansion + layout registration.");
             sb.push(b"  network=0 engine=0 fetched=0 -- capability freeze.");
-            serial_println!("[spindle.browser.surface.command] name=browser-surface ok=1 reason=sid_205_collision_free");
+            serial_println!("[spindle.browser.surface.command] name=browser-surface ok=1 reason=surface_deferred_app_surface_spec");
             true
         }
         b"browser-roadmap" => {

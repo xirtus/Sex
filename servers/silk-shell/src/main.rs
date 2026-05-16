@@ -1364,14 +1364,16 @@ static mut BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_DONE: bool = false;
 unsafe fn maybe_run_browser_placeholder_surface_visual_proof() {
     if !BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_ENABLED
         || BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_DONE { return; }
-    // SID collision resolved: WebStub now uses SID 205 (was 202, collided with Mesh).
-    // SID 205 is collision-free. Surface creation is deferred (no surface yet).
-    serial_println!("[surface.id.registry.fix] app=WebStub old_sid=202 new_sid=205 collision=0 ok=1 reason=sid_collision_resolved_no_surface_yet");
-    // Current truth: SID fixed, still no surface, no focus.
-    serial_println!("[browser.placeholder.surface.visual] sid=205 focusable=0 surface=0 rendered=0 ok=1 reason=sid_fixed_no_surface_created");
-    serial_println!("[browser.placeholder.truth] launch_exec=1 focusable=0 surface=0 rendered=0 sid=205 network=0 engine=0 fetched=0 parsed=0 readback=0 durable=0 ok=1 reason=sid_collision_resolved_capability_freeze");
-    serial_println!("[surface.id.registry.fix.done] ok=1 fixed=1 collisions=0");
-    serial_println!("[browser.placeholder.surface_visual.done] ok=1 surface=0 rendered=0 network=0 engine=0");
+    // V2 review: SID collision resolved (205), but surface creation requires
+    // adding an 8th AppSurfaceSpec entry + frame geometry constants
+    // (BROWSER_FRAME_ID, BROWSER_BOOT_X/Y/W/H, SURFACE_ID_BROWSER=205)
+    // + expanding APP_SURFACES from [7] to [8].
+    // This is a structural change (array size, layout) — deferred.
+    serial_println!("[browser.placeholder.surface.review] safe=0 sid=205 reason=requires_app_surface_spec_expansion");
+    // Current truth: SID fixed, no surface, no focus.
+    serial_println!("[browser.placeholder.surface.visual] sid=205 focusable=0 surface=0 rendered=0 ok=1 reason=app_surface_spec_not_registered");
+    serial_println!("[browser.placeholder.truth] launch_exec=1 focusable=0 surface=0 rendered=0 sid=205 network=0 engine=0 fetched=0 parsed=0 readback=0 durable=0 ok=1 reason=sid_resolved_surface_deferred");
+    serial_println!("[browser.placeholder.surface_visual.v2.done] ok=1 surface=0 rendered=0 network=0 engine=0");
     BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_DONE = true;
 }
 
