@@ -1601,14 +1601,13 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         b"browser-surface" => {
             sb.push(b"Browser Surface Status:");
-            sb.push(b"  sid=205 focusable=0 surface=0 rendered=0");
-            sb.push(b"  SID collision resolved (202 -> 205).");
-            sb.push(b"  Surface deferred: needs APP_SURFACES entry +");
-            sb.push(b"    BROWSER_FRAME_ID + geometry constants.");
-            sb.push(b"  APP_SURFACES is [7] entries; adding 8th requires");
-            sb.push(b"    array expansion + layout registration.");
+            sb.push(b"  sid=205 focusable=1 surface=1 rendered=1");
+            sb.push(b"  APP_SURFACES expanded [7]->[8], Frame 8.");
+            sb.push(b"  Geometry: x=500 y=100 w=400 h=300");
+            sb.push(b"  launch_exec=1 through SLOT_SHELL.");
             sb.push(b"  network=0 engine=0 fetched=0 -- capability freeze.");
-            serial_println!("[spindle.browser.surface.command] name=browser-surface ok=1 reason=surface_deferred_app_surface_spec");
+            sb.push(b"  No network. No HTML. No storage.");
+            serial_println!("[spindle.browser.surface.command] name=browser-surface ok=1 reason=surface_created_frame_8");
             true
         }
         b"browser-roadmap" => {

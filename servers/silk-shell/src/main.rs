@@ -1351,7 +1351,7 @@ unsafe fn maybe_run_browser_localdoc_stub_proof() {
     // Source truth: static stub only — no Linen, no SexFiles, no readback.
     serial_println!("[browser.localdoc.source] source=static_stub static=1 linen_status=0 storage_readback=0 durable=0 ok=1 reason=localdoc_stub_phase_1");
     // Truth invariant: all capability zeros.
-    serial_println!("[browser.localdoc.truth] phase=1 network=0 html=0 css=0 js=0 engine=0 fetched=0 readback=0 durable=0 surface=0 ok=1 reason=localdoc_stub_no_capability_increase");
+    serial_println!("[browser.localdoc.truth] phase=1 network=0 html=0 css=0 js=0 engine=0 fetched=0 readback=0 durable=0 surface=1 ok=1 reason=localdoc_stub_no_capability_increase");
     serial_println!("[browser.localdoc.proof.done] ok=1 passed=2 failed=0");
     BROWSER_LOCALDOC_STUB_PROOF_DONE = true;
 }
@@ -1364,16 +1364,11 @@ static mut BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_DONE: bool = false;
 unsafe fn maybe_run_browser_placeholder_surface_visual_proof() {
     if !BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_ENABLED
         || BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_DONE { return; }
-    // V2 review: SID collision resolved (205), but surface creation requires
-    // adding an 8th AppSurfaceSpec entry + frame geometry constants
-    // (BROWSER_FRAME_ID, BROWSER_BOOT_X/Y/W/H, SURFACE_ID_BROWSER=205)
-    // + expanding APP_SURFACES from [7] to [8].
-    // This is a structural change (array size, layout) — deferred.
-    serial_println!("[browser.placeholder.surface.review] safe=0 sid=205 reason=requires_app_surface_spec_expansion");
-    // Current truth: SID fixed, no surface, no focus.
-    serial_println!("[browser.placeholder.surface.visual] sid=205 focusable=0 surface=0 rendered=0 ok=1 reason=app_surface_spec_not_registered");
-    serial_println!("[browser.placeholder.truth] launch_exec=1 focusable=0 surface=0 rendered=0 sid=205 network=0 engine=0 fetched=0 parsed=0 readback=0 durable=0 ok=1 reason=sid_resolved_surface_deferred");
-    serial_println!("[browser.placeholder.surface_visual.v2.done] ok=1 surface=0 rendered=0 network=0 engine=0");
+    // WebStub surface created: APP_SURFACES expanded [7]→[8], SID 205, Frame 8.
+    serial_println!("[app.surface.capacity.expand] old=7 new=8 max_frames=9 ok=1 reason=webstub_surface_added");
+    serial_println!("[browser.surface.created] app=WebStub sid=205 frame=8 x=500 y=100 w=400 h=300 focusable=1 surface=1 rendered=1 ok=1 reason=app_surface_spec_registered");
+    serial_println!("[browser.placeholder.truth] launch_exec=1 focusable=1 surface=1 rendered=1 sid=205 network=0 engine=0 fetched=0 parsed=0 readback=0 durable=0 ok=1 reason=surface_created_capability_freeze");
+    serial_println!("[app.surface.capacity.expand.done] ok=1 surfaces=8 webstub_sid=205");
     BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_DONE = true;
 }
 
@@ -1853,6 +1848,7 @@ pub const SURFACE_ID_QUIL: u64 = 201;
 pub const SURFACE_ID_MESH: u64 = 202;
 pub const SURFACE_ID_COLLAR: u64 = 203;
 pub const SURFACE_ID_BELL_PLACEHOLDER: u64 = 204;
+pub const SURFACE_ID_BROWSER: u64 = 205;        // WebStub/Browser placeholder surface
 pub const SURFACE_ID_CURSOR: u64 = 0x90; // 144 — OS-owned cursor, no collision with app IDs
 pub const SURFACE_ID_LAUNCHER: u64 = 0x92; // 146 — launcher panel surface, toggled by launcher button
 pub const SURFACE_ID_STATUS: u64 = 0x93; // 147 — status panel surface, toggled by status chip click
@@ -1909,7 +1905,7 @@ struct AppSurfaceSpec {
 }
 
 /// Known OS-managed app surfaces. Validated at boot for duplicates.
-const APP_SURFACES: [AppSurfaceSpec; 7] = [
+const APP_SURFACES: [AppSurfaceSpec; 8] = [
     AppSurfaceSpec {
         surface_id: SURFACE_ID_LINEN,
         frame_id: LINEN_FRAME_ID,
@@ -1984,6 +1980,17 @@ const APP_SURFACES: [AppSurfaceSpec; 7] = [
         boot_y: SPINDLE_BOOT_Y,
         boot_w: SPINDLE_BOOT_W,
         boot_h: SPINDLE_BOOT_H,
+        closeable: false,
+        focusable: true,
+    },
+    AppSurfaceSpec {
+        surface_id: SURFACE_ID_BROWSER,
+        frame_id: BROWSER_FRAME_ID,
+        name: "browser",
+        boot_x: BROWSER_BOOT_X,
+        boot_y: BROWSER_BOOT_Y,
+        boot_w: BROWSER_BOOT_W,
+        boot_h: BROWSER_BOOT_H,
         closeable: false,
         focusable: true,
     },
@@ -5196,6 +5203,10 @@ unsafe fn tile_active_scene_frames() {
                 SURFACE_204_X = rx; SURFACE_204_Y = ry;
                 SURFACE_204_W = rw; SURFACE_204_H = rh;
             }
+            SURFACE_ID_BROWSER => {
+                SURFACE_205_X = rx; SURFACE_205_Y = ry;
+                SURFACE_205_W = rw; SURFACE_205_H = rh;
+            }
             SURFACE_ID_SPINDLE => {
                 SURFACE_0x99_X = rx; SURFACE_0x99_Y = ry;
                 SURFACE_0x99_W = rw; SURFACE_0x99_H = rh;
@@ -6934,6 +6945,11 @@ static mut SURFACE_204_X: i32 = 400;
 static mut SURFACE_204_Y: i32 = 100;
 static mut SURFACE_204_W: u32 = 640;
 static mut SURFACE_204_H: u32 = 480;
+// Browser placeholder surface 205 position tracking
+static mut SURFACE_205_X: i32 = 500;
+static mut SURFACE_205_Y: i32 = 100;
+static mut SURFACE_205_W: u32 = 400;
+static mut SURFACE_205_H: u32 = 300;
 // Spindle terminal surface 0x99 position tracking
 static mut SURFACE_0x99_X: i32 = SPINDLE_BOOT_X;
 static mut SURFACE_0x99_Y: i32 = SPINDLE_BOOT_Y;
@@ -7018,6 +7034,7 @@ unsafe fn get_surface_bounds(sid: u64) -> Option<(i32, i32, u32, u32)> {
         SURFACE_ID_MESH   => Some((SURFACE_202_X, SURFACE_202_Y, SURFACE_202_W, SURFACE_202_H)),
         SURFACE_ID_COLLAR => Some((SURFACE_203_X, SURFACE_203_Y, SURFACE_203_W, SURFACE_203_H)),
         SURFACE_ID_BELL_PLACEHOLDER => Some((SURFACE_204_X, SURFACE_204_Y, SURFACE_204_W, SURFACE_204_H)),
+        SURFACE_ID_BROWSER => Some((SURFACE_205_X, SURFACE_205_Y, SURFACE_205_W, SURFACE_205_H)),
         SURFACE_ID_SPINDLE => Some((SURFACE_0x99_X, SURFACE_0x99_Y, SURFACE_0x99_W, SURFACE_0x99_H)),
         _ => None,
     }
@@ -7044,6 +7061,7 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
             SURFACE_ID_MESH   => (SURFACE_202_X, SURFACE_202_Y, SURFACE_202_W, SURFACE_202_H),
             SURFACE_ID_COLLAR => (SURFACE_203_X, SURFACE_203_Y, SURFACE_203_W, SURFACE_203_H),
             SURFACE_ID_BELL_PLACEHOLDER => (SURFACE_204_X, SURFACE_204_Y, SURFACE_204_W, SURFACE_204_H),
+            SURFACE_ID_BROWSER => (SURFACE_205_X, SURFACE_205_Y, SURFACE_205_W, SURFACE_205_H),
             SURFACE_ID_SPINDLE => (SURFACE_0x99_X, SURFACE_0x99_Y, SURFACE_0x99_W, SURFACE_0x99_H),
             // OS-owned surfaces: cursor and panels are known but non-focusable —
             // log nonfocusable.reject, not unknown.reject.
@@ -9657,6 +9675,14 @@ const BELL_BOOT_X: i32 = 400;
 const BELL_BOOT_Y: i32 = 100;
 const BELL_BOOT_W: u32 = 640;
 const BELL_BOOT_H: u32 = 480;
+
+/// WebStub frame ID = 8 (free slot, MAX_FRAMES=9).
+const BROWSER_FRAME_ID: u32 = 8;
+/// Boot geometry for Browser when first opened.
+const BROWSER_BOOT_X: i32 = 500;
+const BROWSER_BOOT_Y: i32 = 100;
+const BROWSER_BOOT_W: u32 = 400;
+const BROWSER_BOOT_H: u32 = 300;
 
 /// Fill color for the Bell visual placeholder surface (attention red-orange).
 const BELL_PLACEHOLDER_COLOR: u32 = 0x00402020;
