@@ -1603,9 +1603,12 @@ pub extern "C" fn _start() -> ! {
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
     let mut last_clock_tick = sex_pdx::get_ticks();     // raw ticks for fallback
-    let mut last_clock_second = last_clock_tick / 62;    // sec_now for liveness gate
     let mut clock_from_silkbar = false;
-    let mut last_silkbar_clock_ticks: u64 = 0;            // raw ticks of last silkbar update
+    let mut display_loop_counter: u64 = 0;
+    let mut last_silkbar_msg_loop: u64 = 0;
+    let mut last_silkbar_second: u8 = bar.clock_ss;
+    let mut repeated_silkbar_second_msgs: u32 = 0;
+    let mut fallback_idle_loops: u16 = 0;
     let mut fb_live = false;
     let mut render_proof_done = false;
     let mut loop_iter: u64 = 0;
@@ -1647,6 +1650,7 @@ pub extern "C" fn _start() -> ! {
 
     // 2. Listen for runtime FB handoff and SilkBar updates
     loop {
+        display_loop_counter = display_loop_counter.wrapping_add(1);
         // ── Per-cycle flags ──
         let mut needs_surface_redraw = false;
         let mut needs_top_strip_redraw = false;
@@ -1669,17 +1673,26 @@ pub extern "C" fn _start() -> ! {
         let raw_ticks = sex_pdx::get_ticks();
         let sec_now = raw_ticks / 62; // still computed for silkbar liveness gate
 
-        // Liveness-gate: if SilkBar clock stalls, resume local fallback.
-        // Uses raw_ticks so a slow timer doesn't falsely trigger staleness.
-        if clock_from_silkbar && raw_ticks.saturating_sub(last_silkbar_clock_ticks) > (62 * 5) {
+        // Liveness-gate: if SilkBar clock stalls (no SetClock messages or repeated
+        // same-second SetClock too long), resume local fallback.
+        // This is loop-progress based and does not rely on host time/POSIX.
+        const SILKBAR_STALE_NO_MSG_LOOPS: u64 = 1200;
+        const SILKBAR_STALE_REPEAT_MSGS: u32 = 120;
+        let stale_no_msg = display_loop_counter.saturating_sub(last_silkbar_msg_loop) > SILKBAR_STALE_NO_MSG_LOOPS;
+        let stale_repeats = repeated_silkbar_second_msgs > SILKBAR_STALE_REPEAT_MSGS;
+        if clock_from_silkbar && (stale_no_msg || stale_repeats) {
             clock_from_silkbar = false;
-            // Budgeted: first 4 fallback-resume events.
+            repeated_silkbar_second_msgs = 0;
+            // Budgeted: first 8 fallback-resume events.
             unsafe {
-                static mut CLOCK_FALLBACK_RESUME_BUDGET: u32 = 4;
+                static mut CLOCK_FALLBACK_RESUME_BUDGET: u32 = 8;
                 let remaining = &mut CLOCK_FALLBACK_RESUME_BUDGET;
                 if *remaining > 0 {
                     *remaining -= 1;
-                    sex_pdx::serial_println!("[sexdisplay.clock.fallback.resume] reason=silkbar_stale");
+                    sex_pdx::serial_println!(
+                        "[sexdisplay.clock.source.fallback.rearm] reason=stale_silkbar loop={} last_ss={}",
+                        display_loop_counter, bar.clock_ss
+                    );
                 }
             }
         }
@@ -1688,7 +1701,7 @@ pub extern "C" fn _start() -> ! {
         // Works even when ticks < 62 (i.e. sec_now stays 0 for many cycles).
         if !clock_from_silkbar && raw_ticks > last_clock_tick {
             last_clock_tick = raw_ticks;
-            last_clock_second = sec_now; // still track for silkbar liveness
+            fallback_idle_loops = 0;
             bar.clock_ss = bar.clock_ss.wrapping_add(1);
             if bar.clock_ss >= 60 { bar.clock_ss = 0; bar.clock_mm = bar.clock_mm.wrapping_add(1); }
             if bar.clock_mm >= 60 { bar.clock_mm = 0; bar.clock_hh = bar.clock_hh.wrapping_add(1); }
@@ -1696,6 +1709,44 @@ pub extern "C" fn _start() -> ! {
             if fb_live {
                 needs_top_strip_redraw = true;
                 unsafe { CLOCK_REDRAW_SOURCE = 1; } // fallback source
+            }
+            unsafe {
+                static mut CLOCK_SOURCE_FALLBACK_TICK_BUDGET: u32 = 64;
+                let b = &mut CLOCK_SOURCE_FALLBACK_TICK_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!(
+                        "[sexdisplay.clock.source.fallback.tick] hh={} mm={} ss={}",
+                        bar.clock_hh, bar.clock_mm, bar.clock_ss
+                    );
+                }
+            }
+        } else if !clock_from_silkbar {
+            // Raw ticks may stall under emulation; keep fallback visibly alive
+            // using bounded loop-progress cadence while preserving monotonic time.
+            const FALLBACK_SYNTH_TICK_LOOPS: u16 = 64;
+            fallback_idle_loops = fallback_idle_loops.wrapping_add(1);
+            if fallback_idle_loops >= FALLBACK_SYNTH_TICK_LOOPS {
+                fallback_idle_loops = 0;
+                bar.clock_ss = bar.clock_ss.wrapping_add(1);
+                if bar.clock_ss >= 60 { bar.clock_ss = 0; bar.clock_mm = bar.clock_mm.wrapping_add(1); }
+                if bar.clock_mm >= 60 { bar.clock_mm = 0; bar.clock_hh = bar.clock_hh.wrapping_add(1); }
+                if bar.clock_hh >= 24 { bar.clock_hh = 0; }
+                if fb_live {
+                    needs_top_strip_redraw = true;
+                    unsafe { CLOCK_REDRAW_SOURCE = 1; } // fallback source
+                }
+                unsafe {
+                    static mut CLOCK_SOURCE_FALLBACK_TICK_SYNTH_BUDGET: u32 = 64;
+                    let b = &mut CLOCK_SOURCE_FALLBACK_TICK_SYNTH_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!(
+                            "[sexdisplay.clock.source.fallback.tick] hh={} mm={} ss={}",
+                            bar.clock_hh, bar.clock_mm, bar.clock_ss
+                        );
+                    }
+                }
             }
         }
 
@@ -1740,11 +1791,39 @@ pub extern "C" fn _start() -> ! {
                     if applied {
                         if kind == UpdateKind::SetClock as u32 {
                             let changed = in_hh != old_hh || in_mm != old_mm || in_ss != old_ss;
-                            // Always trust silkbar for clock ownership — no modulo-based
-                            // stale gate. get_ticks() may be frozen under QEMU TCG.
+                            // Trust SilkBar while updates are fresh; stale fallback gate
+                            // can reclaim ownership if messages stop/repeat too long.
                             clock_from_silkbar = true;
-                            last_silkbar_clock_ticks = raw_ticks;
+                            last_silkbar_msg_loop = display_loop_counter;
+                            if (in_ss as u8) == last_silkbar_second {
+                                repeated_silkbar_second_msgs = repeated_silkbar_second_msgs.saturating_add(1);
+                                unsafe {
+                                    static mut CLOCK_SOURCE_REPEAT_BUDGET: u32 = 32;
+                                    let b = &mut CLOCK_SOURCE_REPEAT_BUDGET;
+                                    if *b > 0 {
+                                        *b -= 1;
+                                        serial_println!(
+                                            "[sexdisplay.clock.source.silkbar.repeat] ss={} count={}",
+                                            in_ss, repeated_silkbar_second_msgs
+                                        );
+                                    }
+                                }
+                            } else {
+                                repeated_silkbar_second_msgs = 0;
+                                last_silkbar_second = in_ss as u8;
+                            }
                             unsafe { CLOCK_REDRAW_SOURCE = 0; } // silkbar source
+                            unsafe {
+                                static mut CLOCK_SOURCE_APPLY_BUDGET: u32 = 64;
+                                let b = &mut CLOCK_SOURCE_APPLY_BUDGET;
+                                if *b > 0 {
+                                    *b -= 1;
+                                    serial_println!(
+                                        "[sexdisplay.clock.source.silkbar.apply] hh={} mm={} ss={} loop={}",
+                                        bar.clock_hh, bar.clock_mm, bar.clock_ss, display_loop_counter
+                                    );
+                                }
+                            }
                             unsafe {
                                 static mut CLOCK_RECV_BUDGET: u32 = 64;
                                 let b = &mut CLOCK_RECV_BUDGET;

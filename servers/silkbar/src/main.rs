@@ -10,6 +10,8 @@ use silkbar_model::{
 use sex_pdx::{OP_BELL_LIST, OP_BELL_SUBSCRIBE, SLOT_BELL};
 
 const BELL_DELIVERY_PROOF_ENABLED: bool = option_env!("SEXOS_BELL_DELIVERY_PROOF").is_some();
+const CLOCK_FORCE_STALL_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SILKBAR_CLOCK_FORCE_STALL_PROOF").is_some();
 static CAP_READY_DISPLAY: AtomicBool = AtomicBool::new(false);
 static DEFER_EMITTED_DISPLAY: AtomicBool = AtomicBool::new(false);
 
@@ -138,6 +140,9 @@ pub extern "C" fn _start() -> ! {
     // have no wall-clock correlation; 100 yields makes ss appear frozen.
     const LIVE_CLOCK_THRESHOLD: u16 = BOOT_CLOCK_THRESHOLD;
     let mut boot_clock_sends: u8 = 0;
+    let mut force_stall_seeded = false;
+    let mut force_stall_ss: u8 = 0;
+    let mut force_stall_repeat_sends: u16 = 0;
     // Cached Bell generation counter. 0 forces first LIST poll.
     let mut bell_gen_cached: u64 = 0;
     // True when OP_BELL_LIST is enqueued and reply not yet received.
@@ -636,15 +641,64 @@ pub extern "C" fn _start() -> ! {
             chip_phase = (chip_phase + 1) & 0x3;
         }
 
+        let mut clock_sent = false;
         let clock_status = if degraded {
             u64::MAX
+        } else if CLOCK_FORCE_STALL_PROOF_ENABLED {
+            if !force_stall_seeded {
+                force_stall_seeded = true;
+                force_stall_ss = ss;
+                clock_sent = true;
+                sex_pdx::serial_println!(
+                    "[silkbar.clock.force_stall.seed] hh={} mm={} ss={}",
+                    hh, mm, ss
+                );
+                send_update_status(SilkBarUpdate::new(
+                    UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
+                ))
+            } else if force_stall_repeat_sends < 124 {
+                let mut repeat_status = u64::MAX;
+                let mut burst: u8 = 0;
+                while burst < 4 && force_stall_repeat_sends < 124 {
+                    force_stall_repeat_sends = force_stall_repeat_sends.wrapping_add(1);
+                    repeat_status = send_update_status(SilkBarUpdate::new(
+                        UpdateKind::SetClock as u32,
+                        0,
+                        hh as u32,
+                        ((mm as u32) << 8) | force_stall_ss as u32,
+                    ));
+                    burst = burst.wrapping_add(1);
+                }
+                clock_sent = true;
+                if (force_stall_repeat_sends % 20) == 0 {
+                    sex_pdx::serial_println!(
+                        "[silkbar.clock.force_stall.repeat] ss={} sends={}",
+                        force_stall_ss, force_stall_repeat_sends
+                    );
+                }
+                repeat_status
+            } else {
+                static mut FORCE_STALL_SUPPRESS_BUDGET: u32 = 4;
+                let b = unsafe { &mut FORCE_STALL_SUPPRESS_BUDGET };
+                if *b > 0 {
+                    *b -= 1;
+                    sex_pdx::serial_println!(
+                        "[silkbar.clock.force_stall.suppress] repeats={} status=hold",
+                        force_stall_repeat_sends
+                    );
+                }
+                u64::MAX
+            }
         } else {
+            clock_sent = true;
             send_update_status(SilkBarUpdate::new(
                 UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
             ))
         };
         if !degraded {
-            boot_clock_sends = boot_clock_sends.wrapping_add(1);
+            if clock_sent {
+                boot_clock_sends = boot_clock_sends.wrapping_add(1);
+            }
             {
                 static mut CLOCK_BOOT_CANARY_BUDGET: u32 = 8;
                 let b = unsafe { &mut CLOCK_BOOT_CANARY_BUDGET };
