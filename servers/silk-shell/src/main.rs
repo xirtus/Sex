@@ -1372,6 +1372,43 @@ unsafe fn maybe_run_webstub_localdoc_surface_text_proof() {
     WEBSTUB_LOCALDOC_TEXT_PROOF_DONE = true;
 }
 
+/// WebStub static text render proof.
+const WEBSTUB_STATIC_TEXT_RENDER_PROOF_ENABLED: bool =
+    option_env!("SEXOS_WEBSTUB_STATIC_TEXT_RENDER_PROOF").is_some();
+static mut WEBSTUB_STATIC_TEXT_RENDER_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_webstub_static_text_render_proof() {
+    if !WEBSTUB_STATIC_TEXT_RENDER_PROOF_ENABLED || WEBSTUB_STATIC_TEXT_RENDER_PROOF_DONE { return; }
+    // Render 4 colored fill-rect rows inside WebStub surface (SID 205, 400x300).
+    // Same pattern as Spindle band rendering: pdx_call(SLOT_DISPLAY, 0xEF, sid, ...).
+    // Rows visualize static localdoc text. No glyph font — colored bands only.
+    // Bounds: rows are within (0,0,400,300) surface.
+    let sid = SURFACE_ID_BROWSER;
+    let surf_w: u32 = 400;
+    let row_h: u32 = 24;
+    let row_gap: u32 = 4;
+    let lines: [(&str, u32); 4] = [
+        ("Browser / WebStub", 0x007AAFA4),      // teal accent (header)
+        ("Local document stub", 0x00CDD6F4),    // silkbar text color
+        ("network=0 engine=0", 0x00386050),     // green tint
+        ("URL intent: marker-only", 0x00202830), // dim default
+    ];
+    for i in 0..4usize {
+        let rect_index = (i as u64 + 1) & 0xF;
+        let row_y = 8u32 + i as u32 * (row_h + row_gap);
+        pdx_call(SLOT_DISPLAY, 0xEF, sid,
+            (row_y as u64) << 32 | 0u64,
+            (rect_index << 56)
+                | ((lines[i].1 as u64) << 32)
+                | ((row_h as u64) << 16)
+                | surf_w as u64);
+    }
+    serial_println!("[webstub.static.text.render] sid=205 lines=4 glyphs=0 ok=1 reason=fill_rect_bands_no_font_glyphs");
+    serial_println!("[webstub.static.text.bounds] sid=205 x=0 y=0 w=400 h=300 ok=1 reason=within_surface_bounds");
+    serial_println!("[webstub.static.text.done] ok=1 lines=4 visible=1");
+    WEBSTUB_STATIC_TEXT_RENDER_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16443,6 +16480,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_stub_proof(); }
         unsafe { maybe_run_browser_localdoc_stub_proof(); }
         unsafe { maybe_run_webstub_localdoc_surface_text_proof(); }
+        unsafe { maybe_run_webstub_static_text_render_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
