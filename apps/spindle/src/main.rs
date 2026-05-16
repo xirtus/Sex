@@ -1110,6 +1110,28 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.bell.command] name=bell-status ok=1 reason=status_report");
             true
         }
+        b"launch-outcomes" => {
+            sb.push(b"App Launch Outcomes (Bell Bridge Phase 2):");
+            sb.push(b"  Quil:    route=SLOT_SHELL outcome=ok launch_exec=1");
+            sb.push(b"  Linen:   route=SLOT_SHELL outcome=ok launch_exec=1");
+            sb.push(b"  WebStub: route=SLOT_SHELL outcome=placeholder focusable=0");
+            sb.push(b"  Atlas:   outcome=deferred (nonfocusable overlay)");
+            sb.push(b"  Bell/Collar/Mesh: outcome=deferred (not launched)");
+            sb.push(b"  bell_ipc=0 -- Bell not receiving launch events yet");
+            sb.push(b"  Phase 3 future: shell publishes to Bell via OP_BELL_NOTIFY.");
+            serial_println!("[spindle.bell.launch.command] name=launch-outcomes ok=1 reason=outcome_table");
+            true
+        }
+        b"bell-launch-events" => {
+            sb.push(b"Bell Launch Events (Bell Bridge Phase 2):");
+            sb.push(b"  bell_ipc=0 op_bell_notify=0 launch_authority=0");
+            sb.push(b"  focus_authority=0 render_authority=0");
+            sb.push(b"  slot_shell_primary=1 -- shell owns launch policy");
+            sb.push(b"  Bell observes outcomes; never executes launches.");
+            sb.push(b"  No Bell IPC yet. Phase 3: real OP_BELL_NOTIFY.");
+            serial_println!("[spindle.bell.launch.command] name=bell-launch-events ok=1 reason=bell_bridge_truth");
+            true
+        }
         b"linen-status" => {
             sb.push(b"Linen object bridge status:");
             sb.push(b"  slot:     SLOT_LINEN=11 (PD 7: linen)");
@@ -2730,10 +2752,20 @@ fn run_bell_bridge_proof(sb: &mut Scrollback, hist: &mut History, ev: &mut Event
     );
 
     // Stage 6: safety audit — verify no blocking.
+    // Stage 5b: launch-outcomes — launch outcome markers (Bell Bridge Phase 2).
+    let launch_outcomes_ok = dispatch(b"launch-outcomes", sb, hist, ev);
+    serial_println!("[spindle.bell.proof] stage=5b action=launch_outcomes ok={} reason={}",
+        launch_outcomes_ok as u8, if launch_outcomes_ok { "ok" } else { "dispatch_fail" });
+    // Stage 5c: bell-launch-events — Bell Bridge truth table.
+    let bell_launch_ok = dispatch(b"bell-launch-events", sb, hist, ev);
+    serial_println!("[spindle.bell.proof] stage=5c action=bell_launch_events ok={} reason={}",
+        bell_launch_ok as u8, if bell_launch_ok { "ok" } else { "dispatch_fail" });
+
     // All Bell pdx_calls are fire-and-forget AsyncEnqueue.
     serial_println!("[spindle.bell.proof] stage=6 action=safety ok=1 reason=no_blocking_no_unbounded_waits");
 
-    let all_ok = status_ok && test_ok && notify_ok && notify_empty_ok && bell_ok;
+    let all_ok = status_ok && test_ok && notify_ok && notify_empty_ok && bell_ok
+        && launch_outcomes_ok && bell_launch_ok;
     serial_println!("[spindle.bell.proof.done] ok={}", all_ok as u8);
 }
 

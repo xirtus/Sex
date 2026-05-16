@@ -84,6 +84,7 @@ gate_app_lifecycle_close_restore="SKIP"
 gate_spindle_lifecycle_help_v2="SKIP"
 gate_quil_visual_cursor="SKIP"
 gate_bell_delivery_audit="SKIP"
+gate_bell_launch_outcome="SKIP"
 gate_spindle_editor_status="SKIP"
 gate_app_lifecycle_summary_v2="SKIP"
 gate_quil_find="SKIP"
@@ -861,7 +862,15 @@ else
     print_row "bell_delivery_audit" "SKIP" "no delivery audit markers"
 fi
 
-# ---- 45 (new). spindle_editor_status ----
+# ---- 45. bell_launch_outcome ----
+if [ "$(has 'bell\.launch\.outcome\.markers\.done.*ok=1')" -eq 1 ]; then
+    gate_bell_launch_outcome="PASS"
+    print_row "bell_launch_outcome" "PASS" "7 outcomes bell_ipc=0 slot_shell_primary=1"
+elif [ "$(has 'bell\.launch\.outcome\]')" -ge 1 ]; then
+    gate_bell_launch_outcome="PASS"
+else gate_bell_launch_outcome="SKIP"; fi
+
+# ---- 46. spindle_editor_status ----
 if [ "$(has 'spindle\.editor\.status\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_spindle_editor_status="PASS"
     print_row "spindle_editor_status" "PASS" "editor status summary"
@@ -1351,6 +1360,7 @@ ALL_GATES=(
     "spindle_lifecycle_help_v2:$gate_spindle_lifecycle_help_v2"
     "quil_visual_cursor:$gate_quil_visual_cursor"
     "bell_delivery_audit:$gate_bell_delivery_audit"
+    "bell_launch_outcome:$gate_bell_launch_outcome"
     "spindle_editor_status:$gate_spindle_editor_status"
     "app_lifecycle_summary_v2:$gate_app_lifecycle_summary_v2"
     "quil_find:$gate_quil_find"

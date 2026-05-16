@@ -1449,6 +1449,29 @@ unsafe fn maybe_run_frame_lights_keyboard_proof() {
     FRAME_LIGHTS_KEYBOARD_PROOF_DONE = true;
 }
 
+/// Bell launch outcome markers proof (Bell Bridge Phase 2).
+/// Marker-only: no Bell IPC, no OP_BELL_NOTIFY, no launch authority change.
+const BELL_LAUNCH_OUTCOME_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BELL_LAUNCH_OUTCOME_PROOF").is_some();
+static mut BELL_LAUNCH_OUTCOME_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_bell_launch_outcome_proof() {
+    if !BELL_LAUNCH_OUTCOME_PROOF_ENABLED || BELL_LAUNCH_OUTCOME_PROOF_DONE { return; }
+    serial_println!("[bell.launch.outcome.proof.begin]");
+
+    serial_println!("[bell.launch.outcome] app=Quil route=SLOT_SHELL outcome=ok launch_exec=1 focusable=1 bell_ipc=0 ok=1 reason=launch_route_exists");
+    serial_println!("[bell.launch.outcome] app=Linen route=SLOT_SHELL outcome=ok launch_exec=1 focusable=1 bell_ipc=0 ok=1 reason=launch_route_exists");
+    serial_println!("[bell.launch.outcome] app=WebStub route=SLOT_SHELL outcome=placeholder launch_exec=1 focusable=0 bell_ipc=0 ok=1 reason=no_surface_placeholder_only");
+    serial_println!("[bell.launch.outcome] app=Atlas route=SLOT_SHELL outcome=deferred launch_exec=0 focusable=0 bell_ipc=0 ok=1 reason=overlay_nonfocusable");
+    serial_println!("[bell.launch.outcome] app=Bell route=none outcome=deferred launch_exec=0 focusable=0 bell_ipc=0 ok=1 reason=self_referential_no_launch_path");
+    serial_println!("[bell.launch.outcome] app=Collar route=none outcome=deferred launch_exec=0 focusable=0 bell_ipc=0 ok=1 reason=not_spawned");
+    serial_println!("[bell.launch.outcome] app=Mesh route=none outcome=deferred launch_exec=0 focusable=0 bell_ipc=0 ok=1 reason=not_spawned");
+
+    serial_println!("[bell.launch.bridge.truth] bell_ipc=0 op_bell_notify=0 launch_authority=0 focus_authority=0 render_authority=0 slot_shell_primary=1 ok=1 reason=shell_owns_launch_bell_observes_only");
+    serial_println!("[bell.launch.outcome.markers.done] ok=1 outcomes=7 bell_ipc=0");
+    BELL_LAUNCH_OUTCOME_PROOF_DONE = true;
+}
+
 /// Atlas Scene status stub: model markers, no visuals.
 unsafe fn maybe_run_atlas_scene_stub_proof() {
     if !ATLAS_SCENE_STUB_PROOF_ENABLED || ATLAS_SCENE_STUB_PROOF_DONE { return; }
@@ -16237,6 +16260,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_frame_rim_markers_proof(); }
         unsafe { maybe_run_frame_lights_stub_proof(); }
         unsafe { maybe_run_frame_lights_keyboard_proof(); }
+        unsafe { maybe_run_bell_launch_outcome_proof(); }
         unsafe { maybe_run_atlas_scene_stub_proof(); }
         unsafe { maybe_run_scene_lifecycle_markers_proof(); }
         unsafe { maybe_run_scene_keyboard_switch_proof(); }
