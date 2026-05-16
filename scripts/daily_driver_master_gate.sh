@@ -162,6 +162,11 @@ gate_pci_net_status="SKIP"
 gate_e1000_bar_meta="SKIP"
 gate_e1000_driver_status="SKIP"
 gate_e1000_ring_alloc="SKIP"
+gate_dma_static_ring_alloc="SKIP"
+gate_e1000_ring_phys="SKIP"
+gate_e1000_ring_truth="SKIP"
+gate_browser_nic_truth="SKIP"
+gate_dma_ring_alloc_proof_done="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1415,9 +1420,54 @@ else gate_e1000_driver_status="SKIP"; fi
 if [ "$(has 'e1000.ring.allocation.stub.done.*ok=1')" -eq 1 ]; then
     gate_e1000_ring_alloc="PASS"
     print_row "e1000_ring_alloc" "PASS" "allocated=0 rings_enabled=0 packets=0"
+elif [ "$(has 'dma.static.ring.allocation.proof.done.*ok=1')" -eq 1 ]; then
+    gate_e1000_ring_alloc="PASS"
+    print_row "e1000_ring_alloc" "PASS" "superseded_by_dma_static_ring_alloc_proof_v1"
 elif [ "$(has 'e1000.ring.allocation.stub]')" -ge 1 ]; then
     gate_e1000_ring_alloc="PASS"
 else gate_e1000_ring_alloc="SKIP"; fi
+
+# ---- 133. dma_static_ring_alloc ----
+if [ "$(has 'dma.static.ring.alloc.*allocated=1.*ok=1')" -eq 1 ]; then
+    gate_dma_static_ring_alloc="PASS"
+    print_row "dma_static_ring_alloc" "PASS" "rx=4K tx=4K align=4K cache=UC allocated=1"
+elif [ "$(has 'dma.static.ring.alloc.*allocated=0.*ok=0')" -eq 1 ]; then
+    gate_dma_static_ring_alloc="FAIL"
+    print_row "dma_static_ring_alloc" "FAIL" "alloc_frame failed"
+else gate_dma_static_ring_alloc="SKIP"; fi
+
+# ---- 134. e1000_ring_phys ----
+if [ "$(has 'e1000.ring.phys.*ok=1')" -eq 1 ]; then
+    gate_e1000_ring_phys="PASS"
+    print_row "e1000_ring_phys" "PASS" "rx_phys tx_phys virt proved"
+elif [ "$(has 'e1000.ring.phys.*ok=0')" -eq 1 ]; then
+    gate_e1000_ring_phys="FAIL"
+    print_row "e1000_ring_phys" "FAIL" "phys addresses not proved"
+else gate_e1000_ring_phys="SKIP"; fi
+
+# ---- 135. e1000_ring_truth ----
+if [ "$(has 'e1000.ring.truth.*allocated=1.*rings_enabled=0.*dma=0.*mmio_writes=0.*irq=0.*packets=0.*ok=1')" -eq 1 ]; then
+    gate_e1000_ring_truth="PASS"
+    print_row "e1000_ring_truth" "PASS" "allocated=1 rings_enabled=0 dma=0 mmio_writes=0 irq=0 packets=0"
+elif [ "$(has 'e1000.ring.truth.*rings_enabled=0.*packets=0.*ok=1')" -eq 1 ]; then
+    gate_e1000_ring_truth="PASS"
+    print_row "e1000_ring_truth" "PASS" "rings_enabled=0 packets=0"
+else gate_e1000_ring_truth="SKIP"; fi
+
+# ---- 136. browser_nic_truth ----
+if [ "$(has 'browser.nic.truth.*slot_net_grant=0.*network=0.*fetched=0.*ok=1')" -eq 1 ]; then
+    gate_browser_nic_truth="PASS"
+    print_row "browser_nic_truth" "PASS" "slot_net_grant=0 network=0 fetched=0 dns=0 tcp=0 http=0 tls=0"
+else gate_browser_nic_truth="SKIP"; fi
+
+# ---- 137. dma_ring_alloc_proof_done ----
+if [ "$(has 'dma.static.ring.allocation.proof.done.*ok=1.*allocated=1.*packets=0')" -eq 1 ]; then
+    gate_dma_ring_alloc_proof_done="PASS"
+    print_row "dma_ring_alloc_proof_done" "PASS" "ok=1 allocated=1 packets=0"
+elif [ "$(has 'dma.static.ring.allocation.proof.done.*ok=0')" -eq 1 ]; then
+    gate_dma_ring_alloc_proof_done="FAIL"
+    print_row "dma_ring_alloc_proof_done" "FAIL" "proof not completed"
+else gate_dma_ring_alloc_proof_done="SKIP"; fi
 
 # ---- 94. clock_visible_seconds ----
 first_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
@@ -1865,6 +1915,11 @@ ALL_GATES=(
     "e1000_bar_meta:$gate_e1000_bar_meta"
     "e1000_driver_status:$gate_e1000_driver_status"
     "e1000_ring_alloc:$gate_e1000_ring_alloc"
+    "dma_static_ring_alloc:$gate_dma_static_ring_alloc"
+    "e1000_ring_phys:$gate_e1000_ring_phys"
+    "e1000_ring_truth:$gate_e1000_ring_truth"
+    "browser_nic_truth:$gate_browser_nic_truth"
+    "dma_ring_alloc_proof_done:$gate_dma_ring_alloc_proof_done"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"
