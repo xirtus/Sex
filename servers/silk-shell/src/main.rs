@@ -1738,6 +1738,29 @@ unsafe fn maybe_run_browser_reader_proof() {
     BROWSER_READER_PROOF_DONE = true;
 }
 
+/// Browser save page stub proof.
+const BROWSER_SAVE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_SAVE_PROOF").is_some();
+static mut BROWSER_SAVE_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_save_proof() {
+    if !BROWSER_SAVE_PROOF_ENABLED || BROWSER_SAVE_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let ylw: u64 = 0x00F9E2AF;
+    let dim: u64 = 0x006C7086;
+
+    serial_println!("[browser.save.intent] page=0 bytes=280 lines=22 durable=0 ok=1 reason=marker_only_no_storage");
+    serial_println!("[browser.save.status] saved=marker_only durable=0 object_status=0 ok=1 reason=storage_phase_A_correlation_0");
+
+    shell_draw_text(sid, b"Save: marker-only (durable=0)", ylw);
+    shell_draw_text(sid, b"  page: 280 bytes, 22 lines", dim);
+    shell_draw_text(sid, b"  storage: correlation=0, no readback", dim);
+
+    serial_println!("[browser.save.draw] sid={} saved=marker_only durable=0 ok=1", sid);
+    serial_println!("[browser.save.proof.done] ok=1");
+    BROWSER_SAVE_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16844,6 +16867,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_dashboard_proof(); }
         unsafe { maybe_run_browser_find_proof(); }
         unsafe { maybe_run_browser_reader_proof(); }
+        unsafe { maybe_run_browser_save_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }

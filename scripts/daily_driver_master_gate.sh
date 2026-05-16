@@ -144,6 +144,7 @@ gate_browser_actions="SKIP"
 gate_browser_dashboard="SKIP"
 gate_browser_find="SKIP"
 gate_browser_reader="SKIP"
+gate_browser_save="SKIP"
 gate_frame_lights_visual="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1265,6 +1266,14 @@ elif [ "$(has 'browser.reader.toggle]')" -ge 1 ]; then
     gate_browser_reader="PASS"
 else gate_browser_reader="SKIP"; fi
 
+# ---- 87. browser_save ----
+if [ "$(has 'browser.save.proof.done.*ok=1')" -eq 1 ]; then
+    gate_browser_save="PASS"
+    print_row "browser_save" "PASS" "save marker-only durable=0"
+elif [ "$(has 'browser.save.intent]')" -ge 1 ]; then
+    gate_browser_save="PASS"
+else gate_browser_save="SKIP"; fi
+
 # ---- 73. linen_persist_readback ----
 if [ "$(has 'linen\.persist\.readback\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_persist_readback="PASS"
@@ -1591,6 +1600,7 @@ ALL_GATES=(
     "browser_dashboard:$gate_browser_dashboard"
     "browser_find:$gate_browser_find"
     "browser_reader:$gate_browser_reader"
+    "browser_save:$gate_browser_save"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
