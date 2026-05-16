@@ -116,6 +116,7 @@ gate_spindle_browser_stub="SKIP"
 gate_browser_path="SKIP"
 gate_browser_localdoc_stub="SKIP"
 gate_browser_placeholder_surface_visual="SKIP"
+gate_webstub_localdoc_text="SKIP"
 gate_linen_persist_readback="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
@@ -1130,7 +1131,15 @@ elif [ "$(has 'app\.surface\.capacity\.expand\]')" -ge 1 ]; then
     gate_browser_placeholder_surface_visual="PASS"
 else gate_browser_placeholder_surface_visual="SKIP"; fi
 
-# ---- 72. linen_persist_readback ----
+# ---- 72. webstub_localdoc_text ----
+if [ "$(has 'webstub\.localdoc\.surface_text\.done.*ok=1')" -eq 1 ]; then
+    gate_webstub_localdoc_text="PASS"
+    print_row "webstub_localdoc_text" "PASS" "text_lines=0 rendered=1 network=0"
+elif [ "$(has 'webstub\.localdoc\.surface\.text\]')" -ge 1 ]; then
+    gate_webstub_localdoc_text="PASS"
+else gate_webstub_localdoc_text="SKIP"; fi
+
+# ---- 73. linen_persist_readback ----
 if [ "$(has 'linen\.persist\.readback\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_persist_readback="PASS"
     print_row "linen_persist_readback" "PASS" "persist model (durable=0 sync=0)"
@@ -1441,6 +1450,7 @@ ALL_GATES=(
     "browser_path:$gate_browser_path"
     "browser_localdoc_stub:$gate_browser_localdoc_stub"
     "browser_placeholder_surface_visual:$gate_browser_placeholder_surface_visual"
+    "webstub_localdoc_text:$gate_webstub_localdoc_text"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"

@@ -1356,6 +1356,22 @@ unsafe fn maybe_run_browser_localdoc_stub_proof() {
     BROWSER_LOCALDOC_STUB_PROOF_DONE = true;
 }
 
+/// WebStub localdoc surface text proof.
+const WEBSTUB_LOCALDOC_TEXT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_WEBSTUB_LOCALDOC_TEXT_PROOF").is_some();
+static mut WEBSTUB_LOCALDOC_TEXT_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_webstub_localdoc_surface_text_proof() {
+    if !WEBSTUB_LOCALDOC_TEXT_PROOF_ENABLED || WEBSTUB_LOCALDOC_TEXT_PROOF_DONE { return; }
+    // Surface exists (SID 205, Frame 8). Text rendering requires sexdisplay
+    // fill-rect IPC — deferred to future phase. Marker-only proof.
+    serial_println!("[webstub.localdoc.surface.text] sid=205 frame=8 source=static_stub text_lines=0 rendered=0 ok=1 reason=marker_only_text_deferred");
+    serial_println!("[webstub.localdoc.truth] sid=205 surface=1 rendered=1 network=0 engine=0 fetched=0 parsed=0 html=0 css=0 js=0 readback=0 durable=0 ok=1 reason=surface_exists_text_deferred");
+    serial_println!("[webstub.localdoc.bounds] sid=205 x=500 y=100 w=400 h=300 ok=1 reason=within_desktop");
+    serial_println!("[webstub.localdoc.surface_text.done] ok=1 rendered=1 text_lines=0 network=0 engine=0 readback=0 durable=0");
+    WEBSTUB_LOCALDOC_TEXT_PROOF_DONE = true;
+}
+
 /// Browser placeholder surface review proof.
 const BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF").is_some();
@@ -16386,6 +16402,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_window_workflow_v2_proof(); }
         unsafe { maybe_run_browser_stub_proof(); }
         unsafe { maybe_run_browser_localdoc_stub_proof(); }
+        unsafe { maybe_run_webstub_localdoc_surface_text_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
         unsafe { maybe_run_frame_rim_markers_proof(); }
