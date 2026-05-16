@@ -135,6 +135,7 @@ gate_quil_visible_typing_e2e="SKIP"
 gate_webstub_static_text_render="SKIP"
 gate_shell_draw_text_helper="SKIP"
 gate_browser_stub_v2="SKIP"
+gate_browser_localdoc_viewer="SKIP"
 gate_frame_lights_visual="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1184,6 +1185,14 @@ elif [ "$(has 'browser.stub.panel.draw]')" -ge 1 ]; then
     gate_browser_stub_v2="PASS"
 else gate_browser_stub_v2="SKIP"; fi
 
+# ---- 78. browser_localdoc_viewer ----
+if [ "$(has 'browser.localdoc.proof.done.*ok=1')" -eq 1 ]; then
+    gate_browser_localdoc_viewer="PASS"
+    print_row "browser_localdoc_viewer" "PASS" "22 line doc rendered via shell_draw_text"
+elif [ "$(has 'browser.localdoc.render]')" -ge 1 ]; then
+    gate_browser_localdoc_viewer="PASS"
+else gate_browser_localdoc_viewer="SKIP"; fi
+
 # ---- 73. linen_persist_readback ----
 if [ "$(has 'linen\.persist\.readback\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_persist_readback="PASS"
@@ -1501,6 +1510,7 @@ ALL_GATES=(
     "webstub_static_text_render:$gate_webstub_static_text_render"
     "shell_draw_text_helper:$gate_shell_draw_text_helper"
     "browser_stub_v2:$gate_browser_stub_v2"
+    "browser_localdoc_viewer:$gate_browser_localdoc_viewer"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"

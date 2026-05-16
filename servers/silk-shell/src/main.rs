@@ -1467,6 +1467,53 @@ unsafe fn maybe_run_browser_stub_v2_proof() {
     BROWSER_STUB_V2_PROOF_DONE = true;
 }
 
+/// Browser local document viewer proof.
+const BROWSER_LOCALDOC_VIEWER_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_LOCALDOC_VIEWER_PROOF").is_some();
+static mut BROWSER_LOCALDOC_VIEWER_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_localdoc_viewer_proof() {
+    if !BROWSER_LOCALDOC_VIEWER_PROOF_ENABLED || BROWSER_LOCALDOC_VIEWER_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let hdr: u64 = 0x00CDD6F4; // header
+    let body: u64 = 0x00BAC2DE; // body text
+    let dim: u64 = 0x006C7086;  // dim meta
+    let grn: u64 = 0x00A6E3A1;  // green
+    let ylw: u64 = 0x00F9E2AF;  // yellow
+
+    // Title + document metadata
+    shell_draw_text(sid, b"=== Local Document Viewer ===", hdr);
+    shell_draw_text(sid, b"", dim);
+    shell_draw_text(sid, b"Source: static_stub (embedded)", dim);
+    shell_draw_text(sid, b"Format: plain text only", dim);
+    shell_draw_text(sid, b"", dim);
+
+    // Document body
+    shell_draw_text(sid, b"Welcome to SexOS Browser.", body);
+    shell_draw_text(sid, b"", body);
+    shell_draw_text(sid, b"This is a local text viewer stub.", body);
+    shell_draw_text(sid, b"It renders static embedded text", body);
+    shell_draw_text(sid, b"via shell_draw_text() using the", body);
+    shell_draw_text(sid, b"OP_TEXT_DRAW display protocol.", body);
+    shell_draw_text(sid, b"", body);
+    shell_draw_text(sid, b"There is NO network stack.", body);
+    shell_draw_text(sid, b"There is NO HTML/CSS/JS engine.", body);
+    shell_draw_text(sid, b"There is NO file readback (durable=0).", body);
+    shell_draw_text(sid, b"", body);
+    shell_draw_text(sid, b"Future: Linen object status panel.", ylw);
+    shell_draw_text(sid, b"Future: proven SexFiles readback.", ylw);
+    shell_draw_text(sid, b"", dim);
+
+    // Footer / truth
+    shell_draw_text(sid, b"---", dim);
+    shell_draw_text(sid, b"network=0 engine=0 html=0 js=0", grn);
+    shell_draw_text(sid, b"fetched=0 parsed=0 readback=0 durable=0", grn);
+
+    serial_println!("[browser.localdoc.render] sid={} lines=22 ok=1 reason=shell_draw_text_static_document", sid);
+    serial_println!("[browser.localdoc.proof.done] ok=1");
+    BROWSER_LOCALDOC_VIEWER_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16564,6 +16611,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_webstub_static_text_render_proof(); }
         unsafe { maybe_run_shell_draw_text_helper_proof(); }
         unsafe { maybe_run_browser_stub_v2_proof(); }
+        unsafe { maybe_run_browser_localdoc_viewer_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
