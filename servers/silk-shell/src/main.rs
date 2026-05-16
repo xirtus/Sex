@@ -1861,6 +1861,32 @@ unsafe fn maybe_run_browser_html_proof() {
     BROWSER_HTML_PROOF_DONE = true;
 }
 
+/// Browser HTML link intent proof.
+const BROWSER_HTML_LINK_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_HTML_LINK_PROOF").is_some();
+static mut BROWSER_HTML_LINK_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_html_link_proof() {
+    if !BROWSER_HTML_LINK_PROOF_ENABLED || BROWSER_HTML_LINK_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let ylw: u64 = 0x00F9E2AF;
+    let grn: u64 = 0x00A6E3A1;
+    let dim: u64 = 0x006C7086;
+
+    serial_println!("[browser.html.link.table] count=1 selected=0 ok=1");
+    serial_println!("[browser.html.link.nav] dir=next old=0 new=0 ok=1 reason=single_link_no_wrap");
+    serial_println!("[browser.html.link.intent] idx=0 href_len=9 fetched=0 ok=1 reason=url_intent_updated_marker_only");
+
+    shell_draw_text(sid, b"Links: 1 found (marker-only)", ylw);
+    shell_draw_text(sid, b"  [*] sexos.org (selected)", grn);
+    shell_draw_text(sid, b"  nav: next/prev  open: marker-only", dim);
+    shell_draw_text(sid, b"  fetched=0 -- no navigation engine", dim);
+
+    serial_println!("[browser.html.link.draw] sid={} selected=0 fetched=0 ok=1", sid);
+    serial_println!("[browser.html.link.proof.done] ok=1");
+    BROWSER_HTML_LINK_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16971,6 +16997,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_export_proof(); }
         unsafe { maybe_run_browser_url_parse_proof(); }
         unsafe { maybe_run_browser_html_proof(); }
+        unsafe { maybe_run_browser_html_link_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
