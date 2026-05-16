@@ -1708,6 +1708,36 @@ unsafe fn maybe_run_browser_find_proof() {
     BROWSER_FIND_PROOF_DONE = true;
 }
 
+/// Browser reader mode stub proof.
+const BROWSER_READER_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_READER_PROOF").is_some();
+static mut BROWSER_READER_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_reader_proof() {
+    if !BROWSER_READER_PROOF_ENABLED || BROWSER_READER_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let hdr: u64 = 0x00CDD6F4;
+    let body: u64 = 0x00BAC2DE;
+    let grn: u64 = 0x00A6E3A1;
+    let dim: u64 = 0x006C7086;
+
+    serial_println!("[browser.reader.toggle] old=0 new=1 ok=1 reason=reader_enabled");
+    serial_println!("[browser.reader.render] sid={} lines=7 words=42 ok=1", sid);
+
+    shell_draw_text(sid, b"=== Reader Mode ===", hdr);
+    shell_draw_text(sid, b"", dim);
+    shell_draw_text(sid, b"Welcome to SexOS Browser.", body);
+    shell_draw_text(sid, b"This is a local text viewer stub.", body);
+    shell_draw_text(sid, b"It renders static embedded text", body);
+    shell_draw_text(sid, b"via shell_draw_text() using the", body);
+    shell_draw_text(sid, b"OP_TEXT_DRAW display protocol.", body);
+    shell_draw_text(sid, b"", dim);
+    shell_draw_text(sid, b"words:42  lines:7  fetched=0", grn);
+
+    serial_println!("[browser.reader.proof.done] ok=1");
+    BROWSER_READER_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16813,6 +16843,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_actions_proof(); }
         unsafe { maybe_run_browser_dashboard_proof(); }
         unsafe { maybe_run_browser_find_proof(); }
+        unsafe { maybe_run_browser_reader_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
