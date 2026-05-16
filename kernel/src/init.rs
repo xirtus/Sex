@@ -36,9 +36,10 @@ pub fn init() {
     let mut sexbell_id = 0;
     let mut sexfiles_id = 0;
     let mut spindle_id = 0;
+    let mut sexnet_id = 0;
 
     // Fixed Spawn Order (Deterministic IDs)
-    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell", "sexfiles", "spindle"];
+    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell", "sexfiles", "spindle", "sexnet"];
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -93,6 +94,9 @@ pub fn init() {
                         } else if domain_id == 12 {
                             spindle_id = id;
                             serial_println!("[kernel.spawn.spindle] id={} path={}", id, path);
+                        } else if domain_id == 13 {
+                            sexnet_id = id;
+                            serial_println!("[kernel.spawn.sexnet] id={} path={}", id, path);
                         }
                     }
                     Err(e) => {
@@ -602,6 +606,8 @@ pub fn init() {
             sexfiles_id, sexdrive_id
         );
     }
+    serial_println!("[kernel.sexnet.passive] spawned={} id={} slot_net_grant=0 browser_network=0",
+        if sexnet_id != 0 { 1u64 } else { 0u64 }, sexnet_id as u64);
     serial_println!("[bootgraph.phase25.complete]");
 
     // Hand framebuffer to sexdisplay: Limine fb.address is ALREADY VIRTUAL.

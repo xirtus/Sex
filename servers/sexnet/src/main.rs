@@ -1,25 +1,34 @@
 #![no_std]
 #![no_main]
-#![feature(alloc_error_handler)]
 
-extern crate alloc;
-use linked_list_allocator::LockedHeap;
-
-#[global_allocator]
-static ALLOCATOR: LockedHeap = LockedHeap::empty();
-
-#[alloc_error_handler]
-fn alloc_error_handler(_layout: core::alloc::Layout) -> ! {
-    loop {}
-}
-
-use sex_pdx::{
-    pdx_listen_raw, pdx_reply,
-    SEXNET_GET_STATUS, SEXNET_SCAN_WIFI, SEXNET_CONNECT,
-    SEXNET_DISCONNECT, SEXNET_VPN_UP, SEXNET_VPN_DOWN, SEXNET_GET_IP,
-    SexnetApEntry,
-};
+use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println};
 use spin::Mutex;
+
+// --------------------------------------------------------------------------
+// Opcodes (local — these are NOT in sex-pdx)
+// --------------------------------------------------------------------------
+
+const SEXNET_GET_STATUS:  u64 = 0x200;
+const SEXNET_SCAN_WIFI:   u64 = 0x201;
+const SEXNET_CONNECT:     u64 = 0x202;
+const SEXNET_DISCONNECT:  u64 = 0x203;
+const SEXNET_VPN_UP:      u64 = 0x204;
+const SEXNET_VPN_DOWN:    u64 = 0x205;
+const SEXNET_GET_IP:      u64 = 0x206;
+
+// --------------------------------------------------------------------------
+// AP entry (server-side; client uses silknet crate)
+// --------------------------------------------------------------------------
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SexnetApEntry {
+    ssid:    [u8; 32],
+    rssi:    i8,
+    channel: u8,
+    flags:   u8,
+    _pad:    u8,
+}
 
 // --------------------------------------------------------------------------
 // State
@@ -32,24 +41,24 @@ enum WifiState { Disconnected, Connected }
 enum VpnState { Down, Up }
 
 struct NetState {
-    wifi: WifiState,
-    vpn: VpnState,
+    wifi:          WifiState,
+    vpn:           VpnState,
     link_speed_mbps: u16,
-    ipv4: u32,
+    ipv4:          u32,
 }
 
 static STATE: Mutex<NetState> = Mutex::new(NetState {
     wifi: WifiState::Disconnected,
-    vpn: VpnState::Down,
+    vpn:  VpnState::Down,
     link_speed_mbps: 0,
     ipv4: 0,
 });
 
 // Mock AP scan table — replaced by NIC ring in a real driver.
 static MOCK_APS: [SexnetApEntry; 3] = [
-    SexnetApEntry { ssid: *b"SexOS_Network\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", rssi: -45, channel: 6,  flags: 0b0010 },
-    SexnetApEntry { ssid: *b"Silk_Hotspot\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", rssi: -68, channel: 11, flags: 0b0010 },
-    SexnetApEntry { ssid: *b"OpenAP\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", rssi: -80, channel: 1,  flags: 0b0001 },
+    SexnetApEntry { ssid: *b"SexOS_Network\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", rssi: -45, channel: 6,  flags: 0b0010, _pad: 0 },
+    SexnetApEntry { ssid: *b"Silk_Hotspot\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", rssi: -68, channel: 11, flags: 0b0010, _pad: 0 },
+    SexnetApEntry { ssid: *b"OpenAP\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", rssi: -80, channel: 1,  flags: 0b0001, _pad: 0 },
 ];
 
 // --------------------------------------------------------------------------
@@ -102,7 +111,7 @@ fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
         SEXNET_VPN_UP => {
             let mut s = STATE.lock();
             if s.wifi != WifiState::Connected {
-                return 2; // no carrier
+                return 2;
             }
             s.vpn = VpnState::Up;
             0
@@ -126,9 +135,12 @@ fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    serial_println!("[sexnet.boot] ok=1 reason=passive_spawn");
+    serial_println!("[sexnet.passive.ready] network=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=mock_status_only_no_nic");
+    serial_println!("[sexnet.passive.spawn.done] ok=1 spawned=1 browser_network=0");
     loop {
         let req = unsafe { pdx_listen_raw(0) };
-        let result = handle_call(req.opcode(), req.msg_type.arg0(), req.msg_type.arg1());
+        let result = handle_call(req.type_id, req.arg0, req.arg1);
         pdx_reply(req.caller_pd, result);
     }
 }

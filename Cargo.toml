@@ -13,6 +13,7 @@ members = [
     "servers/linen",
     "servers/quil",
     "servers/sexstore",
+    "servers/sexnet",
     "apps/sexdrive",
     "purple-scanout",
     "crates/sex-pdx",

@@ -1827,11 +1827,11 @@ static mut SEXNET_BROWSER_CAP_PROOF_DONE: bool = false;
 
 unsafe fn maybe_run_sexnet_browser_cap_proof() {
     if !SEXNET_BROWSER_CAP_PROOF_ENABLED || SEXNET_BROWSER_CAP_PROOF_DONE { return; }
-    // Honest: sexnet server exists (servers/sexnet/) but is not spawned at boot.
-    // silknet crate has opcodes (GET_STATUS, SCAN_WIFI, etc.).
-    // Browser has no SLOT_NET grant. No network capability.
-    serial_println!("[sexnet.stub.status] spawned=0 slot_net=0 nic=0 tcp=0 dns=0 http=0 ok=1 reason=sexnet_not_spawned_no_capability_grant");
-    serial_println!("[browser.net.status] sexnet=0 slot_net=0 network=0 fetched=0 ok=1 reason=honest_no_network_route");
+    // sexnet spawned passively at boot (domain 13, mock/status only, no NIC, no real networking).
+    // Browser has no SLOT_NET grant. Network capability unchanged: network=0.
+    serial_println!("[sexnet.stub.status] spawned=1 slot_net=0 nic=0 tcp=0 dns=0 http=0 ok=1 reason=passive_spawn_no_capability_grant");
+    serial_println!("[browser.net.status] sexnet=1 slot_net=0 network=0 fetched=0 ok=1 reason=sexnet_passive_no_browser_route");
+    serial_println!("[browser.sexnet.truth] spawned=1 slot_net_grant=0 network=0 fetched=0 dns=0 http=0 tls=0 ok=1 reason=passive_spawn_no_network_cap");
     serial_println!("[sexnet.browser.cap.stub.proof.done] ok=1");
     SEXNET_BROWSER_CAP_PROOF_DONE = true;
 }

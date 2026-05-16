@@ -39,7 +39,8 @@ crates = [
   "servers/quil/Cargo.toml",
   "servers/sexstore/Cargo.toml",
   "servers/sexfiles/Cargo.toml",
-  "apps/spindle/Cargo.toml"
+  "apps/spindle/Cargo.toml",
+  "servers/sexnet/Cargo.toml"
 ]
 
 [[stage]]
@@ -157,6 +158,13 @@ action = "cargo_manifest"
 manifest = "apps/spindle/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/spindle"
 dest_artifact = "iso_root/apps/spindle"
+
+[[stage]]
+id = "build_sexnet"
+action = "cargo_manifest"
+manifest = "servers/sexnet/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sexnet"
+dest_artifact = "iso_root/servers/sexnet"
 
 [[stage]]
 id = "copy_limine_cfg"
