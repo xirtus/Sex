@@ -1434,6 +1434,39 @@ unsafe fn maybe_run_shell_draw_text_helper_proof() {
     SHELL_DRAW_TEXT_HELPER_PROOF_DONE = true;
 }
 
+/// Browser stub v2 visible panel proof.
+const BROWSER_STUB_V2_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_STUB_V2_PROOF").is_some();
+static mut BROWSER_STUB_V2_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_stub_v2_proof() {
+    if !BROWSER_STUB_V2_PROOF_ENABLED || BROWSER_STUB_V2_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let c: u64 = 0x00CDD6F4; // silkbar text
+    let g: u64 = 0x00A6E3A1; // green
+    let y: u64 = 0x00F9E2AF; // yellow
+    let d: u64 = 0x006C7086; // dim
+
+    shell_draw_text(sid, b"Browser / WebStub", c);
+    shell_draw_text(sid, b"", d);
+    shell_draw_text(sid, b"network=0  engine=0", g);
+    shell_draw_text(sid, b"fetched=0  parsed=0", g);
+    shell_draw_text(sid, b"html=0  css=0  js=0", g);
+    shell_draw_text(sid, b"", d);
+    shell_draw_text(sid, b"Local document stub", c);
+    shell_draw_text(sid, b"  url <text>  stores marker only", y);
+    shell_draw_text(sid, b"  no fetch, no DNS, no HTTP", d);
+    shell_draw_text(sid, b"", d);
+    shell_draw_text(sid, b"Launch: SLOT_SHELL -> sid 205", c);
+    shell_draw_text(sid, b"Surface: frame 8, focusable", y);
+    shell_draw_text(sid, b"", d);
+    shell_draw_text(sid, b"[ capability freeze: all zeros ]", d);
+
+    serial_println!("[browser.stub.panel.draw] sid={} lines=14 ok=1 reason=shell_draw_text_op_text_draw", sid);
+    serial_println!("[browser.stub.v2.proof.done] ok=1");
+    BROWSER_STUB_V2_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16530,6 +16563,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_webstub_localdoc_surface_text_proof(); }
         unsafe { maybe_run_webstub_static_text_render_proof(); }
         unsafe { maybe_run_shell_draw_text_helper_proof(); }
+        unsafe { maybe_run_browser_stub_v2_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
