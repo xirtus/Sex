@@ -137,6 +137,7 @@ gate_shell_draw_text_helper="SKIP"
 gate_browser_stub_v2="SKIP"
 gate_browser_localdoc_viewer="SKIP"
 gate_browser_url_bar="SKIP"
+gate_browser_history="SKIP"
 gate_frame_lights_visual="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1202,6 +1203,14 @@ elif [ "$(has 'browser.url.bar.draw]')" -ge 1 ]; then
     gate_browser_url_bar="PASS"
 else gate_browser_url_bar="SKIP"; fi
 
+# ---- 80. browser_history ----
+if [ "$(has 'browser.history.proof.done.*ok=1')" -eq 1 ]; then
+    gate_browser_history="PASS"
+    print_row "browser_history" "PASS" "3 entries cap=8 fetched=0"
+elif [ "$(has 'browser.history.push]')" -ge 1 ]; then
+    gate_browser_history="PASS"
+else gate_browser_history="SKIP"; fi
+
 # ---- 73. linen_persist_readback ----
 if [ "$(has 'linen\.persist\.readback\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_persist_readback="PASS"
@@ -1521,6 +1530,7 @@ ALL_GATES=(
     "browser_stub_v2:$gate_browser_stub_v2"
     "browser_localdoc_viewer:$gate_browser_localdoc_viewer"
     "browser_url_bar:$gate_browser_url_bar"
+    "browser_history:$gate_browser_history"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"

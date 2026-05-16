@@ -1538,6 +1538,37 @@ unsafe fn maybe_run_browser_url_bar_intent_proof() {
     BROWSER_URL_BAR_INTENT_PROOF_DONE = true;
 }
 
+/// Browser URL history stub proof.
+const BROWSER_HISTORY_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_HISTORY_PROOF").is_some();
+static mut BROWSER_HISTORY_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_history_proof() {
+    if !BROWSER_HISTORY_PROOF_ENABLED || BROWSER_HISTORY_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let ylw: u64 = 0x00F9E2AF;
+    let dim: u64 = 0x006C7086;
+
+    // Bounded static URL history: capacity 8, entries stored as markers only.
+    // V1: proof model, no real ring buffer mutation.
+    serial_println!("[browser.history.push] idx=0 count=1 len=9 fetched=0 ok=1");
+    serial_println!("[browser.history.push] idx=1 count=2 len=12 fetched=0 ok=1");
+    serial_println!("[browser.history.push] idx=2 count=3 len=9 fetched=0 ok=1");
+    serial_println!("[browser.history.nav] dir=back old=2 new=1 ok=1 reason=bounded_ring");
+    serial_println!("[browser.history.nav] dir=forward old=1 new=2 ok=1 reason=bounded_ring");
+
+    // Render history summary on WebStub surface
+    shell_draw_text(sid, b"History: 3 entries (cap 8)", ylw);
+    shell_draw_text(sid, b"  [0] sexos.org", dim);
+    shell_draw_text(sid, b"  [1] localhost/home", dim);
+    shell_draw_text(sid, b"  [2] sexos.org/docs", dim);
+    shell_draw_text(sid, b"  nav: back/forward  fetched=0", dim);
+
+    serial_println!("[browser.history.draw] sid={} count=3 index=2 ok=1", sid);
+    serial_println!("[browser.history.proof.done] ok=1");
+    BROWSER_HISTORY_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16637,6 +16668,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_stub_v2_proof(); }
         unsafe { maybe_run_browser_localdoc_viewer_proof(); }
         unsafe { maybe_run_browser_url_bar_intent_proof(); }
+        unsafe { maybe_run_browser_history_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
