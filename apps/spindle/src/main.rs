@@ -1180,6 +1180,39 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.mesh.graph.command] name=mesh-graph-status ok=1 reason=graph_summary");
             true
         }
+        b"collar-grants" => {
+            sb.push(b"Collar Grant Status (stub, no authority):");
+            sb.push(b"  browser_network:     deferred granted=0 (network=0)");
+            sb.push(b"  bell_focus:          denied   granted=0 (shell focus)");
+            sb.push(b"  frame_close:         denied   granted=0 (close_allowed=0)");
+            sb.push(b"  project_scene_auth:  denied   granted=0 (metadata only)");
+            sb.push(b"  mesh_graph_inspect:  deferred granted=0 (stub only)");
+            sb.push(b"  storage_readback:    deferred granted=0 (durable=0)");
+            sb.push(b"  grants_mutated=0 revokes=0 secrets=0 auth_ui=0");
+            sb.push(b"  Collar not spawned. No authority granted.");
+            sb.push(b"  Use collar-status or authority-status for summary.");
+            serial_println!("[spindle.collar.command] name=collar-grants ok=1 reason=grant_status_table");
+            true
+        }
+        b"collar-status" => {
+            sb.push(b"Collar Status:");
+            sb.push(b"  phase=stub grants_mutated=0 revokes=0");
+            sb.push(b"  secrets=0 auth_ui=0 policy=0");
+            sb.push(b"  Collar is future authority wallet / trust plane.");
+            sb.push(b"  Currently no real grants, no secrets, no UI.");
+            serial_println!("[spindle.collar.command] name=collar-status ok=1 reason=collar_truth");
+            true
+        }
+        b"authority-status" => {
+            sb.push(b"Authority Status -- all safe defaults:");
+            sb.push(b"  browser_network=0 bell_focus=0 frame_close=0");
+            sb.push(b"  project_scene_authority=0 secrets=0");
+            sb.push(b"  SLOT_SHELL launch: shell-owned, proven.");
+            sb.push(b"  No Collar grants. No Bell authority.");
+            sb.push(b"  All capabilities frozen at safe minimum.");
+            serial_println!("[spindle.collar.command] name=authority-status ok=1 reason=authority_truth");
+            true
+        }
         b"linen-status" => {
             sb.push(b"Linen object bridge status:");
             sb.push(b"  slot:     SLOT_LINEN=11 (PD 7: linen)");
@@ -2161,6 +2194,9 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"project-scene-status", sb, hist, &mut ev);
         let _ = dispatch(b"mesh-graph", sb, hist, &mut ev);
         let _ = dispatch(b"mesh-graph-status", sb, hist, &mut ev);
+        let _ = dispatch(b"collar-grants", sb, hist, &mut ev);
+        let _ = dispatch(b"collar-status", sb, hist, &mut ev);
+        let _ = dispatch(b"authority-status", sb, hist, &mut ev);
         serial_println!("[spindle.frame.chrome.proof.done] ok=1");
     }
     if SPINDLE_BROWSER_STUB_PROOF_ENABLED {

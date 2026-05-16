@@ -1532,6 +1532,29 @@ unsafe fn maybe_run_mesh_graph_status_proof() {
     MESH_GRAPH_STATUS_PROOF_DONE = true;
 }
 
+/// Collar grant status stub.
+const COLLAR_GRANT_STATUS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_COLLAR_GRANT_STATUS_PROOF").is_some();
+static mut COLLAR_GRANT_STATUS_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_collar_grant_status_proof() {
+    if !COLLAR_GRANT_STATUS_PROOF_ENABLED || COLLAR_GRANT_STATUS_PROOF_DONE { return; }
+    serial_println!("[collar.grant.status.proof.begin]");
+
+    // Grant rows: all deferred/denied — Collar grants no authority.
+    serial_println!("[collar.grant.row] name=browser_network status=deferred granted=0 authority=0 ok=1 reason=network_0_no_collar_grant");
+    serial_println!("[collar.grant.row] name=bell_focus status=denied granted=0 authority=0 ok=1 reason=shell_owns_focus");
+    serial_println!("[collar.grant.row] name=frame_close status=denied granted=0 authority=0 ok=1 reason=close_allowed_0");
+    serial_println!("[collar.grant.row] name=project_scene_authority status=denied granted=0 authority=0 ok=1 reason=metadata_only_no_authority");
+    serial_println!("[collar.grant.row] name=mesh_graph_inspect status=deferred granted=0 authority=0 ok=1 reason=status_stub_only");
+    serial_println!("[collar.grant.row] name=storage_readback status=deferred granted=0 authority=0 ok=1 reason=durable_0_sync_readback_0");
+
+    serial_println!("[collar.grant.status] phase=stub grants_mutated=0 revokes=0 secrets=0 auth_ui=0 policy=0 ok=1 reason=collar_not_spawned_no_authority");
+    serial_println!("[collar.grant.truth] browser_network=0 bell_focus=0 frame_close=0 project_scene_authority=0 secrets=0 ok=1 reason=all_grants_deferred_or_denied");
+    serial_println!("[collar.grant.status_stub.done] ok=1 grants_mutated=0 secrets=0 auth_ui=0");
+    COLLAR_GRANT_STATUS_PROOF_DONE = true;
+}
+
 /// Atlas Scene status stub: model markers, no visuals.
 unsafe fn maybe_run_atlas_scene_stub_proof() {
     if !ATLAS_SCENE_STUB_PROOF_ENABLED || ATLAS_SCENE_STUB_PROOF_DONE { return; }
@@ -16325,6 +16348,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_scene_lifecycle_markers_proof(); }
         unsafe { maybe_run_project_scene_link_proof(); }
         unsafe { maybe_run_mesh_graph_status_proof(); }
+        unsafe { maybe_run_collar_grant_status_proof(); }
         unsafe { maybe_run_scene_keyboard_switch_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }

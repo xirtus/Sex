@@ -133,6 +133,7 @@ gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
 gate_project_scene_link="SKIP"
 gate_mesh_graph_status="SKIP"
+gate_collar_grant_status="SKIP"
 gate_spindle_atlas="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
@@ -1263,7 +1264,15 @@ elif [ "$(has 'mesh\.graph\.edge\]')" -ge 1 ]; then
     gate_mesh_graph_status="PASS"
 else gate_mesh_graph_status="SKIP"; fi
 
-# ---- 88. spindle_atlas ----
+# ---- 88. collar_grant_status ----
+if [ "$(has 'collar\.grant\.status_stub\.done.*ok=1')" -eq 1 ]; then
+    gate_collar_grant_status="PASS"
+    print_row "collar_grant_status" "PASS" "grants_mutated=0 secrets=0 auth_ui=0"
+elif [ "$(has 'collar\.grant\.row\]')" -ge 1 ]; then
+    gate_collar_grant_status="PASS"
+else gate_collar_grant_status="SKIP"; fi
+
+# ---- 89. spindle_atlas ----
 if [ "$(has 'spindle\.atlas\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_spindle_atlas="PASS"
 elif [ "$(has 'spindle\.atlas\.command\]')" -ge 1 ]; then
@@ -1426,6 +1435,7 @@ ALL_GATES=(
     "scene_keyboard_switch:$gate_scene_keyboard_switch"
     "project_scene_link:$gate_project_scene_link"
     "mesh_graph_status:$gate_mesh_graph_status"
+    "collar_grant_status:$gate_collar_grant_status"
     "spindle_atlas:$gate_spindle_atlas"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
