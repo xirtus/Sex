@@ -1404,6 +1404,17 @@ unsafe fn top_strip_render_proof(fb: *const u32, w: usize, h: usize) {
     let matched = h_val == GOLDEN_TOP_STRIP_HASH;
     serial_println!("[silk.topstrip.hash.result] actual=0x{:016X} expected=0x{:016X} match={} ok={}",
         h_val, GOLDEN_TOP_STRIP_HASH, matched as u8, matched as u8);
+    // Diagnostics: pixel-level diff requires storing 200KB golden buffer.
+    // V1: hash-only comparison. First-mismatch pixel not available.
+    // Future: if a smaller canonical strip (e.g., 40 rows) or sparse hash
+    // approach allows per-pixel diff within static budget, add pixel_diff=1.
+    serial_println!("[silk.topstrip.hash.diagnostics] ready={} pixel_diff=0 reason=no_golden_buffer_hash_only",
+        matched as u8);
+    if !matched {
+        serial_println!("[silk.topstrip.hash.mismatch] actual=0x{:016X} expected=0x{:016X} ok=0 reason=hash_mismatch_no_pixel_diff",
+            h_val, GOLDEN_TOP_STRIP_HASH);
+    }
+    serial_println!("[silk.topstrip.hash.diagnostics.done] ok={} ready={}", matched as u8, matched as u8);
     serial_println!("[silk.topstrip.hash.proof.done] ok={}", matched as u8);
 }
 
