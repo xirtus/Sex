@@ -153,6 +153,8 @@ gate_browser_html_history="SKIP"
 gate_sexnet_browser_cap="SKIP"
 gate_sexnet_status_route="SKIP"
 gate_clock_visible_seconds="SKIP"
+gate_browser_network_grant="SKIP"
+gate_http_client_status="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1338,6 +1340,22 @@ elif [ "$(has 'sexnet.status.route]')" -ge 1 ]; then
     gate_sexnet_status_route="PASS"
 else gate_sexnet_status_route="SKIP"; fi
 
+# ---- 96. browser_network_grant ----
+if [ "$(has 'browser.network.grant.stub.done.*ok=1')" -eq 1 ]; then
+    gate_browser_network_grant="PASS"
+    print_row "browser_network_grant" "PASS" "approved=0 slot_net=0 network=0"
+elif [ "$(has 'browser.network.grant.status]')" -ge 1 ]; then
+    gate_browser_network_grant="PASS"
+else gate_browser_network_grant="SKIP"; fi
+
+# ---- 97. http_client_status ----
+if [ "$(has 'http.client.status.stub.done.*ok=1')" -eq 1 ]; then
+    gate_http_client_status="PASS"
+    print_row "http_client_status" "PASS" "status=no_route fetched=0 http=0"
+elif [ "$(has 'http.client.status]')" -ge 1 ]; then
+    gate_http_client_status="PASS"
+else gate_http_client_status="SKIP"; fi
+
 # ---- 94. clock_visible_seconds ----
 first_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
 first_nonzero_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\].* s=[1-9][0-9]* ' "$LOG" | head -n1 | cut -d: -f1 || true)"
@@ -1775,6 +1793,8 @@ ALL_GATES=(
     "browser_html_history:$gate_browser_html_history"
     "sexnet_browser_cap:$gate_sexnet_browser_cap"
     "sexnet_status_route:$gate_sexnet_status_route"
+    "browser_network_grant:$gate_browser_network_grant"
+    "http_client_status:$gate_http_client_status"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"

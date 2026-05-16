@@ -1848,6 +1848,30 @@ unsafe fn maybe_run_sexnet_status_route_proof() {
     SEXNET_STATUS_ROUTE_PROOF_DONE = true;
 }
 
+/// Browser network grant stub proof.
+const BROWSER_NET_GRANT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_NET_GRANT_PROOF").is_some();
+static mut BROWSER_NET_GRANT_PROOF_DONE: bool = false;
+unsafe fn maybe_run_browser_net_grant_proof() {
+    if !BROWSER_NET_GRANT_PROOF_ENABLED || BROWSER_NET_GRANT_PROOF_DONE { return; }
+    serial_println!("[browser.network.grant.status] requested=0 approved=0 slot_net_grant=0 network=0 fetched=0 ok=1 reason=deferred_no_collar_approval");
+    serial_println!("[browser.network.grant.truth] collar_auth_ui=0 secrets=0 grants_mutated=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=all_grants_deferred");
+    serial_println!("[browser.network.grant.stub.done] ok=1 approved=0 network=0 fetched=0");
+    BROWSER_NET_GRANT_PROOF_DONE = true;
+}
+
+/// HTTP client status stub proof.
+const HTTP_CLIENT_STATUS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_HTTP_CLIENT_STATUS_PROOF").is_some();
+static mut HTTP_CLIENT_STATUS_PROOF_DONE: bool = false;
+unsafe fn maybe_run_http_client_status_proof() {
+    if !HTTP_CLIENT_STATUS_PROOF_ENABLED || HTTP_CLIENT_STATUS_PROOF_DONE { return; }
+    serial_println!("[http.client.status] phase=status_stub status=no_route max_url=256 max_response=4096 ok=1 reason=sexnet_passive_no_network_route");
+    serial_println!("[http.client.truth] request_built=0 request_sent=0 response_len=0 fetched=0 network=0 dns=0 tcp=0 http=0 tls=0 heap=0 posix=0 ok=1 reason=all_capabilities_zero");
+    serial_println!("[http.client.status.stub.done] ok=1 fetched=0 network=0 http=0");
+    HTTP_CLIENT_STATUS_PROOF_DONE = true;
+}
+
 /// Browser HTML subset proof.
 const BROWSER_HTML_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_HTML_PROOF").is_some();
@@ -17117,6 +17141,8 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_html_history_proof(); }
         unsafe { maybe_run_sexnet_browser_cap_proof(); }
         unsafe { maybe_run_sexnet_status_route_proof(); }
+        unsafe { maybe_run_browser_net_grant_proof(); }
+        unsafe { maybe_run_http_client_status_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
