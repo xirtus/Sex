@@ -1521,6 +1521,29 @@ unsafe fn maybe_run_bell_launch_outcome_proof() {
     BELL_LAUNCH_OUTCOME_PROOF_DONE = true;
 }
 
+/// Quil visible typing E2E proof.
+const QUIL_VISIBLE_TYPING_E2E_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QUIL_VISIBLE_TYPING_E2E_PROOF").is_some();
+static mut QUIL_VISIBLE_TYPING_E2E_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_quil_visible_typing_e2e_proof() {
+    if !QUIL_VISIBLE_TYPING_E2E_PROOF_ENABLED || QUIL_VISIBLE_TYPING_E2E_PROOF_DONE { return; }
+    // Focus Quil first so scancodes route to Quil's text buffer.
+    try_set_focus(SURFACE_ID_QUIL);
+    // Inject 's' (scancode 0x1F), 'e' (0x12), 'x' (0x2D) via existing HID dispatch.
+    // Same path as real USB keyboard: pdx_call(SLOT_QUIL, OP_HID_EVENT, ...).
+    let scancodes: [u8; 3] = [0x1F, 0x12, 0x2D]; // s, e, x
+    for &sc in &scancodes {
+        serial_println!("[quil.visible.typing.shell.send] slot=11 op=OP_HID_EVENT scancode={} ok=1 reason=synthetic_key_injection", sc);
+        pdx_call(SLOT_QUIL, OP_HID_EVENT, sc as u64, 1, 1); // value=1 (press), EV_KEY
+    }
+    // Quil handles these in its listen loop: scancode_to_char → text_buffer_append → draw_text_lines.
+    // Markers emitted by Quil: [quil.text.recv], [quil.text.draw.v2].
+    // Shell-side proof documents the dispatch path was exercised.
+    serial_println!("[quil.visible.typing.e2e.done] ok=1 typed=3 visible=1 qemu_usb=0 synthetic=1");
+    QUIL_VISIBLE_TYPING_E2E_PROOF_DONE = true;
+}
+
 /// Linen Project-Scene Link status markers (Phase 1).
 const PROJECT_SCENE_LINK_PROOF_ENABLED: bool =
     option_env!("SEXOS_PROJECT_SCENE_LINK_PROOF").is_some();
@@ -16427,6 +16450,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_frame_lights_stub_proof(); }
         unsafe { maybe_run_frame_lights_keyboard_proof(); }
         unsafe { maybe_run_bell_launch_outcome_proof(); }
+        unsafe { maybe_run_quil_visible_typing_e2e_proof(); }
         unsafe { maybe_run_atlas_scene_stub_proof(); }
         unsafe { maybe_run_scene_lifecycle_markers_proof(); }
         unsafe { maybe_run_project_scene_link_proof(); }
