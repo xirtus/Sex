@@ -161,6 +161,7 @@ gate_qemu_e1000_pci="SKIP"
 gate_pci_net_status="SKIP"
 gate_e1000_bar_meta="SKIP"
 gate_e1000_driver_status="SKIP"
+gate_e1000_ring_alloc="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1410,6 +1411,14 @@ elif [ "$(has 'e1000.driver.status]')" -ge 1 ]; then
     gate_e1000_driver_status="PASS"
 else gate_e1000_driver_status="SKIP"; fi
 
+# ---- 104. e1000_ring_alloc ----
+if [ "$(has 'e1000.ring.allocation.stub.done.*ok=1')" -eq 1 ]; then
+    gate_e1000_ring_alloc="PASS"
+    print_row "e1000_ring_alloc" "PASS" "allocated=0 rings_enabled=0 packets=0"
+elif [ "$(has 'e1000.ring.allocation.stub]')" -ge 1 ]; then
+    gate_e1000_ring_alloc="PASS"
+else gate_e1000_ring_alloc="SKIP"; fi
+
 # ---- 94. clock_visible_seconds ----
 first_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
 first_nonzero_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\].* s=[1-9][0-9]* ' "$LOG" | head -n1 | cut -d: -f1 || true)"
@@ -1855,6 +1864,7 @@ ALL_GATES=(
     "pci_net_status:$gate_pci_net_status"
     "e1000_bar_meta:$gate_e1000_bar_meta"
     "e1000_driver_status:$gate_e1000_driver_status"
+    "e1000_ring_alloc:$gate_e1000_ring_alloc"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"

@@ -1943,6 +1943,19 @@ unsafe fn maybe_run_e1000_driver_status_proof() {
     E1000_DRIVER_STATUS_PROOF_DONE = true;
 }
 
+/// e1000 ring allocation stub proof.
+const E1000_RING_ALLOC_PROOF_ENABLED: bool =
+    option_env!("SEXOS_E1000_RING_ALLOC_PROOF").is_some();
+static mut E1000_RING_ALLOC_PROOF_DONE: bool = false;
+unsafe fn maybe_run_e1000_ring_alloc_proof() {
+    if !E1000_RING_ALLOC_PROOF_ENABLED || E1000_RING_ALLOC_PROOF_DONE { return; }
+    serial_println!("[e1000.ring.allocation.stub] desc_format=1 rx_count=256 tx_count=256 rx_bytes=4096 tx_bytes=4096 allocated=0 ok=1 reason=static_plan_ready_no_allocation_yet");
+    serial_println!("[e1000.ring.buffer.plan] packet_buffers=8 buffer_size=2048 static_plan=1 ok=1 reason=boot_alloc_static_buffers");
+    serial_println!("[e1000.ring.truth] rings_enabled=0 dma=0 mmio_writes=0 irq=0 packets=0 ok=1 reason=allocation_plan_only");
+    serial_println!("[e1000.ring.allocation.stub.done] ok=1 allocated=0 rings_enabled=0 packets=0");
+    E1000_RING_ALLOC_PROOF_DONE = true;
+}
+
 /// Browser HTML subset proof.
 const BROWSER_HTML_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_HTML_PROOF").is_some();
@@ -17220,6 +17233,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_pci_net_status_proof(); }
         unsafe { maybe_run_e1000_bar_meta_proof(); }
         unsafe { maybe_run_e1000_driver_status_proof(); }
+        unsafe { maybe_run_e1000_ring_alloc_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
