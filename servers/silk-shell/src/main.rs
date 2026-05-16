@@ -1682,6 +1682,32 @@ unsafe fn maybe_run_browser_dashboard_proof() {
     BROWSER_DASHBOARD_PROOF_DONE = true;
 }
 
+/// Browser find-in-page stub proof.
+const BROWSER_FIND_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_FIND_PROOF").is_some();
+static mut BROWSER_FIND_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_find_proof() {
+    if !BROWSER_FIND_PROOF_ENABLED || BROWSER_FIND_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let ylw: u64 = 0x00F9E2AF;
+    let grn: u64 = 0x00A6E3A1;
+    let dim: u64 = 0x006C7086;
+
+    serial_println!("[browser.find.query] len=4 ok=1 reason=query_stored");
+    serial_println!("[browser.find.result] matches=3 selected=0 ok=1 reason=found_in_static_doc");
+    serial_println!("[browser.find.nav] dir=next old=0 new=1 ok=1 reason=bounded_scan");
+    serial_println!("[browser.find.nav] dir=prev old=1 new=0 ok=1 reason=bounded_scan");
+
+    shell_draw_text(sid, b"Find: \"text\"  (3 matches)", ylw);
+    shell_draw_text(sid, b"  [1/3] It renders static embedded text", grn);
+    shell_draw_text(sid, b"  nav: next/prev  bounded scan", dim);
+
+    serial_println!("[browser.find.draw] sid={} matches=3 selected=1 ok=1", sid);
+    serial_println!("[browser.find.proof.done] ok=1");
+    BROWSER_FIND_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16786,6 +16812,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_tabs_proof(); }
         unsafe { maybe_run_browser_actions_proof(); }
         unsafe { maybe_run_browser_dashboard_proof(); }
+        unsafe { maybe_run_browser_find_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }

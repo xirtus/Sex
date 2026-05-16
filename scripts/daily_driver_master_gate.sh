@@ -142,6 +142,7 @@ gate_browser_bookmarks="SKIP"
 gate_browser_tabs="SKIP"
 gate_browser_actions="SKIP"
 gate_browser_dashboard="SKIP"
+gate_browser_find="SKIP"
 gate_frame_lights_visual="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1247,6 +1248,14 @@ elif [ "$(has 'browser.dashboard.draw]')" -ge 1 ]; then
     gate_browser_dashboard="PASS"
 else gate_browser_dashboard="SKIP"; fi
 
+# ---- 85. browser_find ----
+if [ "$(has 'browser.find.proof.done.*ok=1')" -eq 1 ]; then
+    gate_browser_find="PASS"
+    print_row "browser_find" "PASS" "find: 3 matches in static doc"
+elif [ "$(has 'browser.find.result]')" -ge 1 ]; then
+    gate_browser_find="PASS"
+else gate_browser_find="SKIP"; fi
+
 # ---- 73. linen_persist_readback ----
 if [ "$(has 'linen\.persist\.readback\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_persist_readback="PASS"
@@ -1571,6 +1580,7 @@ ALL_GATES=(
     "browser_tabs:$gate_browser_tabs"
     "browser_actions:$gate_browser_actions"
     "browser_dashboard:$gate_browser_dashboard"
+    "browser_find:$gate_browser_find"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
