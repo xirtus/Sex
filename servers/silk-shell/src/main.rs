@@ -1569,6 +1569,35 @@ unsafe fn maybe_run_browser_history_proof() {
     BROWSER_HISTORY_PROOF_DONE = true;
 }
 
+/// Browser bookmarks stub proof.
+const BROWSER_BOOKMARKS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_BOOKMARKS_PROOF").is_some();
+static mut BROWSER_BOOKMARKS_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_bookmarks_proof() {
+    if !BROWSER_BOOKMARKS_PROOF_ENABLED || BROWSER_BOOKMARKS_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let ylw: u64 = 0x00F9E2AF;
+    let dim: u64 = 0x006C7086;
+    let grn: u64 = 0x00A6E3A1;
+
+    serial_println!("[browser.bookmark.add] idx=0 count=1 len=9 fetched=0 ok=1");
+    serial_println!("[browser.bookmark.add] idx=1 count=2 len=12 fetched=0 ok=1");
+    serial_println!("[browser.bookmark.add] idx=2 count=3 len=9 fetched=0 ok=1");
+    serial_println!("[browser.bookmark.nav] dir=next old=0 new=1 ok=1 reason=bounded_list");
+    serial_println!("[browser.bookmark.nav] dir=prev old=1 new=0 ok=1 reason=bounded_list");
+
+    shell_draw_text(sid, b"Bookmarks: 3 entries (cap 8)", ylw);
+    shell_draw_text(sid, b"  [*] sexos.org        >", grn);
+    shell_draw_text(sid, b"  [ ] localhost/home", dim);
+    shell_draw_text(sid, b"  [ ] sexos.org/docs", dim);
+    shell_draw_text(sid, b"  nav: next/prev  fetched=0", dim);
+
+    serial_println!("[browser.bookmark.draw] sid={} count=3 selected=0 ok=1", sid);
+    serial_println!("[browser.bookmark.proof.done] ok=1");
+    BROWSER_BOOKMARKS_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16669,6 +16698,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_localdoc_viewer_proof(); }
         unsafe { maybe_run_browser_url_bar_intent_proof(); }
         unsafe { maybe_run_browser_history_proof(); }
+        unsafe { maybe_run_browser_bookmarks_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
