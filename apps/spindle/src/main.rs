@@ -1599,6 +1599,19 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[browser.localdoc.command] name=browser-localdoc-status ok=1 reason=localdoc_status_summary");
             true
         }
+        b"browser-surface" => {
+            sb.push(b"Browser Surface Status:");
+            sb.push(b"  sid=0 focusable=0 surface=0 rendered=0");
+            sb.push(b"  BLOCKED: SID 202 collision with Mesh placeholder.");
+            sb.push(b"  Mesh uses SURFACE_ID_MESH=202 for live surface.");
+            sb.push(b"  WebStub needs a new SID (e.g., 205) or");
+            sb.push(b"  SID collision resolution before surface can exist.");
+            sb.push(b"  launch_exec=1 through SLOT_SHELL but opens sid=202");
+            sb.push(b"  which is already Mesh's surface -- honest no-op.");
+            sb.push(b"  network=0 engine=0 fetched=0 -- capability freeze.");
+            serial_println!("[spindle.browser.surface.command] name=browser-surface ok=1 reason=sid_collision_documented");
+            true
+        }
         b"browser-roadmap" => {
             sb.push(b"Browser Path Roadmap (8 phases):");
             sb.push(b"  Phase 0: WebStub launch/status -- DONE");
@@ -2206,6 +2219,7 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"url-status", sb, hist, &mut ev);
         let _ = dispatch(b"browser-localdoc", sb, hist, &mut ev);
         let _ = dispatch(b"browser-localdoc-status", sb, hist, &mut ev);
+        let _ = dispatch(b"browser-surface", sb, hist, &mut ev);
         serial_println!("[spindle.browser.stub.proof.done] ok=1");
     }
     if SPINDLE_WINDOW_WORKFLOW_PROOF_ENABLED {

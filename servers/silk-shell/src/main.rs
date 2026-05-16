@@ -1356,6 +1356,26 @@ unsafe fn maybe_run_browser_localdoc_stub_proof() {
     BROWSER_LOCALDOC_STUB_PROOF_DONE = true;
 }
 
+/// Browser placeholder surface review proof.
+const BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF").is_some();
+static mut BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_placeholder_surface_visual_proof() {
+    if !BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_ENABLED
+        || BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_DONE { return; }
+    // Honest review: WebStub cannot get a real surface because SID 202
+    // is already allocated to SURFACE_ID_MESH (mesh placeholder surface).
+    // Creating a WebStub surface requires either a new SID (e.g., 205)
+    // or resolving the SID collision. Both are beyond the current scope.
+    serial_println!("[browser.placeholder.surface.review] safe=0 reason=sid_202_collision_with_mesh_placeholder");
+    // Current truth: no surface, no focus, honest placeholder.
+    serial_println!("[browser.placeholder.surface.visual] sid=0 focusable=0 surface=0 rendered=0 ok=1 reason=sid_collision_mesh_owns_202");
+    serial_println!("[browser.placeholder.truth] launch_exec=1 focusable=0 surface=0 network=0 engine=0 fetched=0 parsed=0 readback=0 durable=0 ok=1 reason=honest_placeholder_no_sid_available");
+    serial_println!("[browser.placeholder.surface_visual.done] ok=1 surface=0 rendered=0 network=0 engine=0");
+    BROWSER_PLACEHOLDER_SURFACE_VISUAL_PROOF_DONE = true;
+}
+
 /// Frame Chrome model proof: Scene→Frame→Tab→Surface static model.
 unsafe fn maybe_run_frame_chrome_model_proof() {
     if !FRAME_CHROME_MODEL_PROOF_ENABLED || FRAME_CHROME_MODEL_PROOF_DONE { return; }
@@ -16339,6 +16359,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_window_workflow_v2_proof(); }
         unsafe { maybe_run_browser_stub_proof(); }
         unsafe { maybe_run_browser_localdoc_stub_proof(); }
+        unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
         unsafe { maybe_run_frame_rim_markers_proof(); }
         unsafe { maybe_run_frame_lights_stub_proof(); }

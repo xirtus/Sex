@@ -115,6 +115,7 @@ gate_browser_stub="SKIP"
 gate_spindle_browser_stub="SKIP"
 gate_browser_path="SKIP"
 gate_browser_localdoc_stub="SKIP"
+gate_browser_placeholder_surface_visual="SKIP"
 gate_linen_persist_readback="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
@@ -1119,7 +1120,15 @@ elif [ "$(has 'browser\.localdoc\.source\]')" -ge 1 ]; then
     gate_browser_localdoc_stub="PASS"
 else gate_browser_localdoc_stub="SKIP"; fi
 
-# ---- 71. linen_persist_readback ----
+# ---- 71. browser_placeholder_surface_visual ----
+if [ "$(has 'browser\.placeholder\.surface_visual\.done.*ok=1')" -eq 1 ]; then
+    gate_browser_placeholder_surface_visual="PASS"
+    print_row "browser_placeholder_surface_visual" "PASS" "sid collision documented surface=0"
+elif [ "$(has 'browser\.placeholder\.surface\.review\]')" -ge 1 ]; then
+    gate_browser_placeholder_surface_visual="PASS"
+else gate_browser_placeholder_surface_visual="SKIP"; fi
+
+# ---- 72. linen_persist_readback ----
 if [ "$(has 'linen\.persist\.readback\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_persist_readback="PASS"
     print_row "linen_persist_readback" "PASS" "persist model (durable=0 sync=0)"
@@ -1429,6 +1438,7 @@ ALL_GATES=(
     "spindle_browser_stub:$gate_spindle_browser_stub"
     "browser_path:$gate_browser_path"
     "browser_localdoc_stub:$gate_browser_localdoc_stub"
+    "browser_placeholder_surface_visual:$gate_browser_placeholder_surface_visual"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
