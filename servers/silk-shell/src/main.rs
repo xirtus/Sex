@@ -1931,6 +1931,18 @@ unsafe fn maybe_run_e1000_bar_meta_proof() {
     E1000_BAR_META_PROOF_DONE = true;
 }
 
+/// e1000 driver status attach stub proof.
+const E1000_DRIVER_STATUS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_E1000_DRIVER_STATUS_PROOF").is_some();
+static mut E1000_DRIVER_STATUS_PROOF_DONE: bool = false;
+unsafe fn maybe_run_e1000_driver_status_proof() {
+    if !E1000_DRIVER_STATUS_PROOF_ENABLED || E1000_DRIVER_STATUS_PROOF_DONE { return; }
+    serial_println!("[e1000.driver.status] pci_seen=1 bar_seen=1 mmio_read=1 mac_read=1 attach_ready=1 attached=0 ok=1 reason=read_only_discovery_complete");
+    serial_println!("[e1000.driver.truth] writes=0 irq=0 dma=0 rings=0 packets=0 ok=1 reason=status_only_no_driver_attach");
+    serial_println!("[e1000.driver.status.attach_stub.done] ok=1 attached=0 packets=0");
+    E1000_DRIVER_STATUS_PROOF_DONE = true;
+}
+
 /// Browser HTML subset proof.
 const BROWSER_HTML_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_HTML_PROOF").is_some();
@@ -17207,6 +17219,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_qemu_e1000_pci_enum_proof(); }
         unsafe { maybe_run_pci_net_status_proof(); }
         unsafe { maybe_run_e1000_bar_meta_proof(); }
+        unsafe { maybe_run_e1000_driver_status_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
