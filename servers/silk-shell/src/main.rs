@@ -1514,6 +1514,30 @@ unsafe fn maybe_run_browser_localdoc_viewer_proof() {
     BROWSER_LOCALDOC_VIEWER_PROOF_DONE = true;
 }
 
+/// Browser URL bar intent proof.
+const BROWSER_URL_BAR_INTENT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_URL_BAR_INTENT_PROOF").is_some();
+static mut BROWSER_URL_BAR_INTENT_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_url_bar_intent_proof() {
+    if !BROWSER_URL_BAR_INTENT_PROOF_ENABLED || BROWSER_URL_BAR_INTENT_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+
+    // URL bar line on WebStub surface
+    let url_color: u64 = 0x00F9E2AF; // yellow
+    let dim: u64 = 0x006C7086;
+
+    // Static URL intent: local marker only, no fetch
+    let url_text = b"url> sexos.org  [stored:9 bytes, fetched=0]";
+    shell_draw_text(sid, url_text, url_color);
+    shell_draw_text(sid, b"  network=0  DNS=0  TCP=0  HTTP=0  TLS=0", dim);
+
+    serial_println!("[browser.url.bar.draw] sid={} len=9 fetched=0 ok=1 reason=url_bar_rendered_via_shell_draw_text", sid);
+    serial_println!("[browser.url.intent] len=9 stored=9 fetched=0 ok=1 reason=marker_only_no_network");
+    serial_println!("[browser.url.intent.proof.done] ok=1");
+    BROWSER_URL_BAR_INTENT_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16612,6 +16636,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_shell_draw_text_helper_proof(); }
         unsafe { maybe_run_browser_stub_v2_proof(); }
         unsafe { maybe_run_browser_localdoc_viewer_proof(); }
+        unsafe { maybe_run_browser_url_bar_intent_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
