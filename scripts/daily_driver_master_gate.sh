@@ -1503,7 +1503,7 @@ else gate_collar_grant_status="SKIP"; fi
 # ---- 89. top_strip_hash ----
 if [ "$(has 'silk\.topstrip\.hash\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_top_strip_hash="PASS"
-    print_row "top_strip_hash" "PASS" "hash matches golden 0xFD6093AC9ADE7B4D"
+    print_row "top_strip_hash" "PASS" "hash matches golden 0x0C4A6A75054B82D5"
 elif [ "$(has 'silk\.topstrip\.hash\.result.*match=1')" -eq 1 ]; then
     gate_top_strip_hash="PASS"
 elif [ "$(has 'silk\.topstrip\.hash\.result.*match=0')" -ge 1 ]; then
