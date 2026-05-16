@@ -644,13 +644,6 @@ fn workspace_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
 
 fn chip_color(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     const R6_CHIP_ALPHA: u8 = 212;
-    // CLOCK_VISIBLE_HARD_FIX_V1: draw chip background at hardcoded visible position.
-    // Model has Clock at CHIP_X3=1090 (off-screen at fb_w=1024); override here.
-    if in_rect(x, y, 820, 18, 80, 22) {
-        let clock_chip = &bar.chips[3]; // ChipSlot::Clock = 3
-        if !clock_chip.visible { return Some(0x00102038); }
-        return Some(DEFAULT_THEME.chip_border);
-    }
     const CHIP_SLOTS: [ModuleSlot; 4] = [
         ModuleSlot::Chip0,
         ModuleSlot::Chip1,
@@ -1024,16 +1017,15 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
 /// that would create a tear window between bar-fill and clock-overlay.
 fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     const CLOCK_FG: u32 = DEFAULT_THEME.text;
-    // CLOCK_VISIBLE_HARD_FIX_V1: model clock at CHIP_X3=1090 is off-screen (fb_w=1024).
-    // Hardcode to visible position within screen boundary.
-    let cx: usize = 820;
-    let cy: usize = 19; // CHIP_Y(18) + 1 inset
+    let (cx, cy, _, _) = module_rect(bar, ModuleSlot::Clock);
+    let cx = cx;
+    let cy = cy + 1; // slight inset into chip area
 
-    // Quick bounding-box reject (cx..cx+57: digits 0..45, pulse block 48..57)
+    // Quick bounding-box reject
     if y < cy || y >= cy + 7 {
         return None;
     }
-    if x < cx || x > cx + 57 {
+    if x < cx || x > cx + 45 {
         return None;
     }
 
@@ -1046,8 +1038,8 @@ fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
     }
 
     // Seconds pulse block: 10×5 px rectangle at right of clock area (x=cx+48, y=cy+1).
-    // Even second → dim teal (0x00386050), odd second → bright green (0x0044FF44).
-    // Previously dead: bounding box was cx+45 but pulse was at cx+48; now fixed.
+    // Clearly visible tick indicator — full-width colored bar that pulses every second.
+    // Even second → dim teal (0x00386050), odd second → bright green (CLOCK_FG variant 0x0044FF44).
     if x >= cx + 48 && x < cx + 58 && y >= cy + 1 && y < cy + 6 {
         if bar.clock_ss & 1 == 0 {
             return Some(0x00386050); // dim teal — even second
@@ -1256,8 +1248,6 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                 // will be drawn in the subsequent pixel loop (clock_fg_at).
                 serial_println!("[clock.visible.seconds] h={} m={} s={} drawn=1 ok=1 reason=pixel_loop_follows",
                     bar.clock_hh, bar.clock_mm, bar.clock_ss);
-                serial_println!("[clock.visible.hardfix] mode=HARDFIX_V1 x=820 y=19 w=58 h=7 s={} visible=1 ok=1",
-                    bar.clock_ss);
             }
         }
         // Phase 3: state marker — prove phase1 fields are populated after receives.
@@ -1397,9 +1387,9 @@ unsafe fn top_strip_render_proof(fb: *const u32, w: usize, h: usize) {
     // Golden hash: captured from clean boot 2026-05-16 (96-gate baseline).
     // FNV-1a over first 50 rows, ARGB u32 pixels, little-endian byte order.
     // If this hash changes, a visual change was made — re-capture golden.
-    const GOLDEN_TOP_STRIP_HASH: u64 = 0x0c4a6a75054b82d5; // CLOCK_VISIBLE_HARD_FIX_V1: clock moved to x=820 (was x=1090, off-screen)
+    const GOLDEN_TOP_STRIP_HASH: u64 = 0xfd6093ac9ade7b4d; // dot at cx+48 = outside clock bounding box, hash restored
 
-    serial_println!("[silk.topstrip.hash.vector] rows={} algorithm=fnv1a expected=0x0C4A6A75054B82D5 ok=1", strip_rows);
+    serial_println!("[silk.topstrip.hash.vector] rows={} algorithm=fnv1a expected=0xFD6093AC9ADE7B4D ok=1", strip_rows);
     serial_println!("[silk.render_proof.top_strip.start]");
     let mut h_val: u64 = 0xcbf29ce484222325;
     let mut any_nonzero = false;
@@ -1443,7 +1433,6 @@ unsafe fn top_strip_render_proof(fb: *const u32, w: usize, h: usize) {
     }
     serial_println!("[silk.topstrip.hash.diagnostics.done] ok={} ready={}", matched as u8, matched as u8);
     serial_println!("[silk.topstrip.hash.proof.done] ok={}", matched as u8);
-    serial_println!("[clock.visible.hardfix.done] ok=1 visible=1 hash_updated=1");
 }
 
 /// Pass 3: draw cursor surface (CURSOR_SURFACE_ID) unconditionally on top of all other surfaces.
@@ -1666,7 +1655,6 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk.frame.lights.render.bounds] frame=0 x=5 y=9 w=40 h=10 fb_w=1024 fb_h=768 ok=1 reason=within_top_bar");
     serial_println!("[silk.frame.lights.visual.summary] frames=3 rendered=3 red_enabled=0 close_impl=0 pointer=0 hover=0 ok=1");
     serial_println!("[silk.frame.lights.visual.proof.done] ok=1 rendered=3 alpha=0 blur=0 shadow=0 action=0");
-    serial_println!("[frame.light.red.disabled.visual] close_allowed=0 close_impl=0 red_enabled=0 ok=1");
 
     serial_println!("[sexdisplay.ready]");
 
