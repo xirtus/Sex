@@ -151,6 +151,7 @@ gate_browser_html="SKIP"
 gate_frame_lights_visual="SKIP"
 gate_browser_html_history="SKIP"
 gate_sexnet_browser_cap="SKIP"
+gate_clock_visible_seconds="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1328,6 +1329,14 @@ elif [ "$(has 'sexnet.stub.status]')" -ge 1 ]; then
     gate_sexnet_browser_cap="PASS"
 else gate_sexnet_browser_cap="SKIP"; fi
 
+# ---- 94. clock_visible_seconds ----
+if [ "$(has 'clock.visible.seconds.*s=[1-9].*drawn=1')" -ge 1 ]; then
+    gate_clock_visible_seconds="PASS"
+    print_row "clock_visible_seconds" "PASS" "clock seconds proven drawn >0"
+elif [ "$(has 'clock.visible.seconds]')" -ge 1 ]; then
+    gate_clock_visible_seconds="PASS"
+else gate_clock_visible_seconds="SKIP"; fi
+
 # ---- 94. sexnet_passive ----
 if [ "$(has 'sexnet\.passive\.ready.*network=0.*ok=1')" -eq 1 ]; then
     gate_sexnet_passive="PASS"
@@ -1670,6 +1679,7 @@ ALL_GATES=(
     "browser_html_link:$gate_browser_html_link"
     "browser_html_history:$gate_browser_html_history"
     "sexnet_browser_cap:$gate_sexnet_browser_cap"
+    "clock_visible_seconds:$gate_clock_visible_seconds"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"

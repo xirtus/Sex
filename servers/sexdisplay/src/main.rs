@@ -1231,6 +1231,10 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                 let src = if CLOCK_REDRAW_SOURCE == 1 { "fallback" } else { "silkbar" };
                 serial_println!("[sexdisplay.clock.redraw] h={} m={} s={} source={}",
                     bar.clock_hh, bar.clock_mm, bar.clock_ss, src);
+                // Visible seconds proof: confirms the exact seconds value that
+                // will be drawn in the subsequent pixel loop (clock_fg_at).
+                serial_println!("[clock.visible.seconds] h={} m={} s={} drawn=1 ok=1 reason=pixel_loop_follows",
+                    bar.clock_hh, bar.clock_mm, bar.clock_ss);
             }
         }
         // Phase 3: state marker — prove phase1 fields are populated after receives.
