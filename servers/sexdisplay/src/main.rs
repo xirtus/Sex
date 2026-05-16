@@ -103,9 +103,11 @@ const FRAME_LIGHT_ZOOM_COLOR: u32 = 0x0044FF44;
 
 /// Base alpha for the disabled close light (close_allowed=0, non-interactive).
 /// V1: close is disabled for all frames; red renders at reduced alpha to
-/// signal the action is unavailable. Yellow/green remain at normal brightness.
-/// When close_allowed becomes 1 in a future phase, this changes to 224.
-const FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA: u8 = 48;
+/// signal the action is unavailable. Yellow/green remain at normal brightness (224).
+/// Alpha 72 gives visible dim red — clearly distinguishable from enabled lights
+/// while remaining obviously disabled. When close_allowed becomes 1 in a
+/// future phase, this changes to 224.
+const FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA: u8 = 72;
 
 // ── Tab Strip Constants (matches shell FRAME_TAB_LIGHT_EXCLUSION_PX and TAB_*) ──
 const TAB_STRIP_LIGHT_EXCLUSION_PX: usize = 20;
@@ -1035,15 +1037,14 @@ fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
         return None;
     }
 
-    // Liveness dot: 3×3 px at right of clock digits (x=cx+48, y=cy+2).
-    // Positioned with 2px gap after the final seconds digit (ends at cx+46).
-    // Toggles based on clock seconds parity.
-    // Even second → dim grey (0x00404040), odd second → bright (CLOCK_FG).
-    if x >= cx + 48 && x < cx + 51 && y >= cy + 2 && y < cy + 5 {
+    // Seconds pulse block: 10×5 px rectangle at right of clock area (x=cx+48, y=cy+1).
+    // Clearly visible tick indicator — full-width colored bar that pulses every second.
+    // Even second → dim teal (0x00386050), odd second → bright green (CLOCK_FG variant 0x0044FF44).
+    if x >= cx + 48 && x < cx + 58 && y >= cy + 1 && y < cy + 6 {
         if bar.clock_ss & 1 == 0 {
-            return Some(0x00404040); // dim — even second
+            return Some(0x00386050); // dim teal — even second
         } else {
-            return Some(CLOCK_FG);   // bright — odd second
+            return Some(0x0044FF44); // bright green — odd second
         }
     }
 
