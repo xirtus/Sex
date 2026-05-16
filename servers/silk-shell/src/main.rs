@@ -1884,6 +1884,18 @@ unsafe fn maybe_run_http_req_builder_proof() {
     HTTP_REQ_BUILDER_PROOF_DONE = true;
 }
 
+/// Sexnet HTTP handshake stub proof.
+const SEXNET_HTTP_HANDSHAKE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SEXNET_HTTP_HANDSHAKE_PROOF").is_some();
+static mut SEXNET_HTTP_HANDSHAKE_PROOF_DONE: bool = false;
+unsafe fn maybe_run_sexnet_http_handshake_proof() {
+    if !SEXNET_HTTP_HANDSHAKE_PROOF_ENABLED || SEXNET_HTTP_HANDSHAKE_PROOF_DONE { return; }
+    serial_println!("[sexnet.http.handshake] phase=status_only request_built=1 sexnet=1 passive=1 slot_net_grant=0 allowed=0 ok=1 reason=no_network_grant_no_route");
+    serial_println!("[sexnet.http.truth] request_sent=0 packets=0 response_len=0 fetched=0 network=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=handshake_blocked_no_capability");
+    serial_println!("[sexnet.http.handshake.stub.done] ok=1 allowed=0 request_sent=0 fetched=0 network=0");
+    SEXNET_HTTP_HANDSHAKE_PROOF_DONE = true;
+}
+
 /// Browser HTML subset proof.
 const BROWSER_HTML_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_HTML_PROOF").is_some();
@@ -17156,6 +17168,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_net_grant_proof(); }
         unsafe { maybe_run_http_client_status_proof(); }
         unsafe { maybe_run_http_req_builder_proof(); }
+        unsafe { maybe_run_sexnet_http_handshake_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }

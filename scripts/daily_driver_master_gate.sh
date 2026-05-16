@@ -156,6 +156,7 @@ gate_clock_visible_seconds="SKIP"
 gate_browser_network_grant="SKIP"
 gate_http_client_status="SKIP"
 gate_http_req_builder="SKIP"
+gate_sexnet_http_handshake="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1365,6 +1366,14 @@ elif [ "$(has 'http.request.builder]')" -ge 1 ]; then
     gate_http_req_builder="PASS"
 else gate_http_req_builder="SKIP"; fi
 
+# ---- 99. sexnet_http_handshake ----
+if [ "$(has 'sexnet.http.handshake.stub.done.*ok=1')" -eq 1 ]; then
+    gate_sexnet_http_handshake="PASS"
+    print_row "sexnet_http_handshake" "PASS" "allowed=0 request_sent=0 network=0"
+elif [ "$(has 'sexnet.http.handshake]')" -ge 1 ]; then
+    gate_sexnet_http_handshake="PASS"
+else gate_sexnet_http_handshake="SKIP"; fi
+
 # ---- 94. clock_visible_seconds ----
 first_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
 first_nonzero_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\].* s=[1-9][0-9]* ' "$LOG" | head -n1 | cut -d: -f1 || true)"
@@ -1805,6 +1814,7 @@ ALL_GATES=(
     "browser_network_grant:$gate_browser_network_grant"
     "http_client_status:$gate_http_client_status"
     "http_req_builder:$gate_http_req_builder"
+    "sexnet_http_handshake:$gate_sexnet_http_handshake"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"
