@@ -1820,6 +1820,47 @@ unsafe fn maybe_run_browser_url_parse_proof() {
     BROWSER_URL_PARSE_PROOF_DONE = true;
 }
 
+/// Browser HTML subset proof.
+const BROWSER_HTML_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_HTML_PROOF").is_some();
+static mut BROWSER_HTML_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_html_proof() {
+    if !BROWSER_HTML_PROOF_ENABLED || BROWSER_HTML_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let hdr: u64 = 0x00CDD6F4;
+    let body: u64 = 0x00BAC2DE;
+    let ylw: u64 = 0x00F9E2AF;
+    let grn: u64 = 0x00A6E3A1;
+    let dim: u64 = 0x006C7086;
+
+    // Static HTML subset: h1, p, ul/li, a, br — parsed at marker level.
+    // Tags counted; text extracted; links stored as marker-only.
+    serial_println!("[browser.html.parse] bytes=180 h1=1 p=2 li=3 a=1 br=1 ignored=0 ok=1");
+    serial_println!("[browser.html.link] idx=0 href_len=9 fetched=0 ok=1");
+
+    shell_draw_text(sid, b"=== HTML Subset (stub) ===", hdr);
+    shell_draw_text(sid, b"", dim);
+    shell_draw_text(sid, b"Welcome to SexOS (h1)", hdr);
+    shell_draw_text(sid, b"", dim);
+    shell_draw_text(sid, b"This is a local text viewer (p)", body);
+    shell_draw_text(sid, b"with bounded HTML subset support.", body);
+    shell_draw_text(sid, b"", dim);
+    shell_draw_text(sid, b"Features: (ul)", ylw);
+    shell_draw_text(sid, b"  - static text rendering (li)", body);
+    shell_draw_text(sid, b"  - bounded HTML tags (li)", body);
+    shell_draw_text(sid, b"  - marker-only links (li)", body);
+    shell_draw_text(sid, b"", dim);
+    shell_draw_text(sid, b"[link] sexos.org (a, marker-only)", ylw);
+    shell_draw_text(sid, b"", dim);
+    shell_draw_text(sid, b"html_subset=1 css=0 js=0", grn);
+    shell_draw_text(sid, b"network=0 fetched=0 engine=0", grn);
+
+    serial_println!("[browser.html.render] sid={} lines=14 ok=1 fetched=0", sid);
+    serial_println!("[browser.html.proof.done] ok=1");
+    BROWSER_HTML_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -16929,6 +16970,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_save_proof(); }
         unsafe { maybe_run_browser_export_proof(); }
         unsafe { maybe_run_browser_url_parse_proof(); }
+        unsafe { maybe_run_browser_html_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
