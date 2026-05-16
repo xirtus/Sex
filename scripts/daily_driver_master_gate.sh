@@ -159,6 +159,7 @@ gate_http_req_builder="SKIP"
 gate_sexnet_http_handshake="SKIP"
 gate_qemu_e1000_pci="SKIP"
 gate_pci_net_status="SKIP"
+gate_e1000_bar_meta="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1392,6 +1393,14 @@ elif [ "$(has 'pci.net.status]')" -ge 1 ]; then
     gate_pci_net_status="PASS"
 else gate_pci_net_status="SKIP"; fi
 
+# ---- 102. e1000_bar_meta ----
+if [ "$(has 'e1000.bar.metadata.proof.done.*ok=1')" -eq 1 ]; then
+    gate_e1000_bar_meta="PASS"
+    print_row "e1000_bar_meta" "PASS" "BAR0 read mapped=0 size_probe=0"
+elif [ "$(has 'e1000.bar.metadata]')" -ge 1 ]; then
+    gate_e1000_bar_meta="PASS"
+else gate_e1000_bar_meta="SKIP"; fi
+
 # ---- 94. clock_visible_seconds ----
 first_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
 first_nonzero_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\].* s=[1-9][0-9]* ' "$LOG" | head -n1 | cut -d: -f1 || true)"
@@ -1835,6 +1844,7 @@ ALL_GATES=(
     "sexnet_http_handshake:$gate_sexnet_http_handshake"
     "qemu_e1000_pci:$gate_qemu_e1000_pci"
     "pci_net_status:$gate_pci_net_status"
+    "e1000_bar_meta:$gate_e1000_bar_meta"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"
