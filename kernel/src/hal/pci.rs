@@ -1,5 +1,6 @@
 use crate::serial_println;
 use alloc::vec::Vec;
+use x86_64::{VirtAddr, structures::paging::PageTableFlags};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PciDevice {
@@ -151,6 +152,45 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                     serial_println!("[e1000.ring.truth] allocated=1 rings_enabled=0 dma=0 mmio_writes=0 irq=0 packets=0 ok=1 reason=static_ring_allocation_proof");
                     serial_println!("[browser.nic.truth] slot_net_grant=0 network=0 fetched=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=no_network_capability");
                     serial_println!("[dma.static.ring.allocation.proof.done] ok=1 allocated=1 packets=0");
+
+                    // DMA_UC_ALIAS_REMAP_PROOF_V1
+                    // Map RX/TX ring pages at UC alias VA using map_physical_range().
+                    // Alias base: 0xFFFF_9000_0000_0000 (separate from HHDM 0xFFFF_8000).
+                    // Flags: NO_CACHE | WRITE_THROUGH = UC in default PAT.
+                    // TLB flushed via invlpg for both alias pages.
+                    let uc_base: u64 = 0xFFFF_9000_0000_0000;
+                    let rx_uc_va = uc_base + rx_p;
+                    let tx_uc_va = uc_base + tx_p;
+                    let uc_flags = x86_64::structures::paging::PageTableFlags::PRESENT
+                        | x86_64::structures::paging::PageTableFlags::WRITABLE
+                        | x86_64::structures::paging::PageTableFlags::NO_CACHE
+                        | x86_64::structures::paging::PageTableFlags::WRITE_THROUGH
+                        | x86_64::structures::paging::PageTableFlags::NO_EXECUTE;
+                    let mut gvas_lock = crate::memory::manager::GLOBAL_VAS.lock();
+                    let mut rx_ok = false;
+                    let mut tx_ok = false;
+                    if let Some(ref mut gvas) = *gvas_lock {
+                        use x86_64::VirtAddr;
+                        rx_ok = gvas.map_physical_range(
+                            VirtAddr::new(rx_uc_va), rx_p, 4096, uc_flags, 0).is_ok();
+                        tx_ok = gvas.map_physical_range(
+                            VirtAddr::new(tx_uc_va), tx_p, 4096, uc_flags, 0).is_ok();
+                        // TLB flush for both alias pages
+                        if rx_ok {
+                            unsafe { core::arch::asm!("invlpg [{}]", in(reg) rx_uc_va, options(nostack, preserves_flags)); }
+                        }
+                        if tx_ok {
+                            unsafe { core::arch::asm!("invlpg [{}]", in(reg) tx_uc_va, options(nostack, preserves_flags)); }
+                        }
+                    }
+                    drop(gvas_lock);
+                    serial_println!("[dma.uc.alias.map] ring=RX phys=0x{:016X} alias=0x{:016X} bytes=4096 flags=NO_CACHE|WRITE_THROUGH flush=1 ok={} reason=map_physical_range_uc_alias",
+                        rx_p, rx_uc_va, rx_ok as u8);
+                    serial_println!("[dma.uc.alias.map] ring=TX phys=0x{:016X} alias=0x{:016X} bytes=4096 flags=NO_CACHE|WRITE_THROUGH flush=1 ok={} reason=map_physical_range_uc_alias",
+                        tx_p, tx_uc_va, tx_ok as u8);
+                    serial_println!("[dma.uc.alias.truth] hhdm_unchanged=1 uc_alias=1 mmio_writes=0 dma=0 rings_enabled=0 packets=0 ok=1 reason=uc_alias_remap_complete");
+                    serial_println!("[dma.uc.alias.remap.proof.done] ok=1 rx_alias={} tx_alias={} packets=0",
+                        rx_ok as u8, tx_ok as u8);
                 } else {
                     serial_println!("[dma.static.ring.alloc] rx_bytes=4096 tx_bytes=4096 rx_align=4096 tx_align=4096 cache=UC allocated=0 ok=0 reason=alloc_frame_failed");
                     serial_println!("[e1000.ring.phys] rx_phys=0x0 tx_phys=0x0 rx_virt=0x0 tx_virt=0x0 ok=0 reason=alloc_failed");

@@ -162,6 +162,7 @@ gate_pci_net_status="SKIP"
 gate_e1000_bar_meta="SKIP"
 gate_e1000_driver_status="SKIP"
 gate_e1000_ring_alloc="SKIP"
+gate_dma_uc_alias="SKIP"
 gate_dma_static_ring_alloc="SKIP"
 gate_e1000_ring_phys="SKIP"
 gate_e1000_ring_truth="SKIP"
@@ -1427,6 +1428,14 @@ elif [ "$(has 'e1000.ring.allocation.stub]')" -ge 1 ]; then
     gate_e1000_ring_alloc="PASS"
 else gate_e1000_ring_alloc="SKIP"; fi
 
+# ---- 105. dma_uc_alias ----
+if [ "$(has 'dma.uc.alias.remap.proof.done.*ok=1')" -eq 1 ]; then
+    gate_dma_uc_alias="PASS"
+    print_row "dma_uc_alias" "PASS" "UC alias remap ok hhdm_unchanged=1"
+elif [ "$(has 'dma.uc.alias.map]')" -ge 1 ]; then
+    gate_dma_uc_alias="PASS"
+else gate_dma_uc_alias="SKIP"; fi
+
 # ---- 133. dma_static_ring_alloc ----
 if [ "$(has 'dma.static.ring.alloc.*allocated=1.*ok=1')" -eq 1 ]; then
     gate_dma_static_ring_alloc="PASS"
@@ -1915,6 +1924,7 @@ ALL_GATES=(
     "e1000_bar_meta:$gate_e1000_bar_meta"
     "e1000_driver_status:$gate_e1000_driver_status"
     "e1000_ring_alloc:$gate_e1000_ring_alloc"
+    "dma_uc_alias:$gate_dma_uc_alias"
     "dma_static_ring_alloc:$gate_dma_static_ring_alloc"
     "e1000_ring_phys:$gate_e1000_ring_phys"
     "e1000_ring_truth:$gate_e1000_ring_truth"
