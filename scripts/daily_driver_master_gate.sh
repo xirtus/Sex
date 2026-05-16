@@ -1301,6 +1301,14 @@ elif [ "$(has 'browser.html.parse]')" -ge 1 ]; then
     gate_browser_html="PASS"
 else gate_browser_html="SKIP"; fi
 
+# ---- 91. browser_html_link ----
+if [ "$(has 'browser\.html\.link\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_browser_html_link="PASS"
+    print_row "browser_html_link" "PASS" "1 link marker-only fetched=0"
+elif [ "$(has 'browser\.html\.link\.table\]')" -ge 1 ]; then
+    gate_browser_html_link="PASS"
+else gate_browser_html_link="SKIP"; fi
+
 # ---- 73. linen_persist_readback ----
 if [ "$(has 'linen\.persist\.readback\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_persist_readback="PASS"
@@ -1631,6 +1639,7 @@ ALL_GATES=(
     "browser_export:$gate_browser_export"
     "browser_url_parse:$gate_browser_url_parse"
     "browser_html:$gate_browser_html"
+    "browser_html_link:$gate_browser_html_link"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
