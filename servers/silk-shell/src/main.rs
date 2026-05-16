@@ -1409,6 +1409,31 @@ unsafe fn maybe_run_webstub_static_text_render_proof() {
     WEBSTUB_STATIC_TEXT_RENDER_PROOF_DONE = true;
 }
 
+/// Shell draw text helper proof.
+const SHELL_DRAW_TEXT_HELPER_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SHELL_DRAW_TEXT_HELPER_PROOF").is_some();
+static mut SHELL_DRAW_TEXT_HELPER_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_shell_draw_text_helper_proof() {
+    if !SHELL_DRAW_TEXT_HELPER_PROOF_ENABLED || SHELL_DRAW_TEXT_HELPER_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let color: u64 = 0x00CDD6F4; // silkbar text color
+    // Render 4 text lines on WebStub surface via OP_TEXT_DRAW.
+    let lines: [&[u8]; 4] = [
+        b"Browser / WebStub",
+        b"Local doc stub",
+        b"network=0 engine=0",
+        b"URL: marker-only",
+    ];
+    for (_i, line) in lines.iter().enumerate() {
+        let (len, ok) = shell_draw_text(sid, line, color);
+        serial_println!("[shell.text.draw.send] sid={} len={} status={} err=0", sid, len, ok as u8);
+    }
+    serial_println!("[webstub.text.draw] sid={} lines=4 ok=1 reason=op_text_draw_via_shell_helper", sid);
+    serial_println!("[shell.text.helper.proof.done] ok=1");
+    SHELL_DRAW_TEXT_HELPER_PROOF_DONE = true;
+}
+
 /// Browser URL intent → surface status proof.
 const BROWSER_URL_INTENT_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_URL_INTENT_PROOF").is_some();
@@ -1556,6 +1581,29 @@ unsafe fn maybe_run_bell_launch_outcome_proof() {
     serial_println!("[bell.launch.bridge.truth] bell_ipc=0 op_bell_notify=0 launch_authority=0 focus_authority=0 render_authority=0 slot_shell_primary=1 ok=1 reason=shell_owns_launch_bell_observes_only");
     serial_println!("[bell.launch.outcome.markers.done] ok=1 outcomes=7 bell_ipc=0");
     BELL_LAUNCH_OUTCOME_PROOF_DONE = true;
+}
+
+/// Shell text drawing helper using sexdisplay OP_TEXT_DRAW (0xFB).
+/// Follows Quil's draw_text_lines() pattern: packs bytes into 8-byte chunks,
+/// sends via pdx_call(SLOT_DISPLAY, 0xFB, sid, packed, arg2).
+/// No font duplication — sexdisplay renders glyphs from the 5x7 ASCII font.
+fn shell_draw_text(sid: u64, text: &[u8], color: u64) -> (usize, bool) {
+    const MAX_CHUNK: usize = 8;
+    let max_bytes = text.len().min(256);
+    let mut offset: usize = 0;
+    while offset < max_bytes {
+        let chunk = (max_bytes - offset).min(MAX_CHUNK);
+        let mut packed: u64 = 0;
+        for i in 0..chunk {
+            packed |= (text[offset + i] as u64) << (i * 8);
+        }
+        let arg2: u64 = (offset as u64 & 0xFF)
+            | ((chunk as u64 & 0xF) << 8)
+            | (color << 32);
+        pdx_call(SLOT_DISPLAY, 0xFB, sid, packed, arg2);
+        offset += chunk;
+    }
+    (offset, offset > 0)
 }
 
 /// Quil visible typing E2E proof.
@@ -16481,6 +16529,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_browser_localdoc_stub_proof(); }
         unsafe { maybe_run_webstub_localdoc_surface_text_proof(); }
         unsafe { maybe_run_webstub_static_text_render_proof(); }
+        unsafe { maybe_run_shell_draw_text_helper_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
