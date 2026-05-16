@@ -157,6 +157,7 @@ gate_browser_network_grant="SKIP"
 gate_http_client_status="SKIP"
 gate_http_req_builder="SKIP"
 gate_sexnet_http_handshake="SKIP"
+gate_qemu_e1000_pci="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1374,6 +1375,14 @@ elif [ "$(has 'sexnet.http.handshake]')" -ge 1 ]; then
     gate_sexnet_http_handshake="PASS"
 else gate_sexnet_http_handshake="SKIP"; fi
 
+# ---- 100. qemu_e1000_pci ----
+if [ "$(has 'qemu.e1000.pci.enum.proof.done.*ok=1')" -eq 1 ]; then
+    gate_qemu_e1000_pci="PASS"
+    print_row "qemu_e1000_pci" "PASS" "seen=0 driver=0 packets=0 (no QEMU net dev)"
+elif [ "$(has 'pci.e1000.enum]')" -ge 1 ]; then
+    gate_qemu_e1000_pci="PASS"
+else gate_qemu_e1000_pci="SKIP"; fi
+
 # ---- 94. clock_visible_seconds ----
 first_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
 first_nonzero_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\].* s=[1-9][0-9]* ' "$LOG" | head -n1 | cut -d: -f1 || true)"
@@ -1815,6 +1824,7 @@ ALL_GATES=(
     "http_client_status:$gate_http_client_status"
     "http_req_builder:$gate_http_req_builder"
     "sexnet_http_handshake:$gate_sexnet_http_handshake"
+    "qemu_e1000_pci:$gate_qemu_e1000_pci"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"

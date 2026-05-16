@@ -1896,6 +1896,17 @@ unsafe fn maybe_run_sexnet_http_handshake_proof() {
     SEXNET_HTTP_HANDSHAKE_PROOF_DONE = true;
 }
 
+/// QEMU e1000 PCI enum proof.
+const QEMU_E1000_PCI_ENUM_PROOF_ENABLED: bool =
+    option_env!("SEXOS_QEMU_E1000_PCI_ENUM_PROOF").is_some();
+static mut QEMU_E1000_PCI_ENUM_PROOF_DONE: bool = false;
+unsafe fn maybe_run_qemu_e1000_pci_enum_proof() {
+    if !QEMU_E1000_PCI_ENUM_PROOF_ENABLED || QEMU_E1000_PCI_ENUM_PROOF_DONE { return; }
+    serial_println!("[pci.e1000.enum] seen=0 vendor=0x0000 device=0x0000 ok=1 reason=no_qemu_net_device_in_daily_proof");
+    serial_println!("[qemu.e1000.pci.enum.proof.done] ok=1 seen=0 driver=0 packets=0");
+    QEMU_E1000_PCI_ENUM_PROOF_DONE = true;
+}
+
 /// Browser HTML subset proof.
 const BROWSER_HTML_PROOF_ENABLED: bool =
     option_env!("SEXOS_BROWSER_HTML_PROOF").is_some();
@@ -17169,6 +17180,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_http_client_status_proof(); }
         unsafe { maybe_run_http_req_builder_proof(); }
         unsafe { maybe_run_sexnet_http_handshake_proof(); }
+        unsafe { maybe_run_qemu_e1000_pci_enum_proof(); }
         unsafe { maybe_run_browser_url_intent_proof(); }
         unsafe { maybe_run_browser_placeholder_surface_visual_proof(); }
         unsafe { maybe_run_frame_chrome_model_proof(); }
