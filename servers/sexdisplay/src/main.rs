@@ -1035,11 +1035,11 @@ fn clock_fg_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
         return None;
     }
 
-    // Liveness dot: 3×3 px at right of clock digits (x=cx+48, y=cy+2).
-    // Positioned with 2px gap after the final seconds digit (ends at cx+46).
-    // Toggles based on clock seconds parity.
+    // Liveness dot: 3×3 px at right edge of clock area (x=cx+44, y=cy+2).
+    // Toggles based on clock seconds parity to make liveness visible even
+    // when 5×7 font seconds digits are too small to read at QEMU resolution.
     // Even second → dim grey (0x00404040), odd second → bright (CLOCK_FG).
-    if x >= cx + 48 && x < cx + 51 && y >= cy + 2 && y < cy + 5 {
+    if x >= cx + 44 && x < cx + 47 && y >= cy + 2 && y < cy + 5 {
         if bar.clock_ss & 1 == 0 {
             return Some(0x00404040); // dim — even second
         } else {
@@ -1386,9 +1386,9 @@ unsafe fn top_strip_render_proof(fb: *const u32, w: usize, h: usize) {
     // Golden hash: captured from clean boot 2026-05-16 (96-gate baseline).
     // FNV-1a over first 50 rows, ARGB u32 pixels, little-endian byte order.
     // If this hash changes, a visual change was made — re-capture golden.
-    const GOLDEN_TOP_STRIP_HASH: u64 = 0xfd6093ac9ade7b4d; // dot at cx+48 = outside clock bounding box, hash restored
+    const GOLDEN_TOP_STRIP_HASH: u64 = 0x5413164aa874a0c5; // recaptured 2026-05-16: clock liveness dot added
 
-    serial_println!("[silk.topstrip.hash.vector] rows={} algorithm=fnv1a expected=0xFD6093AC9ADE7B4D ok=1", strip_rows);
+    serial_println!("[silk.topstrip.hash.vector] rows={} algorithm=fnv1a expected=0x5413164AA874A0C5 ok=1", strip_rows);
     serial_println!("[silk.render_proof.top_strip.start]");
     let mut h_val: u64 = 0xcbf29ce484222325;
     let mut any_nonzero = false;
