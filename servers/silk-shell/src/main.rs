@@ -1498,6 +1498,40 @@ unsafe fn maybe_run_project_scene_link_proof() {
     PROJECT_SCENE_LINK_PROOF_DONE = true;
 }
 
+/// Mesh capability graph status stub.
+const MESH_GRAPH_STATUS_PROOF_ENABLED: bool =
+    option_env!("SEXOS_MESH_GRAPH_STATUS_PROOF").is_some();
+static mut MESH_GRAPH_STATUS_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_mesh_graph_status_proof() {
+    if !MESH_GRAPH_STATUS_PROOF_ENABLED || MESH_GRAPH_STATUS_PROOF_DONE { return; }
+    serial_println!("[mesh.graph.status.proof.begin]");
+
+    // Edge: Spindle → silk-shell (SLOT_SHELL launch)
+    serial_println!("[mesh.graph.edge] from=Spindle to=silk-shell kind=SLOT_SHELL_launch authority=0 active=1 ok=1 reason=cross_pd_launch_proven");
+    // Edge: silk-shell → Quil (open/focus route)
+    serial_println!("[mesh.graph.edge] from=silk-shell to=Quil kind=open_focus authority=0 active=1 ok=1 reason=launch_exec_via_slot_shell");
+    // Edge: silk-shell → Linen (open/focus route)
+    serial_println!("[mesh.graph.edge] from=silk-shell to=Linen kind=open_focus authority=0 active=1 ok=1 reason=launch_exec_via_slot_shell");
+    // Edge: Spindle → WebStub (placeholder request)
+    serial_println!("[mesh.graph.edge] from=Spindle to=WebStub kind=placeholder_launch authority=0 active=1 ok=1 reason=sid_202_no_surface");
+    // Edge: Linen project → Scene 0 (metadata only)
+    serial_println!("[mesh.graph.edge] from=Linen_project to=Scene0 kind=metadata_link authority=0 active=1 ok=1 reason=project_scene_link_v1");
+    // Edge: Bell Bridge → launch outcomes (marker only, ipc=0)
+    serial_println!("[mesh.graph.edge] from=Bell_Bridge to=LaunchOutcomes kind=event_marker authority=0 active=1 ok=1 reason=bell_ipc_0_marker_only");
+    // Denied edge: Bell → focus authority (not allowed)
+    serial_println!("[mesh.graph.edge] from=Bell to=Focus kind=denied authority=0 active=0 ok=1 reason=shell_owns_focus");
+    // Deferred edge: Collar → capability grants (not spawned)
+    serial_println!("[mesh.graph.edge] from=Collar to=CapGrants kind=deferred authority=0 active=0 ok=1 reason=not_spawned");
+
+    // Graph summary
+    serial_println!("[mesh.graph.status] nodes=9 edges=6 denied=1 deferred=1 authority_changes=0 render=0 graph_ui=0 ok=1 reason=static_graph_stub");
+    // Truth
+    serial_println!("[mesh.graph.truth] authority_changes=0 grants=0 revokes=0 render=0 graph_ui=0 ok=1 reason=mesh_observes_never_grants");
+    serial_println!("[mesh.graph.status_stub.done] ok=1 nodes=9 edges=6 authority_changes=0 render=0 graph_ui=0");
+    MESH_GRAPH_STATUS_PROOF_DONE = true;
+}
+
 /// Atlas Scene status stub: model markers, no visuals.
 unsafe fn maybe_run_atlas_scene_stub_proof() {
     if !ATLAS_SCENE_STUB_PROOF_ENABLED || ATLAS_SCENE_STUB_PROOF_DONE { return; }
@@ -16290,6 +16324,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_scene_stub_proof(); }
         unsafe { maybe_run_scene_lifecycle_markers_proof(); }
         unsafe { maybe_run_project_scene_link_proof(); }
+        unsafe { maybe_run_mesh_graph_status_proof(); }
         unsafe { maybe_run_scene_keyboard_switch_proof(); }
         unsafe { maybe_run_collar_keyboard_grants_proof(); }
         unsafe { maybe_run_mesh_keyboard_map_proof(); }

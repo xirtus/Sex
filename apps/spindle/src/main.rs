@@ -1153,6 +1153,33 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             serial_println!("[spindle.project.scene.command] name=project-scene-status ok=1 reason=link_summary");
             true
         }
+        b"mesh-graph" => {
+            sb.push(b"Mesh Capability Graph (status stub, no UI):");
+            sb.push(b"  Nodes: Spindle, silk-shell, Quil, Linen, WebStub,");
+            sb.push(b"         Linen_project, Scene0, Bell_Bridge, Collar");
+            sb.push(b"  Edges (6 active):");
+            sb.push(b"    Spindle->shell: SLOT_SHELL launch (cross-PD)");
+            sb.push(b"    shell->Quil/Linen: open/focus route");
+            sb.push(b"    Spindle->WebStub: placeholder launch");
+            sb.push(b"    Linen->Scene0: metadata link (authority=0)");
+            sb.push(b"    Bell_Bridge->LaunchOutcomes: marker only (ipc=0)");
+            sb.push(b"  Denied: Bell->Focus (shell owns focus)");
+            sb.push(b"  Deferred: Collar->CapGrants (not spawned)");
+            sb.push(b"  authority_changes=0 grants=0 revokes=0");
+            sb.push(b"  render=0 graph_ui=0 -- marker only.");
+            sb.push(b"  Use mesh-graph-status for summary.");
+            serial_println!("[spindle.mesh.graph.command] name=mesh-graph ok=1 reason=graph_edge_table");
+            true
+        }
+        b"mesh-graph-status" => {
+            sb.push(b"Mesh Graph Status:");
+            sb.push(b"  nodes=9 edges=6 denied=1 deferred=1");
+            sb.push(b"  authority_changes=0 grants=0 revokes=0");
+            sb.push(b"  render=0 graph_ui=0 -- no visual graph.");
+            sb.push(b"  Mesh observes; never grants authority.");
+            serial_println!("[spindle.mesh.graph.command] name=mesh-graph-status ok=1 reason=graph_summary");
+            true
+        }
         b"linen-status" => {
             sb.push(b"Linen object bridge status:");
             sb.push(b"  slot:     SLOT_LINEN=11 (PD 7: linen)");
@@ -2132,6 +2159,8 @@ pub extern "C" fn _start() -> ! {
         let _ = dispatch(b"scene-switch-status", sb, hist, &mut ev);
         let _ = dispatch(b"project-scene-link", sb, hist, &mut ev);
         let _ = dispatch(b"project-scene-status", sb, hist, &mut ev);
+        let _ = dispatch(b"mesh-graph", sb, hist, &mut ev);
+        let _ = dispatch(b"mesh-graph-status", sb, hist, &mut ev);
         serial_println!("[spindle.frame.chrome.proof.done] ok=1");
     }
     if SPINDLE_BROWSER_STUB_PROOF_ENABLED {

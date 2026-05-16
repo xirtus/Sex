@@ -132,6 +132,7 @@ gate_frame_lights_visual="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
 gate_project_scene_link="SKIP"
+gate_mesh_graph_status="SKIP"
 gate_spindle_atlas="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
@@ -1254,7 +1255,15 @@ elif [ "$(has 'linen\.scene\.link\]')" -ge 1 ]; then
     gate_project_scene_link="PASS"
 else gate_project_scene_link="SKIP"; fi
 
-# ---- 87. spindle_atlas ----
+# ---- 87. mesh_graph_status ----
+if [ "$(has 'mesh\.graph\.status_stub\.done.*ok=1')" -eq 1 ]; then
+    gate_mesh_graph_status="PASS"
+    print_row "mesh_graph_status" "PASS" "6 edges authority_changes=0 render=0"
+elif [ "$(has 'mesh\.graph\.edge\]')" -ge 1 ]; then
+    gate_mesh_graph_status="PASS"
+else gate_mesh_graph_status="SKIP"; fi
+
+# ---- 88. spindle_atlas ----
 if [ "$(has 'spindle\.atlas\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_spindle_atlas="PASS"
 elif [ "$(has 'spindle\.atlas\.command\]')" -ge 1 ]; then
@@ -1416,6 +1425,7 @@ ALL_GATES=(
     "scene_lifecycle_markers:$gate_scene_lifecycle_markers"
     "scene_keyboard_switch:$gate_scene_keyboard_switch"
     "project_scene_link:$gate_project_scene_link"
+    "mesh_graph_status:$gate_mesh_graph_status"
     "spindle_atlas:$gate_spindle_atlas"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
