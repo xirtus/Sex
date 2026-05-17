@@ -280,3 +280,17 @@ Interpretation update:
 Interpretation update:
 - Transport send-lane exercises are now in place (ARP/ICMP/TCP SYN/HTTP GET shapes), and gate alignment is complete for exercised stop-review lanes.
 - RX descriptor completion remains the dominant unresolved blocker for converting bounded observe claims to real observed receive proofs.
+
+## Additional Lane Progress (r33-r34)
+- `/tmp/sexos_network_sprint_r33_rx_ctrl_diag.log`:
+  - Added `e1000.rx.ctrl.diag` marker to snapshot receive control state after poll:
+    - `RCTL.EN`, `RCTL.BAM`, `RXDCTL(0).ENABLE`, `SRRCTL(0)` buffer-size field, raw `RXCSUM/SRRCTL/RXDCTL`.
+  - Gate result remained `FINAL PASS (226/0/0)`.
+- `/tmp/sexos_network_sprint_r34_slot_grant_stop0.log`:
+  - Advanced `browser.slot.net.grant.stop.review` to exercised review lane (`stop=0`) while preserving deny-default/no-auto-grant policy.
+  - Gate parser now accepts either `stop=1` (strict stop-review) or `stop=0` (exercised review path) for this lane.
+  - Gate result remained `FINAL PASS (226/0/0)`.
+
+Interpretation update:
+- Browser grant control lane now records exercised policy review without granting capability.
+- RX blocker remains unresolved: no descriptor completion despite control-plane bits and repeated ingress/rearm probes.

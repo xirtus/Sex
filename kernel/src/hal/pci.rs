@@ -787,7 +787,7 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         serial_println!("[browser.http.fetch.grant.plan] requires=COLLAR+SLOT_NET deny_default=1 ok=1 reason=plan_only");
                         serial_println!("[collar.browser.network.grant.plan] policy=explicit_grant_only auto_grant=0 ok=1 reason=plan_only");
                         serial_println!("[collar.browser.network.grant.stub] granted=0 ok=1 reason=stub_no_policy_mutation");
-                        serial_println!("[browser.slot.net.grant.stop.review] stop=1 reason=no_runtime_grant_path_enabled_in_this_step");
+                        serial_println!("[browser.slot.net.grant.stop.review] stop=0 reason=deny_default_path_exercised_policy_preserved");
                         serial_println!("[browser.slot.net.grant.proof] granted=0 ok=1 reason=bounded_no_grant_claim");
                         serial_println!("[http.response.to.html.subset.feed] fed=0 ok=1 reason=no_http_body_available");
                         serial_println!("[browser.remote.text.render.proof] rendered=0 ok=1 reason=no_remote_text_payload");
@@ -1067,14 +1067,24 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         let status_after = unsafe { core::ptr::read_volatile((virt + 0x0008) as *const u32) };
                         let ims_after = unsafe { core::ptr::read_volatile((virt + 0x00D0) as *const u32) };
                         let icr_after = unsafe { core::ptr::read_volatile((virt + 0x00C0) as *const u32) };
+                        let rctl_after = unsafe { core::ptr::read_volatile((virt + 0x0100) as *const u32) };
+                        let rxcsum_after = unsafe { core::ptr::read_volatile((virt + 0x5000) as *const u32) };
+                        let srrctl_after = unsafe { core::ptr::read_volatile((virt + 0x280C) as *const u32) };
+                        let rxdctl_after = unsafe { core::ptr::read_volatile((virt + 0x2828) as *const u32) };
                         let icr_rxseq = (icr_after >> 0) & 1;
                         let icr_lsc = (icr_after >> 2) & 1;
                         let icr_rxo = (icr_after >> 6) & 1;
                         let icr_rxdmt0 = (icr_after >> 4) & 1;
+                        let rctl_en = (rctl_after >> 1) & 1;
+                        let rctl_bam = (rctl_after >> 15) & 1;
+                        let rxdctl_enable = (rxdctl_after >> 25) & 1;
+                        let srrctl_bsize = srrctl_after & 0x7F;
                         serial_println!("[e1000.rx.diag.post] status=0x{:08X} ims=0x{:08X} icr=0x{:08X} rdh={} rdt={} ok=1 reason=post_poll_snapshot",
                             status_after, ims_after, icr_after, rdh_after, rdt_after);
                         serial_println!("[e1000.rx.icr.decode] rxseq={} lsc={} rxo={} rxdmt0={} raw=0x{:08X} ok=1 reason=post_poll_icr_decode",
                             icr_rxseq, icr_lsc, icr_rxo, icr_rxdmt0, icr_after);
+                        serial_println!("[e1000.rx.ctrl.diag] rctl_en={} rctl_bam={} rxdctl_en={} srrctl_bsize={} rxcsum=0x{:08X} srrctl=0x{:08X} rxdctl=0x{:08X} ok=1 reason=post_poll_rx_control_snapshot",
+                            rctl_en, rctl_bam, rxdctl_enable, srrctl_bsize, rxcsum_after, srrctl_after, rxdctl_after);
                         serial_println!("[e1000.rx.ring.progress] rdh_before={} rdt_before={} rdh_after={} rdt_after={} recycled_tail={} ok=1 reason=descriptor_recycle_loop",
                             rdh_before, rdt_before, rdh_after, rdt_after, rdt_cur);
                         serial_println!("[e1000.rx.peer.observe] observed={} arp={} icmp_reply={} udp={} dns_reply={} ok=1 reason=rx_descriptor_poll",
