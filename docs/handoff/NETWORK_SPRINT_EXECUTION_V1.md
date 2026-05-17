@@ -178,3 +178,14 @@ Interpretation update:
 Interpretation update:
 - Bounded RX disable→queue reset→re-enable ordering did not unblock RX descriptor completion.
 - Next lane should target receive interrupt/cause timing and moderation registers (IMS/IMC/ICR + RDTR/RADV/RXDCTL model-specific behavior) while preserving bounded claims.
+
+## RX Diagnostic Snapshot (r24 interrupt/moderation lane)
+- `/tmp/sexos_network_sprint_autopilot_r24_intr_moderation.log`:
+  - `e1000.rx.intr.reseq`: `imc=0x00000000`, `icr_flush=0x00000000`, `ims=0x00000083`.
+  - `e1000.rx.moderation.probe`: `rdtr=0x00000000`, `radv=0x00000000` (write/readback at bounded defaults).
+  - `e1000.rx.diag.post`: `icr=0x00000003`, `rdh=0`, `rdt=7`.
+  - `e1000.rx.peer.observe`: still `observed=0`.
+
+Interpretation update:
+- Interrupt/cause resequencing and moderation register writes are now explicitly exercised and read back.
+- RX completion remains stalled; next bounded lane should focus on descriptor rearm/tail update semantics in the poll/recycle loop.

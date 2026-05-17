@@ -699,6 +699,23 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         let rah_before = unsafe { core::ptr::read_volatile((virt + 0x5404) as *const u32) };
                         serial_println!("[e1000.rx.diag.pre] status=0x{:08X} rctl=0x{:08X} ims=0x{:08X} icr=0x{:08X} ral=0x{:08X} rah=0x{:08X} ok=1 reason=pre_poll_snapshot",
                             status_before, rctl_before, ims_before, icr_before, ral_before, rah_before);
+                        // Bounded RX interrupt/cause + moderation sequencing.
+                        let (imc_rb, icr_flush, ims_rb, rdtr_rb, radv_rb) = unsafe {
+                            core::ptr::write_volatile((virt + 0x00D8) as *mut u32, 0xFFFF_FFFF); // IMC mask all
+                            let imc_readback = core::ptr::read_volatile((virt + 0x00D8) as *const u32);
+                            let icr_read = core::ptr::read_volatile((virt + 0x00C0) as *const u32); // flush causes
+                            core::ptr::write_volatile((virt + 0x2820) as *mut u32, 0); // RDTR minimal delay
+                            core::ptr::write_volatile((virt + 0x282C) as *mut u32, 0); // RADV minimal delay
+                            core::ptr::write_volatile((virt + 0x00D0) as *mut u32, 0x0000_0083); // IMS re-enable diag set
+                            let ims_readback = core::ptr::read_volatile((virt + 0x00D0) as *const u32);
+                            let rdtr_readback = core::ptr::read_volatile((virt + 0x2820) as *const u32);
+                            let radv_readback = core::ptr::read_volatile((virt + 0x282C) as *const u32);
+                            (imc_readback, icr_read, ims_readback, rdtr_readback, radv_readback)
+                        };
+                        serial_println!("[e1000.rx.intr.reseq] imc=0x{:08X} icr_flush=0x{:08X} ims=0x{:08X} ok=1 reason=imc_icr_ims_reorder",
+                            imc_rb, icr_flush, ims_rb);
+                        serial_println!("[e1000.rx.moderation.probe] rdtr=0x{:08X} radv=0x{:08X} ok=1 reason=bounded_rdtr_radv_program",
+                            rdtr_rb, radv_rb);
                         // Bounded RX reset-ordering replay: disable RX, reset queue pointers, then re-enable.
                         unsafe {
                             let rctl_disabled = rctl_before & !(1 << 1);
