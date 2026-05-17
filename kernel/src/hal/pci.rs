@@ -2063,6 +2063,180 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 c_gw_mac[0], c_gw_mac[1], c_gw_mac[2],
                                 c_gw_mac[3], c_gw_mac[4], c_gw_mac[5],
                                 c_rx_dd_total, c_arp_total, c_reply_total, c_send_tdt);
+
+                            // === PROBE: ICMP_ECHO_REQUEST_PROOF_V1 ===
+                            // Send ICMP echo request to 10.0.2.2 using confirmed gateway MAC.
+                            // No fake. Requires c_gw_mac from ARP capture above.
+
+                            // Step 1: Precheck ring before any rearm or send
+                            let p_icr_pre = core::ptr::read_volatile((virt + 0x00C0) as *const u32);
+                            let p_rdh_pre = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                            let p_rdt_pre = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+                            let mut p_pre_dd: u32 = 0;
+                            let mut p_rdt_cur: u32 = p_rdt_pre;
+
+                            for i in 0usize..8 {
+                                let desc_off = (i * 16) as u64;
+                                let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                if (rx_stat & 0x1) != 0 {
+                                    p_pre_dd += 1;
+                                    let page_idx = i / 2;
+                                    let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                    let buf_phys = pkt_pages[page_idx] + buf_off;
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                    p_rdt_cur = p_rdt_cur.wrapping_add(1) & 0x7;
+                                    core::ptr::write_volatile((virt + 0x2818) as *mut u32, p_rdt_cur);
+                                }
+                            }
+                            serial_println!("[icmp.echo.precheck] dd={} icr=0x{:08X} rdh={} rdt={} ok=1 reason=precheck_before_icmp_send",
+                                p_pre_dd, p_icr_pre, p_rdh_pre, p_rdt_pre);
+
+                            // Step 2: Compute checksums (all inputs are constants — compiler folds)
+                            // IPv4 header checksum: one's complement sum, checksum field = 0
+                            let mut ip_sum: u32 = 0x4500 + 0x0020 + 0x0001 + 0x0000 + 0x4001
+                                + 0x0A00 + 0x020F + 0x0A00 + 0x0202; // no checksum word
+                            ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16);
+                            ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16);
+                            let ipv4_csum = !(ip_sum as u16); // expected 0x62CC
+                            // ICMP checksum: type+code+id+seq+payload, checksum = 0
+                            let mut ic_sum: u32 = 0x0800 + 0x0000 + 0x4444 + 0x0001 + 0x4142 + 0x4344;
+                            ic_sum = (ic_sum & 0xFFFF) + (ic_sum >> 16);
+                            ic_sum = (ic_sum & 0xFFFF) + (ic_sum >> 16);
+                            let icmp_csum = !(ic_sum as u16); // expected 0x2F34
+                            let checksum_ok = ((ipv4_csum == 0x62CC) && (icmp_csum == 0x2F34)) as u32;
+
+                            // Build ICMP echo request frame (60 bytes)
+                            let mut p_frame: [u8; 60] = [0u8; 60];
+                            p_frame[0..6].copy_from_slice(&c_gw_mac);  // dst = gateway MAC
+                            p_frame[6..12].copy_from_slice(&c_src_mac); // src = our MAC
+                            p_frame[12] = 0x08; p_frame[13] = 0x00;    // ethertype IPv4
+                            // IPv4 header
+                            p_frame[14] = 0x45; p_frame[15] = 0x00;    // ver=4 ihl=5
+                            p_frame[16] = 0x00; p_frame[17] = 0x20;    // total_length=32
+                            p_frame[18] = 0x00; p_frame[19] = 0x01;    // id
+                            p_frame[20] = 0x00; p_frame[21] = 0x00;    // flags+frag
+                            p_frame[22] = 0x40; p_frame[23] = 0x01;    // TTL=64 proto=ICMP
+                            p_frame[24] = (ipv4_csum >> 8) as u8;
+                            p_frame[25] = (ipv4_csum & 0xFF) as u8;
+                            p_frame[26] = 10; p_frame[27] = 0; p_frame[28] = 2; p_frame[29] = 15; // src 10.0.2.15
+                            p_frame[30] = 10; p_frame[31] = 0; p_frame[32] = 2; p_frame[33] = 2;  // dst 10.0.2.2
+                            // ICMP echo request
+                            p_frame[34] = 0x08; p_frame[35] = 0x00;   // type=8 code=0
+                            p_frame[36] = (icmp_csum >> 8) as u8;
+                            p_frame[37] = (icmp_csum & 0xFF) as u8;
+                            p_frame[38] = 0x44; p_frame[39] = 0x44;   // id=0x4444
+                            p_frame[40] = 0x00; p_frame[41] = 0x01;   // seq=1
+                            p_frame[42] = 0x41; p_frame[43] = 0x42; p_frame[44] = 0x43; p_frame[45] = 0x44; // "ABCD"
+                            // bytes 46-59 = 0 padding
+
+                            for (i, b) in p_frame.iter().enumerate() {
+                                core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
+                            }
+                            // TX desc slot 0
+                            core::ptr::write_volatile((tx_ring_uc + 0) as *mut u64, tx0_phys);
+                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, 60u16);
+                            core::ptr::write_volatile((tx_ring_uc + 10) as *mut u8, 0u8);
+                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);
+                            core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8);
+                            core::ptr::write_volatile((virt + 0x3810) as *mut u32, 0u32); // TDH=0
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 0u32);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 1u32); // TDT=1 post
+                            // Wait for TX DD
+                            for _ in 0..5usize { for _ in 0..100_000usize { core::hint::spin_loop(); } }
+                            let p_tx_dd = (core::ptr::read_volatile((tx_ring_uc + 12) as *const u8) & 0x1) as u32;
+                            serial_println!("[icmp.echo.request.send] dst_mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} src_ip=10.0.2.15 dst_ip=10.0.2.2 tx_dd={} checksum_ok={} ipv4_csum=0x{:04X} icmp_csum=0x{:04X} fake=0 ok={} reason=icmp_echo_request_to_slirp_gateway",
+                                c_gw_mac[0], c_gw_mac[1], c_gw_mac[2], c_gw_mac[3], c_gw_mac[4], c_gw_mac[5],
+                                p_tx_dd, checksum_ok, ipv4_csum, icmp_csum,
+                                (p_tx_dd & checksum_ok));
+
+                            // Step 3: Poll 8 rounds × 500k spins for ICMP echo reply
+                            let mut p_reply_seen: u32 = 0;
+                            let mut p_reply_src: [u8; 4] = [0u8; 4];
+                            let mut p_reply_type: u8 = 0;
+                            let mut p_id_match: u32 = 0;
+                            let mut p_seq_match: u32 = 0;
+                            let mut p_rx_dd_total: u32 = 0;
+                            let mut p_ipv4_total: u32 = 0;
+                            let mut p_icmp_total: u32 = 0;
+                            let mut p_rounds_done: u32 = 0;
+
+                            for round in 0..8usize {
+                                for _ in 0..500_000usize { core::hint::spin_loop(); }
+                                let p_icr_r = core::ptr::read_volatile((virt + 0x00C0) as *const u32);
+                                let p_rdh_r = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                                let p_rdt_r = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+                                let mut p_round_dd: u32 = 0;
+                                let mut p_round_ipv4: u32 = 0;
+                                let mut p_round_icmp: u32 = 0;
+                                let mut p_round_reply: u32 = 0;
+                                let mut p_found = false;
+                                p_rounds_done += 1;
+
+                                for i in 0usize..8 {
+                                    let desc_off = (i * 16) as u64;
+                                    let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                    if (rx_stat & 0x1) != 0 {
+                                        p_round_dd += 1; p_rx_dd_total += 1;
+                                        let page_idx = i / 2;
+                                        let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                        let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                        let rx_len = core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16);
+                                        let et0 = core::ptr::read_volatile((buf_va + 12) as *const u8);
+                                        let et1 = core::ptr::read_volatile((buf_va + 13) as *const u8);
+                                        let rx_etype = ((et0 as u16) << 8) | (et1 as u16);
+                                        if rx_etype == 0x0800 && rx_len >= 34 {
+                                            p_round_ipv4 += 1; p_ipv4_total += 1;
+                                            let ip_proto = core::ptr::read_volatile((buf_va + 23) as *const u8);
+                                            let ip_src0 = core::ptr::read_volatile((buf_va + 26) as *const u8);
+                                            let ip_src1 = core::ptr::read_volatile((buf_va + 27) as *const u8);
+                                            let ip_src2 = core::ptr::read_volatile((buf_va + 28) as *const u8);
+                                            let ip_src3 = core::ptr::read_volatile((buf_va + 29) as *const u8);
+                                            let ip_dst3 = core::ptr::read_volatile((buf_va + 33) as *const u8);
+                                            if ip_proto == 1 && rx_len >= 42 {
+                                                p_icmp_total += 1; p_round_icmp += 1;
+                                                let icmp_t = core::ptr::read_volatile((buf_va + 34) as *const u8);
+                                                let icmp_i0 = core::ptr::read_volatile((buf_va + 38) as *const u8);
+                                                let icmp_i1 = core::ptr::read_volatile((buf_va + 39) as *const u8);
+                                                let icmp_s0 = core::ptr::read_volatile((buf_va + 40) as *const u8);
+                                                let icmp_s1 = core::ptr::read_volatile((buf_va + 41) as *const u8);
+                                                let from_gw = (ip_src0 == 10 && ip_src1 == 0
+                                                    && ip_src2 == 2 && ip_src3 == 2) as u32;
+                                                let to_us = (ip_dst3 == 15) as u32;
+                                                if icmp_t == 0 && from_gw == 1 && to_us == 1 {
+                                                    p_round_reply += 1;
+                                                    p_reply_seen = 1;
+                                                    p_reply_src = [ip_src0, ip_src1, ip_src2, ip_src3];
+                                                    p_reply_type = icmp_t;
+                                                    p_id_match = ((icmp_i0 == 0x44) && (icmp_i1 == 0x44)) as u32;
+                                                    p_seq_match = ((icmp_s0 == 0x00) && (icmp_s1 == 0x01)) as u32;
+                                                    p_found = true;
+                                                }
+                                            }
+                                        }
+                                        // Selective rearm — no RDH write
+                                        let buf_phys = pkt_pages[page_idx] + buf_off;
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                        p_rdt_cur = p_rdt_cur.wrapping_add(1) & 0x7;
+                                        core::ptr::write_volatile((virt + 0x2818) as *mut u32, p_rdt_cur);
+                                        if p_found { break; }
+                                    }
+                                }
+                                serial_println!("[icmp.echo.reply.scan] round={} icr=0x{:08X} rx_dd={} ipv4_seen={} icmp_seen={} echo_reply={} rdh={} rdt={} ok=1 reason=icmp_poll_round",
+                                    round, p_icr_r, p_round_dd, p_round_ipv4, p_round_icmp, p_round_reply, p_rdh_r, p_rdt_r);
+                                if p_found { break; }
+                            }
+                            serial_println!("[icmp.echo.reply.observe] src_ip={}.{}.{}.{} dst_ip=10.0.2.15 type={} id_match={} seq_match={} reply_seen={} fake=0 ok={} reason=icmp_echo_reply_classification",
+                                p_reply_src[0], p_reply_src[1], p_reply_src[2], p_reply_src[3],
+                                p_reply_type, p_id_match, p_seq_match, p_reply_seen, p_reply_seen);
+                            serial_println!("[icmp.echo.request.proof.done] ok={} sent=1 tx_dd={} reply_seen={} rounds={} rx_dd_total={} ipv4_total={} icmp_total={} checksum_ok={} fake=0",
+                                (p_tx_dd & checksum_ok & p_reply_seen), p_tx_dd, p_reply_seen,
+                                p_rounds_done, p_rx_dd_total, p_ipv4_total, p_icmp_total, checksum_ok);
                         }
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");

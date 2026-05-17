@@ -741,3 +741,56 @@ Real ARP reply received. Gateway MAC confirmed. rdh_written=0.
 All fields known. Send ICMP echo to 10.0.2.2 with dst_mac=52:55:0A:00:02:02.
 
 Full findings: `docs/handoff/ARP_REPLY_CAPTURE_FIX_V1.md`
+
+---
+
+## ICMP_ECHO_REQUEST_PROOF_V1
+
+Date: 2026-05-17
+Gates: FINAL PASS IMPLEMENTED **229**/0/2skip (e1000e).
+Log: `/tmp/sexos_icmp_echo_request_proof_v1.log`.
+
+### Result: PASS IMPLEMENTED
+
+Real ICMP echo request sent to 10.0.2.2. Real ICMP echo reply (type=0) received in round 0.
+id_match=1, seq_match=1, checksum_ok=1, fake=0.
+
+### Frame
+
+| Field      | Value              |
+|------------|--------------------|
+| dst MAC    | 52:55:0A:00:02:02  |
+| src MAC    | 52:54:00:12:34:56  |
+| IPv4 src   | 10.0.2.15          |
+| IPv4 dst   | 10.0.2.2           |
+| ICMP type  | 8 (echo req)       |
+| ICMP id    | 0x4444             |
+| ICMP seq   | 1                  |
+| IPv4 csum  | 0x62CC             |
+| ICMP csum  | 0x2F34             |
+| tx_dd      | 1                  |
+
+### Reply
+
+| Round | ICR        | echo_reply | RDH | Result |
+|-------|------------|------------|-----|--------|
+| 0     | 0x80000083 | 1          | 2   | REPLY FOUND |
+
+### Cumulative Network State
+
+| Item            | Value              | Confidence |
+|-----------------|--------------------|------------|
+| Our IP          | 10.0.2.15          | confirmed  |
+| Our MAC         | 52:54:00:12:34:56  | confirmed  |
+| Gateway IP      | 10.0.2.2           | confirmed  |
+| Gateway MAC     | 52:55:0A:00:02:02  | confirmed  |
+| TX path         | functional         | tx_dd=1    |
+| RX path         | functional         | reply round 0 |
+| IPv4 TX         | functional         | checksum accepted |
+| ICMP round-trip | functional         | id+seq match |
+
+### Next: UDP/DNS_PROBE_V1
+
+Send UDP DNS query to 10.0.2.3:53 (SLiRP DNS resolver).
+
+Full findings: `docs/handoff/ICMP_ECHO_REQUEST_PROOF_V1.md`
