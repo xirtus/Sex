@@ -1620,3 +1620,30 @@ Result:
 Detailed handoff:
 
 - `docs/handoff/HOSTFWD_SYNTAX_MATRIX_PROBE_V1.md`
+
+---
+
+## HOSTFWD_ENV_VALUE_CORRECTION_PROBE_V1 (2026-05-17)
+
+Objective:
+
+- Probe corrected env values (no `hostfwd=` prefix) on bounded hostfwd variants.
+- Verify single netdev/usernet construction.
+- Stop at first boot.
+
+Result:
+
+- **PASS DIAGNOSTIC** (no variant booted in this environment).
+- Single netdev path remains confirmed:
+  - `-netdev user,id=net0,hostfwd=${QEMU_USERNET_HOSTFWD}` (or `user,id=net0`)
+  - exactly one matching `-device ... netdev=net0`.
+- Port check command hit host permission boundary (`Cannot open netlink socket: Operation not permitted`).
+- Exact per-variant QEMU errors:
+  - `tcp::18080-:80` → `Could not set up host forwarding rule 'tcp::18080-:80'`
+  - `tcp::18081-:80` → `Could not set up host forwarding rule 'tcp::18081-:80'`
+  - `tcp:127.0.0.1:18080-10.0.2.15:80` → `Could not set up host forwarding rule 'tcp:127.0.0.1:18080-10.0.2.15:80'`
+  - `tcp:127.0.0.1:18081-10.0.2.15:80` → `Could not set up host forwarding rule 'tcp:127.0.0.1:18081-10.0.2.15:80'`
+
+Detailed handoff:
+
+- `docs/handoff/HOSTFWD_ENV_VALUE_CORRECTION_PROBE_V1.md`
