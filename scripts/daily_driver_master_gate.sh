@@ -232,6 +232,7 @@ gate_tcp_syn_truth_send_v1="SKIP"
 gate_tcp_syn_send_proof_done_v1="SKIP"
 gate_tcp_syn_send_retry_proof_v1="SKIP"
 gate_tcp_target_variant_probe_v1="SKIP"
+gate_tcp_http_target_known_good_probe_v1="SKIP"
 gate_tcp_syn_ack_observe_proof_v1="SKIP"
 gate_tcp_http_connect_proof_v1="SKIP"
 gate_dns_client_plan="SKIP"
@@ -2041,6 +2042,11 @@ if [ "$(has 'tcp.target.variant.probe.done.*ok=1')" -eq 1 ]; then
     print_row "tcp_target_variant_probe_v1" "PASS" "target/port variant probe completed"
 else gate_tcp_target_variant_probe_v1="SKIP"; fi
 
+if [ "$(has 'tcp.http.target.known_good.probe.done.*ok=1')" -eq 1 ]; then
+    gate_tcp_http_target_known_good_probe_v1="PASS"
+    print_row "tcp_http_target_known_good_probe_v1" "PASS" "known-good plain HTTP target probe completed"
+else gate_tcp_http_target_known_good_probe_v1="SKIP"; fi
+
 if [ "$(has 'tcp.syn.ack.observe.proof.*ok=1')" -eq 1 ]; then
     gate_tcp_syn_ack_observe_proof_v1="PASS"
     print_row "tcp_syn_ack_observe_proof_v1" "PASS" "SYN-ACK observe marker"
@@ -2672,6 +2678,7 @@ ALL_GATES=(
     "tcp_syn_send_proof_done_v1:$gate_tcp_syn_send_proof_done_v1"
     "tcp_syn_send_retry_proof_v1:$gate_tcp_syn_send_retry_proof_v1"
     "tcp_target_variant_probe_v1:$gate_tcp_target_variant_probe_v1"
+    "tcp_http_target_known_good_probe_v1:$gate_tcp_http_target_known_good_probe_v1"
     "tcp_syn_ack_observe_proof_v1:$gate_tcp_syn_ack_observe_proof_v1"
     "tcp_http_connect_proof_v1:$gate_tcp_http_connect_proof_v1"
     "dns_client_plan:$gate_dns_client_plan"

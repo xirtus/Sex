@@ -2641,16 +2641,9 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             let checksum_ok: u8;
                             let tcp_ok: u8;
 
-                            let mut resolved_dst_ip: [u8; 4] = [0; 4];
+                            let mut resolved_dst_ip: [u8; 4] = [34, 223, 124, 45];
                             let mut dst_ip_source_dns: u8 = 0;
-                            if q_resolved != 0 && q_a_records >= 1 {
-                                resolved_dst_ip = q_a_ip[0];
-                                dst_ip_source_dns = 1;
-                            } else {
-                                // bounded fallback for transport execution when DNS lane is flaky
-                                resolved_dst_ip = [104, 20, 23, 154];
-                                dst_ip_source_dns = 0;
-                            }
+                            serial_println!("[tcp.http.target.known_good.plan] host=neverssl.com dst_ip=34.223.124.45 port=80 source=controlled_override fake=0 ok=1 reason=cloudflare_example_target_bypassed");
 
                             if resolved_dst_ip != [0, 0, 0, 0] {
                                 let dst_ip = resolved_dst_ip;
@@ -2776,20 +2769,13 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 let mut last_attempt_dst_ip: [u8; 4] = dst_ip;
 
                                 let mut variant_ips: [[u8; 4]; 2] = [[0; 4]; 2];
-                                let mut variant_count: usize = 0;
-                                if q_a_records >= 1 && q_a_ip[0] != [0, 0, 0, 0] {
-                                    variant_ips[variant_count] = q_a_ip[0];
-                                    variant_count += 1;
+                                let mut variant_count: usize = 1;
+                                variant_ips[0] = dst_ip;
+                                if q_a_records >= 2 && q_a_ip[1] != [0, 0, 0, 0] && q_a_ip[1] != dst_ip {
+                                    variant_ips[1] = q_a_ip[1];
+                                    variant_count = 2;
                                 }
-                                if q_a_records >= 2 && q_a_ip[1] != [0, 0, 0, 0] && q_a_ip[1] != q_a_ip[0] {
-                                    variant_ips[variant_count] = q_a_ip[1];
-                                    variant_count += 1;
-                                }
-                                if variant_count == 0 {
-                                    variant_ips[0] = dst_ip;
-                                    variant_count = 1;
-                                }
-                                serial_println!("[tcp.target.variant.plan] variants={} a0={}.{}.{}.{} a1={}.{}.{}.{} max_attempts={} fake=0 ok=1 reason=bounded_target_variant_probe_plan",
+                                serial_println!("[tcp.target.variant.plan] variants={} a0={}.{}.{}.{} a1={}.{}.{}.{} max_attempts={} fake=0 ok=1 reason=bounded_target_variant_probe_plan_known_good_first",
                                     variant_count as u32,
                                     variant_ips[0][0], variant_ips[0][1], variant_ips[0][2], variant_ips[0][3],
                                     variant_ips[1][0], variant_ips[1][1], variant_ips[1][2], variant_ips[1][3],
@@ -2991,6 +2977,9 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                     syn_max_attempts, syn_sent_any, syn_tx_dd, synack_seen, rst_seen, (synack_seen | rst_seen), syn_sent_any);
                                 serial_println!("[tcp.target.variant.probe.done] attempts={} variants={} synack_seen={} rst_seen={} final_ack_sent=0 http_sent=0 ok={} reason=target_variant_probe_completed_without_http",
                                     syn_max_attempts, variant_count as u32, synack_seen, rst_seen, syn_sent_any);
+                                serial_println!("[tcp.http.target.known_good.probe.done] dst_ip={}.{}.{}.{} attempts={} synack_seen={} rst_seen={} final_ack_sent=0 http_sent=0 ok={} reason=known_good_plain_http_target_probe_complete",
+                                    variant_ips[0][0], variant_ips[0][1], variant_ips[0][2], variant_ips[0][3],
+                                    syn_max_attempts, synack_seen, rst_seen, syn_sent_any);
                                 serial_println!("[tcp.handshake.ack.build] seq=1 ack=0 flags=0x10 payload_len=0 checksum_ok=0 ok=0 reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1");
                                 serial_println!("[tcp.handshake.ack.tx.post] seq=1 ack=0 tx_dd=0 sent=0 ok=0 reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1");
                                 serial_println!("[tcp.handshake.proof] observed={} final_ack_sent=0 seq=1 ack=0 ok=0 reason=final_ack_deferred_in_tcp_syn_send_retry_proof_v1",

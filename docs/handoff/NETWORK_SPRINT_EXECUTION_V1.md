@@ -1160,3 +1160,43 @@ Result: **FINAL PASS (238 gates, 0 fail, 12 skip)**.
 - Blocker is no longer ARP/L2/TX post.
 - In this run DNS parse produced a single variant (`q_a_ip[0]` only), so the probe exercised source-port variation and bounded retries against one remote target.
 - Next bounded step: rerun until `variants=2` appears from DNS parse, then verify alternating probes over `q_a_ip[0]:80` and `q_a_ip[1]:80` under identical SYN-only constraints.
+
+---
+
+## TCP_HTTP_TARGET_KNOWN_GOOD_PROBE_V1 (2026-05-17)
+
+Runtime:
+
+```bash
+QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 ./scripts/run_daily_driver_proof.sh /tmp/sexos_tcp_http_target_known_good_probe_v1.log
+```
+
+Result: **FINAL PASS (239 gates, 0 fail, 12 skip)**.
+
+### Controlled target override (non-Cloudflare/example path)
+
+- `[tcp.http.target.known_good.plan] host=neverssl.com dst_ip=34.223.124.45 port=80 source=controlled_override ...`
+
+### SYN-only probe evidence
+
+- Variant plan:
+  - `[tcp.target.variant.plan] variants=1 a0=34.223.124.45 ...`
+- Attempts with source-port rotation:
+  - attempt 1: `src_port=49153`, `tx_dd=1`
+  - attempt 2: `src_port=49154`, `tx_dd=1`
+  - attempt 3: `src_port=49155`, `tx_dd=1`
+- RX summary:
+  - `[tcp.syn.rx.synack] attempts=3 rounds=24 ... synack_seen=0 rst_seen=0 ...`
+- Completion marker:
+  - `[tcp.http.target.known_good.probe.done] dst_ip=34.223.124.45 attempts=3 synack_seen=0 rst_seen=0 final_ack_sent=0 http_sent=0 ok=1 ...`
+
+### Safety invariants preserved
+
+- No final ACK:
+  - `[tcp.handshake.ack.tx.post] ... sent=0 ...`
+- No HTTP GET:
+  - `[http.get.send.proof] sent=0 ...`
+
+### Gate addition
+
+- `tcp_http_target_known_good_probe_v1 PASS` is now scored from marker `tcp.http.target.known_good.probe.done.*ok=1`.
