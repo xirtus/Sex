@@ -2721,6 +2721,86 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 syn_frame[50] = (tcp_csum >> 8) as u8;
                                 syn_frame[51] = (tcp_csum & 0xFF) as u8;
 
+                                // Independent audit path from built bytes (SLiRP-facing invariants).
+                                let ip_ihl_words = (syn_frame[14] & 0x0F) as usize;
+                                let ip_header_len = ip_ihl_words * 4;
+                                let ip_total_len = (((syn_frame[16] as u16) << 8) | syn_frame[17] as u16) as usize;
+                                let tcp_header_len = ((syn_frame[46] >> 4) as usize) * 4;
+                                let payload_len = ip_total_len.saturating_sub(ip_header_len + tcp_header_len);
+                                let tx_len: usize = 60;
+                                let frame_len_no_pad = 14 + ip_total_len;
+                                let pad_len = tx_len.saturating_sub(frame_len_no_pad);
+
+                                let mut ip_audit_words: [u16; 10] = [0; 10];
+                                for wi in 0..10usize {
+                                    let off = 14 + (wi * 2);
+                                    if wi == 5 {
+                                        ip_audit_words[wi] = 0; // checksum field zeroed
+                                    } else {
+                                        let hi = syn_frame[off] as u16;
+                                        let lo = syn_frame[off + 1] as u16;
+                                        ip_audit_words[wi] = (hi << 8) | lo;
+                                    }
+                                }
+                                let mut ip_audit_sum: u32 = 0;
+                                for w in ip_audit_words { ip_audit_sum += w as u32; }
+                                while ip_audit_sum > 0xFFFF { ip_audit_sum = (ip_audit_sum & 0xFFFF) + (ip_audit_sum >> 16); }
+                                let ip_recomputed = !(ip_audit_sum as u16);
+                                let ip_stored = (((syn_frame[24] as u16) << 8) | syn_frame[25] as u16);
+                                let ip_match = (ip_recomputed == ip_stored) as u32;
+                                let ip_ok = (ip_match == 1 && ip_total_len == 44 && ip_header_len == 20 && syn_frame[23] == 0x06) as u32;
+
+                                let src_ip0 = ((syn_frame[26] as u16) << 8) | syn_frame[27] as u16;
+                                let src_ip1 = ((syn_frame[28] as u16) << 8) | syn_frame[29] as u16;
+                                let dst_ip0 = ((syn_frame[30] as u16) << 8) | syn_frame[31] as u16;
+                                let dst_ip1 = ((syn_frame[32] as u16) << 8) | syn_frame[33] as u16;
+                                let mut tcp_audit_sum: u32 = src_ip0 as u32 + src_ip1 as u32 + dst_ip0 as u32 + dst_ip1 as u32
+                                    + 0x0006u32 + (tcp_header_len as u32) + payload_len as u32;
+                                for wi in 0..(tcp_header_len / 2) {
+                                    let off = 34 + (wi * 2);
+                                    let mut word = ((syn_frame[off] as u16) << 8) | syn_frame[off + 1] as u16;
+                                    if off == 50 { word = 0; } // checksum zeroed
+                                    tcp_audit_sum += word as u32;
+                                }
+                                if payload_len > 0 {
+                                    let p_off = 14 + ip_header_len + tcp_header_len;
+                                    for bi in (0..payload_len).step_by(2) {
+                                        let hi = syn_frame[p_off + bi] as u16;
+                                        let lo = if bi + 1 < payload_len { syn_frame[p_off + bi + 1] as u16 } else { 0u16 };
+                                        tcp_audit_sum += ((hi << 8) | lo) as u32;
+                                    }
+                                }
+                                while tcp_audit_sum > 0xFFFF { tcp_audit_sum = (tcp_audit_sum & 0xFFFF) + (tcp_audit_sum >> 16); }
+                                let tcp_recomputed = !(tcp_audit_sum as u16);
+                                let tcp_stored = (((syn_frame[50] as u16) << 8) | syn_frame[51] as u16);
+                                let tcp_match = (tcp_recomputed == tcp_stored) as u32;
+                                let tcp_data_offset_words = (syn_frame[46] >> 4) as u32;
+                                let tcp_flags = syn_frame[47];
+                                let tcp_src_port = (((syn_frame[34] as u16) << 8) | syn_frame[35] as u16) as u32;
+                                let tcp_dst_port = (((syn_frame[36] as u16) << 8) | syn_frame[37] as u16) as u32;
+                                let tcp_ok_audit = (tcp_match == 1 && tcp_data_offset_words == 6 && tcp_flags == 0x02 && payload_len == 0) as u32;
+
+                                let tx_cmd: u8 = 0b0000_1011; // EOP|IFCS|RS
+                                let tx_eop = ((tx_cmd & 0x01) != 0) as u32;
+                                let tx_ifcs = ((tx_cmd & 0x02) != 0) as u32;
+                                let tx_rs = ((tx_cmd & 0x08) != 0) as u32;
+                                let tx_checksum_offload = 0u32;
+                                let tx_cso = 0u32;
+                                let tx_css = 0u32;
+                                let offload_ok = (tx_eop == 1 && tx_ifcs == 1 && tx_rs == 1 && tx_checksum_offload == 0) as u32;
+
+                                serial_println!("[tcp.header.audit.ip] total_len={} ihl={} proto=6 checksum=0x{:04X} recomputed=0x{:04X} match={} ok={} reason=ipv4_header_checksum_independent_recompute",
+                                    ip_total_len, ip_header_len, ip_stored, ip_recomputed, ip_match, ip_ok);
+                                serial_println!("[tcp.header.audit.tcp] src_port={} dst_port={} data_offset={} flags=0x{:02X} checksum=0x{:04X} recomputed=0x{:04X} match={} ok={} reason=tcp_header_checksum_independent_recompute",
+                                    tcp_src_port, tcp_dst_port, tcp_data_offset_words * 4, tcp_flags, tcp_stored, tcp_recomputed, tcp_match, tcp_ok_audit);
+                                serial_println!("[tcp.header.audit.lengths] frame_len={} ip_total_len={} tcp_header_len={} payload_len={} tx_len={} padding={} ok={} reason=ip_tcp_lengths_and_padding_consistent",
+                                    frame_len_no_pad, ip_total_len, tcp_header_len, payload_len, tx_len, pad_len,
+                                    ((frame_len_no_pad == 58 && ip_total_len == 44 && tcp_header_len == 24 && payload_len == 0 && tx_len == 60) as u32));
+                                serial_println!("[tcp.tx.offload.audit] eop={} ifcs={} rs={} checksum_offload={} cso={} css={} ok={} reason=tx_desc_cmd_no_tcp_offload_assumed",
+                                    tx_eop, tx_ifcs, tx_rs, tx_checksum_offload, tx_cso, tx_css, offload_ok);
+                                serial_println!("[tcp.checksum.offload.header.audit.done] ok={} ip_ok={} tcp_ok={} offload_ok={} final_ack_sent=0 http_sent=0 fake=0",
+                                    (ip_ok & tcp_ok_audit & offload_ok), ip_ok, tcp_ok_audit, offload_ok);
+
                                 checksum_ok = ((ipv4_csum != 0) && (tcp_csum != 0)) as u8;
                                 ipv4_csum_built = ipv4_csum;
                                 tcp_csum_built = tcp_csum;

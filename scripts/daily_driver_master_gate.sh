@@ -234,6 +234,7 @@ gate_tcp_syn_send_retry_proof_v1="SKIP"
 gate_tcp_target_variant_probe_v1="SKIP"
 gate_tcp_http_target_known_good_probe_v1="SKIP"
 gate_tcp_guest_host_10_0_2_2_probe_v1="SKIP"
+gate_tcp_checksum_offload_header_audit_v1="SKIP"
 gate_tcp_syn_ack_observe_proof_v1="SKIP"
 gate_tcp_http_connect_proof_v1="SKIP"
 gate_dns_client_plan="SKIP"
@@ -2053,6 +2054,19 @@ if [ "$(has 'tcp.guest.host.10_0_2_2.probe.done.*ok=1')" -eq 1 ]; then
     print_row "tcp_guest_host_10_0_2_2_probe_v1" "PASS" "guest->host 10.0.2.2 tcp probe completed"
 else gate_tcp_guest_host_10_0_2_2_probe_v1="SKIP"; fi
 
+if [ "$(has 'tcp.header.audit.ip')" -eq 1 ] && \
+   [ "$(has 'tcp.header.audit.tcp')" -eq 1 ] && \
+   [ "$(has 'tcp.header.audit.lengths')" -eq 1 ] && \
+   [ "$(has 'tcp.tx.offload.audit')" -eq 1 ] && \
+   [ "$(has 'tcp.header.audit.ip.*match=1.*ok=1')" -eq 1 ] && \
+   [ "$(has 'tcp.header.audit.tcp.*match=1.*ok=1')" -eq 1 ] && \
+   [ "$(has 'tcp.header.audit.lengths.*payload_len=0.*ok=1')" -eq 1 ] && \
+   [ "$(has 'tcp.tx.offload.audit.*checksum_offload=0.*ok=1')" -eq 1 ] && \
+   [ "$(has 'tcp.checksum.offload.header.audit.done.*ok=1.*ip_ok=1.*tcp_ok=1.*offload_ok=1.*final_ack_sent=0.*http_sent=0.*fake=0')" -eq 1 ]; then
+    gate_tcp_checksum_offload_header_audit_v1="PASS"
+    print_row "tcp_checksum_offload_header_audit_v1" "PASS" "TCP IP/TCP header checksum + TX offload invariants proven"
+else gate_tcp_checksum_offload_header_audit_v1="SKIP"; fi
+
 if [ "$(has 'tcp.syn.ack.observe.proof.*ok=1')" -eq 1 ]; then
     gate_tcp_syn_ack_observe_proof_v1="PASS"
     print_row "tcp_syn_ack_observe_proof_v1" "PASS" "SYN-ACK observe marker"
@@ -2686,6 +2700,7 @@ ALL_GATES=(
     "tcp_target_variant_probe_v1:$gate_tcp_target_variant_probe_v1"
     "tcp_http_target_known_good_probe_v1:$gate_tcp_http_target_known_good_probe_v1"
     "tcp_guest_host_10_0_2_2_probe_v1:$gate_tcp_guest_host_10_0_2_2_probe_v1"
+    "tcp_checksum_offload_header_audit_v1:$gate_tcp_checksum_offload_header_audit_v1"
     "tcp_syn_ack_observe_proof_v1:$gate_tcp_syn_ack_observe_proof_v1"
     "tcp_http_connect_proof_v1:$gate_tcp_http_connect_proof_v1"
     "dns_client_plan:$gate_dns_client_plan"

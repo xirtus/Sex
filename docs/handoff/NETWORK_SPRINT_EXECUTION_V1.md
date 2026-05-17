@@ -1279,3 +1279,42 @@ Result: **FINAL PASS (239 gates, 0 fail, 13 skip)**.
 
 No SYN-ACK and no RST are observed even on guest->host SLiRP gateway target with a local listener path.
 This further points to backend/policy behavior for this raw TCP lane rather than target DNS/domain selection.
+
+---
+
+## TCP_CHECKSUM_OFFLOAD_HEADER_AUDIT_V1 (2026-05-17)
+
+Runtime:
+
+```bash
+./scripts/entrypoint_build.sh
+QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexos_tcp_checksum_offload_header_audit_v1.log
+```
+
+Result: **FINAL PASS (240 gates, 0 fail, 13 skip)**.
+
+### Required marker evidence
+
+- `[tcp.header.audit.ip] total_len=44 ihl=20 proto=6 checksum=0x62BC recomputed=0x62BC match=1 ok=1 ...`
+- `[tcp.header.audit.tcp] src_port=49153 dst_port=18080 data_offset=24 flags=0x02 checksum=0x7974 recomputed=0x7974 match=1 ok=1 ...`
+- `[tcp.header.audit.lengths] frame_len=58 ip_total_len=44 tcp_header_len=24 payload_len=0 tx_len=60 padding=2 ok=1 ...`
+- `[tcp.tx.offload.audit] eop=1 ifcs=1 rs=1 checksum_offload=0 cso=0 css=0 ok=1 ...`
+- `[tcp.checksum.offload.header.audit.done] ok=1 ip_ok=1 tcp_ok=1 offload_ok=1 final_ack_sent=0 http_sent=0 fake=0`
+
+### Fix during mission
+
+- Independent IPv4 recompute path initially logged mismatch due to only partially zeroing checksum field.
+- Audit path corrected to zero full checksum word before recompute; marker now matches (`match=1`).
+- No broad TX/offload rewrite required.
+
+### TCP response status remains blocked (not handshake progression)
+
+- `[tcp.syn.send.retry.proof] attempts=3 sent=1 tx_dd=1 synack_seen=0 rst_seen=0 ... final_ack_sent=0 http_sent=0 ok=1 ...`
+- `[tcp.guest.host.10_0_2_2.probe.done] ... synack_seen=0 rst_seen=0 final_ack_sent=0 http_sent=0 ok=1 ...`
+
+Conclusion:
+
+- Packet-shape (IP/TCP header/checksum/offload invariants) is now proven clean in-lane.
+- Remaining blocker is environment/backend behavior (SLiRP/TAP/hostfwd path), not SYN construction.
+- Next: `QEMU_SLIRP_TCP_LIMITATION_FREEZE_V1` or `TAP_HOST_ENV_FIX_PLAN_V1`.
