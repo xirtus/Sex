@@ -1598,3 +1598,25 @@ Key window/input markers:
 Detailed handoff:
 
 - `docs/handoff/BROWSER_INPUT_WINDOWING_SPRINT_EXECUTION_V1.md`
+
+---
+
+## HOSTFWD_SYNTAX_MATRIX_PROBE_V1 (2026-05-17)
+
+Objective:
+
+- Probe bounded hostfwd syntax variants and stop on first QEMU boot.
+- Verify no duplicate netdev/usernet construction in runner.
+
+Result:
+
+- Runner netdev path verified single-construction (`-netdev user|tap,id=net0` + one `-device ... netdev=net0`).
+- No syntax variant reached boot in this environment:
+  - `tcp::18080-:18080` → `Could not set up host forwarding rule`
+  - `tcp:127.0.0.1:18080-:18080` → `Could not set up host forwarding rule`
+  - `hostfwd=tcp::18080-:80` → `Invalid host forwarding rule ... (Bad protocol name)`
+  - `hostfwd=tcp:127.0.0.1:18080-10.0.2.15:80` → `Invalid host forwarding rule ... (Bad protocol name)`
+
+Detailed handoff:
+
+- `docs/handoff/HOSTFWD_SYNTAX_MATRIX_PROBE_V1.md`
