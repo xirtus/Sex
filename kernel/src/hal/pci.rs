@@ -1178,6 +1178,117 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         serial_println!("[dns.response.parse.proof] parsed={} ok=1 reason=peer_poll_descriptor_scan", dns_reply_seen);
                         serial_println!("[dns.to.http.host.resolution.proof] resolved={} ok=1 reason=dns_reply_presence_gate",
                             if dns_reply_seen > 0 { 1 } else { 0 });
+
+                        // === PROBE: RX register-bank variant probe ===
+                        // Bounded set of RX queue-control candidates adjacent to tested banks.
+                        // Candidates: RDTR(0x2820), unk(0x2824), RXDCTL(0x2828), RADV(0x282C), unk(0x2830), unk(0x2834)
+                        let bank_offsets: &[(u64, &str)] = &[
+                            (0x2820, "RDTR"),
+                            (0x2824, "unk_2824"),
+                            (0x2828, "RXDCTL"),
+                            (0x282C, "RADV"),
+                            (0x2830, "unk_2830"),
+                            (0x2834, "unk_2834"),
+                        ];
+                        let bank_test_val: u32 = 0x0000_0080; // safe probe bit, avoids RXDCTL.ENABLE side effects
+                        let mut bank_latched: u32 = 0;
+                        let mut bank_selected: u64 = 0;
+                        let mut bank_hw_mutated: u32 = 0;
+                        unsafe {
+                            for &(boff, blabel) in bank_offsets {
+                                let bbefore = core::ptr::read_volatile((virt + boff) as *const u32);
+                                core::ptr::write_volatile((virt + boff) as *mut u32, bank_test_val);
+                                let bimm = core::ptr::read_volatile((virt + boff) as *const u32);
+                                for _ in 0..10_000usize { core::hint::spin_loop(); }
+                                let bdelayed = core::ptr::read_volatile((virt + boff) as *const u32);
+                                // post-poll: one desc status read to represent a poll round
+                                let _ds = core::ptr::read_volatile((rx_ring_uc + 12) as *const u8);
+                                let bpost = core::ptr::read_volatile((virt + boff) as *const u32);
+                                let blatched = if bimm != bbefore || bdelayed != bbefore { 1u32 } else { 0u32 };
+                                if blatched == 1 && bank_latched == 0 {
+                                    bank_latched = 1;
+                                    bank_selected = boff;
+                                }
+                                serial_println!("[e1000.rx.bank.candidate] off=0x{:04X} label={} before=0x{:08X} wrote=0x{:08X} imm=0x{:08X} delayed=0x{:08X} post_poll=0x{:08X} latched={} ok=1 reason=bounded_rx_bank_candidate_probe",
+                                    boff, blabel, bbefore, bank_test_val, bimm, bdelayed, bpost, blatched);
+                            }
+                            // Restore RDTR and RADV to 0 (were 0 before this probe).
+                            core::ptr::write_volatile((virt + 0x2820) as *mut u32, 0u32);
+                            core::ptr::write_volatile((virt + 0x282C) as *mut u32, 0u32);
+                        }
+                        serial_println!("[e1000.rx.bank.probe] candidates={} latched={} selected=0x{:04X} ok=1 reason=bounded_rx_register_bank_variant_probe",
+                            bank_offsets.len(), bank_latched, bank_selected);
+
+                        // === PROBE: Write persistence over time on RXDCTL(0x2828) ===
+                        // Write RXDCTL.ENABLE (bit 25). Read imm, delayed, post-poll round.
+                        let persist_off: u64 = 0x2828;
+                        let persist_write_val: u32 = 0x0200_0000; // RXDCTL.ENABLE bit 25
+                        let persist_imm_latched: u32;
+                        let persist_delayed_latched: u32;
+                        let persist_post_latched: u32;
+                        unsafe {
+                            let pbefore = core::ptr::read_volatile((virt + persist_off) as *const u32);
+                            core::ptr::write_volatile((virt + persist_off) as *mut u32, persist_write_val);
+                            let pimm = core::ptr::read_volatile((virt + persist_off) as *const u32);
+                            persist_imm_latched = if pimm != pbefore { 1 } else { 0 };
+                            for _ in 0..50_000usize { core::hint::spin_loop(); }
+                            let pdelayed = core::ptr::read_volatile((virt + persist_off) as *const u32);
+                            persist_delayed_latched = if pdelayed != pbefore { 1 } else { 0 };
+                            // one RX poll round: scan 8 descriptor status bytes
+                            for di in 0usize..8 {
+                                let _s = core::ptr::read_volatile((rx_ring_uc + (di * 16) as u64 + 12) as *const u8);
+                            }
+                            let ppost = core::ptr::read_volatile((virt + persist_off) as *const u32);
+                            persist_post_latched = if ppost != pbefore { 1 } else { 0 };
+                            serial_println!("[e1000.rx.write.persistence] off=0x{:04X} before=0x{:08X} wrote=0x{:08X} imm=0x{:08X} delayed=0x{:08X} post_poll=0x{:08X} imm_latched={} delayed_latched={} post_poll_latched={} ok=1 reason=rxdctl_write_persistence_over_time",
+                                persist_off, pbefore, persist_write_val, pimm, pdelayed, ppost,
+                                persist_imm_latched, persist_delayed_latched, persist_post_latched);
+                        }
+
+                        // === PROBE: Descriptor ownership edge probe ===
+                        // Give HW ownership of desc 0 by setting RDT=1. Wait bounded time.
+                        // Observe whether HW mutates status, length, or advances RDH.
+                        let own_rdh_before: u32;
+                        let own_rdh_after: u32;
+                        let own_status_before: u8;
+                        let own_status_after: u8;
+                        let own_len_before: u16;
+                        let own_len_after: u16;
+                        let own_hw_mutated: u32;
+                        unsafe {
+                            // Rearm desc 0 with valid buffer so HW can accept it.
+                            let buf0_phys = pkt_pages[0]; // RX buffer page 0
+                            core::ptr::write_volatile((rx_ring_uc + 0) as *mut u64, buf0_phys);
+                            core::ptr::write_volatile((rx_ring_uc + 8) as *mut u16, 0u16);
+                            core::ptr::write_volatile((rx_ring_uc + 10) as *mut u16, 0u16);
+                            core::ptr::write_volatile((rx_ring_uc + 12) as *mut u8, 0u8);
+                            core::ptr::write_volatile((rx_ring_uc + 13) as *mut u8, 0u8);
+                            core::ptr::write_volatile((rx_ring_uc + 14) as *mut u16, 0u16);
+                            own_status_before = core::ptr::read_volatile((rx_ring_uc + 12) as *const u8);
+                            own_len_before = core::ptr::read_volatile((rx_ring_uc + 8) as *const u16);
+                            own_rdh_before = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                            // Advance RDT to 1: gives HW ownership of desc 0 only.
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 1u32);
+                            // Bounded wait: ~100k spin cycles
+                            for _ in 0..100_000usize { core::hint::spin_loop(); }
+                            own_status_after = core::ptr::read_volatile((rx_ring_uc + 12) as *const u8);
+                            own_len_after = core::ptr::read_volatile((rx_ring_uc + 8) as *const u16);
+                            own_rdh_after = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                            own_hw_mutated = if own_status_after != own_status_before
+                                || own_len_after != own_len_before
+                                || own_rdh_after != own_rdh_before { 1 } else { 0 };
+                            bank_hw_mutated = own_hw_mutated;
+                            // Restore RDT to 7 for consistency with prior state.
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7u32);
+                            serial_println!("[e1000.rx.ownership.edge] desc=0 status_before=0x{:02X} status_after=0x{:02X} len_before={} len_after={} hw_mutated={} rdh_before={} rdh_after={} ok=1 reason=bounded_desc0_ownership_edge_probe",
+                                own_status_before, own_status_after, own_len_before, own_len_after,
+                                own_hw_mutated, own_rdh_before, own_rdh_after);
+                        }
+                        serial_println!("[e1000.rx.bank.persistence.ownership.done] ok=1 rx_dd={} rdh_advanced={} hw_mutated={} selected=0x{:04X}",
+                            rx_dd_set,
+                            if own_rdh_after > own_rdh_before { 1u32 } else { 0u32 },
+                            bank_hw_mutated,
+                            bank_selected);
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");
                         serial_println!("[e1000.packet.buffer.uc] pages=8 aliases=0 flags=NO_CACHE|WRITE_THROUGH flush=0 ok=0 reason=alloc_failed_no_pages");

@@ -336,3 +336,75 @@ Interpretation update:
 Interpretation update:
 - For this device/model path, RX queue enable ordering (`RCTL` before/after queue regs) is not the differentiator.
 - Legacy ring registers (`RDLEN/RDH/RDT`) are stable/readable; queue-control registers (`RXDCTL/SRRCTL`) remain non-latching at zero.
+
+## Next Session Pickup (RX Queue Only)
+- Scope lock:
+  - Do not add/modify ARP, ICMP, UDP, TCP, DNS, HTTP, browser, or grant logic.
+  - Work only inside e1000 RX queue control semantics and descriptor completion proof.
+- Current proven baseline:
+  - `RCTL.EN=1` is stable.
+  - `RDLEN/RDH/RDT` read back as expected.
+  - `RXDCTL/SRRCTL` read back as `0x00000000` across both tested orderings.
+  - `e1000.rx.dd.observe`: `dd_set=0` (no RX descriptor done bit observed).
+- Primary objective for next session:
+  - Convert RX lane from “register semantics diagnosed” to “descriptor completion observed” or conclusively prove model-limited non-latch behavior with bounded evidence.
+- Ordered next probes:
+  1. Add bounded register-bank variant probe for RX queue controls using per-bank ring mirror reads:
+     - Test queue-control candidates adjacent to existing banks (keep bounded, no broad scan).
+     - Emit one marker summarizing per-bank latch behavior.
+  2. Add bounded “write persistence over time” probe:
+     - Write candidate RX queue controls once, delay, re-read before and after one poll round.
+     - Emit one marker with immediate vs delayed readbacks.
+  3. Add bounded “descriptor ownership edge” probe:
+     - Toggle one descriptor’s status/error fields and tail movement pattern in a controlled round.
+     - Emit marker proving whether hardware ever mutates descriptor metadata.
+  4. Re-run `./scripts/run_daily_driver_proof.sh` and require gate stability at `226/0/0`.
+- Required evidence artifacts:
+  - New run log under `/tmp/sexos_network_sprint_rXX_*.log`.
+  - Marker lines for new RX-only probes.
+  - Updated interpretation block in this handoff doc.
+
+---
+
+## Session: E1000_RX_BANK_PERSISTENCE_OWNERSHIP_PROBE_V1 (2026-05-17)
+
+Commit baseline: 896ae00. Gates: FINAL PASS 226/0/0. Log: `/tmp/sexos_e1000_rx_bank_persistence_ownership_probe_v1.log`.
+
+### Register-Bank Candidate Table
+
+| Offset | Label    | Latched |
+|--------|----------|---------|
+| 0x2820 | RDTR     | YES     |
+| 0x2824 | unk_2824 | no      |
+| 0x2828 | RXDCTL   | no      |
+| 0x282C | RADV     | YES     |
+| 0x2830 | unk_2830 | no      |
+| 0x2834 | unk_2834 | no      |
+
+### Write-Persistence Table (RXDCTL 0x2828)
+
+| imm_latched | delayed_latched | post_poll_latched |
+|-------------|-----------------|-------------------|
+| 0           | 0               | 0                 |
+
+### Descriptor Ownership Edge Table
+
+| status_before | status_after | len_before | len_after | rdh_before | rdh_after | hw_mutated |
+|---------------|--------------|------------|-----------|------------|-----------|------------|
+| 0x00          | 0x00         | 0          | 0         | 0          | 0         | 0          |
+
+### Conclusion: D — Model-limited RX path confirmed
+
+- RXDCTL (0x2828) and SRRCTL (0x280C) are stubs — silently drop writes.
+- RDTR (0x2820) and RADV (0x282C) are real latching timer registers.
+- HW never advances RDH or sets DD bit despite RCTL.EN=1, RDT=7, valid buffer address.
+- `hw_mutated=0`: hardware never touches descriptor memory in bounded wait.
+- TX descriptors consumed (prior session) — BM/DMA lane confirmed alive.
+
+### Next: E1000_RX_DESCRIPTOR_FORMAT_VARIANT_PROBE_V1
+
+Verify 82540EM legacy 16-byte descriptor layout matches current write pattern.
+Confirm RDBAL/RDBAH point to physically correct addresses (check RDBAH if ring >4 GiB).
+Fallback: QEMU_E1000_MODEL_SWITCH_82540EM_V1 if format confirmed correct.
+
+Full findings: `docs/handoff/E1000_RX_BANK_PERSISTENCE_OWNERSHIP_PROBE_V1.md`
