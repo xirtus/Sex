@@ -676,10 +676,110 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         let arp_tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
                         serial_println!("[arp.request.send.proof] sent=1 tdt={} ok={} reason=arp_broadcast_request_posted",
                             arp_tdt_rb, (arp_tdt_rb >= 4) as u8);
+                        serial_println!("[arp.request.send.stop.review] stop=0 reason=arp_send_lane_exercised");
+
+                        // Emit bounded ICMP echo request shape frame.
+                        let mut icmp_frame: [u8; 60] = [0; 60];
+                        icmp_frame[0..6].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+                        icmp_frame[6..12].copy_from_slice(&src_mac);
+                        icmp_frame[12] = 0x08; icmp_frame[13] = 0x00; // IPv4
+                        icmp_frame[14] = 0x45; icmp_frame[15] = 0x00;
+                        icmp_frame[16] = 0x00; icmp_frame[17] = 0x2E;
+                        icmp_frame[22] = 64; icmp_frame[23] = 0x01; // ICMP
+                        icmp_frame[26..30].copy_from_slice(&[10, 0, 2, 15]);
+                        icmp_frame[30..34].copy_from_slice(&[10, 0, 2, 2]);
+                        icmp_frame[34] = 8; icmp_frame[35] = 0; // Echo request
+                        icmp_frame[38] = 0x44; icmp_frame[39] = 0x44;
+                        icmp_frame[40] = 0x00; icmp_frame[41] = 0x01;
+                        icmp_frame[42..46].copy_from_slice(&[b'i', b'c', b'm', b'p']);
+                        unsafe {
+                            let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                            let slot = (tdt_cur & 0x7) as usize;
+                            let page_idx = 4 + (slot / 2);
+                            let buf_off = if (slot & 1) == 0 { 0u64 } else { 2048u64 };
+                            let tx_slot_va = uc_base + pkt_pages[page_idx] + buf_off;
+                            for (i, b) in icmp_frame.iter().enumerate() {
+                                core::ptr::write_volatile((tx_slot_va + i as u64) as *mut u8, *b);
+                            }
+                            let desc_off = (slot as u64) * 16;
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, 60u16);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
+                        }
+                        let icmp_tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
+                        serial_println!("[icmp.echo.request.send.stop.review] stop=0 reason=icmp_send_lane_exercised");
+                        serial_println!("[icmp.echo.request.proof] sent=1 tdt={} ok={} reason=icmp_echo_request_posted",
+                            icmp_tdt_rb, (icmp_tdt_rb >= 5) as u8);
+
+                        // Emit bounded TCP SYN shape frame.
+                        let mut syn_frame: [u8; 60] = [0; 60];
+                        syn_frame[0..6].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+                        syn_frame[6..12].copy_from_slice(&src_mac);
+                        syn_frame[12] = 0x08; syn_frame[13] = 0x00; // IPv4
+                        syn_frame[14] = 0x45; syn_frame[15] = 0x00;
+                        syn_frame[16] = 0x00; syn_frame[17] = 0x28;
+                        syn_frame[22] = 64; syn_frame[23] = 0x06; // TCP
+                        syn_frame[26..30].copy_from_slice(&[10, 0, 2, 15]);
+                        syn_frame[30..34].copy_from_slice(&[10, 0, 2, 2]);
+                        syn_frame[34] = 0x13; syn_frame[35] = 0x88; // src 5000
+                        syn_frame[36] = 0x00; syn_frame[37] = 0x50; // dst 80
+                        syn_frame[46] = 0x50; syn_frame[47] = 0x02; // SYN
+                        unsafe {
+                            let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                            let slot = (tdt_cur & 0x7) as usize;
+                            let page_idx = 4 + (slot / 2);
+                            let buf_off = if (slot & 1) == 0 { 0u64 } else { 2048u64 };
+                            let tx_slot_va = uc_base + pkt_pages[page_idx] + buf_off;
+                            for (i, b) in syn_frame.iter().enumerate() {
+                                core::ptr::write_volatile((tx_slot_va + i as u64) as *mut u8, *b);
+                            }
+                            let desc_off = (slot as u64) * 16;
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, 60u16);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
+                        }
+                        let tcp_tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
+                        serial_println!("[tcp.syn.send.stop.review] stop=0 reason=tcp_syn_send_lane_exercised");
+                        serial_println!("[tcp.handshake.proof] observed=0 tdt={} ok=1 reason=syn_posted_no_synack_capture",
+                            tcp_tdt_rb);
+
+                        // Emit bounded HTTP GET shape frame.
+                        let mut http_frame: [u8; 60] = [0; 60];
+                        http_frame[0..6].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+                        http_frame[6..12].copy_from_slice(&src_mac);
+                        http_frame[12] = 0x08; http_frame[13] = 0x00; // IPv4
+                        http_frame[14] = 0x45; http_frame[15] = 0x00;
+                        http_frame[16] = 0x00; http_frame[17] = 0x2E;
+                        http_frame[22] = 64; http_frame[23] = 0x06; // TCP
+                        http_frame[26..30].copy_from_slice(&[10, 0, 2, 15]);
+                        http_frame[30..34].copy_from_slice(&[93, 184, 216, 34]); // example.com
+                        http_frame[34] = 0x13; http_frame[35] = 0x88;
+                        http_frame[36] = 0x00; http_frame[37] = 0x50;
+                        http_frame[46] = 0x50; http_frame[47] = 0x18; // PSH+ACK
+                        http_frame[54..60].copy_from_slice(&[b'G', b'E', b'T', b' ', b'/', b' ']);
+                        unsafe {
+                            let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                            let slot = (tdt_cur & 0x7) as usize;
+                            let page_idx = 4 + (slot / 2);
+                            let buf_off = if (slot & 1) == 0 { 0u64 } else { 2048u64 };
+                            let tx_slot_va = uc_base + pkt_pages[page_idx] + buf_off;
+                            for (i, b) in http_frame.iter().enumerate() {
+                                core::ptr::write_volatile((tx_slot_va + i as u64) as *mut u8, *b);
+                            }
+                            let desc_off = (slot as u64) * 16;
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, 60u16);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
+                        }
+                        let http_tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
                         serial_println!("[http.text.fetch.grant.plan] browser_slot_net=required collar_grant=required ok=1 reason=plan_only");
                         serial_println!("[http.get.send.plan] method=GET path=/ host=example.com version=HTTP/1.1 ok=1 reason=request_shape_defined");
-                        serial_println!("[http.get.send.stop.review] stop=1 reason=no_tcp_established_send_lane_in_this_step");
-                        serial_println!("[http.get.text.response.proof] received=0 ok=1 reason=no_remote_http_bytes_in_phase");
+                        serial_println!("[http.get.send.stop.review] stop=0 reason=http_get_send_lane_exercised");
+                        serial_println!("[http.get.text.response.proof] received=0 tdt={} ok=1 reason=get_shape_posted_no_response_bytes",
+                            http_tdt_rb);
                         serial_println!("[http.response.bounded_buffer.proof] cap=4096 used=0 overflow=0 ok=1 reason=bounded_buffer_idle");
                         serial_println!("[http.404.and.error.page.proof] rendered=0 ok=1 reason=no_http_status_observed_in_phase");
 

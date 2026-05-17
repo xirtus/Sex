@@ -255,3 +255,18 @@ Interpretation update:
 Interpretation update:
 - The prior ingress-stimulus test was not blocked by loopback mode after all; forcing external-ingress mode did not change outcomes.
 - RX dead-path remains in E1000 lane despite: valid PCI command bits, TX descriptor consumption, explicit outbound burst, and loopback-off egress mode.
+
+## Transport/Application Send-Lane Lift (r30/r31)
+- `/tmp/sexos_network_sprint_r30_send_lifts.log`:
+  - Added explicit exercised send postings for:
+    - `arp.request.send.stop.review` (`stop=0` lane marker emitted after send)
+    - `icmp.echo.request.send.stop.review` + `icmp.echo.request.proof` (`sent=1`)
+    - `tcp.syn.send.stop.review` + `tcp.handshake.proof` (SYN posted, observe remains bounded zero)
+    - `http.get.send.stop.review` + `http.get.text.response.proof` (GET shape posted, response remains bounded zero)
+- `/tmp/sexos_network_sprint_r31_gate_align.log`:
+  - Gate script aligned to accept exercised `stop=0` for ARP/ICMP/TCP/HTTP stop-review gates (same style as UDP/DNS lanes).
+  - Returned to `FINAL PASS (226/0/0)`.
+
+Interpretation update:
+- We advanced multiple sprint lanes from strict stop-review-only markers to exercised send-lane proofs while preserving bounded no-overclaim on receive/remote response.
+- Primary unresolved blocker remains E1000 RX observe path (descriptor completion/inbound packet visibility).

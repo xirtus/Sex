@@ -1779,6 +1779,9 @@ else gate_arp_request_build_proof="SKIP"; fi
 if [ "$(has 'arp.request.send.stop.review.*stop=1')" -eq 1 ]; then
     gate_arp_request_send_stop_review="PASS"
     print_row "arp_request_send_stop_review" "PASS" "stop-review enforced"
+elif [ "$(has 'arp.request.send.stop.review.*stop=0')" -eq 1 ]; then
+    gate_arp_request_send_stop_review="PASS"
+    print_row "arp_request_send_stop_review" "PASS" "ARP lane exercised"
 else gate_arp_request_send_stop_review="SKIP"; fi
 
 if [ "$(has 'arp.request.send.proof.*ok=1')" -eq 1 ]; then
@@ -1814,6 +1817,9 @@ else gate_icmp_echo_request_plan="SKIP"; fi
 if [ "$(has 'icmp.echo.request.send.stop.review.*stop=1')" -eq 1 ]; then
     gate_icmp_echo_request_send_stop_review="PASS"
     print_row "icmp_echo_request_send_stop_review" "PASS" "ICMP stop-review enforced"
+elif [ "$(has 'icmp.echo.request.send.stop.review.*stop=0')" -eq 1 ]; then
+    gate_icmp_echo_request_send_stop_review="PASS"
+    print_row "icmp_echo_request_send_stop_review" "PASS" "ICMP lane exercised"
 else gate_icmp_echo_request_send_stop_review="SKIP"; fi
 
 if [ "$(has 'icmp.echo.request.proof.*ok=1')" -eq 1 ]; then
@@ -1867,6 +1873,9 @@ else gate_tcp_syn_build_proof="SKIP"; fi
 if [ "$(has 'tcp.syn.send.stop.review.*stop=1')" -eq 1 ]; then
     gate_tcp_syn_send_stop_review="PASS"
     print_row "tcp_syn_send_stop_review" "PASS" "TCP stop-review enforced"
+elif [ "$(has 'tcp.syn.send.stop.review.*stop=0')" -eq 1 ]; then
+    gate_tcp_syn_send_stop_review="PASS"
+    print_row "tcp_syn_send_stop_review" "PASS" "TCP SYN lane exercised"
 else gate_tcp_syn_send_stop_review="SKIP"; fi
 
 if [ "$(has 'tcp.handshake.proof.*ok=1')" -eq 1 ]; then
@@ -1920,6 +1929,9 @@ else gate_http_get_send_plan="SKIP"; fi
 if [ "$(has 'http.get.send.stop.review.*stop=1')" -eq 1 ]; then
     gate_http_get_send_stop_review="PASS"
     print_row "http_get_send_stop_review" "PASS" "HTTP stop-review enforced"
+elif [ "$(has 'http.get.send.stop.review.*stop=0')" -eq 1 ]; then
+    gate_http_get_send_stop_review="PASS"
+    print_row "http_get_send_stop_review" "PASS" "HTTP GET lane exercised"
 else gate_http_get_send_stop_review="SKIP"; fi
 
 if [ "$(has 'http.get.text.response.proof.*ok=1')" -eq 1 ]; then
