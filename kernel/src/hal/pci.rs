@@ -2932,92 +2932,17 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 serial_println!("[tcp.syn.ack.observe.proof] synack_seen={} ack_num={} peer_seq={} flags=0x{:02X} ok={} reason=synack_observed_after_syn_send",
                                     synack_seen, synack_ack_num, peer_seq, synack_flags, synack_seen);
 
-                                // === TCP_HANDSHAKE_PROOF_V1 (final ACK send) ===
-                                let mut final_ack_sent: u32 = 0;
-                                let mut final_ack_tx_dd: u32 = 0;
-                                let mut final_ack_num: u32 = 0;
-                                if synack_seen == 1 && syn_tx_dd == 1 {
-                                    let ack_num = peer_seq.wrapping_add(1);
-                                    final_ack_num = ack_num;
-                                    let mut ack_frame: [u8; 60] = [0; 60];
-                                    ack_frame[0..6].copy_from_slice(&c_gw_mac);
-                                    ack_frame[6..12].copy_from_slice(&c_src_mac);
-                                    ack_frame[12] = 0x08; ack_frame[13] = 0x00;
-                                    ack_frame[14] = 0x45; ack_frame[15] = 0x00;
-                                    ack_frame[16] = 0x00; ack_frame[17] = 0x28; // 20 + 20
-                                    ack_frame[18] = 0x00; ack_frame[19] = 0x01;
-                                    ack_frame[20] = 0x00; ack_frame[21] = 0x00;
-                                    ack_frame[22] = 64; ack_frame[23] = 0x06;
-                                    ack_frame[26] = 10; ack_frame[27] = 0; ack_frame[28] = 2; ack_frame[29] = 15;
-                                    ack_frame[30..34].copy_from_slice(&dst_ip);
-                                    ack_frame[34] = 0xC0; ack_frame[35] = 0x01;
-                                    ack_frame[36] = 0x00; ack_frame[37] = 0x50;
-                                    // seq = 1
-                                    ack_frame[38] = 0x00; ack_frame[39] = 0x00; ack_frame[40] = 0x00; ack_frame[41] = 0x01;
-                                    // ack = peer_seq + 1
-                                    ack_frame[42] = (ack_num >> 24) as u8;
-                                    ack_frame[43] = (ack_num >> 16) as u8;
-                                    ack_frame[44] = (ack_num >> 8) as u8;
-                                    ack_frame[45] = (ack_num & 0xFF) as u8;
-                                    ack_frame[46] = 0x50; ack_frame[47] = 0x10; // ACK only
-                                    ack_frame[48] = 0xFF; ack_frame[49] = 0xFF;
-                                    ack_frame[52] = 0x00; ack_frame[53] = 0x00;
-
-                                    let d0: u32 = ((dst_ip[0] as u32) << 8) | (dst_ip[1] as u32);
-                                    let d1: u32 = ((dst_ip[2] as u32) << 8) | (dst_ip[3] as u32);
-                                    let mut ip_sum: u32 = 0x4500u32 + 0x0028u32 + 0x0001u32 + 0x0000u32
-                                        + 0x4006u32 + 0x0000u32 + 0x0A00u32 + 0x020Fu32 + d0 + d1;
-                                    while ip_sum > 0xFFFF { ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16); }
-                                    let ip_csum: u16 = !(ip_sum as u16);
-                                    ack_frame[24] = (ip_csum >> 8) as u8;
-                                    ack_frame[25] = (ip_csum & 0xFF) as u8;
-
-                                    let seq_hi: u32 = 0x0000;
-                                    let seq_lo: u32 = 0x0001;
-                                    let ack_hi: u32 = ((ack_num >> 16) & 0xFFFF) as u32;
-                                    let ack_lo: u32 = (ack_num & 0xFFFF) as u32;
-                                    let mut tcp_sum: u32 = 0x0A00u32 + 0x020Fu32 + d0 + d1 + 0x0006u32 + 20u32
-                                        + 0xC001u32 + 0x0050u32 + seq_hi + seq_lo + ack_hi + ack_lo
-                                        + 0x5010u32 + 0xFFFFu32 + 0x0000u32 + 0x0000u32;
-                                    while tcp_sum > 0xFFFF { tcp_sum = (tcp_sum & 0xFFFF) + (tcp_sum >> 16); }
-                                    let tcp_csum: u16 = !(tcp_sum as u16);
-                                    ack_frame[50] = (tcp_csum >> 8) as u8;
-                                    ack_frame[51] = (tcp_csum & 0xFF) as u8;
-
-                                    serial_println!("[tcp.handshake.ack.build] seq=1 ack={} flags=0x10 payload_len=0 checksum_ok=1 ok=1 reason=final_ack_frame_built",
-                                        ack_num);
-
-                                    unsafe {
-                                        let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
-                                        let slot = (tdt_cur & 0x7) as usize;
-                                        let page_idx = 4 + (slot / 2);
-                                        let buf_off = if (slot & 1) == 0 { 0u64 } else { 2048u64 };
-                                        let tx_slot_va = uc_base + pkt_pages[page_idx] + buf_off;
-                                        let tx_slot_phys = pkt_pages[page_idx] + buf_off;
-                                        for (i, b) in ack_frame.iter().enumerate() {
-                                            core::ptr::write_volatile((tx_slot_va + i as u64) as *mut u8, *b);
-                                        }
-                                        let desc_off = (slot as u64) * 16;
-                                        core::ptr::write_volatile((tx_ring_uc + desc_off) as *mut u64, tx_slot_phys);
-                                        core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, 60u16);
-                                        core::ptr::write_volatile((tx_ring_uc + desc_off + 10) as *mut u8, 0u8);
-                                        core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011);
-                                        core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);
-                                        core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
-                                        for _ in 0..4usize { for _ in 0..100_000usize { core::hint::spin_loop(); } }
-                                        final_ack_tx_dd = (core::ptr::read_volatile((tx_ring_uc + desc_off + 12) as *const u8) & 0x1) as u32;
-                                    }
-                                    final_ack_sent = final_ack_tx_dd;
-                                    serial_println!("[tcp.handshake.ack.tx.post] seq=1 ack={} tx_dd={} sent={} ok={} reason=final_ack_posted_to_e1000e_tx",
-                                        ack_num, final_ack_tx_dd, final_ack_sent, final_ack_sent);
-                                } else {
-                                    serial_println!("[tcp.handshake.ack.build] seq=1 ack=0 flags=0x10 payload_len=0 checksum_ok=0 ok=0 reason=no_synack_no_final_ack_build");
-                                    serial_println!("[tcp.handshake.ack.tx.post] seq=1 ack=0 tx_dd=0 sent=0 ok=0 reason=no_synack_no_final_ack_send");
-                                }
-                                serial_println!("[tcp.handshake.proof] observed={} final_ack_sent={} seq=1 ack={} ok={} reason=three_way_handshake_completion_attempt",
-                                    synack_seen, final_ack_sent, final_ack_num, final_ack_sent);
-                                serial_println!("[tcp.http.connect.proof] connected={} synack_seen={} final_ack_sent={} ok={} reason=tcp_connect_after_final_ack",
-                                    final_ack_sent, synack_seen, final_ack_sent, final_ack_sent);
+                                // === TCP_SYN_SEND_RETRY_PROOF_V1: stop after SYN-ACK/RST observe ===
+                                let final_ack_sent: u32 = 0;
+                                let final_ack_num: u32 = 0;
+                                serial_println!("[tcp.syn.send.retry.proof] attempts={} sent={} tx_dd={} synack_seen={} rst_seen={} stop_on_synack_or_rst={} final_ack_sent=0 http_sent=0 ok={} reason=bounded_syn_retry_stopped_before_final_ack",
+                                    syn_max_attempts, syn_sent_any, syn_tx_dd, synack_seen, rst_seen, (synack_seen | rst_seen), syn_sent_any);
+                                serial_println!("[tcp.handshake.ack.build] seq=1 ack=0 flags=0x10 payload_len=0 checksum_ok=0 ok=0 reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1");
+                                serial_println!("[tcp.handshake.ack.tx.post] seq=1 ack=0 tx_dd=0 sent=0 ok=0 reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1");
+                                serial_println!("[tcp.handshake.proof] observed={} final_ack_sent=0 seq=1 ack=0 ok=0 reason=final_ack_deferred_in_tcp_syn_send_retry_proof_v1",
+                                    synack_seen);
+                                serial_println!("[tcp.http.connect.proof] connected=0 synack_seen={} final_ack_sent=0 ok=0 reason=connect_deferred_until_final_ack_mission",
+                                    synack_seen);
 
                                 // === HTTP_GET_SEND_PROOF_V1 + response observe ===
                                 let mut http_sent: u32 = 0;

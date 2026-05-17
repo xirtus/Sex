@@ -1068,3 +1068,56 @@ Result: **FINAL PASS (236 gates, 0 fail, 12 skip)**.
 
 - `arp_gateway_resolution_reliability PASS`.
 - `faults_zero PASS` (fault count remains 0).
+
+---
+
+## TCP_SYN_SEND_RETRY_PROOF_V1 (2026-05-17)
+
+Runtime:
+
+```bash
+QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 ./scripts/run_daily_driver_proof.sh /tmp/sexos_tcp_syn_send_retry_proof_v1.log
+```
+
+Result: **FINAL PASS (237 gates, 0 fail, 12 skip)**.
+
+### Mission truth
+
+- Gateway reused from same-run ARP reliability lane:
+  - `[arp.gateway.resolved] gateway_known=1 gw_mac=52:55:0A:00:02:02 attempts=1 fake=0 ok=1`
+- Bounded SYN retries attempted (`max_requests=3` equivalent in TCP lane):
+  - `[tcp.syn.tx.post] attempt=1 ... tx_dd=1 syn_sent=1`
+  - `[tcp.syn.tx.post] attempt=2 ... tx_dd=1 syn_sent=1`
+  - `[tcp.syn.tx.post] attempt=3 ... tx_dd=1 syn_sent=1`
+- Bounded RX stop scan summary:
+  - `[tcp.syn.rx.synack] attempts=3 rounds=24 rx_dd=3 tcp_seen=0 synack_seen=0 rst_seen=0 ...`
+- Mission marker:
+  - `[tcp.syn.send.retry.proof] attempts=3 sent=1 tx_dd=1 synack_seen=0 rst_seen=0 stop_on_synack_or_rst=0 final_ack_sent=0 http_sent=0 ok=1 reason=bounded_syn_retry_stopped_before_final_ack`
+
+### Explicit deferrals (required)
+
+- No final ACK send in this mission:
+  - `[tcp.handshake.ack.tx.post] seq=1 ack=0 tx_dd=0 sent=0 ok=0 reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1`
+- No HTTP send:
+  - `[http.get.send.proof] sent=0 tx_dd=0 payload_len=0 ok=0 reason=no_final_ack_no_http_send`
+
+### Gate addition
+
+- `scripts/daily_driver_master_gate.sh` now scores:
+  - `tcp_syn_send_retry_proof_v1 PASS` when marker `tcp.syn.send.retry.proof.*ok=1` is present.
+
+### TCP_SYN_ACK_OBSERVE_PROOF_V1 continuation (bounded retries)
+
+Extra bounded boots (same e1000e lane) were run to sample intermittency:
+
+| run | syn_sent | synack_seen | rst_seen | note |
+|---|---:|---:|---:|---|
+| r1 (`/tmp/sexos_tcp_syn_send_retry_proof_v1_r1.log`) | 1 | 0 | 0 | bounded poll exhausted |
+| r2 (`/tmp/sexos_tcp_syn_send_retry_proof_v1_r2.log`) | 1 | 0 | 0 | bounded poll exhausted |
+| r3 (`/tmp/sexos_tcp_syn_send_retry_proof_v1_r3.log`) | 1 | 0 | 0 | bounded poll exhausted |
+
+Observed each retry:
+
+- `[tcp.syn.rx.synack] attempts=3 rounds=24 ... synack_seen=0 rst_seen=0 ...`
+- `[tcp.syn.ack.observe.proof] synack_seen=0 ... ok=0`
+- `[tcp.syn.send.retry.proof] ... ok=1 reason=bounded_syn_retry_stopped_before_final_ack`
