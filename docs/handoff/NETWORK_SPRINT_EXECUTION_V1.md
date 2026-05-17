@@ -1391,3 +1391,41 @@ QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
 ```
 
 Result: **FINAL PASS (245 gates, 0 fail, 12 skip, 0 faults)**.
+
+---
+
+## Browser Usability Sprint On Mock/Feed Path (2026-05-17)
+
+This sprint explicitly avoided further live TCP progression and advanced browser usability markers on the proven bounded mock path.
+
+Missions completed:
+
+- `BROWSER_FETCH_STATUS_UI_V1`
+  - `[browser.fetch.status.ui] state=DONE code=200 bytes=98 ok=1 ...`
+- `BROWSER_LINK_FETCH_GATED_PROOF_V1`
+  - `[browser.link.fetch.gated.proof] link_fetch=0 gate=slot_net_required ok=1 ...`
+- `BROWSER_HISTORY_REMOTE_ENTRY_PROOF_V1`
+  - `[browser.history.remote.entry.proof] added=1 ok=1 ...`
+- `BROWSER_TAB_REMOTE_STATUS_PROOF_V1`
+  - `[browser.tab.remote.status.proof] tabs=1 remote_active=1 ok=1 ...`
+- `BROWSER_URL_BAR_EDIT_PROOF_V1`
+  - `[browser.url.bar.edit.proof] edits=1 ok=1 ...`
+- `BROWSER_ENTER_TO_FETCH_GATED_PROOF_V1`
+  - `[browser.enter.to.fetch.gated.proof] enter_fetch=0 gate=slot_net_required ok=1 ...`
+- `BROWSER_BACK_FORWARD_REMOTE_HISTORY_V1`
+  - `[browser.back.forward.remote.history] back=0 forward=0 ok=1 ...`
+- `BROWSER_RELOAD_STOP_PROOF_V1`
+  - `[browser.reload.stop.proof] reload=0 stop=1 ok=1 ...`
+- `SEXNET_STATUS_DASHBOARD_V1`
+  - `[sexnet.status.dashboard] net=1 dns=1 tcp=0 http=1 tls=0 ok=1 ...`
+- `NETWORK_SPRINT_HANDOFF_FREEZE_V1`
+  - `[network.sprint.handoff.freeze] done=0 ok=1 reason=handoff_checkpoint_after_network_probe`
+
+Mock integration anchor:
+
+- `[browser.mock.fetch.integration.status] mock_mode=1 fetched=1 status=200 bytes=98 final_ack_sent=0 http_sent=0 network=0 ok=1 ...`
+
+Result in this lane remains:
+
+- `FINAL: PASS (245 gates proved, 0 fail, 12 skip, 0 faults)`
+- Live TCP remains frozen as environment/backend-limited (`SLiRP` no SYN-ACK/RST).
