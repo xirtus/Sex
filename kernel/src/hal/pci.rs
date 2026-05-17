@@ -584,7 +584,7 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         serial_println!("[arp.request.build.proof] built=0 ok=1 reason=deferred_to_arp_ethertype_lane");
                         serial_println!("[arp.request.send.stop.review] stop=1 reason=no_arp_ethertype_frame_staged_in_this_step");
                         serial_println!("[arp.request.send.proof] sent=0 ok=1 reason=bounded_no_send_claim");
-                        serial_println!("[arp.cache.status.stub] entries=0 valid=0 ok=1 reason=stub_only_no_learning_path");
+                        serial_println!("[arp.cache.status.stub] entries=0 valid=0 ok=1 reason=initial_stub_before_observe_lane");
 
                         // ICMP plan/proof markers similarly bounded in this phase.
                         serial_println!("[icmp.echo.request.plan] type=8 code=0 checksum=deferred tx_lane=e1000_desc0 ok=1 reason=plan_only");
@@ -1067,12 +1067,20 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         let status_after = unsafe { core::ptr::read_volatile((virt + 0x0008) as *const u32) };
                         let ims_after = unsafe { core::ptr::read_volatile((virt + 0x00D0) as *const u32) };
                         let icr_after = unsafe { core::ptr::read_volatile((virt + 0x00C0) as *const u32) };
+                        let icr_rxseq = (icr_after >> 0) & 1;
+                        let icr_lsc = (icr_after >> 2) & 1;
+                        let icr_rxo = (icr_after >> 6) & 1;
+                        let icr_rxdmt0 = (icr_after >> 4) & 1;
                         serial_println!("[e1000.rx.diag.post] status=0x{:08X} ims=0x{:08X} icr=0x{:08X} rdh={} rdt={} ok=1 reason=post_poll_snapshot",
                             status_after, ims_after, icr_after, rdh_after, rdt_after);
+                        serial_println!("[e1000.rx.icr.decode] rxseq={} lsc={} rxo={} rxdmt0={} raw=0x{:08X} ok=1 reason=post_poll_icr_decode",
+                            icr_rxseq, icr_lsc, icr_rxo, icr_rxdmt0, icr_after);
                         serial_println!("[e1000.rx.ring.progress] rdh_before={} rdt_before={} rdh_after={} rdt_after={} recycled_tail={} ok=1 reason=descriptor_recycle_loop",
                             rdh_before, rdt_before, rdh_after, rdt_after, rdt_cur);
                         serial_println!("[e1000.rx.peer.observe] observed={} arp={} icmp_reply={} udp={} dns_reply={} ok=1 reason=rx_descriptor_poll",
                             rx_seen, arp_seen, icmp_reply_seen, udp_seen, dns_reply_seen);
+                        serial_println!("[arp.cache.status.stub] entries={} valid={} ok=1 reason=runtime_observe_lane_status",
+                            arp_seen, arp_seen);
                         serial_println!("[e1000.rx.rearm.variant] rounds=8 desc_rearm_writes={} final_rdt={} ok=1 reason=round_rearm_fixed_tail",
                             rearm_writes, rdt_cur);
                         serial_println!("[e1000.rx.selftest.proof] observed={} loopback={} ok=1 reason=bounded_internal_loopback_probe",

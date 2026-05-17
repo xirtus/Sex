@@ -270,3 +270,13 @@ Interpretation update:
 Interpretation update:
 - We advanced multiple sprint lanes from strict stop-review-only markers to exercised send-lane proofs while preserving bounded no-overclaim on receive/remote response.
 - Primary unresolved blocker remains E1000 RX observe path (descriptor completion/inbound packet visibility).
+
+## Additional Lane Progress (r32)
+- `/tmp/sexos_network_sprint_r32_arp_status_icr_decode.log`:
+  - Added `e1000.rx.icr.decode` marker to decode key post-poll causes (`rxseq`, `lsc`, `rxo`, `rxdmt0`) from `ICR`.
+  - `arp.cache.status.stub` now also emits runtime observe-lane status (`entries=<arp_seen> valid=<arp_seen>`) in addition to initial pre-observe stub marker.
+  - Proof remains stable at `FINAL PASS (226/0/0)`.
+
+Interpretation update:
+- Transport send-lane exercises are now in place (ARP/ICMP/TCP SYN/HTTP GET shapes), and gate alignment is complete for exercised stop-review lanes.
+- RX descriptor completion remains the dominant unresolved blocker for converting bounded observe claims to real observed receive proofs.
