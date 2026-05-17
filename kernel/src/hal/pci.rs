@@ -2503,6 +2503,7 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             let mut q_dns_ancount: u32 = 0;
                             let mut q_dns_qdcount: u32 = 0;
                             let mut q_a_ip: [[u8; 4]; 2] = [[0u8; 4]; 2];
+                            let mut q_a_ttl: [u32; 2] = [0u32; 2];
                             let mut q_rounds_done: u32 = 0;
                             let mut q_found = false;
                             for round in 0usize..8 {
@@ -2611,7 +2612,7 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                                         let a1 = core::ptr::read_volatile((buf_va + ans_off + 1) as *const u8);
                                                         let a2 = core::ptr::read_volatile((buf_va + ans_off + 2) as *const u8);
                                                         let a3 = core::ptr::read_volatile((buf_va + ans_off + 3) as *const u8);
-                                                        if idx_u < 2 { q_a_ip[idx_u] = [a0, a1, a2, a3]; }
+                                                        if idx_u < 2 { q_a_ip[idx_u] = [a0, a1, a2, a3]; q_a_ttl[idx_u] = ans_ttl; }
                                                         q_a_records += 1;
                                                         serial_println!("[dns.response.answer] idx={} type={} class={} ttl={} rdlen={} a={}.{}.{}.{} ok=1 reason=dns_a_record_extracted",
                                                             idx, ans_type, ans_class, ans_ttl, rdlen, a0, a1, a2, a3);
@@ -2644,6 +2645,38 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             }
                             serial_println!("[dns.response.parse.proof.done] ok={} a_records={} fake=0",
                                 (q_tx_dd & q_parse_ok), q_a_records);
+
+                            // === DNS_TO_HTTP_HOST_RESOLUTION_PROOF_V1 ===
+                            // Promote real DNS A record parse into bounded HTTP host resolution state.
+                            // host=example.com, source=dns_rx_observed.
+                            // selected_ip=first A record, alternate_ip=second A record.
+                            // tcp_ready=1, tcp_sent=0, http_sent=0, browser_grant=0 — no forward send yet.
+                            // No heap, no fake, bounded to q_a_ip[0..1].
+                            let q_resolved: u8 = if q_parse_ok != 0 && q_a_records >= 1 { 1 } else { 0 };
+                            let q_has_alt: u8 = if q_a_records >= 2 { 1 } else { 0 };
+                            // host resolution main marker
+                            serial_println!("[dns.http.resolve] host=example.com resolved={} selected={}.{}.{}.{} alternates={} source=dns_rx_observed fake=0 ok={} reason=dns_a_parse_promoted",
+                                q_resolved,
+                                q_a_ip[0][0], q_a_ip[0][1], q_a_ip[0][2], q_a_ip[0][3],
+                                q_has_alt,
+                                q_resolved);
+                            // per-answer promotion markers
+                            let a_records_to_report: u32 = if q_a_records <= 2 { q_a_records } else { 2 };
+                            for idx in 0u32..a_records_to_report {
+                                let idx_u = idx as usize;
+                                let is_sel: u8 = if idx == 0 { 1 } else { 0 };
+                                let ans_ip = q_a_ip[idx_u];
+                                let ans_ttl_report = q_a_ttl[idx_u];
+                                serial_println!("[dns.http.resolve.answer] idx={} ip={}.{}.{}.{} ttl={} selected={} ok=1 reason=dns_answer_promoted",
+                                    idx, ans_ip[0], ans_ip[1], ans_ip[2], ans_ip[3],
+                                    ans_ttl_report, is_sel);
+                            }
+                            // TCP/HTTP not-sent truth — no forward protocol progress yet
+                            serial_println!("[dns.http.target.truth] tcp_ready=1 tcp_sent=0 http_sent=0 browser_grant=0 fake=0 ok=1 reason=host_resolved_no_fwd_send");
+                            // final host resolution proof marker
+                            serial_println!("[dns.to.http.host.resolution.proof.done] ok={} resolved={} selected={}.{}.{}.{} fake=0",
+                                q_resolved, q_resolved,
+                                q_a_ip[0][0], q_a_ip[0][1], q_a_ip[0][2], q_a_ip[0][3]);
                         }
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");

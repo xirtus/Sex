@@ -53,12 +53,12 @@ Status note:
 - Implemented bounded model/build/observe markers.
 - TCP send/handshake remain explicit stop-review/no-peer-observe in this phase.
 
-### Bundle D: DNS/HTTP core client (in progress: marker/stub lane implemented)
+### Bundle D: DNS/HTTP core client (in progress: DNS parse + host resolution implemented; HTTP markers next)
 - `DNS_CLIENT_PLAN_V1`
 - `DNS_QUERY_BUILD_PROOF_V1`
 - `DNS_QUERY_SEND_STOP_REVIEW_V1`
 - `DNS_RESPONSE_PARSE_PROOF_V1`
-- `DNS_TO_HTTP_HOST_RESOLUTION_PROOF_V1`
+- `DNS_TO_HTTP_HOST_RESOLUTION_PROOF_V1` ✅ IMPLEMENTED
 - `HTTP_TEXT_FETCH_GRANT_PLAN_V1`
 - `HTTP_GET_SEND_PLAN_V1`
 - `HTTP_GET_SEND_STOP_REVIEW_V1`
@@ -68,7 +68,8 @@ Status note:
 
 Status note:
 - Implemented DNS/HTTP plan/build marker chain with bounded no-network claims.
-- DNS send and HTTP GET send remain explicit stop-review markers until transport lane is wired.
+- DNS parse + DNS-to-HTTP host resolution: ✅ IMPLEMENTED on e1000e lane.
+- HTTP GET send remains explicit stop-review marker until transport lane is wired.
 
 ### Bundle E: Collar/browser network integration (in progress: marker/stub lane implemented)
 - `BROWSER_HTTP_FETCH_GRANT_PLAN_V1`
@@ -867,3 +868,50 @@ from real RX buffer. Bounded parse, no heap, no fake.
 Use resolved IP for outbound HTTP probe (TCP SYN to port 80).
 
 Full findings: `docs/handoff/DNS_RESPONSE_PARSE_PROOF_V1.md`
+
+---
+
+## DNS_TO_HTTP_HOST_RESOLUTION_PROOF_V1
+
+Date: 2026-05-17
+Gates: FINAL PASS IMPLEMENTED **231**/0/2skip (e1000e).
+Log: `/tmp/sexos_dns_to_http_host_resolution_proof_v1.log`.
+
+### Result: PASS IMPLEMENTED
+
+Real DNS A record parse promoted into bounded HTTP host resolution state.
+selected_ip=first A record from live DNS response. tcp_ready=1, tcp_sent=0,
+http_sent=0, browser_grant=0 — no forward send yet.
+
+### Host Resolution
+
+| Field       | Value           |
+|-------------|-----------------|
+| host        | example.com     |
+| resolved    | 1               |
+| selected    | first A record  |
+| alternates  | 1               |
+| source      | dns_rx_observed |
+| fake        | 0               |
+
+Note: selected IP is first A record in real DNS response. DNS round-robin
+may return 104.20.23.154 or 172.66.147.243 first. Both valid.
+
+### TCP/HTTP Not-Sent Truth
+
+| tcp_ready | tcp_sent | http_sent | browser_grant |
+|-----------|----------|-----------|---------------|
+| 1         | 0        | 0         | 0             |
+
+### Markers Emitted
+
+- `[dns.http.resolve]` — main host resolution marker
+- `[dns.http.resolve.answer]` × 2 — per-answer promotion
+- `[dns.http.target.truth]` — TCP/HTTP not-sent truth
+- `[dns.to.http.host.resolution.proof.done]` — final proof marker
+
+### Next: TCP_SYN_SEND_STOP_REVIEW_V1 → TCP_SYN_SEND_PROOF_V1
+
+TCP SYN to resolved IP on port 80. Host resolution complete, tcp_ready=1.
+
+Full findings: `docs/handoff/DNS_TO_HTTP_HOST_RESOLUTION_PROOF_V1.md`
