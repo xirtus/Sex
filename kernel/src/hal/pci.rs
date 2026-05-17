@@ -403,6 +403,22 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         serial_println!("[e1000.mmio.ring.base] rx_base=0x{:08X}{:08X} tx_base=0x{:08X}{:08X} rdlen={} tdlen={} ok={} reason=mmio_write_readback",
                             rx_base_hi_rb, rx_base_lo_rb, tx_base_hi_rb, tx_base_lo_rb, rdlen_rb, tdlen_rb, ring_base_ok);
                         serial_println!("[e1000.mmio.ring.base.proof.done] ok={} rx_enabled=0 tx_enabled=0 packets=0", ring_base_ok);
+                        // Re-check PCI command at runtime before RX/TX init to ensure BM/MEM/IO are still enabled.
+                        let cmd_rt_before = unsafe { pci_config_read(dev.bus, dev.dev, dev.func, 0x04) };
+                        let mut cmd_rt = (cmd_rt_before & 0xFFFF) as u16;
+                        cmd_rt |= 0x0001; // IO space
+                        cmd_rt |= 0x0002; // Memory space
+                        cmd_rt |= 0x0004; // Bus master
+                        let cmd_rt_after32 = ((cmd_rt_before & 0xFFFF_0000) | (cmd_rt as u32)) as u32;
+                        unsafe { pci_config_write(dev.bus, dev.dev, dev.func, 0x04, cmd_rt_after32); }
+                        let cmd_rt_rb = unsafe { pci_config_read(dev.bus, dev.dev, dev.func, 0x04) };
+                        serial_println!("[e1000.pci.command.recheck] before=0x{:08X} after=0x{:08X} rb=0x{:08X} bm={} mem={} io={} ok=1 reason=runtime_pci_command_reassert",
+                            cmd_rt_before,
+                            cmd_rt_after32,
+                            cmd_rt_rb,
+                            ((cmd_rt_rb >> 2) & 1),
+                            ((cmd_rt_rb >> 1) & 1),
+                            (cmd_rt_rb & 1));
 
                         // E1000_RX_REGISTER_INIT_PLAN_V1 + E1000_RX_REGISTER_INIT_PROOF_V1
                         // RX path register initialization only, no behavior expansion.

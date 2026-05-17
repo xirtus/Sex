@@ -199,3 +199,13 @@ Interpretation update:
 Interpretation update:
 - Descriptor rearm semantics and fixed-tail discipline are now explicitly exercised each round.
 - RX still stalls with zero descriptor completions; next bounded lane should move to explicit PCI bus-master + memory-space config verification/writeback at runtime before RX init.
+
+## RX Diagnostic Snapshot (r26 runtime PCI command recheck)
+- `/tmp/sexos_network_sprint_autopilot_r26_pci_cmd_recheck.log`:
+  - `e1000.pci.command.recheck`: `before=0x00000107 after=0x00000107 rb=0x00000107 bm=1 mem=1 io=1`.
+  - `e1000.rx.ring.progress`: unchanged (`rdh_before=0`, `rdh_after=0`).
+  - `e1000.rx.peer.observe`: unchanged (`observed=0`).
+
+Interpretation update:
+- PCI command gating is confirmed not to be the blocker; runtime already has IO/MEM/BM enabled.
+- Next bounded lane should probe alternate RX register-bank controls (queue region offsets near 0x2C00) while preserving bounded claims.
