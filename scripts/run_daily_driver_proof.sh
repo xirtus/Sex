@@ -31,6 +31,7 @@ BUILD_SCRIPT="./scripts/entrypoint_build.sh"
 ISO="sexos-v1.0.0.iso"
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 PROBE_SECONDS="${DAILY_DRIVER_PROBE_SECONDS:-30}"
+ENABLE_QEMU_USERNET_E1000="${ENABLE_QEMU_USERNET_E1000:-1}"
 
 # ---- helpers ----
 die() {
@@ -245,6 +246,7 @@ export SEXOS_PCI_NET_STATUS_PROOF=1
 export SEXOS_E1000_BAR_META_PROOF=1
 export SEXOS_E1000_DRIVER_STATUS_PROOF=1
 export SEXOS_E1000_RING_ALLOC_PROOF=1
+export SEXOS_DMA_UC_ALIAS_PROOF=1
 export SEXOS_LINEN_PERSIST_READBACK_PROOF=1
 
 # ── Frame Chrome model proof ──
@@ -308,6 +310,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+QEMU_NET_ARGS=()
+if [ "$ENABLE_QEMU_USERNET_E1000" = "1" ]; then
+    QEMU_NET_ARGS=(
+        -netdev user,id=net0
+        -device e1000,netdev=net0
+    )
+fi
+
 "$QEMU_BIN" \
     -M q35 \
     -m 512M \
@@ -315,6 +325,7 @@ trap cleanup EXIT INT TERM
     -cdrom "$ISO" \
     -device nec-usb-xhci,id=xhci \
     -device usb-kbd,bus=xhci.0 \
+    "${QEMU_NET_ARGS[@]}" \
     -serial "file:$LOG" \
     -display none \
     -no-reboot \

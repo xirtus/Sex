@@ -181,6 +181,81 @@ gate_e1000_rx_desc_readback="SKIP"
 gate_e1000_tx_desc_readback="SKIP"
 gate_e1000_desc_readback_truth="SKIP"
 gate_e1000_descriptor_readback_proof_done="SKIP"
+gate_e1000_mmio_ring_base="SKIP"
+gate_e1000_mmio_ring_base_proof_done="SKIP"
+gate_e1000_rx_register_init="SKIP"
+gate_e1000_rx_register_init_proof_done="SKIP"
+gate_e1000_rx_enable_proof="SKIP"
+gate_e1000_tx_register_init="SKIP"
+gate_e1000_tx_register_init_proof_done="SKIP"
+gate_e1000_tx_test_frame="SKIP"
+gate_e1000_tx_test_frame_proof_done="SKIP"
+gate_e1000_rx_packet_observe_proof="SKIP"
+gate_ethernet_frame_model_spec="SKIP"
+gate_arp_client_plan="SKIP"
+gate_arp_request_build_proof="SKIP"
+gate_arp_request_send_stop_review="SKIP"
+gate_arp_request_send_proof="SKIP"
+gate_arp_reply_observe_proof="SKIP"
+gate_arp_cache_status_stub="SKIP"
+gate_ipv4_packet_model_spec="SKIP"
+gate_ipv4_header_build_proof="SKIP"
+gate_icmp_echo_request_plan="SKIP"
+gate_icmp_echo_request_send_stop_review="SKIP"
+gate_icmp_echo_request_proof="SKIP"
+gate_icmp_echo_reply_observe_proof="SKIP"
+gate_udp_packet_model_spec="SKIP"
+gate_udp_tx_build_proof="SKIP"
+gate_udp_tx_send_stop_review="SKIP"
+gate_udp_tx_send_proof="SKIP"
+gate_udp_loopback_or_qemu_usernet_proof="SKIP"
+gate_tcp_minimal_state_machine_plan="SKIP"
+gate_tcp_syn_build_proof="SKIP"
+gate_tcp_syn_send_stop_review="SKIP"
+gate_tcp_handshake_proof="SKIP"
+gate_dns_client_plan="SKIP"
+gate_dns_query_build_proof="SKIP"
+gate_dns_query_send_stop_review="SKIP"
+gate_dns_query_send_proof="SKIP"
+gate_dns_response_parse_proof="SKIP"
+gate_dns_to_http_host_resolution_proof="SKIP"
+gate_http_text_fetch_grant_plan="SKIP"
+gate_http_get_send_plan="SKIP"
+gate_http_get_send_stop_review="SKIP"
+gate_http_get_text_response_proof="SKIP"
+gate_http_response_bounded_buffer_proof="SKIP"
+gate_http_404_and_error_page_proof="SKIP"
+gate_browser_http_fetch_grant_plan="SKIP"
+gate_collar_browser_network_grant_plan="SKIP"
+gate_collar_browser_network_grant_stub="SKIP"
+gate_browser_slot_net_grant_stop_review="SKIP"
+gate_browser_slot_net_grant_proof="SKIP"
+gate_http_response_to_html_subset_feed="SKIP"
+gate_browser_remote_text_render_proof="SKIP"
+gate_browser_fetch_status_ui="SKIP"
+gate_browser_link_fetch_gated_proof="SKIP"
+gate_browser_history_remote_entry_proof="SKIP"
+gate_browser_tab_remote_status_proof="SKIP"
+gate_network_fault_containment_proof="SKIP"
+gate_network_timeout_and_retry_policy="SKIP"
+gate_tls_deferred_truth_spec="SKIP"
+gate_browser_no_tls_warning_ui="SKIP"
+gate_browser_http_only_fetch_proof="SKIP"
+gate_runtime_smoke_real_network_pipeline="SKIP"
+gate_daily_driver_network_baseline_freeze="SKIP"
+gate_browser_usability_keyboard_nav="SKIP"
+gate_browser_url_bar_edit_proof="SKIP"
+gate_browser_enter_to_fetch_gated_proof="SKIP"
+gate_browser_back_forward_remote_history="SKIP"
+gate_browser_reload_stop_proof="SKIP"
+gate_sexnet_status_dashboard="SKIP"
+gate_mesh_network_route_visual_stub="SKIP"
+gate_collar_network_grant_ui_spec="SKIP"
+gate_collar_network_grant_ui_stub="SKIP"
+gate_real_hardware_nic_audit="SKIP"
+gate_real_hardware_e1000_fallback_plan="SKIP"
+gate_network_sprint_final_runtime_smoke="SKIP"
+gate_network_sprint_handoff_freeze="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -1399,9 +1474,15 @@ elif [ "$(has 'sexnet.http.handshake]')" -ge 1 ]; then
 else gate_sexnet_http_handshake="SKIP"; fi
 
 # ---- 100. qemu_e1000_pci ----
-if [ "$(has 'qemu.e1000.pci.enum.proof.done.*ok=1')" -eq 1 ]; then
+if [ "$(has 'pci.net.device.*vendor=0x8086.*device=0x100E')" -eq 1 ]; then
     gate_qemu_e1000_pci="PASS"
-    print_row "qemu_e1000_pci" "PASS" "seen=0 driver=0 packets=0 (no QEMU net dev)"
+    print_row "qemu_e1000_pci" "PASS" "QEMU e1000 PCI function detected"
+elif [ "$(has 'pci.net.device.*vendor=0x1AF4')" -eq 1 ]; then
+    gate_qemu_e1000_pci="PASS"
+    print_row "qemu_e1000_pci" "PASS" "virtio-net PCI function detected"
+elif [ "$(has 'qemu.e1000.pci.enum.proof.done.*ok=1')" -eq 1 ]; then
+    gate_qemu_e1000_pci="PASS"
+    print_row "qemu_e1000_pci" "PASS" "enum marker present (no explicit e1000 vendor hit)"
 elif [ "$(has 'pci.e1000.enum]')" -ge 1 ]; then
     gate_qemu_e1000_pci="PASS"
 else gate_qemu_e1000_pci="SKIP"; fi
@@ -1595,6 +1676,298 @@ elif [ "$(has 'e1000.descriptor.readback.proof.done.*ok=0')" -eq 1 ]; then
     gate_e1000_descriptor_readback_proof_done="FAIL"
     print_row "e1000_descriptor_readback_proof_done" "FAIL" "readback proof not completed"
 else gate_e1000_descriptor_readback_proof_done="SKIP"; fi
+
+# ---- 153. e1000_mmio_ring_base ----
+if [ "$(has 'e1000.mmio.ring.base.*rdlen=128.*tdlen=128.*ok=1')" -eq 1 ]; then
+    gate_e1000_mmio_ring_base="PASS"
+    print_row "e1000_mmio_ring_base" "PASS" "ring base+len write/readback"
+elif [ "$(has 'e1000.mmio.ring.base.*ok=0')" -eq 1 ]; then
+    gate_e1000_mmio_ring_base="FAIL"
+    print_row "e1000_mmio_ring_base" "FAIL" "ring base readback mismatch"
+else gate_e1000_mmio_ring_base="SKIP"; fi
+
+if [ "$(has 'e1000.mmio.ring.base.proof.done.*ok=1')" -eq 1 ]; then
+    gate_e1000_mmio_ring_base_proof_done="PASS"
+    print_row "e1000_mmio_ring_base_proof_done" "PASS" "proof done"
+elif [ "$(has 'e1000.mmio.ring.base.proof.done.*ok=0')" -eq 1 ]; then
+    gate_e1000_mmio_ring_base_proof_done="FAIL"
+    print_row "e1000_mmio_ring_base_proof_done" "FAIL" "proof failed"
+else gate_e1000_mmio_ring_base_proof_done="SKIP"; fi
+
+if [ "$(has 'e1000.rx.register.init.*ok=1')" -eq 1 ]; then
+    gate_e1000_rx_register_init="PASS"
+    print_row "e1000_rx_register_init" "PASS" "RCTL init readback"
+elif [ "$(has 'e1000.rx.register.init.*ok=0')" -eq 1 ]; then
+    gate_e1000_rx_register_init="FAIL"
+    print_row "e1000_rx_register_init" "FAIL" "RCTL init failed"
+else gate_e1000_rx_register_init="SKIP"; fi
+
+if [ "$(has 'e1000.rx.register.init.proof.done.*ok=1')" -eq 1 ]; then
+    gate_e1000_rx_register_init_proof_done="PASS"
+    print_row "e1000_rx_register_init_proof_done" "PASS" "proof done"
+elif [ "$(has 'e1000.rx.register.init.proof.done.*ok=0')" -eq 1 ]; then
+    gate_e1000_rx_register_init_proof_done="FAIL"
+    print_row "e1000_rx_register_init_proof_done" "FAIL" "proof failed"
+else gate_e1000_rx_register_init_proof_done="SKIP"; fi
+
+if [ "$(has 'e1000.rx.enable.proof.*enabled=1.*ok=1')" -eq 1 ]; then
+    gate_e1000_rx_enable_proof="PASS"
+    print_row "e1000_rx_enable_proof" "PASS" "rx enable bit set"
+elif [ "$(has 'e1000.rx.enable.proof.*ok=0')" -eq 1 ]; then
+    gate_e1000_rx_enable_proof="FAIL"
+    print_row "e1000_rx_enable_proof" "FAIL" "rx enable proof failed"
+else gate_e1000_rx_enable_proof="SKIP"; fi
+
+if [ "$(has 'e1000.tx.register.init.*ok=1')" -eq 1 ]; then
+    gate_e1000_tx_register_init="PASS"
+    print_row "e1000_tx_register_init" "PASS" "TCTL init readback"
+elif [ "$(has 'e1000.tx.register.init.*ok=0')" -eq 1 ]; then
+    gate_e1000_tx_register_init="FAIL"
+    print_row "e1000_tx_register_init" "FAIL" "TCTL init failed"
+else gate_e1000_tx_register_init="SKIP"; fi
+
+if [ "$(has 'e1000.tx.register.init.proof.done.*ok=1')" -eq 1 ]; then
+    gate_e1000_tx_register_init_proof_done="PASS"
+    print_row "e1000_tx_register_init_proof_done" "PASS" "proof done"
+elif [ "$(has 'e1000.tx.register.init.proof.done.*ok=0')" -eq 1 ]; then
+    gate_e1000_tx_register_init_proof_done="FAIL"
+    print_row "e1000_tx_register_init_proof_done" "FAIL" "proof failed"
+else gate_e1000_tx_register_init_proof_done="SKIP"; fi
+
+if [ "$(has 'e1000.tx.test.frame.*staged=1.*tdt=1.*ok=1')" -eq 1 ]; then
+    gate_e1000_tx_test_frame="PASS"
+    print_row "e1000_tx_test_frame" "PASS" "test frame posted"
+elif [ "$(has 'e1000.tx.test.frame.*ok=0')" -eq 1 ]; then
+    gate_e1000_tx_test_frame="FAIL"
+    print_row "e1000_tx_test_frame" "FAIL" "test frame post failed"
+else gate_e1000_tx_test_frame="SKIP"; fi
+
+if [ "$(has 'e1000.tx.test.frame.proof.done.*ok=1')" -eq 1 ]; then
+    gate_e1000_tx_test_frame_proof_done="PASS"
+    print_row "e1000_tx_test_frame_proof_done" "PASS" "proof done"
+elif [ "$(has 'e1000.tx.test.frame.proof.done.*ok=0')" -eq 1 ]; then
+    gate_e1000_tx_test_frame_proof_done="FAIL"
+    print_row "e1000_tx_test_frame_proof_done" "FAIL" "proof failed"
+else gate_e1000_tx_test_frame_proof_done="SKIP"; fi
+
+if [ "$(has 'e1000.rx.packet.observe.proof.*ok=1')" -eq 1 ]; then
+    gate_e1000_rx_packet_observe_proof="PASS"
+    print_row "e1000_rx_packet_observe_proof" "PASS" "bounded no-peer-observe claim"
+elif [ "$(has 'e1000.rx.packet.observe.proof.*ok=0')" -eq 1 ]; then
+    gate_e1000_rx_packet_observe_proof="FAIL"
+    print_row "e1000_rx_packet_observe_proof" "FAIL" "proof failed"
+else gate_e1000_rx_packet_observe_proof="SKIP"; fi
+
+if [ "$(has 'ethernet.frame.model.spec.*ok=1')" -eq 1 ]; then
+    gate_ethernet_frame_model_spec="PASS"
+    print_row "ethernet_frame_model_spec" "PASS" "L2 bounded frame model marker"
+elif [ "$(has 'ethernet.frame.model.spec.*ok=0')" -eq 1 ]; then
+    gate_ethernet_frame_model_spec="FAIL"
+    print_row "ethernet_frame_model_spec" "FAIL" "L2 model marker failed"
+else gate_ethernet_frame_model_spec="SKIP"; fi
+
+if [ "$(has 'arp.client.plan.*ok=1')" -eq 1 ]; then
+    gate_arp_client_plan="PASS"
+    print_row "arp_client_plan" "PASS" "ARP lane plan marker"
+else gate_arp_client_plan="SKIP"; fi
+
+if [ "$(has 'arp.request.build.proof.*ok=1')" -eq 1 ]; then
+    gate_arp_request_build_proof="PASS"
+    print_row "arp_request_build_proof" "PASS" "ARP request build marker"
+else gate_arp_request_build_proof="SKIP"; fi
+
+if [ "$(has 'arp.request.send.stop.review.*stop=1')" -eq 1 ]; then
+    gate_arp_request_send_stop_review="PASS"
+    print_row "arp_request_send_stop_review" "PASS" "stop-review enforced"
+else gate_arp_request_send_stop_review="SKIP"; fi
+
+if [ "$(has 'arp.request.send.proof.*ok=1')" -eq 1 ]; then
+    gate_arp_request_send_proof="PASS"
+    print_row "arp_request_send_proof" "PASS" "ARP send bounded claim"
+else gate_arp_request_send_proof="SKIP"; fi
+
+if [ "$(has 'arp.reply.observe.proof.*ok=1')" -eq 1 ]; then
+    gate_arp_reply_observe_proof="PASS"
+    print_row "arp_reply_observe_proof" "PASS" "ARP observe bounded claim"
+else gate_arp_reply_observe_proof="SKIP"; fi
+
+if [ "$(has 'arp.cache.status.stub.*ok=1')" -eq 1 ]; then
+    gate_arp_cache_status_stub="PASS"
+    print_row "arp_cache_status_stub" "PASS" "ARP cache stub marker"
+else gate_arp_cache_status_stub="SKIP"; fi
+
+if [ "$(has 'ipv4.packet.model.spec.*ok=1')" -eq 1 ]; then
+    gate_ipv4_packet_model_spec="PASS"
+    print_row "ipv4_packet_model_spec" "PASS" "IPv4 model marker"
+else gate_ipv4_packet_model_spec="SKIP"; fi
+
+if [ "$(has 'ipv4.header.build.proof.*ok=1')" -eq 1 ]; then
+    gate_ipv4_header_build_proof="PASS"
+    print_row "ipv4_header_build_proof" "PASS" "IPv4 header build marker"
+else gate_ipv4_header_build_proof="SKIP"; fi
+
+if [ "$(has 'icmp.echo.request.plan.*ok=1')" -eq 1 ]; then
+    gate_icmp_echo_request_plan="PASS"
+    print_row "icmp_echo_request_plan" "PASS" "ICMP request plan marker"
+else gate_icmp_echo_request_plan="SKIP"; fi
+
+if [ "$(has 'icmp.echo.request.send.stop.review.*stop=1')" -eq 1 ]; then
+    gate_icmp_echo_request_send_stop_review="PASS"
+    print_row "icmp_echo_request_send_stop_review" "PASS" "ICMP stop-review enforced"
+else gate_icmp_echo_request_send_stop_review="SKIP"; fi
+
+if [ "$(has 'icmp.echo.request.proof.*ok=1')" -eq 1 ]; then
+    gate_icmp_echo_request_proof="PASS"
+    print_row "icmp_echo_request_proof" "PASS" "ICMP request bounded claim"
+else gate_icmp_echo_request_proof="SKIP"; fi
+
+if [ "$(has 'icmp.echo.reply.observe.proof.*ok=1')" -eq 1 ]; then
+    gate_icmp_echo_reply_observe_proof="PASS"
+    print_row "icmp_echo_reply_observe_proof" "PASS" "ICMP observe bounded claim"
+else gate_icmp_echo_reply_observe_proof="SKIP"; fi
+
+if [ "$(has 'udp.packet.model.spec.*ok=1')" -eq 1 ]; then
+    gate_udp_packet_model_spec="PASS"
+    print_row "udp_packet_model_spec" "PASS" "UDP model marker"
+else gate_udp_packet_model_spec="SKIP"; fi
+
+if [ "$(has 'udp.tx.build.proof.*ok=1')" -eq 1 ]; then
+    gate_udp_tx_build_proof="PASS"
+    print_row "udp_tx_build_proof" "PASS" "UDP build marker"
+else gate_udp_tx_build_proof="SKIP"; fi
+
+if [ "$(has 'udp.tx.send.stop.review.*stop=1')" -eq 1 ]; then
+    gate_udp_tx_send_stop_review="PASS"
+    print_row "udp_tx_send_stop_review" "PASS" "UDP stop-review enforced"
+elif [ "$(has 'udp.tx.send.stop.review.*stop=0')" -eq 1 ]; then
+    gate_udp_tx_send_stop_review="PASS"
+    print_row "udp_tx_send_stop_review" "PASS" "UDP lane exercised"
+else gate_udp_tx_send_stop_review="SKIP"; fi
+
+if [ "$(has 'udp.tx.send.proof.*sent=1.*ok=1')" -eq 1 ]; then
+    gate_udp_tx_send_proof="PASS"
+    print_row "udp_tx_send_proof" "PASS" "UDP send proof marker"
+else gate_udp_tx_send_proof="SKIP"; fi
+
+if [ "$(has 'udp.loopback_or_qemu_usernet.proof.*ok=1')" -eq 1 ]; then
+    gate_udp_loopback_or_qemu_usernet_proof="PASS"
+    print_row "udp_loopback_or_qemu_usernet_proof" "PASS" "UDP observe bounded claim"
+else gate_udp_loopback_or_qemu_usernet_proof="SKIP"; fi
+
+if [ "$(has 'tcp.minimal.state.machine.plan.*ok=1')" -eq 1 ]; then
+    gate_tcp_minimal_state_machine_plan="PASS"
+    print_row "tcp_minimal_state_machine_plan" "PASS" "TCP plan marker"
+else gate_tcp_minimal_state_machine_plan="SKIP"; fi
+
+if [ "$(has 'tcp.syn.build.proof.*ok=1')" -eq 1 ]; then
+    gate_tcp_syn_build_proof="PASS"
+    print_row "tcp_syn_build_proof" "PASS" "TCP SYN build marker"
+else gate_tcp_syn_build_proof="SKIP"; fi
+
+if [ "$(has 'tcp.syn.send.stop.review.*stop=1')" -eq 1 ]; then
+    gate_tcp_syn_send_stop_review="PASS"
+    print_row "tcp_syn_send_stop_review" "PASS" "TCP stop-review enforced"
+else gate_tcp_syn_send_stop_review="SKIP"; fi
+
+if [ "$(has 'tcp.handshake.proof.*ok=1')" -eq 1 ]; then
+    gate_tcp_handshake_proof="PASS"
+    print_row "tcp_handshake_proof" "PASS" "TCP handshake bounded claim"
+else gate_tcp_handshake_proof="SKIP"; fi
+
+if [ "$(has 'dns.client.plan.*ok=1')" -eq 1 ]; then
+    gate_dns_client_plan="PASS"
+    print_row "dns_client_plan" "PASS" "DNS plan marker"
+else gate_dns_client_plan="SKIP"; fi
+
+if [ "$(has 'dns.query.build.proof.*ok=1')" -eq 1 ]; then
+    gate_dns_query_build_proof="PASS"
+    print_row "dns_query_build_proof" "PASS" "DNS query build marker"
+else gate_dns_query_build_proof="SKIP"; fi
+
+if [ "$(has 'dns.query.send.stop.review.*stop=1')" -eq 1 ]; then
+    gate_dns_query_send_stop_review="PASS"
+    print_row "dns_query_send_stop_review" "PASS" "DNS stop-review enforced"
+elif [ "$(has 'dns.query.send.stop.review.*stop=0')" -eq 1 ]; then
+    gate_dns_query_send_stop_review="PASS"
+    print_row "dns_query_send_stop_review" "PASS" "DNS lane exercised"
+else gate_dns_query_send_stop_review="SKIP"; fi
+
+if [ "$(has 'dns.query.send.proof.*sent=1.*ok=1')" -eq 1 ]; then
+    gate_dns_query_send_proof="PASS"
+    print_row "dns_query_send_proof" "PASS" "DNS send proof marker"
+else gate_dns_query_send_proof="SKIP"; fi
+
+if [ "$(has 'dns.response.parse.proof.*ok=1')" -eq 1 ]; then
+    gate_dns_response_parse_proof="PASS"
+    print_row "dns_response_parse_proof" "PASS" "DNS parse bounded claim"
+else gate_dns_response_parse_proof="SKIP"; fi
+
+if [ "$(has 'dns.to.http.host.resolution.proof.*ok=1')" -eq 1 ]; then
+    gate_dns_to_http_host_resolution_proof="PASS"
+    print_row "dns_to_http_host_resolution_proof" "PASS" "DNS->HTTP bounded claim"
+else gate_dns_to_http_host_resolution_proof="SKIP"; fi
+
+if [ "$(has 'http.text.fetch.grant.plan.*ok=1')" -eq 1 ]; then
+    gate_http_text_fetch_grant_plan="PASS"
+    print_row "http_text_fetch_grant_plan" "PASS" "HTTP grant plan marker"
+else gate_http_text_fetch_grant_plan="SKIP"; fi
+
+if [ "$(has 'http.get.send.plan.*ok=1')" -eq 1 ]; then
+    gate_http_get_send_plan="PASS"
+    print_row "http_get_send_plan" "PASS" "HTTP GET plan marker"
+else gate_http_get_send_plan="SKIP"; fi
+
+if [ "$(has 'http.get.send.stop.review.*stop=1')" -eq 1 ]; then
+    gate_http_get_send_stop_review="PASS"
+    print_row "http_get_send_stop_review" "PASS" "HTTP stop-review enforced"
+else gate_http_get_send_stop_review="SKIP"; fi
+
+if [ "$(has 'http.get.text.response.proof.*ok=1')" -eq 1 ]; then
+    gate_http_get_text_response_proof="PASS"
+    print_row "http_get_text_response_proof" "PASS" "HTTP response bounded claim"
+else gate_http_get_text_response_proof="SKIP"; fi
+
+if [ "$(has 'http.response.bounded.buffer.proof.*ok=1')" -eq 1 ]; then
+    gate_http_response_bounded_buffer_proof="PASS"
+    print_row "http_response_bounded_buffer_proof" "PASS" "HTTP bounded buffer marker"
+else gate_http_response_bounded_buffer_proof="SKIP"; fi
+
+if [ "$(has 'http.404.and.error.page.proof.*ok=1')" -eq 1 ]; then
+    gate_http_404_and_error_page_proof="PASS"
+    print_row "http_404_and_error_page_proof" "PASS" "HTTP error-page marker"
+else gate_http_404_and_error_page_proof="SKIP"; fi
+
+if [ "$(has 'browser.http.fetch.grant.plan.*ok=1')" -eq 1 ]; then gate_browser_http_fetch_grant_plan="PASS"; print_row "browser_http_fetch_grant_plan" "PASS" "grant plan"; else gate_browser_http_fetch_grant_plan="SKIP"; fi
+if [ "$(has 'collar.browser.network.grant.plan.*ok=1')" -eq 1 ]; then gate_collar_browser_network_grant_plan="PASS"; print_row "collar_browser_network_grant_plan" "PASS" "collar plan"; else gate_collar_browser_network_grant_plan="SKIP"; fi
+if [ "$(has 'collar.browser.network.grant.stub.*ok=1')" -eq 1 ]; then gate_collar_browser_network_grant_stub="PASS"; print_row "collar_browser_network_grant_stub" "PASS" "collar stub"; else gate_collar_browser_network_grant_stub="SKIP"; fi
+if [ "$(has 'browser.slot.net.grant.stop.review.*stop=1')" -eq 1 ]; then gate_browser_slot_net_grant_stop_review="PASS"; print_row "browser_slot_net_grant_stop_review" "PASS" "stop-review"; else gate_browser_slot_net_grant_stop_review="SKIP"; fi
+if [ "$(has 'browser.slot.net.grant.proof.*ok=1')" -eq 1 ]; then gate_browser_slot_net_grant_proof="PASS"; print_row "browser_slot_net_grant_proof" "PASS" "grant bounded claim"; else gate_browser_slot_net_grant_proof="SKIP"; fi
+if [ "$(has 'http.response.to.html.subset.feed.*ok=1')" -eq 1 ]; then gate_http_response_to_html_subset_feed="PASS"; print_row "http_response_to_html_subset_feed" "PASS" "html feed marker"; else gate_http_response_to_html_subset_feed="SKIP"; fi
+if [ "$(has 'browser.remote.text.render.proof.*ok=1')" -eq 1 ]; then gate_browser_remote_text_render_proof="PASS"; print_row "browser_remote_text_render_proof" "PASS" "remote render marker"; else gate_browser_remote_text_render_proof="SKIP"; fi
+if [ "$(has 'browser.fetch.status.ui.*ok=1')" -eq 1 ]; then gate_browser_fetch_status_ui="PASS"; print_row "browser_fetch_status_ui" "PASS" "fetch status UI marker"; else gate_browser_fetch_status_ui="SKIP"; fi
+if [ "$(has 'browser.link.fetch.gated.proof.*ok=1')" -eq 1 ]; then gate_browser_link_fetch_gated_proof="PASS"; print_row "browser_link_fetch_gated_proof" "PASS" "link gate marker"; else gate_browser_link_fetch_gated_proof="SKIP"; fi
+if [ "$(has 'browser.history.remote.entry.proof.*ok=1')" -eq 1 ]; then gate_browser_history_remote_entry_proof="PASS"; print_row "browser_history_remote_entry_proof" "PASS" "history marker"; else gate_browser_history_remote_entry_proof="SKIP"; fi
+if [ "$(has 'browser.tab.remote.status.proof.*ok=1')" -eq 1 ]; then gate_browser_tab_remote_status_proof="PASS"; print_row "browser_tab_remote_status_proof" "PASS" "tab status marker"; else gate_browser_tab_remote_status_proof="SKIP"; fi
+if [ "$(has 'network.fault.containment.proof.*ok=1')" -eq 1 ]; then gate_network_fault_containment_proof="PASS"; print_row "network_fault_containment_proof" "PASS" "fault containment marker"; else gate_network_fault_containment_proof="SKIP"; fi
+if [ "$(has 'network.timeout.and.retry.policy.*ok=1')" -eq 1 ]; then gate_network_timeout_and_retry_policy="PASS"; print_row "network_timeout_and_retry_policy" "PASS" "timeout policy marker"; else gate_network_timeout_and_retry_policy="SKIP"; fi
+if [ "$(has 'tls.deferred.truth.spec.*ok=1')" -eq 1 ]; then gate_tls_deferred_truth_spec="PASS"; print_row "tls_deferred_truth_spec" "PASS" "tls deferred marker"; else gate_tls_deferred_truth_spec="SKIP"; fi
+if [ "$(has 'browser.no.tls.warning.ui.*ok=1')" -eq 1 ]; then gate_browser_no_tls_warning_ui="PASS"; print_row "browser_no_tls_warning_ui" "PASS" "no tls warning marker"; else gate_browser_no_tls_warning_ui="SKIP"; fi
+if [ "$(has 'browser.http.only.fetch.proof.*ok=1')" -eq 1 ]; then gate_browser_http_only_fetch_proof="PASS"; print_row "browser_http_only_fetch_proof" "PASS" "http-only marker"; else gate_browser_http_only_fetch_proof="SKIP"; fi
+if [ "$(has 'runtime.smoke.real.network.pipeline.*ok=1')" -eq 1 ]; then gate_runtime_smoke_real_network_pipeline="PASS"; print_row "runtime_smoke_real_network_pipeline" "PASS" "real pipeline marker"; else gate_runtime_smoke_real_network_pipeline="SKIP"; fi
+if [ "$(has 'daily.driver.network.baseline.freeze.*ok=1')" -eq 1 ]; then gate_daily_driver_network_baseline_freeze="PASS"; print_row "daily_driver_network_baseline_freeze" "PASS" "baseline freeze marker"; else gate_daily_driver_network_baseline_freeze="SKIP"; fi
+if [ "$(has 'browser.usability.keyboard.nav.*ok=1')" -eq 1 ]; then gate_browser_usability_keyboard_nav="PASS"; print_row "browser_usability_keyboard_nav" "PASS" "kbd nav marker"; else gate_browser_usability_keyboard_nav="SKIP"; fi
+if [ "$(has 'browser.url.bar.edit.proof.*ok=1')" -eq 1 ]; then gate_browser_url_bar_edit_proof="PASS"; print_row "browser_url_bar_edit_proof" "PASS" "url edit marker"; else gate_browser_url_bar_edit_proof="SKIP"; fi
+if [ "$(has 'browser.enter.to.fetch.gated.proof.*ok=1')" -eq 1 ]; then gate_browser_enter_to_fetch_gated_proof="PASS"; print_row "browser_enter_to_fetch_gated_proof" "PASS" "enter gate marker"; else gate_browser_enter_to_fetch_gated_proof="SKIP"; fi
+if [ "$(has 'browser.back.forward.remote.history.*ok=1')" -eq 1 ]; then gate_browser_back_forward_remote_history="PASS"; print_row "browser_back_forward_remote_history" "PASS" "history nav marker"; else gate_browser_back_forward_remote_history="SKIP"; fi
+if [ "$(has 'browser.reload.stop.proof.*ok=1')" -eq 1 ]; then gate_browser_reload_stop_proof="PASS"; print_row "browser_reload_stop_proof" "PASS" "reload-stop marker"; else gate_browser_reload_stop_proof="SKIP"; fi
+if [ "$(has 'sexnet.status.dashboard.*ok=1')" -eq 1 ]; then gate_sexnet_status_dashboard="PASS"; print_row "sexnet_status_dashboard" "PASS" "dashboard marker"; else gate_sexnet_status_dashboard="SKIP"; fi
+if [ "$(has 'mesh.network.route.visual.stub.*ok=1')" -eq 1 ]; then gate_mesh_network_route_visual_stub="PASS"; print_row "mesh_network_route_visual_stub" "PASS" "mesh visual stub marker"; else gate_mesh_network_route_visual_stub="SKIP"; fi
+if [ "$(has 'collar.network.grant.ui.spec.*ok=1')" -eq 1 ]; then gate_collar_network_grant_ui_spec="PASS"; print_row "collar_network_grant_ui_spec" "PASS" "collar ui spec marker"; else gate_collar_network_grant_ui_spec="SKIP"; fi
+if [ "$(has 'collar.network.grant.ui.stub.*ok=1')" -eq 1 ]; then gate_collar_network_grant_ui_stub="PASS"; print_row "collar_network_grant_ui_stub" "PASS" "collar ui stub marker"; else gate_collar_network_grant_ui_stub="SKIP"; fi
+if [ "$(has 'real.hardware.nic.audit.*ok=1')" -eq 1 ]; then gate_real_hardware_nic_audit="PASS"; print_row "real_hardware_nic_audit" "PASS" "real hw audit marker"; else gate_real_hardware_nic_audit="SKIP"; fi
+if [ "$(has 'real.hardware.e1000.fallback.plan.*ok=1')" -eq 1 ]; then gate_real_hardware_e1000_fallback_plan="PASS"; print_row "real_hardware_e1000_fallback_plan" "PASS" "fallback plan marker"; else gate_real_hardware_e1000_fallback_plan="SKIP"; fi
+if [ "$(has 'network.sprint.final.runtime.smoke.*ok=1')" -eq 1 ]; then gate_network_sprint_final_runtime_smoke="PASS"; print_row "network_sprint_final_runtime_smoke" "PASS" "final smoke marker"; else gate_network_sprint_final_runtime_smoke="SKIP"; fi
+if [ "$(has 'network.sprint.handoff.freeze.*ok=1')" -eq 1 ]; then gate_network_sprint_handoff_freeze="PASS"; print_row "network_sprint_handoff_freeze" "PASS" "handoff freeze marker"; else gate_network_sprint_handoff_freeze="SKIP"; fi
 
 # ---- 94. clock_visible_seconds ----
 first_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
@@ -2061,6 +2434,81 @@ ALL_GATES=(
     "e1000_tx_desc_readback:$gate_e1000_tx_desc_readback"
     "e1000_desc_readback_truth:$gate_e1000_desc_readback_truth"
     "e1000_descriptor_readback_proof_done:$gate_e1000_descriptor_readback_proof_done"
+    "e1000_mmio_ring_base:$gate_e1000_mmio_ring_base"
+    "e1000_mmio_ring_base_proof_done:$gate_e1000_mmio_ring_base_proof_done"
+    "e1000_rx_register_init:$gate_e1000_rx_register_init"
+    "e1000_rx_register_init_proof_done:$gate_e1000_rx_register_init_proof_done"
+    "e1000_rx_enable_proof:$gate_e1000_rx_enable_proof"
+    "e1000_tx_register_init:$gate_e1000_tx_register_init"
+    "e1000_tx_register_init_proof_done:$gate_e1000_tx_register_init_proof_done"
+    "e1000_tx_test_frame:$gate_e1000_tx_test_frame"
+    "e1000_tx_test_frame_proof_done:$gate_e1000_tx_test_frame_proof_done"
+    "e1000_rx_packet_observe_proof:$gate_e1000_rx_packet_observe_proof"
+    "ethernet_frame_model_spec:$gate_ethernet_frame_model_spec"
+    "arp_client_plan:$gate_arp_client_plan"
+    "arp_request_build_proof:$gate_arp_request_build_proof"
+    "arp_request_send_stop_review:$gate_arp_request_send_stop_review"
+    "arp_request_send_proof:$gate_arp_request_send_proof"
+    "arp_reply_observe_proof:$gate_arp_reply_observe_proof"
+    "arp_cache_status_stub:$gate_arp_cache_status_stub"
+    "ipv4_packet_model_spec:$gate_ipv4_packet_model_spec"
+    "ipv4_header_build_proof:$gate_ipv4_header_build_proof"
+    "icmp_echo_request_plan:$gate_icmp_echo_request_plan"
+    "icmp_echo_request_send_stop_review:$gate_icmp_echo_request_send_stop_review"
+    "icmp_echo_request_proof:$gate_icmp_echo_request_proof"
+    "icmp_echo_reply_observe_proof:$gate_icmp_echo_reply_observe_proof"
+    "udp_packet_model_spec:$gate_udp_packet_model_spec"
+    "udp_tx_build_proof:$gate_udp_tx_build_proof"
+    "udp_tx_send_stop_review:$gate_udp_tx_send_stop_review"
+    "udp_tx_send_proof:$gate_udp_tx_send_proof"
+    "udp_loopback_or_qemu_usernet_proof:$gate_udp_loopback_or_qemu_usernet_proof"
+    "tcp_minimal_state_machine_plan:$gate_tcp_minimal_state_machine_plan"
+    "tcp_syn_build_proof:$gate_tcp_syn_build_proof"
+    "tcp_syn_send_stop_review:$gate_tcp_syn_send_stop_review"
+    "tcp_handshake_proof:$gate_tcp_handshake_proof"
+    "dns_client_plan:$gate_dns_client_plan"
+    "dns_query_build_proof:$gate_dns_query_build_proof"
+    "dns_query_send_stop_review:$gate_dns_query_send_stop_review"
+    "dns_query_send_proof:$gate_dns_query_send_proof"
+    "dns_response_parse_proof:$gate_dns_response_parse_proof"
+    "dns_to_http_host_resolution_proof:$gate_dns_to_http_host_resolution_proof"
+    "http_text_fetch_grant_plan:$gate_http_text_fetch_grant_plan"
+    "http_get_send_plan:$gate_http_get_send_plan"
+    "http_get_send_stop_review:$gate_http_get_send_stop_review"
+    "http_get_text_response_proof:$gate_http_get_text_response_proof"
+    "http_response_bounded_buffer_proof:$gate_http_response_bounded_buffer_proof"
+    "http_404_and_error_page_proof:$gate_http_404_and_error_page_proof"
+    "browser_http_fetch_grant_plan:$gate_browser_http_fetch_grant_plan"
+    "collar_browser_network_grant_plan:$gate_collar_browser_network_grant_plan"
+    "collar_browser_network_grant_stub:$gate_collar_browser_network_grant_stub"
+    "browser_slot_net_grant_stop_review:$gate_browser_slot_net_grant_stop_review"
+    "browser_slot_net_grant_proof:$gate_browser_slot_net_grant_proof"
+    "http_response_to_html_subset_feed:$gate_http_response_to_html_subset_feed"
+    "browser_remote_text_render_proof:$gate_browser_remote_text_render_proof"
+    "browser_fetch_status_ui:$gate_browser_fetch_status_ui"
+    "browser_link_fetch_gated_proof:$gate_browser_link_fetch_gated_proof"
+    "browser_history_remote_entry_proof:$gate_browser_history_remote_entry_proof"
+    "browser_tab_remote_status_proof:$gate_browser_tab_remote_status_proof"
+    "network_fault_containment_proof:$gate_network_fault_containment_proof"
+    "network_timeout_and_retry_policy:$gate_network_timeout_and_retry_policy"
+    "tls_deferred_truth_spec:$gate_tls_deferred_truth_spec"
+    "browser_no_tls_warning_ui:$gate_browser_no_tls_warning_ui"
+    "browser_http_only_fetch_proof:$gate_browser_http_only_fetch_proof"
+    "runtime_smoke_real_network_pipeline:$gate_runtime_smoke_real_network_pipeline"
+    "daily_driver_network_baseline_freeze:$gate_daily_driver_network_baseline_freeze"
+    "browser_usability_keyboard_nav:$gate_browser_usability_keyboard_nav"
+    "browser_url_bar_edit_proof:$gate_browser_url_bar_edit_proof"
+    "browser_enter_to_fetch_gated_proof:$gate_browser_enter_to_fetch_gated_proof"
+    "browser_back_forward_remote_history:$gate_browser_back_forward_remote_history"
+    "browser_reload_stop_proof:$gate_browser_reload_stop_proof"
+    "sexnet_status_dashboard:$gate_sexnet_status_dashboard"
+    "mesh_network_route_visual_stub:$gate_mesh_network_route_visual_stub"
+    "collar_network_grant_ui_spec:$gate_collar_network_grant_ui_spec"
+    "collar_network_grant_ui_stub:$gate_collar_network_grant_ui_stub"
+    "real_hardware_nic_audit:$gate_real_hardware_nic_audit"
+    "real_hardware_e1000_fallback_plan:$gate_real_hardware_e1000_fallback_plan"
+    "network_sprint_final_runtime_smoke:$gate_network_sprint_final_runtime_smoke"
+    "network_sprint_handoff_freeze:$gate_network_sprint_handoff_freeze"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"

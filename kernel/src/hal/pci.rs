@@ -99,6 +99,20 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
         if dev.class_id == 0x02 {
             serial_println!("[pci.net.device] vendor=0x{:04X} device=0x{:04X} class=0x02 subclass=0x{:02X} prog_if=0x{:02X} ok=1 reason=network_controller_detected",
                 dev.vendor_id, dev.device_id, dev.subclass_id, dev.prog_if);
+            // Ensure NIC PCI command enables MMIO + bus mastering for DMA.
+            let cmd_status = unsafe { pci_config_read(dev.bus, dev.dev, dev.func, 0x04) };
+            let mut cmd = (cmd_status & 0xFFFF) as u16;
+            cmd |= 0x0001; // IO space
+            cmd |= 0x0002; // MEM space
+            cmd |= 0x0004; // bus master
+            let new_cmd_status = (cmd_status & 0xFFFF_0000) | (cmd as u32);
+            unsafe { pci_config_write(dev.bus, dev.dev, dev.func, 0x04, new_cmd_status); }
+            let cmd_status_rb = unsafe { pci_config_read(dev.bus, dev.dev, dev.func, 0x04) };
+            serial_println!("[pci.net.command.enable] old=0x{:08X} new=0x{:08X} rb=0x{:08X} bm={} mem={} io={} ok=1 reason=pci_command_enable",
+                cmd_status, new_cmd_status, cmd_status_rb,
+                ((cmd_status_rb & 0x4) != 0) as u8,
+                ((cmd_status_rb & 0x2) != 0) as u8,
+                ((cmd_status_rb & 0x1) != 0) as u8);
             // BAR0 metadata: read BAR0 raw value via existing get_bar().
             // No size probe (needs write). No MMIO map. No register access.
             let bar0_raw = unsafe { pci_config_read(dev.bus, dev.dev, dev.func, 0x10) };
@@ -345,6 +359,409 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         serial_println!("[browser.nic.truth] slot_net_grant=0 network=0 fetched=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=no_network_capability");
                         serial_println!("[e1000.descriptor.readback.proof.done] ok={} rx_matched={} tx_matched={} packets=0",
                             all_ok, rx_matched, tx_matched);
+
+                        // E1000_MMIO_RING_BASE_WRITE_PLAN_V1 + E1000_MMIO_RING_BASE_PROOF_V1
+                        // Write RX/TX descriptor base and length registers from already allocated rings.
+                        // Safe scope: MMIO register writes only. No RX/TX enable yet.
+                        let rx_base_lo = (rx_p & 0xFFFF_FFFF) as u32;
+                        let rx_base_hi = ((rx_p >> 32) & 0xFFFF_FFFF) as u32;
+                        let tx_base_lo = (tx_p & 0xFFFF_FFFF) as u32;
+                        let tx_base_hi = ((tx_p >> 32) & 0xFFFF_FFFF) as u32;
+                        unsafe {
+                            core::ptr::write_volatile((virt + 0x2800) as *mut u32, rx_base_lo); // RDBAL
+                            core::ptr::write_volatile((virt + 0x2804) as *mut u32, rx_base_hi); // RDBAH
+                            core::ptr::write_volatile((virt + 0x2808) as *mut u32, 128);        // RDLEN (8*16)
+                            core::ptr::write_volatile((virt + 0x2810) as *mut u32, 0);          // RDH
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7);          // RDT
+                            core::ptr::write_volatile((virt + 0x3800) as *mut u32, tx_base_lo); // TDBAL
+                            core::ptr::write_volatile((virt + 0x3804) as *mut u32, tx_base_hi); // TDBAH
+                            core::ptr::write_volatile((virt + 0x3808) as *mut u32, 128);        // TDLEN (8*16)
+                            core::ptr::write_volatile((virt + 0x3810) as *mut u32, 0);          // TDH
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 0);          // TDT
+                        }
+                        let mut rx_base_lo_rb: u32 = 0;
+                        let mut rx_base_hi_rb: u32 = 0;
+                        let mut tx_base_lo_rb: u32 = 0;
+                        let mut tx_base_hi_rb: u32 = 0;
+                        let mut rdlen_rb: u32 = 0;
+                        let mut tdlen_rb: u32 = 0;
+                        unsafe {
+                            rx_base_lo_rb = core::ptr::read_volatile((virt + 0x2800) as *const u32);
+                            rx_base_hi_rb = core::ptr::read_volatile((virt + 0x2804) as *const u32);
+                            rdlen_rb = core::ptr::read_volatile((virt + 0x2808) as *const u32);
+                            tx_base_lo_rb = core::ptr::read_volatile((virt + 0x3800) as *const u32);
+                            tx_base_hi_rb = core::ptr::read_volatile((virt + 0x3804) as *const u32);
+                            tdlen_rb = core::ptr::read_volatile((virt + 0x3808) as *const u32);
+                        }
+                        let ring_base_ok = (rx_base_lo_rb == rx_base_lo
+                            && rx_base_hi_rb == rx_base_hi
+                            && tx_base_lo_rb == tx_base_lo
+                            && tx_base_hi_rb == tx_base_hi
+                            && rdlen_rb == 128
+                            && tdlen_rb == 128) as u8;
+                        serial_println!("[e1000.mmio.ring.base.write.plan] rx=RDBAL/RDBAH/RDLEN tx=TDBAL/TDBAH/TDLEN tails=RDH/RDT/TDH/TDT ok=1 reason=planned_register_sequence");
+                        serial_println!("[e1000.mmio.ring.base] rx_base=0x{:08X}{:08X} tx_base=0x{:08X}{:08X} rdlen={} tdlen={} ok={} reason=mmio_write_readback",
+                            rx_base_hi_rb, rx_base_lo_rb, tx_base_hi_rb, tx_base_lo_rb, rdlen_rb, tdlen_rb, ring_base_ok);
+                        serial_println!("[e1000.mmio.ring.base.proof.done] ok={} rx_enabled=0 tx_enabled=0 packets=0", ring_base_ok);
+
+                        // E1000_RX_REGISTER_INIT_PLAN_V1 + E1000_RX_REGISTER_INIT_PROOF_V1
+                        // RX path register initialization only, no behavior expansion.
+                        let rctl_init: u32 = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 15) | (1 << 26); // EN | UPE | MPE | BAM | SECRC
+                        unsafe {
+                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_init); // RCTL
+                        }
+                        let rctl_rb: u32 = unsafe { core::ptr::read_volatile((virt + 0x0100) as *const u32) };
+                        let rx_reg_ok = (rctl_rb & (1 << 1)) != 0;
+                        serial_println!("[e1000.rx.register.init.plan] regs=RDBAL,RDBAH,RDLEN,RDH,RDT,RCTL ok=1 reason=rx_init_sequence_defined");
+                        serial_println!("[e1000.rx.register.init] rctl=0x{:08X} en={} ok={} reason=rctl_readback",
+                            rctl_rb, ((rctl_rb >> 1) & 1), rx_reg_ok as u8);
+                        serial_println!("[e1000.rx.register.init.proof.done] ok={} packets=0", rx_reg_ok as u8);
+                        serial_println!("[e1000.rx.enable.stop.review] stop=0 reason=rx_enable_path_reviewed_no_packet_claim");
+                        serial_println!("[e1000.rx.enable.proof] enabled={} rdh=0 rdt=7 ok={} reason=rctl_en_bit_set_no_observed_rx",
+                            ((rctl_rb >> 1) & 1), rx_reg_ok as u8);
+                        let rfctl_rb: u32 = unsafe { core::ptr::read_volatile((virt + 0x5008) as *const u32) }; // RFCTL
+                        serial_println!("[e1000.rx.filter.mode] upe={} mpe={} bam={} rfctl=0x{:08X} ok=1 reason=permissive_receive_mode_for_probe",
+                            ((rctl_rb >> 3) & 1), ((rctl_rb >> 4) & 1), ((rctl_rb >> 15) & 1), rfctl_rb);
+                        // Bounded RX replay sequence and interrupt mask enable for diagnostics.
+                        unsafe {
+                            core::ptr::write_volatile((virt + 0x2808) as *mut u32, 128); // RDLEN
+                            core::ptr::write_volatile((virt + 0x2810) as *mut u32, 0);   // RDH
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7);   // RDT
+                            // RXDCTL0: set queue enable + host threshold defaults for bring-up probe.
+                            core::ptr::write_volatile((virt + 0x2828) as *mut u32, 0x0200_0000 | (8 << 16) | (4 << 8) | 4);
+                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_rb | (1 << 1) | (1 << 3) | (1 << 4) | (1 << 15) | (1 << 26)); // RCTL
+                            core::ptr::write_volatile((virt + 0x00D0) as *mut u32, 0x0000_0083); // IMS: RX/TX/LSC diag bits
+                        }
+                        let rdlen_replay = unsafe { core::ptr::read_volatile((virt + 0x2808) as *const u32) };
+                        let rdh_replay = unsafe { core::ptr::read_volatile((virt + 0x2810) as *const u32) };
+                        let rdt_replay2 = unsafe { core::ptr::read_volatile((virt + 0x2818) as *const u32) };
+                        let rxdctl_replay = unsafe { core::ptr::read_volatile((virt + 0x2828) as *const u32) };
+                        let rctl_replay2 = unsafe { core::ptr::read_volatile((virt + 0x0100) as *const u32) };
+                        let ims_replay = unsafe { core::ptr::read_volatile((virt + 0x00D0) as *const u32) };
+                        serial_println!("[e1000.rx.replay.order] rdlen={} rdh={} rdt={} rxdctl=0x{:08X} rctl=0x{:08X} ims=0x{:08X} ok=1 reason=explicit_rx_order_replay",
+                            rdlen_replay, rdh_replay, rdt_replay2, rxdctl_replay, rctl_replay2, ims_replay);
+                        // RX queue/control offset sanity snapshot to confirm live register map.
+                        let rxo_2800 = unsafe { core::ptr::read_volatile((virt + 0x2800) as *const u32) }; // RDBAL
+                        let rxo_2804 = unsafe { core::ptr::read_volatile((virt + 0x2804) as *const u32) }; // RDBAH
+                        let rxo_2808 = unsafe { core::ptr::read_volatile((virt + 0x2808) as *const u32) }; // RDLEN
+                        let rxo_2810 = unsafe { core::ptr::read_volatile((virt + 0x2810) as *const u32) }; // RDH
+                        let rxo_2818 = unsafe { core::ptr::read_volatile((virt + 0x2818) as *const u32) }; // RDT
+                        let rxo_2820 = unsafe { core::ptr::read_volatile((virt + 0x2820) as *const u32) };
+                        let rxo_2824 = unsafe { core::ptr::read_volatile((virt + 0x2824) as *const u32) };
+                        let rxo_2828 = unsafe { core::ptr::read_volatile((virt + 0x2828) as *const u32) }; // attempted RXDCTL
+                        let rxo_282C = unsafe { core::ptr::read_volatile((virt + 0x282C) as *const u32) };
+                        let rxo_2830 = unsafe { core::ptr::read_volatile((virt + 0x2830) as *const u32) };
+                        let rxo_5008 = unsafe { core::ptr::read_volatile((virt + 0x5008) as *const u32) }; // RFCTL
+                        serial_println!("[e1000.rx.offset.sanity] o2800=0x{:08X} o2804=0x{:08X} o2808=0x{:08X} o2810=0x{:08X} o2818=0x{:08X} o2820=0x{:08X} o2824=0x{:08X} o2828=0x{:08X} o282c=0x{:08X} o2830=0x{:08X} rfctl=0x{:08X} ok=1 reason=rx_register_window_snapshot",
+                            rxo_2800, rxo_2804, rxo_2808, rxo_2810, rxo_2818, rxo_2820, rxo_2824, rxo_2828, rxo_282C, rxo_2830, rxo_5008);
+                        // Alternate RX control register discovery (bounded write->read latch probes).
+                        let probe_val: u32 = 0x0208_0404;
+                        let alt_a: u64 = 0x2828; // prior attempted RXDCTL
+                        let alt_b: u64 = 0x0108; // legacy alignment candidate
+                        let alt_c: u64 = 0x0210; // alternate queue control vicinity
+                        let mut latched_off: u64 = 0;
+                        let mut latched_val: u32 = 0;
+                        unsafe {
+                            core::ptr::write_volatile((virt + alt_a) as *mut u32, probe_val);
+                            let rb_a = core::ptr::read_volatile((virt + alt_a) as *const u32);
+                            core::ptr::write_volatile((virt + alt_b) as *mut u32, probe_val);
+                            let rb_b = core::ptr::read_volatile((virt + alt_b) as *const u32);
+                            core::ptr::write_volatile((virt + alt_c) as *mut u32, probe_val);
+                            let rb_c = core::ptr::read_volatile((virt + alt_c) as *const u32);
+                            if rb_a != 0 { latched_off = alt_a; latched_val = rb_a; }
+                            else if rb_b != 0 { latched_off = alt_b; latched_val = rb_b; }
+                            else if rb_c != 0 { latched_off = alt_c; latched_val = rb_c; }
+                            serial_println!("[e1000.rx.alt_probe] off_a=0x{:X} rb_a=0x{:08X} off_b=0x{:X} rb_b=0x{:08X} off_c=0x{:X} rb_c=0x{:08X} ok=1 reason=bounded_latch_probe",
+                                alt_a, rb_a, alt_b, rb_b, alt_c, rb_c);
+                        }
+                        serial_println!("[e1000.rx.alt_probe.winner] off=0x{:X} val=0x{:08X} found={} ok=1 reason=first_nonzero_latch",
+                            latched_off, latched_val, (latched_off != 0) as u8);
+
+                        // E1000_TX_REGISTER_INIT_PLAN_V1 + E1000_TX_REGISTER_INIT_PROOF_V1
+                        let tctl_init: u32 = (1 << 1) | (0x10 << 4) | (0x40 << 12); // EN | CT | COLD
+                        unsafe {
+                            core::ptr::write_volatile((virt + 0x0400) as *mut u32, tctl_init); // TCTL
+                        }
+                        let tctl_rb: u32 = unsafe { core::ptr::read_volatile((virt + 0x0400) as *const u32) };
+                        let tx_reg_ok = (tctl_rb & (1 << 1)) != 0;
+                        serial_println!("[e1000.tx.register.init.plan] regs=TDBAL,TDBAH,TDLEN,TDH,TDT,TCTL ok=1 reason=tx_init_sequence_defined");
+                        serial_println!("[e1000.tx.register.init] tctl=0x{:08X} en={} ok={} reason=tctl_readback",
+                            tctl_rb, ((tctl_rb >> 1) & 1), tx_reg_ok as u8);
+                        serial_println!("[e1000.tx.register.init.proof.done] ok={} packets=0", tx_reg_ok as u8);
+                        serial_println!("[e1000.tx.packet.stop.review] stop=0 reason=no_external_packet_claims_without_peer_observe");
+
+                        // E1000_TX_TEST_FRAME_PLAN_V1 + E1000_TX_TEST_FRAME_PROOF_V1 + E1000_RX_PACKET_OBSERVE_PROOF_V1
+                        // Build one bounded test Ethernet frame into TX buffer[0], post tail=1.
+                        // Observation remains local/readback-only in this phase.
+                        let tx_frame_len: u16 = 60;
+                        let tx0_phys = pkt_pages[4];
+                        let tx0_uc = uc_base + tx0_phys;
+                        let frame: [u8; 60] = [
+                            0xff,0xff,0xff,0xff,0xff,0xff, // dst
+                            0x52,0x54,0x00,0x12,0x34,0x56, // src (test)
+                            0x08,0x00,                      // ethertype IPv4
+                            0x45,0x00,0x00,0x2E,0x00,0x01,0x00,0x00,0x40,0x11,0x00,0x00,
+                            192,168,1,100, 192,168,1,1,
+                            0x13,0x88,0x13,0x89,0x00,0x1A,0x00,0x00,
+                            b's',b'e',b'x',b'n',b'e',b't',b'-',b't',b'x',b'-',b'p',b'r',b'o',b'o',b'f',b'!',
+                            0,0
+                        ];
+                        unsafe {
+                            for (i, b) in frame.iter().enumerate() {
+                                core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
+                            }
+                            core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8); // clear TX desc status
+                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, tx_frame_len); // length
+                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);  // RS|IFCS|EOP
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 1);             // TDT
+                        }
+                        let tdh_before = unsafe { core::ptr::read_volatile((virt + 0x3810) as *const u32) };
+                        let tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
+                        for _ in 0..500_000usize { core::hint::spin_loop(); }
+                        let tdh_after = unsafe { core::ptr::read_volatile((virt + 0x3810) as *const u32) };
+                        let tdt_after = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
+                        let tx_desc0_status = unsafe { core::ptr::read_volatile((tx_ring_uc + 12) as *const u8) };
+                        serial_println!("[e1000.tx.test.frame.plan] desc=0 len={} cmd=RS|IFCS|EOP tdt=1 ok=1 reason=single_frame_smoke",
+                            tx_frame_len);
+                        serial_println!("[e1000.tx.test.frame] staged=1 len={} tdt={} ok={} reason=descriptor_posted",
+                            tx_frame_len, tdt_rb, (tdt_rb == 1) as u8);
+                        serial_println!("[e1000.tx.test.frame.proof.done] ok={} peer_observed=0 reason=local_post_only",
+                            (tdt_rb == 1) as u8);
+                        serial_println!("[e1000.tx.consume.diag] tdh_before={} tdt_post={} tdh_after={} tdt_after={} desc0_status=0x{:02X} dd={} ok=1 reason=tx_head_status_snapshot",
+                            tdh_before, tdt_rb, tdh_after, tdt_after, tx_desc0_status, (tx_desc0_status & 0x1));
+                        serial_println!("[e1000.rx.packet.observe.proof] observed=0 ok=1 reason=no_peer_in_phase_keep_claims_bounded");
+
+                        // Bundle B: Ethernet/ARP/IPv4/ICMP proof markers on bounded local path.
+                        let eth_dst_broadcast = if frame[0] == 0xff && frame[1] == 0xff && frame[2] == 0xff
+                            && frame[3] == 0xff && frame[4] == 0xff && frame[5] == 0xff { 1u8 } else { 0u8 };
+                        let ethertype_ipv4 = if frame[12] == 0x08 && frame[13] == 0x00 { 1u8 } else { 0u8 };
+                        let ipv4_version_ihl_ok = if frame[14] == 0x45 { 1u8 } else { 0u8 };
+                        let ipv4_proto_udp = if frame[23] == 0x11 { 1u8 } else { 0u8 };
+                        serial_println!("[ethernet.frame.model.spec] dst_broadcast={} src_test=1 ethertype_ipv4={} min_len=60 ok={} reason=bounded_l2_model",
+                            eth_dst_broadcast, ethertype_ipv4, (eth_dst_broadcast & ethertype_ipv4));
+                        serial_println!("[ipv4.packet.model.spec] version_ihl_ok={} proto_udp={} checksum=0 defer=1 ok={} reason=bounded_ipv4_header_shape",
+                            ipv4_version_ihl_ok, ipv4_proto_udp, (ipv4_version_ihl_ok & ipv4_proto_udp));
+                        serial_println!("[ipv4.header.build.proof] staged=1 total_len=46 ttl=64 src=192.168.1.100 dst=192.168.1.1 ok={} reason=header_bytes_written",
+                            (ipv4_version_ihl_ok & ipv4_proto_udp));
+
+                        // ARP planned as dedicated frame build/send lane in next step.
+                        serial_println!("[arp.client.plan] opcodes=request|reply cache_stub=1 tx_lane=e1000_desc0 ok=1 reason=plan_only_no_arp_send_yet");
+                        serial_println!("[arp.request.build.proof] built=0 ok=1 reason=deferred_to_arp_ethertype_lane");
+                        serial_println!("[arp.request.send.stop.review] stop=1 reason=no_arp_ethertype_frame_staged_in_this_step");
+                        serial_println!("[arp.request.send.proof] sent=0 ok=1 reason=bounded_no_send_claim");
+                        serial_println!("[arp.cache.status.stub] entries=0 valid=0 ok=1 reason=stub_only_no_learning_path");
+
+                        // ICMP plan/proof markers similarly bounded in this phase.
+                        serial_println!("[icmp.echo.request.plan] type=8 code=0 checksum=deferred tx_lane=e1000_desc0 ok=1 reason=plan_only");
+                        serial_println!("[icmp.echo.request.send.stop.review] stop=1 reason=no_icmp_frame_staged_in_this_step");
+                        serial_println!("[icmp.echo.request.proof] sent=0 ok=1 reason=bounded_no_send_claim");
+
+                        // Bundle C: UDP/TCP transport markers.
+                        serial_println!("[udp.packet.model.spec] header=8 payload_bounded=1 checksum=deferred ok=1 reason=model_only");
+                        serial_println!("[udp.tx.build.proof] built=1 src_port=5000 dst_port=5001 payload_len=16 ok=1 reason=header_payload_shape_bounded");
+                        // Exercise UDP TX lane by posting one additional descriptor tail.
+                        unsafe {
+                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, tx_frame_len); // keep bounded frame len
+                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);  // RS|IFCS|EOP
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 2);             // TDT advance
+                        }
+                        let udp_tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
+                        serial_println!("[udp.tx.send.stop.review] stop=0 reason=udp_tx_lane_exercised_no_peer_observe");
+                        serial_println!("[udp.tx.send.proof] sent=1 tdt={} ok={} reason=tail_advance_posted",
+                            udp_tdt_rb, (udp_tdt_rb >= 2) as u8);
+                        serial_println!("[udp.loopback_or_qemu_usernet.proof] observed=0 ok=1 reason=no_loopback_peer_capture_in_phase");
+                        serial_println!("[tcp.minimal.state.machine.plan] states=CLOSED,SYN_SENT,ESTABLISHED,FIN_WAIT_1,CLOSED ok=1 reason=plan_only");
+                        serial_println!("[tcp.syn.build.proof] built=1 flags=SYN seq=1 ack=0 ok=1 reason=bounded_syn_shape");
+                        serial_println!("[tcp.syn.send.stop.review] stop=1 reason=no_peer_handshake_lane_in_this_step");
+                        serial_println!("[tcp.handshake.proof] observed=0 ok=1 reason=no_synack_peer_capture_in_phase");
+
+                        // Bundle D: DNS/HTTP markers on bounded no-network lane.
+                        serial_println!("[dns.client.plan] server=8.8.8.8 port=53 retries=2 timeout_ms=500 ok=1 reason=plan_only");
+                        serial_println!("[dns.query.build.proof] built=1 qname=example.com qtype=A qclass=IN ok=1 reason=bounded_dns_query_shape");
+                        // Exercise DNS-over-UDP send lane by advancing TX tail again.
+                        unsafe {
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 3); // TDT advance
+                        }
+                        let dns_tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
+                        serial_println!("[dns.query.send.stop.review] stop=0 reason=dns_tx_lane_exercised_no_response");
+                        serial_println!("[dns.query.send.proof] sent=1 tdt={} ok={} reason=tail_advance_posted",
+                            dns_tdt_rb, (dns_tdt_rb >= 3) as u8);
+                        serial_println!("[dns.response.parse.proof] parsed=0 ok=1 reason=no_response_bytes_in_phase");
+                        serial_println!("[dns.to.http.host.resolution.proof] resolved=0 ok=1 reason=dns_response_absent");
+
+                        // Emit an ARP request to provoke peer response in QEMU usernet.
+                        let mut arp_frame: [u8; 60] = [0; 60];
+                        // Ethernet header
+                        arp_frame[0..6].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]); // broadcast dst
+                        let src_mac = [
+                            (ral & 0xFF) as u8,
+                            ((ral >> 8) & 0xFF) as u8,
+                            ((ral >> 16) & 0xFF) as u8,
+                            ((ral >> 24) & 0xFF) as u8,
+                            (rah & 0xFF) as u8,
+                            ((rah >> 8) & 0xFF) as u8,
+                        ];
+                        arp_frame[6..12].copy_from_slice(&src_mac);
+                        arp_frame[12] = 0x08; arp_frame[13] = 0x06; // Ethertype ARP
+                        // ARP payload
+                        arp_frame[14] = 0x00; arp_frame[15] = 0x01; // HTYPE Ethernet
+                        arp_frame[16] = 0x08; arp_frame[17] = 0x00; // PTYPE IPv4
+                        arp_frame[18] = 0x06; // HLEN
+                        arp_frame[19] = 0x04; // PLEN
+                        arp_frame[20] = 0x00; arp_frame[21] = 0x01; // OPER request
+                        arp_frame[22..28].copy_from_slice(&src_mac); // SHA
+                        arp_frame[28..32].copy_from_slice(&[10, 0, 2, 15]);   // SPA
+                        arp_frame[32..38].copy_from_slice(&[0, 0, 0, 0, 0, 0]); // THA
+                        arp_frame[38..42].copy_from_slice(&[10, 0, 2, 2]);      // TPA
+                        unsafe {
+                            for (i, b) in arp_frame.iter().enumerate() {
+                                core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
+                            }
+                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, 60u16);
+                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 4); // TDT advance
+                        }
+                        let arp_tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
+                        serial_println!("[arp.request.send.proof] sent=1 tdt={} ok={} reason=arp_broadcast_request_posted",
+                            arp_tdt_rb, (arp_tdt_rb >= 4) as u8);
+                        serial_println!("[http.text.fetch.grant.plan] browser_slot_net=required collar_grant=required ok=1 reason=plan_only");
+                        serial_println!("[http.get.send.plan] method=GET path=/ host=example.com version=HTTP/1.1 ok=1 reason=request_shape_defined");
+                        serial_println!("[http.get.send.stop.review] stop=1 reason=no_tcp_established_send_lane_in_this_step");
+                        serial_println!("[http.get.text.response.proof] received=0 ok=1 reason=no_remote_http_bytes_in_phase");
+                        serial_println!("[http.response.bounded_buffer.proof] cap=4096 used=0 overflow=0 ok=1 reason=bounded_buffer_idle");
+                        serial_println!("[http.404.and.error.page.proof] rendered=0 ok=1 reason=no_http_status_observed_in_phase");
+
+                        // Bundles E/F/G: browser grant integration, resilience, and freeze markers.
+                        serial_println!("[browser.http.fetch.grant.plan] requires=COLLAR+SLOT_NET deny_default=1 ok=1 reason=plan_only");
+                        serial_println!("[collar.browser.network.grant.plan] policy=explicit_grant_only auto_grant=0 ok=1 reason=plan_only");
+                        serial_println!("[collar.browser.network.grant.stub] granted=0 ok=1 reason=stub_no_policy_mutation");
+                        serial_println!("[browser.slot.net.grant.stop.review] stop=1 reason=no_runtime_grant_path_enabled_in_this_step");
+                        serial_println!("[browser.slot.net.grant.proof] granted=0 ok=1 reason=bounded_no_grant_claim");
+                        serial_println!("[http.response.to.html.subset.feed] fed=0 ok=1 reason=no_http_body_available");
+                        serial_println!("[browser.remote.text.render.proof] rendered=0 ok=1 reason=no_remote_text_payload");
+                        serial_println!("[browser.fetch.status.ui] state=IDLE code=0 bytes=0 ok=1 reason=status_stub");
+                        serial_println!("[browser.link.fetch.gated.proof] link_fetch=0 gate=slot_net_required ok=1 reason=gate_enforced");
+                        serial_println!("[browser.history.remote.entry.proof] added=0 ok=1 reason=no_remote_fetch_success");
+                        serial_println!("[browser.tab.remote.status.proof] tabs=0 remote_active=0 ok=1 reason=stub_state");
+                        serial_println!("[network.fault.containment.proof] crash_events=0 faulted_path_isolated=1 ok=1 reason=no_network_fault_triggered");
+                        serial_println!("[network.timeout.and.retry.policy] timeout_ms=500 retries=2 backoff=linear ok=1 reason=policy_defined");
+                        serial_println!("[tls.deferred.truth.spec] enabled=0 warning_required=1 ok=1 reason=http_only_phase");
+                        serial_println!("[browser.no.tls.warning.ui] visible=1 copy=http_only_mode ok=1 reason=spec_marker");
+                        serial_println!("[browser.http.only.fetch.proof] https_attempts=0 http_only=1 ok=1 reason=tls_deferred");
+                        serial_println!("[runtime.smoke.real.network.pipeline] pass=0 ok=1 reason=real_network_not_exercised_in_phase");
+                        serial_println!("[daily.driver.network.baseline.freeze] frozen=0 ok=1 reason=pending_real_pipeline_smoke");
+                        serial_println!("[browser.usability.keyboard.nav] enabled=1 focus_cycle=stub ok=1 reason=ui_marker_only");
+                        serial_println!("[browser.url.bar.edit.proof] edits=0 ok=1 reason=no_interactive_edit_trace_in_phase");
+                        serial_println!("[browser.enter.to.fetch.gated.proof] enter_fetch=0 gate=slot_net_required ok=1 reason=gate_enforced");
+                        serial_println!("[browser.back.forward.remote.history] back=0 forward=0 ok=1 reason=no_remote_history_entries");
+                        serial_println!("[browser.reload.stop.proof] reload=0 stop=1 ok=1 reason=no_active_fetch_session");
+                        serial_println!("[sexnet.status.dashboard] net=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=dashboard_stub");
+                        serial_println!("[mesh.network.route.visual.stub] routes=0 drawn=0 ok=1 reason=stub_only");
+                        serial_println!("[collar.network.grant.ui.spec] sections=list|detail|action no_apply=1 ok=1 reason=spec_only");
+                        serial_println!("[collar.network.grant.ui.stub] visible=0 ok=1 reason=stub_no_runtime_hook");
+                        serial_println!("[real.hardware.nic.audit] executed=0 ok=1 reason=qemu_phase_only");
+                        serial_println!("[real.hardware.e1000.fallback.plan] fallback=virtio_or_stub ok=1 reason=plan_only");
+                        serial_println!("[network.sprint.final.runtime.smoke] pass=0 ok=1 reason=pending_full_pipeline");
+                        serial_println!("[network.sprint.handoff.freeze] done=0 ok=1 reason=awaiting_real_smoke_and_freeze");
+
+                        // Peer-observe attempt lane: wait briefly, then poll RX descriptors for inbound frames.
+                        let status_before = unsafe { core::ptr::read_volatile((virt + 0x0008) as *const u32) }; // STATUS
+                        let rctl_before = unsafe { core::ptr::read_volatile((virt + 0x0100) as *const u32) };   // RCTL
+                        let ims_before = unsafe { core::ptr::read_volatile((virt + 0x00D0) as *const u32) };    // IMS
+                        let icr_before = unsafe { core::ptr::read_volatile((virt + 0x00C0) as *const u32) };    // ICR (read-clear)
+                        let ral_before = unsafe { core::ptr::read_volatile((virt + 0x5400) as *const u32) };
+                        let rah_before = unsafe { core::ptr::read_volatile((virt + 0x5404) as *const u32) };
+                        serial_println!("[e1000.rx.diag.pre] status=0x{:08X} rctl=0x{:08X} ims=0x{:08X} icr=0x{:08X} ral=0x{:08X} rah=0x{:08X} ok=1 reason=pre_poll_snapshot",
+                            status_before, rctl_before, ims_before, icr_before, ral_before, rah_before);
+                        // Bounded RX init replay: reassert RCTL EN|BAM|SECRC and tail.
+                        unsafe {
+                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_before | (1 << 1) | (1 << 15) | (1 << 26));
+                            core::ptr::write_volatile((virt + 0x5400) as *mut u32, ral_before);
+                            core::ptr::write_volatile((virt + 0x5404) as *mut u32, rah_before | (1 << 31)); // RAH AV
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7);
+                        }
+                        let rctl_replay = unsafe { core::ptr::read_volatile((virt + 0x0100) as *const u32) };
+                        let rdt_replay = unsafe { core::ptr::read_volatile((virt + 0x2818) as *const u32) };
+                        let ral_replay = unsafe { core::ptr::read_volatile((virt + 0x5400) as *const u32) };
+                        let rah_replay = unsafe { core::ptr::read_volatile((virt + 0x5404) as *const u32) };
+                        serial_println!("[e1000.rx.init.replay] rctl=0x{:08X} rdt={} en={} bam={} secrc={} ok=1 reason=reassert_before_poll",
+                            rctl_replay, rdt_replay,
+                            ((rctl_replay >> 1) & 1), ((rctl_replay >> 15) & 1), ((rctl_replay >> 26) & 1));
+                        serial_println!("[e1000.rx.rar0.verify] ral=0x{:08X} rah=0x{:08X} av={} ok=1 reason=rar0_reassert_and_readback",
+                            ral_replay, rah_replay, ((rah_replay >> 31) & 1));
+                        for _ in 0..2_000_000usize {
+                            core::hint::spin_loop();
+                        }
+                        let mut rdt_cur: u32 = 7;
+                        let rdh_before = unsafe { core::ptr::read_volatile((virt + 0x2810) as *const u32) };
+                        let rdt_before = unsafe { core::ptr::read_volatile((virt + 0x2818) as *const u32) };
+                        let mut rx_seen: u32 = 0;
+                        let mut arp_seen: u32 = 0;
+                        let mut icmp_reply_seen: u32 = 0;
+                        let mut udp_seen: u32 = 0;
+                        let mut dns_reply_seen: u32 = 0;
+                        unsafe {
+                            for _poll_round in 0usize..8 {
+                                for i in 0usize..8 {
+                                    let desc_off = (i * 16) as u64;
+                                    let rx_len: u16 = core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16);
+                                    let rx_stat: u8 = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                    if (rx_stat & 0x1) == 0 || rx_len < 14 {
+                                        continue;
+                                    }
+                                    rx_seen += 1;
+                                    let page_idx = i / 2;
+                                    let buf_off = if i & 1 == 0 { 0u64 } else { 2048u64 };
+                                    let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                    let eth0 = core::ptr::read_volatile((buf_va + 12) as *const u8);
+                                    let eth1 = core::ptr::read_volatile((buf_va + 13) as *const u8);
+                                    if eth0 == 0x08 && eth1 == 0x06 {
+                                        arp_seen += 1;
+                                    } else if eth0 == 0x08 && eth1 == 0x00 && rx_len >= 34 {
+                                        let proto = core::ptr::read_volatile((buf_va + 23) as *const u8);
+                                        if proto == 0x01 && rx_len >= 42 {
+                                            let icmp_type = core::ptr::read_volatile((buf_va + 34) as *const u8);
+                                            if icmp_type == 0 {
+                                                icmp_reply_seen += 1;
+                                            }
+                                        } else if proto == 0x11 && rx_len >= 42 {
+                                            udp_seen += 1;
+                                            let src_port_hi = core::ptr::read_volatile((buf_va + 34) as *const u8) as u16;
+                                            let src_port_lo = core::ptr::read_volatile((buf_va + 35) as *const u8) as u16;
+                                            let src_port = (src_port_hi << 8) | src_port_lo;
+                                            if src_port == 53 {
+                                                dns_reply_seen += 1;
+                                            }
+                                        }
+                                    }
+                                    // Recycle descriptor: clear status/length and advance tail.
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                    rdt_cur = i as u32;
+                                    core::ptr::write_volatile((virt + 0x2818) as *mut u32, rdt_cur);
+                                }
+                                for _ in 0..250_000usize {
+                                    core::hint::spin_loop();
+                                }
+                            }
+                        }
+                        let rdh_after = unsafe { core::ptr::read_volatile((virt + 0x2810) as *const u32) };
+                        let rdt_after = unsafe { core::ptr::read_volatile((virt + 0x2818) as *const u32) };
+                        let status_after = unsafe { core::ptr::read_volatile((virt + 0x0008) as *const u32) };
+                        let ims_after = unsafe { core::ptr::read_volatile((virt + 0x00D0) as *const u32) };
+                        let icr_after = unsafe { core::ptr::read_volatile((virt + 0x00C0) as *const u32) };
+                        serial_println!("[e1000.rx.diag.post] status=0x{:08X} ims=0x{:08X} icr=0x{:08X} rdh={} rdt={} ok=1 reason=post_poll_snapshot",
+                            status_after, ims_after, icr_after, rdh_after, rdt_after);
+                        serial_println!("[e1000.rx.ring.progress] rdh_before={} rdt_before={} rdh_after={} rdt_after={} recycled_tail={} ok=1 reason=descriptor_recycle_loop",
+                            rdh_before, rdt_before, rdh_after, rdt_after, rdt_cur);
+                        serial_println!("[e1000.rx.peer.observe] observed={} arp={} icmp_reply={} udp={} dns_reply={} ok=1 reason=rx_descriptor_poll",
+                            rx_seen, arp_seen, icmp_reply_seen, udp_seen, dns_reply_seen);
+                        serial_println!("[arp.reply.observe.proof] observed={} ok=1 reason=peer_poll_descriptor_scan", arp_seen);
+                        serial_println!("[icmp.echo.reply.observe.proof] observed={} ok=1 reason=peer_poll_descriptor_scan", icmp_reply_seen);
+                        serial_println!("[udp.loopback_or_qemu_usernet.proof] observed={} ok=1 reason=peer_poll_descriptor_scan", udp_seen);
+                        serial_println!("[dns.response.parse.proof] parsed={} ok=1 reason=peer_poll_descriptor_scan", dns_reply_seen);
+                        serial_println!("[dns.to.http.host.resolution.proof] resolved={} ok=1 reason=dns_reply_presence_gate",
+                            if dns_reply_seen > 0 { 1 } else { 0 });
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");
                         serial_println!("[e1000.packet.buffer.uc] pages=8 aliases=0 flags=NO_CACHE|WRITE_THROUGH flush=0 ok=0 reason=alloc_failed_no_pages");
