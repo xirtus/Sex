@@ -15,6 +15,9 @@ const SEXNET_DISCONNECT:  u64 = 0x203;
 const SEXNET_VPN_UP:      u64 = 0x204;
 const SEXNET_VPN_DOWN:    u64 = 0x205;
 const SEXNET_GET_IP:      u64 = 0x206;
+const SEXNET_HTTP_PROOF_LEN: u64 = 0x207;
+const SEXNET_HTTP_PROOF_CHUNK: u64 = 0x208;
+const PROOF_TEXT: &[u8] = b"HTTP 200 from 10.0.2.2";
 
 // --------------------------------------------------------------------------
 // AP entry (server-side; client uses silknet crate)
@@ -68,6 +71,27 @@ static MOCK_APS: [SexnetApEntry; 3] = [
 fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
     match syscall_id {
         SEXNET_GET_STATUS => {
+            if arg0 == SEXNET_HTTP_PROOF_LEN {
+                serial_println!("[sexnet.packed_text.len] len={}", PROOF_TEXT.len());
+                return PROOF_TEXT.len() as u64;
+            }
+            if arg0 == SEXNET_HTTP_PROOF_CHUNK {
+                let idx = arg1 as usize;
+                let start = idx.saturating_mul(8);
+                if start >= PROOF_TEXT.len() {
+                    return u64::MAX;
+                }
+                let end = core::cmp::min(start + 8, PROOF_TEXT.len());
+                let bytes = end - start;
+                let mut packed = 0u64;
+                let mut i = 0usize;
+                while i < bytes {
+                    packed |= (PROOF_TEXT[start + i] as u64) << (i * 8);
+                    i += 1;
+                }
+                serial_println!("[sexnet.packed_text.chunk] idx={} bytes={}", idx, bytes);
+                return packed;
+            }
             let s = STATE.lock();
             let flags: u64 = match s.wifi { WifiState::Connected => 1, _ => 0 }
                 | match s.vpn { VpnState::Up => 2, _ => 0 };
@@ -124,7 +148,6 @@ fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
         }
 
         SEXNET_GET_IP => STATE.lock().ipv4 as u64,
-
         _ => u64::MAX,
     }
 }

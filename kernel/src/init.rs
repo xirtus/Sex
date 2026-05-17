@@ -37,9 +37,11 @@ pub fn init() {
     let mut sexfiles_id = 0;
     let mut spindle_id = 0;
     let mut sexnet_id = 0;
+    let mut kaleido_id = 0;
+    let mut kaleido_domain_id = 0;
 
     // Fixed Spawn Order (Deterministic IDs)
-    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell", "sexfiles", "spindle", "sexnet"];
+    let module_paths = ["sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb", "silkbar", "linen", "sexstore", "quil", "sexbell", "sexfiles", "spindle", "sexnet", "RESERVED_SHARED", "kaleidoscope"];
     for (i, target) in module_paths.iter().enumerate() {
         let domain_id = (i + 1) as u8;
         for module in modules.modules() {
@@ -97,6 +99,10 @@ pub fn init() {
                         } else if domain_id == 13 {
                             sexnet_id = id;
                             serial_println!("[kernel.spawn.sexnet] id={} path={}", id, path);
+                        } else if domain_id == 15 {
+                            kaleido_id = id;
+                            kaleido_domain_id = domain_id;
+                            serial_println!("[kernel.spawn.kaleidoscope] id={} domain_id={}", id, domain_id);
                         }
                     }
                     Err(e) => {
@@ -606,6 +612,21 @@ pub fn init() {
             sexfiles_id, sexdrive_id
         );
     }
+    if kaleido_id != 0 && sexnet_id != 0 {
+        use crate::ipc::DOMAIN_REGISTRY;
+        use crate::capability::CapabilityData;
+        serial_println!(
+            "[slot.net.grant.browser.begin] target=kaleidoscope slot=18 pd={}",
+            kaleido_domain_id
+        );
+        if let Some(pd) = DOMAIN_REGISTRY.get(kaleido_id) {
+            pd.grant_capability(sex_pdx::SLOT_NET, CapabilityData::Domain(sexnet_id));
+            serial_println!(
+                "[slot.net.grant.browser.ok] slot=18 kaleido_pd={}",
+                kaleido_domain_id
+            );
+        }
+    }
     serial_println!("[kernel.sexnet.passive] spawned={} id={} slot_net_grant=0 browser_network=0",
         if sexnet_id != 0 { 1u64 } else { 0u64 }, sexnet_id as u64);
     serial_println!("[bootgraph.phase25.complete]");
@@ -671,6 +692,8 @@ pub fn init() {
                     10 => "sexbell",
                     11 => "sexfiles",
                     12 => "spindle",
+                    13 => "sexnet",
+                    15 => "kaleidoscope",
                     _ => "unknown",
                 };
                 let entry = unsafe { (*task_ptr).context.rip };

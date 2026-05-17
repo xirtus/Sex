@@ -400,6 +400,7 @@ pub const SLOT_LINEN: u64 = 13;  // Linen app surface server
 pub const SLOT_SPINDLE: u64 = 14; // Spindle command console (domain 12)
 pub const SLOT_BLOCK:   u64 = 15; // sexdrive block/DMA service (sexfiles→sexdrive route)
 pub const SLOT_BUF_LEND: u64 = 17; // kernel-allocated MemLend buffer cap (sexfiles→sexdrive, Phase A)
+pub const SLOT_NET:     u64 = 18; // sexnet network manager route
 
 // ── MemLend buffer cap ABI (SEXBLOCK_BUFFER_LEND_CAP_IMPLEMENT_PHASE_A_V1) ──
 pub const SYS_GRANT_MEM_LEND: u64 = 50; // rdi=domain_slot rsi=length(4096) rdx=lend_slot → producer_va

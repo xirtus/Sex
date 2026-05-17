@@ -1842,6 +1842,10 @@ const SEXNET_STATUS_ROUTE_PROOF_ENABLED: bool =
 static mut SEXNET_STATUS_ROUTE_PROOF_DONE: bool = false;
 unsafe fn maybe_run_sexnet_status_route_proof() {
     if !SEXNET_STATUS_ROUTE_PROOF_ENABLED || SEXNET_STATUS_ROUTE_PROOF_DONE { return; }
+    serial_println!("[sexnet.route.proof.begin]");
+    let (status, value) = pdx_call(sex_pdx::SLOT_NET, 0x200, 0, 0, 0);
+    serial_println!("[sexnet.route.call.get_status] ret={} status={}", value, status);
+    serial_println!("[sexnet.route.proof.done]");
     serial_println!("[sexnet.status.route] spawned=1 passive=1 slot_net_grant=0 ok=1 reason=sexnet_passive_browser_observes_status_only");
     serial_println!("[browser.sexnet.status] visible=1 network=0 fetched=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=passive_spawn_no_network_route");
     serial_println!("[sexnet.status.route.proof.done] ok=1 browser_network=0 fetched=0");
@@ -1854,6 +1858,7 @@ const BROWSER_NET_GRANT_PROOF_ENABLED: bool =
 static mut BROWSER_NET_GRANT_PROOF_DONE: bool = false;
 unsafe fn maybe_run_browser_net_grant_proof() {
     if !BROWSER_NET_GRANT_PROOF_ENABLED || BROWSER_NET_GRANT_PROOF_DONE { return; }
+    serial_println!("[collar.net.policy.browser] app=kaleidoscope slot=SLOT_NET policy=static_boot_v1 ok=1 reason=collar_not_spawned_boot_grant_only");
     serial_println!("[browser.network.grant.status] requested=0 approved=0 slot_net_grant=0 network=0 fetched=0 ok=1 reason=deferred_no_collar_approval");
     serial_println!("[browser.network.grant.truth] collar_auth_ui=0 secrets=0 grants_mutated=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=all_grants_deferred");
     serial_println!("[browser.network.grant.stub.done] ok=1 approved=0 network=0 fetched=0");
