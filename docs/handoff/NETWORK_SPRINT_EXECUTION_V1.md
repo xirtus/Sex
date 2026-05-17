@@ -189,3 +189,13 @@ Interpretation update:
 Interpretation update:
 - Interrupt/cause resequencing and moderation register writes are now explicitly exercised and read back.
 - RX completion remains stalled; next bounded lane should focus on descriptor rearm/tail update semantics in the poll/recycle loop.
+
+## RX Diagnostic Snapshot (r25 descriptor rearm + fixed tail)
+- `/tmp/sexos_network_sprint_autopilot_r25_rx_rearm_tail.log`:
+  - `e1000.rx.rearm.variant`: `rounds=8`, `desc_rearm_writes=64`, `final_rdt=7`.
+  - `e1000.rx.diag.post`: `rdh=0`, `rdt=7`, `icr=0x00000003`.
+  - `e1000.rx.peer.observe`: still `observed=0`.
+
+Interpretation update:
+- Descriptor rearm semantics and fixed-tail discipline are now explicitly exercised each round.
+- RX still stalls with zero descriptor completions; next bounded lane should move to explicit PCI bus-master + memory-space config verification/writeback at runtime before RX init.
