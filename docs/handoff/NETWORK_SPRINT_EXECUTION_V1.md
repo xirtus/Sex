@@ -1200,3 +1200,47 @@ Result: **FINAL PASS (239 gates, 0 fail, 12 skip)**.
 ### Gate addition
 
 - `tcp_http_target_known_good_probe_v1 PASS` is now scored from marker `tcp.http.target.known_good.probe.done.*ok=1`.
+
+---
+
+## TCP_SLIRP_TCP_FORWARDING_AUDIT_V1 (2026-05-17)
+
+Blocked truth is now stable:
+
+- no SYN-ACK from prior Cloudflare/example target path
+- no SYN-ACK from controlled known-good target path (`34.223.124.45:80`)
+- no RST in bounded windows
+- final ACK deferred by policy
+- HTTP GET deferred by policy
+
+Audit finding from proof runner wiring:
+
+- `scripts/run_daily_driver_proof.sh` currently uses pure SLiRP user-mode net in this lane:
+  - `-netdev user,id=net0`
+  - `-device e1000e,netdev=net0`
+- No `hostfwd` path is enabled.
+- No `tap` backend path is enabled in this runner.
+
+Conclusion:
+
+- The dominant remaining suspect moved from target selection to backend forwarding behavior (SLiRP TCP/NAT path) or outbound policy interaction with this raw driver traffic pattern.
+- Next mission is execution audit against backend variants and controlled local forward path:
+  - `TCP_SLIRP_TCP_FORWARDING_AUDIT_EXEC_V1`
+
+Detailed handoff:
+
+- `docs/handoff/TCP_SLIRP_TCP_FORWARDING_AUDIT_V1.md`
+
+### Execution outcome
+
+- Runner now supports backend audit toggles:
+  - `QEMU_NET_BACKEND=user|tap`
+  - `QEMU_USERNET_HOSTFWD=...`
+  - `QEMU_TAP_IFNAME=...`
+  - plus persisted marker: `[qemu.net.config] ...`
+- Case A (`backend=user`) reproduces current blocker truth with full runtime pass:
+  - SYN tx_dd=1, `synack_seen=0`, `rst_seen=0`, final ACK deferred, HTTP deferred.
+- Case B (`backend=user` + hostfwd) fails before guest runtime:
+  - `Could not set up host forwarding rule`.
+- Case C (`backend=tap`) fails before guest runtime:
+  - `Could not open '/dev/net/tun': No such file or directory`.

@@ -33,6 +33,9 @@ QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 PROBE_SECONDS="${DAILY_DRIVER_PROBE_SECONDS:-30}"
 ENABLE_QEMU_USERNET_E1000="${ENABLE_QEMU_USERNET_E1000:-1}"
 QEMU_NET_MODEL="${QEMU_NET_MODEL:-e1000}"
+QEMU_NET_BACKEND="${QEMU_NET_BACKEND:-user}"
+QEMU_USERNET_HOSTFWD="${QEMU_USERNET_HOSTFWD:-}"
+QEMU_TAP_IFNAME="${QEMU_TAP_IFNAME:-tap0}"
 
 # ---- helpers ----
 die() {
@@ -280,7 +283,8 @@ echo ""
 echo "  log:     $LOG"
 echo "  iso:     $ISO"
 echo "  probe:   ${PROBE_SECONDS}s"
-echo "  nic:     ${QEMU_NET_MODEL} (usernet=${ENABLE_QEMU_USERNET_E1000})"
+echo "  nic:     ${QEMU_NET_MODEL} (backend=${QEMU_NET_BACKEND} usernet=${ENABLE_QEMU_USERNET_E1000})"
+echo "  hostfwd: ${QEMU_USERNET_HOSTFWD:-none}"
 echo ""
 
 # ---- 1. BUILD ----
@@ -314,34 +318,59 @@ trap cleanup EXIT INT TERM
 
 QEMU_NET_ARGS=()
 if [ "$ENABLE_QEMU_USERNET_E1000" = "1" ]; then
+    case "$QEMU_NET_BACKEND" in
+        user|tap) ;;
+        *) die "unsupported QEMU_NET_BACKEND=$QEMU_NET_BACKEND (expected: user|tap)" ;;
+    esac
+
+    NETDEV_KIND=""
+    NETDEV_VALUE=""
+    if [ "$QEMU_NET_BACKEND" = "user" ]; then
+        if [ -n "$QEMU_USERNET_HOSTFWD" ]; then
+            NETDEV_KIND="-netdev"
+            NETDEV_VALUE="user,id=net0,hostfwd=${QEMU_USERNET_HOSTFWD}"
+        else
+            NETDEV_KIND="-netdev"
+            NETDEV_VALUE="user,id=net0"
+        fi
+    else
+        NETDEV_KIND="-netdev"
+        NETDEV_VALUE="tap,id=net0,ifname=${QEMU_TAP_IFNAME},script=no,downscript=no"
+    fi
+
     case "$QEMU_NET_MODEL" in
         e1000|e1000-82540em)
             QEMU_NET_ARGS=(
-                -netdev user,id=net0
+                "$NETDEV_KIND"
+                "$NETDEV_VALUE"
                 -device e1000,netdev=net0
             )
             ;;
         e1000-82544gc)
             QEMU_NET_ARGS=(
-                -netdev user,id=net0
+                "$NETDEV_KIND"
+                "$NETDEV_VALUE"
                 -device e1000-82544gc,netdev=net0
             )
             ;;
         e1000-82545em)
             QEMU_NET_ARGS=(
-                -netdev user,id=net0
+                "$NETDEV_KIND"
+                "$NETDEV_VALUE"
                 -device e1000-82545em,netdev=net0
             )
             ;;
         e1000e)
             QEMU_NET_ARGS=(
-                -netdev user,id=net0
+                "$NETDEV_KIND"
+                "$NETDEV_VALUE"
                 -device e1000e,netdev=net0
             )
             ;;
         virtio|virtio-net|virtio-net-pci)
             QEMU_NET_ARGS=(
-                -netdev user,id=net0
+                "$NETDEV_KIND"
+                "$NETDEV_VALUE"
                 -device virtio-net-pci,netdev=net0
             )
             ;;
@@ -381,6 +410,10 @@ fi
 if [ ! -f "$LOG" ]; then
     die "no serial log produced at $LOG"
 fi
+
+{
+    echo "[qemu.net.config] backend=${QEMU_NET_BACKEND} model=${QEMU_NET_MODEL} usernet=${ENABLE_QEMU_USERNET_E1000} hostfwd=${QEMU_USERNET_HOSTFWD:-none} tap_if=${QEMU_TAP_IFNAME}"
+} >> "$LOG"
 
 LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 echo "[proof] Log lines: $LOG_LINES"
