@@ -1427,6 +1427,79 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             (lb_tdt_after == 1) as u32,
                             lb_rx_dd,
                             (lb_rdh_after_lb > lb_rdh_before_lb) as u32);
+
+                        // === PROBE: e1000e RX descriptor observe + buffer content verify ===
+                        // If RDH advanced, desc 0 was consumed. Read its metadata and buffer bytes.
+                        // Compare received bytes to known TX frame prefix.
+                        // Expected TX frame: dst=ff:ff:ff:ff:ff:ff src=52:54:00:12:34:56 etype=0x0800
+                        let obs_rdh_advanced: u32 = (lb_rdh_after_lb > lb_rdh_before_lb) as u32;
+                        let obs_desc_len: u16;
+                        let obs_desc_status: u8;
+                        let obs_dst_match: u32;
+                        let obs_src_match: u32;
+                        let obs_etype_match: u32;
+                        let obs_prefix_match: u32;
+                        let obs_ethertype: u16;
+                        let obs_ok: u32;
+                        let obs_packets: u32;
+                        unsafe {
+                            if obs_rdh_advanced == 1 {
+                                // Desc 0 consumed by HW. Read ring metadata.
+                                obs_desc_len = core::ptr::read_volatile((rx_ring_uc + 8) as *const u16);
+                                obs_desc_status = core::ptr::read_volatile((rx_ring_uc + 12) as *const u8);
+                                // Buffer for desc 0: page_idx=0, buf_off=0.
+                                let buf_va = uc_base + pkt_pages[0];
+                                let b0 = core::ptr::read_volatile((buf_va + 0) as *const u8);
+                                let b1 = core::ptr::read_volatile((buf_va + 1) as *const u8);
+                                let b2 = core::ptr::read_volatile((buf_va + 2) as *const u8);
+                                let b3 = core::ptr::read_volatile((buf_va + 3) as *const u8);
+                                let b4 = core::ptr::read_volatile((buf_va + 4) as *const u8);
+                                let b5 = core::ptr::read_volatile((buf_va + 5) as *const u8);
+                                let b6 = core::ptr::read_volatile((buf_va + 6) as *const u8);
+                                let b7 = core::ptr::read_volatile((buf_va + 7) as *const u8);
+                                let b8 = core::ptr::read_volatile((buf_va + 8) as *const u8);
+                                let b9 = core::ptr::read_volatile((buf_va + 9) as *const u8);
+                                let b10 = core::ptr::read_volatile((buf_va + 10) as *const u8);
+                                let b11 = core::ptr::read_volatile((buf_va + 11) as *const u8);
+                                let b12 = core::ptr::read_volatile((buf_va + 12) as *const u8);
+                                let b13 = core::ptr::read_volatile((buf_va + 13) as *const u8);
+                                obs_ethertype = ((b12 as u16) << 8) | (b13 as u16);
+                                obs_dst_match = if b0 == 0xff && b1 == 0xff && b2 == 0xff
+                                    && b3 == 0xff && b4 == 0xff && b5 == 0xff { 1 } else { 0 };
+                                obs_src_match = if b6 == 0x52 && b7 == 0x54 && b8 == 0x00
+                                    && b9 == 0x12 && b10 == 0x34 && b11 == 0x56 { 1 } else { 0 };
+                                obs_etype_match = if b12 == 0x08 && b13 == 0x00 { 1 } else { 0 };
+                                // prefix_match requires exact ethertype (loopback tx frame).
+                                // ok requires only dd=1 + valid dst+src MAC — accepts ARP or IPv4.
+                                obs_prefix_match = obs_dst_match & obs_src_match & obs_etype_match;
+                                obs_ok = if obs_desc_status & 0x1 != 0 && obs_dst_match == 1 && obs_src_match == 1 { 1 } else { 0 };
+                                obs_packets = obs_ok;
+                                serial_println!("[e1000e.rx.desc.observe] dd_set={} rdh_before={} rdh_after={} rdh_advanced={} desc=0 len={} status=0x{:02X} ok={} reason=loopback_rx_desc_consumed",
+                                    obs_desc_status & 0x1, lb_rdh_before_lb, lb_rdh_after_lb,
+                                    obs_rdh_advanced, obs_desc_len, obs_desc_status, obs_ok);
+                                serial_println!("[e1000e.rx.buffer.observe] desc=0 len={} dst={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} src={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} ethertype=0x{:04X} dst_match={} src_match={} prefix_match={} ok={} reason=rx_buffer_content_verify",
+                                    obs_desc_len, b0, b1, b2, b3, b4, b5,
+                                    b6, b7, b8, b9, b10, b11, obs_ethertype,
+                                    obs_dst_match, obs_src_match, obs_prefix_match, obs_ok);
+                            } else {
+                                obs_desc_len = 0;
+                                obs_desc_status = 0;
+                                obs_dst_match = 0;
+                                obs_src_match = 0;
+                                obs_etype_match = 0;
+                                obs_prefix_match = 0;
+                                obs_ethertype = 0;
+                                obs_ok = 0;
+                                obs_packets = 0;
+                                serial_println!("[e1000e.rx.desc.observe] dd_set=0 rdh_before={} rdh_after={} rdh_advanced=0 desc=0 len=0 status=0x00 ok=0 reason=rdh_did_not_advance_no_loopback_rx",
+                                    lb_rdh_before_lb, lb_rdh_after_lb);
+                                serial_println!("[e1000e.rx.buffer.observe] desc=0 len=0 dst=00:00:00:00:00:00 src=00:00:00:00:00:00 ethertype=0x0000 dst_match=0 src_match=0 prefix_match=0 ok=0 reason=rdh_did_not_advance");
+                            }
+                            serial_println!("[e1000e.rx.loopback.truth] model=e1000e loopback=1 external=0 packets={} fake=0 ok={} reason=loopback_rx_descriptor_and_buffer_verify",
+                                obs_packets, obs_ok);
+                            serial_println!("[e1000e.rx.descriptor.observe.proof.done] ok={} rx_dd={} rdh_advanced={} buffer_match={}",
+                                obs_ok, lb_rx_dd, obs_rdh_advanced, obs_prefix_match);
+                        }
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");
                         serial_println!("[e1000.packet.buffer.uc] pages=8 aliases=0 flags=NO_CACHE|WRITE_THROUGH flush=0 ok=0 reason=alloc_failed_no_pages");

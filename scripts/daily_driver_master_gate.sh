@@ -191,6 +191,7 @@ gate_e1000_tx_register_init_proof_done="SKIP"
 gate_e1000_tx_test_frame="SKIP"
 gate_e1000_tx_test_frame_proof_done="SKIP"
 gate_e1000_rx_packet_observe_proof="SKIP"
+gate_e1000e_rx_desc_observe="SKIP"
 gate_ethernet_frame_model_spec="SKIP"
 gate_arp_client_plan="SKIP"
 gate_arp_request_build_proof="SKIP"
@@ -1758,6 +1759,14 @@ elif [ "$(has 'e1000.rx.packet.observe.proof.*ok=0')" -eq 1 ]; then
     print_row "e1000_rx_packet_observe_proof" "FAIL" "proof failed"
 else gate_e1000_rx_packet_observe_proof="SKIP"; fi
 
+if [ "$(has 'e1000e\.rx\.descriptor\.observe\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_e1000e_rx_desc_observe="PASS"
+    print_row "e1000e_rx_desc_observe" "PASS" "loopback RX dd+rdh+buffer_match=1"
+elif [ "$(has 'e1000e\.rx\.descriptor\.observe\.proof\.done.*rdh_advanced=1')" -eq 1 ]; then
+    gate_e1000e_rx_desc_observe="FAIL"
+    print_row "e1000e_rx_desc_observe" "FAIL" "rdh_advanced=1 but buffer_match or ok=0"
+else gate_e1000e_rx_desc_observe="SKIP"; fi
+
 if [ "$(has 'ethernet.frame.model.spec.*ok=1')" -eq 1 ]; then
     gate_ethernet_frame_model_spec="PASS"
     print_row "ethernet_frame_model_spec" "PASS" "L2 bounded frame model marker"
@@ -2456,6 +2465,7 @@ ALL_GATES=(
     "e1000_tx_test_frame:$gate_e1000_tx_test_frame"
     "e1000_tx_test_frame_proof_done:$gate_e1000_tx_test_frame_proof_done"
     "e1000_rx_packet_observe_proof:$gate_e1000_rx_packet_observe_proof"
+    "e1000e_rx_desc_observe:$gate_e1000e_rx_desc_observe"
     "ethernet_frame_model_spec:$gate_ethernet_frame_model_spec"
     "arp_client_plan:$gate_arp_client_plan"
     "arp_request_build_proof:$gate_arp_request_build_proof"

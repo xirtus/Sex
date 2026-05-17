@@ -521,3 +521,38 @@ Prove single-descriptor completion (clear DD between poll rounds).
 Then probe external SLiRP RX.
 
 Full findings: `docs/handoff/QEMU_E1000_MODEL_SPLIT_RX_V1.md`
+
+---
+
+## Session: E1000E_RX_DESCRIPTOR_OBSERVE_PROOF_V1 (2026-05-17) — SECOND BREAKTHROUGH
+
+Model: `QEMU_NET_MODEL=e1000e`.
+Gates: FINAL PASS **227**/0/0 (e1000e); 226/1skip/0 (e1000 default unchanged).
+Log: `/tmp/sexos_e1000e_rx_descriptor_observe_proof_v1.log`.
+
+### Descriptor Observe Table
+
+| dd_set | rdh_before | rdh_after | len | status | ok |
+|--------|-----------|-----------|-----|--------|----|
+| 1      | 0         | 1         | 60  | 0x03   | 1  |
+
+### RX Buffer Content
+
+| dst               | src               | ethertype    | dst_match | src_match | ok |
+|-------------------|-------------------|--------------|-----------|-----------|----|
+| FF:FF:FF:FF:FF:FF | 52:54:00:12:34:56 | 0x0806 (ARP) | 1         | 1         | 1  |
+
+### Key Finding: External ARP from SLiRP received
+
+ethertype=0x0806 (ARP from QEMU SLiRP gateway `52:54:00:12:34:56`).
+Not our loopback TX frame — SLiRP spontaneously probed our NIC with an ARP broadcast.
+**External RX from SLiRP working without protocol initiation from our side.**
+
+New gate: `e1000e_rx_desc_observe = PASS` (SKIP on default e1000 — no gates broken).
+
+### Next: E1000E_EXTERNAL_SLIRP_RX_PROBE_V1
+
+SLiRP ARP frames already arriving. Next: read full ARP payload, send ARP reply,
+verify SLiRP ARP reply received. First protocol step (ARP assembly required).
+
+Full findings: `docs/handoff/E1000E_RX_DESCRIPTOR_OBSERVE_PROOF_V1.md`
