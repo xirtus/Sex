@@ -93,6 +93,44 @@ impl SexApp for App {
             );
         }
         sex_pdx::serial_println!("[browser.packed_text.proof.done]");
+        sex_pdx::serial_println!("[browser.body.begin]");
+        sex_pdx::pdx_call(sex_pdx::SLOT_NET, 0x200, 0x209, 0, 0);
+        let body_len_reply = sex_pdx::pdx_listen_raw(0);
+        let body_len_ok = body_len_reply.type_id == 0x1;
+        let body_reported = if body_len_ok {
+            core::cmp::min(body_len_reply.arg0 as usize, 19)
+        } else {
+            0
+        };
+        let mut body_text = [0u8; 32];
+        let mut body_len = 0usize;
+        if body_reported > 0 {
+            sex_pdx::serial_println!("[browser.body.len.recv] len={}", body_reported);
+            let chunk_count = core::cmp::min((body_reported + 7) / 8, 4);
+            let mut idx = 0usize;
+            while idx < chunk_count {
+                sex_pdx::pdx_call(sex_pdx::SLOT_NET, 0x200, 0x20A, idx as u64, 0);
+                let chunk_reply = sex_pdx::pdx_listen_raw(0);
+                if chunk_reply.type_id != 0x1 {
+                    break;
+                }
+                let start = idx * 8;
+                let remain = body_reported.saturating_sub(start);
+                let bytes = core::cmp::min(remain, 8);
+                let mut i = 0usize;
+                while i < bytes {
+                    body_text[start + i] = ((chunk_reply.arg0 >> (i * 8)) & 0xFF) as u8;
+                    i += 1;
+                }
+                sex_pdx::serial_println!("[browser.body.chunk.recv] idx={} bytes={}", idx, bytes);
+                body_len = start + bytes;
+                idx += 1;
+            }
+            if body_len > body_reported {
+                body_len = body_reported;
+            }
+            sex_pdx::serial_println!("[browser.body.text.set] live=1 len={}", body_len);
+        }
         sex_pdx::serial_println!("[browser.render.live_text.begin] len={}", live_len);
         sex_pdx::serial_println!("[browser.visible.polish.begin] sid={}", KALEIDO_SURFACE_ID);
 
@@ -153,6 +191,27 @@ impl SexApp for App {
 
             sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, 0xFB, KALEIDO_SURFACE_ID, packed, arg2);
             ci += 1;
+        }
+
+        if body_len > 0 {
+            sex_pdx::serial_println!("[browser.body.render.begin]");
+            let body_color: u64 = 0x00CDD6F4;
+            let body_chunks = (body_len + 7) / 8;
+            let mut ci = 0usize;
+            while ci < body_chunks {
+                let offset = ci * 8;
+                let count = core::cmp::min(body_len - offset, 8);
+                let mut packed: u64 = 0;
+                let mut bi = 0usize;
+                while bi < count {
+                    packed |= (body_text[offset + bi] as u64) << (bi * 8);
+                    bi += 1;
+                }
+                let arg2 = (40u64 + offset as u64) | ((count as u64) << 8) | (body_color << 32);
+                sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, 0xFB, KALEIDO_SURFACE_ID, packed, arg2);
+                ci += 1;
+            }
+            sex_pdx::serial_println!("[browser.body.render.done]");
         }
 
         sex_pdx::serial_println!("[browser.render.draw_text] live=1 len={}", live_len);

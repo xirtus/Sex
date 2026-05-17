@@ -17,7 +17,10 @@ const SEXNET_VPN_DOWN:    u64 = 0x205;
 const SEXNET_GET_IP:      u64 = 0x206;
 const SEXNET_HTTP_PROOF_LEN: u64 = 0x207;
 const SEXNET_HTTP_PROOF_CHUNK: u64 = 0x208;
+const SEXNET_HTTP_BODY_LEN: u64 = 0x209;
+const SEXNET_HTTP_BODY_CHUNK: u64 = 0x20A;
 const PROOF_TEXT: &[u8] = b"HTTP 200 from 10.0.2.2";
+const BODY_TEXT: &[u8] = b"Hello SexOS HTTP OK";
 
 // --------------------------------------------------------------------------
 // AP entry (server-side; client uses silknet crate)
@@ -90,6 +93,27 @@ fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
                     i += 1;
                 }
                 serial_println!("[sexnet.packed_text.chunk] idx={} bytes={}", idx, bytes);
+                return packed;
+            }
+            if arg0 == SEXNET_HTTP_BODY_LEN {
+                serial_println!("[sexnet.body_text.len] len={}", BODY_TEXT.len());
+                return BODY_TEXT.len() as u64;
+            }
+            if arg0 == SEXNET_HTTP_BODY_CHUNK {
+                let idx = arg1 as usize;
+                let start = idx.saturating_mul(8);
+                if start >= BODY_TEXT.len() {
+                    return u64::MAX;
+                }
+                let end = core::cmp::min(start + 8, BODY_TEXT.len());
+                let bytes = end - start;
+                let mut packed = 0u64;
+                let mut i = 0usize;
+                while i < bytes {
+                    packed |= (BODY_TEXT[start + i] as u64) << (i * 8);
+                    i += 1;
+                }
+                serial_println!("[sexnet.body_text.chunk] idx={} bytes={}", idx, bytes);
                 return packed;
             }
             let s = STATE.lock();
