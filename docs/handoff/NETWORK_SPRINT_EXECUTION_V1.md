@@ -452,3 +452,38 @@ descriptor processing works and only external traffic is missing.
 Secondary: probe RCTL.BSIZE variants, explicit descriptor field layout verification.
 
 Full findings: `docs/handoff/E1000_RX_DESCRIPTOR_ADDRESS_WIDTH_PROBE_V1.md`
+
+---
+
+## Session: E1000_RX_LOOPBACK_PREENABLE_REPOST_PROOF_V1 (2026-05-17)
+
+Gates: FINAL PASS 226/0/0. Log: `/tmp/sexos_e1000_rx_loopback_preenable_repost_proof_v1.log`.
+
+### Loopback Timing Table
+
+| lbm | en | tx_posted | tx_dd_after_poll | rx_dd | rdh_advanced |
+|-----|----|-----------|-----------------|-------|--------------|
+| 3   | 1  | 1 (TDT=1) | **0**           | 0     | 0            |
+
+### Key finding
+
+TX worked (dd=1) in normal mode. TX did NOT work (dd=0) with RCTL.LBM=3.
+QEMU e1000 MAC loopback (LBM=3) does not process TX descriptors — path is non-functional.
+
+### Conclusion: B — Loopback dead. Model-limitation confirmed for LBM=3 path.
+
+- RCTL.LBM=3 latches correctly.
+- TX descriptor not consumed in LBM=3 mode.
+- RX: zero descriptors touched across 4×100k-spin poll rounds.
+- Direct TDH=0 write may also have corrupted TX state (TDH is read-only per 82540EM spec).
+
+### Ruled out (cumulative)
+
+RXDCTL stub, SRRCTL stub, address/alignment (all correct), RCTL.EN, ring register init, MAC loopback path.
+
+### Next: QEMU_E1000_MODEL_SWITCH_82540EM_V1
+
+Check QEMU `-device` model name. Try `e1000-82544gc` or PHY loopback (LBM=1) probe.
+External RX requires SLiRP to deliver packets — needs ARP/DHCP (protocol scope) or model switch.
+
+Full findings: `docs/handoff/E1000_RX_LOOPBACK_PREENABLE_REPOST_PROOF_V1.md`

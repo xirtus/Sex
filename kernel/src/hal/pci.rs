@@ -1337,6 +1337,96 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             serial_println!("[e1000.rx.addr.width.done] ok={} address_width_ok={} packets=0",
                                 aw_ok, aw_ok);
                         }
+
+                        // === PROBE: RX loopback pre-enable + TX repost ===
+                        // Enable MAC loopback (RCTL.LBM=3) BEFORE posting TX frame.
+                        // Repost one minimal TX frame. Poll bounded RX rounds.
+                        // Proves whether QEMU e1000 RX descriptor processing functions at all.
+                        let lb_rctl_before: u32;
+                        let lb_rctl_after: u32;
+                        let lb_lbm: u32;
+                        let lb_en: u32;
+                        let lb_tdh_before: u32;
+                        let lb_tdt_after: u32;
+                        let lb_tx_dd: u32;
+                        let mut lb_rx_dd: u32 = 0;
+                        let mut lb_rdh_before_lb: u32 = 0;
+                        let mut lb_rdh_after_lb: u32 = 0;
+                        let mut lb_polled: u32 = 0;
+                        let mut lb_observed: u32 = 0;
+                        unsafe {
+                            // Step 1: Enable loopback BEFORE any new TX post.
+                            lb_rctl_before = core::ptr::read_volatile((virt + 0x0100) as *const u32);
+                            let lb_rctl_set = (lb_rctl_before & !(0x3 << 6)) | (3 << 6); // LBM=11, keep existing bits
+                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, lb_rctl_set);
+                            lb_rctl_after = core::ptr::read_volatile((virt + 0x0100) as *const u32);
+                            lb_lbm = (lb_rctl_after >> 6) & 0x3;
+                            lb_en = (lb_rctl_after >> 1) & 1;
+                            serial_println!("[e1000.rx.loopback.preenable] rctl_before=0x{:08X} rctl_after=0x{:08X} lbm={} en={} ok={} reason=loopback_set_before_tx_repost",
+                                lb_rctl_before, lb_rctl_after, lb_lbm, lb_en, (lb_lbm == 3) as u32);
+
+                            // Step 2: Rearm all 8 RX descriptors with valid buffer pointers and clear status.
+                            for i in 0usize..8 {
+                                let desc_off = (i * 16) as u64;
+                                let page_idx = i / 2;
+                                let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                let buf_phys = pkt_pages[page_idx] + buf_off;
+                                core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 10) as *mut u16, 0u16);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 14) as *mut u16, 0u16);
+                            }
+                            // Reset RX ring head/tail.
+                            core::ptr::write_volatile((virt + 0x2810) as *mut u32, 0u32); // RDH=0
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7u32); // RDT=7
+                            lb_rdh_before_lb = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+
+                            // Step 3: Clear TX desc 0 and re-post minimal frame.
+                            // tx0_uc already contains the frame data from the earlier TX test.
+                            core::ptr::write_volatile((tx_ring_uc + 0) as *mut u64, tx0_phys);
+                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, tx_frame_len);
+                            core::ptr::write_volatile((tx_ring_uc + 10) as *mut u8, 0u8);
+                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011); // RS|IFCS|EOP
+                            core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8); // clear DD
+                            // Ensure TDH=0, TDT=0 first, then advance TDT to 1.
+                            core::ptr::write_volatile((virt + 0x3810) as *mut u32, 0u32); // TDH=0
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 0u32); // TDT=0
+                            lb_tdh_before = core::ptr::read_volatile((virt + 0x3810) as *const u32);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 1u32); // TDT=1 — post frame
+                            lb_tdt_after = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                            serial_println!("[e1000.rx.loopback.repost] tdh={} tdt_before=0 tdt_after={} len={} tx_dd=0 ok={} reason=loopback_tx_frame_repost",
+                                lb_tdh_before, lb_tdt_after, tx_frame_len, (lb_tdt_after == 1) as u32);
+
+                            // Step 4: Bounded RX poll — 4 rounds.
+                            for _poll in 0usize..4 {
+                                for _ in 0..100_000usize { core::hint::spin_loop(); }
+                                for i in 0usize..8 {
+                                    let desc_off = (i * 16) as u64;
+                                    let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                    lb_polled += 1;
+                                    if (rx_stat & 0x1) != 0 {
+                                        lb_rx_dd += 1;
+                                        lb_observed += 1;
+                                    }
+                                }
+                            }
+                            // Check TX DD after polling.
+                            lb_tx_dd = (core::ptr::read_volatile((tx_ring_uc + 12) as *const u8) & 0x1) as u32;
+                            lb_rdh_after_lb = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                            serial_println!("[e1000.rx.loopback.observe] polled={} dd_set={} rdh_before={} rdh_after={} observed={} ok=1 reason=bounded_loopback_rx_poll",
+                                lb_polled, lb_rx_dd, lb_rdh_before_lb, lb_rdh_after_lb, lb_observed);
+
+                            // Restore RCTL to normal mode (LBM=0) after loopback probe.
+                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_init);
+                        }
+                        serial_println!("[e1000.rx.loopback.preenable.repost.done] ok={} loopback={} tx_posted={} rx_dd={} rdh_advanced={}",
+                            (lb_lbm == 3) as u32,
+                            (lb_lbm == 3) as u32,
+                            (lb_tdt_after == 1) as u32,
+                            lb_rx_dd,
+                            (lb_rdh_after_lb > lb_rdh_before_lb) as u32);
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");
                         serial_println!("[e1000.packet.buffer.uc] pages=8 aliases=0 flags=NO_CACHE|WRITE_THROUGH flush=0 ok=0 reason=alloc_failed_no_pages");
