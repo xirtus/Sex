@@ -487,3 +487,37 @@ Check QEMU `-device` model name. Try `e1000-82544gc` or PHY loopback (LBM=1) pro
 External RX requires SLiRP to deliver packets — needs ARP/DHCP (protocol scope) or model switch.
 
 Full findings: `docs/handoff/E1000_RX_LOOPBACK_PREENABLE_REPOST_PROOF_V1.md`
+
+---
+
+## Session: QEMU_E1000_MODEL_SPLIT_RX_V1 (2026-05-17) — BREAKTHROUGH
+
+Gates: FINAL PASS 226/0/0 on ALL four models.
+
+### Model RX Result Table
+
+| Model         | TX dd | rx_dd | rdh_advanced | Gates   |
+|---------------|-------|-------|-------------|---------|
+| e1000         | 1     | 0     | 0           | 226/0/0 |
+| e1000-82544gc | 1     | 0     | 0           | 226/0/0 |
+| e1000-82545em | 1     | 0     | 0           | 226/0/0 |
+| **e1000e**    | 1     | **4** | **1**       | 226/0/0 |
+
+### Finding: e1000e (82574L) produces RX descriptor completions
+
+`e1000e` model: `rx_dd=4 rdh_advanced=1` in the loopback pre-enable repost probe.
+All e1000 family (82540em/82544gc/82545em): `rx_dd=0 rdh_advanced=0`.
+
+QEMU e1000e implements MAC loopback and RX descriptor processing.
+QEMU e1000 family does not implement either.
+
+Kernel register programming (RDBAL/RDBAH/RDLEN/RDH/RDT/RCTL) is compatible with e1000e.
+No kernel changes required to switch models — only `QEMU_NET_MODEL=e1000e`.
+
+### Next: E1000E_RX_DESCRIPTOR_OBSERVE_PROOF_V1
+
+Use `QEMU_NET_MODEL=e1000e`. Verify actual packet content in loopback RX buffer.
+Prove single-descriptor completion (clear DD between poll rounds).
+Then probe external SLiRP RX.
+
+Full findings: `docs/handoff/QEMU_E1000_MODEL_SPLIT_RX_V1.md`

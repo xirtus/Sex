@@ -315,10 +315,28 @@ trap cleanup EXIT INT TERM
 QEMU_NET_ARGS=()
 if [ "$ENABLE_QEMU_USERNET_E1000" = "1" ]; then
     case "$QEMU_NET_MODEL" in
-        e1000)
+        e1000|e1000-82540em)
             QEMU_NET_ARGS=(
                 -netdev user,id=net0
                 -device e1000,netdev=net0
+            )
+            ;;
+        e1000-82544gc)
+            QEMU_NET_ARGS=(
+                -netdev user,id=net0
+                -device e1000-82544gc,netdev=net0
+            )
+            ;;
+        e1000-82545em)
+            QEMU_NET_ARGS=(
+                -netdev user,id=net0
+                -device e1000-82545em,netdev=net0
+            )
+            ;;
+        e1000e)
+            QEMU_NET_ARGS=(
+                -netdev user,id=net0
+                -device e1000e,netdev=net0
             )
             ;;
         virtio|virtio-net|virtio-net-pci)
@@ -328,7 +346,7 @@ if [ "$ENABLE_QEMU_USERNET_E1000" = "1" ]; then
             )
             ;;
         *)
-            die "unsupported QEMU_NET_MODEL=$QEMU_NET_MODEL (expected: e1000|virtio-net-pci)"
+            die "unsupported QEMU_NET_MODEL=$QEMU_NET_MODEL (expected: e1000|e1000-82544gc|e1000-82545em|e1000e|virtio-net-pci)"
             ;;
     esac
 fi
