@@ -794,3 +794,44 @@ id_match=1, seq_match=1, checksum_ok=1, fake=0.
 Send UDP DNS query to 10.0.2.3:53 (SLiRP DNS resolver).
 
 Full findings: `docs/handoff/ICMP_ECHO_REQUEST_PROOF_V1.md`
+
+---
+
+## UDP_DNS_PROBE_V1
+
+Date: 2026-05-17
+Gates: FINAL PASS IMPLEMENTED **230**/0/2skip (e1000e).
+Log: `/tmp/sexos_udp_dns_probe_v1.log`.
+
+### Result: PASS IMPLEMENTED
+
+UDP DNS query for example.com sent to 10.0.2.3:53. DNS response received round 0.
+txid_match=1, qr=1, ancount=2, fake=0.
+
+### Query
+
+| Field     | Value              |
+|-----------|--------------------|
+| dst MAC   | 52:55:0A:00:02:02  |
+| dst IP    | 10.0.2.3           |
+| dst port  | 53                 |
+| src port  | 49152              |
+| QNAME     | example.com        |
+| QTYPE     | A                  |
+| DNS txid  | 0x1234             |
+| IPv4 csum | 0x62A1             |
+| tx_dd     | 1                  |
+
+### Response
+
+| Round | ICR        | dns | response | Result |
+|-------|------------|-----|----------|--------|
+| 0     | 0x80000083 | 1   | 1        | FOUND  |
+
+src_ip=10.0.2.3, txid_match=1, qr=1, ancount=2.
+
+### Next: DNS_RESPONSE_PARSE_PROOF_V1
+
+Parse two A record answers from DNS response. Extract IP addresses.
+
+Full findings: `docs/handoff/UDP_DNS_PROBE_V1.md`

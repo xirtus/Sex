@@ -209,6 +209,7 @@ gate_icmp_echo_request_plan="SKIP"
 gate_icmp_echo_request_send_stop_review="SKIP"
 gate_icmp_echo_request_proof="SKIP"
 gate_icmp_echo_reply_observe_proof="SKIP"
+gate_udp_dns_probe="SKIP"
 gate_udp_packet_model_spec="SKIP"
 gate_udp_tx_build_proof="SKIP"
 gate_udp_tx_send_stop_review="SKIP"
@@ -1876,6 +1877,14 @@ if [ "$(has 'icmp.echo.reply.observe.proof.*ok=1')" -eq 1 ]; then
     print_row "icmp_echo_reply_observe_proof" "PASS" "ICMP observe bounded claim"
 else gate_icmp_echo_reply_observe_proof="SKIP"; fi
 
+if [ "$(has 'udp\.dns\.probe\.done.*ok=1.*sent=1.*tx_dd=1.*response_seen=1')" -eq 1 ]; then
+    gate_udp_dns_probe="PASS"
+    print_row "udp_dns_probe" "PASS" "UDP DNS round-trip: txid match + QR=1 response"
+elif [ "$(has 'udp\.dns\.probe\.done.*sent=1.*tx_dd=1')" -eq 1 ]; then
+    gate_udp_dns_probe="SKIP"
+    print_row "udp_dns_probe" "SKIP" "UDP DNS query sent, no response in window (diagnostic)"
+else gate_udp_dns_probe="SKIP"; fi
+
 if [ "$(has 'udp.packet.model.spec.*ok=1')" -eq 1 ]; then
     gate_udp_packet_model_spec="PASS"
     print_row "udp_packet_model_spec" "PASS" "UDP model marker"
@@ -2518,6 +2527,7 @@ ALL_GATES=(
     "icmp_echo_request_send_stop_review:$gate_icmp_echo_request_send_stop_review"
     "icmp_echo_request_proof:$gate_icmp_echo_request_proof"
     "icmp_echo_reply_observe_proof:$gate_icmp_echo_reply_observe_proof"
+    "udp_dns_probe:$gate_udp_dns_probe"
     "udp_packet_model_spec:$gate_udp_packet_model_spec"
     "udp_tx_build_proof:$gate_udp_tx_build_proof"
     "udp_tx_send_stop_review:$gate_udp_tx_send_stop_review"

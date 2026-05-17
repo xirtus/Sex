@@ -2237,6 +2237,187 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             serial_println!("[icmp.echo.request.proof.done] ok={} sent=1 tx_dd={} reply_seen={} rounds={} rx_dd_total={} ipv4_total={} icmp_total={} checksum_ok={} fake=0",
                                 (p_tx_dd & checksum_ok & p_reply_seen), p_tx_dd, p_reply_seen,
                                 p_rounds_done, p_rx_dd_total, p_ipv4_total, p_icmp_total, checksum_ok);
+
+                            // === PROBE: UDP_DNS_PROBE_V1 ===
+                            // Send bounded UDP DNS query for example.com to 10.0.2.3:53.
+                            // Uses c_gw_mac and c_src_mac from ARP capture scope.
+
+                            // Step 1: precheck ring — no rearm or send yet
+                            let d_icr_pre = core::ptr::read_volatile((virt + 0x00C0) as *const u32);
+                            let d_rdh_pre = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                            let d_rdt_pre = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+                            let mut d_pre_dd: u32 = 0;
+                            let mut d_rdt_cur: u32 = d_rdt_pre;
+                            for i in 0usize..8 {
+                                let desc_off = (i * 16) as u64;
+                                let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                if (rx_stat & 0x1) != 0 {
+                                    d_pre_dd += 1;
+                                    let page_idx = i / 2;
+                                    let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                    let buf_phys = pkt_pages[page_idx] + buf_off;
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                    d_rdt_cur = d_rdt_cur.wrapping_add(1) & 0x7;
+                                    core::ptr::write_volatile((virt + 0x2818) as *mut u32, d_rdt_cur);
+                                }
+                            }
+                            serial_println!("[udp.dns.query.precheck] dd={} icr=0x{:08X} rdh={} rdt={} ok=1 reason=precheck_before_dns_send",
+                                d_pre_dd, d_icr_pre, d_rdh_pre, d_rdt_pre);
+
+                            // Step 2: compute IPv4 checksum for src=10.0.2.15 dst=10.0.2.3 proto=UDP total=57
+                            // Header words: 0x4500 0x0039 0x0002 0x0000 0x4011 0x0A00 0x020F 0x0A00 0x0203
+                            let mut d_ip_sum: u32 = 0x4500u32 + 0x0039u32 + 0x0002u32 + 0x0000u32
+                                + 0x4011u32 + 0x0A00u32 + 0x020Fu32 + 0x0A00u32 + 0x0203u32;
+                            d_ip_sum = (d_ip_sum & 0xFFFF) + (d_ip_sum >> 16);
+                            d_ip_sum = (d_ip_sum & 0xFFFF) + (d_ip_sum >> 16);
+                            let d_ipv4_csum = !(d_ip_sum as u16);
+                            let d_checksum_ok = (d_ipv4_csum == 0x62A1u16) as u32;
+
+                            // Step 3: build 71-byte Ethernet/IPv4/UDP/DNS frame
+                            // Ethernet(14) + IPv4(20) + UDP(8) + DNS(29) = 71 bytes
+                            let mut d_frame: [u8; 71] = [0u8; 71];
+                            d_frame[0..6].copy_from_slice(&c_gw_mac);   // dst = gateway MAC
+                            d_frame[6..12].copy_from_slice(&c_src_mac);  // src = our MAC
+                            d_frame[12] = 0x08; d_frame[13] = 0x00;     // ethertype IPv4
+                            d_frame[14] = 0x45; d_frame[15] = 0x00;     // ver=4 ihl=5
+                            d_frame[16] = 0x00; d_frame[17] = 0x39;     // total_length=57
+                            d_frame[18] = 0x00; d_frame[19] = 0x02;     // id=2
+                            d_frame[20] = 0x00; d_frame[21] = 0x00;     // flags+frag=0
+                            d_frame[22] = 0x40; d_frame[23] = 0x11;     // TTL=64 proto=UDP
+                            d_frame[24] = (d_ipv4_csum >> 8) as u8;
+                            d_frame[25] = (d_ipv4_csum & 0xFF) as u8;
+                            d_frame[26] = 10; d_frame[27] = 0; d_frame[28] = 2; d_frame[29] = 15; // src 10.0.2.15
+                            d_frame[30] = 10; d_frame[31] = 0; d_frame[32] = 2; d_frame[33] = 3;  // dst 10.0.2.3
+                            d_frame[34] = 0xC0; d_frame[35] = 0x00;     // src_port=49152
+                            d_frame[36] = 0x00; d_frame[37] = 0x35;     // dst_port=53
+                            d_frame[38] = 0x00; d_frame[39] = 0x25;     // udp_len=37 (8+29)
+                            d_frame[40] = 0x00; d_frame[41] = 0x00;     // udp_checksum=0
+                            d_frame[42] = 0x12; d_frame[43] = 0x34;     // DNS txid=0x1234
+                            d_frame[44] = 0x01; d_frame[45] = 0x00;     // flags: RD=1
+                            d_frame[46] = 0x00; d_frame[47] = 0x01;     // QDCOUNT=1
+                            d_frame[48] = 0x00; d_frame[49] = 0x00;     // ANCOUNT=0
+                            d_frame[50] = 0x00; d_frame[51] = 0x00;     // NSCOUNT=0
+                            d_frame[52] = 0x00; d_frame[53] = 0x00;     // ARCOUNT=0
+                            d_frame[54] = 0x07;                          // len("example")=7
+                            d_frame[55] = 0x65; d_frame[56] = 0x78; d_frame[57] = 0x61; // "exa"
+                            d_frame[58] = 0x6D; d_frame[59] = 0x70; d_frame[60] = 0x6C; // "mpl"
+                            d_frame[61] = 0x65;                          // "e"
+                            d_frame[62] = 0x03;                          // len("com")=3
+                            d_frame[63] = 0x63; d_frame[64] = 0x6F; d_frame[65] = 0x6D; // "com"
+                            d_frame[66] = 0x00;                          // end label
+                            d_frame[67] = 0x00; d_frame[68] = 0x01;     // QTYPE=A
+                            d_frame[69] = 0x00; d_frame[70] = 0x01;     // QCLASS=IN
+                            for (i, b) in d_frame.iter().enumerate() {
+                                core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
+                            }
+                            // TX desc slot 0
+                            core::ptr::write_volatile((tx_ring_uc + 0) as *mut u64, tx0_phys);
+                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, 71u16);
+                            core::ptr::write_volatile((tx_ring_uc + 10) as *mut u8, 0u8);
+                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);
+                            core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8);
+                            core::ptr::write_volatile((virt + 0x3810) as *mut u32, 0u32); // TDH=0
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 0u32);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 1u32); // TDT=1 post
+                            for _ in 0..5usize { for _ in 0..100_000usize { core::hint::spin_loop(); } }
+                            let d_tx_dd = (core::ptr::read_volatile((tx_ring_uc + 12) as *const u8) & 0x1) as u32;
+                            serial_println!("[udp.dns.query.send] dst_ip=10.0.2.3 dst_port=53 src_port=49152 tx_dd={} ipv4_checksum_ok={} udp_len=37 dns_len=29 fake=0 ok={} reason=udp_dns_query_to_slirp_dns",
+                                d_tx_dd, d_checksum_ok, (d_tx_dd & d_checksum_ok));
+
+                            // Step 4: Poll 8 rounds × 500k spins for DNS response
+                            let mut d_response_seen: u32 = 0;
+                            let mut d_resp_src: [u8; 4] = [0u8; 4];
+                            let mut d_resp_ancount: u16 = 0;
+                            let mut d_txid_match: u32 = 0;
+                            let mut d_qr: u32 = 0;
+                            let mut d_resp_src_port: u16 = 0;
+                            let mut d_rx_dd_total: u32 = 0;
+                            let mut d_ipv4_total: u32 = 0;
+                            let mut d_udp_total: u32 = 0;
+                            let mut d_dns_total: u32 = 0;
+                            let mut d_rounds_done: u32 = 0;
+                            let mut d_found = false;
+                            for round in 0usize..8 {
+                                for _ in 0..500_000usize { core::hint::spin_loop(); }
+                                let d_icr_r = core::ptr::read_volatile((virt + 0x00C0) as *const u32);
+                                let d_rdh_r = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                                let d_rdt_r = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+                                let mut d_round_dd: u32 = 0;
+                                let mut d_round_ipv4: u32 = 0;
+                                let mut d_round_udp: u32 = 0;
+                                let mut d_round_dns: u32 = 0;
+                                let mut d_round_resp: u32 = 0;
+                                d_rounds_done += 1;
+                                for i in 0usize..8 {
+                                    let desc_off = (i * 16) as u64;
+                                    let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                    if (rx_stat & 0x1) != 0 {
+                                        let page_idx = i / 2;
+                                        let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                        let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                        let rx_len = core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16);
+                                        d_round_dd += 1; d_rx_dd_total += 1;
+                                        if rx_len >= 42 {
+                                            let et0 = core::ptr::read_volatile((buf_va + 12) as *const u8);
+                                            let et1 = core::ptr::read_volatile((buf_va + 13) as *const u8);
+                                            if et0 == 0x08 && et1 == 0x00 {
+                                                d_round_ipv4 += 1; d_ipv4_total += 1;
+                                                let ip_proto = core::ptr::read_volatile((buf_va + 23) as *const u8);
+                                                if ip_proto == 0x11 && rx_len >= 50 {
+                                                    d_round_udp += 1; d_udp_total += 1;
+                                                    let sp0 = core::ptr::read_volatile((buf_va + 34) as *const u8) as u16;
+                                                    let sp1 = core::ptr::read_volatile((buf_va + 35) as *const u8) as u16;
+                                                    let src_port_rx = (sp0 << 8) | sp1;
+                                                    if src_port_rx == 53 && rx_len >= 54 {
+                                                        d_dns_total += 1; d_round_dns += 1;
+                                                        let dns_t0 = core::ptr::read_volatile((buf_va + 42) as *const u8);
+                                                        let dns_t1 = core::ptr::read_volatile((buf_va + 43) as *const u8);
+                                                        let dns_flags0 = core::ptr::read_volatile((buf_va + 44) as *const u8);
+                                                        let an0 = core::ptr::read_volatile((buf_va + 48) as *const u8) as u16;
+                                                        let an1 = core::ptr::read_volatile((buf_va + 49) as *const u8) as u16;
+                                                        let ancount_rx = (an0 << 8) | an1;
+                                                        let t_match = ((dns_t0 == 0x12) && (dns_t1 == 0x34)) as u32;
+                                                        let qr_rx = ((dns_flags0 & 0x80) != 0) as u32;
+                                                        let ip_src0 = core::ptr::read_volatile((buf_va + 26) as *const u8);
+                                                        let ip_src1 = core::ptr::read_volatile((buf_va + 27) as *const u8);
+                                                        let ip_src2 = core::ptr::read_volatile((buf_va + 28) as *const u8);
+                                                        let ip_src3 = core::ptr::read_volatile((buf_va + 29) as *const u8);
+                                                        if qr_rx == 1 && !d_found {
+                                                            d_response_seen = 1;
+                                                            d_txid_match = t_match;
+                                                            d_qr = qr_rx;
+                                                            d_resp_ancount = ancount_rx;
+                                                            d_resp_src = [ip_src0, ip_src1, ip_src2, ip_src3];
+                                                            d_resp_src_port = src_port_rx;
+                                                            d_round_resp += 1;
+                                                            d_found = true;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // selective rearm consumed desc
+                                        let buf_phys = pkt_pages[page_idx] + buf_off;
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                        d_rdt_cur = d_rdt_cur.wrapping_add(1) & 0x7;
+                                        core::ptr::write_volatile((virt + 0x2818) as *mut u32, d_rdt_cur);
+                                    }
+                                }
+                                serial_println!("[udp.dns.response.scan] round={} icr=0x{:08X} rx_dd={} ipv4_seen={} udp_seen={} dns_seen={} response_seen={} rdh={} rdt={} ok=1 reason=dns_poll_round",
+                                    round, d_icr_r, d_round_dd, d_round_ipv4, d_round_udp, d_round_dns, d_round_resp, d_rdh_r, d_rdt_r);
+                                if d_found { break; }
+                            }
+                            serial_println!("[udp.dns.response.observe] src_ip={}.{}.{}.{} src_port={} dst_port=49152 txid_match={} qr={} ancount={} response_seen={} fake=0 ok={} reason=dns_response_classification",
+                                d_resp_src[0], d_resp_src[1], d_resp_src[2], d_resp_src[3],
+                                d_resp_src_port, d_txid_match, d_qr, d_resp_ancount, d_response_seen, d_response_seen);
+                            serial_println!("[udp.dns.probe.done] ok={} sent=1 tx_dd={} response_seen={} fake=0",
+                                (d_tx_dd & d_checksum_ok & d_response_seen), d_tx_dd, d_response_seen);
                         }
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");
