@@ -1429,3 +1429,86 @@ Result in this lane remains:
 
 - `FINAL: PASS (245 gates proved, 0 fail, 12 skip, 0 faults)`
 - Live TCP remains frozen as environment/backend-limited (`SLiRP` no SYN-ACK/RST).
+
+---
+
+## NETWORK_SPRINT_FINAL_RUNTIME_SMOKE_V1 (2026-05-17)
+
+Runtime:
+
+```bash
+./scripts/entrypoint_build.sh
+QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexos_network_sprint_final_runtime_smoke_v1.log
+```
+
+Result: **FINAL PASS (246 gates, 0 fail, 12 skip)**.
+
+New strict marker (frozen-live-TCP + mock-browser smoke):
+
+- `[network.sprint.final.runtime.smoke.v1] mode=mock backend=user tcp_env_limited=1 syn_tx=1 synack=0 rst=0 mock_mode=1 fetched=1 status=200 bytes=98 final_ack_sent=0 http_sent=0 ok=1 ...`
+
+Gate added:
+
+- `network_sprint_final_runtime_smoke_v1 PASS` with strict field checks.
+
+---
+
+## NETWORK_SPRINT_HANDOFF_FREEZE_V1 (2026-05-17)
+
+Runtime:
+
+```bash
+./scripts/entrypoint_build.sh
+QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexos_network_sprint_handoff_freeze_v1.log
+```
+
+Result: **FINAL PASS (247 gates, 0 fail, 12 skip)**.
+
+New strict freeze marker:
+
+- `[network.sprint.handoff.freeze.v1] mode=mock backend=user done=1 tcp_env_limited=1 syn_tx=1 synack=0 rst=0 mock_mode=1 fetched=1 status=200 final_ack_sent=0 http_sent=0 ok=1 ...`
+
+Gate added:
+
+- `network_sprint_handoff_freeze_v1 PASS` with strict frozen-live-TCP mock-browser checks.
+
+---
+
+## RUNTIME_SMOKE_REAL_NETWORK_PIPELINE_V1 + DAILY_DRIVER_NETWORK_BASELINE_FREEZE_V1 (2026-05-17)
+
+Runtime:
+
+```bash
+./scripts/entrypoint_build.sh
+QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexos_runtime_baseline_v1.log
+```
+
+Result: **FINAL PASS (249 gates, 0 fail, 12 skip)**.
+
+New strict markers:
+
+- `[runtime.smoke.real.network.pipeline.v1] mode=mock backend=user tcp_env_limited=1 syn_tx=1 synack=0 rst=0 mock_mode=1 fetched=1 status=200 final_ack_sent=0 http_sent=0 ok=1 ...`
+- `[daily.driver.network.baseline.freeze.v1] mode=mock backend=user frozen=1 tcp_env_limited=1 syn_tx=1 synack=0 rst=0 mock_mode=1 fetched=1 status=200 final_ack_sent=0 http_sent=0 ok=1 ...`
+
+New strict gates:
+
+- `runtime_smoke_real_network_pipeline_v1 PASS`
+- `daily_driver_network_baseline_freeze_v1 PASS`
+
+---
+
+## REAL_HARDWARE_* Classification (2026-05-17)
+
+From `/tmp/sexos_runtime_baseline_v1.log`:
+
+- `[real.hardware.nic.audit] executed=0 ok=1 reason=qemu_phase_only`
+- `[real.hardware.e1000.fallback.plan] fallback=virtio_or_stub ok=1 reason=plan_only`
+- `[real.hardware.network.boot.proof] done=0 ok=1 reason=qemu_phase_only`
+
+Classification:
+
+- These missions are frozen as hardware-lane pending, not failed.
+- Current host lane remains QEMU-only with truthful non-hardware status.

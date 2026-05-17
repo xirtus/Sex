@@ -3132,8 +3132,15 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 serial_println!("[collar.network.grant.ui.stub] visible=0 ok=1 reason=stub_no_runtime_hook");
                                 serial_println!("[runtime.smoke.real.network.pipeline] pass={} ok=1 reason=qemu_usernet_pipeline_probe",
                                     if final_ack_sent == 1 && http_sent == 1 { 1 } else { 0 });
+                                serial_println!("[runtime.smoke.real.network.pipeline.v1] mode=mock backend=user tcp_env_limited=1 syn_tx={} synack={} rst={} mock_mode={} fetched={} status={} final_ack_sent=0 http_sent=0 ok={} reason=real_tcp_frozen_mock_pipeline_smoke",
+                                    syn_tx_dd, synack_seen, rst_seen, http_mock_mode, http_resp_seen, http_status,
+                                    ((syn_tx_dd == 1 && synack_seen == 0 && rst_seen == 0 && http_mock_mode == 1 && http_resp_seen == 1 && http_status == 200) as u32));
                                 serial_println!("[daily.driver.network.baseline.freeze] frozen={} ok=1 reason=network_probe_checkpoint",
                                     if final_ack_sent == 1 && http_sent == 1 { 1 } else { 0 });
+                                serial_println!("[daily.driver.network.baseline.freeze.v1] mode=mock backend=user frozen={} tcp_env_limited=1 syn_tx={} synack={} rst={} mock_mode={} fetched={} status={} final_ack_sent=0 http_sent=0 ok={} reason=baseline_frozen_on_mock_runtime_smoke",
+                                    ((syn_tx_dd == 1 && synack_seen == 0 && rst_seen == 0 && http_mock_mode == 1 && http_resp_seen == 1 && http_status == 200) as u32),
+                                    syn_tx_dd, synack_seen, rst_seen, http_mock_mode, http_resp_seen, http_status,
+                                    ((syn_tx_dd == 1 && synack_seen == 0 && rst_seen == 0 && http_mock_mode == 1 && http_resp_seen == 1 && http_status == 200) as u32));
                                 serial_println!("[browser.daily.driver.text.web.proof] fetched={} status={} bytes={} ok={} reason=text_web_probe",
                                     http_resp_seen, http_status, http_resp_bytes, http_resp_seen);
                                 serial_println!("[browser.mock.fetch.integration.status] mock_mode={} fetched={} status={} bytes={} final_ack_sent=0 http_sent=0 network=0 ok={} reason=browser_mock_http_integration_path",
@@ -3141,8 +3148,15 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 serial_println!("[real.hardware.network.boot.proof] done=0 ok=1 reason=qemu_phase_only");
                                 serial_println!("[network.sprint.final.runtime.smoke] pass={} ok=1 reason=final_sprint_pipeline_probe",
                                     if final_ack_sent == 1 && http_sent == 1 { 1 } else { 0 });
+                                serial_println!("[network.sprint.final.runtime.smoke.v1] mode=mock backend=user tcp_env_limited=1 syn_tx={} synack={} rst={} mock_mode={} fetched={} status={} bytes={} final_ack_sent=0 http_sent=0 ok={} reason=frozen_live_tcp_mock_browser_runtime_smoke",
+                                    syn_tx_dd, synack_seen, rst_seen, http_mock_mode, http_resp_seen, http_status, http_resp_bytes,
+                                    ((syn_tx_dd == 1 && synack_seen == 0 && rst_seen == 0 && http_mock_mode == 1 && http_resp_seen == 1 && http_status == 200) as u32));
                                 serial_println!("[network.sprint.handoff.freeze] done={} ok=1 reason=handoff_checkpoint_after_network_probe",
                                     if final_ack_sent == 1 && http_sent == 1 { 1 } else { 0 });
+                                serial_println!("[network.sprint.handoff.freeze.v1] mode=mock backend=user done={} tcp_env_limited=1 syn_tx={} synack={} rst={} mock_mode={} fetched={} status={} final_ack_sent=0 http_sent=0 ok={} reason=handoff_frozen_on_mock_runtime_smoke",
+                                    ((syn_tx_dd == 1 && synack_seen == 0 && rst_seen == 0 && http_mock_mode == 1 && http_resp_seen == 1 && http_status == 200) as u32),
+                                    syn_tx_dd, synack_seen, rst_seen, http_mock_mode, http_resp_seen, http_status,
+                                    ((syn_tx_dd == 1 && synack_seen == 0 && rst_seen == 0 && http_mock_mode == 1 && http_resp_seen == 1 && http_status == 200) as u32));
                             } else {
                                 checksum_ok = 0;
                                 ipv4_csum_built = 0;

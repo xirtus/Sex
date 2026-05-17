@@ -271,7 +271,9 @@ gate_tls_deferred_truth_spec="SKIP"
 gate_browser_no_tls_warning_ui="SKIP"
 gate_browser_http_only_fetch_proof="SKIP"
 gate_runtime_smoke_real_network_pipeline="SKIP"
+gate_runtime_smoke_real_network_pipeline_v1="SKIP"
 gate_daily_driver_network_baseline_freeze="SKIP"
+gate_daily_driver_network_baseline_freeze_v1="SKIP"
 gate_browser_daily_driver_text_web_proof_v1="SKIP"
 gate_browser_usability_keyboard_nav="SKIP"
 gate_browser_url_bar_edit_proof="SKIP"
@@ -286,7 +288,9 @@ gate_real_hardware_nic_audit="SKIP"
 gate_real_hardware_e1000_fallback_plan="SKIP"
 gate_real_hardware_network_boot_proof_v1="SKIP"
 gate_network_sprint_final_runtime_smoke="SKIP"
+gate_network_sprint_final_runtime_smoke_v1="SKIP"
 gate_network_sprint_handoff_freeze="SKIP"
+gate_network_sprint_handoff_freeze_v1="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -2191,7 +2195,9 @@ if [ "$(has 'tls.deferred.truth.spec.*ok=1')" -eq 1 ]; then gate_tls_deferred_tr
 if [ "$(has 'browser.no.tls.warning.ui.*ok=1')" -eq 1 ]; then gate_browser_no_tls_warning_ui="PASS"; print_row "browser_no_tls_warning_ui" "PASS" "no tls warning marker"; else gate_browser_no_tls_warning_ui="SKIP"; fi
 if [ "$(has 'browser.http.only.fetch.proof.*ok=1')" -eq 1 ]; then gate_browser_http_only_fetch_proof="PASS"; print_row "browser_http_only_fetch_proof" "PASS" "http-only marker"; else gate_browser_http_only_fetch_proof="SKIP"; fi
 if [ "$(has 'runtime.smoke.real.network.pipeline.*ok=1')" -eq 1 ]; then gate_runtime_smoke_real_network_pipeline="PASS"; print_row "runtime_smoke_real_network_pipeline" "PASS" "real pipeline marker"; else gate_runtime_smoke_real_network_pipeline="SKIP"; fi
+if [ "$(has 'runtime.smoke.real.network.pipeline.v1.*mode=mock.*backend=user.*tcp_env_limited=1.*syn_tx=1.*synack=0.*rst=0.*mock_mode=1.*fetched=1.*status=200.*final_ack_sent=0.*http_sent=0.*ok=1')" -eq 1 ]; then gate_runtime_smoke_real_network_pipeline_v1="PASS"; print_row "runtime_smoke_real_network_pipeline_v1" "PASS" "runtime smoke V1 proven on frozen-tcp mock lane"; else gate_runtime_smoke_real_network_pipeline_v1="SKIP"; fi
 if [ "$(has 'daily.driver.network.baseline.freeze.*ok=1')" -eq 1 ]; then gate_daily_driver_network_baseline_freeze="PASS"; print_row "daily_driver_network_baseline_freeze" "PASS" "baseline freeze marker"; else gate_daily_driver_network_baseline_freeze="SKIP"; fi
+if [ "$(has 'daily.driver.network.baseline.freeze.v1.*mode=mock.*backend=user.*frozen=1.*tcp_env_limited=1.*syn_tx=1.*synack=0.*rst=0.*mock_mode=1.*fetched=1.*status=200.*final_ack_sent=0.*http_sent=0.*ok=1')" -eq 1 ]; then gate_daily_driver_network_baseline_freeze_v1="PASS"; print_row "daily_driver_network_baseline_freeze_v1" "PASS" "baseline freeze V1 locked to frozen-tcp mock-browser lane"; else gate_daily_driver_network_baseline_freeze_v1="SKIP"; fi
 if [ "$(has 'browser.daily.driver.text.web.proof.*ok=1')" -eq 1 ]; then gate_browser_daily_driver_text_web_proof_v1="PASS"; print_row "browser_daily_driver_text_web_proof_v1" "PASS" "daily-driver text web marker"; else gate_browser_daily_driver_text_web_proof_v1="SKIP"; fi
 if [ "$(has 'browser.usability.keyboard.nav.*ok=1')" -eq 1 ]; then gate_browser_usability_keyboard_nav="PASS"; print_row "browser_usability_keyboard_nav" "PASS" "kbd nav marker"; else gate_browser_usability_keyboard_nav="SKIP"; fi
 if [ "$(has 'browser.url.bar.edit.proof.*ok=1')" -eq 1 ]; then gate_browser_url_bar_edit_proof="PASS"; print_row "browser_url_bar_edit_proof" "PASS" "url edit marker"; else gate_browser_url_bar_edit_proof="SKIP"; fi
@@ -2206,7 +2212,9 @@ if [ "$(has 'real.hardware.nic.audit.*ok=1')" -eq 1 ]; then gate_real_hardware_n
 if [ "$(has 'real.hardware.e1000.fallback.plan.*ok=1')" -eq 1 ]; then gate_real_hardware_e1000_fallback_plan="PASS"; print_row "real_hardware_e1000_fallback_plan" "PASS" "fallback plan marker"; else gate_real_hardware_e1000_fallback_plan="SKIP"; fi
 if [ "$(has 'real.hardware.network.boot.proof.*ok=1')" -eq 1 ]; then gate_real_hardware_network_boot_proof_v1="PASS"; print_row "real_hardware_network_boot_proof_v1" "PASS" "real hardware boot proof marker"; else gate_real_hardware_network_boot_proof_v1="SKIP"; fi
 if [ "$(has 'network.sprint.final.runtime.smoke.*ok=1')" -eq 1 ]; then gate_network_sprint_final_runtime_smoke="PASS"; print_row "network_sprint_final_runtime_smoke" "PASS" "final smoke marker"; else gate_network_sprint_final_runtime_smoke="SKIP"; fi
+if [ "$(has 'network.sprint.final.runtime.smoke.v1.*mode=mock.*backend=user.*tcp_env_limited=1.*syn_tx=1.*synack=0.*rst=0.*mock_mode=1.*fetched=1.*status=200.*final_ack_sent=0.*http_sent=0.*ok=1')" -eq 1 ]; then gate_network_sprint_final_runtime_smoke_v1="PASS"; print_row "network_sprint_final_runtime_smoke_v1" "PASS" "final smoke V1 proven on frozen-tcp mock-browser lane"; else gate_network_sprint_final_runtime_smoke_v1="SKIP"; fi
 if [ "$(has 'network.sprint.handoff.freeze.*ok=1')" -eq 1 ]; then gate_network_sprint_handoff_freeze="PASS"; print_row "network_sprint_handoff_freeze" "PASS" "handoff freeze marker"; else gate_network_sprint_handoff_freeze="SKIP"; fi
+if [ "$(has 'network.sprint.handoff.freeze.v1.*mode=mock.*backend=user.*done=1.*tcp_env_limited=1.*syn_tx=1.*synack=0.*rst=0.*mock_mode=1.*fetched=1.*status=200.*final_ack_sent=0.*http_sent=0.*ok=1')" -eq 1 ]; then gate_network_sprint_handoff_freeze_v1="PASS"; print_row "network_sprint_handoff_freeze_v1" "PASS" "handoff freeze V1 locked to frozen-tcp mock-browser lane"; else gate_network_sprint_handoff_freeze_v1="SKIP"; fi
 
 # ---- 94. clock_visible_seconds ----
 first_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
@@ -2763,7 +2771,9 @@ ALL_GATES=(
     "browser_no_tls_warning_ui:$gate_browser_no_tls_warning_ui"
     "browser_http_only_fetch_proof:$gate_browser_http_only_fetch_proof"
     "runtime_smoke_real_network_pipeline:$gate_runtime_smoke_real_network_pipeline"
+    "runtime_smoke_real_network_pipeline_v1:$gate_runtime_smoke_real_network_pipeline_v1"
     "daily_driver_network_baseline_freeze:$gate_daily_driver_network_baseline_freeze"
+    "daily_driver_network_baseline_freeze_v1:$gate_daily_driver_network_baseline_freeze_v1"
     "browser_daily_driver_text_web_proof_v1:$gate_browser_daily_driver_text_web_proof_v1"
     "browser_usability_keyboard_nav:$gate_browser_usability_keyboard_nav"
     "browser_url_bar_edit_proof:$gate_browser_url_bar_edit_proof"
@@ -2778,7 +2788,9 @@ ALL_GATES=(
     "real_hardware_e1000_fallback_plan:$gate_real_hardware_e1000_fallback_plan"
     "real_hardware_network_boot_proof_v1:$gate_real_hardware_network_boot_proof_v1"
     "network_sprint_final_runtime_smoke:$gate_network_sprint_final_runtime_smoke"
+    "network_sprint_final_runtime_smoke_v1:$gate_network_sprint_final_runtime_smoke_v1"
     "network_sprint_handoff_freeze:$gate_network_sprint_handoff_freeze"
+    "network_sprint_handoff_freeze_v1:$gate_network_sprint_handoff_freeze_v1"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"
