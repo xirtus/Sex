@@ -244,3 +244,14 @@ Interpretation update:
 Interpretation update:
 - Current dead-path evidence remains E1000-lane specific in this harness.
 - Next bounded lane should focus on E1000-specific driver/model assumptions (descriptor format/control bits and queue ownership semantics), not generic network plumbing.
+
+## RX Diagnostic Snapshot (r29 external-ingress trigger mode)
+- `/tmp/sexos_network_sprint_r29_ingress_external_mode.log`:
+  - `e1000.rx.ingress.mode`: `rctl_before=0x040080DA rctl_after=0x0400801A lbm=0`.
+  - `e1000.rx.ingress.trigger`: `bursts=4 tdt_after=8 icr_before=0x00000003 icr_after=0x00000003`.
+  - `e1000.rx.ring.progress`: still `rdh_before=0 rdh_after=0`.
+  - `e1000.rx.peer.observe`: still `observed=0`.
+
+Interpretation update:
+- The prior ingress-stimulus test was not blocked by loopback mode after all; forcing external-ingress mode did not change outcomes.
+- RX dead-path remains in E1000 lane despite: valid PCI command bits, TX descriptor consumption, explicit outbound burst, and loopback-off egress mode.

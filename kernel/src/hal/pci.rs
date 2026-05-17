@@ -717,6 +717,15 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         serial_println!("[network.sprint.handoff.freeze] done=0 ok=1 reason=awaiting_real_smoke_and_freeze");
 
                         // Explicit ingress-trigger burst to isolate "no inbound stimulus" vs RX-path dead.
+                        // Force loopback OFF for this burst so frames egress to usernet instead of internal loopback.
+                        let rctl_ingress_before = unsafe { core::ptr::read_volatile((virt + 0x0100) as *const u32) };
+                        let rctl_ingress_external = rctl_ingress_before & !(0x3 << 6); // clear LBM bits
+                        unsafe {
+                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_ingress_external);
+                        }
+                        let rctl_ingress_rb = unsafe { core::ptr::read_volatile((virt + 0x0100) as *const u32) };
+                        serial_println!("[e1000.rx.ingress.mode] rctl_before=0x{:08X} rctl_after=0x{:08X} lbm={} ok=1 reason=external_ingress_trigger_mode",
+                            rctl_ingress_before, rctl_ingress_rb, (rctl_ingress_rb >> 6) & 0x3);
                         let icr_trigger_before = unsafe { core::ptr::read_volatile((virt + 0x00C0) as *const u32) };
                         let mut ingress_bursts: u32 = 0;
                         unsafe {
