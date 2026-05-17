@@ -1244,3 +1244,38 @@ Detailed handoff:
   - `Could not set up host forwarding rule`.
 - Case C (`backend=tap`) fails before guest runtime:
   - `Could not open '/dev/net/tun': No such file or directory`.
+
+---
+
+## TCP_GUEST_TO_HOST_10_0_2_2_PROBE_V1 (2026-05-17)
+
+Runtime:
+
+```bash
+python3 -m http.server 18080 --bind 0.0.0.0
+QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 QEMU_NET_BACKEND=user \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexos_tcp_guest_host_10_0_2_2_probe_v1.log
+```
+
+Result: **FINAL PASS (239 gates, 0 fail, 13 skip)**.
+
+### Marker truth
+
+- `[tcp.guest.host.10_0_2_2.plan] dst_ip=10.0.2.2 dst_port=18080 ...`
+- attempts:
+  - attempt1: `src_port=49153` -> `10.0.2.2:18080`, `tx_dd=1`
+  - attempt2: `src_port=49154` -> `10.0.2.2:18080`, `tx_dd=1`
+  - attempt3: `src_port=49155` -> `10.0.2.2:18080`, `tx_dd=1`
+- `[tcp.syn.rx.synack] ... synack_seen=0 rst_seen=0 ...`
+- `[tcp.guest.host.10_0_2_2.probe.done] ... synack_seen=0 rst_seen=0 final_ack_sent=0 http_sent=0 ok=1 ...`
+- `[qemu.net.config] backend=user model=e1000e usernet=1 hostfwd=none tap_if=tap0`
+
+### Safety constraints preserved
+
+- Final ACK deferred: `[tcp.handshake.ack.tx.post] ... sent=0 ...`
+- HTTP deferred: `[http.get.send.proof] sent=0 ...`
+
+### Updated diagnosis
+
+No SYN-ACK and no RST are observed even on guest->host SLiRP gateway target with a local listener path.
+This further points to backend/policy behavior for this raw TCP lane rather than target DNS/domain selection.
