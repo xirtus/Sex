@@ -1357,3 +1357,37 @@ Result: **FINAL PASS (241 gates, 0 fail, 13 skip)**.
 - `HOSTFWD_ENV_FIX_PLAN_V1`
 - `TCP_WITH_CAPTURE_BACKEND_PROOF_V1`
 - Browser integration with bounded local/mock HTTP until backend TCP-response path is available
+
+---
+
+## Sprint Pivot After SLiRP Freeze (2026-05-17)
+
+Live TCP is frozen in this host lane; sprint moved to environment plans + mock browser integration.
+
+### 1) TAP_HOST_ENV_FIX_PLAN_V1
+- Plan doc: `docs/handoff/TAP_HOST_ENV_FIX_PLAN_V1.md`
+- Objective: unlock backend with observable TCP replies (`synack`/`rst`) via tap backend.
+
+### 2) HOSTFWD_ENV_FIX_PLAN_V1
+- Plan doc: `docs/handoff/HOSTFWD_ENV_FIX_PLAN_V1.md`
+- Objective: repair hostfwd startup path and re-run deterministic guest->host listener probe.
+
+### 3) HTTP_RESPONSE_BOUNDED_BUFFER_MOCK_PROOF_V1
+- Marker: `[http.response.bounded.buffer.mock.proof] cap=4096 used=98 overflow=0 source=mock network=0 ok=1 ...`
+
+### 4) HTTP_RESPONSE_TO_HTML_SUBSET_FEED_V1
+- Marker: `[http.response.to.html.subset.feed.v1] fed=1 bytes=98 source=mock network=0 ok=1 ...`
+
+### 5) BROWSER_REMOTE_TEXT_RENDER_PROOF_V1
+- Marker: `[browser.remote.text.render.proof.v1] rendered=1 bytes=98 source=mock network=0 ok=1 ...`
+- Integration status: `[browser.mock.fetch.integration.status] mock_mode=1 fetched=1 status=200 bytes=98 final_ack_sent=0 http_sent=0 network=0 ok=1 ...`
+
+Runtime used:
+
+```bash
+./scripts/entrypoint_build.sh
+QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexos_mock_http_browser_integration_v1.log
+```
+
+Result: **FINAL PASS (245 gates, 0 fail, 12 skip, 0 faults)**.

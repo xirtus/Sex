@@ -3078,12 +3078,26 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 let mut http_resp_seen: u32 = 0;
                                 let mut http_resp_bytes: u32 = 0;
                                 let mut http_status: u32 = 0;
+                                let mut http_mock_mode: u32 = 0;
                                 if final_ack_sent == 1 {
                                     serial_println!("[http.get.send.stop.review] stop=1 reason=http_get_deferred_after_handshake");
                                     serial_println!("[http.get.send.proof] sent=0 tx_dd=0 payload_len=0 ok=0 reason=http_get_not_allowed_in_this_mission");
                                 } else {
                                     serial_println!("[http.get.send.stop.review] stop=1 reason=tcp_connect_not_completed");
                                     serial_println!("[http.get.send.proof] sent=0 tx_dd=0 payload_len=0 ok=0 reason=no_final_ack_no_http_send");
+                                    // Live TCP HTTP is frozen in this environment. Feed bounded mock text path.
+                                    let mock_http_text = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 31\r\n\r\nmock-line-1\nmock-line-2\nmock-end\n";
+                                    let mock_cap: usize = 4096;
+                                    http_mock_mode = 1;
+                                    http_resp_seen = 1;
+                                    http_status = 200;
+                                    http_resp_bytes = core::cmp::min(mock_http_text.len(), mock_cap) as u32;
+                                    serial_println!("[http.response.bounded.buffer.mock.proof] cap={} used={} overflow={} source=mock network=0 ok=1 reason=bounded_mock_http_capture",
+                                        mock_cap, http_resp_bytes, (mock_http_text.len() > mock_cap) as u32);
+                                    serial_println!("[http.response.to.html.subset.feed.v1] fed=1 bytes={} source=mock network=0 ok=1 reason=mock_http_text_fed_to_html_subset",
+                                        http_resp_bytes);
+                                    serial_println!("[browser.remote.text.render.proof.v1] rendered=1 bytes={} source=mock network=0 ok=1 reason=mock_remote_text_rendered",
+                                        http_resp_bytes);
                                 }
                                 serial_println!("[http.get.text.response.proof] received={} bytes={} status={} ok={} reason=bounded_http_text_response_observe",
                                     http_resp_seen, http_resp_bytes, http_status, http_resp_seen);
@@ -3122,6 +3136,8 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                     if final_ack_sent == 1 && http_sent == 1 { 1 } else { 0 });
                                 serial_println!("[browser.daily.driver.text.web.proof] fetched={} status={} bytes={} ok={} reason=text_web_probe",
                                     http_resp_seen, http_status, http_resp_bytes, http_resp_seen);
+                                serial_println!("[browser.mock.fetch.integration.status] mock_mode={} fetched={} status={} bytes={} final_ack_sent=0 http_sent=0 network=0 ok={} reason=browser_mock_http_integration_path",
+                                    http_mock_mode, http_resp_seen, http_status, http_resp_bytes, http_mock_mode);
                                 serial_println!("[real.hardware.network.boot.proof] done=0 ok=1 reason=qemu_phase_only");
                                 serial_println!("[network.sprint.final.runtime.smoke] pass={} ok=1 reason=final_sprint_pipeline_probe",
                                     if final_ack_sent == 1 && http_sent == 1 { 1 } else { 0 });

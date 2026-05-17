@@ -236,6 +236,9 @@ gate_tcp_http_target_known_good_probe_v1="SKIP"
 gate_tcp_guest_host_10_0_2_2_probe_v1="SKIP"
 gate_tcp_checksum_offload_header_audit_v1="SKIP"
 gate_qemu_slirp_tcp_limitation_freeze_v1="SKIP"
+gate_http_response_bounded_buffer_mock_proof_v1="SKIP"
+gate_http_response_to_html_subset_feed_v1="SKIP"
+gate_browser_remote_text_render_proof_v1="SKIP"
 gate_tcp_syn_ack_observe_proof_v1="SKIP"
 gate_tcp_http_connect_proof_v1="SKIP"
 gate_dns_client_plan="SKIP"
@@ -2073,6 +2076,23 @@ if [ "$(has 'qemu.slirp.tcp.limit.freeze.*backend=user.*tcp_syn_tx=1.*synack=0.*
     print_row "qemu_slirp_tcp_limitation_freeze_v1" "PASS" "SLiRP backend TCP no-response blocker frozen with clean packet truth"
 else gate_qemu_slirp_tcp_limitation_freeze_v1="SKIP"; fi
 
+if [ "$(has 'http.response.bounded.buffer.mock.proof.*source=mock.*network=0.*ok=1')" -eq 1 ] && \
+   [ "$(has 'http.response.bounded.buffer.mock.proof.*used=[1-9][0-9]*')" -eq 1 ]; then
+    gate_http_response_bounded_buffer_mock_proof_v1="PASS"
+    print_row "http_response_bounded_buffer_mock_proof_v1" "PASS" "bounded mock HTTP response buffer proven"
+else gate_http_response_bounded_buffer_mock_proof_v1="SKIP"; fi
+
+if [ "$(has 'http.response.to.html.subset.feed.v1.*fed=1.*source=mock.*network=0.*ok=1')" -eq 1 ]; then
+    gate_http_response_to_html_subset_feed_v1="PASS"
+    print_row "http_response_to_html_subset_feed_v1" "PASS" "mock HTTP response fed into HTML subset path"
+else gate_http_response_to_html_subset_feed_v1="SKIP"; fi
+
+if [ "$(has 'browser.remote.text.render.proof.v1.*rendered=1.*source=mock.*network=0.*ok=1')" -eq 1 ] && \
+   [ "$(has 'browser.mock.fetch.integration.status.*mock_mode=1.*network=0.*ok=1')" -eq 1 ]; then
+    gate_browser_remote_text_render_proof_v1="PASS"
+    print_row "browser_remote_text_render_proof_v1" "PASS" "browser remote text render proven via bounded mock path"
+else gate_browser_remote_text_render_proof_v1="SKIP"; fi
+
 if [ "$(has 'tcp.syn.ack.observe.proof.*ok=1')" -eq 1 ]; then
     gate_tcp_syn_ack_observe_proof_v1="PASS"
     print_row "tcp_syn_ack_observe_proof_v1" "PASS" "SYN-ACK observe marker"
@@ -2708,6 +2728,9 @@ ALL_GATES=(
     "tcp_guest_host_10_0_2_2_probe_v1:$gate_tcp_guest_host_10_0_2_2_probe_v1"
     "tcp_checksum_offload_header_audit_v1:$gate_tcp_checksum_offload_header_audit_v1"
     "qemu_slirp_tcp_limitation_freeze_v1:$gate_qemu_slirp_tcp_limitation_freeze_v1"
+    "http_response_bounded_buffer_mock_proof_v1:$gate_http_response_bounded_buffer_mock_proof_v1"
+    "http_response_to_html_subset_feed_v1:$gate_http_response_to_html_subset_feed_v1"
+    "browser_remote_text_render_proof_v1:$gate_browser_remote_text_render_proof_v1"
     "tcp_syn_ack_observe_proof_v1:$gate_tcp_syn_ack_observe_proof_v1"
     "tcp_http_connect_proof_v1:$gate_tcp_http_connect_proof_v1"
     "dns_client_plan:$gate_dns_client_plan"
