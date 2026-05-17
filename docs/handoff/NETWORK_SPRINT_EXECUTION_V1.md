@@ -306,3 +306,16 @@ Interpretation update:
 
 Interpretation update:
 - The dominant blocker is now sharper: RX descriptor done-bit never asserts (`dd_set=0`) across repeated polls, with queue-control registers still reading disabled/default in this environment.
+
+## Additional Lane Progress (r36)
+- `/tmp/sexos_network_sprint_r36_rx_queue_init.log`:
+  - Added explicit RX queue-control init/writeback marker:
+    - `e1000.rx.queue.init.proof`
+    - Programs `SRRCTL(0)`, `RXCSUM`, `RXDCTL(0)` and reads them back in the replay snapshot.
+  - Runtime evidence still reads default values:
+    - `srrctl=0x00000000`, `rxcsum=0x00000000`, `rxdctl=0x00000000`, `rxdctl_en=0`.
+  - `e1000.rx.dd.observe` remains `dd_set=0`.
+  - Gate result remained `FINAL PASS (226/0/0)`.
+
+Interpretation update:
+- The RX dead-path is consistent with queue-control writes not taking effect on this emulated register path (or being reset/ignored), while `RCTL.EN` remains asserted.

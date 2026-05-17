@@ -439,23 +439,31 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         serial_println!("[e1000.rx.filter.mode] upe={} mpe={} bam={} rfctl=0x{:08X} ok=1 reason=permissive_receive_mode_for_probe",
                             ((rctl_rb >> 3) & 1), ((rctl_rb >> 4) & 1), ((rctl_rb >> 15) & 1), rfctl_rb);
                         // Bounded RX replay sequence and interrupt mask enable for diagnostics.
+                        let srrctl_init: u32 = 0x0000_0002; // one 2KB buffer descriptor (legacy RX)
+                        let rxcsum_init: u32 = 0x0000_0000; // checksum off for deterministic bring-up
+                        let rxdctl_init: u32 = 0x0200_0000 | (8 << 16) | (4 << 8) | 4; // ENABLE + thresholds
                         unsafe {
                             core::ptr::write_volatile((virt + 0x2808) as *mut u32, 128); // RDLEN
                             core::ptr::write_volatile((virt + 0x2810) as *mut u32, 0);   // RDH
                             core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7);   // RDT
-                            // RXDCTL0: set queue enable + host threshold defaults for bring-up probe.
-                            core::ptr::write_volatile((virt + 0x2828) as *mut u32, 0x0200_0000 | (8 << 16) | (4 << 8) | 4);
+                            core::ptr::write_volatile((virt + 0x280C) as *mut u32, srrctl_init); // SRRCTL(0)
+                            core::ptr::write_volatile((virt + 0x5000) as *mut u32, rxcsum_init); // RXCSUM
+                            core::ptr::write_volatile((virt + 0x2828) as *mut u32, rxdctl_init); // RXDCTL(0)
                             core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_rb | (1 << 1) | (1 << 3) | (1 << 4) | (1 << 15) | (1 << 26)); // RCTL
                             core::ptr::write_volatile((virt + 0x00D0) as *mut u32, 0x0000_0083); // IMS: RX/TX/LSC diag bits
                         }
                         let rdlen_replay = unsafe { core::ptr::read_volatile((virt + 0x2808) as *const u32) };
                         let rdh_replay = unsafe { core::ptr::read_volatile((virt + 0x2810) as *const u32) };
                         let rdt_replay2 = unsafe { core::ptr::read_volatile((virt + 0x2818) as *const u32) };
+                        let srrctl_replay = unsafe { core::ptr::read_volatile((virt + 0x280C) as *const u32) };
+                        let rxcsum_replay = unsafe { core::ptr::read_volatile((virt + 0x5000) as *const u32) };
                         let rxdctl_replay = unsafe { core::ptr::read_volatile((virt + 0x2828) as *const u32) };
                         let rctl_replay2 = unsafe { core::ptr::read_volatile((virt + 0x0100) as *const u32) };
                         let ims_replay = unsafe { core::ptr::read_volatile((virt + 0x00D0) as *const u32) };
-                        serial_println!("[e1000.rx.replay.order] rdlen={} rdh={} rdt={} rxdctl=0x{:08X} rctl=0x{:08X} ims=0x{:08X} ok=1 reason=explicit_rx_order_replay",
-                            rdlen_replay, rdh_replay, rdt_replay2, rxdctl_replay, rctl_replay2, ims_replay);
+                        serial_println!("[e1000.rx.replay.order] rdlen={} rdh={} rdt={} srrctl=0x{:08X} rxcsum=0x{:08X} rxdctl=0x{:08X} rctl=0x{:08X} ims=0x{:08X} ok=1 reason=explicit_rx_order_replay",
+                            rdlen_replay, rdh_replay, rdt_replay2, srrctl_replay, rxcsum_replay, rxdctl_replay, rctl_replay2, ims_replay);
+                        serial_println!("[e1000.rx.queue.init.proof] srrctl=0x{:08X} rxcsum=0x{:08X} rxdctl=0x{:08X} rxdctl_en={} ok=1 reason=rx_queue_controls_programmed",
+                            srrctl_replay, rxcsum_replay, rxdctl_replay, ((rxdctl_replay >> 25) & 1));
                         // RX queue/control offset sanity snapshot to confirm live register map.
                         let rxo_2800 = unsafe { core::ptr::read_volatile((virt + 0x2800) as *const u32) }; // RDBAL
                         let rxo_2804 = unsafe { core::ptr::read_volatile((virt + 0x2804) as *const u32) }; // RDBAH
