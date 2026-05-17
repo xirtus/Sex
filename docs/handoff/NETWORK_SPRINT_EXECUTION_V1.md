@@ -706,3 +706,38 @@ Check ring for existing frames BEFORE rearm. Don't write RDH. Target 10.0.2.2.
 Extend poll window to catch delayed SLiRP reply.
 
 Full findings: `docs/handoff/ARP_REPLY_TIMING_SLIRP_PROBE_V1.md`
+
+---
+
+## ARP_REPLY_CAPTURE_FIX_V1 — 2026-05-17
+
+Gates: FINAL PASS IMPLEMENTED **229**/0/2skip (e1000e).
+Log: `/tmp/sexos_arp_reply_capture_fix_v1.log`.
+
+### Result: PASS IMPLEMENTED
+
+Real ARP reply received. Gateway MAC confirmed. rdh_written=0.
+
+### Fixes Applied
+
+| Fix | Change |
+|-----|--------|
+| Ring precheck | scan ring BEFORE any rearm or send |
+| RDH write removed | never write RDH |
+| Target IP | TPA=10.0.2.1 → TPA=10.0.2.2 (SLiRP standard GW) |
+| Poll window | extended to 8×500k with selective per-desc rearm |
+
+### Gateway Confirmed
+
+| Item       | Value              |
+|------------|--------------------|
+| Gateway IP | 10.0.2.2           |
+| Gateway MAC| 52:55:0A:00:02:02  |
+| rx_dd      | 1 (round 0)        |
+| ICR        | 0x80000083 (RXT0 set) |
+
+### Next: ICMP_ECHO_REQUEST_PROOF_V1
+
+All fields known. Send ICMP echo to 10.0.2.2 with dst_mac=52:55:0A:00:02:02.
+
+Full findings: `docs/handoff/ARP_REPLY_CAPTURE_FIX_V1.md`

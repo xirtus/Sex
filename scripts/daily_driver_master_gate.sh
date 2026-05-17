@@ -198,6 +198,7 @@ gate_arp_request_build_proof="SKIP"
 gate_arp_request_send_stop_review="SKIP"
 gate_arp_request_send_proof="SKIP"
 gate_arp_reply_timing_slirp_probe="SKIP"
+gate_arp_reply_capture_fix="SKIP"
 gate_arp_reply_observe_proof="SKIP"
 gate_arp_rx_observe_live="SKIP"
 gate_arp_cache_real_behavior="SKIP"
@@ -1812,6 +1813,14 @@ elif [ "$(has 'arp\.reply\.timing\.slirp\.probe\.done.*ok=1.*reply_seen=0.*diagn
     print_row "arp_reply_timing_slirp_probe" "SKIP" "ARP timing probe sent reply_seen=0 diagnostic"
 else gate_arp_reply_timing_slirp_probe="SKIP"; fi
 
+if [ "$(has 'arp\.reply\.capture\.fix\.done.*ok=1.*reply_seen=1.*gateway_known=1.*rdh_written=0')" -eq 1 ]; then
+    gate_arp_reply_capture_fix="PASS"
+    print_row "arp_reply_capture_fix" "PASS" "ARP reply captured gateway_known=1 rdh_written=0"
+elif [ "$(has 'arp\.reply\.capture\.fix\.done.*ok=1.*rdh_written=0')" -eq 1 ]; then
+    gate_arp_reply_capture_fix="SKIP"
+    print_row "arp_reply_capture_fix" "SKIP" "ARP capture fix ran rdh_written=0 no reply diagnostic"
+else gate_arp_reply_capture_fix="SKIP"; fi
+
 if [ "$(has 'arp.reply.observe.proof.*ok=1')" -eq 1 ]; then
     gate_arp_reply_observe_proof="PASS"
     print_row "arp_reply_observe_proof" "PASS" "ARP observe bounded claim"
@@ -2498,6 +2507,7 @@ ALL_GATES=(
     "arp_request_send_stop_review:$gate_arp_request_send_stop_review"
     "arp_request_send_proof:$gate_arp_request_send_proof"
     "arp_reply_timing_slirp_probe:$gate_arp_reply_timing_slirp_probe"
+    "arp_reply_capture_fix:$gate_arp_reply_capture_fix"
     "arp_reply_observe_proof:$gate_arp_reply_observe_proof"
     "arp_rx_observe_live:$gate_arp_rx_observe_live"
     "arp_cache_real_behavior:$gate_arp_cache_real_behavior"

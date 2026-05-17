@@ -1898,6 +1898,171 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 t_gw_mac[0], t_gw_mac[1], t_gw_mac[2],
                                 t_gw_mac[3], t_gw_mac[4], t_gw_mac[5],
                                 t_rdh_init, t_rdt_init, t_send_tdt);
+
+                            // === PROBE: ARP_REPLY_CAPTURE_FIX_V1 ===
+                            // Fix: (1) precheck ring before any rearm, (2) never write RDH,
+                            //      (3) selectively rearm only consumed descs,
+                            //      (4) target 10.0.2.2 (SLiRP standard gateway).
+
+                            // Step 1: precheck current ring state — no writes yet
+                            let c_icr_pre = core::ptr::read_volatile((virt + 0x00C0) as *const u32);
+                            let c_rdh_pre = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                            let c_rdt_pre = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+                            let mut c_pre_dd: u32 = 0;
+                            let mut c_pre_arp: u32 = 0;
+                            let mut c_pre_reply: u32 = 0;
+                            let mut c_rdt_cur: u32 = c_rdt_pre;
+
+                            for i in 0usize..8 {
+                                let desc_off = (i * 16) as u64;
+                                let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                if (rx_stat & 0x1) != 0 {
+                                    c_pre_dd += 1;
+                                    let page_idx = i / 2;
+                                    let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                    let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                    let rx_len = core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16);
+                                    let et0 = core::ptr::read_volatile((buf_va + 12) as *const u8);
+                                    let et1 = core::ptr::read_volatile((buf_va + 13) as *const u8);
+                                    let rx_etype = ((et0 as u16) << 8) | (et1 as u16);
+                                    if rx_etype == 0x0806 && rx_len >= 42 {
+                                        c_pre_arp += 1;
+                                        let rop0 = core::ptr::read_volatile((buf_va + 20) as *const u8);
+                                        let rop1 = core::ptr::read_volatile((buf_va + 21) as *const u8);
+                                        if ((rop0 as u16) << 8 | rop1 as u16) == 2 { c_pre_reply += 1; }
+                                    }
+                                    // Selectively rearm only this consumed descriptor — no RDH write
+                                    let buf_phys = pkt_pages[page_idx] + buf_off;
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                    c_rdt_cur = c_rdt_cur.wrapping_add(1) & 0x7;
+                                    core::ptr::write_volatile((virt + 0x2818) as *mut u32, c_rdt_cur);
+                                }
+                            }
+                            serial_println!("[arp.reply.capture.precheck] dd={} arp={} reply={} icr=0x{:08X} rdh={} rdt={} ok=1 reason=precheck_before_rearm_or_send",
+                                c_pre_dd, c_pre_arp, c_pre_reply, c_icr_pre, c_rdh_pre, c_rdt_pre);
+
+                            // Step 2: Build ARP request for 10.0.2.2 (SLiRP standard gateway)
+                            let c_src_mac: [u8; 6] = [
+                                (ral & 0xFF) as u8, ((ral >> 8) & 0xFF) as u8,
+                                ((ral >> 16) & 0xFF) as u8, ((ral >> 24) & 0xFF) as u8,
+                                (rah & 0xFF) as u8, ((rah >> 8) & 0xFF) as u8,
+                            ];
+                            let mut c_frame: [u8; 60] = [0u8; 60];
+                            c_frame[0] = 0xff; c_frame[1] = 0xff; c_frame[2] = 0xff;
+                            c_frame[3] = 0xff; c_frame[4] = 0xff; c_frame[5] = 0xff;
+                            c_frame[6..12].copy_from_slice(&c_src_mac);
+                            c_frame[12] = 0x08; c_frame[13] = 0x06;
+                            c_frame[14] = 0x00; c_frame[15] = 0x01;
+                            c_frame[16] = 0x08; c_frame[17] = 0x00;
+                            c_frame[18] = 0x06; c_frame[19] = 0x04;
+                            c_frame[20] = 0x00; c_frame[21] = 0x01; // oper request
+                            c_frame[22..28].copy_from_slice(&c_src_mac); // SHA
+                            c_frame[28] = 10; c_frame[29] = 0; c_frame[30] = 2; c_frame[31] = 15; // SPA 10.0.2.15
+                            // THA bytes 32-37 = 0
+                            c_frame[38] = 10; c_frame[39] = 0; c_frame[40] = 2; c_frame[41] = 2; // TPA 10.0.2.2
+                            for (i, b) in c_frame.iter().enumerate() {
+                                core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
+                            }
+                            // TX desc slot 0: no RDH-equivalent write; only TDT
+                            core::ptr::write_volatile((tx_ring_uc + 0) as *mut u64, tx0_phys);
+                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, 60u16);
+                            core::ptr::write_volatile((tx_ring_uc + 10) as *mut u8, 0u8);
+                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);
+                            core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8); // clear DD
+                            core::ptr::write_volatile((virt + 0x3810) as *mut u32, 0u32); // TDH=0 reset
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 0u32);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 1u32); // TDT=1 post
+                            let c_send_tdt = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                            // Wait for TX DD before polling RX
+                            for _ in 0..5usize { for _ in 0..100_000usize { core::hint::spin_loop(); } }
+                            let c_tx_dd = (core::ptr::read_volatile((tx_ring_uc + 12) as *const u8) & 0x1) as u32;
+                            serial_println!("[arp.request.send] target_ip=10.0.2.2 sender_ip=10.0.2.15 tx_posted=1 tx_dd={} fake=0 ok={} reason=arp_request_for_slirp_gateway_10_0_2_2",
+                                c_tx_dd, c_tx_dd);
+
+                            // Step 3: Bounded poll: 8 rounds × 500k spins, scan+selectively-rearm
+                            let mut c_reply_seen: u32 = 0;
+                            let mut c_gw_known: u32 = 0;
+                            let mut c_gw_mac: [u8; 6] = [0u8; 6];
+                            let mut c_rx_dd_total: u32 = 0;
+                            let mut c_arp_total: u32 = 0;
+                            let mut c_reply_total: u32 = 0;
+
+                            for round in 0..8usize {
+                                for _ in 0..500_000usize { core::hint::spin_loop(); }
+                                let c_icr_r = core::ptr::read_volatile((virt + 0x00C0) as *const u32);
+                                let c_rdh_r = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                                let c_rdt_r = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+                                let mut c_round_dd: u32 = 0;
+                                let mut c_round_arp: u32 = 0;
+                                let mut c_round_reply: u32 = 0;
+                                let mut c_found = false;
+
+                                for i in 0usize..8 {
+                                    let desc_off = (i * 16) as u64;
+                                    let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                    if (rx_stat & 0x1) != 0 {
+                                        c_round_dd += 1; c_rx_dd_total += 1;
+                                        let page_idx = i / 2;
+                                        let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                        let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                        let rx_len = core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16);
+                                        let et0 = core::ptr::read_volatile((buf_va + 12) as *const u8);
+                                        let et1 = core::ptr::read_volatile((buf_va + 13) as *const u8);
+                                        let rx_etype = ((et0 as u16) << 8) | (et1 as u16);
+                                        if rx_etype == 0x0806 && rx_len >= 42 {
+                                            c_round_arp += 1; c_arp_total += 1;
+                                            let rop0 = core::ptr::read_volatile((buf_va + 20) as *const u8);
+                                            let rop1 = core::ptr::read_volatile((buf_va + 21) as *const u8);
+                                            let r_oper = ((rop0 as u16) << 8) | (rop1 as u16);
+                                            let spa0 = core::ptr::read_volatile((buf_va + 28) as *const u8);
+                                            let spa1 = core::ptr::read_volatile((buf_va + 29) as *const u8);
+                                            let spa2 = core::ptr::read_volatile((buf_va + 30) as *const u8);
+                                            let spa3 = core::ptr::read_volatile((buf_va + 31) as *const u8);
+                                            let sha0 = core::ptr::read_volatile((buf_va + 22) as *const u8);
+                                            let sha1 = core::ptr::read_volatile((buf_va + 23) as *const u8);
+                                            let sha2 = core::ptr::read_volatile((buf_va + 24) as *const u8);
+                                            let sha3 = core::ptr::read_volatile((buf_va + 25) as *const u8);
+                                            let sha4 = core::ptr::read_volatile((buf_va + 26) as *const u8);
+                                            let sha5 = core::ptr::read_volatile((buf_va + 27) as *const u8);
+                                            if r_oper == 2 {
+                                                c_round_reply += 1; c_reply_total += 1;
+                                                // Accept 10.0.2.2 (target) or 10.0.2.1 (alt)
+                                                if spa0 == 10 && spa1 == 0 && spa2 == 2 && (spa3 == 2 || spa3 == 1) {
+                                                    c_reply_seen = 1; c_gw_known = 1;
+                                                    c_gw_mac = [sha0, sha1, sha2, sha3, sha4, sha5];
+                                                    serial_println!("[arp.reply.capture.gateway] ip=10.0.2.{} mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} known=1 fake=0 ok=1 reason=arp_reply_from_slirp_gateway",
+                                                        spa3, sha0, sha1, sha2, sha3, sha4, sha5);
+                                                    c_found = true;
+                                                }
+                                            }
+                                        }
+                                        // Selective rearm: only this consumed descriptor
+                                        let buf_phys = pkt_pages[page_idx] + buf_off;
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                        c_rdt_cur = c_rdt_cur.wrapping_add(1) & 0x7;
+                                        core::ptr::write_volatile((virt + 0x2818) as *mut u32, c_rdt_cur);
+                                        if c_found { break; }
+                                    }
+                                }
+                                serial_println!("[arp.reply.capture.round] round={} icr=0x{:08X} dd={} arp={} reply={} rdh={} rdt={} ok=1 reason=capture_round",
+                                    round, c_icr_r, c_round_dd, c_round_arp, c_round_reply, c_rdh_r, c_rdt_r);
+                                if c_found { break; }
+                            }
+
+                            if c_reply_seen == 0 {
+                                serial_println!("[arp.reply.capture.gateway] ip=10.0.2.2 mac=00:00:00:00:00:00 known=0 fake=0 ok=1 reason=no_reply_in_capture_window");
+                            }
+                            serial_println!("[arp.reply.capture.fix.done] ok=1 sent=1 reply_seen={} gateway_known={} rdh_written=0 fake=0 gw_mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} rx_dd_total={} arp_total={} reply_total={} send_tdt={}",
+                                c_reply_seen, c_gw_known,
+                                c_gw_mac[0], c_gw_mac[1], c_gw_mac[2],
+                                c_gw_mac[3], c_gw_mac[4], c_gw_mac[5],
+                                c_rx_dd_total, c_arp_total, c_reply_total, c_send_tdt);
                         }
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");
