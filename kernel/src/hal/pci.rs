@@ -1289,6 +1289,54 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             if own_rdh_after > own_rdh_before { 1u32 } else { 0u32 },
                             bank_hw_mutated,
                             bank_selected);
+
+                        // === PROBE: RX descriptor address-width and base-address verification ===
+                        // Verify RDBAL/RDBAH readback matches rx_p split.
+                        // Verify desc[0] buffer address readback matches pkt_pages[0].
+                        // Check all addresses are below 4 GiB and properly aligned.
+                        let aw_rdbal_rb: u32;
+                        let aw_rdbah_rb: u32;
+                        let aw_reconstructed: u64;
+                        let aw_ring_below4g: u32;
+                        let aw_ring_match: u32;
+                        let aw_ring_align16: u32;
+                        let aw_ring_align4k: u32;
+                        let aw_desc0_buf: u64;
+                        let aw_buf0_phys: u64 = pkt_pages[0];
+                        let aw_buf_below4g: u32;
+                        let aw_buf_match: u32;
+                        let aw_buf_align16: u32;
+                        let aw_buf_align2048: u32;
+                        let aw_ok: u32;
+                        unsafe {
+                            aw_rdbal_rb = core::ptr::read_volatile((virt + 0x2800) as *const u32);
+                            aw_rdbah_rb = core::ptr::read_volatile((virt + 0x2804) as *const u32);
+                            aw_reconstructed = ((aw_rdbah_rb as u64) << 32) | (aw_rdbal_rb as u64);
+                            aw_ring_below4g = if rx_p < 0x1_0000_0000u64 { 1 } else { 0 };
+                            aw_ring_match = if aw_reconstructed == rx_p { 1 } else { 0 };
+                            aw_ring_align16 = if rx_p % 16 == 0 { 1 } else { 0 };
+                            aw_ring_align4k = if rx_p % 4096 == 0 { 1 } else { 0 };
+                            // Read desc[0] buffer pointer from ring memory (UC alias).
+                            aw_desc0_buf = core::ptr::read_volatile(rx_ring_uc as *const u64);
+                            aw_buf_below4g = if aw_buf0_phys < 0x1_0000_0000u64 { 1 } else { 0 };
+                            aw_buf_match = if aw_desc0_buf == aw_buf0_phys { 1 } else { 0 };
+                            aw_buf_align16 = if aw_buf0_phys % 16 == 0 { 1 } else { 0 };
+                            aw_buf_align2048 = if aw_buf0_phys % 2048 == 0 { 1 } else { 0 };
+                            aw_ok = aw_ring_match & aw_buf_match & aw_ring_below4g & aw_buf_below4g;
+                            serial_println!("[e1000.rx.addr.width.ring] rx_phys=0x{:016X} rdbal=0x{:08X} rdbah=0x{:08X} reconstructed=0x{:016X} below4g={} match={} align16={} align4k={} ok={} reason=rdbal_rdbah_phys_audit",
+                                rx_p, aw_rdbal_rb, aw_rdbah_rb, aw_reconstructed,
+                                aw_ring_below4g, aw_ring_match, aw_ring_align16, aw_ring_align4k,
+                                aw_ring_match & aw_ring_below4g);
+                            serial_println!("[e1000.rx.addr.width.buffer] desc0_buf=0x{:016X} buf0_phys=0x{:016X} below4g={} match={} align16={} align2048={} ok={} reason=desc0_buffer_addr_audit",
+                                aw_desc0_buf, aw_buf0_phys,
+                                aw_buf_below4g, aw_buf_match, aw_buf_align16, aw_buf_align2048,
+                                aw_buf_match & aw_buf_below4g);
+                            serial_println!("[e1000.rx.addr.width.truth] address_width_ok={} ring_align_ok={} buffer_align_ok={} rdh={} rdt={} dd={} ok={} reason=address_width_sanity_classification",
+                                aw_ok, aw_ring_align4k, aw_buf_align2048,
+                                rdh_after, rdt_after, rx_dd_set, aw_ok);
+                            serial_println!("[e1000.rx.addr.width.done] ok={} address_width_ok={} packets=0",
+                                aw_ok, aw_ok);
+                        }
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");
                         serial_println!("[e1000.packet.buffer.uc] pages=8 aliases=0 flags=NO_CACHE|WRITE_THROUGH flush=0 ok=0 reason=alloc_failed_no_pages");

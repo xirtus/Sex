@@ -408,3 +408,47 @@ Confirm RDBAL/RDBAH point to physically correct addresses (check RDBAH if ring >
 Fallback: QEMU_E1000_MODEL_SWITCH_82540EM_V1 if format confirmed correct.
 
 Full findings: `docs/handoff/E1000_RX_BANK_PERSISTENCE_OWNERSHIP_PROBE_V1.md`
+
+---
+
+## Session: E1000_RX_DESCRIPTOR_ADDRESS_WIDTH_PROBE_V1 (2026-05-17)
+
+Gates: FINAL PASS 226/0/0. Log: `/tmp/sexos_e1000_rx_descriptor_address_width_probe_v1.log`.
+
+### Ring Base Address Table
+
+| rx_phys            | RDBAL      | RDBAH      | Reconstructed      | below4g | match | align4k |
+|--------------------|------------|------------|--------------------|---------|-------|---------|
+| 0x000000001F86C000 | 0x1F86C000 | 0x00000000 | 0x000000001F86C000 | YES     | YES   | YES     |
+
+### Buffer Address Table
+
+| desc0_buf          | buf0_phys          | below4g | match | align2048 |
+|--------------------|--------------------|---------|-------|-----------|
+| 0x00000000102AB000 | 0x00000000102AB000 | YES     | YES   | YES       |
+
+### Conclusion: address_width_ok=1 — NOT the blocker
+
+- RDBAL/RDBAH correctly split and read back.
+- Buffer address in descriptor[0] exactly matches pkt_pages[0].
+- All addresses below 4 GiB, properly aligned.
+- RX still dead: `rdh=0, rdt=7, dd=0`.
+
+### Ruled out so far
+
+| Cause                         | Status        |
+|-------------------------------|---------------|
+| RXDCTL/SRRCTL not latching    | CONFIRMED stub |
+| RDBAL/RDBAH wrong             | RULED OUT     |
+| Address above 4 GiB           | RULED OUT     |
+| Buffer addr mismatch in desc  | RULED OUT     |
+| Alignment fault               | RULED OUT     |
+| RCTL.EN not set               | RULED OUT     |
+
+### Next: E1000_RX_DESCRIPTOR_FORMAT_VARIANT_PROBE_V1
+
+Primary: enable RCTL.LBM=3 BEFORE sending TX frame — if RX gets that frame,
+descriptor processing works and only external traffic is missing.
+Secondary: probe RCTL.BSIZE variants, explicit descriptor field layout verification.
+
+Full findings: `docs/handoff/E1000_RX_DESCRIPTOR_ADDRESS_WIDTH_PROBE_V1.md`
