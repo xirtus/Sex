@@ -294,3 +294,15 @@ Interpretation update:
 Interpretation update:
 - Browser grant control lane now records exercised policy review without granting capability.
 - RX blocker remains unresolved: no descriptor completion despite control-plane bits and repeated ingress/rearm probes.
+
+## Additional Lane Progress (r35)
+- `/tmp/sexos_network_sprint_r35_rx_dd_observe.log`:
+  - Added `e1000.rx.dd.observe` marker to count descriptor polling and completion-bit observations:
+    - `polled=64 dd_set=0` in this run.
+  - Confirmed RX control snapshot in same run:
+    - `e1000.rx.ctrl.diag` showed `rctl_en=1`, `rctl_bam=1`, `rxdctl_en=0`, `srrctl=0`, `rxdctl=0`.
+  - `e1000.rx.peer.observe` remained `observed=0` with no ARP/ICMP/UDP/DNS replies.
+  - Gate result remained `FINAL PASS (226/0/0)`.
+
+Interpretation update:
+- The dominant blocker is now sharper: RX descriptor done-bit never asserts (`dd_set=0`) across repeated polls, with queue-control registers still reading disabled/default in this environment.

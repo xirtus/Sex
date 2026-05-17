@@ -983,6 +983,8 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         let mut udp_seen: u32 = 0;
                         let mut dns_reply_seen: u32 = 0;
                         let mut rearm_writes: u32 = 0;
+                        let mut rx_desc_polled: u32 = 0;
+                        let mut rx_dd_set: u32 = 0;
                         unsafe {
                             for poll_round in 0usize..8 {
                                 if poll_round < 3 {
@@ -1025,9 +1027,11 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                     let desc_off = (i * 16) as u64;
                                     let rx_len: u16 = core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16);
                                     let rx_stat: u8 = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                    rx_desc_polled += 1;
                                     if (rx_stat & 0x1) == 0 || rx_len < 14 {
                                         continue;
                                     }
+                                    rx_dd_set += 1;
                                     rx_seen += 1;
                                     let page_idx = i / 2;
                                     let buf_off = if i & 1 == 0 { 0u64 } else { 2048u64 };
@@ -1087,6 +1091,8 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             rctl_en, rctl_bam, rxdctl_enable, srrctl_bsize, rxcsum_after, srrctl_after, rxdctl_after);
                         serial_println!("[e1000.rx.ring.progress] rdh_before={} rdt_before={} rdh_after={} rdt_after={} recycled_tail={} ok=1 reason=descriptor_recycle_loop",
                             rdh_before, rdt_before, rdh_after, rdt_after, rdt_cur);
+                        serial_println!("[e1000.rx.dd.observe] polled={} dd_set={} ok=1 reason=descriptor_done_bit_scan",
+                            rx_desc_polled, rx_dd_set);
                         serial_println!("[e1000.rx.peer.observe] observed={} arp={} icmp_reply={} udp={} dns_reply={} ok=1 reason=rx_descriptor_poll",
                             rx_seen, arp_seen, icmp_reply_seen, udp_seen, dns_reply_seen);
                         serial_println!("[arp.cache.status.stub] entries={} valid={} ok=1 reason=runtime_observe_lane_status",
