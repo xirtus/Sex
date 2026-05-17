@@ -1318,3 +1318,42 @@ Conclusion:
 - Packet-shape (IP/TCP header/checksum/offload invariants) is now proven clean in-lane.
 - Remaining blocker is environment/backend behavior (SLiRP/TAP/hostfwd path), not SYN construction.
 - Next: `QEMU_SLIRP_TCP_LIMITATION_FREEZE_V1` or `TAP_HOST_ENV_FIX_PLAN_V1`.
+
+---
+
+## QEMU_SLIRP_TCP_LIMITATION_FREEZE_V1 (2026-05-17)
+
+Runtime:
+
+```bash
+./scripts/entrypoint_build.sh
+QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexos_qemu_slirp_tcp_limitation_freeze_v1.log
+```
+
+Result: **FINAL PASS (241 gates, 0 fail, 13 skip)**.
+
+### Freeze marker
+
+- `[qemu.slirp.tcp.limit.freeze] backend=user tcp_syn_tx=1 synack=0 rst=0 checksum_ok=1 offload_ok=1 final_ack_sent=0 http_sent=0 environment_limited=1 ok=1 reason=slirp_tcp_no_response`
+
+### Ruled-out causes (from prior and current proofs)
+
+- ARP/L2 path and gateway resolution
+- DNS/target resolution path
+- IPv4/TCP checksum correctness
+- TCP header length/options shape
+- TX descriptor/offload assumptions
+- target variation path
+- guest->host `10.0.2.2:18080` listener path
+
+### Frozen blocker
+
+- Remaining blocker is environment/backend-limited in this host lane (`user` SLiRP): SYN TX is consumed, but no SYN-ACK and no RST observed in bounded retries.
+
+### Next viable paths
+
+- `TAP_HOST_ENV_FIX_PLAN_V1`
+- `HOSTFWD_ENV_FIX_PLAN_V1`
+- `TCP_WITH_CAPTURE_BACKEND_PROOF_V1`
+- Browser integration with bounded local/mock HTTP until backend TCP-response path is available

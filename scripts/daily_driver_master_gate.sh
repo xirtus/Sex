@@ -235,6 +235,7 @@ gate_tcp_target_variant_probe_v1="SKIP"
 gate_tcp_http_target_known_good_probe_v1="SKIP"
 gate_tcp_guest_host_10_0_2_2_probe_v1="SKIP"
 gate_tcp_checksum_offload_header_audit_v1="SKIP"
+gate_qemu_slirp_tcp_limitation_freeze_v1="SKIP"
 gate_tcp_syn_ack_observe_proof_v1="SKIP"
 gate_tcp_http_connect_proof_v1="SKIP"
 gate_dns_client_plan="SKIP"
@@ -2067,6 +2068,11 @@ if [ "$(has 'tcp.header.audit.ip')" -eq 1 ] && \
     print_row "tcp_checksum_offload_header_audit_v1" "PASS" "TCP IP/TCP header checksum + TX offload invariants proven"
 else gate_tcp_checksum_offload_header_audit_v1="SKIP"; fi
 
+if [ "$(has 'qemu.slirp.tcp.limit.freeze.*backend=user.*tcp_syn_tx=1.*synack=0.*rst=0.*checksum_ok=1.*offload_ok=1.*final_ack_sent=0.*http_sent=0.*environment_limited=1.*ok=1')" -eq 1 ]; then
+    gate_qemu_slirp_tcp_limitation_freeze_v1="PASS"
+    print_row "qemu_slirp_tcp_limitation_freeze_v1" "PASS" "SLiRP backend TCP no-response blocker frozen with clean packet truth"
+else gate_qemu_slirp_tcp_limitation_freeze_v1="SKIP"; fi
+
 if [ "$(has 'tcp.syn.ack.observe.proof.*ok=1')" -eq 1 ]; then
     gate_tcp_syn_ack_observe_proof_v1="PASS"
     print_row "tcp_syn_ack_observe_proof_v1" "PASS" "SYN-ACK observe marker"
@@ -2701,6 +2707,7 @@ ALL_GATES=(
     "tcp_http_target_known_good_probe_v1:$gate_tcp_http_target_known_good_probe_v1"
     "tcp_guest_host_10_0_2_2_probe_v1:$gate_tcp_guest_host_10_0_2_2_probe_v1"
     "tcp_checksum_offload_header_audit_v1:$gate_tcp_checksum_offload_header_audit_v1"
+    "qemu_slirp_tcp_limitation_freeze_v1:$gate_qemu_slirp_tcp_limitation_freeze_v1"
     "tcp_syn_ack_observe_proof_v1:$gate_tcp_syn_ack_observe_proof_v1"
     "tcp_http_connect_proof_v1:$gate_tcp_http_connect_proof_v1"
     "dns_client_plan:$gate_dns_client_plan"

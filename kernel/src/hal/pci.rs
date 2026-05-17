@@ -3063,6 +3063,8 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 serial_println!("[tcp.guest.host.10_0_2_2.probe.done] dst_ip={}.{}.{}.{} dst_port={} attempts={} synack_seen={} rst_seen={} final_ack_sent=0 http_sent=0 ok={} reason=guest_to_host_tcp_probe_complete",
                                     variant_ips[0][0], variant_ips[0][1], variant_ips[0][2], variant_ips[0][3],
                                     tcp_probe_dst_port, syn_max_attempts, synack_seen, rst_seen, syn_sent_any);
+                                serial_println!("[qemu.slirp.tcp.limit.freeze] backend=user tcp_syn_tx={} synack={} rst={} checksum_ok={} offload_ok={} final_ack_sent=0 http_sent=0 environment_limited=1 ok=1 reason=slirp_tcp_no_response",
+                                    syn_tx_dd, synack_seen, rst_seen, (ip_ok & tcp_ok_audit), offload_ok);
                                 serial_println!("[tcp.handshake.ack.build] seq=1 ack=0 flags=0x10 payload_len=0 checksum_ok=0 ok=0 reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1");
                                 serial_println!("[tcp.handshake.ack.tx.post] seq=1 ack=0 tx_dd=0 sent=0 ok=0 reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1");
                                 serial_println!("[tcp.handshake.proof] observed={} final_ack_sent=0 seq=1 ack=0 ok=0 reason=final_ack_deferred_in_tcp_syn_send_retry_proof_v1",
