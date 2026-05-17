@@ -3,9 +3,7 @@
 
 extern crate alloc;
 
-use silkclient::{app_main, SexApp, SilkWindow};
-use sex_pdx::Rect;
-use sex_graphics::{WindowBuffer, font};
+use silkclient::{app_main, SexApp};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 // --- Bump allocator ---
@@ -38,14 +36,11 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-const BG:      u32 = 0xFF1E1E2E; 
-const FG:      u32 = 0xFFCDD6F4;
-const SURFACE: u32 = 0xFF313244;
-const ACCENT:  u32 = 0xFF89B4FA;
+const KALEIDO_SURFACE_ID: u64 = 300;
 
 struct App {
-    window: SilkWindow,
-    buffer: WindowBuffer,
+    live_text: [u8; 64],
+    live_len: usize,
 }
 
 impl SexApp for App {
@@ -98,36 +93,55 @@ impl SexApp for App {
             );
         }
         sex_pdx::serial_println!("[browser.packed_text.proof.done]");
+        sex_pdx::serial_println!("[browser.render.live_text.begin] len={}", live_len);
 
-        let window = SilkWindow::create("Kaleidoscope - Browser", 1024, 768).expect("Failed to create window");
-        let buffer = unsafe { WindowBuffer::new(window.virt_addr, 1024, 768, 1024) };
-        
-        let mut app = Self { window, buffer };
-        app.draw();
-        app
+        sex_pdx::pdx_call(
+            sex_pdx::SLOT_DISPLAY,
+            0xEC,
+            KALEIDO_SURFACE_ID,
+            (100u64 << 32) | 50u64,
+            (200u64 << 32) | 400u64,
+        );
+
+        sex_pdx::serial_println!(
+            "[browser.render.buffer.ready] virt=surface pfn=surface sid={}",
+            KALEIDO_SURFACE_ID
+        );
+
+        let text_color: u64 = 0x00CDD6F4;
+        let chunks = (live_len + 7) / 8;
+        let mut ci = 0usize;
+        while ci < chunks {
+            let offset = ci * 8;
+            let count = core::cmp::min(live_len - offset, 8);
+
+            let mut packed: u64 = 0;
+            let mut bi = 0usize;
+            while bi < count {
+                packed |= (live_text[offset + bi] as u64) << (bi * 8);
+                bi += 1;
+            }
+
+            let arg2 = (offset as u64) | ((count as u64) << 8) | (text_color << 32);
+
+            sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, 0xFB, KALEIDO_SURFACE_ID, packed, arg2);
+            ci += 1;
+        }
+
+        sex_pdx::serial_println!("[browser.render.draw_text] live=1 len={}", live_len);
+
+        sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, 0xEB, KALEIDO_SURFACE_ID, 50, 100);
+
+        sex_pdx::serial_println!("[browser.render.commit.request] window={}", KALEIDO_SURFACE_ID);
+        sex_pdx::serial_println!("[browser.render.live_text.done]");
+
+        Self { live_text, live_len }
     }
 
     fn run(&mut self, _pdx: u32) -> bool {
         let req = sex_pdx::pdx_listen_raw(1);
         if req.type_id == 0xFF_FF { return false; }
         true
-    }
-}
-
-impl App {
-    fn draw(&mut self) {
-        unsafe {
-            self.buffer.clear(BG);
-            
-            // Toolbar
-            self.buffer.draw_rect(Rect { x: 0, y: 0, width: 1024, height: 40 }, SURFACE);
-            font::draw_str(&mut self.buffer, 10, 12, b"https://sexos.org", FG, None);
-            
-            // Content area (placeholder for Servo)
-            self.buffer.draw_rect(Rect { x: 10, y: 50, width: 1004, height: 708 }, 0xFFFFFFFF);
-            font::draw_str(&mut self.buffer, 450, 380, b"Servo WebRender Placeholder", 0xFF000000, None);
-        }
-        self.window.commit(&[self.window.pfn_base]).expect("Failed to commit frame");
     }
 }
 
