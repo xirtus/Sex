@@ -464,6 +464,69 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             rdlen_replay, rdh_replay, rdt_replay2, srrctl_replay, rxcsum_replay, rxdctl_replay, rctl_replay2, ims_replay);
                         serial_println!("[e1000.rx.queue.init.proof] srrctl=0x{:08X} rxcsum=0x{:08X} rxdctl=0x{:08X} rxdctl_en={} ok=1 reason=rx_queue_controls_programmed",
                             srrctl_replay, rxcsum_replay, rxdctl_replay, ((rxdctl_replay >> 25) & 1));
+                        // E1000_RX_QUEUE_ENABLE_SEMANTICS_V1:
+                        // Probe exact ordering semantics without protocol-level behavior changes.
+                        let mut sem_a_rctl: u32 = 0;
+                        let mut sem_a_rxdctl: u32 = 0;
+                        let mut sem_a_srrctl: u32 = 0;
+                        let mut sem_a_rdlen: u32 = 0;
+                        let mut sem_a_rdh: u32 = 0;
+                        let mut sem_a_rdt: u32 = 0;
+                        let mut sem_b_rctl: u32 = 0;
+                        let mut sem_b_rxdctl: u32 = 0;
+                        let mut sem_b_srrctl: u32 = 0;
+                        let mut sem_b_rdlen: u32 = 0;
+                        let mut sem_b_rdh: u32 = 0;
+                        let mut sem_b_rdt: u32 = 0;
+                        unsafe {
+                            // Sequence A: ring+queue registers first, then RCTL.EN.
+                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_init & !(1 << 1)); // RCTL.EN=0
+                            core::ptr::write_volatile((virt + 0x2800) as *mut u32, rx_base_lo); // RDBAL
+                            core::ptr::write_volatile((virt + 0x2804) as *mut u32, rx_base_hi); // RDBAH
+                            core::ptr::write_volatile((virt + 0x2808) as *mut u32, 128);        // RDLEN
+                            core::ptr::write_volatile((virt + 0x2810) as *mut u32, 0);          // RDH
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7);          // RDT
+                            core::ptr::write_volatile((virt + 0x280C) as *mut u32, srrctl_init); // SRRCTL
+                            core::ptr::write_volatile((virt + 0x5000) as *mut u32, rxcsum_init); // RXCSUM
+                            core::ptr::write_volatile((virt + 0x2828) as *mut u32, rxdctl_init); // RXDCTL
+                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_init);   // RCTL.EN=1
+                            sem_a_rctl = core::ptr::read_volatile((virt + 0x0100) as *const u32);
+                            sem_a_rxdctl = core::ptr::read_volatile((virt + 0x2828) as *const u32);
+                            sem_a_srrctl = core::ptr::read_volatile((virt + 0x280C) as *const u32);
+                            sem_a_rdlen = core::ptr::read_volatile((virt + 0x2808) as *const u32);
+                            sem_a_rdh = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                            sem_a_rdt = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+
+                            // Sequence B: RCTL.EN first, then queue registers.
+                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_init);   // RCTL.EN=1
+                            core::ptr::write_volatile((virt + 0x2800) as *mut u32, rx_base_lo); // RDBAL
+                            core::ptr::write_volatile((virt + 0x2804) as *mut u32, rx_base_hi); // RDBAH
+                            core::ptr::write_volatile((virt + 0x2808) as *mut u32, 128);        // RDLEN
+                            core::ptr::write_volatile((virt + 0x2810) as *mut u32, 0);          // RDH
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7);          // RDT
+                            core::ptr::write_volatile((virt + 0x280C) as *mut u32, srrctl_init); // SRRCTL
+                            core::ptr::write_volatile((virt + 0x5000) as *mut u32, rxcsum_init); // RXCSUM
+                            core::ptr::write_volatile((virt + 0x2828) as *mut u32, rxdctl_init); // RXDCTL
+                            sem_b_rctl = core::ptr::read_volatile((virt + 0x0100) as *const u32);
+                            sem_b_rxdctl = core::ptr::read_volatile((virt + 0x2828) as *const u32);
+                            sem_b_srrctl = core::ptr::read_volatile((virt + 0x280C) as *const u32);
+                            sem_b_rdlen = core::ptr::read_volatile((virt + 0x2808) as *const u32);
+                            sem_b_rdh = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                            sem_b_rdt = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+                        }
+                        let sem_a_rctl_en = (sem_a_rctl >> 1) & 1;
+                        let sem_b_rctl_en = (sem_b_rctl >> 1) & 1;
+                        let sem_a_rxdctl_en = (sem_a_rxdctl >> 25) & 1;
+                        let sem_b_rxdctl_en = (sem_b_rxdctl >> 25) & 1;
+                        let sem_ring_ok_a = (sem_a_rdlen == 128 && sem_a_rdh == 0 && sem_a_rdt == 7) as u8;
+                        let sem_ring_ok_b = (sem_b_rdlen == 128 && sem_b_rdh == 0 && sem_b_rdt == 7) as u8;
+                        let queue_mode_visible = if sem_a_rxdctl != 0 || sem_b_rxdctl != 0 || sem_a_srrctl != 0 || sem_b_srrctl != 0 { 1 } else { 0 };
+                        let legacy_mode_visible = if sem_ring_ok_a == 1 && sem_ring_ok_b == 1 { 1 } else { 0 };
+                        let semantics_ok = if sem_a_rctl_en == 1 && sem_b_rctl_en == 1 && legacy_mode_visible == 1 { 1 } else { 0 };
+                        serial_println!("[e1000.rx.queue.enable.semantics.v1] seqA(rctl_en={} rxdctl_en={} rxdctl=0x{:08X} srrctl=0x{:08X} rdlen={} rdh={} rdt={} ring_ok={}) seqB(rctl_en={} rxdctl_en={} rxdctl=0x{:08X} srrctl=0x{:08X} rdlen={} rdh={} rdt={} ring_ok={}) queue_mode_visible={} legacy_mode_visible={} ok={} reason=rx_enable_order_probe",
+                            sem_a_rctl_en, sem_a_rxdctl_en, sem_a_rxdctl, sem_a_srrctl, sem_a_rdlen, sem_a_rdh, sem_a_rdt, sem_ring_ok_a,
+                            sem_b_rctl_en, sem_b_rxdctl_en, sem_b_rxdctl, sem_b_srrctl, sem_b_rdlen, sem_b_rdh, sem_b_rdt, sem_ring_ok_b,
+                            queue_mode_visible, legacy_mode_visible, semantics_ok);
                         // RX queue/control offset sanity snapshot to confirm live register map.
                         let rxo_2800 = unsafe { core::ptr::read_volatile((virt + 0x2800) as *const u32) }; // RDBAL
                         let rxo_2804 = unsafe { core::ptr::read_volatile((virt + 0x2804) as *const u32) }; // RDBAH

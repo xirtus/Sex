@@ -319,3 +319,20 @@ Interpretation update:
 
 Interpretation update:
 - The RX dead-path is consistent with queue-control writes not taking effect on this emulated register path (or being reset/ignored), while `RCTL.EN` remains asserted.
+
+## Additional Lane Progress (r37) - E1000_RX_QUEUE_ENABLE_SEMANTICS_V1
+- `/tmp/sexos_network_sprint_r37_rx_queue_enable_semantics.log`:
+  - Added `e1000.rx.queue.enable.semantics.v1` marker that probes two exact RX-enable orders:
+    - Sequence A: ring/queue regs first, then `RCTL.EN`.
+    - Sequence B: `RCTL.EN` first, then ring/queue regs.
+  - Observed in both sequences:
+    - `rctl_en=1`
+    - `rdlen=128`, `rdh=0`, `rdt=7` (`ring_ok=1`)
+    - `rxdctl=0x00000000`, `srrctl=0x00000000`, `rxdctl_en=0`
+    - `queue_mode_visible=0`, `legacy_mode_visible=1`
+  - `e1000.rx.dd.observe` remains `dd_set=0`.
+  - Gate result remained `FINAL PASS (226/0/0)`.
+
+Interpretation update:
+- For this device/model path, RX queue enable ordering (`RCTL` before/after queue regs) is not the differentiator.
+- Legacy ring registers (`RDLEN/RDH/RDT`) are stable/readable; queue-control registers (`RXDCTL/SRRCTL`) remain non-latching at zero.
