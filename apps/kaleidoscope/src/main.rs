@@ -94,13 +94,14 @@ impl SexApp for App {
         }
         sex_pdx::serial_println!("[browser.packed_text.proof.done]");
         sex_pdx::serial_println!("[browser.render.live_text.begin] len={}", live_len);
+        sex_pdx::serial_println!("[browser.visible.polish.begin] sid={}", KALEIDO_SURFACE_ID);
 
         sex_pdx::pdx_call(
             sex_pdx::SLOT_DISPLAY,
             0xEC,
             KALEIDO_SURFACE_ID,
-            (100u64 << 32) | 50u64,
-            (200u64 << 32) | 400u64,
+            (120u64 << 32) | 80u64,
+            (120u64 << 32) | 520u64,
         );
 
         sex_pdx::serial_println!(
@@ -109,12 +110,38 @@ impl SexApp for App {
         );
 
         let text_color: u64 = 0x00CDD6F4;
+        let send_text = |text: &[u8], base_offset: usize| {
+            let chunks = (text.len() + 7) / 8;
+            let mut ci = 0usize;
+            while ci < chunks {
+                let offset = ci * 8;
+                let count = core::cmp::min(text.len() - offset, 8);
+                let abs_offset = base_offset + offset;
+                let mut packed: u64 = 0;
+                let mut bi = 0usize;
+                while bi < count {
+                    packed |= (text[offset + bi] as u64) << (bi * 8);
+                    bi += 1;
+                }
+                let arg2 = (abs_offset as u64) | ((count as u64) << 8) | (text_color << 32);
+                sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, 0xFB, KALEIDO_SURFACE_ID, packed, arg2);
+                ci += 1;
+            }
+        };
+
+        let title = b"Kaleidoscope";
+        send_text(title, 0);
+        sex_pdx::serial_println!("[browser.visible.polish.text] line=0 len={}", title.len());
+
+        let status_line = b"HTTP 200 from 10.0.2.2";
+        send_text(status_line, 32);
+        sex_pdx::serial_println!("[browser.visible.polish.text] line=1 len={}", status_line.len());
+
         let chunks = (live_len + 7) / 8;
         let mut ci = 0usize;
         while ci < chunks {
             let offset = ci * 8;
             let count = core::cmp::min(live_len - offset, 8);
-
             let mut packed: u64 = 0;
             let mut bi = 0usize;
             while bi < count {
@@ -122,7 +149,7 @@ impl SexApp for App {
                 bi += 1;
             }
 
-            let arg2 = (offset as u64) | ((count as u64) << 8) | (text_color << 32);
+            let arg2 = ((64 + offset) as u64) | ((count as u64) << 8) | (text_color << 32);
 
             sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, 0xFB, KALEIDO_SURFACE_ID, packed, arg2);
             ci += 1;
@@ -134,6 +161,7 @@ impl SexApp for App {
 
         sex_pdx::serial_println!("[browser.render.commit.request] window={}", KALEIDO_SURFACE_ID);
         sex_pdx::serial_println!("[browser.render.live_text.done]");
+        sex_pdx::serial_println!("[browser.visible.polish.done]");
 
         Self { live_text, live_len }
     }
