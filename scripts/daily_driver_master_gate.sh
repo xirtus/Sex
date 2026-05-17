@@ -224,6 +224,11 @@ gate_tcp_syn_build_v1="SKIP"
 gate_tcp_syn_checksum_v1="SKIP"
 gate_tcp_syn_truth_v1="SKIP"
 gate_tcp_syn_build_proof_done_v1="SKIP"
+gate_tcp_syn_tx_post_v1="SKIP"
+gate_tcp_syn_rx_synack_v1="SKIP"
+gate_tcp_syn_rx_synack_valid_v1="SKIP"
+gate_tcp_syn_truth_send_v1="SKIP"
+gate_tcp_syn_send_proof_done_v1="SKIP"
 gate_dns_client_plan="SKIP"
 gate_dns_query_build_proof="SKIP"
 gate_dns_query_send_stop_review="SKIP"
@@ -1970,6 +1975,32 @@ if [ "$(has 'tcp.syn.build.proof.done\].*ok=1')" -eq 1 ]; then
     print_row "tcp_syn_build_proof_done_v1" "PASS" "TCP SYN build proof V1 done"
 else gate_tcp_syn_build_proof_done_v1="SKIP"; fi
 
+# ---- TCP_SYN_SEND_PROOF_V1 gates ----
+if [ "$(has 'tcp.syn.tx.post\].*ok=1')" -eq 1 ]; then
+    gate_tcp_syn_tx_post_v1="PASS"
+    print_row "tcp_syn_tx_post_v1" "PASS" "TCP SYN TX post with DD=1"
+else gate_tcp_syn_tx_post_v1="SKIP"; fi
+
+if [ "$(has 'tcp.syn.rx.synack\].*ok=1')" -eq 1 ]; then
+    gate_tcp_syn_rx_synack_v1="PASS"
+    print_row "tcp_syn_rx_synack_v1" "PASS" "TCP SYN-ACK RX poll"
+else gate_tcp_syn_rx_synack_v1="SKIP"; fi
+
+if [ "$(has 'tcp.syn.rx.synack.valid\].*ok=1')" -eq 1 ]; then
+    gate_tcp_syn_rx_synack_valid_v1="PASS"
+    print_row "tcp_syn_rx_synack_valid_v1" "PASS" "TCP SYN-ACK fields parsed"
+else gate_tcp_syn_rx_synack_valid_v1="SKIP"; fi
+
+if [ "$(has 'tcp.syn.truth.*sent=1.*ok=1')" -eq 1 ]; then
+    gate_tcp_syn_truth_send_v1="PASS"
+    print_row "tcp_syn_truth_send_v1" "PASS" "TCP SYN sent truth sent=1 final_ack_sent=0"
+else gate_tcp_syn_truth_send_v1="SKIP"; fi
+
+if [ "$(has 'tcp.syn.send.proof.done\].*ok=1')" -eq 1 ]; then
+    gate_tcp_syn_send_proof_done_v1="PASS"
+    print_row "tcp_syn_send_proof_done_v1" "PASS" "TCP SYN send proof V1 done"
+else gate_tcp_syn_send_proof_done_v1="SKIP"; fi
+
 if [ "$(has 'dns.client.plan.*ok=1')" -eq 1 ]; then
     gate_dns_client_plan="PASS"
     print_row "dns_client_plan" "PASS" "DNS plan marker"
@@ -2576,6 +2607,11 @@ ALL_GATES=(
     "tcp_syn_checksum_v1:$gate_tcp_syn_checksum_v1"
     "tcp_syn_truth_v1:$gate_tcp_syn_truth_v1"
     "tcp_syn_build_proof_done_v1:$gate_tcp_syn_build_proof_done_v1"
+    "tcp_syn_tx_post_v1:$gate_tcp_syn_tx_post_v1"
+    "tcp_syn_rx_synack_v1:$gate_tcp_syn_rx_synack_v1"
+    "tcp_syn_rx_synack_valid_v1:$gate_tcp_syn_rx_synack_valid_v1"
+    "tcp_syn_truth_send_v1:$gate_tcp_syn_truth_send_v1"
+    "tcp_syn_send_proof_done_v1:$gate_tcp_syn_send_proof_done_v1"
     "dns_client_plan:$gate_dns_client_plan"
     "dns_query_build_proof:$gate_dns_query_build_proof"
     "dns_query_send_stop_review:$gate_dns_query_send_stop_review"

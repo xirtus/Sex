@@ -39,18 +39,20 @@ Status note:
 - Implemented bounded proof markers on the E1000 TX local path (no external peer-claim).
 - ARP/ICMP send stages are currently explicit stop-review markers (`stop=1`) until dedicated Ethertype-specific frame lanes are staged.
 
-### Bundle C: UDP/TCP transport (TCP SYN BUILD ✅ implemented)
+### Bundle C: UDP/TCP transport (TCP SYN BUILD ✅ + TCP SYN SEND ✅ implemented)
 - `UDP_PACKET_MODEL_SPEC_V1`
 - `UDP_TX_BUILD_PROOF_V1`
 - `UDP_TX_SEND_STOP_REVIEW_V1`
 - `UDP_LOOPBACK_OR_QEMU_USERNET_PROOF_V1`
 - `TCP_MINIMAL_STATE_MACHINE_PLAN_V1`
-- `TCP_SYN_BUILD_PROOF_V1` ✅ IMPLEMENTED (TCP_SYN_BUILD_PROOF_V1)
-- `TCP_SYN_BUILD_PROOF_V1` ↔ new gates: tcp_syn_build_v1, tcp_syn_checksum_v1, tcp_syn_truth_v1, tcp_syn_build_proof_done_v1
+- `TCP_SYN_BUILD_PROOF_V1` ✅ IMPLEMENTED — gates: tcp_syn_build_v1, tcp_syn_checksum_v1, tcp_syn_truth_v1, tcp_syn_build_proof_done_v1
+- `TCP_SYN_SEND_PROOF_V1` ✅ IMPLEMENTED — gates: tcp_syn_tx_post_v1, tcp_syn_rx_synack_v1, tcp_syn_rx_synack_valid_v1, tcp_syn_truth_send_v1, tcp_syn_send_proof_done_v1
+- `TCP_HANDSHAKE_PROOF_V1` pending (final ACK step)
 
 Status note:
-- TCP SYN build: ✅ IMPLEMENTED on e1000e lane. Full Ethernet+IPv4+TCP(MSS) frame built targeting DNS-resolved example.com IP (172.66.147.243). IPv4 header checksum (0x2E88) and TCP checksum with pseudo-header (0x8B90) computed at runtime. No TX descriptor post. No TDT advance. syn_sent=0, tcp_sent=0, http_sent=0. Verified with manual checksum recomputation.
-- TCP SYN send/handshake remain pending for next phases: TCP_SYN_SEND_STOP_REVIEW_V1, TCP_SYN_SEND_PROOF_V1.
+- TCP SYN build: ✅ Full Ethernet+IPv4+TCP(MSS) frame with runtime checksums.
+- TCP SYN send: ✅ SYN posted to e1000e TX lane, tx_dd=1. REAL SYN-ACK received from example.com (104.20.23.154) in round 1: flags=0x12, ack_num=1, peer_seq=64001. No final ACK sent. No HTTP sent. peer_seq captured for handshake completion.
+- TCP handshake: pending — needs final ACK (seq=1, ack=64002, flags=ACK).
 
 ### Bundle D: DNS/HTTP core client (in progress: DNS parse + host resolution implemented; HTTP markers next)
 - `DNS_CLIENT_PLAN_V1`
@@ -124,11 +126,11 @@ Status note:
 
 ## Proof Notes
 - TX/RX packet claims remain bounded: local descriptor/ring/register evidence only; no external peer delivery claim in this pass.
+- **TCP SYN build + send:** ✅ SYN posted to e1000e TX, tx_dd=1, real SYN-ACK received from example.com (104.20.23.154:80 → 10.0.2.15:49153, flags=0x12, ack_num=1, peer_seq=64001). 238 gates PASS, 0 fail, 4 skip, 0 faults.
 - Runtime compile check in this shell is blocked by missing local target (`x86_64-sex`).
 - Runtime proof evidence (QEMU headless):
-  - `/tmp/sexos_network_sprint_autopilot.log` first run: marker coverage PASS but `faults_zero` false-positive due marker token (`panic=0`).
-  - `/tmp/sexos_network_sprint_autopilot_r2.log` rerun after marker fix: **FINAL PASS (224 gates, 0 fail, 0 skip)**.
-  - `/tmp/sexos_network_sprint_autopilot_r18_alt_probe.log` after RX diagnostics + alt-latch probe: **FINAL PASS (226 gates, 0 fail, 0 skip)**.
+  - `/tmp/sexos_tcp_syn_build_proof_v1.log`: **FINAL PASS (233 gates, 0 fail, 4 skip)**.
+  - `/tmp/sexos_tcp_syn_send_proof_v1.log`: **FINAL PASS (238 gates, 0 fail, 4 skip)** with real SYN-ACK. 
 
 ## RX Diagnostic Snapshot (r18)
 - `e1000.tx.consume.diag`: `desc0_status=0x01 dd=1` (TX descriptor consumed by device).
