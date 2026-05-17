@@ -699,14 +699,19 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         let rah_before = unsafe { core::ptr::read_volatile((virt + 0x5404) as *const u32) };
                         serial_println!("[e1000.rx.diag.pre] status=0x{:08X} rctl=0x{:08X} ims=0x{:08X} icr=0x{:08X} ral=0x{:08X} rah=0x{:08X} ok=1 reason=pre_poll_snapshot",
                             status_before, rctl_before, ims_before, icr_before, ral_before, rah_before);
-                        // Bounded RX init replay: reassert RCTL EN|BAM|SECRC and tail.
+                        // Bounded RX reset-ordering replay: disable RX, reset queue pointers, then re-enable.
                         unsafe {
-                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_before | (1 << 1) | (1 << 15) | (1 << 26));
+                            let rctl_disabled = rctl_before & !(1 << 1);
+                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_disabled); // clear EN
+                            core::ptr::write_volatile((virt + 0x2810) as *mut u32, 0); // RDH reset
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 0); // RDT reset empty
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7); // expose 8 desc
+                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_disabled | (1 << 1) | (1 << 15) | (1 << 26)); // re-enable
                             core::ptr::write_volatile((virt + 0x5400) as *mut u32, ral_before);
                             core::ptr::write_volatile((virt + 0x5404) as *mut u32, rah_before | (1 << 31)); // RAH AV
-                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7);
                         }
                         let rctl_replay = unsafe { core::ptr::read_volatile((virt + 0x0100) as *const u32) };
+                        let rdh_replay = unsafe { core::ptr::read_volatile((virt + 0x2810) as *const u32) };
                         let rdt_replay = unsafe { core::ptr::read_volatile((virt + 0x2818) as *const u32) };
                         let ral_replay = unsafe { core::ptr::read_volatile((virt + 0x5400) as *const u32) };
                         let rah_replay = unsafe { core::ptr::read_volatile((virt + 0x5404) as *const u32) };
@@ -715,8 +720,8 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             core::ptr::write_volatile((virt + 0x0000) as *mut u32, ctrl_before | (1 << 6)); // SLU
                         }
                         let ctrl_after = unsafe { core::ptr::read_volatile((virt + 0x0000) as *const u32) };
-                        serial_println!("[e1000.rx.init.replay] rctl=0x{:08X} rdt={} en={} bam={} secrc={} ok=1 reason=reassert_before_poll",
-                            rctl_replay, rdt_replay,
+                        serial_println!("[e1000.rx.init.replay] rctl=0x{:08X} rdh={} rdt={} en={} bam={} secrc={} ok=1 reason=disable_reset_reenable_before_poll",
+                            rctl_replay, rdh_replay, rdt_replay,
                             ((rctl_replay >> 1) & 1), ((rctl_replay >> 15) & 1), ((rctl_replay >> 26) & 1));
                         serial_println!("[e1000.rx.rar0.verify] ral=0x{:08X} rah=0x{:08X} av={} ok=1 reason=rar0_reassert_and_readback",
                             ral_replay, rah_replay, ((rah_replay >> 31) & 1));

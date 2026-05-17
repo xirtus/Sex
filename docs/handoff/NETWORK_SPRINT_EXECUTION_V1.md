@@ -168,3 +168,13 @@ Interpretation update:
 Interpretation update:
 - A concrete TX-lane correctness bug was fixed (tail-slot descriptor staging), but RX remains blocked.
 - Remaining likely blocker is RX queue/reset/enable ordering or model-specific receive path behavior in this emulation profile.
+
+## RX Diagnostic Snapshot (r23 disable-reset-reenable)
+- `/tmp/sexos_network_sprint_autopilot_r23_rx_reorder.log`:
+  - `e1000.rx.init.replay`: `reason=disable_reset_reenable_before_poll`, with `rctl=0x040080DA`, `rdh=0`, `rdt=7`, `en=1`.
+  - `e1000.rx.diag.post`: still `rdh=0 rdt=7`.
+  - `e1000.rx.peer.observe`: still `observed=0`.
+
+Interpretation update:
+- Bounded RX disable→queue reset→re-enable ordering did not unblock RX descriptor completion.
+- Next lane should target receive interrupt/cause timing and moderation registers (IMS/IMC/ICR + RDTR/RADV/RXDCTL model-specific behavior) while preserving bounded claims.
