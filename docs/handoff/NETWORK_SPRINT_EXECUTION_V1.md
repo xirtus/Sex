@@ -154,3 +154,17 @@ Interpretation:
 Interpretation update:
 - Loopback-mode enable plus post-enable TX repost did not produce RX descriptor completion in this emulation/profile.
 - Next bounded lane should focus on queue/register model mismatch (RXDCTL/register bank variant) rather than more packet-shape changes.
+
+## RX Diagnostic Snapshot (r21/r22 sequencing + TX-slot staging)
+- `/tmp/sexos_network_sprint_autopilot_r21_rx_variant_sweep.log`:
+  - `e1000.rx.ctrl.link_probe`: `slu=1` already set; reasserting CTRL.SLU did not change RX behavior.
+  - `e1000.rx.variant.apply`: rounds 0..2 exercised RCTL variants with `lbm=3`, including `lpe=1` in round 1.
+  - `e1000.rx.ring.progress`: unchanged (`rdh_before=0`, `rdh_after=0`).
+- `/tmp/sexos_network_sprint_autopilot_r22_tail_slot_stage.log`:
+  - TX path fix: descriptor staging now uses current tail slot before each tail advance (not descriptor 0 only).
+  - `e1000.rx.loopback.tx.repost`: `tdt=5 len=60` after slot-correct staging.
+  - `e1000.rx.peer.observe`: still `observed=0`; `arp=0`, `dns_reply=0`.
+
+Interpretation update:
+- A concrete TX-lane correctness bug was fixed (tail-slot descriptor staging), but RX remains blocked.
+- Remaining likely blocker is RX queue/reset/enable ordering or model-specific receive path behavior in this emulation profile.

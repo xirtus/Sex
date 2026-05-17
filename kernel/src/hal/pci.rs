@@ -568,11 +568,15 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         // Bundle C: UDP/TCP transport markers.
                         serial_println!("[udp.packet.model.spec] header=8 payload_bounded=1 checksum=deferred ok=1 reason=model_only");
                         serial_println!("[udp.tx.build.proof] built=1 src_port=5000 dst_port=5001 payload_len=16 ok=1 reason=header_payload_shape_bounded");
-                        // Exercise UDP TX lane by posting one additional descriptor tail.
+                        // Exercise UDP TX lane by staging current tail descriptor then posting.
                         unsafe {
-                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, tx_frame_len); // keep bounded frame len
-                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);  // RS|IFCS|EOP
-                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 2);             // TDT advance
+                            let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                            let slot = (tdt_cur & 0x7) as u64;
+                            let desc_off = slot * 16;
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, tx_frame_len);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011); // RS|IFCS|EOP
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);         // clear DD
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
                         }
                         let udp_tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
                         serial_println!("[udp.tx.send.stop.review] stop=0 reason=udp_tx_lane_exercised_no_peer_observe");
@@ -587,9 +591,15 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         // Bundle D: DNS/HTTP markers on bounded no-network lane.
                         serial_println!("[dns.client.plan] server=8.8.8.8 port=53 retries=2 timeout_ms=500 ok=1 reason=plan_only");
                         serial_println!("[dns.query.build.proof] built=1 qname=example.com qtype=A qclass=IN ok=1 reason=bounded_dns_query_shape");
-                        // Exercise DNS-over-UDP send lane by advancing TX tail again.
+                        // Exercise DNS-over-UDP send lane by staging current tail descriptor then posting.
                         unsafe {
-                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 3); // TDT advance
+                            let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                            let slot = (tdt_cur & 0x7) as u64;
+                            let desc_off = slot * 16;
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, tx_frame_len);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011); // RS|IFCS|EOP
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);         // clear DD
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
                         }
                         let dns_tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
                         serial_println!("[dns.query.send.stop.review] stop=0 reason=dns_tx_lane_exercised_no_response");
@@ -623,12 +633,19 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         arp_frame[32..38].copy_from_slice(&[0, 0, 0, 0, 0, 0]); // THA
                         arp_frame[38..42].copy_from_slice(&[10, 0, 2, 2]);      // TPA
                         unsafe {
+                            let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                            let slot = (tdt_cur & 0x7) as usize;
+                            let page_idx = 4 + (slot / 2);
+                            let buf_off = if (slot & 1) == 0 { 0u64 } else { 2048u64 };
+                            let tx_slot_va = uc_base + pkt_pages[page_idx] + buf_off;
                             for (i, b) in arp_frame.iter().enumerate() {
-                                core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
+                                core::ptr::write_volatile((tx_slot_va + i as u64) as *mut u8, *b);
                             }
-                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, 60u16);
-                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);
-                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 4); // TDT advance
+                            let desc_off = (slot as u64) * 16;
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, 60u16);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
                         }
                         let arp_tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
                         serial_println!("[arp.request.send.proof] sent=1 tdt={} ok={} reason=arp_broadcast_request_posted",
@@ -693,20 +710,32 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         let rdt_replay = unsafe { core::ptr::read_volatile((virt + 0x2818) as *const u32) };
                         let ral_replay = unsafe { core::ptr::read_volatile((virt + 0x5400) as *const u32) };
                         let rah_replay = unsafe { core::ptr::read_volatile((virt + 0x5404) as *const u32) };
+                        let ctrl_before = unsafe { core::ptr::read_volatile((virt + 0x0000) as *const u32) }; // CTRL
+                        unsafe {
+                            core::ptr::write_volatile((virt + 0x0000) as *mut u32, ctrl_before | (1 << 6)); // SLU
+                        }
+                        let ctrl_after = unsafe { core::ptr::read_volatile((virt + 0x0000) as *const u32) };
                         serial_println!("[e1000.rx.init.replay] rctl=0x{:08X} rdt={} en={} bam={} secrc={} ok=1 reason=reassert_before_poll",
                             rctl_replay, rdt_replay,
                             ((rctl_replay >> 1) & 1), ((rctl_replay >> 15) & 1), ((rctl_replay >> 26) & 1));
                         serial_println!("[e1000.rx.rar0.verify] ral=0x{:08X} rah=0x{:08X} av={} ok=1 reason=rar0_reassert_and_readback",
                             ral_replay, rah_replay, ((rah_replay >> 31) & 1));
+                        serial_println!("[e1000.rx.ctrl.link_probe] ctrl_before=0x{:08X} ctrl_after=0x{:08X} slu={} ok=1 reason=bounded_ctrl_slu_reassert",
+                            ctrl_before, ctrl_after, (ctrl_after >> 6) & 1);
                         // Repost one bounded TX frame after loopback enable so RX polling can observe self-test traffic.
                         unsafe {
-                            for (i, b) in frame.iter().enumerate() {
-                                core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
-                            }
-                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, tx_frame_len); // desc0 length
-                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);  // RS|IFCS|EOP
-                            core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8);          // clear DD before post
                             let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                            let slot = (tdt_cur & 0x7) as usize;
+                            let page_idx = 4 + (slot / 2);
+                            let buf_off = if (slot & 1) == 0 { 0u64 } else { 2048u64 };
+                            let tx_slot_va = uc_base + pkt_pages[page_idx] + buf_off;
+                            for (i, b) in frame.iter().enumerate() {
+                                core::ptr::write_volatile((tx_slot_va + i as u64) as *mut u8, *b);
+                            }
+                            let desc_off = (slot as u64) * 16;
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, tx_frame_len);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011);  // RS|IFCS|EOP
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);          // clear DD before post
                             core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
                         }
                         let tdt_loopback_post = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
@@ -724,7 +753,27 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         let mut udp_seen: u32 = 0;
                         let mut dns_reply_seen: u32 = 0;
                         unsafe {
-                            for _poll_round in 0usize..8 {
+                            for poll_round in 0usize..8 {
+                                if poll_round < 3 {
+                                    let rctl_variant = match poll_round {
+                                        // keep loopback, remove promiscuous flags to try strict directed RX
+                                        0 => (1 << 1) | (1 << 15) | (1 << 26) | (3 << 6),
+                                        // add long-packet enable while keeping loopback and standard RX bits
+                                        1 => (1 << 1) | (1 << 5) | (1 << 15) | (1 << 26) | (3 << 6),
+                                        // restore permissive mode with loopback
+                                        _ => (1 << 1) | (1 << 3) | (1 << 4) | (1 << 15) | (1 << 26) | (3 << 6),
+                                    };
+                                    core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_variant); // RCTL
+                                    core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7); // RDT
+                                    let rctl_variant_rb = core::ptr::read_volatile((virt + 0x0100) as *const u32);
+                                    serial_println!("[e1000.rx.variant.apply] round={} rctl=0x{:08X} en={} lbm={} bam={} lpe={} ok=1 reason=bounded_rx_variant_sweep",
+                                        poll_round,
+                                        rctl_variant_rb,
+                                        (rctl_variant_rb >> 1) & 1,
+                                        (rctl_variant_rb >> 6) & 0x3,
+                                        (rctl_variant_rb >> 15) & 1,
+                                        (rctl_variant_rb >> 5) & 1);
+                                }
                                 for i in 0usize..8 {
                                     let desc_off = (i * 16) as u64;
                                     let rx_len: u16 = core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16);
