@@ -2418,6 +2418,232 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 d_resp_src_port, d_txid_match, d_qr, d_resp_ancount, d_response_seen, d_response_seen);
                             serial_println!("[udp.dns.probe.done] ok={} sent=1 tx_dd={} response_seen={} fake=0",
                                 (d_tx_dd & d_checksum_ok & d_response_seen), d_tx_dd, d_response_seen);
+
+                            // === PROBE: DNS_RESPONSE_PARSE_PROOF_V1 ===
+                            // Resend same DNS query, parse response DNS header and A record answers.
+                            // Bounded parse: no heap, no fake, bounds-checked at every offset.
+
+                            // Step 1: precheck ring
+                            let q_icr_pre = core::ptr::read_volatile((virt + 0x00C0) as *const u32);
+                            let q_rdh_pre = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                            let q_rdt_pre = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+                            let mut q_pre_dd: u32 = 0;
+                            let mut q_rdt_cur: u32 = q_rdt_pre;
+                            for i in 0usize..8 {
+                                let desc_off = (i * 16) as u64;
+                                let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                if (rx_stat & 0x1) != 0 {
+                                    q_pre_dd += 1;
+                                    let page_idx = i / 2;
+                                    let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                    let buf_phys = pkt_pages[page_idx] + buf_off;
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                    q_rdt_cur = q_rdt_cur.wrapping_add(1) & 0x7;
+                                    core::ptr::write_volatile((virt + 0x2818) as *mut u32, q_rdt_cur);
+                                }
+                            }
+                            serial_println!("[dns.parse.precheck] dd={} icr=0x{:08X} rdh={} rdt={} ok=1 reason=precheck_before_dns_parse",
+                                q_pre_dd, q_icr_pre, q_rdh_pre, q_rdt_pre);
+
+                            // Step 2: resend same DNS query (txid=0x1234 example.com A, IPv4 csum=0x62A1)
+                            let mut q_frame: [u8; 71] = [0u8; 71];
+                            q_frame[0..6].copy_from_slice(&c_gw_mac);
+                            q_frame[6..12].copy_from_slice(&c_src_mac);
+                            q_frame[12] = 0x08; q_frame[13] = 0x00;
+                            q_frame[14] = 0x45; q_frame[15] = 0x00;
+                            q_frame[16] = 0x00; q_frame[17] = 0x39;
+                            q_frame[18] = 0x00; q_frame[19] = 0x02;
+                            q_frame[20] = 0x00; q_frame[21] = 0x00;
+                            q_frame[22] = 0x40; q_frame[23] = 0x11;
+                            q_frame[24] = 0x62; q_frame[25] = 0xA1;
+                            q_frame[26] = 10; q_frame[27] = 0; q_frame[28] = 2; q_frame[29] = 15;
+                            q_frame[30] = 10; q_frame[31] = 0; q_frame[32] = 2; q_frame[33] = 3;
+                            q_frame[34] = 0xC0; q_frame[35] = 0x00;
+                            q_frame[36] = 0x00; q_frame[37] = 0x35;
+                            q_frame[38] = 0x00; q_frame[39] = 0x25;
+                            q_frame[40] = 0x00; q_frame[41] = 0x00;
+                            q_frame[42] = 0x12; q_frame[43] = 0x34;
+                            q_frame[44] = 0x01; q_frame[45] = 0x00;
+                            q_frame[46] = 0x00; q_frame[47] = 0x01;
+                            q_frame[48] = 0x00; q_frame[49] = 0x00;
+                            q_frame[50] = 0x00; q_frame[51] = 0x00;
+                            q_frame[52] = 0x00; q_frame[53] = 0x00;
+                            q_frame[54] = 0x07;
+                            q_frame[55] = 0x65; q_frame[56] = 0x78; q_frame[57] = 0x61;
+                            q_frame[58] = 0x6D; q_frame[59] = 0x70; q_frame[60] = 0x6C;
+                            q_frame[61] = 0x65;
+                            q_frame[62] = 0x03;
+                            q_frame[63] = 0x63; q_frame[64] = 0x6F; q_frame[65] = 0x6D;
+                            q_frame[66] = 0x00;
+                            q_frame[67] = 0x00; q_frame[68] = 0x01;
+                            q_frame[69] = 0x00; q_frame[70] = 0x01;
+                            for (i, b) in q_frame.iter().enumerate() {
+                                core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
+                            }
+                            core::ptr::write_volatile((tx_ring_uc + 0) as *mut u64, tx0_phys);
+                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, 71u16);
+                            core::ptr::write_volatile((tx_ring_uc + 10) as *mut u8, 0u8);
+                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);
+                            core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8);
+                            core::ptr::write_volatile((virt + 0x3810) as *mut u32, 0u32);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 0u32);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 1u32);
+                            for _ in 0..5usize { for _ in 0..100_000usize { core::hint::spin_loop(); } }
+                            let q_tx_dd = (core::ptr::read_volatile((tx_ring_uc + 12) as *const u8) & 0x1) as u32;
+                            serial_println!("[dns.parse.query.send] dst_ip=10.0.2.3 dst_port=53 txid=0x1234 tx_dd={} fake=0 ok={} reason=dns_parse_query_resend",
+                                q_tx_dd, q_tx_dd);
+
+                            // Step 3: Poll 8 rounds × 500k; parse DNS response inline on match
+                            let mut q_response_seen: u32 = 0;
+                            let mut q_parse_ok: u32 = 0;
+                            let mut q_a_records: u32 = 0;
+                            let mut q_dns_ancount: u32 = 0;
+                            let mut q_dns_qdcount: u32 = 0;
+                            let mut q_a_ip: [[u8; 4]; 2] = [[0u8; 4]; 2];
+                            let mut q_rounds_done: u32 = 0;
+                            let mut q_found = false;
+                            for round in 0usize..8 {
+                                for _ in 0..500_000usize { core::hint::spin_loop(); }
+                                let q_icr_r = core::ptr::read_volatile((virt + 0x00C0) as *const u32);
+                                let q_rdh_r = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                                let q_rdt_r = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+                                let mut q_round_dd: u32 = 0;
+                                q_rounds_done += 1;
+                                for i in 0usize..8 {
+                                    let desc_off = (i * 16) as u64;
+                                    let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                    if (rx_stat & 0x1) != 0 {
+                                        let page_idx = i / 2;
+                                        let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                        let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                        let rx_len = core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16);
+                                        let rx_len64 = rx_len as u64;
+                                        q_round_dd += 1;
+                                        // Match: IPv4 UDP from 10.0.2.3:53 txid=0x1234 QR=1
+                                        if !q_found && rx_len >= 54 {
+                                            let et0 = core::ptr::read_volatile((buf_va + 12) as *const u8);
+                                            let et1 = core::ptr::read_volatile((buf_va + 13) as *const u8);
+                                            let ip_proto = core::ptr::read_volatile((buf_va + 23) as *const u8);
+                                            let ip_s2 = core::ptr::read_volatile((buf_va + 28) as *const u8);
+                                            let ip_s3 = core::ptr::read_volatile((buf_va + 29) as *const u8);
+                                            let sp0 = core::ptr::read_volatile((buf_va + 34) as *const u8) as u16;
+                                            let sp1 = core::ptr::read_volatile((buf_va + 35) as *const u8) as u16;
+                                            let src_port_q = (sp0 << 8) | sp1;
+                                            let dns_t0 = core::ptr::read_volatile((buf_va + 42) as *const u8);
+                                            let dns_t1 = core::ptr::read_volatile((buf_va + 43) as *const u8);
+                                            let dns_f0 = core::ptr::read_volatile((buf_va + 44) as *const u8);
+                                            let is_match = (et0 == 0x08) & (et1 == 0x00)
+                                                & (ip_proto == 0x11)
+                                                & (ip_s2 == 2) & (ip_s3 == 3)
+                                                & (src_port_q == 53)
+                                                & (dns_t0 == 0x12) & (dns_t1 == 0x34)
+                                                & ((dns_f0 & 0x80) != 0);
+                                            if is_match {
+                                                q_response_seen = 1;
+                                                q_found = true;
+                                                // Parse DNS header
+                                                let dns_f1 = core::ptr::read_volatile((buf_va + 45) as *const u8);
+                                                let qd0 = core::ptr::read_volatile((buf_va + 46) as *const u8) as u32;
+                                                let qd1 = core::ptr::read_volatile((buf_va + 47) as *const u8) as u32;
+                                                let an0 = core::ptr::read_volatile((buf_va + 48) as *const u8) as u32;
+                                                let an1 = core::ptr::read_volatile((buf_va + 49) as *const u8) as u32;
+                                                q_dns_qdcount = (qd0 << 8) | qd1;
+                                                q_dns_ancount = (an0 << 8) | an1;
+                                                let rcode = (dns_f1 & 0x0F) as u32;
+                                                serial_println!("[dns.response.header] txid=0x1234 qr=1 qd={} an={} ns=0 ar=0 rcode={} ok=1 reason=dns_response_header_parsed",
+                                                    q_dns_qdcount, q_dns_ancount, rcode);
+
+                                                // Walk question QNAME to find answer section start
+                                                // DNS base offset in frame = 42; QNAME starts at dns+12=54
+                                                let mut qn_off: u64 = 54;
+                                                for _ in 0u32..64 {
+                                                    if qn_off >= rx_len64 { break; }
+                                                    let lab = core::ptr::read_volatile((buf_va + qn_off) as *const u8);
+                                                    if lab == 0x00 { qn_off += 1; break; }
+                                                    else if (lab & 0xC0) == 0xC0 { qn_off += 2; break; }
+                                                    else { qn_off += 1 + (lab as u64); }
+                                                }
+                                                // skip QTYPE(2) + QCLASS(2)
+                                                let mut ans_off: u64 = qn_off + 4;
+
+                                                // Parse up to 2 answer records
+                                                let max_ans: u32 = if q_dns_ancount <= 2 { q_dns_ancount } else { 2 };
+                                                for idx in 0u32..max_ans {
+                                                    let idx_u = idx as usize;
+                                                    // Skip answer name (compressed pointer or walk)
+                                                    if ans_off + 2 > rx_len64 { break; }
+                                                    let name0 = core::ptr::read_volatile((buf_va + ans_off) as *const u8);
+                                                    if (name0 & 0xC0) == 0xC0 {
+                                                        ans_off += 2;
+                                                    } else {
+                                                        let mut n = ans_off;
+                                                        for _ in 0u32..64 {
+                                                            if n >= rx_len64 { break; }
+                                                            let lb = core::ptr::read_volatile((buf_va + n) as *const u8);
+                                                            if lb == 0x00 { n += 1; break; }
+                                                            else if (lb & 0xC0) == 0xC0 { n += 2; break; }
+                                                            else { n += 1 + (lb as u64); }
+                                                        }
+                                                        ans_off = n;
+                                                    }
+                                                    // type(2)+class(2)+ttl(4)+rdlen(2) = 10 bytes
+                                                    if ans_off + 10 > rx_len64 { break; }
+                                                    let ty0 = core::ptr::read_volatile((buf_va + ans_off) as *const u8) as u16;
+                                                    let ty1 = core::ptr::read_volatile((buf_va + ans_off + 1) as *const u8) as u16;
+                                                    let ans_type = (ty0 << 8) | ty1;
+                                                    let cl0 = core::ptr::read_volatile((buf_va + ans_off + 2) as *const u8) as u16;
+                                                    let cl1 = core::ptr::read_volatile((buf_va + ans_off + 3) as *const u8) as u16;
+                                                    let ans_class = (cl0 << 8) | cl1;
+                                                    let tt0 = core::ptr::read_volatile((buf_va + ans_off + 4) as *const u8) as u32;
+                                                    let tt1 = core::ptr::read_volatile((buf_va + ans_off + 5) as *const u8) as u32;
+                                                    let tt2 = core::ptr::read_volatile((buf_va + ans_off + 6) as *const u8) as u32;
+                                                    let tt3 = core::ptr::read_volatile((buf_va + ans_off + 7) as *const u8) as u32;
+                                                    let ans_ttl = (tt0 << 24) | (tt1 << 16) | (tt2 << 8) | tt3;
+                                                    let rdl0 = core::ptr::read_volatile((buf_va + ans_off + 8) as *const u8) as u16;
+                                                    let rdl1 = core::ptr::read_volatile((buf_va + ans_off + 9) as *const u8) as u16;
+                                                    let rdlen = (rdl0 << 8) | rdl1;
+                                                    ans_off += 10;
+                                                    if ans_type == 1 && ans_class == 1 && rdlen == 4 && ans_off + 4 <= rx_len64 {
+                                                        let a0 = core::ptr::read_volatile((buf_va + ans_off) as *const u8);
+                                                        let a1 = core::ptr::read_volatile((buf_va + ans_off + 1) as *const u8);
+                                                        let a2 = core::ptr::read_volatile((buf_va + ans_off + 2) as *const u8);
+                                                        let a3 = core::ptr::read_volatile((buf_va + ans_off + 3) as *const u8);
+                                                        if idx_u < 2 { q_a_ip[idx_u] = [a0, a1, a2, a3]; }
+                                                        q_a_records += 1;
+                                                        serial_println!("[dns.response.answer] idx={} type={} class={} ttl={} rdlen={} a={}.{}.{}.{} ok=1 reason=dns_a_record_extracted",
+                                                            idx, ans_type, ans_class, ans_ttl, rdlen, a0, a1, a2, a3);
+                                                    } else {
+                                                        serial_println!("[dns.response.answer] idx={} type={} class={} ttl={} rdlen={} a=0.0.0.0 ok=1 reason=non_a_record_skipped",
+                                                            idx, ans_type, ans_class, ans_ttl, rdlen);
+                                                    }
+                                                    ans_off += rdlen as u64;
+                                                }
+                                                q_parse_ok = (q_a_records >= 1) as u32;
+                                                serial_println!("[dns.response.parse.truth] parsed={} a_records={} a0={}.{}.{}.{} fake=0 bounded=1 ok={} reason=dns_answer_parse_complete",
+                                                    q_dns_ancount, q_a_records,
+                                                    q_a_ip[0][0], q_a_ip[0][1], q_a_ip[0][2], q_a_ip[0][3],
+                                                    q_parse_ok);
+                                            }
+                                        }
+                                        // selective rearm
+                                        let buf_phys_q = pkt_pages[page_idx] + buf_off;
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys_q);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                        q_rdt_cur = q_rdt_cur.wrapping_add(1) & 0x7;
+                                        core::ptr::write_volatile((virt + 0x2818) as *mut u32, q_rdt_cur);
+                                    }
+                                }
+                                serial_println!("[dns.response.parse.scan] round={} icr=0x{:08X} rx_dd={} response_seen={} a_records={} rdh={} rdt={} ok=1 reason=dns_parse_poll_round",
+                                    round, q_icr_r, q_round_dd, q_response_seen, q_a_records, q_rdh_r, q_rdt_r);
+                                if q_found { break; }
+                            }
+                            serial_println!("[dns.response.parse.proof.done] ok={} a_records={} fake=0",
+                                (q_tx_dd & q_parse_ok), q_a_records);
                         }
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");

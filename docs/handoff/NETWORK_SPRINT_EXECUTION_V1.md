@@ -835,3 +835,35 @@ src_ip=10.0.2.3, txid_match=1, qr=1, ancount=2.
 Parse two A record answers from DNS response. Extract IP addresses.
 
 Full findings: `docs/handoff/UDP_DNS_PROBE_V1.md`
+
+---
+
+## DNS_RESPONSE_PARSE_PROOF_V1
+
+Date: 2026-05-17
+Gates: FINAL PASS IMPLEMENTED **231**/0/2skip (e1000e).
+Log: `/tmp/sexos_dns_response_parse_proof_v1.log`.
+
+### Result: PASS IMPLEMENTED
+
+Resent DNS query, captured response, parsed header and both A record answers
+from real RX buffer. Bounded parse, no heap, no fake.
+
+### DNS Header
+
+| txid   | qr | qd | an | rcode |
+|--------|----|----|----|-------|
+| 0x1234 | 1  | 1  | 2  | 0     |
+
+### Extracted A Records
+
+| idx | IP              |
+|-----|-----------------|
+| 0   | 104.20.23.154   |
+| 1   | 172.66.147.243  |
+
+### Next: DNS_TO_HTTP_HOST_RESOLUTION_PROOF_V1
+
+Use resolved IP for outbound HTTP probe (TCP SYN to port 80).
+
+Full findings: `docs/handoff/DNS_RESPONSE_PARSE_PROOF_V1.md`
