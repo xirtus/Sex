@@ -1481,6 +1481,81 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                     obs_desc_len, b0, b1, b2, b3, b4, b5,
                                     b6, b7, b8, b9, b10, b11, obs_ethertype,
                                     obs_dst_match, obs_src_match, obs_prefix_match, obs_ok);
+
+                                // === ARP parse: only when ethertype=0x0806 and len>=42 ===
+                                let arp_parsed: u32;
+                                let arp_request_observed: u32;
+                                let arp_reply_observed: u32;
+                                let arp_ok: u32;
+                                if obs_ethertype == 0x0806 && obs_desc_len >= 42 {
+                                    // ARP header starts at offset 14 in Ethernet frame.
+                                    let a_htype_hi = core::ptr::read_volatile((buf_va + 14) as *const u8);
+                                    let a_htype_lo = core::ptr::read_volatile((buf_va + 15) as *const u8);
+                                    let a_ptype_hi = core::ptr::read_volatile((buf_va + 16) as *const u8);
+                                    let a_ptype_lo = core::ptr::read_volatile((buf_va + 17) as *const u8);
+                                    let a_hlen    = core::ptr::read_volatile((buf_va + 18) as *const u8);
+                                    let a_plen    = core::ptr::read_volatile((buf_va + 19) as *const u8);
+                                    let a_oper_hi = core::ptr::read_volatile((buf_va + 20) as *const u8);
+                                    let a_oper_lo = core::ptr::read_volatile((buf_va + 21) as *const u8);
+                                    // Sender hardware addr (SHA): offset 22..27
+                                    let sha0 = core::ptr::read_volatile((buf_va + 22) as *const u8);
+                                    let sha1 = core::ptr::read_volatile((buf_va + 23) as *const u8);
+                                    let sha2 = core::ptr::read_volatile((buf_va + 24) as *const u8);
+                                    let sha3 = core::ptr::read_volatile((buf_va + 25) as *const u8);
+                                    let sha4 = core::ptr::read_volatile((buf_va + 26) as *const u8);
+                                    let sha5 = core::ptr::read_volatile((buf_va + 27) as *const u8);
+                                    // Sender protocol addr (SPA): offset 28..31
+                                    let spa0 = core::ptr::read_volatile((buf_va + 28) as *const u8);
+                                    let spa1 = core::ptr::read_volatile((buf_va + 29) as *const u8);
+                                    let spa2 = core::ptr::read_volatile((buf_va + 30) as *const u8);
+                                    let spa3 = core::ptr::read_volatile((buf_va + 31) as *const u8);
+                                    // Target hardware addr (THA): offset 32..37
+                                    let tha0 = core::ptr::read_volatile((buf_va + 32) as *const u8);
+                                    let tha1 = core::ptr::read_volatile((buf_va + 33) as *const u8);
+                                    let tha2 = core::ptr::read_volatile((buf_va + 34) as *const u8);
+                                    let tha3 = core::ptr::read_volatile((buf_va + 35) as *const u8);
+                                    let tha4 = core::ptr::read_volatile((buf_va + 36) as *const u8);
+                                    let tha5 = core::ptr::read_volatile((buf_va + 37) as *const u8);
+                                    // Target protocol addr (TPA): offset 38..41
+                                    let tpa0 = core::ptr::read_volatile((buf_va + 38) as *const u8);
+                                    let tpa1 = core::ptr::read_volatile((buf_va + 39) as *const u8);
+                                    let tpa2 = core::ptr::read_volatile((buf_va + 40) as *const u8);
+                                    let tpa3 = core::ptr::read_volatile((buf_va + 41) as *const u8);
+                                    let a_htype = ((a_htype_hi as u16) << 8) | (a_htype_lo as u16);
+                                    let a_ptype = ((a_ptype_hi as u16) << 8) | (a_ptype_lo as u16);
+                                    let a_oper  = ((a_oper_hi  as u16) << 8) | (a_oper_lo  as u16);
+                                    let htype_ok = (a_htype == 1) as u32;
+                                    let ptype_ok = (a_ptype == 0x0800) as u32;
+                                    let hlen_ok  = (a_hlen == 6) as u32;
+                                    let plen_ok  = (a_plen == 4) as u32;
+                                    let fields_ok = htype_ok & ptype_ok & hlen_ok & plen_ok;
+                                    arp_request_observed = (a_oper == 1 && fields_ok == 1) as u32;
+                                    arp_reply_observed   = (a_oper == 2 && fields_ok == 1) as u32;
+                                    arp_parsed = fields_ok;
+                                    arp_ok = (arp_request_observed | arp_reply_observed) as u32;
+                                    serial_println!("[arp.rx.observe] ethertype=0x0806 len={} parsed={} htype={} ptype=0x{:04X} hlen={} plen={} oper={} ok={} reason=arp_fields_from_rx_buffer",
+                                        obs_desc_len, arp_parsed, a_htype, a_ptype, a_hlen, a_plen, a_oper, arp_ok);
+                                    serial_println!("[arp.rx.sender] mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} ip={}.{}.{}.{} ok={} reason=arp_sha_spa_parsed",
+                                        sha0, sha1, sha2, sha3, sha4, sha5,
+                                        spa0, spa1, spa2, spa3, arp_parsed);
+                                    serial_println!("[arp.rx.target] mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} ip={}.{}.{}.{} ok={} reason=arp_tha_tpa_parsed",
+                                        tha0, tha1, tha2, tha3, tha4, tha5,
+                                        tpa0, tpa1, tpa2, tpa3, arp_parsed);
+                                    serial_println!("[arp.reply.observe] observed={} request_observed={} reply_observed={} fake=0 ok={} reason=arp_oper_classification",
+                                        arp_ok, arp_request_observed, arp_reply_observed, arp_ok);
+                                } else {
+                                    arp_parsed = 0;
+                                    arp_request_observed = 0;
+                                    arp_reply_observed = 0;
+                                    arp_ok = 0;
+                                    serial_println!("[arp.rx.observe] ethertype=0x{:04X} len={} parsed=0 htype=0 ptype=0x0000 hlen=0 plen=0 oper=0 ok=0 reason=not_arp_or_too_short",
+                                        obs_ethertype, obs_desc_len);
+                                    serial_println!("[arp.rx.sender] mac=00:00:00:00:00:00 ip=0.0.0.0 ok=0 reason=not_arp");
+                                    serial_println!("[arp.rx.target] mac=00:00:00:00:00:00 ip=0.0.0.0 ok=0 reason=not_arp");
+                                    serial_println!("[arp.reply.observe] observed=0 request_observed=0 reply_observed=0 fake=0 ok=0 reason=not_arp_frame");
+                                }
+                                serial_println!("[arp.reply.observe.proof.done] ok={} arp_seen={} reply_seen={} fake=0",
+                                    arp_ok, (arp_request_observed | arp_reply_observed), arp_reply_observed);
                             } else {
                                 obs_desc_len = 0;
                                 obs_desc_status = 0;
@@ -1494,6 +1569,11 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 serial_println!("[e1000e.rx.desc.observe] dd_set=0 rdh_before={} rdh_after={} rdh_advanced=0 desc=0 len=0 status=0x00 ok=0 reason=rdh_did_not_advance_no_loopback_rx",
                                     lb_rdh_before_lb, lb_rdh_after_lb);
                                 serial_println!("[e1000e.rx.buffer.observe] desc=0 len=0 dst=00:00:00:00:00:00 src=00:00:00:00:00:00 ethertype=0x0000 dst_match=0 src_match=0 prefix_match=0 ok=0 reason=rdh_did_not_advance");
+                                serial_println!("[arp.rx.observe] ethertype=0x0000 len=0 parsed=0 htype=0 ptype=0x0000 hlen=0 plen=0 oper=0 ok=0 reason=no_rx_descriptor_consumed");
+                                serial_println!("[arp.rx.sender] mac=00:00:00:00:00:00 ip=0.0.0.0 ok=0 reason=no_rx");
+                                serial_println!("[arp.rx.target] mac=00:00:00:00:00:00 ip=0.0.0.0 ok=0 reason=no_rx");
+                                serial_println!("[arp.reply.observe] observed=0 request_observed=0 reply_observed=0 fake=0 ok=0 reason=no_rx_descriptor_consumed");
+                                serial_println!("[arp.reply.observe.proof.done] ok=0 arp_seen=0 reply_seen=0 fake=0");
                             }
                             serial_println!("[e1000e.rx.loopback.truth] model=e1000e loopback=1 external=0 packets={} fake=0 ok={} reason=loopback_rx_descriptor_and_buffer_verify",
                                 obs_packets, obs_ok);

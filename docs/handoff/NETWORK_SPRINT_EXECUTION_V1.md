@@ -556,3 +556,34 @@ SLiRP ARP frames already arriving. Next: read full ARP payload, send ARP reply,
 verify SLiRP ARP reply received. First protocol step (ARP assembly required).
 
 Full findings: `docs/handoff/E1000E_RX_DESCRIPTOR_OBSERVE_PROOF_V1.md`
+
+---
+
+## Session: ARP_REPLY_OBSERVE_PROOF_V1 (2026-05-17)
+
+Model: `QEMU_NET_MODEL=e1000e`.
+Gates: FINAL PASS **228**/0/0 (e1000e); 226/2skip/0 (e1000 unchanged).
+Log: `/tmp/sexos_arp_reply_observe_proof_v1.log`.
+
+### ARP Parse Table
+
+| htype | ptype  | hlen | plen | oper | SHA               | SPA       | TPA     |
+|-------|--------|------|------|------|-------------------|-----------|---------|
+| 1     | 0x0800 | 6    | 4    | 1    | 52:54:00:12:34:56 | 10.0.2.15 | 10.0.2.1|
+
+### Request vs Reply Truth
+
+- `arp_request_observed=1 arp_reply_observed=0 fake=0`
+- ARP request from SLiRP: "Who has 10.0.2.1? Tell 10.0.2.15"
+- Our IP confirmed: **10.0.2.15**. Our MAC confirmed: **52:54:00:12:34:56**.
+- Gateway IP: **10.0.2.1**. Gateway MAC: unknown (THA=00:00:00:00:00:00).
+
+New gates passing on e1000e: `e1000e_rx_desc_observe=PASS`, `arp_rx_observe_live=PASS`.
+
+### Next: ARP_REQUEST_SEND_PROOF_V1
+
+Send ARP request "Who has 10.0.2.1?" with SHA/SPA from observed frame.
+Poll RX for oper=2 ARP reply. Extract gateway MAC for ARP cache.
+Then ICMP echo to 10.0.2.1 to prove IP layer.
+
+Full findings: `docs/handoff/ARP_REPLY_OBSERVE_PROOF_V1.md`
