@@ -141,3 +141,16 @@ Status note:
 Interpretation:
 - Current QEMU/usernet lane proves descriptor/ring/programming markers and TX consumption.
 - RX data-path still does not advance in this bounded probe set; next step is register-map variant narrowing or model-specific RX control sequencing while keeping claims bounded.
+
+## RX Diagnostic Snapshot (r19/r20 loopback lane)
+- `/tmp/sexos_network_sprint_autopilot_r19_loopback.log`:
+  - `e1000.rx.loopback.mode`: `lbm=3 en=1` latched in RCTL.
+  - `e1000.rx.selftest.proof`: `observed=0 loopback=0`.
+- `/tmp/sexos_network_sprint_autopilot_r20_loopback_repost.log`:
+  - `e1000.rx.loopback.tx.repost`: `tdt=5 len=60` (TX repost after loopback enable).
+  - `e1000.rx.ring.progress`: `rdh_before=0 rdh_after=0`.
+  - `e1000.rx.peer.observe`: `observed=0 arp=0 icmp_reply=0 udp=0 dns_reply=0`.
+
+Interpretation update:
+- Loopback-mode enable plus post-enable TX repost did not produce RX descriptor completion in this emulation/profile.
+- Next bounded lane should focus on queue/register model mismatch (RXDCTL/register bank variant) rather than more packet-shape changes.

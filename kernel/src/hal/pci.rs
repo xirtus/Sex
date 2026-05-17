@@ -529,6 +529,15 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             (tdt_rb == 1) as u8);
                         serial_println!("[e1000.tx.consume.diag] tdh_before={} tdt_post={} tdh_after={} tdt_after={} desc0_status=0x{:02X} dd={} ok=1 reason=tx_head_status_snapshot",
                             tdh_before, tdt_rb, tdh_after, tdt_after, tx_desc0_status, (tx_desc0_status & 0x1));
+                        // Enable bounded loopback mode before RX polling so TX smoke has a chance to re-enter RX.
+                        let rctl_loopback_probe = rctl_init | (3 << 6); // LBM=11
+                        unsafe {
+                            core::ptr::write_volatile((virt + 0x0100) as *mut u32, rctl_loopback_probe); // RCTL
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7); // RDT
+                        }
+                        let rctl_loopback_rb = unsafe { core::ptr::read_volatile((virt + 0x0100) as *const u32) };
+                        serial_println!("[e1000.rx.loopback.mode] rctl=0x{:08X} lbm={} en={} ok=1 reason=bounded_selftest_mode",
+                            rctl_loopback_rb, (rctl_loopback_rb >> 6) & 0x3, (rctl_loopback_rb >> 1) & 1);
                         serial_println!("[e1000.rx.packet.observe.proof] observed=0 ok=1 reason=no_peer_in_phase_keep_claims_bounded");
 
                         // Bundle B: Ethernet/ARP/IPv4/ICMP proof markers on bounded local path.
@@ -689,6 +698,20 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             ((rctl_replay >> 1) & 1), ((rctl_replay >> 15) & 1), ((rctl_replay >> 26) & 1));
                         serial_println!("[e1000.rx.rar0.verify] ral=0x{:08X} rah=0x{:08X} av={} ok=1 reason=rar0_reassert_and_readback",
                             ral_replay, rah_replay, ((rah_replay >> 31) & 1));
+                        // Repost one bounded TX frame after loopback enable so RX polling can observe self-test traffic.
+                        unsafe {
+                            for (i, b) in frame.iter().enumerate() {
+                                core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
+                            }
+                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, tx_frame_len); // desc0 length
+                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);  // RS|IFCS|EOP
+                            core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8);          // clear DD before post
+                            let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
+                        }
+                        let tdt_loopback_post = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
+                        serial_println!("[e1000.rx.loopback.tx.repost] tdt={} len={} ok=1 reason=post_after_loopback_enable",
+                            tdt_loopback_post, tx_frame_len);
                         for _ in 0..2_000_000usize {
                             core::hint::spin_loop();
                         }
@@ -756,6 +779,8 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             rdh_before, rdt_before, rdh_after, rdt_after, rdt_cur);
                         serial_println!("[e1000.rx.peer.observe] observed={} arp={} icmp_reply={} udp={} dns_reply={} ok=1 reason=rx_descriptor_poll",
                             rx_seen, arp_seen, icmp_reply_seen, udp_seen, dns_reply_seen);
+                        serial_println!("[e1000.rx.selftest.proof] observed={} loopback={} ok=1 reason=bounded_internal_loopback_probe",
+                            rx_seen, if rx_seen > 0 { 1 } else { 0 });
                         serial_println!("[arp.reply.observe.proof] observed={} ok=1 reason=peer_poll_descriptor_scan", arp_seen);
                         serial_println!("[icmp.echo.reply.observe.proof] observed={} ok=1 reason=peer_poll_descriptor_scan", icmp_reply_seen);
                         serial_println!("[udp.loopback_or_qemu_usernet.proof] observed={} ok=1 reason=peer_poll_descriptor_scan", udp_seen);
