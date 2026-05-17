@@ -2772,10 +2772,62 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 let mut syn_sent_any: u32 = 0;
                                 let syn_max_attempts: u32 = 3;
                                 let syn_poll_rounds_per_attempt: u32 = 8;
+                                let mut last_attempt_src_port: u16 = 49153;
+                                let mut last_attempt_dst_ip: [u8; 4] = dst_ip;
+
+                                let mut variant_ips: [[u8; 4]; 2] = [[0; 4]; 2];
+                                let mut variant_count: usize = 0;
+                                if q_a_records >= 1 && q_a_ip[0] != [0, 0, 0, 0] {
+                                    variant_ips[variant_count] = q_a_ip[0];
+                                    variant_count += 1;
+                                }
+                                if q_a_records >= 2 && q_a_ip[1] != [0, 0, 0, 0] && q_a_ip[1] != q_a_ip[0] {
+                                    variant_ips[variant_count] = q_a_ip[1];
+                                    variant_count += 1;
+                                }
+                                if variant_count == 0 {
+                                    variant_ips[0] = dst_ip;
+                                    variant_count = 1;
+                                }
+                                serial_println!("[tcp.target.variant.plan] variants={} a0={}.{}.{}.{} a1={}.{}.{}.{} max_attempts={} fake=0 ok=1 reason=bounded_target_variant_probe_plan",
+                                    variant_count as u32,
+                                    variant_ips[0][0], variant_ips[0][1], variant_ips[0][2], variant_ips[0][3],
+                                    variant_ips[1][0], variant_ips[1][1], variant_ips[1][2], variant_ips[1][3],
+                                    syn_max_attempts);
 
                                 if c_gw_known == 1 {
                                     for attempt in 1..=syn_max_attempts {
                                         if syn_found { break; }
+                                        let variant_idx = ((attempt - 1) as usize) % variant_count;
+                                        let attempt_dst_ip = variant_ips[variant_idx];
+                                        let attempt_src_port: u16 = 49152u16.wrapping_add(attempt as u16);
+                                        last_attempt_src_port = attempt_src_port;
+                                        last_attempt_dst_ip = attempt_dst_ip;
+
+                                        syn_frame[30..34].copy_from_slice(&attempt_dst_ip);
+                                        syn_frame[34] = (attempt_src_port >> 8) as u8;
+                                        syn_frame[35] = (attempt_src_port & 0xFF) as u8;
+                                        let d0: u32 = ((attempt_dst_ip[0] as u32) << 8) | (attempt_dst_ip[1] as u32);
+                                        let d1: u32 = ((attempt_dst_ip[2] as u32) << 8) | (attempt_dst_ip[3] as u32);
+                                        let mut ip_sum: u32 = 0x4500u32 + 0x002Cu32 + 0x0000u32 + 0x0000u32
+                                            + 0x4006u32 + 0x0000u32 + 0x0A00u32 + 0x020Fu32 + d0 + d1;
+                                        while ip_sum > 0xFFFF { ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16); }
+                                        let ipv4_csum: u16 = !(ip_sum as u16);
+                                        syn_frame[24] = (ipv4_csum >> 8) as u8;
+                                        syn_frame[25] = (ipv4_csum & 0xFF) as u8;
+                                        let mut tcp_sum: u32 = 0x0A00u32 + 0x020Fu32 + d0 + d1 + 0x0006u32 + 24u32
+                                            + (attempt_src_port as u32) + 0x0050u32
+                                            + 0x0000u32 + 0x0000u32 + 0x0000u32 + 0x0000u32
+                                            + 0x6002u32 + 0xFFFFu32 + 0x0000u32 + 0x0000u32
+                                            + 0x0204u32 + 0x05B4u32;
+                                        while tcp_sum > 0xFFFF { tcp_sum = (tcp_sum & 0xFFFF) + (tcp_sum >> 16); }
+                                        let tcp_csum: u16 = !(tcp_sum as u16);
+                                        syn_frame[50] = (tcp_csum >> 8) as u8;
+                                        syn_frame[51] = (tcp_csum & 0xFF) as u8;
+
+                                        serial_println!("[tcp.target.variant.attempt] attempt={} variant_idx={} dst_ip={}.{}.{}.{} src_port={} dst_port=80 fake=0 ok=1 reason=target_variant_selected",
+                                            attempt, variant_idx as u32, attempt_dst_ip[0], attempt_dst_ip[1], attempt_dst_ip[2], attempt_dst_ip[3], attempt_src_port);
+
                                         // Rearm all RX descriptors before each SYN attempt.
                                         for sa_i in 0usize..8 {
                                             let sa_page_idx = sa_i / 2;
@@ -2816,8 +2868,8 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                             syn_tx_dd = (core::ptr::read_volatile((tx_ring_uc + desc_off + 12) as *const u8) & 0x1) as u32;
                                         }
                                         syn_sent_any |= syn_tx_dd;
-                                        serial_println!("[tcp.syn.tx.post] attempt={} dst_ip={}.{}.{}.{} src_port=49153 dst_port=80 seq=0 tdt_before={} tdt_after={} tx_dd={} syn_sent=1 http_sent=0 fake=0 ok={} reason=tcp_syn_frame_posted_to_e1000e_tx",
-                                            attempt, dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3], tdt_before, tdt_after, syn_tx_dd, syn_tx_dd);
+                                        serial_println!("[tcp.syn.tx.post] attempt={} dst_ip={}.{}.{}.{} src_port={} dst_port=80 seq=0 tdt_before={} tdt_after={} tx_dd={} syn_sent=1 http_sent=0 fake=0 ok={} reason=tcp_syn_frame_posted_to_e1000e_tx",
+                                            attempt, attempt_dst_ip[0], attempt_dst_ip[1], attempt_dst_ip[2], attempt_dst_ip[3], attempt_src_port, tdt_before, tdt_after, syn_tx_dd, syn_tx_dd);
 
                                         // Poll RX for SYN-ACK (bounded rounds per attempt).
                                         for _round in 0..syn_poll_rounds_per_attempt {
@@ -2860,11 +2912,11 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                                                 let dst_port = (dp0 << 8) | dp1;
                                                                 let tcp_flags = unsafe { core::ptr::read_volatile((buf_va + 47) as *const u8) };
 
-                                                                let from_target = (ip_src0 == dst_ip[0] && ip_src1 == dst_ip[1]
-                                                                    && ip_src2 == dst_ip[2] && ip_src3 == dst_ip[3]) as u32;
+                                                                let from_target = (ip_src0 == attempt_dst_ip[0] && ip_src1 == attempt_dst_ip[1]
+                                                                    && ip_src2 == attempt_dst_ip[2] && ip_src3 == attempt_dst_ip[3]) as u32;
                                                                 let to_us = (ip_dst0 == 10 && ip_dst1 == 0
                                                                     && ip_dst2 == 2 && ip_dst3 == 15) as u32;
-                                                                let ports_match = (src_port == 80 && dst_port == 49153) as u32;
+                                                                let ports_match = (src_port == 80 && dst_port == attempt_src_port) as u32;
                                                                 let is_synack = ((tcp_flags & 0x12) == 0x12) as u32;
                                                                 let is_rst = ((tcp_flags & 0x04) != 0) as u32;
 
@@ -2911,14 +2963,14 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                         }
                                     }
                                 } else {
-                                    serial_println!("[tcp.syn.tx.post] attempt=0 dst_ip={}.{}.{}.{} src_port=49153 dst_port=80 seq=0 tdt_before=0 tdt_after=0 tx_dd=0 syn_sent=0 http_sent=0 fake=0 ok=0 reason=gateway_unknown_no_syn_send",
-                                        dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]);
+                                    serial_println!("[tcp.syn.tx.post] attempt=0 dst_ip={}.{}.{}.{} src_port={} dst_port=80 seq=0 tdt_before=0 tdt_after=0 tx_dd=0 syn_sent=0 http_sent=0 fake=0 ok=0 reason=gateway_unknown_no_syn_send",
+                                        dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3], last_attempt_src_port);
                                 }
 
                                 serial_println!("[tcp.syn.rx.synack] attempts={} rounds={} rx_dd={} tcp_seen={} synack_seen={} rst_seen={} fake=0 ok={} reason=syn_ack_rx_poll_bounded_retry",
                                     syn_max_attempts, syn_rounds, syn_rx_dd, syn_tcp_seen, synack_seen, rst_seen, synack_seen | rst_seen);
-                                serial_println!("[tcp.syn.rx.synack.valid] src_ip={}.{}.{}.{} dst_ip=10.0.2.15 src_port=80 dst_port=49153 flags=0x{:02X} ack_num={} peer_seq={} ipv4_checksum_ok={} tcp_checksum_checked=0 tcp_checksum_ok=0 ok={} reason=syn_ack_fields_parsed_honest_no_tcp_csum_verify",
-                                    dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3],
+                                serial_println!("[tcp.syn.rx.synack.valid] src_ip={}.{}.{}.{} dst_ip=10.0.2.15 src_port=80 dst_port={} flags=0x{:02X} ack_num={} peer_seq={} ipv4_checksum_ok={} tcp_checksum_checked=0 tcp_checksum_ok=0 ok={} reason=syn_ack_fields_parsed_honest_no_tcp_csum_verify",
+                                    last_attempt_dst_ip[0], last_attempt_dst_ip[1], last_attempt_dst_ip[2], last_attempt_dst_ip[3], last_attempt_src_port,
                                     synack_flags, synack_ack_num, peer_seq, synack_ip_ok, synack_seen);
 
                                 serial_println!("[tcp.syn.truth] sent={} tx_dd={} synack_seen={} rst_seen={} final_ack_sent=0 http_sent=0 fake=0 ok={} reason=syn_send_and_syn_ack_truth_observed",
@@ -2937,6 +2989,8 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 let final_ack_num: u32 = 0;
                                 serial_println!("[tcp.syn.send.retry.proof] attempts={} sent={} tx_dd={} synack_seen={} rst_seen={} stop_on_synack_or_rst={} final_ack_sent=0 http_sent=0 ok={} reason=bounded_syn_retry_stopped_before_final_ack",
                                     syn_max_attempts, syn_sent_any, syn_tx_dd, synack_seen, rst_seen, (synack_seen | rst_seen), syn_sent_any);
+                                serial_println!("[tcp.target.variant.probe.done] attempts={} variants={} synack_seen={} rst_seen={} final_ack_sent=0 http_sent=0 ok={} reason=target_variant_probe_completed_without_http",
+                                    syn_max_attempts, variant_count as u32, synack_seen, rst_seen, syn_sent_any);
                                 serial_println!("[tcp.handshake.ack.build] seq=1 ack=0 flags=0x10 payload_len=0 checksum_ok=0 ok=0 reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1");
                                 serial_println!("[tcp.handshake.ack.tx.post] seq=1 ack=0 tx_dd=0 sent=0 ok=0 reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1");
                                 serial_println!("[tcp.handshake.proof] observed={} final_ack_sent=0 seq=1 ack=0 ok=0 reason=final_ack_deferred_in_tcp_syn_send_retry_proof_v1",

@@ -1121,3 +1121,42 @@ Observed each retry:
 - `[tcp.syn.rx.synack] attempts=3 rounds=24 ... synack_seen=0 rst_seen=0 ...`
 - `[tcp.syn.ack.observe.proof] synack_seen=0 ... ok=0`
 - `[tcp.syn.send.retry.proof] ... ok=1 reason=bounded_syn_retry_stopped_before_final_ack`
+
+---
+
+## TCP_TARGET_VARIANT_PROBE_V1 (2026-05-17)
+
+Runtime:
+
+```bash
+QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 ./scripts/run_daily_driver_proof.sh /tmp/sexos_tcp_target_variant_probe_v1.log
+```
+
+Result: **FINAL PASS (238 gates, 0 fail, 12 skip)**.
+
+### Probe behavior
+
+- Marker plan:
+  - `[tcp.target.variant.plan] variants=1 a0=104.20.23.154 a1=0.0.0.0 max_attempts=3 ...`
+- Per-attempt source-port rotation (SYN-only):
+  - attempt 1: dst `104.20.23.154:80`, src port `49153`
+  - attempt 2: dst `104.20.23.154:80`, src port `49154`
+  - attempt 3: dst `104.20.23.154:80`, src port `49155`
+  - all `tx_dd=1`, `syn_sent=1`
+- Bounded receive stop:
+  - `[tcp.syn.rx.synack] attempts=3 rounds=24 ... synack_seen=0 rst_seen=0 ...`
+- Mission done marker:
+  - `[tcp.target.variant.probe.done] attempts=3 variants=1 synack_seen=0 rst_seen=0 final_ack_sent=0 http_sent=0 ok=1 ...`
+
+### Safety constraints preserved
+
+- No final ACK send:
+  - `[tcp.handshake.ack.tx.post] ... sent=0 ... reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1`
+- No HTTP GET send:
+  - `[http.get.send.proof] sent=0 tx_dd=0 payload_len=0 ok=0 reason=no_final_ack_no_http_send`
+
+### Interpretation
+
+- Blocker is no longer ARP/L2/TX post.
+- In this run DNS parse produced a single variant (`q_a_ip[0]` only), so the probe exercised source-port variation and bounded retries against one remote target.
+- Next bounded step: rerun until `variants=2` appears from DNS parse, then verify alternating probes over `q_a_ip[0]:80` and `q_a_ip[1]:80` under identical SYN-only constraints.
