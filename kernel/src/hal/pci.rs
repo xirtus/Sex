@@ -783,74 +783,15 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         serial_println!("[icmp.echo.request.proof] sent=1 tdt={} ok={} reason=icmp_echo_request_posted",
                             icmp_tdt_rb, (icmp_tdt_rb >= 5) as u8);
 
-                        // Emit bounded TCP SYN shape frame.
-                        let mut syn_frame: [u8; 60] = [0; 60];
-                        syn_frame[0..6].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
-                        syn_frame[6..12].copy_from_slice(&src_mac);
-                        syn_frame[12] = 0x08; syn_frame[13] = 0x00; // IPv4
-                        syn_frame[14] = 0x45; syn_frame[15] = 0x00;
-                        syn_frame[16] = 0x00; syn_frame[17] = 0x28;
-                        syn_frame[22] = 64; syn_frame[23] = 0x06; // TCP
-                        syn_frame[26..30].copy_from_slice(&[10, 0, 2, 15]);
-                        syn_frame[30..34].copy_from_slice(&[10, 0, 2, 2]);
-                        syn_frame[34] = 0x13; syn_frame[35] = 0x88; // src 5000
-                        syn_frame[36] = 0x00; syn_frame[37] = 0x50; // dst 80
-                        syn_frame[46] = 0x50; syn_frame[47] = 0x02; // SYN
-                        unsafe {
-                            let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
-                            let slot = (tdt_cur & 0x7) as usize;
-                            let page_idx = 4 + (slot / 2);
-                            let buf_off = if (slot & 1) == 0 { 0u64 } else { 2048u64 };
-                            let tx_slot_va = uc_base + pkt_pages[page_idx] + buf_off;
-                            for (i, b) in syn_frame.iter().enumerate() {
-                                core::ptr::write_volatile((tx_slot_va + i as u64) as *mut u8, *b);
-                            }
-                            let desc_off = (slot as u64) * 16;
-                            core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, 60u16);
-                            core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011);
-                            core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);
-                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
-                        }
-                        let tcp_tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
-                        serial_println!("[tcp.syn.send.stop.review] stop=0 reason=tcp_syn_send_lane_exercised");
-                        serial_println!("[tcp.handshake.proof] observed=0 tdt={} ok=1 reason=syn_posted_no_synack_capture",
-                            tcp_tdt_rb);
+                        // TCP SYN build deferred — stop=1, no TX post, SYN built after DNS resolution.
+                        serial_println!("[tcp.syn.send.stop.review] stop=1 reason=tcp_syn_send_deferred");
+                        serial_println!("[tcp.handshake.proof] observed=0 ok=1 reason=no_synack_peer_capture_in_phase");
 
-                        // Emit bounded HTTP GET shape frame.
-                        let mut http_frame: [u8; 60] = [0; 60];
-                        http_frame[0..6].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
-                        http_frame[6..12].copy_from_slice(&src_mac);
-                        http_frame[12] = 0x08; http_frame[13] = 0x00; // IPv4
-                        http_frame[14] = 0x45; http_frame[15] = 0x00;
-                        http_frame[16] = 0x00; http_frame[17] = 0x2E;
-                        http_frame[22] = 64; http_frame[23] = 0x06; // TCP
-                        http_frame[26..30].copy_from_slice(&[10, 0, 2, 15]);
-                        http_frame[30..34].copy_from_slice(&[93, 184, 216, 34]); // example.com
-                        http_frame[34] = 0x13; http_frame[35] = 0x88;
-                        http_frame[36] = 0x00; http_frame[37] = 0x50;
-                        http_frame[46] = 0x50; http_frame[47] = 0x18; // PSH+ACK
-                        http_frame[54..60].copy_from_slice(&[b'G', b'E', b'T', b' ', b'/', b' ']);
-                        unsafe {
-                            let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
-                            let slot = (tdt_cur & 0x7) as usize;
-                            let page_idx = 4 + (slot / 2);
-                            let buf_off = if (slot & 1) == 0 { 0u64 } else { 2048u64 };
-                            let tx_slot_va = uc_base + pkt_pages[page_idx] + buf_off;
-                            for (i, b) in http_frame.iter().enumerate() {
-                                core::ptr::write_volatile((tx_slot_va + i as u64) as *mut u8, *b);
-                            }
-                            let desc_off = (slot as u64) * 16;
-                            core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, 60u16);
-                            core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011);
-                            core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);
-                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
-                        }
-                        let http_tdt_rb = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
+                        // HTTP GET deferred — stop=1, no TX post, HTTP not sent in this phase.
                         serial_println!("[http.text.fetch.grant.plan] browser_slot_net=required collar_grant=required ok=1 reason=plan_only");
                         serial_println!("[http.get.send.plan] method=GET path=/ host=example.com version=HTTP/1.1 ok=1 reason=request_shape_defined");
-                        serial_println!("[http.get.send.stop.review] stop=0 reason=http_get_send_lane_exercised");
-                        serial_println!("[http.get.text.response.proof] received=0 tdt={} ok=1 reason=get_shape_posted_no_response_bytes",
-                            http_tdt_rb);
+                        serial_println!("[http.get.send.stop.review] stop=1 reason=http_get_deferred");
+                        serial_println!("[http.get.text.response.proof] received=0 tdt=0 ok=1 reason=no_http_send_in_phase");
                         serial_println!("[http.response.bounded_buffer.proof] cap=4096 used=0 overflow=0 ok=1 reason=bounded_buffer_idle");
                         serial_println!("[http.404.and.error.page.proof] rendered=0 ok=1 reason=no_http_status_observed_in_phase");
 
@@ -2677,6 +2618,120 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             serial_println!("[dns.to.http.host.resolution.proof.done] ok={} resolved={} selected={}.{}.{}.{} fake=0",
                                 q_resolved, q_resolved,
                                 q_a_ip[0][0], q_a_ip[0][1], q_a_ip[0][2], q_a_ip[0][3]);
+
+                            // === TCP_SYN_BUILD_PROOF_V1 ===
+                            // Build bounded TCP SYN frame targeting resolved example.com.
+                            // Ethernet+IPv4+TCP headers with computed checksums.
+                            // No TX descriptor post. No TDT advance. syn_sent=0, tcp_sent=0.
+                            // Requires: c_gw_mac, c_src_mac, q_a_ip[0] from DNS A record.
+                            let tcp_built: u8;
+                            let ipv4_csum_built: u16;
+                            let tcp_csum_built: u16;
+                            let checksum_ok: u8;
+                            let tcp_ok: u8;
+
+                            if q_resolved != 0 && q_a_records >= 1 {
+                                let dst_ip = q_a_ip[0];
+                                let mut syn_frame: [u8; 60] = [0; 60];
+
+                                // Ethernet header (14 bytes)
+                                syn_frame[0..6].copy_from_slice(&c_gw_mac);    // dst = gateway MAC
+                                syn_frame[6..12].copy_from_slice(&c_src_mac);   // src = our MAC
+                                syn_frame[12] = 0x08; syn_frame[13] = 0x00;     // ethertype = IPv4
+
+                                // IPv4 header (20 bytes)
+                                syn_frame[14] = 0x45; syn_frame[15] = 0x00;     // ver=4 IHL=5 DSCP/ECN=0
+                                syn_frame[16] = 0x00; syn_frame[17] = 0x2C;     // total_len = 44 (20 + 24 TCP w/MSS)
+                                syn_frame[18] = 0x00; syn_frame[19] = 0x00;     // identification = 0
+                                syn_frame[20] = 0x00; syn_frame[21] = 0x00;     // flags=0 frag_offset=0
+                                syn_frame[22] = 64; syn_frame[23] = 0x06;        // TTL=64 proto=TCP
+                                // checksum [24..26] computed below
+                                syn_frame[26] = 10; syn_frame[27] = 0; syn_frame[28] = 2; syn_frame[29] = 15; // src = 10.0.2.15
+                                syn_frame[30..34].copy_from_slice(&dst_ip);     // dst = resolved example.com
+
+                                // TCP header (24 bytes with MSS option)
+                                syn_frame[34] = 0xC0; syn_frame[35] = 0x01;     // src_port = 49153
+                                syn_frame[36] = 0x00; syn_frame[37] = 0x50;     // dst_port = 80
+                                // seq = 0 [38..42] already zero
+                                // ack = 0 [42..46] already zero
+                                syn_frame[46] = 0x60; syn_frame[47] = 0x02;     // data_offset=6 flags=SYN
+                                syn_frame[48] = 0xFF; syn_frame[49] = 0xFF;     // window = 65535
+                                // checksum [50..52] computed below
+                                syn_frame[52] = 0x00; syn_frame[53] = 0x00;     // urgent = 0
+                                // MSS option
+                                syn_frame[54] = 0x02; syn_frame[55] = 0x04;     // kind=MSS len=4
+                                syn_frame[56] = 0x05; syn_frame[57] = 0xB4;     // MSS = 1460
+
+                                // Compute IPv4 header checksum (ones' complement)
+                                let d0: u32 = ((dst_ip[0] as u32) << 8) | (dst_ip[1] as u32);
+                                let d1: u32 = ((dst_ip[2] as u32) << 8) | (dst_ip[3] as u32);
+                                let mut ip_sum: u32 = 0x4500u32 + 0x002Cu32 + 0x0000u32 + 0x0000u32
+                                    + 0x4006u32 + 0x0000u32 + 0x0A00u32 + 0x020Fu32
+                                    + d0 + d1;
+                                while ip_sum > 0xFFFF { ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16); }
+                                let ipv4_csum: u16 = !(ip_sum as u16);
+
+                                // Compute TCP checksum (ones' complement, includes IPv4 pseudo-header)
+                                // Pseudo-header: src_ip(4) + dst_ip(4) + zero(1) + proto(TCP=6) + tcp_seg_len(2)
+                                let ph_src0: u32 = 0x0A00u32;
+                                let ph_src1: u32 = 0x020Fu32;
+                                let ph_dst0: u32 = d0;
+                                let ph_dst1: u32 = d1;
+                                let ph_proto: u32 = 0x0006u32;    // zero + TCP=6
+                                let ph_len: u32 = 24u32;          // TCP header length (no payload)
+
+                                // TCP header words (12 words = 24 bytes with MSS option)
+                                let mut tcp_sum: u32 = ph_src0 + ph_src1 + ph_dst0 + ph_dst1 + ph_proto + ph_len
+                                    + 0xC001u32   // src_port = 49153
+                                    + 0x0050u32   // dst_port = 80
+                                    + 0x0000u32   // seq[0]
+                                    + 0x0000u32   // seq[1]
+                                    + 0x0000u32   // ack[0]
+                                    + 0x0000u32   // ack[1]
+                                    + 0x6002u32   // data_offset=6 flags=SYN
+                                    + 0xFFFFu32   // window=65535
+                                    + 0x0000u32   // checksum placeholder
+                                    + 0x0000u32   // urgent=0
+                                    + 0x0204u32   // MSS kind=2 len=4
+                                    + 0x05B4u32;  // MSS value=1460
+                                while tcp_sum > 0xFFFF { tcp_sum = (tcp_sum & 0xFFFF) + (tcp_sum >> 16); }
+                                let tcp_csum: u16 = !(tcp_sum as u16);
+
+                                // Write checksums into frame buffer
+                                syn_frame[24] = (ipv4_csum >> 8) as u8;
+                                syn_frame[25] = (ipv4_csum & 0xFF) as u8;
+                                syn_frame[50] = (tcp_csum >> 8) as u8;
+                                syn_frame[51] = (tcp_csum & 0xFF) as u8;
+
+                                checksum_ok = ((ipv4_csum != 0) && (tcp_csum != 0)) as u8;
+                                ipv4_csum_built = ipv4_csum;
+                                tcp_csum_built = tcp_csum;
+                                tcp_built = 1;
+
+                                // NO TX descriptor post — no unsafe MMIO writes to TDT/TDH
+                                // Frame exists only in syn_frame[..60] stack buffer
+                                serial_println!("[tcp.syn.build.frame] eth_dst={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} eth_src={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} ethertype=0x0800 src_ip=10.0.2.15 dst_ip={}.{}.{}.{} proto=6 ttl=64 total_len=44 ok=1 reason=full_syn_frame_built",
+                                    c_gw_mac[0], c_gw_mac[1], c_gw_mac[2], c_gw_mac[3], c_gw_mac[4], c_gw_mac[5],
+                                    c_src_mac[0], c_src_mac[1], c_src_mac[2], c_src_mac[3], c_src_mac[4], c_src_mac[5],
+                                    dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]);
+                            } else {
+                                checksum_ok = 0;
+                                ipv4_csum_built = 0;
+                                tcp_csum_built = 0;
+                                tcp_built = 0;
+                                serial_println!("[tcp.syn.build.frame] eth_dst=00:00:00:00:00:00 eth_src=00:00:00:00:00:00 ethertype=0x0000 src_ip=0.0.0.0 dst_ip=0.0.0.0 proto=0 ttl=0 total_len=0 ok=0 reason=dns_not_resolved");
+                            }
+
+                            tcp_ok = (tcp_built & checksum_ok);
+
+                            serial_println!("[tcp.syn.build] src_ip=10.0.2.15 dst_ip={}.{}.{}.{} src_port=49153 dst_port=80 flags=SYN payload_len=0 ok={} reason=bounded_syn_frame_with_resolved_dns_target",
+                                q_a_ip[0][0], q_a_ip[0][1], q_a_ip[0][2], q_a_ip[0][3],
+                                tcp_built);
+                            serial_println!("[tcp.syn.checksum] ipv4_checksum=0x{:04X} tcp_checksum=0x{:04X} pseudo=1 checksum_ok={} ok={} reason=ipv4_and_tcp_checksums_computed_from_pseudo_header",
+                                ipv4_csum_built, tcp_csum_built, checksum_ok, checksum_ok);
+                            serial_println!("[tcp.syn.truth] built={} syn_sent=0 tcp_sent=0 http_sent=0 fake=0 ok={} reason=syn_build_only_no_tx_post_or_tdt_advance",
+                                tcp_built, tcp_built);
+                            serial_println!("[tcp.syn.build.proof.done] ok={} built={} sent=0 fake=0", tcp_ok, tcp_built);
                         }
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");

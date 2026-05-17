@@ -39,19 +39,18 @@ Status note:
 - Implemented bounded proof markers on the E1000 TX local path (no external peer-claim).
 - ARP/ICMP send stages are currently explicit stop-review markers (`stop=1`) until dedicated Ethertype-specific frame lanes are staged.
 
-### Bundle C: UDP/TCP transport (in progress: marker/stub lane implemented)
+### Bundle C: UDP/TCP transport (TCP SYN BUILD ✅ implemented)
 - `UDP_PACKET_MODEL_SPEC_V1`
 - `UDP_TX_BUILD_PROOF_V1`
 - `UDP_TX_SEND_STOP_REVIEW_V1`
 - `UDP_LOOPBACK_OR_QEMU_USERNET_PROOF_V1`
 - `TCP_MINIMAL_STATE_MACHINE_PLAN_V1`
-- `TCP_SYN_BUILD_PROOF_V1`
-- `TCP_SYN_SEND_STOP_REVIEW_V1`
-- `TCP_HANDSHAKE_PROOF_V1`
+- `TCP_SYN_BUILD_PROOF_V1` ✅ IMPLEMENTED (TCP_SYN_BUILD_PROOF_V1)
+- `TCP_SYN_BUILD_PROOF_V1` ↔ new gates: tcp_syn_build_v1, tcp_syn_checksum_v1, tcp_syn_truth_v1, tcp_syn_build_proof_done_v1
 
 Status note:
-- Implemented bounded model/build/observe markers.
-- TCP send/handshake remain explicit stop-review/no-peer-observe in this phase.
+- TCP SYN build: ✅ IMPLEMENTED on e1000e lane. Full Ethernet+IPv4+TCP(MSS) frame built targeting DNS-resolved example.com IP (172.66.147.243). IPv4 header checksum (0x2E88) and TCP checksum with pseudo-header (0x8B90) computed at runtime. No TX descriptor post. No TDT advance. syn_sent=0, tcp_sent=0, http_sent=0. Verified with manual checksum recomputation.
+- TCP SYN send/handshake remain pending for next phases: TCP_SYN_SEND_STOP_REVIEW_V1, TCP_SYN_SEND_PROOF_V1.
 
 ### Bundle D: DNS/HTTP core client (in progress: DNS parse + host resolution implemented; HTTP markers next)
 - `DNS_CLIENT_PLAN_V1`

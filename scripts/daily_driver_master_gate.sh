@@ -220,6 +220,10 @@ gate_tcp_minimal_state_machine_plan="SKIP"
 gate_tcp_syn_build_proof="SKIP"
 gate_tcp_syn_send_stop_review="SKIP"
 gate_tcp_handshake_proof="SKIP"
+gate_tcp_syn_build_v1="SKIP"
+gate_tcp_syn_checksum_v1="SKIP"
+gate_tcp_syn_truth_v1="SKIP"
+gate_tcp_syn_build_proof_done_v1="SKIP"
 gate_dns_client_plan="SKIP"
 gate_dns_query_build_proof="SKIP"
 gate_dns_query_send_stop_review="SKIP"
@@ -1945,6 +1949,27 @@ if [ "$(has 'tcp.handshake.proof.*ok=1')" -eq 1 ]; then
     print_row "tcp_handshake_proof" "PASS" "TCP handshake bounded claim"
 else gate_tcp_handshake_proof="SKIP"; fi
 
+# ---- TCP_SYN_BUILD_PROOF_V1 gates ----
+if [ "$(has 'tcp.syn.build\].*ok=1')" -eq 1 ]; then
+    gate_tcp_syn_build_v1="PASS"
+    print_row "tcp_syn_build_v1" "PASS" "TCP SYN build with resolved DNS target"
+else gate_tcp_syn_build_v1="SKIP"; fi
+
+if [ "$(has 'tcp.syn.checksum\].*ok=1')" -eq 1 ]; then
+    gate_tcp_syn_checksum_v1="PASS"
+    print_row "tcp_syn_checksum_v1" "PASS" "TCP SYN checksums computed"
+else gate_tcp_syn_checksum_v1="SKIP"; fi
+
+if [ "$(has 'tcp.syn.truth\].*ok=1')" -eq 1 ]; then
+    gate_tcp_syn_truth_v1="PASS"
+    print_row "tcp_syn_truth_v1" "PASS" "TCP SYN truth syn_sent=0 tcp_sent=0"
+else gate_tcp_syn_truth_v1="SKIP"; fi
+
+if [ "$(has 'tcp.syn.build.proof.done\].*ok=1')" -eq 1 ]; then
+    gate_tcp_syn_build_proof_done_v1="PASS"
+    print_row "tcp_syn_build_proof_done_v1" "PASS" "TCP SYN build proof V1 done"
+else gate_tcp_syn_build_proof_done_v1="SKIP"; fi
+
 if [ "$(has 'dns.client.plan.*ok=1')" -eq 1 ]; then
     gate_dns_client_plan="PASS"
     print_row "dns_client_plan" "PASS" "DNS plan marker"
@@ -2547,6 +2572,10 @@ ALL_GATES=(
     "tcp_syn_build_proof:$gate_tcp_syn_build_proof"
     "tcp_syn_send_stop_review:$gate_tcp_syn_send_stop_review"
     "tcp_handshake_proof:$gate_tcp_handshake_proof"
+    "tcp_syn_build_v1:$gate_tcp_syn_build_v1"
+    "tcp_syn_checksum_v1:$gate_tcp_syn_checksum_v1"
+    "tcp_syn_truth_v1:$gate_tcp_syn_truth_v1"
+    "tcp_syn_build_proof_done_v1:$gate_tcp_syn_build_proof_done_v1"
     "dns_client_plan:$gate_dns_client_plan"
     "dns_query_build_proof:$gate_dns_query_build_proof"
     "dns_query_send_stop_review:$gate_dns_query_send_stop_review"
