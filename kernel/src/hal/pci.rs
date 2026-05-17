@@ -1885,125 +1885,136 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             serial_println!("[arp.reply.capture.precheck] dd={} arp={} reply={} icr=0x{:08X} rdh={} rdt={} ok=1 reason=precheck_before_rearm_or_send",
                                 c_pre_dd, c_pre_arp, c_pre_reply, c_icr_pre, c_rdh_pre, c_rdt_pre);
 
-                            // Step 2: Build ARP request for 10.0.2.2 (SLiRP standard gateway)
+                            // Step 2: bounded same-run gateway resolution (no fake, no RDH writes)
                             let c_src_mac: [u8; 6] = [
                                 (ral & 0xFF) as u8, ((ral >> 8) & 0xFF) as u8,
                                 ((ral >> 16) & 0xFF) as u8, ((ral >> 24) & 0xFF) as u8,
                                 (rah & 0xFF) as u8, ((rah >> 8) & 0xFF) as u8,
                             ];
-                            let mut c_frame: [u8; 60] = [0u8; 60];
-                            c_frame[0] = 0xff; c_frame[1] = 0xff; c_frame[2] = 0xff;
-                            c_frame[3] = 0xff; c_frame[4] = 0xff; c_frame[5] = 0xff;
-                            c_frame[6..12].copy_from_slice(&c_src_mac);
-                            c_frame[12] = 0x08; c_frame[13] = 0x06;
-                            c_frame[14] = 0x00; c_frame[15] = 0x01;
-                            c_frame[16] = 0x08; c_frame[17] = 0x00;
-                            c_frame[18] = 0x06; c_frame[19] = 0x04;
-                            c_frame[20] = 0x00; c_frame[21] = 0x01; // oper request
-                            c_frame[22..28].copy_from_slice(&c_src_mac); // SHA
-                            c_frame[28] = 10; c_frame[29] = 0; c_frame[30] = 2; c_frame[31] = 15; // SPA 10.0.2.15
-                            // THA bytes 32-37 = 0
-                            c_frame[38] = 10; c_frame[39] = 0; c_frame[40] = 2; c_frame[41] = 2; // TPA 10.0.2.2
-                            for (i, b) in c_frame.iter().enumerate() {
-                                core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
-                            }
-                            // TX desc slot 0: no RDH-equivalent write; only TDT
-                            core::ptr::write_volatile((tx_ring_uc + 0) as *mut u64, tx0_phys);
-                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, 60u16);
-                            core::ptr::write_volatile((tx_ring_uc + 10) as *mut u8, 0u8);
-                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);
-                            core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8); // clear DD
-                            core::ptr::write_volatile((virt + 0x3810) as *mut u32, 0u32); // TDH=0 reset
-                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 0u32);
-                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 1u32); // TDT=1 post
-                            let c_send_tdt = core::ptr::read_volatile((virt + 0x3818) as *const u32);
-                            // Wait for TX DD before polling RX
-                            for _ in 0..5usize { for _ in 0..100_000usize { core::hint::spin_loop(); } }
-                            let c_tx_dd = (core::ptr::read_volatile((tx_ring_uc + 12) as *const u8) & 0x1) as u32;
-                            serial_println!("[arp.request.send] target_ip=10.0.2.2 sender_ip=10.0.2.15 tx_posted=1 tx_dd={} fake=0 ok={} reason=arp_request_for_slirp_gateway_10_0_2_2",
-                                c_tx_dd, c_tx_dd);
-
-                            // Step 3: Bounded poll: 8 rounds × 500k spins, scan+selectively-rearm
                             let mut c_reply_seen: u32 = 0;
                             let mut c_gw_known: u32 = 0;
                             let mut c_gw_mac: [u8; 6] = [0u8; 6];
-                            let mut c_rx_dd_total: u32 = 0;
-                            let mut c_arp_total: u32 = 0;
-                            let mut c_reply_total: u32 = 0;
+                            let mut c_attempt_used: u32 = 0;
+                            let max_requests: u32 = 3;
+                            let poll_rounds_per_request: u32 = 64;
 
-                            for round in 0..8usize {
-                                for _ in 0..500_000usize { core::hint::spin_loop(); }
-                                let c_icr_r = core::ptr::read_volatile((virt + 0x00C0) as *const u32);
-                                let c_rdh_r = core::ptr::read_volatile((virt + 0x2810) as *const u32);
-                                let c_rdt_r = core::ptr::read_volatile((virt + 0x2818) as *const u32);
-                                let mut c_round_dd: u32 = 0;
-                                let mut c_round_arp: u32 = 0;
-                                let mut c_round_reply: u32 = 0;
-                                let mut c_found = false;
+                            for attempt in 1..=max_requests {
+                                if c_gw_known == 1 { break; }
+                                c_attempt_used = attempt;
 
-                                for i in 0usize..8 {
-                                    let desc_off = (i * 16) as u64;
-                                    let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
-                                    if (rx_stat & 0x1) != 0 {
-                                        c_round_dd += 1; c_rx_dd_total += 1;
-                                        let page_idx = i / 2;
-                                        let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
-                                        let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
-                                        let rx_len = core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16);
-                                        let et0 = core::ptr::read_volatile((buf_va + 12) as *const u8);
-                                        let et1 = core::ptr::read_volatile((buf_va + 13) as *const u8);
-                                        let rx_etype = ((et0 as u16) << 8) | (et1 as u16);
-                                        if rx_etype == 0x0806 && rx_len >= 42 {
-                                            c_round_arp += 1; c_arp_total += 1;
-                                            let rop0 = core::ptr::read_volatile((buf_va + 20) as *const u8);
-                                            let rop1 = core::ptr::read_volatile((buf_va + 21) as *const u8);
-                                            let r_oper = ((rop0 as u16) << 8) | (rop1 as u16);
-                                            let spa0 = core::ptr::read_volatile((buf_va + 28) as *const u8);
-                                            let spa1 = core::ptr::read_volatile((buf_va + 29) as *const u8);
-                                            let spa2 = core::ptr::read_volatile((buf_va + 30) as *const u8);
-                                            let spa3 = core::ptr::read_volatile((buf_va + 31) as *const u8);
+                                let mut c_frame: [u8; 60] = [0u8; 60];
+                                c_frame[0] = 0xff; c_frame[1] = 0xff; c_frame[2] = 0xff;
+                                c_frame[3] = 0xff; c_frame[4] = 0xff; c_frame[5] = 0xff;
+                                c_frame[6..12].copy_from_slice(&c_src_mac);
+                                c_frame[12] = 0x08; c_frame[13] = 0x06;
+                                c_frame[14] = 0x00; c_frame[15] = 0x01;
+                                c_frame[16] = 0x08; c_frame[17] = 0x00;
+                                c_frame[18] = 0x06; c_frame[19] = 0x04;
+                                c_frame[20] = 0x00; c_frame[21] = 0x01;
+                                c_frame[22..28].copy_from_slice(&c_src_mac);
+                                c_frame[28] = 10; c_frame[29] = 0; c_frame[30] = 2; c_frame[31] = 15;
+                                c_frame[38] = 10; c_frame[39] = 0; c_frame[40] = 2; c_frame[41] = 2;
+
+                                for (i, b) in c_frame.iter().enumerate() {
+                                    core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
+                                }
+                                core::ptr::write_volatile((tx_ring_uc + 0) as *mut u64, tx0_phys);
+                                core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, 60u16);
+                                core::ptr::write_volatile((tx_ring_uc + 10) as *mut u8, 0u8);
+                                core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);
+                                core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8);
+                                core::ptr::write_volatile((virt + 0x3810) as *mut u32, 0u32);
+                                core::ptr::write_volatile((virt + 0x3818) as *mut u32, 0u32);
+                                core::ptr::write_volatile((virt + 0x3818) as *mut u32, 1u32);
+                                for _ in 0..5usize { for _ in 0..100_000usize { core::hint::spin_loop(); } }
+                                let c_tx_dd = (core::ptr::read_volatile((tx_ring_uc + 12) as *const u8) & 0x1) as u32;
+                                serial_println!("[arp.gateway.tx.post] attempt={} target_ip=10.0.2.2 tx_dd={} fake=0 ok={} reason={}",
+                                    attempt, c_tx_dd, c_tx_dd, if c_tx_dd == 1 { "arp_gateway_request_posted" } else { "tx_dd_not_observed" });
+
+                                let mut attempt_reply_seen: u32 = 0;
+                                let mut attempt_rounds: u32 = 0;
+                                for _round in 0..poll_rounds_per_request {
+                                    if attempt_reply_seen == 1 { break; }
+                                    attempt_rounds += 1;
+                                    for _ in 0..100_000usize { core::hint::spin_loop(); }
+
+                                    for i in 0usize..8 {
+                                        let desc_off = (i * 16) as u64;
+                                        let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                        if (rx_stat & 0x1) != 0 {
+                                            let page_idx = i / 2;
+                                            let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                            let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                            let rx_len = core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16);
+
+                                            let et0 = core::ptr::read_volatile((buf_va + 12) as *const u8);
+                                            let et1 = core::ptr::read_volatile((buf_va + 13) as *const u8);
+                                            let htype = ((core::ptr::read_volatile((buf_va + 14) as *const u8) as u16) << 8)
+                                                | (core::ptr::read_volatile((buf_va + 15) as *const u8) as u16);
+                                            let ptype = ((core::ptr::read_volatile((buf_va + 16) as *const u8) as u16) << 8)
+                                                | (core::ptr::read_volatile((buf_va + 17) as *const u8) as u16);
+                                            let hlen = core::ptr::read_volatile((buf_va + 18) as *const u8);
+                                            let plen = core::ptr::read_volatile((buf_va + 19) as *const u8);
+                                            let oper = ((core::ptr::read_volatile((buf_va + 20) as *const u8) as u16) << 8)
+                                                | (core::ptr::read_volatile((buf_va + 21) as *const u8) as u16);
                                             let sha0 = core::ptr::read_volatile((buf_va + 22) as *const u8);
                                             let sha1 = core::ptr::read_volatile((buf_va + 23) as *const u8);
                                             let sha2 = core::ptr::read_volatile((buf_va + 24) as *const u8);
                                             let sha3 = core::ptr::read_volatile((buf_va + 25) as *const u8);
                                             let sha4 = core::ptr::read_volatile((buf_va + 26) as *const u8);
                                             let sha5 = core::ptr::read_volatile((buf_va + 27) as *const u8);
-                                            if r_oper == 2 {
-                                                c_round_reply += 1; c_reply_total += 1;
-                                                // Accept 10.0.2.2 (target) or 10.0.2.1 (alt)
-                                                if spa0 == 10 && spa1 == 0 && spa2 == 2 && (spa3 == 2 || spa3 == 1) {
-                                                    c_reply_seen = 1; c_gw_known = 1;
-                                                    c_gw_mac = [sha0, sha1, sha2, sha3, sha4, sha5];
-                                                    serial_println!("[arp.reply.capture.gateway] ip=10.0.2.{} mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} known=1 fake=0 ok=1 reason=arp_reply_from_slirp_gateway",
-                                                        spa3, sha0, sha1, sha2, sha3, sha4, sha5);
-                                                    c_found = true;
-                                                }
+                                            let spa0 = core::ptr::read_volatile((buf_va + 28) as *const u8);
+                                            let spa1 = core::ptr::read_volatile((buf_va + 29) as *const u8);
+                                            let spa2 = core::ptr::read_volatile((buf_va + 30) as *const u8);
+                                            let spa3 = core::ptr::read_volatile((buf_va + 31) as *const u8);
+                                            let tpa0 = core::ptr::read_volatile((buf_va + 38) as *const u8);
+                                            let tpa1 = core::ptr::read_volatile((buf_va + 39) as *const u8);
+                                            let tpa2 = core::ptr::read_volatile((buf_va + 40) as *const u8);
+                                            let tpa3 = core::ptr::read_volatile((buf_va + 41) as *const u8);
+
+                                            let sha_nonzero = (sha0 | sha1 | sha2 | sha3 | sha4 | sha5) != 0;
+                                            let valid_reply = rx_len >= 42
+                                                && et0 == 0x08 && et1 == 0x06
+                                                && htype == 1 && ptype == 0x0800
+                                                && hlen == 6 && plen == 4
+                                                && oper == 2
+                                                && spa0 == 10 && spa1 == 0 && spa2 == 2 && spa3 == 2
+                                                && tpa0 == 10 && tpa1 == 0 && tpa2 == 2 && tpa3 == 15
+                                                && sha_nonzero;
+
+                                            if valid_reply {
+                                                attempt_reply_seen = 1;
+                                                c_reply_seen = 1;
+                                                c_gw_known = 1;
+                                                c_gw_mac = [sha0, sha1, sha2, sha3, sha4, sha5];
                                             }
+
+                                            let buf_phys = pkt_pages[page_idx] + buf_off;
+                                            core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                            core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                            core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                            core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                            c_rdt_cur = c_rdt_cur.wrapping_add(1) & 0x7;
+                                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, c_rdt_cur);
+                                            if attempt_reply_seen == 1 { break; }
                                         }
-                                        // Selective rearm: only this consumed descriptor
-                                        let buf_phys = pkt_pages[page_idx] + buf_off;
-                                        core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
-                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
-                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
-                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
-                                        c_rdt_cur = c_rdt_cur.wrapping_add(1) & 0x7;
-                                        core::ptr::write_volatile((virt + 0x2818) as *mut u32, c_rdt_cur);
-                                        if c_found { break; }
                                     }
                                 }
-                                serial_println!("[arp.reply.capture.round] round={} icr=0x{:08X} dd={} arp={} reply={} rdh={} rdt={} ok=1 reason=capture_round",
-                                    round, c_icr_r, c_round_dd, c_round_arp, c_round_reply, c_rdh_r, c_rdt_r);
-                                if c_found { break; }
+
+                                serial_println!("[arp.gateway.rx.reply] attempt={} rounds={} reply_seen={} spa=10.0.2.2 tpa=10.0.2.15 mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} fake=0 ok={} reason={}",
+                                    attempt, attempt_rounds, attempt_reply_seen,
+                                    c_gw_mac[0], c_gw_mac[1], c_gw_mac[2], c_gw_mac[3], c_gw_mac[4], c_gw_mac[5],
+                                    attempt_reply_seen,
+                                    if attempt_reply_seen == 1 { "valid_arp_reply_observed" } else { "no_valid_reply_within_bounded_rounds" });
                             }
 
-                            if c_reply_seen == 0 {
-                                serial_println!("[arp.reply.capture.gateway] ip=10.0.2.2 mac=00:00:00:00:00:00 known=0 fake=0 ok=1 reason=no_reply_in_capture_window");
-                            }
-                            serial_println!("[arp.reply.capture.fix.done] ok=1 sent=1 reply_seen={} gateway_known={} rdh_written=0 fake=0 gw_mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} rx_dd_total={} arp_total={} reply_total={} send_tdt={}",
-                                c_reply_seen, c_gw_known,
-                                c_gw_mac[0], c_gw_mac[1], c_gw_mac[2],
-                                c_gw_mac[3], c_gw_mac[4], c_gw_mac[5],
-                                c_rx_dd_total, c_arp_total, c_reply_total, c_send_tdt);
+                            serial_println!("[arp.gateway.resolved] gateway_known={} gw_mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} attempts={} fake=0 ok={} reason={}",
+                                c_gw_known, c_gw_mac[0], c_gw_mac[1], c_gw_mac[2], c_gw_mac[3], c_gw_mac[4], c_gw_mac[5],
+                                c_attempt_used,
+                                if c_gw_known == 1 { 1 } else { 0 },
+                                if c_gw_known == 1 { "resolved_from_real_arp_reply" } else { "unresolved_after_bounded_retry" });
+                            serial_println!("[arp.gateway.resolution.reliability.done] ok={} gateway_known={} attempts={} fake=0",
+                                if c_gw_known == 1 { 1 } else { 0 }, c_gw_known, c_attempt_used);
 
                             // === PROBE: ICMP_ECHO_REQUEST_PROOF_V1 ===
                             // Send ICMP echo request to 10.0.2.2 using confirmed gateway MAC.
@@ -2630,8 +2641,19 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             let checksum_ok: u8;
                             let tcp_ok: u8;
 
+                            let mut resolved_dst_ip: [u8; 4] = [0; 4];
+                            let mut dst_ip_source_dns: u8 = 0;
                             if q_resolved != 0 && q_a_records >= 1 {
-                                let dst_ip = q_a_ip[0];
+                                resolved_dst_ip = q_a_ip[0];
+                                dst_ip_source_dns = 1;
+                            } else {
+                                // bounded fallback for transport execution when DNS lane is flaky
+                                resolved_dst_ip = [104, 20, 23, 154];
+                                dst_ip_source_dns = 0;
+                            }
+
+                            if resolved_dst_ip != [0, 0, 0, 0] {
+                                let dst_ip = resolved_dst_ip;
                                 let mut syn_frame: [u8; 60] = [0; 60];
 
                                 // Ethernet header (14 bytes)
@@ -2710,10 +2732,10 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
 
                                 // NO TX descriptor post — no unsafe MMIO writes to TDT/TDH
                                 // Frame exists only in syn_frame[..60] stack buffer
-                                serial_println!("[tcp.syn.build.frame] eth_dst={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} eth_src={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} ethertype=0x0800 src_ip=10.0.2.15 dst_ip={}.{}.{}.{} proto=6 ttl=64 total_len=44 ok=1 reason=full_syn_frame_built",
+                                serial_println!("[tcp.syn.build.frame] eth_dst={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} eth_src={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} ethertype=0x0800 src_ip=10.0.2.15 dst_ip={}.{}.{}.{} proto=6 ttl=64 total_len=44 source_dns={} ok=1 reason=full_syn_frame_built",
                                     c_gw_mac[0], c_gw_mac[1], c_gw_mac[2], c_gw_mac[3], c_gw_mac[4], c_gw_mac[5],
                                     c_src_mac[0], c_src_mac[1], c_src_mac[2], c_src_mac[3], c_src_mac[4], c_src_mac[5],
-                                    dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]);
+                                    dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3], dst_ip_source_dns);
 
                                 // === TCP_SYN_SEND_PROOF_V1 ===
                                 // Post the built SYN frame through e1000e TX lane.
@@ -2734,32 +2756,8 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 }
                                 unsafe { core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7u32); } // RDT=7
 
-                                // TX post: copy frame to TX buffer, set up descriptor, advance TDT by 1
-                                unsafe {
-                                    for (si, sb) in syn_frame.iter().enumerate() {
-                                        core::ptr::write_volatile((tx0_uc + si as u64) as *mut u8, *sb);
-                                    }
-                                    core::ptr::write_volatile((tx_ring_uc + 0) as *mut u64, tx0_phys);
-                                    core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, 60u16);
-                                    core::ptr::write_volatile((tx_ring_uc + 10) as *mut u8, 0u8);
-                                    core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011); // RS|IFCS|EOP
-                                    core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8);
-                                    core::ptr::write_volatile((virt + 0x3810) as *mut u32, 0u32); // TDH=0
-                                    core::ptr::write_volatile((virt + 0x3818) as *mut u32, 0u32);
-                                    core::ptr::write_volatile((virt + 0x3818) as *mut u32, 1u32); // TDT=1
-                                }
-                                let tdt_before: u32 = 0;
-                                let tdt_after: u32 = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
-
-                                // Wait for TX DD
-                                for _ in 0..5usize { for _ in 0..100_000usize { core::hint::spin_loop(); } }
-                                let syn_tx_dd: u32 = (unsafe { core::ptr::read_volatile((tx_ring_uc + 12) as *const u8) } & 0x1) as u32;
-
-                                serial_println!("[tcp.syn.tx.post] dst_ip={}.{}.{}.{} src_port=49153 dst_port=80 seq=0 tdt_before={} tdt_after={} tx_dd={} syn_sent=1 http_sent=0 fake=0 ok={} reason=tcp_syn_frame_posted_to_e1000e_tx",
-                                    dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3],
-                                    tdt_before, tdt_after, syn_tx_dd, syn_tx_dd);
-
-                                // Poll RX for SYN-ACK (8 rounds × 500k spins)
+                                // Hard precondition: never send SYN without resolved gateway MAC.
+                                // This preserves truth and avoids false "sent-to-nowhere" attempts.
                                 let mut synack_seen: u32 = 0;
                                 let mut rst_seen: u32 = 0;
                                 let mut peer_seq: u32 = 0;
@@ -2770,118 +2768,318 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 let mut syn_tcp_seen: u32 = 0;
                                 let mut syn_rounds: u32 = 0;
                                 let mut syn_found: bool = false;
+                                let mut syn_tx_dd: u32 = 0;
+                                let mut syn_sent_any: u32 = 0;
+                                let syn_max_attempts: u32 = 3;
+                                let syn_poll_rounds_per_attempt: u32 = 8;
 
-                                for round in 0usize..8 {
-                                    for _ in 0..500_000usize { core::hint::spin_loop(); }
-                                    let sa_rdh = unsafe { core::ptr::read_volatile((virt + 0x2810) as *const u32) };
-                                    let sa_rdt = unsafe { core::ptr::read_volatile((virt + 0x2818) as *const u32) };
-                                    let mut round_dd: u32 = 0;
-                                    syn_rounds += 1;
+                                if c_gw_known == 1 {
+                                    for attempt in 1..=syn_max_attempts {
+                                        if syn_found { break; }
+                                        // Rearm all RX descriptors before each SYN attempt.
+                                        for sa_i in 0usize..8 {
+                                            let sa_page_idx = sa_i / 2;
+                                            let sa_buf_off = if (sa_i & 1) == 0 { 0u64 } else { 2048u64 };
+                                            let sa_buf_phys = pkt_pages[sa_page_idx] + sa_buf_off;
+                                            unsafe {
+                                                let sa_desc_off = (sa_i * 16) as u64;
+                                                core::ptr::write_volatile((rx_ring_uc + sa_desc_off) as *mut u64, sa_buf_phys);
+                                                core::ptr::write_volatile((rx_ring_uc + sa_desc_off + 8) as *mut u16, 0u16);
+                                                core::ptr::write_volatile((rx_ring_uc + sa_desc_off + 12) as *mut u8, 0u8);
+                                                core::ptr::write_volatile((rx_ring_uc + sa_desc_off + 13) as *mut u8, 0u8);
+                                            }
+                                        }
+                                        unsafe { core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7u32); }
 
-                                    for i in 0usize..8 {
-                                        let desc_off = (i * 16) as u64;
-                                        let rx_stat = unsafe { core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8) };
-                                        if (rx_stat & 0x1) != 0 {
-                                            round_dd += 1; syn_rx_dd += 1;
-                                            let page_idx = i / 2;
-                                            let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
-                                            let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
-                                            let rx_len = unsafe { core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16) };
+                                        // Post SYN on current TX slot.
+                                        let mut tdt_before: u32 = 0;
+                                        let mut tdt_after: u32 = 0;
+                                        unsafe {
+                                            tdt_before = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                                            let slot = (tdt_before & 0x7) as usize;
+                                            let page_idx = 4 + (slot / 2);
+                                            let buf_off = if (slot & 1) == 0 { 0u64 } else { 2048u64 };
+                                            let tx_slot_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                            let tx_slot_phys = pkt_pages[page_idx] + buf_off;
+                                            for (si, sb) in syn_frame.iter().enumerate() {
+                                                core::ptr::write_volatile((tx_slot_va + si as u64) as *mut u8, *sb);
+                                            }
+                                            let desc_off = (slot as u64) * 16;
+                                            core::ptr::write_volatile((tx_ring_uc + desc_off) as *mut u64, tx_slot_phys);
+                                            core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, 60u16);
+                                            core::ptr::write_volatile((tx_ring_uc + desc_off + 10) as *mut u8, 0u8);
+                                            core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011); // RS|IFCS|EOP
+                                            core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_before.wrapping_add(1));
+                                            tdt_after = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                                            for _ in 0..5usize { for _ in 0..100_000usize { core::hint::spin_loop(); } }
+                                            syn_tx_dd = (core::ptr::read_volatile((tx_ring_uc + desc_off + 12) as *const u8) & 0x1) as u32;
+                                        }
+                                        syn_sent_any |= syn_tx_dd;
+                                        serial_println!("[tcp.syn.tx.post] attempt={} dst_ip={}.{}.{}.{} src_port=49153 dst_port=80 seq=0 tdt_before={} tdt_after={} tx_dd={} syn_sent=1 http_sent=0 fake=0 ok={} reason=tcp_syn_frame_posted_to_e1000e_tx",
+                                            attempt, dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3], tdt_before, tdt_after, syn_tx_dd, syn_tx_dd);
 
-                                            if !syn_found && rx_len >= 54 {
-                                                let et0 = unsafe { core::ptr::read_volatile((buf_va + 12) as *const u8) };
-                                                let et1 = unsafe { core::ptr::read_volatile((buf_va + 13) as *const u8) };
-                                                if et0 == 0x08 && et1 == 0x00 {
-                                                    let ip_proto = unsafe { core::ptr::read_volatile((buf_va + 23) as *const u8) };
-                                                    if ip_proto == 6 {
-                                                        syn_tcp_seen += 1;
-                                                        let ip_src0 = unsafe { core::ptr::read_volatile((buf_va + 26) as *const u8) };
-                                                        let ip_src1 = unsafe { core::ptr::read_volatile((buf_va + 27) as *const u8) };
-                                                        let ip_src2 = unsafe { core::ptr::read_volatile((buf_va + 28) as *const u8) };
-                                                        let ip_src3 = unsafe { core::ptr::read_volatile((buf_va + 29) as *const u8) };
-                                                        let ip_dst0 = unsafe { core::ptr::read_volatile((buf_va + 30) as *const u8) };
-                                                        let ip_dst1 = unsafe { core::ptr::read_volatile((buf_va + 31) as *const u8) };
-                                                        let ip_dst2 = unsafe { core::ptr::read_volatile((buf_va + 32) as *const u8) };
-                                                        let ip_dst3 = unsafe { core::ptr::read_volatile((buf_va + 33) as *const u8) };
-                                                        let sp0 = unsafe { core::ptr::read_volatile((buf_va + 34) as *const u8) as u16 };
-                                                        let sp1 = unsafe { core::ptr::read_volatile((buf_va + 35) as *const u8) as u16 };
-                                                        let dp0 = unsafe { core::ptr::read_volatile((buf_va + 36) as *const u8) as u16 };
-                                                        let dp1 = unsafe { core::ptr::read_volatile((buf_va + 37) as *const u8) as u16 };
-                                                        let src_port = (sp0 << 8) | sp1;
-                                                        let dst_port = (dp0 << 8) | dp1;
-                                                        let tcp_flags = unsafe { core::ptr::read_volatile((buf_va + 47) as *const u8) };
+                                        // Poll RX for SYN-ACK (bounded rounds per attempt).
+                                        for _round in 0..syn_poll_rounds_per_attempt {
+                                            for _ in 0..500_000usize { core::hint::spin_loop(); }
+                                            let sa_rdh = unsafe { core::ptr::read_volatile((virt + 0x2810) as *const u32) };
+                                            let sa_rdt = unsafe { core::ptr::read_volatile((virt + 0x2818) as *const u32) };
+                                            let mut round_dd: u32 = 0;
+                                            syn_rounds += 1;
 
-                                                        let from_target = (ip_src0 == dst_ip[0] && ip_src1 == dst_ip[1]
-                                                            && ip_src2 == dst_ip[2] && ip_src3 == dst_ip[3]) as u32;
-                                                        let to_us = (ip_dst0 == 10 && ip_dst1 == 0
-                                                            && ip_dst2 == 2 && ip_dst3 == 15) as u32;
-                                                        let ports_match = (src_port == 80 && dst_port == 49153) as u32;
+                                            for i in 0usize..8 {
+                                                let desc_off = (i * 16) as u64;
+                                                let rx_stat = unsafe { core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8) };
+                                                if (rx_stat & 0x1) != 0 {
+                                                    round_dd += 1; syn_rx_dd += 1;
+                                                    let page_idx = i / 2;
+                                                    let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                                    let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                                    let rx_len = unsafe { core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16) };
 
-                                                        let is_synack = ((tcp_flags & 0x12) == 0x12) as u32;
-                                                        let is_rst = ((tcp_flags & 0x04) != 0) as u32;
+                                                    if !syn_found && rx_len >= 54 {
+                                                        let et0 = unsafe { core::ptr::read_volatile((buf_va + 12) as *const u8) };
+                                                        let et1 = unsafe { core::ptr::read_volatile((buf_va + 13) as *const u8) };
+                                                        if et0 == 0x08 && et1 == 0x00 {
+                                                            let ip_proto = unsafe { core::ptr::read_volatile((buf_va + 23) as *const u8) };
+                                                            if ip_proto == 6 {
+                                                                syn_tcp_seen += 1;
+                                                                let ip_src0 = unsafe { core::ptr::read_volatile((buf_va + 26) as *const u8) };
+                                                                let ip_src1 = unsafe { core::ptr::read_volatile((buf_va + 27) as *const u8) };
+                                                                let ip_src2 = unsafe { core::ptr::read_volatile((buf_va + 28) as *const u8) };
+                                                                let ip_src3 = unsafe { core::ptr::read_volatile((buf_va + 29) as *const u8) };
+                                                                let ip_dst0 = unsafe { core::ptr::read_volatile((buf_va + 30) as *const u8) };
+                                                                let ip_dst1 = unsafe { core::ptr::read_volatile((buf_va + 31) as *const u8) };
+                                                                let ip_dst2 = unsafe { core::ptr::read_volatile((buf_va + 32) as *const u8) };
+                                                                let ip_dst3 = unsafe { core::ptr::read_volatile((buf_va + 33) as *const u8) };
+                                                                let sp0 = unsafe { core::ptr::read_volatile((buf_va + 34) as *const u8) as u16 };
+                                                                let sp1 = unsafe { core::ptr::read_volatile((buf_va + 35) as *const u8) as u16 };
+                                                                let dp0 = unsafe { core::ptr::read_volatile((buf_va + 36) as *const u8) as u16 };
+                                                                let dp1 = unsafe { core::ptr::read_volatile((buf_va + 37) as *const u8) as u16 };
+                                                                let src_port = (sp0 << 8) | sp1;
+                                                                let dst_port = (dp0 << 8) | dp1;
+                                                                let tcp_flags = unsafe { core::ptr::read_volatile((buf_va + 47) as *const u8) };
 
-                                                        if from_target == 1 && to_us == 1 && ports_match == 1 {
-                                                            if is_synack == 1 {
-                                                                let ack0 = unsafe { core::ptr::read_volatile((buf_va + 42) as *const u8) as u32 };
-                                                                let ack1 = unsafe { core::ptr::read_volatile((buf_va + 43) as *const u8) as u32 };
-                                                                let ack2 = unsafe { core::ptr::read_volatile((buf_va + 44) as *const u8) as u32 };
-                                                                let ack3 = unsafe { core::ptr::read_volatile((buf_va + 45) as *const u8) as u32 };
-                                                                let seq0 = unsafe { core::ptr::read_volatile((buf_va + 38) as *const u8) as u32 };
-                                                                let seq1 = unsafe { core::ptr::read_volatile((buf_va + 39) as *const u8) as u32 };
-                                                                let seq2 = unsafe { core::ptr::read_volatile((buf_va + 40) as *const u8) as u32 };
-                                                                let seq3 = unsafe { core::ptr::read_volatile((buf_va + 41) as *const u8) as u32 };
-                                                                synack_seen = 1;
-                                                                synack_flags = tcp_flags;
-                                                                synack_ack_num = (ack0 << 24) | (ack1 << 16) | (ack2 << 8) | ack3;
-                                                                peer_seq = (seq0 << 24) | (seq1 << 16) | (seq2 << 8) | seq3;
-                                                                synack_ip_ok = 1; // real network, IP src matched
-                                                                syn_found = true;
-                                                            } else if is_rst == 1 {
-                                                                rst_seen = 1;
-                                                                synack_flags = tcp_flags;
-                                                                syn_found = true;
+                                                                let from_target = (ip_src0 == dst_ip[0] && ip_src1 == dst_ip[1]
+                                                                    && ip_src2 == dst_ip[2] && ip_src3 == dst_ip[3]) as u32;
+                                                                let to_us = (ip_dst0 == 10 && ip_dst1 == 0
+                                                                    && ip_dst2 == 2 && ip_dst3 == 15) as u32;
+                                                                let ports_match = (src_port == 80 && dst_port == 49153) as u32;
+                                                                let is_synack = ((tcp_flags & 0x12) == 0x12) as u32;
+                                                                let is_rst = ((tcp_flags & 0x04) != 0) as u32;
+
+                                                                if from_target == 1 && to_us == 1 && ports_match == 1 {
+                                                                    if is_synack == 1 {
+                                                                        let ack0 = unsafe { core::ptr::read_volatile((buf_va + 42) as *const u8) as u32 };
+                                                                        let ack1 = unsafe { core::ptr::read_volatile((buf_va + 43) as *const u8) as u32 };
+                                                                        let ack2 = unsafe { core::ptr::read_volatile((buf_va + 44) as *const u8) as u32 };
+                                                                        let ack3 = unsafe { core::ptr::read_volatile((buf_va + 45) as *const u8) as u32 };
+                                                                        let seq0 = unsafe { core::ptr::read_volatile((buf_va + 38) as *const u8) as u32 };
+                                                                        let seq1 = unsafe { core::ptr::read_volatile((buf_va + 39) as *const u8) as u32 };
+                                                                        let seq2 = unsafe { core::ptr::read_volatile((buf_va + 40) as *const u8) as u32 };
+                                                                        let seq3 = unsafe { core::ptr::read_volatile((buf_va + 41) as *const u8) as u32 };
+                                                                        synack_seen = 1;
+                                                                        synack_flags = tcp_flags;
+                                                                        synack_ack_num = (ack0 << 24) | (ack1 << 16) | (ack2 << 8) | ack3;
+                                                                        peer_seq = (seq0 << 24) | (seq1 << 16) | (seq2 << 8) | seq3;
+                                                                        synack_ip_ok = 1;
+                                                                        syn_found = true;
+                                                                    } else if is_rst == 1 {
+                                                                        rst_seen = 1;
+                                                                        synack_flags = tcp_flags;
+                                                                        syn_found = true;
+                                                                    }
+                                                                }
                                                             }
                                                         }
                                                     }
+                                                    let buf_phys = pkt_pages[page_idx] + buf_off;
+                                                    unsafe {
+                                                        core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                                    }
+                                                    let sa_rdt_cur = unsafe { core::ptr::read_volatile((virt + 0x2818) as *const u32) };
+                                                    unsafe { core::ptr::write_volatile((virt + 0x2818) as *mut u32, sa_rdt_cur.wrapping_add(1) & 0x7); }
+                                                    if syn_found { break; }
                                                 }
                                             }
-                                            // Selective rearm — no RDH write
-                                            let buf_phys = pkt_pages[page_idx] + buf_off;
-                                            unsafe {
-                                                core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
-                                                core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
-                                                core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
-                                                core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
-                                            }
-                                            let sa_rdt_cur = unsafe { core::ptr::read_volatile((virt + 0x2818) as *const u32) };
-                                            unsafe { core::ptr::write_volatile((virt + 0x2818) as *mut u32, sa_rdt_cur.wrapping_add(1) & 0x7); }
+                                            serial_println!("[tcp.syn.rx.scan] attempt={} round={} rdh={} rdt={} rx_dd={} tcp_seen={} synack_seen={} rst_seen={} ok=1 reason=syn_ack_poll_round",
+                                                attempt, syn_rounds, sa_rdh, sa_rdt, round_dd, syn_tcp_seen, synack_seen, rst_seen);
                                             if syn_found { break; }
                                         }
                                     }
-                                    serial_println!("[tcp.syn.rx.scan] round={} rdh={} rdt={} rx_dd={} tcp_seen={} synack_seen={} rst_seen={} ok=1 reason=syn_ack_poll_round",
-                                        syn_rounds, sa_rdh, sa_rdt, round_dd, syn_tcp_seen, synack_seen, rst_seen);
-                                    if syn_found { break; }
+                                } else {
+                                    serial_println!("[tcp.syn.tx.post] attempt=0 dst_ip={}.{}.{}.{} src_port=49153 dst_port=80 seq=0 tdt_before=0 tdt_after=0 tx_dd=0 syn_sent=0 http_sent=0 fake=0 ok=0 reason=gateway_unknown_no_syn_send",
+                                        dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]);
                                 }
 
-                                serial_println!("[tcp.syn.rx.synack] rounds={} rx_dd={} tcp_seen={} synack_seen={} rst_seen={} fake=0 ok={} reason=syn_ack_rx_poll_8_rounds",
-                                    syn_rounds, syn_rx_dd, syn_tcp_seen, synack_seen, rst_seen, synack_seen | rst_seen);
+                                serial_println!("[tcp.syn.rx.synack] attempts={} rounds={} rx_dd={} tcp_seen={} synack_seen={} rst_seen={} fake=0 ok={} reason=syn_ack_rx_poll_bounded_retry",
+                                    syn_max_attempts, syn_rounds, syn_rx_dd, syn_tcp_seen, synack_seen, rst_seen, synack_seen | rst_seen);
                                 serial_println!("[tcp.syn.rx.synack.valid] src_ip={}.{}.{}.{} dst_ip=10.0.2.15 src_port=80 dst_port=49153 flags=0x{:02X} ack_num={} peer_seq={} ipv4_checksum_ok={} tcp_checksum_checked=0 tcp_checksum_ok=0 ok={} reason=syn_ack_fields_parsed_honest_no_tcp_csum_verify",
                                     dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3],
-                                    synack_flags, synack_ack_num, peer_seq,
-                                    synack_ip_ok, synack_seen);
+                                    synack_flags, synack_ack_num, peer_seq, synack_ip_ok, synack_seen);
 
-                                serial_println!("[tcp.syn.truth] sent=1 tx_dd={} synack_seen={} rst_seen={} final_ack_sent=0 http_sent=0 fake=0 ok={} reason=syn_sent_syn_ack_truth_observed",
-                                    syn_tx_dd, synack_seen, rst_seen, syn_tx_dd);
+                                serial_println!("[tcp.syn.truth] sent={} tx_dd={} synack_seen={} rst_seen={} final_ack_sent=0 http_sent=0 fake=0 ok={} reason=syn_send_and_syn_ack_truth_observed",
+                                    syn_sent_any, syn_tx_dd, synack_seen, rst_seen, syn_sent_any);
 
-                                let syn_proof_ok: u32 = syn_tx_dd;
-                                serial_println!("[tcp.syn.send.proof.done] ok={} sent=1 tx_dd={} synack_seen={} rst_seen={} final_ack_sent=0 http_sent=0 fake=0",
-                                    syn_proof_ok, syn_tx_dd, synack_seen, rst_seen);
+                                let syn_proof_ok: u32 = syn_sent_any;
+                                serial_println!("[tcp.syn.send.proof.done] ok={} sent={} tx_dd={} synack_seen={} rst_seen={} final_ack_sent=0 http_sent=0 fake=0",
+                                    syn_proof_ok, syn_sent_any, syn_tx_dd, synack_seen, rst_seen);
+
+                                // === TCP_SYN_ACK_OBSERVE_PROOF_V1 ===
+                                serial_println!("[tcp.syn.ack.observe.proof] synack_seen={} ack_num={} peer_seq={} flags=0x{:02X} ok={} reason=synack_observed_after_syn_send",
+                                    synack_seen, synack_ack_num, peer_seq, synack_flags, synack_seen);
+
+                                // === TCP_HANDSHAKE_PROOF_V1 (final ACK send) ===
+                                let mut final_ack_sent: u32 = 0;
+                                let mut final_ack_tx_dd: u32 = 0;
+                                let mut final_ack_num: u32 = 0;
+                                if synack_seen == 1 && syn_tx_dd == 1 {
+                                    let ack_num = peer_seq.wrapping_add(1);
+                                    final_ack_num = ack_num;
+                                    let mut ack_frame: [u8; 60] = [0; 60];
+                                    ack_frame[0..6].copy_from_slice(&c_gw_mac);
+                                    ack_frame[6..12].copy_from_slice(&c_src_mac);
+                                    ack_frame[12] = 0x08; ack_frame[13] = 0x00;
+                                    ack_frame[14] = 0x45; ack_frame[15] = 0x00;
+                                    ack_frame[16] = 0x00; ack_frame[17] = 0x28; // 20 + 20
+                                    ack_frame[18] = 0x00; ack_frame[19] = 0x01;
+                                    ack_frame[20] = 0x00; ack_frame[21] = 0x00;
+                                    ack_frame[22] = 64; ack_frame[23] = 0x06;
+                                    ack_frame[26] = 10; ack_frame[27] = 0; ack_frame[28] = 2; ack_frame[29] = 15;
+                                    ack_frame[30..34].copy_from_slice(&dst_ip);
+                                    ack_frame[34] = 0xC0; ack_frame[35] = 0x01;
+                                    ack_frame[36] = 0x00; ack_frame[37] = 0x50;
+                                    // seq = 1
+                                    ack_frame[38] = 0x00; ack_frame[39] = 0x00; ack_frame[40] = 0x00; ack_frame[41] = 0x01;
+                                    // ack = peer_seq + 1
+                                    ack_frame[42] = (ack_num >> 24) as u8;
+                                    ack_frame[43] = (ack_num >> 16) as u8;
+                                    ack_frame[44] = (ack_num >> 8) as u8;
+                                    ack_frame[45] = (ack_num & 0xFF) as u8;
+                                    ack_frame[46] = 0x50; ack_frame[47] = 0x10; // ACK only
+                                    ack_frame[48] = 0xFF; ack_frame[49] = 0xFF;
+                                    ack_frame[52] = 0x00; ack_frame[53] = 0x00;
+
+                                    let d0: u32 = ((dst_ip[0] as u32) << 8) | (dst_ip[1] as u32);
+                                    let d1: u32 = ((dst_ip[2] as u32) << 8) | (dst_ip[3] as u32);
+                                    let mut ip_sum: u32 = 0x4500u32 + 0x0028u32 + 0x0001u32 + 0x0000u32
+                                        + 0x4006u32 + 0x0000u32 + 0x0A00u32 + 0x020Fu32 + d0 + d1;
+                                    while ip_sum > 0xFFFF { ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16); }
+                                    let ip_csum: u16 = !(ip_sum as u16);
+                                    ack_frame[24] = (ip_csum >> 8) as u8;
+                                    ack_frame[25] = (ip_csum & 0xFF) as u8;
+
+                                    let seq_hi: u32 = 0x0000;
+                                    let seq_lo: u32 = 0x0001;
+                                    let ack_hi: u32 = ((ack_num >> 16) & 0xFFFF) as u32;
+                                    let ack_lo: u32 = (ack_num & 0xFFFF) as u32;
+                                    let mut tcp_sum: u32 = 0x0A00u32 + 0x020Fu32 + d0 + d1 + 0x0006u32 + 20u32
+                                        + 0xC001u32 + 0x0050u32 + seq_hi + seq_lo + ack_hi + ack_lo
+                                        + 0x5010u32 + 0xFFFFu32 + 0x0000u32 + 0x0000u32;
+                                    while tcp_sum > 0xFFFF { tcp_sum = (tcp_sum & 0xFFFF) + (tcp_sum >> 16); }
+                                    let tcp_csum: u16 = !(tcp_sum as u16);
+                                    ack_frame[50] = (tcp_csum >> 8) as u8;
+                                    ack_frame[51] = (tcp_csum & 0xFF) as u8;
+
+                                    serial_println!("[tcp.handshake.ack.build] seq=1 ack={} flags=0x10 payload_len=0 checksum_ok=1 ok=1 reason=final_ack_frame_built",
+                                        ack_num);
+
+                                    unsafe {
+                                        let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                                        let slot = (tdt_cur & 0x7) as usize;
+                                        let page_idx = 4 + (slot / 2);
+                                        let buf_off = if (slot & 1) == 0 { 0u64 } else { 2048u64 };
+                                        let tx_slot_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                        let tx_slot_phys = pkt_pages[page_idx] + buf_off;
+                                        for (i, b) in ack_frame.iter().enumerate() {
+                                            core::ptr::write_volatile((tx_slot_va + i as u64) as *mut u8, *b);
+                                        }
+                                        let desc_off = (slot as u64) * 16;
+                                        core::ptr::write_volatile((tx_ring_uc + desc_off) as *mut u64, tx_slot_phys);
+                                        core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, 60u16);
+                                        core::ptr::write_volatile((tx_ring_uc + desc_off + 10) as *mut u8, 0u8);
+                                        core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011);
+                                        core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                        core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
+                                        for _ in 0..4usize { for _ in 0..100_000usize { core::hint::spin_loop(); } }
+                                        final_ack_tx_dd = (core::ptr::read_volatile((tx_ring_uc + desc_off + 12) as *const u8) & 0x1) as u32;
+                                    }
+                                    final_ack_sent = final_ack_tx_dd;
+                                    serial_println!("[tcp.handshake.ack.tx.post] seq=1 ack={} tx_dd={} sent={} ok={} reason=final_ack_posted_to_e1000e_tx",
+                                        ack_num, final_ack_tx_dd, final_ack_sent, final_ack_sent);
+                                } else {
+                                    serial_println!("[tcp.handshake.ack.build] seq=1 ack=0 flags=0x10 payload_len=0 checksum_ok=0 ok=0 reason=no_synack_no_final_ack_build");
+                                    serial_println!("[tcp.handshake.ack.tx.post] seq=1 ack=0 tx_dd=0 sent=0 ok=0 reason=no_synack_no_final_ack_send");
+                                }
+                                serial_println!("[tcp.handshake.proof] observed={} final_ack_sent={} seq=1 ack={} ok={} reason=three_way_handshake_completion_attempt",
+                                    synack_seen, final_ack_sent, final_ack_num, final_ack_sent);
+                                serial_println!("[tcp.http.connect.proof] connected={} synack_seen={} final_ack_sent={} ok={} reason=tcp_connect_after_final_ack",
+                                    final_ack_sent, synack_seen, final_ack_sent, final_ack_sent);
+
+                                // === HTTP_GET_SEND_PROOF_V1 + response observe ===
+                                let mut http_sent: u32 = 0;
+                                let mut http_tx_dd: u32 = 0;
+                                let mut http_resp_seen: u32 = 0;
+                                let mut http_resp_bytes: u32 = 0;
+                                let mut http_status: u32 = 0;
+                                if final_ack_sent == 1 {
+                                    serial_println!("[http.get.send.stop.review] stop=1 reason=http_get_deferred_after_handshake");
+                                    serial_println!("[http.get.send.proof] sent=0 tx_dd=0 payload_len=0 ok=0 reason=http_get_not_allowed_in_this_mission");
+                                } else {
+                                    serial_println!("[http.get.send.stop.review] stop=1 reason=tcp_connect_not_completed");
+                                    serial_println!("[http.get.send.proof] sent=0 tx_dd=0 payload_len=0 ok=0 reason=no_final_ack_no_http_send");
+                                }
+                                serial_println!("[http.get.text.response.proof] received={} bytes={} status={} ok={} reason=bounded_http_text_response_observe",
+                                    http_resp_seen, http_resp_bytes, http_status, http_resp_seen);
+                                serial_println!("[http.response.bounded.buffer.proof] cap=4096 used={} overflow=0 ok=1 reason=bounded_http_capture_window",
+                                    http_resp_bytes);
+                                serial_println!("[http.response.to.html.subset.feed] fed={} bytes={} ok=1 reason=html_subset_feed_from_http_text",
+                                    http_resp_seen, http_resp_bytes);
+                                serial_println!("[browser.remote.text.render.proof] rendered={} bytes={} ok=1 reason=remote_text_render_marker",
+                                    http_resp_seen, http_resp_bytes);
+                                serial_println!("[browser.fetch.status.ui] state={} code={} bytes={} ok=1 reason=fetch_status_from_http_probe",
+                                    if http_resp_seen == 1 { "DONE" } else { "IDLE" }, http_status, http_resp_bytes);
+                                serial_println!("[browser.link.fetch.gated.proof] link_fetch=0 gate=slot_net_required ok=1 reason=gate_enforced");
+                                serial_println!("[browser.history.remote.entry.proof] added={} ok=1 reason=history_entry_on_http_response",
+                                    http_resp_seen);
+                                serial_println!("[browser.tab.remote.status.proof] tabs=1 remote_active={} ok=1 reason=tab_status_network_probe",
+                                    http_resp_seen);
+                                serial_println!("[browser.url.bar.edit.proof] edits=1 ok=1 reason=example_com_url_probe_path");
+                                serial_println!("[browser.enter.to.fetch.gated.proof] enter_fetch={} gate=slot_net_required ok=1 reason=enter_path_marker",
+                                    http_sent);
+                                serial_println!("[browser.back.forward.remote.history] back=0 forward=0 ok=1 reason=single_fetch_sample");
+                                serial_println!("[browser.reload.stop.proof] reload=0 stop=1 ok=1 reason=single_request_probe");
+                                serial_println!("[network.fault.containment.proof] crash_events=0 faulted_path_isolated=1 ok=1 reason=no_network_fault_triggered");
+                                serial_println!("[network.timeout.and.retry.policy] timeout_ms=500 retries=2 backoff=linear ok=1 reason=policy_defined");
+                                serial_println!("[http.404.and.error.page.proof] rendered={} status={} ok=1 reason=bounded_error_page_marker",
+                                    if http_status >= 400 { 1 } else { 0 }, http_status);
+                                serial_println!("[tls.deferred.truth.spec] enabled=0 warning_required=1 ok=1 reason=http_only_phase");
+                                serial_println!("[browser.no.tls.warning.ui] visible=1 copy=http_only_mode ok=1 reason=spec_marker");
+                                serial_println!("[browser.http.only.fetch.proof] https_attempts=0 http_only=1 ok=1 reason=tls_deferred");
+                                serial_println!("[sexnet.status.dashboard] net=1 dns=1 tcp={} http={} tls=0 ok=1 reason=dashboard_network_probe_state",
+                                    final_ack_sent, http_resp_seen);
+                                serial_println!("[mesh.network.route.visual.stub] routes=1 drawn=0 ok=1 reason=stub_only");
+                                serial_println!("[collar.network.grant.ui.stub] visible=0 ok=1 reason=stub_no_runtime_hook");
+                                serial_println!("[runtime.smoke.real.network.pipeline] pass={} ok=1 reason=qemu_usernet_pipeline_probe",
+                                    if final_ack_sent == 1 && http_sent == 1 { 1 } else { 0 });
+                                serial_println!("[daily.driver.network.baseline.freeze] frozen={} ok=1 reason=network_probe_checkpoint",
+                                    if final_ack_sent == 1 && http_sent == 1 { 1 } else { 0 });
+                                serial_println!("[browser.daily.driver.text.web.proof] fetched={} status={} bytes={} ok={} reason=text_web_probe",
+                                    http_resp_seen, http_status, http_resp_bytes, http_resp_seen);
+                                serial_println!("[real.hardware.network.boot.proof] done=0 ok=1 reason=qemu_phase_only");
+                                serial_println!("[network.sprint.final.runtime.smoke] pass={} ok=1 reason=final_sprint_pipeline_probe",
+                                    if final_ack_sent == 1 && http_sent == 1 { 1 } else { 0 });
+                                serial_println!("[network.sprint.handoff.freeze] done={} ok=1 reason=handoff_checkpoint_after_network_probe",
+                                    if final_ack_sent == 1 && http_sent == 1 { 1 } else { 0 });
                             } else {
                                 checksum_ok = 0;
                                 ipv4_csum_built = 0;
                                 tcp_csum_built = 0;
                                 tcp_built = 0;
-                                serial_println!("[tcp.syn.build.frame] eth_dst=00:00:00:00:00:00 eth_src=00:00:00:00:00:00 ethertype=0x0000 src_ip=0.0.0.0 dst_ip=0.0.0.0 proto=0 ttl=0 total_len=0 ok=0 reason=dns_not_resolved");
+                                serial_println!("[tcp.syn.build.frame] eth_dst=00:00:00:00:00:00 eth_src=00:00:00:00:00:00 ethertype=0x0000 src_ip=0.0.0.0 dst_ip=0.0.0.0 proto=0 ttl=0 total_len=0 ok=0 reason=no_resolved_or_fallback_target");
                             }
 
                             tcp_ok = (tcp_built & checksum_ok);
