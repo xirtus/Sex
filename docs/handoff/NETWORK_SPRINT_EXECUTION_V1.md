@@ -1512,3 +1512,89 @@ Classification:
 
 - These missions are frozen as hardware-lane pending, not failed.
 - Current host lane remains QEMU-only with truthful non-hardware status.
+
+---
+
+## HOSTFWD_ENV_FIX_IMPLEMENTATION_V2 (2026-05-17)
+
+Runtime:
+
+```bash
+python3 -m http.server 18080 --bind 0.0.0.0 >/tmp/hostfwd_http_18080.log 2>&1 &
+QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
+  QEMU_USERNET_HOSTFWD='tcp::18080-:18080' \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexos_hostfwd_env_fix_implementation_v2.log
+```
+
+Result: **BUILD PASS, PRE-BOOT BLOCKED**.
+
+Required marker:
+
+- `[qemu.net.config] backend=user model=e1000e usernet=1 hostfwd=tcp::18080-:18080 tap_if=tap0`
+
+Blocking stderr:
+
+- `Could not set up host forwarding rule 'tcp::18080-:18080'`
+
+Classification:
+
+- Hostfwd branch remains environment-blocked in this host.
+- Detailed handoff: `docs/handoff/HOSTFWD_ENV_FIX_IMPLEMENTATION_V2.md`.
+
+---
+
+## TAP_HOST_ENV_FIX_IMPLEMENTATION_V2 (2026-05-17)
+
+Runtime:
+
+```bash
+QEMU_NET_BACKEND=tap QEMU_TAP_IFNAME=tap0 QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexos_tap_host_env_fix_implementation_v2.log
+```
+
+Result: **BUILD PASS, PRE-BOOT BLOCKED**.
+
+Required marker:
+
+- `[qemu.net.config] backend=tap model=e1000e usernet=1 hostfwd=none tap_if=tap0`
+
+Blocking stderr:
+
+- `Could not open '/dev/net/tun': No such file or directory`
+
+Classification:
+
+- TAP branch remains host-capability blocked in this environment.
+- Detailed handoff: `docs/handoff/TAP_HOST_ENV_FIX_IMPLEMENTATION_V2.md`.
+
+---
+
+## BROWSER_INPUT_WINDOWING_SPRINT_EXECUTION_V1 (2026-05-17)
+
+Runtime:
+
+```bash
+./scripts/entrypoint_build.sh
+QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexos_browser_input_windowing_sprint_v1.log
+```
+
+Result: **FINAL PASS (249 gates, 0 fail, 12 skip, 0 faults)**.
+
+Key frozen-network markers:
+
+- `[runtime.smoke.real.network.pipeline.v1] ... fetched=1 status=200 ... ok=1`
+- `[network.sprint.final.runtime.smoke.v1] ... fetched=1 status=200 ... ok=1`
+- `[network.sprint.handoff.freeze.v1] ... done=1 ... ok=1`
+- `[qemu.slirp.tcp.limit.freeze] ... environment_limited=1 ok=1`
+
+Key window/input markers:
+
+- `[shell.keyboard.window.proof.done] ok=1`
+- `[window.workflow.proof.done] ok=1 passed=6 failed=1`
+- expected unsupported close step preserved:
+  - `[window.workflow.step] action=close_disposable ... ok=0 reason=unsupported_no_safe_disposable_surface`
+
+Detailed handoff:
+
+- `docs/handoff/BROWSER_INPUT_WINDOWING_SPRINT_EXECUTION_V1.md`
