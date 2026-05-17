@@ -209,3 +209,14 @@ Interpretation update:
 Interpretation update:
 - PCI command gating is confirmed not to be the blocker; runtime already has IO/MEM/BM enabled.
 - Next bounded lane should probe alternate RX register-bank controls (queue region offsets near 0x2C00) while preserving bounded claims.
+
+## RX Diagnostic Snapshot (r27 0x2Cxx bank probe)
+- `/tmp/sexos_network_sprint_autopilot_r27_2cxx_probe.log`:
+  - `e1000.rx.alt_probe.ext`: `off_d=0x2C20 rb_d=0x00000000 off_e=0x2C28 rb_e=0x00000000`.
+  - `e1000.rx.alt_probe.winner`: `found=0`.
+  - `e1000.rx.ring.progress`: still `rdh_before=0 rdh_after=0`.
+  - `e1000.rx.peer.observe`: still `observed=0`.
+
+Interpretation update:
+- Additional 0x2Cxx queue-bank candidates did not latch and did not affect RX behavior.
+- Next bounded lane should pivot from register-bank probing to traffic-shape/source assumptions (e.g., explicit QEMU usernet ingress trigger or receive path model mismatch isolation).

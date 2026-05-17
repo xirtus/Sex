@@ -475,6 +475,8 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         let alt_a: u64 = 0x2828; // prior attempted RXDCTL
                         let alt_b: u64 = 0x0108; // legacy alignment candidate
                         let alt_c: u64 = 0x0210; // alternate queue control vicinity
+                        let alt_d: u64 = 0x2C20; // alternate queue-control bank candidate
+                        let alt_e: u64 = 0x2C28; // alternate queue-control bank candidate
                         let mut latched_off: u64 = 0;
                         let mut latched_val: u32 = 0;
                         unsafe {
@@ -484,11 +486,19 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             let rb_b = core::ptr::read_volatile((virt + alt_b) as *const u32);
                             core::ptr::write_volatile((virt + alt_c) as *mut u32, probe_val);
                             let rb_c = core::ptr::read_volatile((virt + alt_c) as *const u32);
+                            core::ptr::write_volatile((virt + alt_d) as *mut u32, probe_val);
+                            let rb_d = core::ptr::read_volatile((virt + alt_d) as *const u32);
+                            core::ptr::write_volatile((virt + alt_e) as *mut u32, probe_val);
+                            let rb_e = core::ptr::read_volatile((virt + alt_e) as *const u32);
                             if rb_a != 0 { latched_off = alt_a; latched_val = rb_a; }
                             else if rb_b != 0 { latched_off = alt_b; latched_val = rb_b; }
                             else if rb_c != 0 { latched_off = alt_c; latched_val = rb_c; }
+                            else if rb_d != 0 { latched_off = alt_d; latched_val = rb_d; }
+                            else if rb_e != 0 { latched_off = alt_e; latched_val = rb_e; }
                             serial_println!("[e1000.rx.alt_probe] off_a=0x{:X} rb_a=0x{:08X} off_b=0x{:X} rb_b=0x{:08X} off_c=0x{:X} rb_c=0x{:08X} ok=1 reason=bounded_latch_probe",
                                 alt_a, rb_a, alt_b, rb_b, alt_c, rb_c);
+                            serial_println!("[e1000.rx.alt_probe.ext] off_d=0x{:X} rb_d=0x{:08X} off_e=0x{:X} rb_e=0x{:08X} ok=1 reason=bounded_2cxx_latch_probe",
+                                alt_d, rb_d, alt_e, rb_e);
                         }
                         serial_println!("[e1000.rx.alt_probe.winner] off=0x{:X} val=0x{:08X} found={} ok=1 reason=first_nonzero_latch",
                             latched_off, latched_val, (latched_off != 0) as u8);
