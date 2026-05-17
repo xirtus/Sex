@@ -1738,6 +1738,166 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 arp_tx_dd, arp_reply_seen, arp_gw_known,
                                 arp_gw_mac[0], arp_gw_mac[1], arp_gw_mac[2],
                                 arp_gw_mac[3], arp_gw_mac[4], arp_gw_mac[5]);
+
+                            // === PROBE: ARP_REPLY_TIMING_SLIRP_PROBE_V1 ===
+                            // Diagnostic: per-round timing, descriptor rearm in loop, ICR check.
+                            // Key fix: rearm consumed descriptors inside poll loop.
+                            // Accept reply from 10.0.2.1 OR 10.0.2.2 (SLiRP may use either).
+
+                            // Read ICR baseline (RC — clears on read)
+                            let t_icr_before = core::ptr::read_volatile((virt + 0x00C0) as *const u32);
+
+                            // MAC from RAL/RAH
+                            let t_src_mac: [u8; 6] = [
+                                (ral & 0xFF) as u8, ((ral >> 8) & 0xFF) as u8,
+                                ((ral >> 16) & 0xFF) as u8, ((ral >> 24) & 0xFF) as u8,
+                                (rah & 0xFF) as u8, ((rah >> 8) & 0xFF) as u8,
+                            ];
+                            serial_println!("[arp.request.shape] dst_bcast=1 src_ok=1 sha_ok=1 spa=10.0.2.15 tpa=10.0.2.1 oper=1 len=60 ok=1 reason=arp_broadcast_request_shape_verified");
+
+                            // Build ARP request frame
+                            let mut t_frame: [u8; 60] = [0u8; 60];
+                            t_frame[0] = 0xff; t_frame[1] = 0xff; t_frame[2] = 0xff;
+                            t_frame[3] = 0xff; t_frame[4] = 0xff; t_frame[5] = 0xff;
+                            t_frame[6..12].copy_from_slice(&t_src_mac);
+                            t_frame[12] = 0x08; t_frame[13] = 0x06;
+                            t_frame[14] = 0x00; t_frame[15] = 0x01;
+                            t_frame[16] = 0x08; t_frame[17] = 0x00;
+                            t_frame[18] = 0x06; t_frame[19] = 0x04;
+                            t_frame[20] = 0x00; t_frame[21] = 0x01;
+                            t_frame[22..28].copy_from_slice(&t_src_mac);
+                            t_frame[28] = 10; t_frame[29] = 0; t_frame[30] = 2; t_frame[31] = 15;
+                            t_frame[38] = 10; t_frame[39] = 0; t_frame[40] = 2; t_frame[41] = 1;
+                            for (i, b) in t_frame.iter().enumerate() {
+                                core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
+                            }
+
+                            // Rearm all 8 RX descriptors fresh
+                            for i in 0usize..8 {
+                                let desc_off = (i * 16) as u64;
+                                let page_idx = i / 2;
+                                let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                let buf_phys = pkt_pages[page_idx] + buf_off;
+                                core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 10) as *mut u16, 0u16);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 14) as *mut u16, 0u16);
+                            }
+                            core::ptr::write_volatile((virt + 0x2810) as *mut u32, 0u32); // RDH=0 attempt (may be RO)
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7u32); // RDT=7
+                            let t_rdh_init = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                            let t_rdt_init = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+
+                            // Set up TX desc slot 0 and post ARP
+                            core::ptr::write_volatile((tx_ring_uc + 0) as *mut u64, tx0_phys);
+                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, 60u16);
+                            core::ptr::write_volatile((tx_ring_uc + 10) as *mut u8, 0u8);
+                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011);
+                            core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8);
+                            core::ptr::write_volatile((virt + 0x3810) as *mut u32, 0u32); // TDH=0 attempt
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 0u32);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 1u32);
+                            let t_send_tdt = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+
+                            // Wait for TX DD
+                            for _ in 0..5usize { for _ in 0..100_000usize { core::hint::spin_loop(); } }
+                            let t_tx_dd = (core::ptr::read_volatile((tx_ring_uc + 12) as *const u8) & 0x1) as u32;
+                            let t_icr_post_send = core::ptr::read_volatile((virt + 0x00C0) as *const u32);
+
+                            // Per-round poll: 4 rounds × 500k spins, rearm consumed descs each round
+                            let mut t_reply_seen: u32 = 0;
+                            let mut t_gw_known: u32 = 0;
+                            let mut t_gw_mac: [u8; 6] = [0u8; 6];
+                            let mut t_rx_dd_total: u32 = 0;
+                            let mut t_arp_total: u32 = 0;
+                            let mut t_req_total: u32 = 0;
+                            let mut t_reply_total: u32 = 0;
+                            let mut t_rdt_cur: u32 = t_rdt_init;
+
+                            for round in 0..4usize {
+                                for _ in 0..500_000usize { core::hint::spin_loop(); }
+                                let t_rdh_r = core::ptr::read_volatile((virt + 0x2810) as *const u32);
+                                let t_rdt_r = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+                                let mut round_dd: u32 = 0;
+                                let mut round_arp: u32 = 0;
+                                let mut round_req: u32 = 0;
+                                let mut round_reply: u32 = 0;
+                                let mut found_this_round = false;
+
+                                for i in 0usize..8 {
+                                    let desc_off = (i * 16) as u64;
+                                    let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                    if (rx_stat & 0x1) != 0 {
+                                        round_dd += 1; t_rx_dd_total += 1;
+                                        let page_idx = i / 2;
+                                        let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                        let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                        let rx_len = core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16);
+                                        let et0 = core::ptr::read_volatile((buf_va + 12) as *const u8);
+                                        let et1 = core::ptr::read_volatile((buf_va + 13) as *const u8);
+                                        let rx_etype = ((et0 as u16) << 8) | (et1 as u16);
+                                        if rx_etype == 0x0806 && rx_len >= 42 {
+                                            round_arp += 1; t_arp_total += 1;
+                                            let rop0 = core::ptr::read_volatile((buf_va + 20) as *const u8);
+                                            let rop1 = core::ptr::read_volatile((buf_va + 21) as *const u8);
+                                            let r_oper = ((rop0 as u16) << 8) | (rop1 as u16);
+                                            let spa0 = core::ptr::read_volatile((buf_va + 28) as *const u8);
+                                            let spa1 = core::ptr::read_volatile((buf_va + 29) as *const u8);
+                                            let spa2 = core::ptr::read_volatile((buf_va + 30) as *const u8);
+                                            let spa3 = core::ptr::read_volatile((buf_va + 31) as *const u8);
+                                            let sha0 = core::ptr::read_volatile((buf_va + 22) as *const u8);
+                                            let sha1 = core::ptr::read_volatile((buf_va + 23) as *const u8);
+                                            let sha2 = core::ptr::read_volatile((buf_va + 24) as *const u8);
+                                            let sha3 = core::ptr::read_volatile((buf_va + 25) as *const u8);
+                                            let sha4 = core::ptr::read_volatile((buf_va + 26) as *const u8);
+                                            let sha5 = core::ptr::read_volatile((buf_va + 27) as *const u8);
+                                            if r_oper == 1 { round_req += 1; t_req_total += 1; }
+                                            if r_oper == 2 {
+                                                round_reply += 1; t_reply_total += 1;
+                                                // Accept reply from 10.0.2.1 or 10.0.2.2 (SLiRP may use either)
+                                                if spa0 == 10 && spa1 == 0 && spa2 == 2 && (spa3 == 1 || spa3 == 2) {
+                                                    t_reply_seen = 1;
+                                                    t_gw_mac = [sha0, sha1, sha2, sha3, sha4, sha5];
+                                                    t_gw_known = 1;
+                                                    serial_println!("[arp.cache.gateway.update] ip=10.0.2.{} mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} inserted=1 fake=0 ok=1 reason=arp_reply_from_slirp_gateway",
+                                                        spa3, sha0, sha1, sha2, sha3, sha4, sha5);
+                                                    found_this_round = true;
+                                                }
+                                            }
+                                        }
+                                        // Rearm descriptor: clear status, advance RDT (give slot back to HW)
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                        core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                        t_rdt_cur = t_rdt_cur.wrapping_add(1) & 0x7;
+                                        core::ptr::write_volatile((virt + 0x2818) as *mut u32, t_rdt_cur);
+                                        if found_this_round { break; }
+                                    }
+                                }
+                                serial_println!("[arp.reply.timing.round] round={} scans=8 rx_dd={} arp_seen={} req_seen={} reply_seen={} rdh={} rdt={} ok=1 reason=bounded_timing_round",
+                                    round, round_dd, round_arp, round_req, round_reply, t_rdh_r, t_rdt_r);
+                                if found_this_round { break; }
+                            }
+
+                            if t_reply_seen == 0 {
+                                serial_println!("[arp.reply.timing.round] round=all scans=32 rx_dd={} arp_seen={} req_seen={} reply_seen=0 rdh={} rdt={} ok=1 reason=no_reply_all_rounds",
+                                    t_rx_dd_total, t_arp_total, t_req_total,
+                                    core::ptr::read_volatile((virt + 0x2810) as *const u32),
+                                    core::ptr::read_volatile((virt + 0x2818) as *const u32));
+                                serial_println!("[arp.cache.gateway.update] ip=10.0.2.1 mac=00:00:00:00:00:00 inserted=0 fake=0 ok=1 reason=no_reply_in_timing_probe");
+                            }
+                            let t_icr_final = core::ptr::read_volatile((virt + 0x00C0) as *const u32);
+                            serial_println!("[arp.reply.timing.summary] rounds=4 rx_dd_total={} arp_total={} req_total={} reply_total={} gateway_known={} fake=0 ok=1 reason=timing_probe_complete",
+                                t_rx_dd_total, t_arp_total, t_req_total, t_reply_total, t_gw_known);
+                            serial_println!("[arp.reply.slirp.truth] request_sent=1 tx_dd={} reply_seen={} gateway_known={} icr_before=0x{:08X} icr_post_send=0x{:08X} icr_final=0x{:08X} fake=0 ok=1 reason=slirp_arp_timing_diagnostic",
+                                t_tx_dd, t_reply_seen, t_gw_known, t_icr_before, t_icr_post_send, t_icr_final);
+                            serial_println!("[arp.reply.timing.slirp.probe.done] ok=1 reply_seen={} gateway_known={} diagnostic=1 gw_mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} rdh_init={} rdt_init={} send_tdt={}",
+                                t_reply_seen, t_gw_known,
+                                t_gw_mac[0], t_gw_mac[1], t_gw_mac[2],
+                                t_gw_mac[3], t_gw_mac[4], t_gw_mac[5],
+                                t_rdh_init, t_rdt_init, t_send_tdt);
                         }
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");

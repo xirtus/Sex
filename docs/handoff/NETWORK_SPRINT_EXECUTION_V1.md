@@ -669,3 +669,40 @@ Options:
 3. Add ARP reply RX interrupt handling to avoid polling
 
 Full findings: `docs/handoff/ARP_REQUEST_SEND_PROOF_V1.md`
+
+---
+
+## ARP_REPLY_TIMING_SLIRP_PROBE_V1 — 2026-05-17
+
+Diagnostic timing probe with per-round markers, ICR readback, and in-loop descriptor rearm.
+
+Gates: PASS DIAGNOSTIC **228**/0/2skip (e1000e).
+Log: `/tmp/sexos_arp_reply_timing_slirp_probe_v1.log`.
+
+### Key Finding: ICR Reveals Lost Reply
+
+`icr_before=0x80000083` has RXT0 (bit 7) set — SLiRP DID deliver an ARP reply after
+probe V1's poll window ended. Probe V2 rearmed/cleared the ring at startup, losing it.
+After the second ARP send, SLiRP did not reply again.
+
+### Root Causes
+
+| # | Cause |
+|---|-------|
+| 1 | Probe V2 cleared pending reply during ring rearm |
+| 2 | Writing RDH=0 may reset ring state (RDH should be read-only) |
+| 3 | TPA=10.0.2.1 may not be SLiRP gateway (standard is 10.0.2.2) |
+| 4 | Probe V1 poll window too short — SLiRP replied after it closed |
+
+### Per-Round Timing
+
+| Round | rx_dd | RDH | RDT |
+|-------|-------|-----|-----|
+| 0-3   | 0     | 0   | 7   |
+
+### Next: E1000E_RX_REARM_AFTER_FIRST_PACKET_PROOF_V1
+
+Check ring for existing frames BEFORE rearm. Don't write RDH. Target 10.0.2.2.
+Extend poll window to catch delayed SLiRP reply.
+
+Full findings: `docs/handoff/ARP_REPLY_TIMING_SLIRP_PROBE_V1.md`
