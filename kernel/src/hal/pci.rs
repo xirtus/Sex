@@ -1618,6 +1618,126 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 obs_packets, obs_ok);
                             serial_println!("[e1000e.rx.descriptor.observe.proof.done] ok={} rx_dd={} rdh_advanced={} buffer_match={}",
                                 obs_ok, lb_rx_dd, obs_rdh_advanced, obs_prefix_match);
+
+                            // === PROBE: ARP_REQUEST_SEND_PROOF_V1 ===
+                            // Send ARP request "Who has 10.0.2.1? Tell 10.0.2.15"
+                            // Poll bounded RX for oper=2 reply. Store gateway MAC only from valid reply.
+                            let arp_src_mac: [u8; 6] = [
+                                (ral & 0xFF) as u8, ((ral >> 8) & 0xFF) as u8,
+                                ((ral >> 16) & 0xFF) as u8, ((ral >> 24) & 0xFF) as u8,
+                                (rah & 0xFF) as u8, ((rah >> 8) & 0xFF) as u8,
+                            ];
+                            let mut arp_req: [u8; 60] = [0u8; 60];
+                            arp_req[0] = 0xff; arp_req[1] = 0xff; arp_req[2] = 0xff;
+                            arp_req[3] = 0xff; arp_req[4] = 0xff; arp_req[5] = 0xff;
+                            arp_req[6..12].copy_from_slice(&arp_src_mac);
+                            arp_req[12] = 0x08; arp_req[13] = 0x06; // ARP ethertype
+                            arp_req[14] = 0x00; arp_req[15] = 0x01; // htype Ethernet
+                            arp_req[16] = 0x08; arp_req[17] = 0x00; // ptype IPv4
+                            arp_req[18] = 0x06; arp_req[19] = 0x04; // hlen=6 plen=4
+                            arp_req[20] = 0x00; arp_req[21] = 0x01; // oper request
+                            arp_req[22..28].copy_from_slice(&arp_src_mac); // SHA
+                            arp_req[28] = 10; arp_req[29] = 0; arp_req[30] = 2; arp_req[31] = 15; // SPA 10.0.2.15
+                            // THA bytes 32-37 = 0 (zeroed)
+                            arp_req[38] = 10; arp_req[39] = 0; arp_req[40] = 2; arp_req[41] = 1; // TPA 10.0.2.1
+                            // Write ARP frame to TX buffer page 0
+                            for (i, b) in arp_req.iter().enumerate() {
+                                core::ptr::write_volatile((tx0_uc + i as u64) as *mut u8, *b);
+                            }
+                            // Set up TX desc slot 0 with ARP frame
+                            core::ptr::write_volatile((tx_ring_uc + 0) as *mut u64, tx0_phys);
+                            core::ptr::write_volatile((tx_ring_uc + 8) as *mut u16, 60u16);
+                            core::ptr::write_volatile((tx_ring_uc + 10) as *mut u8, 0u8);
+                            core::ptr::write_volatile((tx_ring_uc + 11) as *mut u8, 0b0000_1011); // RS|IFCS|EOP
+                            core::ptr::write_volatile((tx_ring_uc + 12) as *mut u8, 0u8); // clear DD
+                            // Rearm all 8 RX descriptors
+                            for i in 0usize..8 {
+                                let desc_off = (i * 16) as u64;
+                                let page_idx = i / 2;
+                                let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                let buf_phys = pkt_pages[page_idx] + buf_off;
+                                core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 10) as *mut u16, 0u16);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                core::ptr::write_volatile((rx_ring_uc + desc_off + 14) as *mut u16, 0u16);
+                            }
+                            core::ptr::write_volatile((virt + 0x2810) as *mut u32, 0u32); // RDH=0
+                            core::ptr::write_volatile((virt + 0x2818) as *mut u32, 7u32); // RDT=7
+                            // Post ARP frame: reset TX ring then advance TDT
+                            core::ptr::write_volatile((virt + 0x3810) as *mut u32, 0u32); // TDH=0 attempt
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 0u32); // TDT=0
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, 1u32); // TDT=1 post
+                            let arp_send_tdt = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                            serial_println!("[arp.request.send] sha={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} spa=10.0.2.15 tpa=10.0.2.1 oper=1 sent=1 tdt={} ok={} reason=arp_request_broadcast_posted",
+                                arp_src_mac[0], arp_src_mac[1], arp_src_mac[2],
+                                arp_src_mac[3], arp_src_mac[4], arp_src_mac[5],
+                                arp_send_tdt, (arp_send_tdt == 1) as u32);
+                            // Wait for TX to be consumed
+                            for _ in 0..5usize { for _ in 0..100_000usize { core::hint::spin_loop(); } }
+                            let arp_tx_dd = (core::ptr::read_volatile((tx_ring_uc + 12) as *const u8) & 0x1) as u32;
+                            // Bounded RX poll: 8 rounds × 100k spins, scan all 8 descriptors
+                            let mut arp_reply_seen: u32 = 0;
+                            let mut arp_scanned: u32 = 0;
+                            let mut arp_gw_mac: [u8; 6] = [0u8; 6];
+                            let mut arp_gw_known: u32 = 0;
+                            'rx_arp: for _poll in 0..8usize {
+                                for _ in 0..100_000usize { core::hint::spin_loop(); }
+                                for i in 0usize..8 {
+                                    let desc_off = (i * 16) as u64;
+                                    let rx_stat = core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8);
+                                    arp_scanned += 1;
+                                    if (rx_stat & 0x1) != 0 {
+                                        let page_idx = i / 2;
+                                        let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                        let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                        let rx_len = core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16);
+                                        let et0 = core::ptr::read_volatile((buf_va + 12) as *const u8);
+                                        let et1 = core::ptr::read_volatile((buf_va + 13) as *const u8);
+                                        let rx_etype = ((et0 as u16) << 8) | (et1 as u16);
+                                        serial_println!("[arp.reply.rx.scan] desc={} stat=0x{:02X} len={} ethertype=0x{:04X} ok=1 reason=rx_descriptor_consumed",
+                                            i, rx_stat, rx_len, rx_etype);
+                                        if rx_etype == 0x0806 && rx_len >= 42 {
+                                            let rop0 = core::ptr::read_volatile((buf_va + 20) as *const u8);
+                                            let rop1 = core::ptr::read_volatile((buf_va + 21) as *const u8);
+                                            let r_oper = ((rop0 as u16) << 8) | (rop1 as u16);
+                                            let spa0 = core::ptr::read_volatile((buf_va + 28) as *const u8);
+                                            let spa1 = core::ptr::read_volatile((buf_va + 29) as *const u8);
+                                            let spa2 = core::ptr::read_volatile((buf_va + 30) as *const u8);
+                                            let spa3 = core::ptr::read_volatile((buf_va + 31) as *const u8);
+                                            let sha0 = core::ptr::read_volatile((buf_va + 22) as *const u8);
+                                            let sha1 = core::ptr::read_volatile((buf_va + 23) as *const u8);
+                                            let sha2 = core::ptr::read_volatile((buf_va + 24) as *const u8);
+                                            let sha3 = core::ptr::read_volatile((buf_va + 25) as *const u8);
+                                            let sha4 = core::ptr::read_volatile((buf_va + 26) as *const u8);
+                                            let sha5 = core::ptr::read_volatile((buf_va + 27) as *const u8);
+                                            serial_println!("[arp.reply.observe] oper={} spa={}.{}.{}.{} sha={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} reply_seen={} fake=0 ok=1",
+                                                r_oper, spa0, spa1, spa2, spa3,
+                                                sha0, sha1, sha2, sha3, sha4, sha5,
+                                                (r_oper == 2) as u32);
+                                            if r_oper == 2 && spa0 == 10 && spa1 == 0 && spa2 == 2 && spa3 == 1 {
+                                                arp_reply_seen = 1;
+                                                arp_gw_mac = [sha0, sha1, sha2, sha3, sha4, sha5];
+                                                arp_gw_known = 1;
+                                                serial_println!("[arp.cache.gateway.update] ip=10.0.2.1 mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} inserted=1 fake=0 ok=1 reason=arp_reply_from_gateway",
+                                                    sha0, sha1, sha2, sha3, sha4, sha5);
+                                                break 'rx_arp;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if arp_reply_seen == 0 {
+                                serial_println!("[arp.reply.rx.scan] scanned={} reply_found=0 ok=1 reason=no_oper2_from_gateway_in_poll_window",
+                                    arp_scanned);
+                                serial_println!("[arp.reply.observe] oper=0 spa=0.0.0.0 sha=00:00:00:00:00:00 reply_seen=0 fake=0 ok=1 reason=no_arp_reply_received");
+                                serial_println!("[arp.cache.gateway.update] ip=10.0.2.1 mac=00:00:00:00:00:00 inserted=0 fake=0 ok=1 reason=no_reply_gateway_mac_unknown");
+                            }
+                            serial_println!("[arp.request.send.proof.done] sent=1 tx_dd={} reply_seen={} gateway_known={} gw_mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} fake=0 ok=1 reason=arp_request_send_bounded_probe",
+                                arp_tx_dd, arp_reply_seen, arp_gw_known,
+                                arp_gw_mac[0], arp_gw_mac[1], arp_gw_mac[2],
+                                arp_gw_mac[3], arp_gw_mac[4], arp_gw_mac[5]);
                         }
                     } else {
                         serial_println!("[e1000.packet.buffer.alloc] pages=8 buffers=16 rx=8 tx=8 buffer_size=2048 allocated=0 ok=0 reason=alloc_frame_page_failed");

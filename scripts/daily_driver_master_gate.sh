@@ -1795,9 +1795,12 @@ elif [ "$(has 'arp.request.send.stop.review.*stop=0')" -eq 1 ]; then
     print_row "arp_request_send_stop_review" "PASS" "ARP lane exercised"
 else gate_arp_request_send_stop_review="SKIP"; fi
 
-if [ "$(has 'arp.request.send.proof.*ok=1')" -eq 1 ]; then
+if [ "$(has 'arp\.request\.send\.proof\.done.*sent=1.*gateway_known=1')" -eq 1 ]; then
     gate_arp_request_send_proof="PASS"
-    print_row "arp_request_send_proof" "PASS" "ARP send bounded claim"
+    print_row "arp_request_send_proof" "PASS" "ARP request sent gateway_known=1 reply rx confirmed"
+elif [ "$(has 'arp\.request\.send\.proof\.done.*sent=1.*gateway_known=0')" -eq 1 ]; then
+    gate_arp_request_send_proof="SKIP"
+    print_row "arp_request_send_proof" "SKIP" "ARP request sent gateway_known=0 no reply rx"
 else gate_arp_request_send_proof="SKIP"; fi
 
 if [ "$(has 'arp.reply.observe.proof.*ok=1')" -eq 1 ]; then

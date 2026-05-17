@@ -623,3 +623,49 @@ All fields known to build ARP request. Send "Who has 10.0.2.1? Tell 10.0.2.15."
 Poll RX for oper=2 reply. Extract gateway MAC. Then ICMP echo to 10.0.2.1.
 
 Full findings: `docs/handoff/ARP_CACHE_REAL_BEHAVIOR_PROOF_V1.md`
+
+---
+
+## ARP_REQUEST_SEND_PROOF_V1 — 2026-05-17
+
+ARP request frame built and sent via e1000e TX descriptor lane. tx_dd=1 confirmed — hardware consumed and transmitted the frame. Bounded RX poll (64 scans) found no oper=2 reply from 10.0.2.1 within window. gateway_known=0, honest.
+
+Gates: FINAL PASS **228**/0/1skip (e1000e); 226/3skip/0 (e1000 unchanged).
+Log: `/tmp/sexos_arp_request_send_proof_v1.log`.
+
+### TX Confirmed
+
+| Field  | Value              |
+|--------|--------------------|
+| SHA    | 52:54:00:12:34:56  |
+| SPA    | 10.0.2.15          |
+| TPA    | 10.0.2.1           |
+| tx_dd  | 1 (consumed by HW) |
+| sent   | 1                  |
+
+### RX Poll
+
+64 scans (8 rounds × 8 descriptors). reply_seen=0. gateway_mac=unknown.
+
+### Gate
+
+`arp_request_send_proof=SKIP` (sent=1, gateway_known=0 — diagnostic pass, not failure).
+
+### Cumulative Network State
+
+| Item       | Value             | Confidence             |
+|------------|-------------------|------------------------|
+| Our IP     | 10.0.2.15         | confirmed              |
+| Our MAC    | 52:54:00:12:34:56 | confirmed              |
+| Gateway IP | 10.0.2.1          | confirmed              |
+| Gateway MAC| unknown           | no reply in window     |
+| TX path    | functional        | tx_dd=1                |
+
+### Next: ICMP_ECHO_REQUEST_PROOF_V1
+
+Options:
+1. Send ICMP echo to 10.0.2.2 (SLiRP standard gateway, may differ from 10.0.2.1)
+2. Extend poll window / retry ARP against 10.0.2.2
+3. Add ARP reply RX interrupt handling to avoid polling
+
+Full findings: `docs/handoff/ARP_REQUEST_SEND_PROOF_V1.md`
