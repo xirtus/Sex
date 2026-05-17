@@ -220,3 +220,13 @@ Interpretation update:
 Interpretation update:
 - Additional 0x2Cxx queue-bank candidates did not latch and did not affect RX behavior.
 - Next bounded lane should pivot from register-bank probing to traffic-shape/source assumptions (e.g., explicit QEMU usernet ingress trigger or receive path model mismatch isolation).
+
+## RX Diagnostic Snapshot (r28 explicit ingress trigger)
+- `/tmp/sexos_network_sprint_autopilot_r28_ingress_trigger.log`:
+  - `e1000.rx.ingress.trigger`: `bursts=4 tdt_after=8 icr_before=0x00000003 icr_after=0x00000003`.
+  - `e1000.rx.ring.progress`: still `rdh_before=0 rdh_after=0`.
+  - `e1000.rx.peer.observe`: still `observed=0`.
+
+Interpretation update:
+- Bounded explicit ingress stimulus was transmitted (ARP/ICMP burst), but no additional RX causes or descriptor movement appeared.
+- This strengthens the conclusion that current blocker is RX-path/model behavior in this emulation/profile, not merely lack of outbound stimulus.

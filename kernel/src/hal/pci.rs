@@ -716,6 +716,79 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                         serial_println!("[network.sprint.final.runtime.smoke] pass=0 ok=1 reason=pending_full_pipeline");
                         serial_println!("[network.sprint.handoff.freeze] done=0 ok=1 reason=awaiting_real_smoke_and_freeze");
 
+                        // Explicit ingress-trigger burst to isolate "no inbound stimulus" vs RX-path dead.
+                        let icr_trigger_before = unsafe { core::ptr::read_volatile((virt + 0x00C0) as *const u32) };
+                        let mut ingress_bursts: u32 = 0;
+                        unsafe {
+                            // Send 3 ARP requests with varying target IP.
+                            for target_last in [2u8, 1u8, 3u8] {
+                                let mut burst_arp: [u8; 60] = [0; 60];
+                                burst_arp[0..6].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+                                burst_arp[6..12].copy_from_slice(&src_mac);
+                                burst_arp[12] = 0x08; burst_arp[13] = 0x06; // ARP
+                                burst_arp[14] = 0x00; burst_arp[15] = 0x01; // HTYPE
+                                burst_arp[16] = 0x08; burst_arp[17] = 0x00; // PTYPE
+                                burst_arp[18] = 0x06; burst_arp[19] = 0x04; // HLEN/PLEN
+                                burst_arp[20] = 0x00; burst_arp[21] = 0x01; // request
+                                burst_arp[22..28].copy_from_slice(&src_mac);
+                                burst_arp[28..32].copy_from_slice(&[10, 0, 2, 15]);
+                                burst_arp[32..38].copy_from_slice(&[0, 0, 0, 0, 0, 0]);
+                                burst_arp[38..42].copy_from_slice(&[10, 0, 2, target_last]);
+
+                                let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                                let slot = (tdt_cur & 0x7) as usize;
+                                let page_idx = 4 + (slot / 2);
+                                let buf_off = if (slot & 1) == 0 { 0u64 } else { 2048u64 };
+                                let tx_slot_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                for (i, b) in burst_arp.iter().enumerate() {
+                                    core::ptr::write_volatile((tx_slot_va + i as u64) as *mut u8, *b);
+                                }
+                                let desc_off = (slot as u64) * 16;
+                                core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, 60u16);
+                                core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011);
+                                core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
+                                ingress_bursts += 1;
+                            }
+                            // Send one minimal ICMP echo request frame shape (broadcast dst, IP proto=ICMP).
+                            let mut burst_icmp: [u8; 60] = [0; 60];
+                            burst_icmp[0..6].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+                            burst_icmp[6..12].copy_from_slice(&src_mac);
+                            burst_icmp[12] = 0x08; burst_icmp[13] = 0x00; // IPv4
+                            burst_icmp[14] = 0x45; burst_icmp[15] = 0x00;
+                            burst_icmp[16] = 0x00; burst_icmp[17] = 0x2E;
+                            burst_icmp[18] = 0x00; burst_icmp[19] = 0x01;
+                            burst_icmp[20] = 0x00; burst_icmp[21] = 0x00;
+                            burst_icmp[22] = 64; burst_icmp[23] = 0x01; // TTL + ICMP
+                            burst_icmp[24] = 0x00; burst_icmp[25] = 0x00; // IP csum deferred
+                            burst_icmp[26..30].copy_from_slice(&[10, 0, 2, 15]);
+                            burst_icmp[30..34].copy_from_slice(&[10, 0, 2, 2]);
+                            burst_icmp[34] = 8; burst_icmp[35] = 0; // Echo request
+                            burst_icmp[36] = 0; burst_icmp[37] = 0; // ICMP csum deferred
+                            burst_icmp[38] = 0x12; burst_icmp[39] = 0x34;
+                            burst_icmp[40] = 0x00; burst_icmp[41] = 0x01;
+                            burst_icmp[42..46].copy_from_slice(&[b'p', b'i', b'n', b'g']);
+                            let tdt_cur = core::ptr::read_volatile((virt + 0x3818) as *const u32);
+                            let slot = (tdt_cur & 0x7) as usize;
+                            let page_idx = 4 + (slot / 2);
+                            let buf_off = if (slot & 1) == 0 { 0u64 } else { 2048u64 };
+                            let tx_slot_va = uc_base + pkt_pages[page_idx] + buf_off;
+                            for (i, b) in burst_icmp.iter().enumerate() {
+                                core::ptr::write_volatile((tx_slot_va + i as u64) as *mut u8, *b);
+                            }
+                            let desc_off = (slot as u64) * 16;
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 8) as *mut u16, 60u16);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 11) as *mut u8, 0b0000_1011);
+                            core::ptr::write_volatile((tx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                            core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_cur.wrapping_add(1));
+                            ingress_bursts += 1;
+                        }
+                        for _ in 0..500_000usize { core::hint::spin_loop(); }
+                        let tdt_after_trigger = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
+                        let icr_trigger_after = unsafe { core::ptr::read_volatile((virt + 0x00C0) as *const u32) };
+                        serial_println!("[e1000.rx.ingress.trigger] bursts={} tdt_after={} icr_before=0x{:08X} icr_after=0x{:08X} ok=1 reason=explicit_tx_stimulus_for_rx_lane",
+                            ingress_bursts, tdt_after_trigger, icr_trigger_before, icr_trigger_after);
+
                         // Peer-observe attempt lane: wait briefly, then poll RX descriptors for inbound frames.
                         let status_before = unsafe { core::ptr::read_volatile((virt + 0x0008) as *const u32) }; // STATUS
                         let rctl_before = unsafe { core::ptr::read_volatile((virt + 0x0100) as *const u32) };   // RCTL
