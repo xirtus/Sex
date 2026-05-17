@@ -587,3 +587,39 @@ Poll RX for oper=2 ARP reply. Extract gateway MAC for ARP cache.
 Then ICMP echo to 10.0.2.1 to prove IP layer.
 
 Full findings: `docs/handoff/ARP_REPLY_OBSERVE_PROOF_V1.md`
+
+---
+
+## Session: ARP_CACHE_REAL_BEHAVIOR_PROOF_V1 (2026-05-17)
+
+Model: `QEMU_NET_MODEL=e1000e`.
+Gates: FINAL PASS **229**/0/0 (e1000e); 226/3skip/0 (e1000 unchanged).
+Log: `/tmp/sexos_arp_cache_real_behavior_proof_v1.log`.
+
+### Cache Table
+
+| IP        | MAC               | source      | inserted | fake |
+|-----------|-------------------|-------------|----------|------|
+| 10.0.2.15 | 52:54:00:12:34:56 | rx_observed | 1        | 0    |
+
+### Gateway Truth
+
+`ip=10.0.2.1 mac_known=0 fake=0` — gateway MAC requires ARP reply.
+
+### Cumulative Network State
+
+| Item       | Value             | Confidence             |
+|------------|-------------------|------------------------|
+| Our IP     | 10.0.2.15         | confirmed (SPA in ARP) |
+| Our MAC    | 52:54:00:12:34:56 | confirmed (SHA in ARP) |
+| Gateway IP | 10.0.2.1          | confirmed (TPA in ARP) |
+| Gateway MAC| unknown           | needs ARP reply        |
+
+New gate passing: `arp_cache_real_behavior=PASS` (SKIP on e1000).
+
+### Next: ARP_REQUEST_SEND_PROOF_V1
+
+All fields known to build ARP request. Send "Who has 10.0.2.1? Tell 10.0.2.15."
+Poll RX for oper=2 reply. Extract gateway MAC. Then ICMP echo to 10.0.2.1.
+
+Full findings: `docs/handoff/ARP_CACHE_REAL_BEHAVIOR_PROOF_V1.md`

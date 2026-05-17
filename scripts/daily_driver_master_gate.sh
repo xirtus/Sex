@@ -199,6 +199,7 @@ gate_arp_request_send_stop_review="SKIP"
 gate_arp_request_send_proof="SKIP"
 gate_arp_reply_observe_proof="SKIP"
 gate_arp_rx_observe_live="SKIP"
+gate_arp_cache_real_behavior="SKIP"
 gate_arp_cache_status_stub="SKIP"
 gate_ipv4_packet_model_spec="SKIP"
 gate_ipv4_header_build_proof="SKIP"
@@ -1809,6 +1810,13 @@ if [ "$(has 'arp\.reply\.observe\.proof\.done.*ok=1.*arp_seen=1')" -eq 1 ]; then
     print_row "arp_rx_observe_live" "PASS" "real ARP parsed from e1000e rx buffer fake=0"
 else gate_arp_rx_observe_live="SKIP"; fi
 
+if [ "$(has 'arp\.cache\.real\.behavior\.done.*ok=1.*entries=1.*fake=0.*gateway_known=0')" -eq 1 ]; then
+    gate_arp_cache_real_behavior="PASS"
+    print_row "arp_cache_real_behavior" "PASS" "live arp cache insert+lookup fake=0 gateway_known=0"
+elif [ "$(has 'arp\.cache\.real\.behavior\.done.*entries=0')" -eq 1 ]; then
+    gate_arp_cache_real_behavior="SKIP"
+else gate_arp_cache_real_behavior="SKIP"; fi
+
 if [ "$(has 'arp.cache.status.stub.*ok=1')" -eq 1 ]; then
     gate_arp_cache_status_stub="PASS"
     print_row "arp_cache_status_stub" "PASS" "ARP cache stub marker"
@@ -2479,6 +2487,7 @@ ALL_GATES=(
     "arp_request_send_proof:$gate_arp_request_send_proof"
     "arp_reply_observe_proof:$gate_arp_reply_observe_proof"
     "arp_rx_observe_live:$gate_arp_rx_observe_live"
+    "arp_cache_real_behavior:$gate_arp_cache_real_behavior"
     "arp_cache_status_stub:$gate_arp_cache_status_stub"
     "ipv4_packet_model_spec:$gate_ipv4_packet_model_spec"
     "ipv4_header_build_proof:$gate_ipv4_header_build_proof"
