@@ -32,6 +32,7 @@ ISO="sexos-v1.0.0.iso"
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 PROBE_SECONDS="${DAILY_DRIVER_PROBE_SECONDS:-30}"
 ENABLE_QEMU_USERNET_E1000="${ENABLE_QEMU_USERNET_E1000:-1}"
+QEMU_NET_MODEL="${QEMU_NET_MODEL:-e1000}"
 
 # ---- helpers ----
 die() {
@@ -279,6 +280,7 @@ echo ""
 echo "  log:     $LOG"
 echo "  iso:     $ISO"
 echo "  probe:   ${PROBE_SECONDS}s"
+echo "  nic:     ${QEMU_NET_MODEL} (usernet=${ENABLE_QEMU_USERNET_E1000})"
 echo ""
 
 # ---- 1. BUILD ----
@@ -312,10 +314,23 @@ trap cleanup EXIT INT TERM
 
 QEMU_NET_ARGS=()
 if [ "$ENABLE_QEMU_USERNET_E1000" = "1" ]; then
-    QEMU_NET_ARGS=(
-        -netdev user,id=net0
-        -device e1000,netdev=net0
-    )
+    case "$QEMU_NET_MODEL" in
+        e1000)
+            QEMU_NET_ARGS=(
+                -netdev user,id=net0
+                -device e1000,netdev=net0
+            )
+            ;;
+        virtio|virtio-net|virtio-net-pci)
+            QEMU_NET_ARGS=(
+                -netdev user,id=net0
+                -device virtio-net-pci,netdev=net0
+            )
+            ;;
+        *)
+            die "unsupported QEMU_NET_MODEL=$QEMU_NET_MODEL (expected: e1000|virtio-net-pci)"
+            ;;
+    esac
 fi
 
 "$QEMU_BIN" \

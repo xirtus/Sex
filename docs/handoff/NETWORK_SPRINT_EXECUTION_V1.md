@@ -230,3 +230,17 @@ Interpretation update:
 Interpretation update:
 - Bounded explicit ingress stimulus was transmitted (ARP/ICMP burst), but no additional RX causes or descriptor movement appeared.
 - This strengthens the conclusion that current blocker is RX-path/model behavior in this emulation/profile, not merely lack of outbound stimulus.
+
+## A/B Emulation Snapshot (e1000 vs virtio-net-pci)
+- Harness update:
+  - `scripts/run_daily_driver_proof.sh` now supports `QEMU_NET_MODEL` (`e1000` or `virtio-net-pci`) while preserving existing E1000 default path.
+- Runs:
+  - E1000: `/tmp/sexos_network_sprint_ab_e1000.log` -> `FINAL PASS (226/0/0)`.
+  - Virtio: `/tmp/sexos_network_sprint_ab_virtio.log` -> `FINAL PASS (134/0/92)` (many E1000-specific gates SKIP by design in this lane).
+- Marker delta:
+  - E1000 run emits RX diagnostics and still stalls (`e1000.rx.ring.progress`, `e1000.rx.peer.observe`, `e1000.rx.selftest.proof` all zero movement/observe).
+  - Virtio run does not emit the E1000 RX lane markers, confirming the A/B harness separation path is functioning for model isolation.
+
+Interpretation update:
+- Current dead-path evidence remains E1000-lane specific in this harness.
+- Next bounded lane should focus on E1000-specific driver/model assumptions (descriptor format/control bits and queue ownership semantics), not generic network plumbing.
