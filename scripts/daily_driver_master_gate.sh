@@ -199,6 +199,9 @@ gate_sexnet_nic_rx_permanent_recv="SKIP"
 gate_sexnet_nic_tx_permanent_init="SKIP"
 gate_sexnet_nic_tx_permanent_send="SKIP"
 gate_sexnet_nic_full_ownership="SKIP"
+gate_sexnet_l2_rx_loop="SKIP"
+gate_sexnet_l2_tx_reuse="SKIP"
+gate_sexnet_l2_proof="SKIP"
 gate_e1000e_rx_desc_observe="SKIP"
 gate_ethernet_frame_model_spec="SKIP"
 gate_arp_client_plan="SKIP"
@@ -1923,6 +1926,55 @@ else
     gate_sexnet_nic_full_ownership="SKIP"
 fi
 
+# ---- sexnet_l2_rx_loop (bounded L2 rx parse+recycle) ----
+if [ "$(has 'sexnet\.l2\.entry.*rx_owner=3.*tx_owner=3.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.l2\.rx\.poll\.done.*frames_rx=[1-9][0-9]*.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.l2\.rx\.recycle.*ok=1')" -eq 1 ]; then
+    gate_sexnet_l2_rx_loop="PASS"
+    print_row "sexnet_l2_rx_loop" "PASS" "bounded L2 RX frame parse+recycle proved"
+elif [ "$(has 'sexnet\.l2\.entry.*ok=0')" -eq 1 ] \
+     && [ "$(has 'sexnet\.nic\.tx\.permanent\.full.*rx_owner=3.*tx_owner=3.*full_ok=1')" -eq 1 ]; then
+    gate_sexnet_l2_rx_loop="FAIL"
+    print_row "sexnet_l2_rx_loop" "FAIL" "entry denied despite full ownership marker"
+elif [ "$(has 'sexnet\.l2\.rx\.frame')" -eq 1 ] && [ "$(has 'sexnet\.l2\.rx\.recycle')" -eq 0 ]; then
+    gate_sexnet_l2_rx_loop="FAIL"
+    print_row "sexnet_l2_rx_loop" "FAIL" "rx frame marker present but recycle marker missing"
+elif [ "$(has 'sexnet\.l2\.rx\.poll\.done.*frames_rx=0')" -eq 1 ]; then
+    gate_sexnet_l2_rx_loop="SKIP"
+    print_row "sexnet_l2_rx_loop" "SKIP" "traffic-dependent lane: no RX frames observed"
+else
+    gate_sexnet_l2_rx_loop="SKIP"
+fi
+
+# ---- sexnet_l2_tx_reuse (bounded tx reuse descriptor 1) ----
+if [ "$(has 'sexnet\.l2\.tx\.reuse\.desc.*slot=1.*len=60.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.l2\.tx\.reuse\.post.*tdt=2.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.l2\.tx\.reuse\.poll\.done.*dd_set=1.*desc_idx=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_l2_tx_reuse="PASS"
+    print_row "sexnet_l2_tx_reuse" "PASS" "bounded L2 TX reuse consumed desc slot 1"
+elif [ "$(has 'sexnet\.l2\.tx\.reuse\.post.*tdt=2.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.l2\.tx\.reuse\.poll\.done.*dd_set=0')" -eq 1 ]; then
+    gate_sexnet_l2_tx_reuse="FAIL"
+    print_row "sexnet_l2_tx_reuse" "FAIL" "tx reuse post issued but DD remained 0"
+else
+    gate_sexnet_l2_tx_reuse="SKIP"
+fi
+
+# ---- sexnet_l2_proof (combined bounded l2 proof) ----
+if [ "$(has 'sexnet\.l2\.proof\.done.*rx_frames=[1-9][0-9]*.*tx_dd=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_l2_proof="PASS"
+    print_row "sexnet_l2_proof" "PASS" "combined bounded L2 proof done"
+elif [ "$(has 'sexnet\.l2\.tx\.reuse\.post.*tdt=2.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.l2\.proof\.done.*ok=0.*tx_dd=0')" -eq 1 ]; then
+    gate_sexnet_l2_proof="FAIL"
+    print_row "sexnet_l2_proof" "FAIL" "combined proof marker failed after tx reuse post"
+elif [ "$(has 'sexnet\.l2\.proof\.done.*rx_frames=0')" -eq 1 ]; then
+    gate_sexnet_l2_proof="SKIP"
+    print_row "sexnet_l2_proof" "SKIP" "traffic-dependent lane: rx_frames=0"
+else
+    gate_sexnet_l2_proof="SKIP"
+fi
+
 if [ "$(has 'e1000e\.rx\.descriptor\.observe\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_e1000e_rx_desc_observe="PASS"
     print_row "e1000e_rx_desc_observe" "PASS" "loopback RX dd+rdh+buffer_match=1"
@@ -2855,6 +2907,9 @@ ALL_GATES=(
     "sexnet_nic_tx_permanent_init:$gate_sexnet_nic_tx_permanent_init"
     "sexnet_nic_tx_permanent_send:$gate_sexnet_nic_tx_permanent_send"
     "sexnet_nic_full_ownership:$gate_sexnet_nic_full_ownership"
+    "sexnet_l2_rx_loop:$gate_sexnet_l2_rx_loop"
+    "sexnet_l2_tx_reuse:$gate_sexnet_l2_tx_reuse"
+    "sexnet_l2_proof:$gate_sexnet_l2_proof"
     "e1000e_rx_desc_observe:$gate_e1000e_rx_desc_observe"
     "ethernet_frame_model_spec:$gate_ethernet_frame_model_spec"
     "arp_client_plan:$gate_arp_client_plan"
