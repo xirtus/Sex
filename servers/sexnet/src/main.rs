@@ -49,6 +49,10 @@ static mut TX_PERM_FRAME_VA: u64 = 0;
 static mut L2_RX_NEXT: u8 = 0;
 static mut L2_RX_COUNT: u32 = 0;
 static mut L2_TX_NEXT: u8 = 1;
+static mut ARP_CACHE_MAC: [u8; 6] = [0u8; 6];
+static mut ARP_CACHE_IP: [u8; 4] = [0u8; 4];
+static mut ARP_CACHE_VALID: u8 = 0;
+static mut ARP_CACHE_REPLY_COUNT: u32 = 0;
 
 unsafe fn sys_net_diag(selector: u64) -> u64 {
     let result: u64;
@@ -1538,6 +1542,228 @@ pub extern "C" fn _start() -> ! {
                         } else {
                             serial_println!("[sexnet.arp.skip] reason=not_full ok=0");
                         }
+
+                        let cache_nic_mac: [u8; 6] = [
+                            (ral & 0xFF) as u8,
+                            ((ral >> 8) & 0xFF) as u8,
+                            ((ral >> 16) & 0xFF) as u8,
+                            ((ral >> 24) & 0xFF) as u8,
+                            (rah & 0xFF) as u8,
+                            ((rah >> 8) & 0xFF) as u8,
+                        ];
+                        let mut cache_replies = 0u32;
+                        let mut cache_outer_done = 0u32;
+                        let cache_rx_own = NIC_RX_OWNER.load(Ordering::Acquire);
+                        let cache_tx_own = NIC_TX_OWNER.load(Ordering::Acquire);
+                        serial_println!(
+                            "[sexnet.arp.cache.poll.begin] max_iters=100000000 target_replies=2"
+                        );
+                        if cache_rx_own == NIC_OWNER_SEXNET_FULL && cache_tx_own == NIC_OWNER_SEXNET_FULL {
+                            let mut cache_outer = 0u32;
+                            while cache_outer < 100_000_000 && cache_replies < 2 {
+                                let mut idx = 0u32;
+                                while idx < 8 && cache_replies < 2 {
+                                    let desc_base = unsafe { RX_PERM_DESC_VA } + (idx as u64) * 16;
+                                    let st = unsafe { core::ptr::read_volatile((desc_base + 12) as *const u8) };
+                                    if (st & 1) != 0 {
+                                        let pkt_buf = unsafe { RX_PERM_PKT_VA[idx as usize] };
+                                        let eth_hi = unsafe { core::ptr::read_volatile((pkt_buf + 12) as *const u8) };
+                                        let eth_lo = unsafe { core::ptr::read_volatile((pkt_buf + 13) as *const u8) };
+                                        let htype_hi = unsafe { core::ptr::read_volatile((pkt_buf + 14) as *const u8) };
+                                        let htype_lo = unsafe { core::ptr::read_volatile((pkt_buf + 15) as *const u8) };
+                                        let ptype_hi = unsafe { core::ptr::read_volatile((pkt_buf + 16) as *const u8) };
+                                        let ptype_lo = unsafe { core::ptr::read_volatile((pkt_buf + 17) as *const u8) };
+                                        let hlen = unsafe { core::ptr::read_volatile((pkt_buf + 18) as *const u8) };
+                                        let plen = unsafe { core::ptr::read_volatile((pkt_buf + 19) as *const u8) };
+                                        let oper_hi = unsafe { core::ptr::read_volatile((pkt_buf + 20) as *const u8) };
+                                        let oper_lo = unsafe { core::ptr::read_volatile((pkt_buf + 21) as *const u8) };
+                                        let ethertype = ((eth_hi as u16) << 8) | (eth_lo as u16);
+                                        let htype = ((htype_hi as u16) << 8) | (htype_lo as u16);
+                                        let ptype = ((ptype_hi as u16) << 8) | (ptype_lo as u16);
+                                        let oper = ((oper_hi as u16) << 8) | (oper_lo as u16);
+                                        let mut tpa = [0u8; 4];
+                                        let mut ti = 0usize;
+                                        while ti < 4 {
+                                            tpa[ti] = unsafe {
+                                                core::ptr::read_volatile((pkt_buf + 38 + ti as u64) as *const u8)
+                                            };
+                                            ti += 1;
+                                        }
+                                        let valid = ethertype == 0x0806
+                                            && htype == 1
+                                            && ptype == 0x0800
+                                            && hlen == 6
+                                            && plen == 4
+                                            && oper == 1
+                                            && tpa == SEXNET_GUEST_IPV4;
+                                        if valid {
+                                            let mut mi = 0usize;
+                                            while mi < 6 {
+                                                unsafe {
+                                                    ARP_CACHE_MAC[mi] = core::ptr::read_volatile(
+                                                        (pkt_buf + 22 + mi as u64) as *const u8
+                                                    );
+                                                }
+                                                mi += 1;
+                                            }
+                                            let mut si = 0usize;
+                                            while si < 4 {
+                                                unsafe {
+                                                    ARP_CACHE_IP[si] = core::ptr::read_volatile(
+                                                        (pkt_buf + 28 + si as u64) as *const u8
+                                                    );
+                                                }
+                                                si += 1;
+                                            }
+                                            unsafe {
+                                                ARP_CACHE_VALID = 1;
+                                            }
+                                            let n = cache_replies + 1;
+                                            serial_println!(
+                                                "[sexnet.arp.cache.learn] n={} sha={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} spa={}.{}.{}.{} ok=1",
+                                                n,
+                                                unsafe { ARP_CACHE_MAC[0] },
+                                                unsafe { ARP_CACHE_MAC[1] },
+                                                unsafe { ARP_CACHE_MAC[2] },
+                                                unsafe { ARP_CACHE_MAC[3] },
+                                                unsafe { ARP_CACHE_MAC[4] },
+                                                unsafe { ARP_CACHE_MAC[5] },
+                                                unsafe { ARP_CACHE_IP[0] },
+                                                unsafe { ARP_CACHE_IP[1] },
+                                                unsafe { ARP_CACHE_IP[2] },
+                                                unsafe { ARP_CACHE_IP[3] }
+                                            );
+
+                                            let tx_slot = 3u32 + cache_replies;
+                                            let tx_tdt = 4u32 + cache_replies;
+                                            let tx_frame_va = unsafe { TX_PERM_FRAME_VA };
+                                            let mut i = 0usize;
+                                            while i < 6 {
+                                                unsafe {
+                                                    core::ptr::write_volatile(
+                                                        (tx_frame_va + i as u64) as *mut u8,
+                                                        ARP_CACHE_MAC[i],
+                                                    );
+                                                    core::ptr::write_volatile(
+                                                        (tx_frame_va + 6 + i as u64) as *mut u8,
+                                                        cache_nic_mac[i],
+                                                    );
+                                                }
+                                                i += 1;
+                                            }
+                                            unsafe {
+                                                core::ptr::write_volatile((tx_frame_va + 12) as *mut u8, 0x08);
+                                                core::ptr::write_volatile((tx_frame_va + 13) as *mut u8, 0x06);
+                                                core::ptr::write_volatile((tx_frame_va + 14) as *mut u8, 0x00);
+                                                core::ptr::write_volatile((tx_frame_va + 15) as *mut u8, 0x01);
+                                                core::ptr::write_volatile((tx_frame_va + 16) as *mut u8, 0x08);
+                                                core::ptr::write_volatile((tx_frame_va + 17) as *mut u8, 0x00);
+                                                core::ptr::write_volatile((tx_frame_va + 18) as *mut u8, 0x06);
+                                                core::ptr::write_volatile((tx_frame_va + 19) as *mut u8, 0x04);
+                                                core::ptr::write_volatile((tx_frame_va + 20) as *mut u8, 0x00);
+                                                core::ptr::write_volatile((tx_frame_va + 21) as *mut u8, 0x02);
+                                            }
+                                            let mut ai = 0usize;
+                                            while ai < 6 {
+                                                unsafe {
+                                                    core::ptr::write_volatile(
+                                                        (tx_frame_va + 22 + ai as u64) as *mut u8,
+                                                        cache_nic_mac[ai],
+                                                    );
+                                                    core::ptr::write_volatile(
+                                                        (tx_frame_va + 32 + ai as u64) as *mut u8,
+                                                        ARP_CACHE_MAC[ai],
+                                                    );
+                                                }
+                                                ai += 1;
+                                            }
+                                            let mut gi = 0usize;
+                                            while gi < 4 {
+                                                unsafe {
+                                                    core::ptr::write_volatile(
+                                                        (tx_frame_va + 28 + gi as u64) as *mut u8,
+                                                        SEXNET_GUEST_IPV4[gi],
+                                                    );
+                                                    core::ptr::write_volatile(
+                                                        (tx_frame_va + 38 + gi as u64) as *mut u8,
+                                                        ARP_CACHE_IP[gi],
+                                                    );
+                                                }
+                                                gi += 1;
+                                            }
+                                            let mut pad = 42u64;
+                                            while pad < 60 {
+                                                unsafe {
+                                                    core::ptr::write_volatile((tx_frame_va + pad) as *mut u8, 0u8);
+                                                }
+                                                pad += 1;
+                                            }
+                                            let tx_desc = unsafe { TX_PERM_DESC_VA } + (tx_slot as u64) * 16;
+                                            unsafe {
+                                                core::ptr::write_volatile(tx_desc as *mut u64, TX_PERM_FRAME_PHYS);
+                                                core::ptr::write_volatile((tx_desc + 8) as *mut u16, 60u16);
+                                                core::ptr::write_volatile((tx_desc + 10) as *mut u8, 0u8);
+                                                core::ptr::write_volatile((tx_desc + 11) as *mut u8, 0x0Bu8);
+                                                core::ptr::write_volatile((tx_desc + 12) as *mut u8, 0u8);
+                                                core::ptr::write_volatile((tx_desc + 13) as *mut u8, 0u8);
+                                                core::ptr::write_volatile((tx_desc + 14) as *mut u16, 0u16);
+                                                core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, tx_tdt);
+                                            }
+                                            serial_println!(
+                                                "[sexnet.arp.cache.reply] n={} slot={} tdt={} ok=1",
+                                                n,
+                                                tx_slot,
+                                                tx_tdt
+                                            );
+
+                                            let mut dd_set = 0u32;
+                                            let mut tx_outer = 0u32;
+                                            while tx_outer < 50_000_000 {
+                                                let tx_st = unsafe {
+                                                    core::ptr::read_volatile((tx_desc + 12) as *const u8)
+                                                };
+                                                if (tx_st & 1) != 0 {
+                                                    dd_set = 1;
+                                                    break;
+                                                }
+                                                tx_outer += 1;
+                                            }
+                                            serial_println!(
+                                                "[sexnet.arp.cache.reply.dd] n={} dd_set={} ok={}",
+                                                n,
+                                                dd_set,
+                                                if dd_set == 1 { 1 } else { 0 }
+                                            );
+
+                                            cache_replies += 1;
+                                            unsafe {
+                                                ARP_CACHE_REPLY_COUNT = cache_replies;
+                                            }
+                                        }
+                                        unsafe {
+                                            core::ptr::write_volatile((desc_base + 8) as *mut u16, 0u16);
+                                            core::ptr::write_volatile((desc_base + 12) as *mut u8, 0u8);
+                                            core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, idx);
+                                        }
+                                    }
+                                    idx += 1;
+                                }
+                                cache_outer += 1;
+                            }
+                            cache_outer_done = cache_outer;
+                        }
+                        let cache_ok = if cache_replies == 2 { 1 } else { 0 };
+                        serial_println!(
+                            "[sexnet.arp.cache.poll.done] outer={} replies={} ok={}",
+                            cache_outer_done,
+                            cache_replies,
+                            cache_ok
+                        );
+                        serial_println!(
+                            "[sexnet.arp.cache.proof.done] replies={} ok={}",
+                            cache_replies,
+                            cache_ok
+                        );
 
                         let l2_rx_own = NIC_RX_OWNER.load(Ordering::Acquire);
                         let l2_tx_own = NIC_TX_OWNER.load(Ordering::Acquire);
