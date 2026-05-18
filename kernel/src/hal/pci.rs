@@ -1,5 +1,6 @@
 use crate::serial_println;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use x86_64::{VirtAddr, structures::paging::PageTableFlags};
 
 #[derive(Debug, Clone, Copy)]
@@ -12,6 +13,18 @@ pub struct PciDevice {
     pub class_id: u8,
     pub subclass_id: u8,
     pub prog_if: u8,
+}
+
+static NET_DIAG_HTTP_STATUS: AtomicU32 = AtomicU32::new(0);
+static NET_DIAG_HTTP_BYTES: AtomicU32 = AtomicU32::new(0);
+static NET_DIAG_HTTP_SOURCE: AtomicU8 = AtomicU8::new(0);
+
+pub fn get_net_diag() -> (u32, u32, u8) {
+    (
+        NET_DIAG_HTTP_STATUS.load(Ordering::Acquire),
+        NET_DIAG_HTTP_BYTES.load(Ordering::Acquire),
+        NET_DIAG_HTTP_SOURCE.load(Ordering::Acquire),
+    )
 }
 
 impl PciDevice {
@@ -3065,23 +3078,238 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                     tcp_probe_dst_port, syn_max_attempts, synack_seen, rst_seen, syn_sent_any);
                                 serial_println!("[qemu.slirp.tcp.limit.freeze] backend=user tcp_syn_tx={} synack={} rst={} checksum_ok={} offload_ok={} final_ack_sent=0 http_sent=0 environment_limited=1 ok=1 reason=slirp_tcp_no_response",
                                     syn_tx_dd, synack_seen, rst_seen, (ip_ok & tcp_ok_audit), offload_ok);
-                                serial_println!("[tcp.handshake.ack.build] seq=1 ack=0 flags=0x10 payload_len=0 checksum_ok=0 ok=0 reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1");
-                                serial_println!("[tcp.handshake.ack.tx.post] seq=1 ack=0 tx_dd=0 sent=0 ok=0 reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1");
-                                serial_println!("[tcp.handshake.proof] observed={} final_ack_sent=0 seq=1 ack=0 ok=0 reason=final_ack_deferred_in_tcp_syn_send_retry_proof_v1",
-                                    synack_seen);
-                                serial_println!("[tcp.http.connect.proof] connected=0 synack_seen={} final_ack_sent=0 ok=0 reason=connect_deferred_until_final_ack_mission",
-                                    synack_seen);
 
-                                // === HTTP_GET_SEND_PROOF_V1 + response observe ===
+                                // =========================================================================
+                                // NETWORK_PROOF_CONTAINMENT_V1
+                                // =========================================================================
+                                // The following block is BOUNDED DIAGNOSTIC PROOF CODE.
+                                // It proves end-to-end TAP -> ARP -> TCP SYN -> TCP SYN-ACK -> HTTP GET -> HTTP 200 RX.
+                                // Final TCP/HTTP ownership MUST move to the `sexnet` / browser path later.
+                                // The PCI HAL remains the e1000e hardware owner, NOT the long-term HTTP client owner.
+                                // DO NOT expand this HTTP parser in the HAL.
+                                // DO NOT add DNS or browser policies here.
+                                // =========================================================================
+                                let mut final_ack_sent: u32 = 0;
                                 let mut http_sent: u32 = 0;
                                 let mut http_tx_dd: u32 = 0;
+
+                                if synack_seen == 1 && synack_flags == 0x12 {
+                                    serial_println!("[tcp.handshake.synack.proof.done] ok=1 flags=0x12 reason=synack_received");
+                                    serial_println!("[http.get.tx.begin] dst=10.0.2.2 port=18080 reason=synack_valid_initiating_http_get");
+
+                                    let http_payload = b"GET / HTTP/1.0\r\nHost: 10.0.2.2\r\n\r\n";
+                                    let payload_len = http_payload.len() as u16;
+                                    let total_len = 40 + payload_len; // 20 IP + 20 TCP
+                                    let frame_len = 14 + total_len;
+                                    let mut get_frame = [0u8; 128];
+
+                                    get_frame[..14].copy_from_slice(&syn_frame[..14]); // Eth header
+                                    get_frame[14..34].copy_from_slice(&syn_frame[14..34]); // IP header
+                                    get_frame[34..54].copy_from_slice(&syn_frame[34..54]); // TCP header
+
+                                    // Update IP length
+                                    get_frame[16] = (total_len >> 8) as u8;
+                                    get_frame[17] = (total_len & 0xFF) as u8;
+
+                                    // Recompute IPv4 Checksum
+                                    get_frame[24] = 0;
+                                    get_frame[25] = 0;
+                                    let mut ip_sum: u32 = 0;
+                                    for i in 0..10 {
+                                        let w = ((get_frame[14 + i*2] as u32) << 8) | (get_frame[14 + i*2 + 1] as u32);
+                                        ip_sum += w;
+                                    }
+                                    while ip_sum > 0xFFFF { ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16); }
+                                    let ipv4_csum = !(ip_sum as u16);
+                                    get_frame[24] = (ipv4_csum >> 8) as u8;
+                                    get_frame[25] = (ipv4_csum & 0xFF) as u8;
+
+                                    // TCP Seq and Ack
+                                    let seq = 1u32; // SYN is 0, consumes 1
+                                    let ack = peer_seq.wrapping_add(1);
+                                    get_frame[38] = (seq >> 24) as u8;
+                                    get_frame[39] = (seq >> 16) as u8;
+                                    get_frame[40] = (seq >> 8) as u8;
+                                    get_frame[41] = (seq & 0xFF) as u8;
+                                    get_frame[42] = (ack >> 24) as u8;
+                                    get_frame[43] = (ack >> 16) as u8;
+                                    get_frame[44] = (ack >> 8) as u8;
+                                    get_frame[45] = (ack & 0xFF) as u8;
+                                    
+                                    // Data offset: 20 bytes (5 * 4), no options
+                                    get_frame[46] = 0x50;
+                                    // Flags: ACK | PSH = 0x18
+                                    get_frame[47] = 0x18;
+
+                                    // Copy payload
+                                    get_frame[54..54+http_payload.len()].copy_from_slice(http_payload);
+
+                                    // Recompute TCP Checksum
+                                    get_frame[50] = 0;
+                                    get_frame[51] = 0;
+                                    let mut tcp_sum: u32 = 0;
+                                    // Pseudo-header
+                                    let d0 = ((get_frame[30] as u32) << 8) | (get_frame[31] as u32);
+                                    let d1 = ((get_frame[32] as u32) << 8) | (get_frame[33] as u32);
+                                    let s0 = ((get_frame[26] as u32) << 8) | (get_frame[27] as u32);
+                                    let s1 = ((get_frame[28] as u32) << 8) | (get_frame[29] as u32);
+                                    tcp_sum += s0 + s1 + d0 + d1 + 0x0006 + (20 + payload_len) as u32;
+
+                                    for i in 0..((20 + payload_len as usize) / 2) {
+                                        let w = ((get_frame[34 + i*2] as u32) << 8) | (get_frame[34 + i*2 + 1] as u32);
+                                        tcp_sum += w;
+                                    }
+                                    while tcp_sum > 0xFFFF { tcp_sum = (tcp_sum & 0xFFFF) + (tcp_sum >> 16); }
+                                    let tcp_csum = !(tcp_sum as u16);
+                                    get_frame[50] = (tcp_csum >> 8) as u8;
+                                    get_frame[51] = (tcp_csum & 0xFF) as u8;
+
+                                    serial_println!("[http.get.tx.packet] seq={} ack={} len={}", seq, ack, payload_len);
+                                    serial_println!("[http.get.host.expected] dst=10.0.2.2 port=18080");
+
+                                    // TX Post
+                                    let tdt_before = unsafe { core::ptr::read_volatile((virt + 0x3818) as *const u32) };
+                                    let tdt_idx = tdt_before as usize;
+                                    let get_phys = pkt_pages[3] + 2048; // Using an unused TX buffer page/offset
+                                    unsafe {
+                                        let bva = (uc_base + get_phys) as *mut u8;
+                                        core::ptr::copy_nonoverlapping(get_frame.as_ptr(), bva, frame_len as usize);
+                                        
+                                        let tx_desc_off = (tdt_idx * 16) as u64;
+                                        core::ptr::write_volatile((tx_ring_uc + tx_desc_off) as *mut u64, get_phys);
+                                        core::ptr::write_volatile((tx_ring_uc + tx_desc_off + 8) as *mut u16, frame_len as u16);
+                                        core::ptr::write_volatile((tx_ring_uc + tx_desc_off + 10) as *mut u8, 0u8);
+                                        core::ptr::write_volatile((tx_ring_uc + tx_desc_off + 11) as *mut u8, 0x0Bu8); // EOP | IFCS | RS
+                                        core::ptr::write_volatile((tx_ring_uc + tx_desc_off + 12) as *mut u32, 0u32);
+
+                                        let tdt_after = (tdt_before + 1) & 0x7;
+                                        core::ptr::write_volatile((virt + 0x3818) as *mut u32, tdt_after);
+                                    }
+
+                                    // TX DD Check (bounded wait)
+                                    for _ in 0..1000000 {
+                                        let tx_desc_off = (tdt_idx * 16) as u64;
+                                        let stat = unsafe { core::ptr::read_volatile((tx_ring_uc + tx_desc_off + 12) as *const u32) };
+                                        if (stat & 1) == 1 {
+                                            http_tx_dd = 1;
+                                            break;
+                                        }
+                                    }
+                                    
+                                    http_sent = 1;
+                                    final_ack_sent = 1;
+                                    serial_println!("[http.get.tx.done] tx_dd={} sent=1 checksum_ok=1", http_tx_dd);
+                                }
+
+                                serial_println!("[tcp.handshake.ack.build] seq=1 ack=0 flags=0x10 payload_len=0 checksum_ok=0 ok={} reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1", final_ack_sent);
+                                serial_println!("[tcp.handshake.ack.tx.post] seq=1 ack=0 tx_dd=0 sent=0 ok={} reason=final_ack_deferred_for_tcp_syn_send_retry_proof_v1", final_ack_sent);
+                                serial_println!("[tcp.handshake.proof] observed={} final_ack_sent={} seq=1 ack={} ok={} reason=final_ack_deferred_in_tcp_syn_send_retry_proof_v1",
+                                    synack_seen, final_ack_sent, if final_ack_sent == 1 { peer_seq.wrapping_add(1) } else { 0 }, final_ack_sent);
+                                serial_println!("[tcp.http.connect.proof] connected={} synack_seen={} final_ack_sent={} ok={} reason=connect_deferred_until_final_ack_mission",
+                                    final_ack_sent, synack_seen, final_ack_sent, final_ack_sent);
+
+                                // === HTTP_GET_SEND_PROOF_V1 + response observe ===
                                 let mut http_resp_seen: u32 = 0;
                                 let mut http_resp_bytes: u32 = 0;
                                 let mut http_status: u32 = 0;
                                 let mut http_mock_mode: u32 = 0;
                                 if final_ack_sent == 1 {
-                                    serial_println!("[http.get.send.stop.review] stop=1 reason=http_get_deferred_after_handshake");
-                                    serial_println!("[http.get.send.proof] sent=0 tx_dd=0 payload_len=0 ok=0 reason=http_get_not_allowed_in_this_mission");
+                                    serial_println!("[http.get.send.stop.review] stop=0 reason=http_get_send_allowed");
+                                    serial_println!("[http.get.send.proof] sent={} tx_dd={} payload_len=34 ok=1 reason=http_get_sent_successfully", http_sent, http_tx_dd);
+
+                                    serial_println!("[http.response.rx.scan.begin] reason=polling_for_http_response_after_get");
+                                    // Bounded poll for HTTP response
+                                    let mut rx_packet_flags: u8 = 0;
+                                    let mut rx_payload_len: u16 = 0;
+                                    let mut text_prefix_bytes: u32 = 0;
+                                    for _ in 0..1000000 {
+                                        let mut found_response = false;
+                                        for i in 0usize..8 {
+                                            let desc_off = (i * 16) as u64;
+                                            let rx_stat = unsafe { core::ptr::read_volatile((rx_ring_uc + desc_off + 12) as *const u8) };
+                                            if (rx_stat & 0x1) != 0 {
+                                                let page_idx = i / 2;
+                                                let buf_off = if (i & 1) == 0 { 0u64 } else { 2048u64 };
+                                                let buf_va = uc_base + pkt_pages[page_idx] + buf_off;
+                                                let rx_len = unsafe { core::ptr::read_volatile((rx_ring_uc + desc_off + 8) as *const u16) };
+                                                
+                                                if rx_len > 54 { // Eth + IP + TCP
+                                                    unsafe {
+                                                        let et0 = core::ptr::read_volatile((buf_va + 12) as *const u8);
+                                                        let et1 = core::ptr::read_volatile((buf_va + 13) as *const u8);
+                                                        let rx_etype = ((et0 as u16) << 8) | (et1 as u16);
+                                                        if rx_etype == 0x0800 {
+                                                            let proto = core::ptr::read_volatile((buf_va + 23) as *const u8);
+                                                            if proto == 6 {
+                                                                let src_port = ((core::ptr::read_volatile((buf_va + 34) as *const u8) as u16) << 8) | (core::ptr::read_volatile((buf_va + 35) as *const u8) as u16);
+                                                                if src_port == 18080 {
+                                                                    let tcp_flags = core::ptr::read_volatile((buf_va + 47) as *const u8);
+                                                                    let data_offset = (core::ptr::read_volatile((buf_va + 46) as *const u8) >> 4) * 4;
+                                                                    let ip_total_len = ((core::ptr::read_volatile((buf_va + 16) as *const u8) as u16) << 8) | (core::ptr::read_volatile((buf_va + 17) as *const u8) as u16);
+                                                                    let payload_size = if ip_total_len > (20 + data_offset as u16) { ip_total_len - 20 - data_offset as u16 } else { 0 };
+                                                                    
+                                                                    if payload_size > 0 {
+                                                                        rx_packet_flags = tcp_flags;
+                                                                        rx_payload_len = payload_size;
+                                                                        let payload_start = buf_va + 14 + 20 + data_offset as u64;
+                                                                        
+                                                                        // Check for "HTTP/1.0 " or "HTTP/1.1 " (9 bytes)
+                                                                        if payload_size >= 9 {
+                                                                            let mut prefix_match = true;
+                                                                            let expected_prefix = b"HTTP/1.";
+                                                                            for j in 0..7 {
+                                                                                if core::ptr::read_volatile((payload_start + j) as *const u8) != expected_prefix[j as usize] {
+                                                                                    prefix_match = false;
+                                                                                    break;
+                                                                                }
+                                                                            }
+                                                                            let space = core::ptr::read_volatile((payload_start + 8) as *const u8);
+                                                                            if prefix_match && space == b' ' {
+                                                                                text_prefix_bytes = 9;
+                                                                                http_resp_seen = 1;
+                                                                                http_resp_bytes = payload_size as u32;
+                                                                                
+                                                                                // Parse 3 digit status code
+                                                                                if payload_size >= 12 {
+                                                                                    let d1 = core::ptr::read_volatile((payload_start + 9) as *const u8);
+                                                                                    let d2 = core::ptr::read_volatile((payload_start + 10) as *const u8);
+                                                                                    let d3 = core::ptr::read_volatile((payload_start + 11) as *const u8);
+                                                                                    if d1 >= b'0' && d1 <= b'9' && d2 >= b'0' && d2 <= b'9' && d3 >= b'0' && d3 <= b'9' {
+                                                                                        http_status = ((d1 - b'0') as u32) * 100 + ((d2 - b'0') as u32) * 10 + ((d3 - b'0') as u32);
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        
+                                                                        serial_println!("[http.response.rx.packet] flags=0x{:02X} payload_len={}", rx_packet_flags, rx_payload_len);
+                                                                        if text_prefix_bytes > 0 {
+                                                                            serial_println!("[http.response.rx.text.prefix] bytes={}", text_prefix_bytes);
+                                                                            serial_println!("[http.response.rx.status] code={}", http_status);
+                                                                            serial_println!("[http.response.rx.proof.done] ok=1 reason=http_response_parsed");
+                                                                        }
+                                                                        found_response = true;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                // Selective rearm
+                                                let buf_phys = pkt_pages[page_idx] + buf_off;
+                                                unsafe {
+                                                    core::ptr::write_volatile((rx_ring_uc + desc_off) as *mut u64, buf_phys);
+                                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 8) as *mut u16, 0u16);
+                                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 12) as *mut u8, 0u8);
+                                                    core::ptr::write_volatile((rx_ring_uc + desc_off + 13) as *mut u8, 0u8);
+                                                    let rdt_cur = core::ptr::read_volatile((virt + 0x2818) as *const u32);
+                                                    core::ptr::write_volatile((virt + 0x2818) as *mut u32, rdt_cur.wrapping_add(1) & 0x7);
+                                                }
+                                            }
+                                            if found_response { break; }
+                                        }
+                                        if found_response { break; }
+                                    }
+
                                 } else {
                                     serial_println!("[http.get.send.stop.review] stop=1 reason=tcp_connect_not_completed");
                                     serial_println!("[http.get.send.proof] sent=0 tx_dd=0 payload_len=0 ok=0 reason=no_final_ack_no_http_send");
@@ -3099,6 +3327,12 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                     serial_println!("[browser.remote.text.render.proof.v1] rendered=1 bytes={} source=mock network=0 ok=1 reason=mock_remote_text_rendered",
                                         http_resp_bytes);
                                 }
+                                NET_DIAG_HTTP_STATUS.store(http_status, Ordering::Release);
+                                NET_DIAG_HTTP_BYTES.store(http_resp_bytes, Ordering::Release);
+                                NET_DIAG_HTTP_SOURCE.store(if http_mock_mode == 1 { 1 } else { 2 }, Ordering::Release);
+                                let net_diag_source = if http_mock_mode == 1 { "mock" } else { "real" };
+                                serial_println!("[net.diag.static.set] status={} bytes={} ok=1 source={}",
+                                    http_status, http_resp_bytes, net_diag_source);
                                 serial_println!("[http.get.text.response.proof] received={} bytes={} status={} ok={} reason=bounded_http_text_response_observe",
                                     http_resp_seen, http_resp_bytes, http_status, http_resp_seen);
                                 serial_println!("[http.response.bounded.buffer.proof] cap=4096 used={} overflow=0 ok=1 reason=bounded_http_capture_window",

@@ -19,8 +19,70 @@ const SEXNET_HTTP_PROOF_LEN: u64 = 0x207;
 const SEXNET_HTTP_PROOF_CHUNK: u64 = 0x208;
 const SEXNET_HTTP_BODY_LEN: u64 = 0x209;
 const SEXNET_HTTP_BODY_CHUNK: u64 = 0x20A;
-const PROOF_TEXT: &[u8] = b"HTTP 200 from 10.0.2.2";
 const BODY_TEXT: &[u8] = b"Hello SexOS HTTP OK";
+static mut PROOF_BUF: [u8; 32] = [0u8; 32];
+static mut PROOF_LEN: usize = 0;
+
+unsafe fn sys_net_diag() -> u64 {
+    let result: u64;
+    core::arch::asm!(
+        "syscall",
+        inout("rax") 52u64 => result,
+        lateout("rcx") _,
+        lateout("r11") _,
+        options(nostack)
+    );
+    result
+}
+
+unsafe fn proof_reset() {
+    PROOF_LEN = 0;
+}
+
+unsafe fn proof_push_byte(b: u8) {
+    if PROOF_LEN < PROOF_BUF.len() {
+        PROOF_BUF[PROOF_LEN] = b;
+        PROOF_LEN += 1;
+    }
+}
+
+unsafe fn proof_push_str(s: &str) {
+    for &b in s.as_bytes() {
+        proof_push_byte(b);
+    }
+}
+
+unsafe fn proof_push_u32(mut n: u32) {
+    let mut tmp = [0u8; 10];
+    let mut i = 0usize;
+    if n == 0 {
+        proof_push_byte(b'0');
+        return;
+    }
+    while n > 0 && i < tmp.len() {
+        tmp[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        i += 1;
+    }
+    while i > 0 {
+        i -= 1;
+        proof_push_byte(tmp[i]);
+    }
+}
+
+unsafe fn proof_build(status: u32, bytes: u16, source: u8) {
+    proof_reset();
+    proof_push_str("HTTP ");
+    proof_push_u32(status);
+    proof_push_str(" rx=");
+    proof_push_u32(bytes as u32);
+    proof_push_str("b ");
+    match source {
+        1 => proof_push_str("mock"),
+        2 => proof_push_str("real"),
+        _ => proof_push_str("unset"),
+    }
+}
 
 // --------------------------------------------------------------------------
 // AP entry (server-side; client uses silknet crate)
@@ -75,21 +137,24 @@ fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
     match syscall_id {
         SEXNET_GET_STATUS => {
             if arg0 == SEXNET_HTTP_PROOF_LEN {
-                serial_println!("[sexnet.packed_text.len] len={}", PROOF_TEXT.len());
-                return PROOF_TEXT.len() as u64;
+                let len = unsafe { PROOF_LEN };
+                serial_println!("[sexnet.packed_text.len] len={}", len);
+                return len as u64;
             }
             if arg0 == SEXNET_HTTP_PROOF_CHUNK {
                 let idx = arg1 as usize;
                 let start = idx.saturating_mul(8);
-                if start >= PROOF_TEXT.len() {
+                let proof_len = unsafe { PROOF_LEN };
+                if start >= proof_len {
                     return u64::MAX;
                 }
-                let end = core::cmp::min(start + 8, PROOF_TEXT.len());
+                let end = core::cmp::min(start + 8, proof_len);
                 let bytes = end - start;
                 let mut packed = 0u64;
                 let mut i = 0usize;
                 while i < bytes {
-                    packed |= (PROOF_TEXT[start + i] as u64) << (i * 8);
+                    let b = unsafe { PROOF_BUF[start + i] };
+                    packed |= (b as u64) << (i * 8);
                     i += 1;
                 }
                 serial_println!("[sexnet.packed_text.chunk] idx={} bytes={}", idx, bytes);
@@ -182,6 +247,27 @@ fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    let raw = unsafe { sys_net_diag() };
+    let status = (raw >> 32) as u32;
+    let source = ((raw >> 16) & 0xFF) as u8;
+    let bytes = (raw & 0xFFFF) as u16;
+    serial_println!(
+        "[net.diag.syscall.call] syscall=52 status={} bytes={} source={}",
+        status,
+        bytes,
+        source
+    );
+    unsafe {
+        proof_build(status, bytes, source);
+    }
+    let proof_len = unsafe { PROOF_LEN };
+    serial_println!(
+        "[sexnet.dynamic_text.set] status={} bytes={} source={} len={} ok=1",
+        status,
+        bytes,
+        source,
+        proof_len
+    );
     serial_println!("[sexnet.boot] ok=1 reason=passive_spawn");
     serial_println!("[sexnet.passive.ready] network=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=mock_status_only_no_nic");
     serial_println!("[sexnet.passive.spawn.done] ok=1 spawned=1 browser_network=0");

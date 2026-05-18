@@ -529,6 +529,19 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                 None => { crate::serial_println!("[kernel.memlend.map.err] reason=no_cap slot={}", cap_slot); u64::MAX }
             }
         },
+        52 => { // SYS_NET_DIAG
+            let (status, bytes, source) = crate::hal::pci::get_net_diag();
+            let packed = ((status as u64) << 32)
+                | ((source as u64) << 16)
+                | (core::cmp::min(bytes, 0xFFFF) as u64);
+            crate::serial_println!(
+                "[net.diag.syscall.reply] status={} bytes={} source={}",
+                status,
+                bytes,
+                source
+            );
+            packed
+        },
 
         _ => u64::MAX,
     };
