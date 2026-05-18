@@ -1447,25 +1447,75 @@ pub extern "C" fn _start() -> ! {
                                     pad += 1;
                                 }
                                 serial_println!("[sexnet.arp.tx.reply.build] spa=10.0.2.15 ok=1");
+                                let tx_dump_base = unsafe { TX_PERM_FRAME_VA };
+                                let eth_dst0 = unsafe { core::ptr::read_volatile((tx_dump_base + 0) as *const u8) };
+                                let eth_dst1 = unsafe { core::ptr::read_volatile((tx_dump_base + 1) as *const u8) };
+                                let eth_dst2 = unsafe { core::ptr::read_volatile((tx_dump_base + 2) as *const u8) };
+                                let eth_dst3 = unsafe { core::ptr::read_volatile((tx_dump_base + 3) as *const u8) };
+                                let eth_dst4 = unsafe { core::ptr::read_volatile((tx_dump_base + 4) as *const u8) };
+                                let eth_dst5 = unsafe { core::ptr::read_volatile((tx_dump_base + 5) as *const u8) };
+                                let eth_src0 = unsafe { core::ptr::read_volatile((tx_dump_base + 6) as *const u8) };
+                                let eth_src1 = unsafe { core::ptr::read_volatile((tx_dump_base + 7) as *const u8) };
+                                let eth_src2 = unsafe { core::ptr::read_volatile((tx_dump_base + 8) as *const u8) };
+                                let eth_src3 = unsafe { core::ptr::read_volatile((tx_dump_base + 9) as *const u8) };
+                                let eth_src4 = unsafe { core::ptr::read_volatile((tx_dump_base + 10) as *const u8) };
+                                let eth_src5 = unsafe { core::ptr::read_volatile((tx_dump_base + 11) as *const u8) };
+                                let etype_hi = unsafe { core::ptr::read_volatile((tx_dump_base + 12) as *const u8) };
+                                let etype_lo = unsafe { core::ptr::read_volatile((tx_dump_base + 13) as *const u8) };
+                                let oper_hi = unsafe { core::ptr::read_volatile((tx_dump_base + 20) as *const u8) };
+                                let oper_lo = unsafe { core::ptr::read_volatile((tx_dump_base + 21) as *const u8) };
+                                let sha0 = unsafe { core::ptr::read_volatile((tx_dump_base + 22) as *const u8) };
+                                let sha1 = unsafe { core::ptr::read_volatile((tx_dump_base + 23) as *const u8) };
+                                let sha2 = unsafe { core::ptr::read_volatile((tx_dump_base + 24) as *const u8) };
+                                let sha3 = unsafe { core::ptr::read_volatile((tx_dump_base + 25) as *const u8) };
+                                let sha4 = unsafe { core::ptr::read_volatile((tx_dump_base + 26) as *const u8) };
+                                let sha5 = unsafe { core::ptr::read_volatile((tx_dump_base + 27) as *const u8) };
+                                let spa0 = unsafe { core::ptr::read_volatile((tx_dump_base + 28) as *const u8) };
+                                let spa1 = unsafe { core::ptr::read_volatile((tx_dump_base + 29) as *const u8) };
+                                let spa2 = unsafe { core::ptr::read_volatile((tx_dump_base + 30) as *const u8) };
+                                let spa3 = unsafe { core::ptr::read_volatile((tx_dump_base + 31) as *const u8) };
+                                let tha0 = unsafe { core::ptr::read_volatile((tx_dump_base + 32) as *const u8) };
+                                let tha1 = unsafe { core::ptr::read_volatile((tx_dump_base + 33) as *const u8) };
+                                let tha2 = unsafe { core::ptr::read_volatile((tx_dump_base + 34) as *const u8) };
+                                let tha3 = unsafe { core::ptr::read_volatile((tx_dump_base + 35) as *const u8) };
+                                let tha4 = unsafe { core::ptr::read_volatile((tx_dump_base + 36) as *const u8) };
+                                let tha5 = unsafe { core::ptr::read_volatile((tx_dump_base + 37) as *const u8) };
+                                let tpa0 = unsafe { core::ptr::read_volatile((tx_dump_base + 38) as *const u8) };
+                                let tpa1 = unsafe { core::ptr::read_volatile((tx_dump_base + 39) as *const u8) };
+                                let tpa2 = unsafe { core::ptr::read_volatile((tx_dump_base + 40) as *const u8) };
+                                let tpa3 = unsafe { core::ptr::read_volatile((tx_dump_base + 41) as *const u8) };
+                                let etype = ((etype_hi as u16) << 8) | (etype_lo as u16);
+                                let oper = ((oper_hi as u16) << 8) | (oper_lo as u16);
+                                serial_println!(
+                                    "[sexnet.arp.tx.dump] eth_dst={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} eth_src={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} etype=0x{:04X} oper=0x{:04X} sha={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} spa={}.{}.{}.{} tha={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} tpa={}.{}.{}.{} ok=1",
+                                    eth_dst0, eth_dst1, eth_dst2, eth_dst3, eth_dst4, eth_dst5,
+                                    eth_src0, eth_src1, eth_src2, eth_src3, eth_src4, eth_src5,
+                                    etype,
+                                    oper,
+                                    sha0, sha1, sha2, sha3, sha4, sha5,
+                                    spa0, spa1, spa2, spa3,
+                                    tha0, tha1, tha2, tha3, tha4, tha5,
+                                    tpa0, tpa1, tpa2, tpa3
+                                );
 
-                                let tx_desc2 = unsafe { TX_PERM_DESC_VA + 32 };
+                                let tx_desc1 = unsafe { TX_PERM_DESC_VA + 16 };
                                 unsafe {
-                                    core::ptr::write_volatile(tx_desc2 as *mut u64, TX_PERM_FRAME_PHYS);
-                                    core::ptr::write_volatile((tx_desc2 + 8) as *mut u16, 60u16);
-                                    core::ptr::write_volatile((tx_desc2 + 10) as *mut u8, 0u8);
-                                    core::ptr::write_volatile((tx_desc2 + 11) as *mut u8, 0x0Bu8);
-                                    core::ptr::write_volatile((tx_desc2 + 12) as *mut u8, 0u8);
-                                    core::ptr::write_volatile((tx_desc2 + 13) as *mut u8, 0u8);
-                                    core::ptr::write_volatile((tx_desc2 + 14) as *mut u16, 0u16);
+                                    core::ptr::write_volatile(tx_desc1 as *mut u64, TX_PERM_FRAME_PHYS);
+                                    core::ptr::write_volatile((tx_desc1 + 8) as *mut u16, 60u16);
+                                    core::ptr::write_volatile((tx_desc1 + 10) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((tx_desc1 + 11) as *mut u8, 0x0Bu8);
+                                    core::ptr::write_volatile((tx_desc1 + 12) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((tx_desc1 + 13) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((tx_desc1 + 14) as *mut u16, 0u16);
                                 }
-                                serial_println!("[sexnet.arp.tx.desc] slot=2 len=60 ok=1");
+                                serial_println!("[sexnet.arp.tx.desc] slot=1 len=60 ok=1");
                                 unsafe {
-                                    core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 3);
+                                    core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 2);
                                 }
-                                serial_println!("[sexnet.arp.tx.post] tdt=3 ok=1");
+                                serial_println!("[sexnet.arp.tx.post] tdt=2 ok=1");
                                 let mut tx_outer = 0u32;
                                 while tx_outer < 50_000_000 {
-                                    let tx_st = unsafe { core::ptr::read_volatile((tx_desc2 + 12) as *const u8) };
+                                    let tx_st = unsafe { core::ptr::read_volatile((tx_desc1 + 12) as *const u8) };
                                     if (tx_st & 1) != 0 {
                                         arp_tx_dd = 1;
                                         break;
@@ -1585,25 +1635,25 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     pi += 1;
                                 }
-                                let tx_desc1 = unsafe { TX_PERM_DESC_VA + 16 };
+                                let tx_desc2 = unsafe { TX_PERM_DESC_VA + 32 };
                                 unsafe {
-                                    core::ptr::write_volatile(tx_desc1 as *mut u64, TX_PERM_FRAME_PHYS);
-                                    core::ptr::write_volatile((tx_desc1 + 8) as *mut u16, 60u16);
-                                    core::ptr::write_volatile((tx_desc1 + 10) as *mut u8, 0u8);
-                                    core::ptr::write_volatile((tx_desc1 + 11) as *mut u8, 0x0Bu8);
-                                    core::ptr::write_volatile((tx_desc1 + 12) as *mut u8, 0u8);
-                                    core::ptr::write_volatile((tx_desc1 + 13) as *mut u8, 0u8);
-                                    core::ptr::write_volatile((tx_desc1 + 14) as *mut u16, 0u16);
-                                    L2_TX_NEXT = 1;
+                                    core::ptr::write_volatile(tx_desc2 as *mut u64, TX_PERM_FRAME_PHYS);
+                                    core::ptr::write_volatile((tx_desc2 + 8) as *mut u16, 60u16);
+                                    core::ptr::write_volatile((tx_desc2 + 10) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((tx_desc2 + 11) as *mut u8, 0x0Bu8);
+                                    core::ptr::write_volatile((tx_desc2 + 12) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((tx_desc2 + 13) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((tx_desc2 + 14) as *mut u16, 0u16);
+                                    L2_TX_NEXT = 2;
                                 }
-                                serial_println!("[sexnet.l2.tx.reuse.desc] slot=1 len=60 ok=1");
+                                serial_println!("[sexnet.l2.tx.reuse.desc] slot=2 len=60 ok=1");
                                 unsafe {
-                                    core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 2);
+                                    core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 3);
                                 }
-                                serial_println!("[sexnet.l2.tx.reuse.post] tdt=2 ok=1");
+                                serial_println!("[sexnet.l2.tx.reuse.post] tdt=3 ok=1");
                                 let mut tx_outer = 0u32;
                                 while tx_outer < 50_000_000 {
-                                    let tx_st = unsafe { core::ptr::read_volatile((tx_desc1 + 12) as *const u8) };
+                                    let tx_st = unsafe { core::ptr::read_volatile((tx_desc2 + 12) as *const u8) };
                                     if (tx_st & 1) != 0 {
                                         l2_tx_dd = 1;
                                         break;
@@ -1611,7 +1661,7 @@ pub extern "C" fn _start() -> ! {
                                     tx_outer += 1;
                                 }
                                 serial_println!(
-                                    "[sexnet.l2.tx.reuse.poll.done] dd_set={} desc_idx=1 ok={}",
+                                    "[sexnet.l2.tx.reuse.poll.done] dd_set={} desc_idx=2 ok={}",
                                     l2_tx_dd,
                                     if l2_tx_dd == 1 { 1 } else { 0 }
                                 );
