@@ -292,6 +292,7 @@ gate_network_sprint_final_runtime_smoke="SKIP"
 gate_network_sprint_final_runtime_smoke_v1="SKIP"
 gate_network_sprint_handoff_freeze="SKIP"
 gate_network_sprint_handoff_freeze_v1="SKIP"
+gate_net_real_http_body_prefix="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
@@ -2223,6 +2224,25 @@ if [ "$(has 'network.sprint.final.runtime.smoke.*ok=1')" -eq 1 ]; then gate_netw
 if [ "$(has 'network.sprint.final.runtime.smoke.v1.*mode=mock.*backend=user.*tcp_env_limited=1.*syn_tx=1.*synack=0.*rst=0.*mock_mode=1.*fetched=1.*status=200.*final_ack_sent=0.*http_sent=0.*ok=1')" -eq 1 ]; then gate_network_sprint_final_runtime_smoke_v1="PASS"; print_row "network_sprint_final_runtime_smoke_v1" "PASS" "final smoke V1 proven on frozen-tcp mock-browser lane"; else gate_network_sprint_final_runtime_smoke_v1="SKIP"; fi
 if [ "$(has 'network.sprint.handoff.freeze.*ok=1')" -eq 1 ]; then gate_network_sprint_handoff_freeze="PASS"; print_row "network_sprint_handoff_freeze" "PASS" "handoff freeze marker"; else gate_network_sprint_handoff_freeze="SKIP"; fi
 if [ "$(has 'network.sprint.handoff.freeze.v1.*mode=mock.*backend=user.*done=1.*tcp_env_limited=1.*syn_tx=1.*synack=0.*rst=0.*mock_mode=1.*fetched=1.*status=200.*final_ack_sent=0.*http_sent=0.*ok=1')" -eq 1 ]; then gate_network_sprint_handoff_freeze_v1="PASS"; print_row "network_sprint_handoff_freeze_v1" "PASS" "handoff freeze V1 locked to frozen-tcp mock-browser lane"; else gate_network_sprint_handoff_freeze_v1="SKIP"; fi
+if [ "$(has 'net\.diag\.body\.capture.*bytes=64.*cap=64.*ok=1.*source=real')" -eq 1 ] \
+   && [ "$(has 'sexnet\.dynamic_body\.set.*len=64.*source=2.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.body_text\.len.*len=64')" -eq 1 ] \
+   && [ "$(has 'browser\.body\.len\.recv.*len=64')" -eq 1 ] \
+   && [ "$(has 'browser\.body\.chunk\.recv.*idx=0.*bytes=8')" -eq 1 ] \
+   && [ "$(has 'browser\.body\.chunk\.recv.*idx=1.*bytes=8')" -eq 1 ] \
+   && [ "$(has 'browser\.body\.chunk\.recv.*idx=2.*bytes=8')" -eq 1 ] \
+   && [ "$(has 'browser\.body\.chunk\.recv.*idx=3.*bytes=8')" -eq 1 ] \
+   && [ "$(has 'browser\.body\.chunk\.recv.*idx=4.*bytes=8')" -eq 1 ] \
+   && [ "$(has 'browser\.body\.chunk\.recv.*idx=5.*bytes=8')" -eq 1 ] \
+   && [ "$(has 'browser\.body\.chunk\.recv.*idx=6.*bytes=8')" -eq 1 ] \
+   && [ "$(has 'browser\.body\.chunk\.recv.*idx=7.*bytes=8')" -eq 1 ] \
+   && [ "$(has 'browser\.body\.text\.set.*live=1.*len=64')" -eq 1 ] \
+   && [ "$(has 'browser\.body\.render\.done')" -eq 1 ]; then
+    gate_net_real_http_body_prefix="PASS"
+    print_row "net_real_http_body_prefix" "PASS" "real(2)->sexnet len64->8x8 chunks->render done"
+else
+    gate_net_real_http_body_prefix="SKIP"
+fi
 
 # ---- 94. clock_visible_seconds ----
 first_redraw_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
@@ -2800,6 +2820,7 @@ ALL_GATES=(
     "network_sprint_final_runtime_smoke_v1:$gate_network_sprint_final_runtime_smoke_v1"
     "network_sprint_handoff_freeze:$gate_network_sprint_handoff_freeze"
     "network_sprint_handoff_freeze_v1:$gate_network_sprint_handoff_freeze_v1"
+    "net_real_http_body_prefix:$gate_net_real_http_body_prefix"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"
