@@ -194,6 +194,8 @@ gate_e1000_rx_packet_observe_proof="SKIP"
 gate_sexnet_nic_rx_packet_observe="SKIP"
 gate_sexnet_nic_tx_frame_observe="SKIP"
 gate_sexnet_nic_ownership_init="SKIP"
+gate_sexnet_nic_rx_permanent_init="SKIP"
+gate_sexnet_nic_rx_permanent_recv="SKIP"
 gate_e1000e_rx_desc_observe="SKIP"
 gate_ethernet_frame_model_spec="SKIP"
 gate_arp_client_plan="SKIP"
@@ -1855,6 +1857,35 @@ else
     gate_sexnet_nic_ownership_init="SKIP"
 fi
 
+# ---- sexnet_nic_rx_permanent_init (permanent rx ownership claim) ----
+if [ "$(has 'sexnet\.nic\.rx\.permanent\.claim.*owner=1.*ring_ok=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_nic_rx_permanent_init="PASS"
+    print_row "sexnet_nic_rx_permanent_init" "PASS" "permanent RX claim owner=1 ring_ok=1"
+elif [ "$(has 'sexnet\.nic\.rx\.permanent\.claim')" -eq 1 ]; then
+    gate_sexnet_nic_rx_permanent_init="FAIL"
+    print_row "sexnet_nic_rx_permanent_init" "FAIL" "claim marker present but owner/ring_ok/ok contract failed"
+else
+    gate_sexnet_nic_rx_permanent_init="SKIP"
+fi
+
+# ---- sexnet_nic_rx_permanent_recv (traffic-dependent receive proof) ----
+if [ "$(has 'sexnet\.nic\.rx\.permanent\.poll\.done.*dd_set=1.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.nic\.rx\.permanent\.pkt\.parse.*len=(1[5-9]|[2-9][0-9]|[1-9][0-9]{2,}).*ethertype=0x(0800|0806).*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.nic\.rx\.permanent\.rdt\.advance.*ok=1')" -eq 1 ]; then
+    gate_sexnet_nic_rx_permanent_recv="PASS"
+    print_row "sexnet_nic_rx_permanent_recv" "PASS" "permanent RX receive parse+recycle proved"
+elif [ "$(has 'sexnet\.nic\.rx\.permanent\.poll\.done.*dd_set=1.*ok=1')" -eq 1 ] \
+     && ( [ "$(has 'sexnet\.nic\.rx\.permanent\.pkt\.parse.*ok=0')" -eq 1 ] \
+          || [ "$(has 'sexnet\.nic\.rx\.permanent\.rdt\.advance')" -eq 0 ] ); then
+    gate_sexnet_nic_rx_permanent_recv="FAIL"
+    print_row "sexnet_nic_rx_permanent_recv" "FAIL" "dd_set=1 but parse/recycle contract failed"
+elif [ "$(has 'sexnet\.nic\.rx\.permanent\.poll\.done.*dd_set=0.*ok=1')" -eq 1 ]; then
+    gate_sexnet_nic_rx_permanent_recv="SKIP"
+    print_row "sexnet_nic_rx_permanent_recv" "SKIP" "no RX frame observed (traffic-dependent lane)"
+else
+    gate_sexnet_nic_rx_permanent_recv="SKIP"
+fi
+
 if [ "$(has 'e1000e\.rx\.descriptor\.observe\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_e1000e_rx_desc_observe="PASS"
     print_row "e1000e_rx_desc_observe" "PASS" "loopback RX dd+rdh+buffer_match=1"
@@ -2782,6 +2813,8 @@ ALL_GATES=(
     "sexnet_nic_rx_packet_observe:$gate_sexnet_nic_rx_packet_observe"
     "sexnet_nic_tx_frame_observe:$gate_sexnet_nic_tx_frame_observe"
     "sexnet_nic_ownership_init:$gate_sexnet_nic_ownership_init"
+    "sexnet_nic_rx_permanent_init:$gate_sexnet_nic_rx_permanent_init"
+    "sexnet_nic_rx_permanent_recv:$gate_sexnet_nic_rx_permanent_recv"
     "e1000e_rx_desc_observe:$gate_e1000e_rx_desc_observe"
     "ethernet_frame_model_spec:$gate_ethernet_frame_model_spec"
     "arp_client_plan:$gate_arp_client_plan"
