@@ -41,6 +41,10 @@ static mut RX_PERM_DESC_PHYS: u64 = 0;
 static mut RX_PERM_DESC_VA: u64 = 0;
 static mut RX_PERM_PKT_PHYS: [u64; 8] = [0u64; 8];
 static mut RX_PERM_PKT_VA: [u64; 8] = [0u64; 8];
+static mut TX_PERM_DESC_PHYS: u64 = 0;
+static mut TX_PERM_DESC_VA: u64 = 0;
+static mut TX_PERM_FRAME_PHYS: u64 = 0;
+static mut TX_PERM_FRAME_VA: u64 = 0;
 
 unsafe fn sys_net_diag(selector: u64) -> u64 {
     let result: u64;
@@ -1132,6 +1136,163 @@ pub extern "C" fn _start() -> ! {
                     tx_dd_set,
                     tx_proof_ok
                 );
+
+                let rx_own = NIC_RX_OWNER.load(Ordering::Acquire);
+                if rx_own != NIC_OWNER_SEXNET_RX {
+                    serial_println!("[sexnet.nic.tx.permanent.skip] reason=rx_not_claimed ok=0");
+                } else {
+                    let txp_desc_phys = sys_alloc_phys(4096);
+                    let txp_desc_va = sys_map_phys(txp_desc_phys, 4096);
+                    let txp_frame_phys = sys_alloc_phys(4096);
+                    let txp_frame_va = sys_map_phys(txp_frame_phys, 4096);
+                    let txp_alloc_ok = txp_desc_phys != 0
+                        && txp_desc_phys != u64::MAX
+                        && txp_desc_va != 0
+                        && txp_desc_va != u64::MAX
+                        && txp_frame_phys != 0
+                        && txp_frame_phys != u64::MAX
+                        && txp_frame_va != 0
+                        && txp_frame_va != u64::MAX;
+                    serial_println!(
+                        "[sexnet.nic.tx.permanent.alloc] desc_phys=0x{:016X} frame_phys=0x{:016X} ok={}",
+                        txp_desc_phys,
+                        txp_frame_phys,
+                        if txp_alloc_ok { 1 } else { 0 }
+                    );
+                    if txp_alloc_ok {
+                        unsafe {
+                            TX_PERM_DESC_PHYS = txp_desc_phys;
+                            TX_PERM_DESC_VA = txp_desc_va;
+                            TX_PERM_FRAME_PHYS = txp_frame_phys;
+                            TX_PERM_FRAME_VA = txp_frame_va;
+                        }
+                        let mut z = 0u64;
+                        while z < 512 {
+                            unsafe {
+                                core::ptr::write_volatile((txp_desc_va + z * 8) as *mut u64, 0);
+                                core::ptr::write_volatile((txp_frame_va + z * 8) as *mut u64, 0);
+                            }
+                            z += 1;
+                        }
+                        let mut bi = 0u64;
+                        while bi < 6 {
+                            unsafe {
+                                core::ptr::write_volatile((txp_frame_va + bi) as *mut u8, 0xFF);
+                            }
+                            bi += 1;
+                        }
+                        let src = [0x52u8, 0x54u8, 0x00u8, 0x12u8, 0x34u8, 0x56u8];
+                        let mut si = 0usize;
+                        while si < 6 {
+                            unsafe {
+                                core::ptr::write_volatile((txp_frame_va + 6 + si as u64) as *mut u8, src[si]);
+                            }
+                            si += 1;
+                        }
+                        unsafe {
+                            core::ptr::write_volatile((txp_frame_va + 12) as *mut u8, 0x88);
+                            core::ptr::write_volatile((txp_frame_va + 13) as *mut u8, 0xB5);
+                        }
+                        let mut pi = 14u64;
+                        while pi < 60 {
+                            unsafe {
+                                core::ptr::write_volatile((txp_frame_va + pi) as *mut u8, 0x42);
+                            }
+                            pi += 1;
+                        }
+                        serial_println!("[sexnet.nic.tx.permanent.frame.write] ethertype=0x88B5 len=60 ok=1");
+
+                        unsafe {
+                            core::ptr::write_volatile(txp_desc_va as *mut u64, txp_frame_phys);
+                            core::ptr::write_volatile((txp_desc_va + 8) as *mut u16, 60u16);
+                            core::ptr::write_volatile((txp_desc_va + 10) as *mut u8, 0u8);
+                            core::ptr::write_volatile((txp_desc_va + 11) as *mut u8, 0x0Bu8);
+                            core::ptr::write_volatile((txp_desc_va + 12) as *mut u8, 0u8);
+                            core::ptr::write_volatile((txp_desc_va + 13) as *mut u8, 0u8);
+                            core::ptr::write_volatile((txp_desc_va + 14) as *mut u16, 0u16);
+                        }
+                        serial_println!("[sexnet.nic.tx.permanent.desc.write] len=60 cmd=0x0B sta=0 ok=1");
+
+                        unsafe {
+                            core::ptr::write_volatile((nic_va + 0x3800) as *mut u32, (txp_desc_phys & 0xFFFF_FFFF) as u32);
+                            core::ptr::write_volatile((nic_va + 0x3804) as *mut u32, (txp_desc_phys >> 32) as u32);
+                            core::ptr::write_volatile((nic_va + 0x3808) as *mut u32, 128);
+                            core::ptr::write_volatile((nic_va + 0x3810) as *mut u32, 0);
+                            core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 0);
+                            core::ptr::write_volatile((nic_va + 0x0400) as *mut u32, 0x0004_0102);
+                        }
+                        let txp_prog_tdbal = unsafe { core::ptr::read_volatile((nic_va + 0x3800) as *const u32) };
+                        let txp_prog_tctl = unsafe { core::ptr::read_volatile((nic_va + 0x0400) as *const u32) };
+                        let txp_tctl_en = if (txp_prog_tctl & (1 << 1)) != 0 { 1 } else { 0 };
+                        let txp_ring_ok = if txp_prog_tdbal == (txp_desc_phys as u32) && txp_tctl_en == 1 {
+                            1
+                        } else {
+                            0
+                        };
+                        serial_println!(
+                            "[sexnet.nic.tx.permanent.ring.program] tdbal=0x{:08X} tdlen=128 tdt=0 tctl=0x{:08X} ok={}",
+                            txp_prog_tdbal,
+                            txp_prog_tctl,
+                            txp_ring_ok
+                        );
+
+                        let mut txp_dd_set = 0u32;
+                        if txp_ring_ok == 1 {
+                            unsafe {
+                                core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 1);
+                            }
+                            serial_println!("[sexnet.nic.tx.permanent.post] tdt=1 ok=1");
+                            serial_println!("[sexnet.nic.tx.permanent.poll.begin] max_iters=50000000");
+                            let mut txp_outer = 0u32;
+                            while txp_outer < 50_000_000 {
+                                let tx_st = unsafe { core::ptr::read_volatile((txp_desc_va + 12) as *const u8) };
+                                if (tx_st & 1) != 0 {
+                                    txp_dd_set = 1;
+                                    break;
+                                }
+                                txp_outer += 1;
+                            }
+                            serial_println!(
+                                "[sexnet.nic.tx.permanent.poll.done] dd_set={} desc_idx=0 ok=1",
+                                txp_dd_set
+                            );
+                        }
+
+                        if txp_ring_ok == 1 && txp_dd_set == 1 {
+                            NIC_TX_OWNER.store(NIC_OWNER_SEXNET_TX, Ordering::Release);
+                        }
+                        let tx_owner_now = NIC_TX_OWNER.load(Ordering::Acquire);
+                        let tx_claim_ok = if tx_owner_now == NIC_OWNER_SEXNET_TX && txp_ring_ok == 1 {
+                            1
+                        } else {
+                            0
+                        };
+                        serial_println!(
+                            "[sexnet.nic.tx.permanent.claim] owner={} ring_ok={} ok={}",
+                            tx_owner_now,
+                            txp_ring_ok,
+                            tx_claim_ok
+                        );
+
+                        if tx_claim_ok == 1 && NIC_RX_OWNER.load(Ordering::Acquire) == NIC_OWNER_SEXNET_RX {
+                            NIC_RX_OWNER.store(NIC_OWNER_SEXNET_FULL, Ordering::Release);
+                            NIC_TX_OWNER.store(NIC_OWNER_SEXNET_FULL, Ordering::Release);
+                            let full_rx = NIC_RX_OWNER.load(Ordering::Acquire);
+                            let full_tx = NIC_TX_OWNER.load(Ordering::Acquire);
+                            let full_ok = if full_rx == NIC_OWNER_SEXNET_FULL && full_tx == NIC_OWNER_SEXNET_FULL {
+                                1
+                            } else {
+                                0
+                            };
+                            serial_println!(
+                                "[sexnet.nic.tx.permanent.full] rx_owner={} tx_owner={} full_ok={}",
+                                full_rx,
+                                full_tx,
+                                full_ok
+                            );
+                        }
+                    }
+                }
             }
         } else {
             serial_println!("[sexnet.nic.bar.map] va=MAX ok=0 reason=no_cap_or_map_denied");
