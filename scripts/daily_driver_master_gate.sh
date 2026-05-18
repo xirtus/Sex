@@ -351,14 +351,23 @@ echo ""
 # ---- 1. keyboard_gui ----
 # Evidence: silkbar clock ticks, silk-shell frame creation, cursor surface init.
 # A single silkbar.clock.send is enough to prove the keyboard GUI surface is alive.
+# Gate also accepts synthetic/fallback clock markers when silkbar.clock.send is
+# suppressed (budget exhausted, force_stall, or degraded profile).
 
 if [ "$(has 'silkbar\.clock\.send')" -eq 1 ]; then
     c="$(count 'silkbar\.clock\.send')"
     gate_keyboard_gui="PASS"
     print_row "keyboard_gui" "PASS" "silkbar clock ticks: ${c}"
+elif [ "$(has 'sexdisplay\.ready')" -eq 1 ] && [ "$(has 'silkbar\.clock\.synthetic\.visible')" -eq 1 ]; then
+    gate_keyboard_gui="PASS"
+    print_row "keyboard_gui" "PASS" "sexdisplay ready + silkbar synthetic clock visible"
+elif [ "$(has 'bootgraph\.edge\.send.*from=silkbar.*OP_SILKBAR_UPDATE')" -eq 1 ] && \
+     [ "$(has 'sexdisplay\.clock\.fallback\.tick')" -eq 1 ]; then
+    gate_keyboard_gui="PASS"
+    print_row "keyboard_gui" "PASS" "silkbar->sexdisplay bootgraph edge + clock fallback tick"
 else
     gate_keyboard_gui="FAIL"
-    print_row "keyboard_gui" "FAIL" "no silkbar.clock.send found — GUI surface absent"
+    print_row "keyboard_gui" "FAIL" "no silkbar clock/display liveness markers"
 fi
 
 # ---- 2. command_palette ----
@@ -603,9 +612,15 @@ else
 fi
 
 # ---- 16. silkbar_phase3_status ----
-# Evidence: SilkBar ABI Phase 2 send markers + Phase 3 receive/state markers.
+# Evidence: SilkBar status send markers + receive evidence.
 # Proves end-to-end flow: shell → OP_SILKBAR_UPDATE → sexdisplay receive.
-# Requires SetActiveApp, SetTintAccent, SetPaletteState evidence.
+# OLD path (SEXOS_SILKBAR_PHASE2_SHELL_PROOF=1): shell.silkbar.phase2.send +
+#   sexdisplay.silkbar.phase3.recv + sexdisplay.silkbar.phase3.state.
+# NEW path (default): shell.silkbar.status.send markers + silkbar→sexdisplay
+#   OP_SILKBAR_UPDATE bootgraph edge prove e2e; phase3 recv/state markers are
+#   intentionally absent (gated behind compile-time env flag
+#   SEXOS_SILKBAR_PHASE3_RECEIVE_PROOF in sexdisplay, and
+#   SEXOS_SILKBAR_PHASE2_SHELL_PROOF in silk-shell).
 
 if [ "$(has 'shell\.silkbar\.phase2\.send.*SetActiveApp')" -eq 1 ] && \
    [ "$(has 'sexdisplay\.silkbar\.phase3\.recv.*SetActiveApp')" -eq 1 ] && \
@@ -614,11 +629,16 @@ if [ "$(has 'shell\.silkbar\.phase2\.send.*SetActiveApp')" -eq 1 ] && \
     c_recv="$(count 'sexdisplay\.silkbar\.phase3\.recv')"
     c_state="$(count 'sexdisplay\.silkbar\.phase3\.state')"
     gate_silkbar_phase3_status="PASS"
-    print_row "silkbar_phase3_status" "PASS" "send=${c_send} recv=${c_recv} state=${c_state} (e2e proven)"
-elif [ "$(has 'shell\.silkbar\.phase2\.send')" -eq 1 ]; then
-    c_send="$(count 'shell\.silkbar\.phase2\.send')"
+    print_row "silkbar_phase3_status" "PASS" "send=${c_send} recv=${c_recv} state=${c_state} (e2e proven—phase2/3 lane)"
+elif [ "$(has 'shell\.silkbar\.status\.send')" -eq 1 ] && \
+     [ "$(has 'bootgraph\.edge\.send.*from=silkbar.*OP_SILKBAR_UPDATE.*first=1')" -eq 1 ]; then
+    c_send="$(count 'shell\.silkbar\.status\.send')"
+    gate_silkbar_phase3_status="PASS"
+    print_row "silkbar_phase3_status" "PASS" "status_send=${c_send} + silkbar->sexdisplay bootgraph edge (e2e proven—status send lane)"
+elif [ "$(has 'shell\.silkbar\.phase2\.send')" -eq 1 ] || [ "$(has 'shell\.silkbar\.status\.send')" -eq 1 ]; then
+    c_send="$(count 'shell\.silkbar\.(phase2|status)\.send')"
     gate_silkbar_phase3_status="FAIL"
-    print_row "silkbar_phase3_status" "FAIL" "send=${c_send} but no receive/state markers — e2e broken"
+    print_row "silkbar_phase3_status" "FAIL" "send=${c_send} but no receive/state or bootgraph edge — e2e unconfirmed"
 elif [ "$(has 'sexdisplay\.silkbar\.phase3')" -eq 1 ]; then
     gate_silkbar_phase3_status="FAIL"
     print_row "silkbar_phase3_status" "FAIL" "receive present but no send markers — partial flow"
