@@ -363,6 +363,44 @@ pub extern "C" fn _start() -> ! {
                 if (reg_rctl & (1 << 1)) != 0 { 1 } else { 0 },
                 reg_rdlen
             );
+            let rctl_orig = unsafe { core::ptr::read_volatile((nic_va + 0x0100) as *const u32) };
+            let rctl_clear = rctl_orig & !(1u32 << 1);
+            serial_println!(
+                "[sexnet.nic.rctl.disable.begin] rctl_orig={:#010X}",
+                rctl_orig
+            );
+            unsafe {
+                core::ptr::write_volatile((nic_va + 0x0100) as *mut u32, rctl_clear);
+            }
+            serial_println!("[sexnet.nic.rctl.disable.write] val={:#010X}", rctl_clear);
+            let rctl_readback_off =
+                unsafe { core::ptr::read_volatile((nic_va + 0x0100) as *const u32) };
+            let rctl_en_off = (rctl_readback_off >> 1) & 1;
+            let rctl_disable_ok = if rctl_en_off == 0 { 1 } else { 0 };
+            serial_println!(
+                "[sexnet.nic.rctl.disable.readback] rctl_en={} ok={}",
+                rctl_en_off,
+                rctl_disable_ok
+            );
+            unsafe {
+                core::ptr::write_volatile((nic_va + 0x0100) as *mut u32, rctl_orig);
+            }
+            serial_println!("[sexnet.nic.rctl.restore.write] val={:#010X}", rctl_orig);
+            let rctl_readback_on =
+                unsafe { core::ptr::read_volatile((nic_va + 0x0100) as *const u32) };
+            let rctl_en_on = (rctl_readback_on >> 1) & 1;
+            let rctl_restore_ok = if rctl_en_on == 1 { 1 } else { 0 };
+            serial_println!(
+                "[sexnet.nic.rctl.restore.readback] rctl_en={} ok={}",
+                rctl_en_on,
+                rctl_restore_ok
+            );
+            let proof_ok = if rctl_disable_ok == 1 && rctl_restore_ok == 1 {
+                1
+            } else {
+                0
+            };
+            serial_println!("[sexnet.nic.rctl.disable_restore.proof.done] ok={}", proof_ok);
         } else {
             serial_println!("[sexnet.nic.bar.map] va=MAX ok=0 reason=no_cap_or_map_denied");
         }
