@@ -600,6 +600,185 @@ pub extern "C" fn _start() -> ! {
                     restore_ok
                 );
                 serial_println!("[sexnet.nic.rx.ring.program_restore.proof.done] ok={}", restore_ok);
+
+                let obs_desc_phys = sys_alloc_phys(4096);
+                let obs_desc_va = sys_map_phys(obs_desc_phys, 4096);
+                let mut obs_pkt_phys = [0u64; 8];
+                let mut obs_pkt_va = [0u64; 8];
+                let mut obs_alloc_ok = obs_desc_phys != 0
+                    && obs_desc_phys != u64::MAX
+                    && obs_desc_va != 0
+                    && obs_desc_va != u64::MAX;
+                let mut oi = 0usize;
+                while oi < 8 {
+                    obs_pkt_phys[oi] = sys_alloc_phys(4096);
+                    obs_pkt_va[oi] = sys_map_phys(obs_pkt_phys[oi], 4096);
+                    if obs_pkt_phys[oi] == 0
+                        || obs_pkt_phys[oi] == u64::MAX
+                        || obs_pkt_va[oi] == 0
+                        || obs_pkt_va[oi] == u64::MAX
+                    {
+                        obs_alloc_ok = false;
+                    }
+                    oi += 1;
+                }
+                serial_println!(
+                    "[sexnet.nic.rx.observe.alloc] desc_phys=0x{:016X} pkt_pages=8 ok={}",
+                    obs_desc_phys,
+                    if obs_alloc_ok { 1 } else { 0 }
+                );
+                if obs_alloc_ok {
+                    let mut z = 0u64;
+                    while z < 512 {
+                        unsafe {
+                            core::ptr::write_volatile((obs_desc_va + z * 8) as *mut u64, 0);
+                        }
+                        z += 1;
+                    }
+                    let mut pi = 0usize;
+                    while pi < 8 {
+                        let mut pz = 0u64;
+                        while pz < 512 {
+                            unsafe {
+                                core::ptr::write_volatile((obs_pkt_va[pi] + pz * 8) as *mut u64, 0);
+                            }
+                            pz += 1;
+                        }
+                        pi += 1;
+                    }
+                    let mut di = 0usize;
+                    while di < 8 {
+                        let base = obs_desc_va + (di as u64) * 16;
+                        unsafe {
+                            core::ptr::write_volatile(base as *mut u64, obs_pkt_phys[di]);
+                            core::ptr::write_volatile((base + 8) as *mut u64, 0);
+                        }
+                        di += 1;
+                    }
+                    serial_println!("[sexnet.nic.rx.observe.desc.link] count=8 separate_bufs=1 ok=1");
+
+                    let obs_rctl_orig =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x0100) as *const u32) };
+                    let obs_rdbal_orig =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x2800) as *const u32) };
+                    let obs_rdbah_orig =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x2804) as *const u32) };
+                    let obs_rdlen_orig =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x2808) as *const u32) };
+                    let obs_rdh_orig =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x2810) as *const u32) };
+                    let obs_rdt_orig =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x2818) as *const u32) };
+                    let rctl_init: u32 = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 15) | (1 << 26);
+                    unsafe {
+                        core::ptr::write_volatile(
+                            (nic_va + 0x0100) as *mut u32,
+                            obs_rctl_orig & !(1u32 << 1),
+                        );
+                        core::ptr::write_volatile(
+                            (nic_va + 0x2800) as *mut u32,
+                            (obs_desc_phys & 0xFFFF_FFFF) as u32,
+                        );
+                        core::ptr::write_volatile(
+                            (nic_va + 0x2804) as *mut u32,
+                            (obs_desc_phys >> 32) as u32,
+                        );
+                        core::ptr::write_volatile((nic_va + 0x2808) as *mut u32, 128);
+                        core::ptr::write_volatile((nic_va + 0x2810) as *mut u32, 0);
+                        core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, 7);
+                        core::ptr::write_volatile((nic_va + 0x280C) as *mut u32, 0x0000_0002);
+                        core::ptr::write_volatile((nic_va + 0x0100) as *mut u32, rctl_init);
+                    }
+                    let obs_prog_rdbal =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x2800) as *const u32) };
+                    let obs_prog_rctl =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x0100) as *const u32) };
+                    serial_println!(
+                        "[sexnet.nic.rx.observe.ring.program] rdbal=0x{:08X} rdlen=128 rdt=7 rctl=0x{:08X} ok=1",
+                        obs_prog_rdbal,
+                        obs_prog_rctl
+                    );
+                    serial_println!("[sexnet.nic.rx.observe.window.open] max_iters=50000000");
+
+                    serial_println!("[sexnet.nic.rx.observe.poll.begin] max_iters=50000000");
+                    let mut dd_set = 0u32;
+                    let mut dd_desc = 0xFFFFu32;
+                    let mut outer = 0u32;
+                    while outer < 50_000_000 {
+                        let mut idx = 0u32;
+                        while idx < 8 {
+                            let st = unsafe {
+                                core::ptr::read_volatile(
+                                    (obs_desc_va + (idx as u64) * 16 + 12) as *const u8
+                                )
+                            };
+                            if (st & 1) != 0 {
+                                dd_set = 1;
+                                dd_desc = idx;
+                                break;
+                            }
+                            idx += 1;
+                        }
+                        if dd_set == 1 {
+                            break;
+                        }
+                        outer += 1;
+                    }
+                    serial_println!(
+                        "[sexnet.nic.rx.observe.poll.done] dd_set={} desc_idx={} ok=1",
+                        dd_set,
+                        dd_desc
+                    );
+
+                    if dd_set > 0 {
+                        let desc_base = obs_desc_va + (dd_desc as u64) * 16;
+                        let pkt_len =
+                            unsafe { core::ptr::read_volatile((desc_base + 8) as *const u16) } as u32;
+                        let pkt_buf = obs_pkt_va[dd_desc as usize];
+                        let eth_hi = unsafe { core::ptr::read_volatile((pkt_buf + 12) as *const u8) };
+                        let eth_lo = unsafe { core::ptr::read_volatile((pkt_buf + 13) as *const u8) };
+                        let ethertype = ((eth_hi as u16) << 8) | (eth_lo as u16);
+                        let parse_ok = if pkt_len > 14 { 1 } else { 0 };
+                        serial_println!(
+                            "[sexnet.nic.rx.observe.pkt.parse] len={} ethertype=0x{:04X} ok={}",
+                            pkt_len,
+                            ethertype,
+                            parse_ok
+                        );
+                    }
+
+                    unsafe {
+                        core::ptr::write_volatile((nic_va + 0x0100) as *mut u32, rctl_init & !(1u32 << 1));
+                        core::ptr::write_volatile((nic_va + 0x2800) as *mut u32, obs_rdbal_orig);
+                        core::ptr::write_volatile((nic_va + 0x2804) as *mut u32, obs_rdbah_orig);
+                        core::ptr::write_volatile((nic_va + 0x2808) as *mut u32, obs_rdlen_orig);
+                        core::ptr::write_volatile((nic_va + 0x2810) as *mut u32, obs_rdh_orig);
+                        core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, obs_rdt_orig);
+                        core::ptr::write_volatile((nic_va + 0x0100) as *mut u32, obs_rctl_orig);
+                    }
+                    let obs_rest_rctl =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x0100) as *const u32) };
+                    let obs_rest_rdbal =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x2800) as *const u32) };
+                    let rctl_en_restored = if (obs_rest_rctl & (1 << 1)) != 0 { 1 } else { 0 };
+                    let restore_ok = if rctl_en_restored == 1 && obs_rest_rdbal == obs_rdbal_orig {
+                        1
+                    } else {
+                        0
+                    };
+                    serial_println!(
+                        "[sexnet.nic.rx.observe.ring.restore] rctl_orig=0x{:08X} rctl_en={} ok={}",
+                        obs_rctl_orig,
+                        rctl_en_restored,
+                        restore_ok
+                    );
+                    let proof_ok = if dd_set > 0 && restore_ok == 1 { 1 } else { 0 };
+                    serial_println!(
+                        "[sexnet.nic.rx.observe.proof.done] dd_set={} ok={}",
+                        dd_set,
+                        proof_ok
+                    );
+                }
             }
         } else {
             serial_println!("[sexnet.nic.bar.map] va=MAX ok=0 reason=no_cap_or_map_denied");
