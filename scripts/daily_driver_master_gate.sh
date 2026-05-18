@@ -192,6 +192,7 @@ gate_e1000_tx_test_frame="SKIP"
 gate_e1000_tx_test_frame_proof_done="SKIP"
 gate_e1000_rx_packet_observe_proof="SKIP"
 gate_sexnet_nic_rx_packet_observe="SKIP"
+gate_sexnet_nic_tx_frame_observe="SKIP"
 gate_e1000e_rx_desc_observe="SKIP"
 gate_ethernet_frame_model_spec="SKIP"
 gate_arp_client_plan="SKIP"
@@ -1819,6 +1820,29 @@ else
     gate_sexnet_nic_rx_packet_observe="SKIP"
 fi
 
+# ---- sexnet_nic_tx_frame_observe (temporary tx observe/restore proof) ----
+if [ "$(has 'sexnet\.nic\.tx\.observe\.alloc.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.nic\.tx\.observe\.frame\.write.*ethertype=0x88B5.*len=60.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.nic\.tx\.observe\.desc\.write.*len=60.*cmd=0x0B.*sta=0.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.nic\.tx\.observe\.ring\.program.*tdlen=128.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.nic\.tx\.observe\.post.*tdt=1.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.nic\.tx\.observe\.poll\.done.*dd_set=1.*desc_idx=0.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.nic\.tx\.observe\.ring\.restore.*tctl_en=1.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.nic\.tx\.observe\.proof\.done.*dd_set=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_nic_tx_frame_observe="PASS"
+    print_row "sexnet_nic_tx_frame_observe" "PASS" "temporary tx observe/restore proof with descriptor DD"
+elif [ "$(has 'sexnet\.nic\.tx\.observe\.poll\.done.*dd_set=0.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.nic\.tx\.observe\.ring\.restore.*tctl_en=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_nic_tx_frame_observe="SKIP"
+    print_row "sexnet_nic_tx_frame_observe" "SKIP" "no TX DD observed in window; restore succeeded"
+elif [ "$(has 'sexnet\.nic\.tx\.observe\.ring\.restore.*tctl_en=0')" -eq 1 ] \
+     || [ "$(has 'sexnet\.nic\.tx\.observe\.proof\.done.*ok=0')" -eq 1 ]; then
+    gate_sexnet_nic_tx_frame_observe="FAIL"
+    print_row "sexnet_nic_tx_frame_observe" "FAIL" "tx observe proof reported restore/proof failure"
+else
+    gate_sexnet_nic_tx_frame_observe="SKIP"
+fi
+
 if [ "$(has 'e1000e\.rx\.descriptor\.observe\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_e1000e_rx_desc_observe="PASS"
     print_row "e1000e_rx_desc_observe" "PASS" "loopback RX dd+rdh+buffer_match=1"
@@ -2744,6 +2768,7 @@ ALL_GATES=(
     "e1000_tx_test_frame_proof_done:$gate_e1000_tx_test_frame_proof_done"
     "e1000_rx_packet_observe_proof:$gate_e1000_rx_packet_observe_proof"
     "sexnet_nic_rx_packet_observe:$gate_sexnet_nic_rx_packet_observe"
+    "sexnet_nic_tx_frame_observe:$gate_sexnet_nic_tx_frame_observe"
     "e1000e_rx_desc_observe:$gate_e1000e_rx_desc_observe"
     "ethernet_frame_model_spec:$gate_ethernet_frame_model_spec"
     "arp_client_plan:$gate_arp_client_plan"
