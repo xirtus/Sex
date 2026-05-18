@@ -1666,3 +1666,9 @@ Docs-only host setup checklist for TAP backend enablement:
 Detailed handoff:
 
 - `docs/handoff/TAP_TUN_HOST_CAPABILITY_FIX_GUIDE_V1.md`
+
+## Final Sprint Closure (2026-05-18)
+- Final handoff doc: `docs/handoff/NETWORK_SPRINT_FINAL_HANDOFF_V1.md`.
+- Final proven gate: `net_real_http_body_prefix PASS real(2)->sexnet len64->8x8 chunks->render done`.
+- Final proof line: `FINAL: PASS (247 gates proved, 16 skipped, 0 faults)`.
+- Truth boundary retained: `source=2` required for real TAP HTTP path; mock source is not valid for this gate.
