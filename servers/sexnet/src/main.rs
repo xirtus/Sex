@@ -3,6 +3,7 @@
 
 use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println};
 use spin::Mutex;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 // --------------------------------------------------------------------------
 // Opcodes (local — these are NOT in sex-pdx)
@@ -24,6 +25,18 @@ static mut PROOF_BUF: [u8; 32] = [0u8; 32];
 static mut PROOF_LEN: usize = 0;
 static mut BODY_BUF: [u8; 64] = [0u8; 64];
 static mut BODY_LEN: usize = 0;
+
+#[allow(dead_code)]
+const NIC_OWNER_HAL_DIAG: u8 = 0;
+#[allow(dead_code)]
+const NIC_OWNER_SEXNET_RX: u8 = 1;
+#[allow(dead_code)]
+const NIC_OWNER_SEXNET_TX: u8 = 2;
+#[allow(dead_code)]
+const NIC_OWNER_SEXNET_FULL: u8 = 3;
+
+static NIC_RX_OWNER: AtomicU8 = AtomicU8::new(NIC_OWNER_HAL_DIAG);
+static NIC_TX_OWNER: AtomicU8 = AtomicU8::new(NIC_OWNER_HAL_DIAG);
 
 unsafe fn sys_net_diag(selector: u64) -> u64 {
     let result: u64;
@@ -365,6 +378,13 @@ pub extern "C" fn _start() -> ! {
             let ral = unsafe { core::ptr::read_volatile((nic_va + 0x5400) as *const u32) };
             let rah = unsafe { core::ptr::read_volatile((nic_va + 0x5404) as *const u32) };
             serial_println!("[sexnet.nic.bar.map] va={:#x} ok=1", nic_va);
+            let rx_own = NIC_RX_OWNER.load(Ordering::Acquire);
+            let tx_own = NIC_TX_OWNER.load(Ordering::Acquire);
+            serial_println!(
+                "[sexnet.nic.ownership.init] rx_owner={} tx_owner={} ok=1",
+                rx_own,
+                tx_own
+            );
             serial_println!(
                 "[sexnet.nic.mac.read] ral={:#010X} rah={:#010X} ok=1",
                 ral,
