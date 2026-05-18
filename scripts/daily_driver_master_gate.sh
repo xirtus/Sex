@@ -196,6 +196,9 @@ gate_sexnet_nic_tx_frame_observe="SKIP"
 gate_sexnet_nic_ownership_init="SKIP"
 gate_sexnet_nic_rx_permanent_init="SKIP"
 gate_sexnet_nic_rx_permanent_recv="SKIP"
+gate_sexnet_nic_tx_permanent_init="SKIP"
+gate_sexnet_nic_tx_permanent_send="SKIP"
+gate_sexnet_nic_full_ownership="SKIP"
 gate_e1000e_rx_desc_observe="SKIP"
 gate_ethernet_frame_model_spec="SKIP"
 gate_arp_client_plan="SKIP"
@@ -1886,6 +1889,40 @@ else
     gate_sexnet_nic_rx_permanent_recv="SKIP"
 fi
 
+# ---- sexnet_nic_tx_permanent_init (permanent tx ownership claim) ----
+if [ "$(has 'sexnet\.nic\.tx\.permanent\.claim.*owner=2.*ring_ok=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_nic_tx_permanent_init="PASS"
+    print_row "sexnet_nic_tx_permanent_init" "PASS" "permanent TX claim owner=2 ring_ok=1"
+elif [ "$(has 'sexnet\.nic\.tx\.permanent\.claim')" -eq 1 ]; then
+    gate_sexnet_nic_tx_permanent_init="FAIL"
+    print_row "sexnet_nic_tx_permanent_init" "FAIL" "tx claim marker present but owner/ring_ok/ok contract failed"
+else
+    gate_sexnet_nic_tx_permanent_init="SKIP"
+fi
+
+# ---- sexnet_nic_tx_permanent_send (tx dd consumption proof) ----
+if [ "$(has 'sexnet\.nic\.tx\.permanent\.poll\.done.*dd_set=1.*desc_idx=0.*ok=1')" -eq 1 ]; then
+    gate_sexnet_nic_tx_permanent_send="PASS"
+    print_row "sexnet_nic_tx_permanent_send" "PASS" "permanent TX descriptor consumed (DD=1)"
+elif [ "$(has 'sexnet\.nic\.tx\.permanent\.poll\.done.*dd_set=0')" -eq 1 ] \
+     && [ "$(has 'sexnet\.nic\.tx\.permanent\.(claim|full)')" -eq 1 ]; then
+    gate_sexnet_nic_tx_permanent_send="FAIL"
+    print_row "sexnet_nic_tx_permanent_send" "FAIL" "dd_set=0 while permanent tx proof/claim lane executed"
+else
+    gate_sexnet_nic_tx_permanent_send="SKIP"
+fi
+
+# ---- sexnet_nic_full_ownership (rx+tx full claim) ----
+if [ "$(has 'sexnet\.nic\.tx\.permanent\.full.*rx_owner=3.*tx_owner=3.*full_ok=1')" -eq 1 ]; then
+    gate_sexnet_nic_full_ownership="PASS"
+    print_row "sexnet_nic_full_ownership" "PASS" "SEXNET_FULL ownership reached (rx=3 tx=3)"
+elif [ "$(has 'sexnet\.nic\.tx\.permanent\.full')" -eq 1 ]; then
+    gate_sexnet_nic_full_ownership="FAIL"
+    print_row "sexnet_nic_full_ownership" "FAIL" "full marker present but rx/tx/full_ok contract failed"
+else
+    gate_sexnet_nic_full_ownership="SKIP"
+fi
+
 if [ "$(has 'e1000e\.rx\.descriptor\.observe\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_e1000e_rx_desc_observe="PASS"
     print_row "e1000e_rx_desc_observe" "PASS" "loopback RX dd+rdh+buffer_match=1"
@@ -2815,6 +2852,9 @@ ALL_GATES=(
     "sexnet_nic_ownership_init:$gate_sexnet_nic_ownership_init"
     "sexnet_nic_rx_permanent_init:$gate_sexnet_nic_rx_permanent_init"
     "sexnet_nic_rx_permanent_recv:$gate_sexnet_nic_rx_permanent_recv"
+    "sexnet_nic_tx_permanent_init:$gate_sexnet_nic_tx_permanent_init"
+    "sexnet_nic_tx_permanent_send:$gate_sexnet_nic_tx_permanent_send"
+    "sexnet_nic_full_ownership:$gate_sexnet_nic_full_ownership"
     "e1000e_rx_desc_observe:$gate_e1000e_rx_desc_observe"
     "ethernet_frame_model_spec:$gate_ethernet_frame_model_spec"
     "arp_client_plan:$gate_arp_client_plan"
