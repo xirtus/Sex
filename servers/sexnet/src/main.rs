@@ -37,6 +37,10 @@ const NIC_OWNER_SEXNET_FULL: u8 = 3;
 
 static NIC_RX_OWNER: AtomicU8 = AtomicU8::new(NIC_OWNER_HAL_DIAG);
 static NIC_TX_OWNER: AtomicU8 = AtomicU8::new(NIC_OWNER_HAL_DIAG);
+static mut RX_PERM_DESC_PHYS: u64 = 0;
+static mut RX_PERM_DESC_VA: u64 = 0;
+static mut RX_PERM_PKT_PHYS: [u64; 8] = [0u64; 8];
+static mut RX_PERM_PKT_VA: [u64; 8] = [0u64; 8];
 
 unsafe fn sys_net_diag(selector: u64) -> u64 {
     let result: u64;
@@ -798,6 +802,175 @@ pub extern "C" fn _start() -> ! {
                         dd_set,
                         proof_ok
                     );
+                }
+
+                let perm_desc_phys = sys_alloc_phys(4096);
+                let perm_desc_va = sys_map_phys(perm_desc_phys, 4096);
+                let mut perm_pkt_phys = [0u64; 8];
+                let mut perm_pkt_va = [0u64; 8];
+                let mut perm_alloc_ok = perm_desc_phys != 0
+                    && perm_desc_phys != u64::MAX
+                    && perm_desc_va != 0
+                    && perm_desc_va != u64::MAX;
+                let mut poi = 0usize;
+                while poi < 8 {
+                    perm_pkt_phys[poi] = sys_alloc_phys(4096);
+                    perm_pkt_va[poi] = sys_map_phys(perm_pkt_phys[poi], 4096);
+                    if perm_pkt_phys[poi] == 0
+                        || perm_pkt_phys[poi] == u64::MAX
+                        || perm_pkt_va[poi] == 0
+                        || perm_pkt_va[poi] == u64::MAX
+                    {
+                        perm_alloc_ok = false;
+                    }
+                    poi += 1;
+                }
+                serial_println!(
+                    "[sexnet.nic.rx.permanent.alloc] desc_phys=0x{:016X} pkt_pages=8 ok={}",
+                    perm_desc_phys,
+                    if perm_alloc_ok { 1 } else { 0 }
+                );
+                if perm_alloc_ok {
+                    let mut z = 0u64;
+                    while z < 512 {
+                        unsafe {
+                            core::ptr::write_volatile((perm_desc_va + z * 8) as *mut u64, 0);
+                        }
+                        z += 1;
+                    }
+                    let mut pzi = 0usize;
+                    while pzi < 8 {
+                        let mut pz = 0u64;
+                        while pz < 512 {
+                            unsafe {
+                                core::ptr::write_volatile((perm_pkt_va[pzi] + pz * 8) as *mut u64, 0);
+                            }
+                            pz += 1;
+                        }
+                        pzi += 1;
+                    }
+                    let mut di = 0usize;
+                    while di < 8 {
+                        let base = perm_desc_va + (di as u64) * 16;
+                        unsafe {
+                            core::ptr::write_volatile(base as *mut u64, perm_pkt_phys[di]);
+                            core::ptr::write_volatile((base + 8) as *mut u64, 0);
+                        }
+                        di += 1;
+                    }
+                    serial_println!("[sexnet.nic.rx.permanent.desc.link] count=8 ok=1");
+
+                    let perm_rctl_orig =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x0100) as *const u32) };
+                    let rctl_init: u32 = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 15) | (1 << 26);
+                    unsafe {
+                        core::ptr::write_volatile((nic_va + 0x0100) as *mut u32, perm_rctl_orig & !(1u32 << 1));
+                        core::ptr::write_volatile((nic_va + 0x2800) as *mut u32, (perm_desc_phys & 0xFFFF_FFFF) as u32);
+                        core::ptr::write_volatile((nic_va + 0x2804) as *mut u32, (perm_desc_phys >> 32) as u32);
+                        core::ptr::write_volatile((nic_va + 0x2808) as *mut u32, 128);
+                        core::ptr::write_volatile((nic_va + 0x2810) as *mut u32, 0);
+                        core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, 7);
+                        core::ptr::write_volatile((nic_va + 0x280C) as *mut u32, 0x0000_0002);
+                        core::ptr::write_volatile((nic_va + 0x0100) as *mut u32, rctl_init);
+                    }
+                    let perm_prog_rdbal =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x2800) as *const u32) };
+                    let perm_prog_rctl =
+                        unsafe { core::ptr::read_volatile((nic_va + 0x0100) as *const u32) };
+                    let perm_rctl_en = if (perm_prog_rctl & (1 << 1)) != 0 { 1 } else { 0 };
+                    let perm_ring_ok = if perm_prog_rdbal == (perm_desc_phys as u32) && perm_rctl_en == 1 {
+                        1
+                    } else {
+                        0
+                    };
+                    serial_println!(
+                        "[sexnet.nic.rx.permanent.ring.program] rdbal=0x{:08X} rdlen=128 rdt=7 rctl=0x{:08X} ok={}",
+                        perm_prog_rdbal,
+                        perm_prog_rctl,
+                        perm_ring_ok
+                    );
+
+                    if perm_ring_ok == 1 {
+                        NIC_RX_OWNER.store(NIC_OWNER_SEXNET_RX, Ordering::Release);
+                    }
+                    let rx_owner_now = NIC_RX_OWNER.load(Ordering::Acquire);
+                    let claim_ok = if rx_owner_now == NIC_OWNER_SEXNET_RX && perm_ring_ok == 1 {
+                        1
+                    } else {
+                        0
+                    };
+                    serial_println!(
+                        "[sexnet.nic.rx.permanent.claim] owner={} ring_ok={} ok={}",
+                        rx_owner_now,
+                        perm_ring_ok,
+                        claim_ok
+                    );
+
+                    if claim_ok == 1 {
+                        unsafe {
+                            RX_PERM_DESC_PHYS = perm_desc_phys;
+                            RX_PERM_DESC_VA = perm_desc_va;
+                            RX_PERM_PKT_PHYS = perm_pkt_phys;
+                            RX_PERM_PKT_VA = perm_pkt_va;
+                        }
+                        serial_println!("[sexnet.nic.rx.permanent.poll.begin] max_iters=50000000");
+                        let mut dd_set = 0u32;
+                        let mut dd_desc = 0xFFFFu32;
+                        let mut outer = 0u32;
+                        while outer < 50_000_000 {
+                            let mut idx = 0u32;
+                            while idx < 8 {
+                                let st = unsafe {
+                                    core::ptr::read_volatile((perm_desc_va + (idx as u64) * 16 + 12) as *const u8)
+                                };
+                                if (st & 1) != 0 {
+                                    dd_set = 1;
+                                    dd_desc = idx;
+                                    break;
+                                }
+                                idx += 1;
+                            }
+                            if dd_set == 1 {
+                                break;
+                            }
+                            outer += 1;
+                        }
+                        serial_println!(
+                            "[sexnet.nic.rx.permanent.poll.done] dd_set={} desc_idx={} ok=1",
+                            dd_set,
+                            dd_desc
+                        );
+
+                        if dd_set == 1 {
+                            let desc_base = perm_desc_va + (dd_desc as u64) * 16;
+                            let pkt_len = unsafe { core::ptr::read_volatile((desc_base + 8) as *const u16) } as u32;
+                            let pkt_buf = perm_pkt_va[dd_desc as usize];
+                            let eth_hi = unsafe { core::ptr::read_volatile((pkt_buf + 12) as *const u8) };
+                            let eth_lo = unsafe { core::ptr::read_volatile((pkt_buf + 13) as *const u8) };
+                            let ethertype = ((eth_hi as u16) << 8) | (eth_lo as u16);
+                            let parse_ok = if pkt_len > 14 { 1 } else { 0 };
+                            serial_println!(
+                                "[sexnet.nic.rx.permanent.pkt.parse] len={} ethertype=0x{:04X} ok={}",
+                                pkt_len,
+                                ethertype,
+                                parse_ok
+                            );
+
+                            unsafe {
+                                core::ptr::write_volatile((desc_base + 8) as *mut u16, 0u16);
+                                core::ptr::write_volatile((desc_base + 12) as *mut u8, 0u8);
+                            }
+                            let new_rdt = (dd_desc + 7) & 7;
+                            unsafe {
+                                core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, new_rdt);
+                            }
+                            serial_println!(
+                                "[sexnet.nic.rx.permanent.rdt.advance] desc_idx={} new_rdt={} ok=1",
+                                dd_desc,
+                                new_rdt
+                            );
+                        }
+                    }
                 }
             }
 
