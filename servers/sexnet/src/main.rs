@@ -1900,6 +1900,232 @@ pub extern "C" fn _start() -> ! {
                                 l2_tx_dd,
                                 l2_ok
                             );
+
+                            let ipv4_rx_own = NIC_RX_OWNER.load(Ordering::Acquire);
+                            if ipv4_rx_own == NIC_OWNER_SEXNET_FULL {
+                                serial_println!("[sexnet.ipv4.entry] rx_owner=3 ok=1");
+                                serial_println!("[sexnet.ipv4.rx.poll.begin] max_iters=200000000");
+                                let mut ipv4_frames = 0u32;
+                                let mut ipv4_ok = 0u32;
+                                let mut reject_logged = 0u32;
+                                let mut outer = 0u32;
+                                while outer < 200_000_000 && ipv4_frames < 1 {
+                                    let mut idx = 0u32;
+                                    while idx < 8 && ipv4_frames < 1 {
+                                        let desc_base = unsafe { RX_PERM_DESC_VA } + (idx as u64) * 16;
+                                        let st = unsafe {
+                                            core::ptr::read_volatile((desc_base + 12) as *const u8)
+                                        };
+                                        if (st & 1) != 0 {
+                                            let pkt_len = unsafe {
+                                                core::ptr::read_volatile((desc_base + 8) as *const u16)
+                                            } as usize;
+                                            let pkt_buf = unsafe { RX_PERM_PKT_VA[idx as usize] };
+                                            let eth_hi = unsafe {
+                                                core::ptr::read_volatile((pkt_buf + 12) as *const u8)
+                                            };
+                                            let eth_lo = unsafe {
+                                                core::ptr::read_volatile((pkt_buf + 13) as *const u8)
+                                            };
+                                            let ethertype = ((eth_hi as u16) << 8) | (eth_lo as u16);
+                                            if ethertype == 0x0800 {
+                                                serial_println!(
+                                                    "[sexnet.ipv4.rx.frame] idx={} pkt_len={} ethertype=0x0800 ok=1",
+                                                    idx,
+                                                    pkt_len
+                                                );
+                                                let mut reason = "short";
+                                                let mut ok = 0u32;
+                                                let mut version = 0u8;
+                                                let mut ihl = 0u8;
+                                                let mut total_len = 0u16;
+                                                let mut flags_frag = 0u16;
+                                                let mut frag_masked = 1u16;
+                                                let mut dst0 = 0u8;
+                                                let mut dst1 = 0u8;
+                                                let mut dst2 = 0u8;
+                                                let mut dst3 = 0u8;
+                                                let mut src0 = 0u8;
+                                                let mut src1 = 0u8;
+                                                let mut src2 = 0u8;
+                                                let mut src3 = 0u8;
+                                                let mut proto = 0u8;
+                                                let mut ttl = 0u8;
+                                                let mut csum = 0u16;
+                                                let mut checksum_ok = 0u32;
+                                                if pkt_len >= 34 {
+                                                    let vihl = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 14) as *const u8)
+                                                    };
+                                                    version = (vihl >> 4) & 0x0F;
+                                                    ihl = vihl & 0x0F;
+                                                    let tl_hi = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 16) as *const u8)
+                                                    } as u16;
+                                                    let tl_lo = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 17) as *const u8)
+                                                    } as u16;
+                                                    total_len = (tl_hi << 8) | tl_lo;
+                                                    ttl = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 22) as *const u8)
+                                                    };
+                                                    proto = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 23) as *const u8)
+                                                    };
+                                                    src0 = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 26) as *const u8)
+                                                    };
+                                                    src1 = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 27) as *const u8)
+                                                    };
+                                                    src2 = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 28) as *const u8)
+                                                    };
+                                                    src3 = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 29) as *const u8)
+                                                    };
+                                                    dst0 = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 30) as *const u8)
+                                                    };
+                                                    dst1 = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 31) as *const u8)
+                                                    };
+                                                    dst2 = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 32) as *const u8)
+                                                    };
+                                                    dst3 = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 33) as *const u8)
+                                                    };
+                                                    let ff_hi = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 20) as *const u8)
+                                                    } as u16;
+                                                    let ff_lo = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 21) as *const u8)
+                                                    } as u16;
+                                                    flags_frag = (ff_hi << 8) | ff_lo;
+                                                    frag_masked = flags_frag & 0x3FFF;
+                                                    let csum_hi = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 24) as *const u8)
+                                                    } as u16;
+                                                    let csum_lo = unsafe {
+                                                        core::ptr::read_volatile((pkt_buf + 25) as *const u8)
+                                                    } as u16;
+                                                    csum = (csum_hi << 8) | csum_lo;
+                                                    if version != 4 {
+                                                        reason = "version";
+                                                    } else if ihl != 5 {
+                                                        reason = "ihl";
+                                                    } else if total_len < 20 {
+                                                        reason = "total_len_min";
+                                                    } else if total_len as usize > pkt_len.saturating_sub(14) {
+                                                        reason = "total_len_max";
+                                                    } else if frag_masked != 0 {
+                                                        reason = "fragmented";
+                                                    } else if dst0 != 10 || dst1 != 0 || dst2 != 2 || dst3 != 15 {
+                                                        reason = "dst";
+                                                    } else {
+                                                        let mut sum = 0u32;
+                                                        let mut ci = 0usize;
+                                                        while ci < 10 {
+                                                            let off = 14 + ci * 2;
+                                                            let w_hi = unsafe {
+                                                                core::ptr::read_volatile((pkt_buf + off as u64) as *const u8)
+                                                            } as u16;
+                                                            let w_lo = unsafe {
+                                                                core::ptr::read_volatile((pkt_buf + off as u64 + 1) as *const u8)
+                                                            } as u16;
+                                                            sum += ((w_hi << 8) | w_lo) as u32;
+                                                            ci += 1;
+                                                        }
+                                                        while (sum >> 16) != 0 {
+                                                            sum = (sum & 0xFFFF) + (sum >> 16);
+                                                        }
+                                                        if (sum as u16) == 0xFFFF {
+                                                            ok = 1;
+                                                            checksum_ok = 1;
+                                                        } else {
+                                                            reason = "checksum";
+                                                        }
+                                                    }
+                                                }
+
+                                                serial_println!(
+                                                    "[sexnet.ipv4.rx.validate.detail] ver={} ihl={} total_len={} pkt_len={} frag=0x{:04X} dst={}.{}.{}.{} csum=0x{:04X} checksum_ok={} proto={} ttl={} ok=0",
+                                                    version,
+                                                    ihl,
+                                                    total_len,
+                                                    pkt_len,
+                                                    flags_frag,
+                                                    dst0,
+                                                    dst1,
+                                                    dst2,
+                                                    dst3,
+                                                    csum,
+                                                    checksum_ok,
+                                                    proto,
+                                                    ttl
+                                                );
+                                                if ok == 1 {
+                                                    serial_println!(
+                                                        "[sexnet.ipv4.rx.validate] version=4 ihl=5 total_len={} dst=10.0.2.15 frag=0 checksum=ok src={}.{}.{}.{} proto={} ttl={} ok=1",
+                                                        total_len,
+                                                        src0,
+                                                        src1,
+                                                        src2,
+                                                        src3,
+                                                        proto,
+                                                        ttl
+                                                    );
+                                                    ipv4_ok = 1;
+                                                    ipv4_frames += 1;
+                                                } else if reject_logged == 0 {
+                                                    serial_println!(
+                                                        "[sexnet.ipv4.rx.reject.detail] idx={} etype=0x{:04X} reason={} ok=0",
+                                                        idx,
+                                                        ethertype,
+                                                        reason
+                                                    );
+                                                    reject_logged = 1;
+                                                }
+                                            } else if reject_logged == 0 {
+                                                serial_println!(
+                                                    "[sexnet.ipv4.rx.reject.detail] idx={} etype=0x{:04X} reason=non_ipv4 ok=0",
+                                                    idx,
+                                                    ethertype
+                                                );
+                                                reject_logged = 1;
+                                            }
+                                            unsafe {
+                                                core::ptr::write_volatile((desc_base + 8) as *mut u16, 0u16);
+                                                core::ptr::write_volatile((desc_base + 12) as *mut u8, 0u8);
+                                                core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, idx);
+                                            }
+                                            serial_println!(
+                                                "[sexnet.ipv4.rx.recycle] idx={} new_rdt={} ok=1",
+                                                idx,
+                                                idx
+                                            );
+                                        }
+                                        idx += 1;
+                                    }
+                                    outer += 1;
+                                }
+                                serial_println!(
+                                    "[sexnet.ipv4.rx.poll.done] frames={} ok={}",
+                                    ipv4_frames,
+                                    ipv4_ok
+                                );
+                                serial_println!(
+                                    "[sexnet.ipv4.proof.done] frames={} ok={}",
+                                    ipv4_frames,
+                                    ipv4_ok
+                                );
+                            } else {
+                                serial_println!(
+                                    "[sexnet.ipv4.entry] rx_owner={} ok=0",
+                                    ipv4_rx_own
+                                );
+                            }
                         } else {
                             serial_println!(
                                 "[sexnet.l2.entry] rx_owner={} tx_owner={} ok=0 reason=not_full",
