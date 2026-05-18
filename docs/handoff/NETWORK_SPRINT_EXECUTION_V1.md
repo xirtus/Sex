@@ -1647,3 +1647,22 @@ Result:
 Detailed handoff:
 
 - `docs/handoff/HOSTFWD_ENV_VALUE_CORRECTION_PROBE_V1.md`
+
+---
+
+## TAP_TUN_HOST_CAPABILITY_FIX_GUIDE_V1 (2026-05-17)
+
+Docs-only host setup checklist for TAP backend enablement:
+
+- `/dev/net/tun` creation/verification
+- `tun` module load verification
+- `tap0` creation and ownership
+- host forwarding/NAT checklist
+- proof-run command using:
+  - `QEMU_NET_BACKEND=tap`
+  - `QEMU_TAP_IFNAME=tap0`
+  - `QEMU_NET_MODEL=e1000e`
+
+Detailed handoff:
+
+- `docs/handoff/TAP_TUN_HOST_CAPABILITY_FIX_GUIDE_V1.md`
