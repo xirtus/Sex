@@ -18,6 +18,8 @@ pub struct PciDevice {
 static NET_DIAG_HTTP_STATUS: AtomicU32 = AtomicU32::new(0);
 static NET_DIAG_HTTP_BYTES: AtomicU32 = AtomicU32::new(0);
 static NET_DIAG_HTTP_SOURCE: AtomicU8 = AtomicU8::new(0);
+static NET_DIAG_HTTP_BODY_LEN: AtomicU32 = AtomicU32::new(0);
+static mut NET_DIAG_HTTP_BODY: [u8; 64] = [0u8; 64];
 
 pub fn get_net_diag() -> (u32, u32, u8) {
     (
@@ -25,6 +27,27 @@ pub fn get_net_diag() -> (u32, u32, u8) {
         NET_DIAG_HTTP_BYTES.load(Ordering::Acquire),
         NET_DIAG_HTTP_SOURCE.load(Ordering::Acquire),
     )
+}
+
+pub fn get_net_diag_body_len() -> u32 {
+    NET_DIAG_HTTP_BODY_LEN.load(Ordering::Acquire)
+}
+
+pub fn get_net_diag_body_chunk(idx: usize) -> u64 {
+    let len = NET_DIAG_HTTP_BODY_LEN.load(Ordering::Acquire) as usize;
+    let start = idx * 8;
+    if start >= len {
+        return u64::MAX;
+    }
+
+    let end = core::cmp::min(start + 8, len);
+    let mut packed = 0u64;
+    let mut i = 0usize;
+    while i < (end - start) {
+        packed |= unsafe { (NET_DIAG_HTTP_BODY[start + i] as u64) << (i * 8) };
+        i += 1;
+    }
+    packed
 }
 
 impl PciDevice {
@@ -3213,6 +3236,7 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                 let mut http_resp_bytes: u32 = 0;
                                 let mut http_status: u32 = 0;
                                 let mut http_mock_mode: u32 = 0;
+                                NET_DIAG_HTTP_BODY_LEN.store(0, Ordering::Release);
                                 if final_ack_sent == 1 {
                                     serial_println!("[http.get.send.stop.review] stop=0 reason=http_get_send_allowed");
                                     serial_println!("[http.get.send.proof] sent={} tx_dd={} payload_len=34 ok=1 reason=http_get_sent_successfully", http_sent, http_tx_dd);
@@ -3278,6 +3302,21 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                                                                         http_status = ((d1 - b'0') as u32) * 100 + ((d2 - b'0') as u32) * 10 + ((d3 - b'0') as u32);
                                                                                     }
                                                                                 }
+                                                                                let capture_len = core::cmp::min(payload_size as usize, 64);
+                                                                                unsafe {
+                                                                                    let mut bi = 0usize;
+                                                                                    while bi < capture_len {
+                                                                                        NET_DIAG_HTTP_BODY[bi] = core::ptr::read_volatile(
+                                                                                            (payload_start + bi as u64) as *const u8
+                                                                                        );
+                                                                                        bi += 1;
+                                                                                    }
+                                                                                }
+                                                                                NET_DIAG_HTTP_BODY_LEN.store(capture_len as u32, Ordering::Release);
+                                                                                serial_println!(
+                                                                                    "[net.diag.body.capture] bytes={} cap=64 ok=1 source=real",
+                                                                                    capture_len
+                                                                                );
                                                                             }
                                                                         }
                                                                         
