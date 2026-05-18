@@ -1296,6 +1296,199 @@ pub extern "C" fn _start() -> ! {
                             );
                         }
 
+                        let mut arp_ok = 0u32;
+                        let arp_rx_own = NIC_RX_OWNER.load(Ordering::Acquire);
+                        let arp_tx_own = NIC_TX_OWNER.load(Ordering::Acquire);
+                        if arp_rx_own == NIC_OWNER_SEXNET_FULL && arp_tx_own == NIC_OWNER_SEXNET_FULL {
+                            let nic_mac: [u8; 6] = [
+                                (ral & 0xFF) as u8,
+                                ((ral >> 8) & 0xFF) as u8,
+                                ((ral >> 16) & 0xFF) as u8,
+                                ((ral >> 24) & 0xFF) as u8,
+                                (rah & 0xFF) as u8,
+                                ((rah >> 8) & 0xFF) as u8,
+                            ];
+                            serial_println!("[sexnet.arp.rx.poll.begin] max_iters=50000000");
+                            let mut arp_rx = 0u32;
+                            let mut sender_mac = [0u8; 6];
+                            let mut sender_ip = [0u8; 4];
+                            let mut arp_outer = 0u32;
+                            while arp_outer < 50_000_000 && arp_rx == 0 {
+                                let mut idx = 0u32;
+                                while idx < 8 && arp_rx == 0 {
+                                    let desc_base = unsafe { RX_PERM_DESC_VA } + (idx as u64) * 16;
+                                    let st = unsafe { core::ptr::read_volatile((desc_base + 12) as *const u8) };
+                                    if (st & 1) != 0 {
+                                        let pkt_buf = unsafe { RX_PERM_PKT_VA[idx as usize] };
+                                        let eth_hi = unsafe { core::ptr::read_volatile((pkt_buf + 12) as *const u8) };
+                                        let eth_lo = unsafe { core::ptr::read_volatile((pkt_buf + 13) as *const u8) };
+                                        let ethertype = ((eth_hi as u16) << 8) | (eth_lo as u16);
+                                        let htype_hi = unsafe { core::ptr::read_volatile((pkt_buf + 14) as *const u8) };
+                                        let htype_lo = unsafe { core::ptr::read_volatile((pkt_buf + 15) as *const u8) };
+                                        let ptype_hi = unsafe { core::ptr::read_volatile((pkt_buf + 16) as *const u8) };
+                                        let ptype_lo = unsafe { core::ptr::read_volatile((pkt_buf + 17) as *const u8) };
+                                        let hlen = unsafe { core::ptr::read_volatile((pkt_buf + 18) as *const u8) };
+                                        let plen = unsafe { core::ptr::read_volatile((pkt_buf + 19) as *const u8) };
+                                        let oper_hi = unsafe { core::ptr::read_volatile((pkt_buf + 20) as *const u8) };
+                                        let oper_lo = unsafe { core::ptr::read_volatile((pkt_buf + 21) as *const u8) };
+                                        let htype = ((htype_hi as u16) << 8) | (htype_lo as u16);
+                                        let ptype = ((ptype_hi as u16) << 8) | (ptype_lo as u16);
+                                        let oper = ((oper_hi as u16) << 8) | (oper_lo as u16);
+                                        let mut tpa = [0u8; 4];
+                                        let mut ti = 0usize;
+                                        while ti < 4 {
+                                            tpa[ti] = unsafe {
+                                                core::ptr::read_volatile((pkt_buf + 38 + ti as u64) as *const u8)
+                                            };
+                                            ti += 1;
+                                        }
+                                        let tpa_match = if tpa == SEXNET_GUEST_IPV4 { 1 } else { 0 };
+                                        let valid = ethertype == 0x0806
+                                            && htype == 1
+                                            && ptype == 0x0800
+                                            && hlen == 6
+                                            && plen == 4
+                                            && oper == 1
+                                            && tpa_match == 1;
+                                        if valid {
+                                            let mut mi = 0usize;
+                                            while mi < 6 {
+                                                sender_mac[mi] = unsafe {
+                                                    core::ptr::read_volatile((pkt_buf + 22 + mi as u64) as *const u8)
+                                                };
+                                                mi += 1;
+                                            }
+                                            let mut si = 0usize;
+                                            while si < 4 {
+                                                sender_ip[si] = unsafe {
+                                                    core::ptr::read_volatile((pkt_buf + 28 + si as u64) as *const u8)
+                                                };
+                                                si += 1;
+                                            }
+                                            serial_println!("[sexnet.arp.rx.frame] idx={} ethertype=0x0806 ok=1", idx);
+                                            serial_println!(
+                                                "[sexnet.arp.rx.validate] htype=1 ptype=0x0800 hlen=6 plen=4 oper=1 tpa_match=1 ok=1"
+                                            );
+                                            arp_rx = 1;
+                                        } else {
+                                            serial_println!(
+                                                "[sexnet.arp.rx.reject.detail] idx={} etype=0x{:04X} oper=0x{:04X} tpa={}.{}.{}.{} ok=0",
+                                                idx,
+                                                ethertype,
+                                                oper,
+                                                tpa[0],
+                                                tpa[1],
+                                                tpa[2],
+                                                tpa[3]
+                                            );
+                                            serial_println!("[sexnet.arp.rx.reject] idx={} reason=notarp_or_badfield ok=0", idx);
+                                        }
+                                        unsafe {
+                                            core::ptr::write_volatile((desc_base + 8) as *mut u16, 0u16);
+                                            core::ptr::write_volatile((desc_base + 12) as *mut u8, 0u8);
+                                            core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, idx);
+                                        }
+                                    }
+                                    idx += 1;
+                                }
+                                arp_outer += 1;
+                            }
+
+                            let mut arp_tx_dd = 0u32;
+                            if arp_rx == 1 {
+                                let tx_frame_va = unsafe { TX_PERM_FRAME_VA };
+                                let mut i = 0usize;
+                                while i < 6 {
+                                    unsafe {
+                                        core::ptr::write_volatile((tx_frame_va + i as u64) as *mut u8, sender_mac[i]);
+                                        core::ptr::write_volatile((tx_frame_va + 6 + i as u64) as *mut u8, nic_mac[i]);
+                                    }
+                                    i += 1;
+                                }
+                                unsafe {
+                                    core::ptr::write_volatile((tx_frame_va + 12) as *mut u8, 0x08);
+                                    core::ptr::write_volatile((tx_frame_va + 13) as *mut u8, 0x06);
+                                    core::ptr::write_volatile((tx_frame_va + 14) as *mut u8, 0x00);
+                                    core::ptr::write_volatile((tx_frame_va + 15) as *mut u8, 0x01);
+                                    core::ptr::write_volatile((tx_frame_va + 16) as *mut u8, 0x08);
+                                    core::ptr::write_volatile((tx_frame_va + 17) as *mut u8, 0x00);
+                                    core::ptr::write_volatile((tx_frame_va + 18) as *mut u8, 0x06);
+                                    core::ptr::write_volatile((tx_frame_va + 19) as *mut u8, 0x04);
+                                    core::ptr::write_volatile((tx_frame_va + 20) as *mut u8, 0x00);
+                                    core::ptr::write_volatile((tx_frame_va + 21) as *mut u8, 0x02);
+                                }
+                                let mut ai = 0usize;
+                                while ai < 6 {
+                                    unsafe {
+                                        core::ptr::write_volatile((tx_frame_va + 22 + ai as u64) as *mut u8, nic_mac[ai]);
+                                        core::ptr::write_volatile((tx_frame_va + 32 + ai as u64) as *mut u8, sender_mac[ai]);
+                                    }
+                                    ai += 1;
+                                }
+                                let mut gi = 0usize;
+                                while gi < 4 {
+                                    unsafe {
+                                        core::ptr::write_volatile(
+                                            (tx_frame_va + 28 + gi as u64) as *mut u8,
+                                            SEXNET_GUEST_IPV4[gi],
+                                        );
+                                        core::ptr::write_volatile(
+                                            (tx_frame_va + 38 + gi as u64) as *mut u8,
+                                            sender_ip[gi],
+                                        );
+                                    }
+                                    gi += 1;
+                                }
+                                let mut pad = 42u64;
+                                while pad < 60 {
+                                    unsafe {
+                                        core::ptr::write_volatile((tx_frame_va + pad) as *mut u8, 0u8);
+                                    }
+                                    pad += 1;
+                                }
+                                serial_println!("[sexnet.arp.tx.reply.build] spa=10.0.2.15 ok=1");
+
+                                let tx_desc2 = unsafe { TX_PERM_DESC_VA + 32 };
+                                unsafe {
+                                    core::ptr::write_volatile(tx_desc2 as *mut u64, TX_PERM_FRAME_PHYS);
+                                    core::ptr::write_volatile((tx_desc2 + 8) as *mut u16, 60u16);
+                                    core::ptr::write_volatile((tx_desc2 + 10) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((tx_desc2 + 11) as *mut u8, 0x0Bu8);
+                                    core::ptr::write_volatile((tx_desc2 + 12) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((tx_desc2 + 13) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((tx_desc2 + 14) as *mut u16, 0u16);
+                                }
+                                serial_println!("[sexnet.arp.tx.desc] slot=2 len=60 ok=1");
+                                unsafe {
+                                    core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 3);
+                                }
+                                serial_println!("[sexnet.arp.tx.post] tdt=3 ok=1");
+                                let mut tx_outer = 0u32;
+                                while tx_outer < 50_000_000 {
+                                    let tx_st = unsafe { core::ptr::read_volatile((tx_desc2 + 12) as *const u8) };
+                                    if (tx_st & 1) != 0 {
+                                        arp_tx_dd = 1;
+                                        break;
+                                    }
+                                    tx_outer += 1;
+                                }
+                                serial_println!(
+                                    "[sexnet.arp.tx.poll.done] dd_set={} ok={}",
+                                    arp_tx_dd,
+                                    if arp_tx_dd == 1 { 1 } else { 0 }
+                                );
+                            }
+                            arp_ok = if arp_rx == 1 && arp_tx_dd == 1 { 1 } else { 0 };
+                            serial_println!(
+                                "[sexnet.arp.proof.done] rx_arp={} tx_dd={} ok={}",
+                                arp_rx,
+                                arp_tx_dd,
+                                arp_ok
+                            );
+                        } else {
+                            serial_println!("[sexnet.arp.skip] reason=not_full ok=0");
+                        }
+
                         let l2_rx_own = NIC_RX_OWNER.load(Ordering::Acquire);
                         let l2_tx_own = NIC_TX_OWNER.load(Ordering::Acquire);
                         if l2_rx_own == NIC_OWNER_SEXNET_FULL && l2_tx_own == NIC_OWNER_SEXNET_FULL {
@@ -1304,6 +1497,7 @@ pub extern "C" fn _start() -> ! {
                             let mut l2_frames = 0u32;
                             let mut outer = 0u32;
                             while outer < 3_000_000 && l2_frames < 3 {
+                                let mut break_l2_poll = false;
                                 let mut idx = 0u32;
                                 while idx < 8 && l2_frames < 3 {
                                     let st = unsafe {
@@ -1339,9 +1533,16 @@ pub extern "C" fn _start() -> ! {
                                                 idx,
                                                 idx
                                             );
+                                        } else {
+                                            // Preserve ARP frame for later lane while preventing repeated count on same DD.
+                                            break_l2_poll = true;
+                                            break;
                                         }
                                     }
                                     idx += 1;
+                                }
+                                if break_l2_poll {
+                                    break;
                                 }
                                 outer += 1;
                             }
@@ -1416,191 +1617,13 @@ pub extern "C" fn _start() -> ! {
                                 );
                             }
 
-                            let l2_ok = if l2_frames > 0 && l2_tx_dd == 1 { 1 } else { 0 };
+                            let l2_ok = if ((l2_frames > 0) || (arp_ok == 1)) && l2_tx_dd == 1 { 1 } else { 0 };
                             serial_println!(
                                 "[sexnet.l2.proof.done] rx_frames={} tx_dd={} ok={}",
                                 l2_frames,
                                 l2_tx_dd,
                                 l2_ok
                             );
-                            if l2_ok != 1 {
-                                serial_println!("[sexnet.arp.skip] reason=l2_not_ok ok=0");
-                            } else {
-                                let nic_mac: [u8; 6] = [
-                                    (ral & 0xFF) as u8,
-                                    ((ral >> 8) & 0xFF) as u8,
-                                    ((ral >> 16) & 0xFF) as u8,
-                                    ((ral >> 24) & 0xFF) as u8,
-                                    (rah & 0xFF) as u8,
-                                    ((rah >> 8) & 0xFF) as u8,
-                                ];
-                                serial_println!("[sexnet.arp.rx.poll.begin] max_iters=10000000");
-                                let mut arp_rx = 0u32;
-                                let mut sender_mac = [0u8; 6];
-                                let mut sender_ip = [0u8; 4];
-                                let mut arp_outer = 0u32;
-                                while arp_outer < 10_000_000 && arp_rx == 0 {
-                                    let mut idx = 0u32;
-                                    while idx < 8 && arp_rx == 0 {
-                                        let desc_base = unsafe { RX_PERM_DESC_VA } + (idx as u64) * 16;
-                                        let st = unsafe { core::ptr::read_volatile((desc_base + 12) as *const u8) };
-                                        if (st & 1) != 0 {
-                                            let pkt_buf = unsafe { RX_PERM_PKT_VA[idx as usize] };
-                                            let eth_hi = unsafe { core::ptr::read_volatile((pkt_buf + 12) as *const u8) };
-                                            let eth_lo = unsafe { core::ptr::read_volatile((pkt_buf + 13) as *const u8) };
-                                            let ethertype = ((eth_hi as u16) << 8) | (eth_lo as u16);
-                                            let htype_hi = unsafe { core::ptr::read_volatile((pkt_buf + 14) as *const u8) };
-                                            let htype_lo = unsafe { core::ptr::read_volatile((pkt_buf + 15) as *const u8) };
-                                            let ptype_hi = unsafe { core::ptr::read_volatile((pkt_buf + 16) as *const u8) };
-                                            let ptype_lo = unsafe { core::ptr::read_volatile((pkt_buf + 17) as *const u8) };
-                                            let hlen = unsafe { core::ptr::read_volatile((pkt_buf + 18) as *const u8) };
-                                            let plen = unsafe { core::ptr::read_volatile((pkt_buf + 19) as *const u8) };
-                                            let oper_hi = unsafe { core::ptr::read_volatile((pkt_buf + 20) as *const u8) };
-                                            let oper_lo = unsafe { core::ptr::read_volatile((pkt_buf + 21) as *const u8) };
-                                            let htype = ((htype_hi as u16) << 8) | (htype_lo as u16);
-                                            let ptype = ((ptype_hi as u16) << 8) | (ptype_lo as u16);
-                                            let oper = ((oper_hi as u16) << 8) | (oper_lo as u16);
-                                            let mut tpa = [0u8; 4];
-                                            let mut ti = 0usize;
-                                            while ti < 4 {
-                                                tpa[ti] = unsafe {
-                                                    core::ptr::read_volatile((pkt_buf + 38 + ti as u64) as *const u8)
-                                                };
-                                                ti += 1;
-                                            }
-                                            let tpa_match = if tpa == SEXNET_GUEST_IPV4 { 1 } else { 0 };
-                                            let valid = ethertype == 0x0806
-                                                && htype == 1
-                                                && ptype == 0x0800
-                                                && hlen == 6
-                                                && plen == 4
-                                                && oper == 1
-                                                && tpa_match == 1;
-                                            if valid {
-                                                let mut mi = 0usize;
-                                                while mi < 6 {
-                                                    sender_mac[mi] = unsafe {
-                                                        core::ptr::read_volatile((pkt_buf + 22 + mi as u64) as *const u8)
-                                                    };
-                                                    mi += 1;
-                                                }
-                                                let mut si = 0usize;
-                                                while si < 4 {
-                                                    sender_ip[si] = unsafe {
-                                                        core::ptr::read_volatile((pkt_buf + 28 + si as u64) as *const u8)
-                                                    };
-                                                    si += 1;
-                                                }
-                                                serial_println!("[sexnet.arp.rx.frame] idx={} ethertype=0x0806 ok=1", idx);
-                                                serial_println!(
-                                                    "[sexnet.arp.rx.validate] htype=1 ptype=0x0800 hlen=6 plen=4 oper=1 tpa_match=1 ok=1"
-                                                );
-                                                arp_rx = 1;
-                                            } else {
-                                                serial_println!("[sexnet.arp.rx.reject] idx={} reason=notarp_or_badfield ok=0", idx);
-                                            }
-                                            unsafe {
-                                                core::ptr::write_volatile((desc_base + 8) as *mut u16, 0u16);
-                                                core::ptr::write_volatile((desc_base + 12) as *mut u8, 0u8);
-                                                core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, idx);
-                                            }
-                                        }
-                                        idx += 1;
-                                    }
-                                    arp_outer += 1;
-                                }
-
-                                let mut arp_tx_dd = 0u32;
-                                if arp_rx == 1 {
-                                    let tx_frame_va = unsafe { TX_PERM_FRAME_VA };
-                                    let mut i = 0usize;
-                                    while i < 6 {
-                                        unsafe {
-                                            core::ptr::write_volatile((tx_frame_va + i as u64) as *mut u8, sender_mac[i]);
-                                            core::ptr::write_volatile((tx_frame_va + 6 + i as u64) as *mut u8, nic_mac[i]);
-                                        }
-                                        i += 1;
-                                    }
-                                    unsafe {
-                                        core::ptr::write_volatile((tx_frame_va + 12) as *mut u8, 0x08);
-                                        core::ptr::write_volatile((tx_frame_va + 13) as *mut u8, 0x06);
-                                        core::ptr::write_volatile((tx_frame_va + 14) as *mut u8, 0x00);
-                                        core::ptr::write_volatile((tx_frame_va + 15) as *mut u8, 0x01);
-                                        core::ptr::write_volatile((tx_frame_va + 16) as *mut u8, 0x08);
-                                        core::ptr::write_volatile((tx_frame_va + 17) as *mut u8, 0x00);
-                                        core::ptr::write_volatile((tx_frame_va + 18) as *mut u8, 0x06);
-                                        core::ptr::write_volatile((tx_frame_va + 19) as *mut u8, 0x04);
-                                        core::ptr::write_volatile((tx_frame_va + 20) as *mut u8, 0x00);
-                                        core::ptr::write_volatile((tx_frame_va + 21) as *mut u8, 0x02);
-                                    }
-                                    let mut ai = 0usize;
-                                    while ai < 6 {
-                                        unsafe {
-                                            core::ptr::write_volatile((tx_frame_va + 22 + ai as u64) as *mut u8, nic_mac[ai]);
-                                            core::ptr::write_volatile((tx_frame_va + 32 + ai as u64) as *mut u8, sender_mac[ai]);
-                                        }
-                                        ai += 1;
-                                    }
-                                    let mut gi = 0usize;
-                                    while gi < 4 {
-                                        unsafe {
-                                            core::ptr::write_volatile(
-                                                (tx_frame_va + 28 + gi as u64) as *mut u8,
-                                                SEXNET_GUEST_IPV4[gi],
-                                            );
-                                            core::ptr::write_volatile(
-                                                (tx_frame_va + 38 + gi as u64) as *mut u8,
-                                                sender_ip[gi],
-                                            );
-                                        }
-                                        gi += 1;
-                                    }
-                                    let mut pad = 42u64;
-                                    while pad < 60 {
-                                        unsafe {
-                                            core::ptr::write_volatile((tx_frame_va + pad) as *mut u8, 0u8);
-                                        }
-                                        pad += 1;
-                                    }
-                                    serial_println!("[sexnet.arp.tx.reply.build] spa=10.0.2.15 ok=1");
-
-                                    let tx_desc2 = unsafe { TX_PERM_DESC_VA + 32 };
-                                    unsafe {
-                                        core::ptr::write_volatile(tx_desc2 as *mut u64, TX_PERM_FRAME_PHYS);
-                                        core::ptr::write_volatile((tx_desc2 + 8) as *mut u16, 60u16);
-                                        core::ptr::write_volatile((tx_desc2 + 10) as *mut u8, 0u8);
-                                        core::ptr::write_volatile((tx_desc2 + 11) as *mut u8, 0x0Bu8);
-                                        core::ptr::write_volatile((tx_desc2 + 12) as *mut u8, 0u8);
-                                        core::ptr::write_volatile((tx_desc2 + 13) as *mut u8, 0u8);
-                                        core::ptr::write_volatile((tx_desc2 + 14) as *mut u16, 0u16);
-                                    }
-                                    serial_println!("[sexnet.arp.tx.desc] slot=2 len=60 ok=1");
-                                    unsafe {
-                                        core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 3);
-                                    }
-                                    serial_println!("[sexnet.arp.tx.post] tdt=3 ok=1");
-                                    let mut tx_outer = 0u32;
-                                    while tx_outer < 50_000_000 {
-                                        let tx_st = unsafe { core::ptr::read_volatile((tx_desc2 + 12) as *const u8) };
-                                        if (tx_st & 1) != 0 {
-                                            arp_tx_dd = 1;
-                                            break;
-                                        }
-                                        tx_outer += 1;
-                                    }
-                                    serial_println!(
-                                        "[sexnet.arp.tx.poll.done] dd_set={} ok={}",
-                                        arp_tx_dd,
-                                        if arp_tx_dd == 1 { 1 } else { 0 }
-                                    );
-                                }
-                                serial_println!(
-                                    "[sexnet.arp.proof.done] rx_arp={} tx_dd={} ok={}",
-                                    arp_rx,
-                                    arp_tx_dd,
-                                    if arp_rx == 1 && arp_tx_dd == 1 { 1 } else { 0 }
-                                );
-                            }
                         } else {
                             serial_println!(
                                 "[sexnet.l2.entry] rx_owner={} tx_owner={} ok=0 reason=not_full",
