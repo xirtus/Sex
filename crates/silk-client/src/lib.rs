@@ -88,6 +88,13 @@ impl SilkWindow {
         }
     }
 
+    pub fn commit(&self, pfns: &[u64]) -> Result<(), ()> {
+        let (status, _) = unsafe {
+            pdx_call(SLOT_DISPLAY, OP_WINDOW_SUBMIT, self.id, pfns.as_ptr() as u64, pfns.len() as u64)
+        };
+        if status == 0 { Ok(()) } else { Err(()) }
+    }
+
     pub fn paint(&self) -> Result<(), ()> {
         // Compatibility shim: TODO: wire to real sexdisplay ABI when PAINT/DESTROY exist
         Ok(())
