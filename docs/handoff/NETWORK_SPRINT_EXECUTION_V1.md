@@ -1675,3 +1675,5 @@ Detailed handoff:
 
 - Added `SEXNET_ARP_REQUEST_REPLY_GATE_V1` handoff and daily-driver gate set for one-shot ARP request/reply proof (docs/gate only; no network stack scope expansion).
 - ARP slot-order gate update: host-visible ARP reply contract is `sexnet.arp.tx.desc slot=1` + `sexnet.arp.tx.post tdt=2`, with subsequent L2 reuse at `sexnet.l2.tx.reuse.desc slot=2` + `sexnet.l2.tx.reuse.post tdt=3`; old ARP slot `2`/`tdt=3` could DD-complete without wire-visible host reply.
+
+- 2026-05-19: Added gate `sexnet_arp_cache_proof` (bounded ARP cache replies=2 with DD checks and slot/TDT contract checks). Handoff: `SEXNET_ARP_CACHE_PROOF_V1.md`.

@@ -220,6 +220,7 @@ gate_sexnet_arp_rx_valid="SKIP"
 gate_sexnet_arp_tx_reply="SKIP"
 gate_sexnet_arp_tx_dd="SKIP"
 gate_sexnet_arp_proof="SKIP"
+gate_sexnet_arp_cache_proof="SKIP"
 gate_ipv4_packet_model_spec="SKIP"
 gate_ipv4_header_build_proof="SKIP"
 gate_icmp_echo_request_plan="SKIP"
@@ -2146,6 +2147,29 @@ else
     print_row "sexnet_arp_proof" "SKIP" "no TAP/no ARP proof markers"
 fi
 
+# ---- SEXNET_ARP_CACHE_GATE_AND_HANDOFF_V1 (bounded 1-entry cache proof) ----
+if [ "$(has 'sexnet\.arp\.cache\.proof\.done.*ok=0')" -eq 1 ]; then
+    gate_sexnet_arp_cache_proof="FAIL"
+    print_row "sexnet_arp_cache_proof" "FAIL" "proof.done reported ok=0"
+elif [ "$(has 'sexnet\.arp\.cache\.reply\.dd.*dd_set=0')" -eq 1 ]; then
+    gate_sexnet_arp_cache_proof="FAIL"
+    print_row "sexnet_arp_cache_proof" "FAIL" "reply.dd marker reported dd_set=0"
+elif { [ "$(has 'sexnet\.arp\.cache\.reply.*n=1')" -eq 1 ] \
+        && [ "$(has 'sexnet\.arp\.cache\.reply.*n=1.*slot=3.*tdt=4.*ok=1')" -eq 0 ]; } \
+     || { [ "$(has 'sexnet\.arp\.cache\.reply.*n=2')" -eq 1 ] \
+           && [ "$(has 'sexnet\.arp\.cache\.reply.*n=2.*slot=4.*tdt=5.*ok=1')" -eq 0 ]; }; then
+    gate_sexnet_arp_cache_proof="FAIL"
+    print_row "sexnet_arp_cache_proof" "FAIL" "reply marker present with unexpected slot/tdt pair"
+elif [ "$(has 'sexnet\.arp\.cache\.proof\.done.*replies=2.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.arp\.cache\.reply\.dd.*n=1.*dd_set=1.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.arp\.cache\.reply\.dd.*n=2.*dd_set=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_arp_cache_proof="PASS"
+    print_row "sexnet_arp_cache_proof" "PASS" "bounded ARP cache proof done replies=2 with DD set for n=1,n=2"
+else
+    gate_sexnet_arp_cache_proof="SKIP"
+    print_row "sexnet_arp_cache_proof" "SKIP" "no TAP/no ARP cache markers in this boot"
+fi
+
 if [ "$(has 'ipv4.packet.model.spec.*ok=1')" -eq 1 ]; then
     gate_ipv4_packet_model_spec="PASS"
     print_row "ipv4_packet_model_spec" "PASS" "IPv4 model marker"
@@ -2997,6 +3021,7 @@ ALL_GATES=(
     "sexnet_arp_tx_reply:$gate_sexnet_arp_tx_reply"
     "sexnet_arp_tx_dd:$gate_sexnet_arp_tx_dd"
     "sexnet_arp_proof:$gate_sexnet_arp_proof"
+    "sexnet_arp_cache_proof:$gate_sexnet_arp_cache_proof"
     "ipv4_packet_model_spec:$gate_ipv4_packet_model_spec"
     "ipv4_header_build_proof:$gate_ipv4_header_build_proof"
     "icmp_echo_request_plan:$gate_icmp_echo_request_plan"
