@@ -45,6 +45,9 @@ static mut TX_PERM_DESC_PHYS: u64 = 0;
 static mut TX_PERM_DESC_VA: u64 = 0;
 static mut TX_PERM_FRAME_PHYS: u64 = 0;
 static mut TX_PERM_FRAME_VA: u64 = 0;
+static mut L2_RX_NEXT: u8 = 0;
+static mut L2_RX_COUNT: u32 = 0;
+static mut L2_TX_NEXT: u8 = 1;
 
 unsafe fn sys_net_diag(selector: u64) -> u64 {
     let result: u64;
@@ -1289,6 +1292,139 @@ pub extern "C" fn _start() -> ! {
                                 full_rx,
                                 full_tx,
                                 full_ok
+                            );
+                        }
+
+                        let l2_rx_own = NIC_RX_OWNER.load(Ordering::Acquire);
+                        let l2_tx_own = NIC_TX_OWNER.load(Ordering::Acquire);
+                        if l2_rx_own == NIC_OWNER_SEXNET_FULL && l2_tx_own == NIC_OWNER_SEXNET_FULL {
+                            serial_println!("[sexnet.l2.entry] rx_owner=3 tx_owner=3 ok=1");
+                            serial_println!("[sexnet.l2.rx.poll.begin] max_frames=3 max_iters_per=3000000");
+                            let mut l2_frames = 0u32;
+                            let mut outer = 0u32;
+                            while outer < 3_000_000 && l2_frames < 3 {
+                                let mut idx = 0u32;
+                                while idx < 8 && l2_frames < 3 {
+                                    let st = unsafe {
+                                        core::ptr::read_volatile((RX_PERM_DESC_VA + (idx as u64) * 16 + 12) as *const u8)
+                                    };
+                                    if (st & 1) != 0 {
+                                        let desc_base = unsafe { RX_PERM_DESC_VA } + (idx as u64) * 16;
+                                        let pkt_len = unsafe { core::ptr::read_volatile((desc_base + 8) as *const u16) } as u32;
+                                        let pkt_buf = unsafe { RX_PERM_PKT_VA[idx as usize] };
+                                        let eth_hi = unsafe { core::ptr::read_volatile((pkt_buf + 12) as *const u8) };
+                                        let eth_lo = unsafe { core::ptr::read_volatile((pkt_buf + 13) as *const u8) };
+                                        let ethertype = ((eth_hi as u16) << 8) | (eth_lo as u16);
+                                        l2_frames += 1;
+                                        unsafe {
+                                            L2_RX_NEXT = idx as u8;
+                                            L2_RX_COUNT = l2_frames;
+                                        }
+                                        serial_println!(
+                                            "[sexnet.l2.rx.frame] idx={} len={} ethertype=0x{:04X} count={} ok=1",
+                                            idx,
+                                            pkt_len,
+                                            ethertype,
+                                            l2_frames
+                                        );
+                                        unsafe {
+                                            core::ptr::write_volatile((desc_base + 8) as *mut u16, 0u16);
+                                            core::ptr::write_volatile((desc_base + 12) as *mut u8, 0u8);
+                                            core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, idx);
+                                        }
+                                        serial_println!(
+                                            "[sexnet.l2.rx.recycle] idx={} new_rdt={} ok=1",
+                                            idx,
+                                            idx
+                                        );
+                                    }
+                                    idx += 1;
+                                }
+                                outer += 1;
+                            }
+                            let l2_rx_ok = if l2_frames > 0 { 1 } else { 0 };
+                            serial_println!(
+                                "[sexnet.l2.rx.poll.done] frames_rx={} ok={}",
+                                l2_frames,
+                                l2_rx_ok
+                            );
+
+                            let mut l2_tx_dd = 0u32;
+                            let tx_perm_ready = unsafe {
+                                TX_PERM_DESC_VA != 0 && TX_PERM_FRAME_PHYS != 0 && TX_PERM_FRAME_VA != 0
+                            };
+                            if tx_perm_ready {
+                                let tx_frame_va = unsafe { TX_PERM_FRAME_VA };
+                                let mut bi = 0u64;
+                                while bi < 6 {
+                                    unsafe {
+                                        core::ptr::write_volatile((tx_frame_va + bi) as *mut u8, 0xFF);
+                                    }
+                                    bi += 1;
+                                }
+                                let src = [0x52u8, 0x54u8, 0x00u8, 0x12u8, 0x34u8, 0x56u8];
+                                let mut si = 0usize;
+                                while si < 6 {
+                                    unsafe {
+                                        core::ptr::write_volatile((tx_frame_va + 6 + si as u64) as *mut u8, src[si]);
+                                    }
+                                    si += 1;
+                                }
+                                unsafe {
+                                    core::ptr::write_volatile((tx_frame_va + 12) as *mut u8, 0x88);
+                                    core::ptr::write_volatile((tx_frame_va + 13) as *mut u8, 0xB5);
+                                }
+                                let mut pi = 14u64;
+                                while pi < 60 {
+                                    unsafe {
+                                        core::ptr::write_volatile((tx_frame_va + pi) as *mut u8, 0x42);
+                                    }
+                                    pi += 1;
+                                }
+                                let tx_desc1 = unsafe { TX_PERM_DESC_VA + 16 };
+                                unsafe {
+                                    core::ptr::write_volatile(tx_desc1 as *mut u64, TX_PERM_FRAME_PHYS);
+                                    core::ptr::write_volatile((tx_desc1 + 8) as *mut u16, 60u16);
+                                    core::ptr::write_volatile((tx_desc1 + 10) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((tx_desc1 + 11) as *mut u8, 0x0Bu8);
+                                    core::ptr::write_volatile((tx_desc1 + 12) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((tx_desc1 + 13) as *mut u8, 0u8);
+                                    core::ptr::write_volatile((tx_desc1 + 14) as *mut u16, 0u16);
+                                    L2_TX_NEXT = 1;
+                                }
+                                serial_println!("[sexnet.l2.tx.reuse.desc] slot=1 len=60 ok=1");
+                                unsafe {
+                                    core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 2);
+                                }
+                                serial_println!("[sexnet.l2.tx.reuse.post] tdt=2 ok=1");
+                                let mut tx_outer = 0u32;
+                                while tx_outer < 50_000_000 {
+                                    let tx_st = unsafe { core::ptr::read_volatile((tx_desc1 + 12) as *const u8) };
+                                    if (tx_st & 1) != 0 {
+                                        l2_tx_dd = 1;
+                                        break;
+                                    }
+                                    tx_outer += 1;
+                                }
+                                serial_println!(
+                                    "[sexnet.l2.tx.reuse.poll.done] dd_set={} desc_idx=1 ok={}",
+                                    l2_tx_dd,
+                                    if l2_tx_dd == 1 { 1 } else { 0 }
+                                );
+                            }
+
+                            let l2_ok = if l2_frames > 0 && l2_tx_dd == 1 { 1 } else { 0 };
+                            serial_println!(
+                                "[sexnet.l2.proof.done] rx_frames={} tx_dd={} ok={}",
+                                l2_frames,
+                                l2_tx_dd,
+                                l2_ok
+                            );
+                        } else {
+                            serial_println!(
+                                "[sexnet.l2.entry] rx_owner={} tx_owner={} ok=0 reason=not_full",
+                                l2_rx_own,
+                                l2_tx_own
                             );
                         }
                     }
