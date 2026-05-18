@@ -215,6 +215,11 @@ gate_arp_reply_observe_proof="SKIP"
 gate_arp_rx_observe_live="SKIP"
 gate_arp_cache_real_behavior="SKIP"
 gate_arp_cache_status_stub="SKIP"
+gate_sexnet_arp_rx_poll="SKIP"
+gate_sexnet_arp_rx_valid="SKIP"
+gate_sexnet_arp_tx_reply="SKIP"
+gate_sexnet_arp_tx_dd="SKIP"
+gate_sexnet_arp_proof="SKIP"
 gate_ipv4_packet_model_spec="SKIP"
 gate_ipv4_header_build_proof="SKIP"
 gate_icmp_echo_request_plan="SKIP"
@@ -1929,14 +1934,19 @@ fi
 # ---- sexnet_l2_rx_loop (bounded L2 rx parse+recycle) ----
 if [ "$(has 'sexnet\.l2\.entry.*rx_owner=3.*tx_owner=3.*ok=1')" -eq 1 ] \
    && [ "$(has 'sexnet\.l2\.rx\.poll\.done.*frames_rx=[1-9][0-9]*.*ok=1')" -eq 1 ] \
-   && [ "$(has 'sexnet\.l2\.rx\.recycle.*ok=1')" -eq 1 ]; then
+   && { [ "$(has 'sexnet\.l2\.rx\.recycle.*ok=1')" -eq 1 ] \
+        || { [ "$(has 'sexnet\.l2\.rx\.frame.*ethertype=0x0806.*ok=1')" -eq 1 ] \
+             && [ "$(has 'sexnet\.arp\.proof\.done.*rx_arp=1.*tx_dd=1.*ok=1')" -eq 1 ]; }; }; then
     gate_sexnet_l2_rx_loop="PASS"
-    print_row "sexnet_l2_rx_loop" "PASS" "bounded L2 RX frame parse+recycle proved"
+    print_row "sexnet_l2_rx_loop" "PASS" "bounded L2 RX proved (recycle or ARP-preserve+ARP-proof)"
 elif [ "$(has 'sexnet\.l2\.entry.*ok=0')" -eq 1 ] \
      && [ "$(has 'sexnet\.nic\.tx\.permanent\.full.*rx_owner=3.*tx_owner=3.*full_ok=1')" -eq 1 ]; then
     gate_sexnet_l2_rx_loop="FAIL"
     print_row "sexnet_l2_rx_loop" "FAIL" "entry denied despite full ownership marker"
-elif [ "$(has 'sexnet\.l2\.rx\.frame')" -eq 1 ] && [ "$(has 'sexnet\.l2\.rx\.recycle')" -eq 0 ]; then
+elif [ "$(has 'sexnet\.l2\.rx\.frame')" -eq 1 ] \
+     && [ "$(has 'sexnet\.l2\.rx\.recycle')" -eq 0 ] \
+     && ! { [ "$(has 'sexnet\.l2\.rx\.frame.*ethertype=0x0806.*ok=1')" -eq 1 ] \
+            && [ "$(has 'sexnet\.arp\.proof\.done.*rx_arp=1.*tx_dd=1.*ok=1')" -eq 1 ]; }; then
     gate_sexnet_l2_rx_loop="FAIL"
     print_row "sexnet_l2_rx_loop" "FAIL" "rx frame marker present but recycle marker missing"
 elif [ "$(has 'sexnet\.l2\.rx\.poll\.done.*frames_rx=0')" -eq 1 ]; then
@@ -1946,13 +1956,13 @@ else
     gate_sexnet_l2_rx_loop="SKIP"
 fi
 
-# ---- sexnet_l2_tx_reuse (bounded tx reuse descriptor 1) ----
-if [ "$(has 'sexnet\.l2\.tx\.reuse\.desc.*slot=1.*len=60.*ok=1')" -eq 1 ] \
-   && [ "$(has 'sexnet\.l2\.tx\.reuse\.post.*tdt=2.*ok=1')" -eq 1 ] \
-   && [ "$(has 'sexnet\.l2\.tx\.reuse\.poll\.done.*dd_set=1.*desc_idx=1.*ok=1')" -eq 1 ]; then
+# ---- sexnet_l2_tx_reuse (bounded tx reuse descriptor 2 after ARP reply) ----
+if [ "$(has 'sexnet\.l2\.tx\.reuse\.desc.*slot=2.*len=60.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.l2\.tx\.reuse\.post.*tdt=3.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.l2\.tx\.reuse\.poll\.done.*dd_set=1.*desc_idx=2.*ok=1')" -eq 1 ]; then
     gate_sexnet_l2_tx_reuse="PASS"
-    print_row "sexnet_l2_tx_reuse" "PASS" "bounded L2 TX reuse consumed desc slot 1"
-elif [ "$(has 'sexnet\.l2\.tx\.reuse\.post.*tdt=2.*ok=1')" -eq 1 ] \
+    print_row "sexnet_l2_tx_reuse" "PASS" "bounded L2 TX reuse consumed desc slot 2"
+elif [ "$(has 'sexnet\.l2\.tx\.reuse\.post.*tdt=3.*ok=1')" -eq 1 ] \
      && [ "$(has 'sexnet\.l2\.tx\.reuse\.poll\.done.*dd_set=0')" -eq 1 ]; then
     gate_sexnet_l2_tx_reuse="FAIL"
     print_row "sexnet_l2_tx_reuse" "FAIL" "tx reuse post issued but DD remained 0"
@@ -1964,7 +1974,7 @@ fi
 if [ "$(has 'sexnet\.l2\.proof\.done.*rx_frames=[1-9][0-9]*.*tx_dd=1.*ok=1')" -eq 1 ]; then
     gate_sexnet_l2_proof="PASS"
     print_row "sexnet_l2_proof" "PASS" "combined bounded L2 proof done"
-elif [ "$(has 'sexnet\.l2\.tx\.reuse\.post.*tdt=2.*ok=1')" -eq 1 ] \
+elif [ "$(has 'sexnet\.l2\.tx\.reuse\.post.*tdt=3.*ok=1')" -eq 1 ] \
      && [ "$(has 'sexnet\.l2\.proof\.done.*ok=0.*tx_dd=0')" -eq 1 ]; then
     gate_sexnet_l2_proof="FAIL"
     print_row "sexnet_l2_proof" "FAIL" "combined proof marker failed after tx reuse post"
@@ -2076,6 +2086,65 @@ if [ "$(has 'arp.cache.status.stub.*ok=1')" -eq 1 ]; then
     gate_arp_cache_status_stub="PASS"
     print_row "arp_cache_status_stub" "PASS" "ARP cache stub marker"
 else gate_arp_cache_status_stub="SKIP"; fi
+
+# ---- SEXNET_ARP_REQUEST_REPLY_GATE_V1 (one-shot, poll-driven) ----
+if [ "$(has 'sexnet\.arp\.rx\.frame.*ethertype=0x0806.*ok=1')" -eq 1 ]; then
+    gate_sexnet_arp_rx_poll="PASS"
+    print_row "sexnet_arp_rx_poll" "PASS" "ARP RX frame observed ethertype=0x0806"
+elif [ "$(has 'sexnet\.arp\..*reject')" -eq 1 ] && [ "$(has 'sexnet\.arp\.proof\.done.*ok=0')" -eq 1 ]; then
+    gate_sexnet_arp_rx_poll="FAIL"
+    print_row "sexnet_arp_rx_poll" "FAIL" "reject-only ARP path with proof done ok=0"
+else
+    gate_sexnet_arp_rx_poll="SKIP"
+    print_row "sexnet_arp_rx_poll" "SKIP" "no TAP traffic or no ARP frame"
+fi
+
+if [ "$(has 'sexnet\.arp\.rx\.validate.*htype=1.*ptype=0x0800.*hlen=6.*plen=4.*oper=1.*tpa_match=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_arp_rx_valid="PASS"
+    print_row "sexnet_arp_rx_valid" "PASS" "ARP request validate fields matched for local TPA"
+elif [ "$(has 'sexnet\.arp\.rx\.validate.*ok=0')" -eq 1 ] || [ "$(has 'sexnet\.arp\.rx\.validate.*tpa_match=0')" -eq 1 ]; then
+    gate_sexnet_arp_rx_valid="FAIL"
+    print_row "sexnet_arp_rx_valid" "FAIL" "ARP validate marker present with ok=0 or tpa_match=0"
+else
+    gate_sexnet_arp_rx_valid="SKIP"
+    print_row "sexnet_arp_rx_valid" "SKIP" "no ARP request observed"
+fi
+
+if [ "$(has 'sexnet\.arp\.tx\.reply\.build.*spa=10\.0\.2\.15.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet\.arp\.tx\.desc.*slot=1.*len=60.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet\.arp\.tx\.post.*tdt=2.*ok=1')" -eq 1 ]; then
+    gate_sexnet_arp_tx_reply="PASS"
+    print_row "sexnet_arp_tx_reply" "PASS" "ARP reply build+desc+post markers all ok"
+elif [ "$(has 'sexnet\.arp\.tx\.(reply\.build|desc|post).*ok=0')" -eq 1 ]; then
+    gate_sexnet_arp_tx_reply="FAIL"
+    print_row "sexnet_arp_tx_reply" "FAIL" "ARP TX build/desc/post marker present with ok=0"
+else
+    gate_sexnet_arp_tx_reply="SKIP"
+    print_row "sexnet_arp_tx_reply" "SKIP" "no ARP RX path to trigger reply"
+fi
+
+if [ "$(has 'sexnet\.arp\.tx\.poll\.done.*dd_set=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_arp_tx_dd="PASS"
+    print_row "sexnet_arp_tx_dd" "PASS" "ARP TX DD consumed dd_set=1"
+elif [ "$(has 'sexnet\.arp\.tx\.poll\.done.*dd_set=0.*ok=0')" -eq 1 ]; then
+    gate_sexnet_arp_tx_dd="FAIL"
+    print_row "sexnet_arp_tx_dd" "FAIL" "ARP TX DD poll marker shows dd_set=0 ok=0"
+else
+    gate_sexnet_arp_tx_dd="SKIP"
+    print_row "sexnet_arp_tx_dd" "SKIP" "no ARP RX path to trigger TX DD poll"
+fi
+
+if [ "$(has 'sexnet\.arp\.proof\.done.*rx_arp=1.*tx_dd=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_arp_proof="PASS"
+    print_row "sexnet_arp_proof" "PASS" "one-shot ARP request/reply proof done"
+elif [ "$(has 'sexnet\.arp\.proof\.done.*ok=0')" -eq 1 ] && \
+     ( [ "$(has 'sexnet\.arp\.proof\.done.*rx_arp=1')" -eq 1 ] || [ "$(has 'sexnet\.arp\.tx\.(reply\.build|desc|post|poll\.done)')" -eq 1 ] ); then
+    gate_sexnet_arp_proof="FAIL"
+    print_row "sexnet_arp_proof" "FAIL" "proof done failed while RX/TX path was attempted"
+else
+    gate_sexnet_arp_proof="SKIP"
+    print_row "sexnet_arp_proof" "SKIP" "no TAP/no ARP proof markers"
+fi
 
 if [ "$(has 'ipv4.packet.model.spec.*ok=1')" -eq 1 ]; then
     gate_ipv4_packet_model_spec="PASS"
@@ -2923,6 +2992,11 @@ ALL_GATES=(
     "arp_rx_observe_live:$gate_arp_rx_observe_live"
     "arp_cache_real_behavior:$gate_arp_cache_real_behavior"
     "arp_cache_status_stub:$gate_arp_cache_status_stub"
+    "sexnet_arp_rx_poll:$gate_sexnet_arp_rx_poll"
+    "sexnet_arp_rx_valid:$gate_sexnet_arp_rx_valid"
+    "sexnet_arp_tx_reply:$gate_sexnet_arp_tx_reply"
+    "sexnet_arp_tx_dd:$gate_sexnet_arp_tx_dd"
+    "sexnet_arp_proof:$gate_sexnet_arp_proof"
     "ipv4_packet_model_spec:$gate_ipv4_packet_model_spec"
     "ipv4_header_build_proof:$gate_ipv4_header_build_proof"
     "icmp_echo_request_plan:$gate_icmp_echo_request_plan"

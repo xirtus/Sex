@@ -1672,3 +1672,6 @@ Detailed handoff:
 - Final proven gate: `net_real_http_body_prefix PASS real(2)->sexnet len64->8x8 chunks->render done`.
 - Final proof line: `FINAL: PASS (247 gates proved, 16 skipped, 0 faults)`.
 - Truth boundary retained: `source=2` required for real TAP HTTP path; mock source is not valid for this gate.
+
+- Added `SEXNET_ARP_REQUEST_REPLY_GATE_V1` handoff and daily-driver gate set for one-shot ARP request/reply proof (docs/gate only; no network stack scope expansion).
+- ARP slot-order gate update: host-visible ARP reply contract is `sexnet.arp.tx.desc slot=1` + `sexnet.arp.tx.post tdt=2`, with subsequent L2 reuse at `sexnet.l2.tx.reuse.desc slot=2` + `sexnet.l2.tx.reuse.post tdt=3`; old ARP slot `2`/`tdt=3` could DD-complete without wire-visible host reply.

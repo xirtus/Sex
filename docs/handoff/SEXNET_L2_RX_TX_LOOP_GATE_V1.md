@@ -41,13 +41,17 @@ grep -E "sexnet_l2_|sexnet.l2|fault.kill|#PF|#GP|panic|KERNEL PANIC|FINAL:" \
 
 - `[sexnet.l2.entry] rx_owner=3 tx_owner=3 ok=1`
 - `[sexnet.l2.rx.poll.done] frames_rx>=1 ok=1`
-- `[sexnet.l2.rx.recycle] ... ok=1`
+- Either:
+  - `[sexnet.l2.rx.recycle] ... ok=1`
+  - OR ARP-preserve path:
+    - `[sexnet.l2.rx.frame] ... ethertype=0x0806 ... ok=1`
+    - `[sexnet.arp.proof.done] rx_arp=1 tx_dd=1 ok=1`
 
 `sexnet_l2_tx_reuse` PASS requires:
 
-- `[sexnet.l2.tx.reuse.desc] slot=1 len=60 ok=1`
-- `[sexnet.l2.tx.reuse.post] tdt=2 ok=1`
-- `[sexnet.l2.tx.reuse.poll.done] dd_set=1 desc_idx=1 ok=1`
+- `[sexnet.l2.tx.reuse.desc] slot=2 len=60 ok=1`
+- `[sexnet.l2.tx.reuse.post] tdt=3 ok=1`
+- `[sexnet.l2.tx.reuse.poll.done] dd_set=1 desc_idx=2 ok=1`
 
 `sexnet_l2_proof` PASS requires:
 
