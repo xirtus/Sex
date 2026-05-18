@@ -239,6 +239,7 @@ gate_qemu_slirp_tcp_limitation_freeze_v1="SKIP"
 gate_http_response_bounded_buffer_mock_proof_v1="SKIP"
 gate_http_response_to_html_subset_feed_v1="SKIP"
 gate_browser_remote_text_render_proof_v1="SKIP"
+gate_sexnet_dynamic_text_render_proof_v1="SKIP"
 gate_tcp_syn_ack_observe_proof_v1="SKIP"
 gate_tcp_http_connect_proof_v1="SKIP"
 gate_dns_client_plan="SKIP"
@@ -2097,6 +2098,13 @@ if [ "$(has 'browser.remote.text.render.proof.v1.*rendered=1.*source=mock.*netwo
     print_row "browser_remote_text_render_proof_v1" "PASS" "browser remote text render proven via bounded mock path"
 else gate_browser_remote_text_render_proof_v1="SKIP"; fi
 
+if [ "$(has 'net.diag.syscall.reply.*status=200.*bytes=98.*source=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.dynamic_text.set.*status=200.*bytes=98.*source=1.*ok=1')" -eq 1 ] && \
+   [ "$(has 'browser.packed_text.text.set.*live=1')" -eq 1 ]; then
+    gate_sexnet_dynamic_text_render_proof_v1="PASS"
+    print_row "sexnet_dynamic_text_render_proof_v1" "PASS" "dynamic packed text render path proven (source=1 mock lane)"
+else gate_sexnet_dynamic_text_render_proof_v1="SKIP"; fi
+
 if [ "$(has 'tcp.syn.ack.observe.proof.*ok=1')" -eq 1 ]; then
     gate_tcp_syn_ack_observe_proof_v1="PASS"
     print_row "tcp_syn_ack_observe_proof_v1" "PASS" "SYN-ACK observe marker"
@@ -2739,6 +2747,7 @@ ALL_GATES=(
     "http_response_bounded_buffer_mock_proof_v1:$gate_http_response_bounded_buffer_mock_proof_v1"
     "http_response_to_html_subset_feed_v1:$gate_http_response_to_html_subset_feed_v1"
     "browser_remote_text_render_proof_v1:$gate_browser_remote_text_render_proof_v1"
+    "sexnet_dynamic_text_render_proof_v1:$gate_sexnet_dynamic_text_render_proof_v1"
     "tcp_syn_ack_observe_proof_v1:$gate_tcp_syn_ack_observe_proof_v1"
     "tcp_http_connect_proof_v1:$gate_tcp_http_connect_proof_v1"
     "dns_client_plan:$gate_dns_client_plan"
