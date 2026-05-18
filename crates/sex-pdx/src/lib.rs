@@ -401,11 +401,31 @@ pub const SLOT_SPINDLE: u64 = 14; // Spindle command console (domain 12)
 pub const SLOT_BLOCK:   u64 = 15; // sexdrive block/DMA service (sexfiles→sexdrive route)
 pub const SLOT_BUF_LEND: u64 = 17; // kernel-allocated MemLend buffer cap (sexfiles→sexdrive, Phase A)
 pub const SLOT_NET:     u64 = 18; // sexnet network manager route
+pub const SLOT_NIC:     u64 = 19; // e1000e NIC hardware capability (sexnet driver)
 
 // ── MemLend buffer cap ABI (SEXBLOCK_BUFFER_LEND_CAP_IMPLEMENT_PHASE_A_V1) ──
+pub const SYS_MAP_PCI_BAR: u64 = 43;
 pub const SYS_GRANT_MEM_LEND: u64 = 50; // rdi=domain_slot rsi=length(4096) rdx=lend_slot → producer_va
 pub const SYS_MAP_MEM_LEND:   u64 = 51; // rdi=cap_slot → consumer_va
 pub const MEM_LEND_PERM_RW:   u64 = 0x3;
+
+pub fn sys_map_pci_bar(cap_slot: u64, bar_index: u64, map_size: u64) -> u64 {
+    let va: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYS_MAP_PCI_BAR,
+            in("rdi") cap_slot,
+            in("rsi") bar_index,
+            in("rdx") map_size,
+            lateout("rax") va,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    va
+}
 
 pub fn sys_grant_mem_lend(domain_slot: u64, length: u64, lend_slot: u64) -> u64 {
     let ret: u64;

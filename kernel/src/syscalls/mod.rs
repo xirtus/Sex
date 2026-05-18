@@ -343,7 +343,8 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                     // Gate: allow XHCI (0x0c/0x03/0x30) or NVMe (0x01/0x08).
                     let is_xhci = class_id == 0x0c && subclass_id == 0x03 && prog_if == 0x30;
                     let is_nvme = class_id == 0x01 && subclass_id == 0x08;
-                    if !is_xhci && !is_nvme {
+                    let is_nic  = class_id == 0x02 && subclass_id == 0x00;
+                    if !is_xhci && !is_nvme && !is_nic {
                         u64::MAX
                     } else {
                         let bar_raw = dev.read_u32(0x10 + bar_index * 4);

@@ -7,7 +7,7 @@ use crate::capability::{CapabilityData, PciCapData, InterruptCapData};
 // Not added to sex-pdx to avoid ABI hash churn; canonical slot number only here.
 const SLOT_NVME_HOST: u64 = 16;
 
-pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32) {
+pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexnet_pd_id: u32) {
     serial_println!("DevMgr: Starting hardware discovery...");
 
     let devices = HAL.enumerate_pci();
@@ -75,6 +75,24 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32) {
             }
             (0x0c, _) => { // USB (other)
                 serial_println!("DevMgr: Discovered USB controller class={:02x}:{:02x} ({:02x}:{:02x}.{}) vendor={:04x} device={:04x}", dev.class_id, dev.subclass_id, dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id);
+            }
+            (0x02, 0x00) => { // Ethernet NIC
+                serial_println!(
+                    "[kernel.pci.nic.found] {:02x}:{:02x}.{} vendor={:04x} device={:04x}",
+                    dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id
+                );
+                if sexnet_pd_id != 0 {
+                    if let Some(pd) = DOMAIN_REGISTRY.get(sexnet_pd_id) {
+                        pd.grant_capability(sex_pdx::SLOT_NIC, CapabilityData::Pci(PciCapData {
+                            bus: dev.bus,
+                            dev: dev.dev,
+                            func: dev.func,
+                            vendor_id: dev.vendor_id,
+                            device_id: dev.device_id,
+                        }));
+                        serial_println!("[kernel.cap.nic.grant] pd={} slot=19", sexnet_pd_id);
+                    }
+                }
             }
             _ => {}
         }

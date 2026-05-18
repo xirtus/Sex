@@ -326,6 +326,21 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexnet.boot] ok=1 reason=passive_spawn");
     serial_println!("[sexnet.passive.ready] network=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=mock_status_only_no_nic");
     serial_println!("[sexnet.passive.spawn.done] ok=1 spawned=1 browser_network=0");
+    {
+        let nic_va = sex_pdx::sys_map_pci_bar(sex_pdx::SLOT_NIC, 0, 0x10000);
+        if nic_va != u64::MAX {
+            let ral = unsafe { core::ptr::read_volatile((nic_va + 0x5400) as *const u32) };
+            let rah = unsafe { core::ptr::read_volatile((nic_va + 0x5404) as *const u32) };
+            serial_println!("[sexnet.nic.bar.map] va={:#x} ok=1", nic_va);
+            serial_println!(
+                "[sexnet.nic.mac.read] ral={:#010X} rah={:#010X} ok=1",
+                ral,
+                rah
+            );
+        } else {
+            serial_println!("[sexnet.nic.bar.map] va=MAX ok=0 reason=no_cap_or_map_denied");
+        }
+    }
     loop {
         let req = unsafe { pdx_listen_raw(0) };
         let result = handle_call(req.type_id, req.arg0, req.arg1);
