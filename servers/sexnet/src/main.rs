@@ -337,6 +337,32 @@ pub extern "C" fn _start() -> ! {
                 ral,
                 rah
             );
+            serial_println!("[sexnet.nic.reg.audit.begin] ok=1");
+            let reg_ctrl = unsafe { core::ptr::read_volatile((nic_va + 0x0000) as *const u32) };
+            let reg_status = unsafe { core::ptr::read_volatile((nic_va + 0x0008) as *const u32) };
+            let reg_rctl = unsafe { core::ptr::read_volatile((nic_va + 0x0100) as *const u32) };
+            let reg_rdbal = unsafe { core::ptr::read_volatile((nic_va + 0x2800) as *const u32) };
+            let reg_rdbah = unsafe { core::ptr::read_volatile((nic_va + 0x2804) as *const u32) };
+            let reg_rdlen = unsafe { core::ptr::read_volatile((nic_va + 0x2808) as *const u32) };
+            let reg_rdh = unsafe { core::ptr::read_volatile((nic_va + 0x2810) as *const u32) };
+            let reg_rdt = unsafe { core::ptr::read_volatile((nic_va + 0x2818) as *const u32) };
+            serial_println!("[sexnet.nic.reg.ctrl] val={:#010X}", reg_ctrl);
+            serial_println!("[sexnet.nic.reg.status] val={:#010X}", reg_status);
+            serial_println!(
+                "[sexnet.nic.reg.rctl] val={:#010X} rctl_en={}",
+                reg_rctl,
+                if (reg_rctl & (1 << 1)) != 0 { 1 } else { 0 }
+            );
+            serial_println!("[sexnet.nic.reg.rdbal] val={:#010X}", reg_rdbal);
+            serial_println!("[sexnet.nic.reg.rdbah] val={:#010X}", reg_rdbah);
+            serial_println!("[sexnet.nic.reg.rdlen] val={}", reg_rdlen);
+            serial_println!("[sexnet.nic.reg.rdh] val={}", reg_rdh);
+            serial_println!("[sexnet.nic.reg.rdt] val={}", reg_rdt);
+            serial_println!(
+                "[sexnet.nic.reg.audit.done] rctl_en={} rdlen={} ok=1",
+                if (reg_rctl & (1 << 1)) != 0 { 1 } else { 0 },
+                reg_rdlen
+            );
         } else {
             serial_println!("[sexnet.nic.bar.map] va=MAX ok=0 reason=no_cap_or_map_denied");
         }
