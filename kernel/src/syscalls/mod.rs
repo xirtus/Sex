@@ -530,17 +530,33 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             }
         },
         52 => { // SYS_NET_DIAG
-            let (status, bytes, source) = crate::hal::pci::get_net_diag();
-            let packed = ((status as u64) << 32)
-                | ((source as u64) << 16)
-                | (core::cmp::min(bytes, 0xFFFF) as u64);
-            crate::serial_println!(
-                "[net.diag.syscall.reply] status={} bytes={} source={}",
-                status,
-                bytes,
-                source
-            );
-            packed
+            match rdi {
+                0 => {
+                    let (status, bytes, source) = crate::hal::pci::get_net_diag();
+                    let packed = ((status as u64) << 32)
+                        | ((source as u64) << 16)
+                        | (core::cmp::min(bytes, 0xFFFF) as u64);
+                    crate::serial_println!(
+                        "[net.diag.syscall.reply] status={} bytes={} source={}",
+                        status,
+                        bytes,
+                        source
+                    );
+                    packed
+                }
+                1 => {
+                    let len = crate::hal::pci::get_net_diag_body_len();
+                    crate::serial_println!("[net.diag.body.len.reply] len={}", len);
+                    len as u64
+                }
+                2..=9 => {
+                    let idx = (rdi - 2) as usize;
+                    let chunk = crate::hal::pci::get_net_diag_body_chunk(idx);
+                    crate::serial_println!("[net.diag.body.chunk.reply] idx={} ok=1", idx);
+                    chunk
+                }
+                _ => u64::MAX,
+            }
         },
 
         _ => u64::MAX,

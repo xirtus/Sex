@@ -22,12 +22,15 @@ const SEXNET_HTTP_BODY_CHUNK: u64 = 0x20A;
 const BODY_TEXT: &[u8] = b"Hello SexOS HTTP OK";
 static mut PROOF_BUF: [u8; 32] = [0u8; 32];
 static mut PROOF_LEN: usize = 0;
+static mut BODY_BUF: [u8; 64] = [0u8; 64];
+static mut BODY_LEN: usize = 0;
 
-unsafe fn sys_net_diag() -> u64 {
+unsafe fn sys_net_diag(selector: u64) -> u64 {
     let result: u64;
     core::arch::asm!(
         "syscall",
         inout("rax") 52u64 => result,
+        in("rdi") selector,
         lateout("rcx") _,
         lateout("r11") _,
         options(nostack)
@@ -161,12 +164,34 @@ fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
                 return packed;
             }
             if arg0 == SEXNET_HTTP_BODY_LEN {
+                let body_len = unsafe { BODY_LEN };
+                if body_len > 0 {
+                    serial_println!("[sexnet.body_text.len] len={}", body_len);
+                    return body_len as u64;
+                }
                 serial_println!("[sexnet.body_text.len] len={}", BODY_TEXT.len());
                 return BODY_TEXT.len() as u64;
             }
             if arg0 == SEXNET_HTTP_BODY_CHUNK {
                 let idx = arg1 as usize;
                 let start = idx.saturating_mul(8);
+                let body_len = unsafe { BODY_LEN };
+                if body_len > 0 {
+                    if start >= body_len {
+                        return u64::MAX;
+                    }
+                    let end = core::cmp::min(start + 8, body_len);
+                    let bytes = end - start;
+                    let mut packed = 0u64;
+                    let mut i = 0usize;
+                    while i < bytes {
+                        let b = unsafe { BODY_BUF[start + i] };
+                        packed |= (b as u64) << (i * 8);
+                        i += 1;
+                    }
+                    serial_println!("[sexnet.body_text.chunk] idx={} bytes={}", idx, bytes);
+                    return packed;
+                }
                 if start >= BODY_TEXT.len() {
                     return u64::MAX;
                 }
@@ -247,7 +272,7 @@ fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let raw = unsafe { sys_net_diag() };
+    let raw = unsafe { sys_net_diag(0) };
     let status = (raw >> 32) as u32;
     let source = ((raw >> 16) & 0xFF) as u8;
     let bytes = (raw & 0xFFFF) as u16;
@@ -268,6 +293,36 @@ pub extern "C" fn _start() -> ! {
         source,
         proof_len
     );
+    if source == 2 {
+        let blen_raw = unsafe { sys_net_diag(1) };
+        let blen = core::cmp::min(blen_raw as usize, 64usize);
+        if blen > 0 {
+            serial_println!("[sexnet.body.fetch.begin] len={}", blen);
+            let chunks = (blen + 7) / 8;
+            let mut ci = 0usize;
+            while ci < chunks {
+                let packed = unsafe { sys_net_diag(2 + ci as u64) };
+                let mut bi = 0usize;
+                while bi < 8 {
+                    let idx = ci * 8 + bi;
+                    if idx >= blen {
+                        break;
+                    }
+                    let byte = ((packed >> (bi * 8)) & 0xFF) as u8;
+                    let sane = if byte == b'\r' || byte == b'\n' { b' ' } else { byte };
+                    unsafe {
+                        BODY_BUF[idx] = sane;
+                    }
+                    bi += 1;
+                }
+                ci += 1;
+            }
+            unsafe {
+                BODY_LEN = blen;
+            }
+            serial_println!("[sexnet.dynamic_body.set] len={} source=2 ok=1", blen);
+        }
+    }
     serial_println!("[sexnet.boot] ok=1 reason=passive_spawn");
     serial_println!("[sexnet.passive.ready] network=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=mock_status_only_no_nic");
     serial_println!("[sexnet.passive.spawn.done] ok=1 spawned=1 browser_network=0");

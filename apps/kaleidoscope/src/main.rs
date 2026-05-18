@@ -98,15 +98,15 @@ impl SexApp for App {
         let body_len_reply = sex_pdx::pdx_listen_raw(0);
         let body_len_ok = body_len_reply.type_id == 0x1;
         let body_reported = if body_len_ok {
-            core::cmp::min(body_len_reply.arg0 as usize, 19)
+            core::cmp::min(body_len_reply.arg0 as usize, 64)
         } else {
             0
         };
-        let mut body_text = [0u8; 32];
+        let mut body_text = [0u8; 64];
         let mut body_len = 0usize;
         if body_reported > 0 {
             sex_pdx::serial_println!("[browser.body.len.recv] len={}", body_reported);
-            let chunk_count = core::cmp::min((body_reported + 7) / 8, 4);
+            let chunk_count = core::cmp::min((body_reported + 7) / 8, 8);
             let mut idx = 0usize;
             while idx < chunk_count {
                 sex_pdx::pdx_call(sex_pdx::SLOT_NET, 0x200, 0x20A, idx as u64, 0);
@@ -175,22 +175,26 @@ impl SexApp for App {
         send_text(status_line, 32);
         sex_pdx::serial_println!("[browser.visible.polish.text] line=1 len={}", status_line.len());
 
-        let chunks = (live_len + 7) / 8;
-        let mut ci = 0usize;
-        while ci < chunks {
-            let offset = ci * 8;
-            let count = core::cmp::min(live_len - offset, 8);
-            let mut packed: u64 = 0;
-            let mut bi = 0usize;
-            while bi < count {
-                packed |= (live_text[offset + bi] as u64) << (bi * 8);
-                bi += 1;
+        // The display text buffer is 128 bytes. When body text is present, keep
+        // the 64..127 region exclusively for body bytes to avoid overlap.
+        if body_len == 0 {
+            let chunks = (live_len + 7) / 8;
+            let mut ci = 0usize;
+            while ci < chunks {
+                let offset = ci * 8;
+                let count = core::cmp::min(live_len - offset, 8);
+                let mut packed: u64 = 0;
+                let mut bi = 0usize;
+                while bi < count {
+                    packed |= (live_text[offset + bi] as u64) << (bi * 8);
+                    bi += 1;
+                }
+
+                let arg2 = ((64 + offset) as u64) | ((count as u64) << 8) | (text_color << 32);
+
+                sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, 0xFB, KALEIDO_SURFACE_ID, packed, arg2);
+                ci += 1;
             }
-
-            let arg2 = ((64 + offset) as u64) | ((count as u64) << 8) | (text_color << 32);
-
-            sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, 0xFB, KALEIDO_SURFACE_ID, packed, arg2);
-            ci += 1;
         }
 
         if body_len > 0 {
@@ -207,7 +211,7 @@ impl SexApp for App {
                     packed |= (body_text[offset + bi] as u64) << (bi * 8);
                     bi += 1;
                 }
-                let arg2 = (40u64 + offset as u64) | ((count as u64) << 8) | (body_color << 32);
+                let arg2 = (64u64 + offset as u64) | ((count as u64) << 8) | (body_color << 32);
                 sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, 0xFB, KALEIDO_SURFACE_ID, packed, arg2);
                 ci += 1;
             }
