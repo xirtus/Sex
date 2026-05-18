@@ -193,6 +193,7 @@ gate_e1000_tx_test_frame_proof_done="SKIP"
 gate_e1000_rx_packet_observe_proof="SKIP"
 gate_sexnet_nic_rx_packet_observe="SKIP"
 gate_sexnet_nic_tx_frame_observe="SKIP"
+gate_sexnet_nic_ownership_init="SKIP"
 gate_e1000e_rx_desc_observe="SKIP"
 gate_ethernet_frame_model_spec="SKIP"
 gate_arp_client_plan="SKIP"
@@ -1843,6 +1844,17 @@ else
     gate_sexnet_nic_tx_frame_observe="SKIP"
 fi
 
+# ---- sexnet_nic_ownership_init (marker/state-contract only) ----
+if [ "$(has 'sexnet\.nic\.ownership\.init.*rx_owner=0.*tx_owner=0.*ok=1')" -eq 1 ]; then
+    gate_sexnet_nic_ownership_init="PASS"
+    print_row "sexnet_nic_ownership_init" "PASS" "ownership marker initialized to HAL_DIAG (0/0)"
+elif [ "$(has 'sexnet\.nic\.ownership\.init')" -eq 1 ]; then
+    gate_sexnet_nic_ownership_init="FAIL"
+    print_row "sexnet_nic_ownership_init" "FAIL" "ownership marker present with nonzero owner or ok!=1"
+else
+    gate_sexnet_nic_ownership_init="SKIP"
+fi
+
 if [ "$(has 'e1000e\.rx\.descriptor\.observe\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_e1000e_rx_desc_observe="PASS"
     print_row "e1000e_rx_desc_observe" "PASS" "loopback RX dd+rdh+buffer_match=1"
@@ -2769,6 +2781,7 @@ ALL_GATES=(
     "e1000_rx_packet_observe_proof:$gate_e1000_rx_packet_observe_proof"
     "sexnet_nic_rx_packet_observe:$gate_sexnet_nic_rx_packet_observe"
     "sexnet_nic_tx_frame_observe:$gate_sexnet_nic_tx_frame_observe"
+    "sexnet_nic_ownership_init:$gate_sexnet_nic_ownership_init"
     "e1000e_rx_desc_observe:$gate_e1000e_rx_desc_observe"
     "ethernet_frame_model_spec:$gate_ethernet_frame_model_spec"
     "arp_client_plan:$gate_arp_client_plan"
