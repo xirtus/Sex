@@ -1328,16 +1328,18 @@ pub extern "C" fn _start() -> ! {
                                             ethertype,
                                             l2_frames
                                         );
-                                        unsafe {
-                                            core::ptr::write_volatile((desc_base + 8) as *mut u16, 0u16);
-                                            core::ptr::write_volatile((desc_base + 12) as *mut u8, 0u8);
-                                            core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, idx);
+                                        if ethertype != 0x0806 {
+                                            unsafe {
+                                                core::ptr::write_volatile((desc_base + 8) as *mut u16, 0u16);
+                                                core::ptr::write_volatile((desc_base + 12) as *mut u8, 0u8);
+                                                core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, idx);
+                                            }
+                                            serial_println!(
+                                                "[sexnet.l2.rx.recycle] idx={} new_rdt={} ok=1",
+                                                idx,
+                                                idx
+                                            );
                                         }
-                                        serial_println!(
-                                            "[sexnet.l2.rx.recycle] idx={} new_rdt={} ok=1",
-                                            idx,
-                                            idx
-                                        );
                                     }
                                     idx += 1;
                                 }
