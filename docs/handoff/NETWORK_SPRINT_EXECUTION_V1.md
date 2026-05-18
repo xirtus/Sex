@@ -1677,3 +1677,5 @@ Detailed handoff:
 - ARP slot-order gate update: host-visible ARP reply contract is `sexnet.arp.tx.desc slot=1` + `sexnet.arp.tx.post tdt=2`, with subsequent L2 reuse at `sexnet.l2.tx.reuse.desc slot=2` + `sexnet.l2.tx.reuse.post tdt=3`; old ARP slot `2`/`tdt=3` could DD-complete without wire-visible host reply.
 
 - 2026-05-19: Added gate `sexnet_arp_cache_proof` (bounded ARP cache replies=2 with DD checks and slot/TDT contract checks). Handoff: `SEXNET_ARP_CACHE_PROOF_V1.md`.
+
+- 2026-05-19: Added gate `sexnet_ipv4_header_validate` — IPv4 header receive/parse/validate proof on TAP/e1000e lane. One real ICMP echo request frame received from host ping, IPv4 header parsed and checksum validated. No ICMP reply, no UDP/TCP/HTTP/DNS, no routing, no fragmentation. Handoff: `SEXNET_IPV4_HEADER_VALIDATE_PROOF_V1.md`.

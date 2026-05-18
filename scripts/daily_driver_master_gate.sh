@@ -221,6 +221,7 @@ gate_sexnet_arp_tx_reply="SKIP"
 gate_sexnet_arp_tx_dd="SKIP"
 gate_sexnet_arp_proof="SKIP"
 gate_sexnet_arp_cache_proof="SKIP"
+gate_sexnet_ipv4_header_validate="SKIP"
 gate_ipv4_packet_model_spec="SKIP"
 gate_ipv4_header_build_proof="SKIP"
 gate_icmp_echo_request_plan="SKIP"
@@ -340,7 +341,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V32"
+echo " DAILY-DRIVER MASTER GATE V33"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -2170,6 +2171,41 @@ else
     print_row "sexnet_arp_cache_proof" "SKIP" "no TAP/no ARP cache markers in this boot"
 fi
 
+# ---- SEXNET_IPV4_HEADER_VALIDATE_GATE_V1 ----
+# Proof command:
+#   while true; do sudo arping -I tap0 -c 1 -w 1 10.0.2.15 2>/dev/null || true; sleep 0.05; done
+#   while true; do ping -I tap0 -c 1 -W 1 10.0.2.15 2>/dev/null || true; sleep 0.2; done
+#   QEMU_NET_BACKEND=tap QEMU_NET_MODEL=e1000e QEMU_TAP_IFNAME=tap0 ENABLE_QEMU_USERNET_E1000=1 \
+#     ./scripts/run_daily_driver_proof.sh /tmp/sexnet_ipv4_header_validate_gate_v1.log
+#
+# PASS requires:
+#   [sexnet.ipv4.entry] rx_owner=3 ok=1
+#   [sexnet.ipv4.rx.frame] ... ethertype=0x0800 ok=1
+#   [sexnet.ipv4.rx.validate] version=4 ihl=5 ... dst=10.0.2.15 ... checksum=ok ... ok=1
+#   [sexnet.ipv4.rx.recycle] ... ok=1
+#   [sexnet.ipv4.proof.done] frames=1 ok=1
+if [ "$(has 'sexnet\.ipv4\.proof\.done.*ok=0')" -eq 1 ]; then
+    gate_sexnet_ipv4_header_validate="FAIL"
+    print_row "sexnet_ipv4_header_validate" "FAIL" "proof.done ok=0 — IPv4 validation failed"
+elif [ "$(has 'sexnet\.ipv4\.entry.*ok=0')" -eq 1 ]; then
+    gate_sexnet_ipv4_header_validate="FAIL"
+    print_row "sexnet_ipv4_header_validate" "FAIL" "ipv4.entry ok=0 — RX owner not acquired"
+elif [ "$(has 'sexnet\.ipv4\.rx\.validate.*ok=0')" -eq 1 ] \
+     && [ "$(has 'sexnet\.ipv4\.rx\.validate.*ok=1')" -eq 0 ]; then
+    gate_sexnet_ipv4_header_validate="FAIL"
+    print_row "sexnet_ipv4_header_validate" "FAIL" "rx.validate ok=0 without later ok=1 — header invalid"
+elif [ "$(has 'sexnet\.ipv4\.proof\.done.*frames=1.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.ipv4\.entry.*rx_owner=3.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.ipv4\.rx\.frame.*ethertype=0x0800.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.ipv4\.rx\.validate.*version=4.*ihl=5.*dst=10\.0\.2\.15.*checksum=ok.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.ipv4\.rx\.recycle.*ok=1')" -eq 1 ]; then
+    gate_sexnet_ipv4_header_validate="PASS"
+    print_row "sexnet_ipv4_header_validate" "PASS" "IPv4 header receive/parse/validate proven: 1 frame"
+else
+    gate_sexnet_ipv4_header_validate="SKIP"
+    print_row "sexnet_ipv4_header_validate" "SKIP" "no TAP/no ping stimulus — IPv4 markers absent"
+fi
+
 if [ "$(has 'ipv4.packet.model.spec.*ok=1')" -eq 1 ]; then
     gate_ipv4_packet_model_spec="PASS"
     print_row "ipv4_packet_model_spec" "PASS" "IPv4 model marker"
@@ -3022,6 +3058,7 @@ ALL_GATES=(
     "sexnet_arp_tx_dd:$gate_sexnet_arp_tx_dd"
     "sexnet_arp_proof:$gate_sexnet_arp_proof"
     "sexnet_arp_cache_proof:$gate_sexnet_arp_cache_proof"
+    "sexnet_ipv4_header_validate:$gate_sexnet_ipv4_header_validate"
     "ipv4_packet_model_spec:$gate_ipv4_packet_model_spec"
     "ipv4_header_build_proof:$gate_ipv4_header_build_proof"
     "icmp_echo_request_plan:$gate_icmp_echo_request_plan"
