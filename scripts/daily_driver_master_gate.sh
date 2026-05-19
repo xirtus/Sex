@@ -276,6 +276,13 @@ gate_sexnet_dns_query_build="SKIP"
 gate_sexnet_dns_query_tx="SKIP"
 gate_sexnet_dns_response_parse="SKIP"
 gate_sexnet_dns_a_record_cache="SKIP"
+gate_sexnet_dns_source3_query_build="SKIP"
+gate_sexnet_dns_source3_udp_tx="SKIP"
+gate_sexnet_dns_source3_rx_parse_or_timeout="SKIP"
+gate_sexnet_dns_source3_cache_insert_or_timeout="SKIP"
+gate_sexnet_dns_source3_browser_resolve="SKIP"
+gate_sexnet_dns_source3_legacy_source2_not_used="SKIP"
+gate_sexnet_dns_source3_proof_v1="SKIP"
 gate_sexnet_tcp_handshake="SKIP"
 gate_sexnet_tcp_payload="SKIP"
 gate_sexnet_e1000e_reset_rx="SKIP"
@@ -2733,6 +2740,120 @@ else
     print_row "sexnet_dns_a_record_cache" "SKIP" "Phase F: DNS cache proof not present"
 fi
 
+# ---- SEXNET_SOURCE3_DNS_P6_GATES_HANDOFF_V1 ----
+# Source3 DNS migration gates (docs/gates handoff only; no feature-code assumptions)
+dns_s3_query_build_ok="$(has 'sexnet\.dns\.source3\.query\.build.*ok=1')"
+dns_s3_query_build_bad="$(has 'sexnet\.dns\.source3\.query\.build.*ok=0')"
+dns_s3_udp_tx_ok="$(has 'sexnet\.dns\.source3\.udp\.tx.*tx_dd=1.*ok=1')"
+dns_s3_udp_tx_dd0="$(has 'sexnet\.dns\.source3\.udp\.tx.*tx_dd=0')"
+dns_s3_udp_tx_bad="$(has 'sexnet\.dns\.source3\.udp\.tx.*ok=0')"
+dns_s3_rx_parse_ok="$(has 'sexnet\.dns\.source3\.rx\.parse.*ok=1')"
+dns_s3_answer_ok="$(has 'sexnet\.dns\.source3\.answer\.a.*ok=1')"
+dns_s3_cache_insert_ok="$(has 'sexnet\.dns\.source3\.cache\.insert.*ok=1')"
+dns_s3_rx_timeout_skip="$(has 'sexnet\.dns\.source3\.rx\.timeout.*reason=no_response_env_blocked')"
+dns_s3_browser_req_ok="$(has 'browser\.dns\.resolve\.request.*ok=1')"
+dns_s3_browser_ok="$(has 'browser\.dns\.resolve\.ok.*ok=1')"
+dns_s3_browser_miss_skip="$(has 'browser\.dns\.resolve\.miss.*reason=cache_miss')"
+dns_s3_legacy_not_used_ok="$(has 'legacy\.source2\.dns\.not_used.*ok=1')"
+dns_s3_source2_used_markers="$(count 'sexnet\.dns\.(query\.build|query\.tx|response\.parse|cache\.)')"
+dns_s3_malformed_accepted="$(has 'sexnet\.dns\.malformed\.accepted')"
+
+if [ "$dns_s3_query_build_bad" -eq 1 ]; then
+    gate_sexnet_dns_source3_query_build="FAIL"
+    print_row "sexnet_dns_source3_query_build" "FAIL" "source3 query build marker present with ok=0"
+elif [ "$dns_s3_query_build_ok" -eq 1 ]; then
+    gate_sexnet_dns_source3_query_build="PASS"
+    print_row "sexnet_dns_source3_query_build" "PASS" "source3 query build proven"
+else
+    gate_sexnet_dns_source3_query_build="SKIP"
+    print_row "sexnet_dns_source3_query_build" "SKIP" "source3 DNS query build marker absent"
+fi
+
+if [ "$dns_s3_udp_tx_dd0" -eq 1 ] || [ "$dns_s3_udp_tx_bad" -eq 1 ]; then
+    gate_sexnet_dns_source3_udp_tx="FAIL"
+    print_row "sexnet_dns_source3_udp_tx" "FAIL" "source3 UDP DNS TX invalid (tx_dd=0 or ok=0)"
+elif [ "$dns_s3_udp_tx_ok" -eq 1 ]; then
+    gate_sexnet_dns_source3_udp_tx="PASS"
+    print_row "sexnet_dns_source3_udp_tx" "PASS" "source3 UDP DNS TX proven (tx_dd=1)"
+else
+    gate_sexnet_dns_source3_udp_tx="SKIP"
+    print_row "sexnet_dns_source3_udp_tx" "SKIP" "source3 UDP DNS TX marker absent"
+fi
+
+if [ "$dns_s3_rx_parse_ok" -eq 1 ] && [ "$dns_s3_answer_ok" -ge 1 ]; then
+    gate_sexnet_dns_source3_rx_parse_or_timeout="PASS"
+    print_row "sexnet_dns_source3_rx_parse_or_timeout" "PASS" "source3 DNS RX parse + answer proven"
+elif [ "$dns_s3_rx_timeout_skip" -eq 1 ]; then
+    gate_sexnet_dns_source3_rx_parse_or_timeout="SKIP"
+    print_row "sexnet_dns_source3_rx_parse_or_timeout" "SKIP" "source3 DNS no-response env blocked"
+else
+    gate_sexnet_dns_source3_rx_parse_or_timeout="SKIP"
+    print_row "sexnet_dns_source3_rx_parse_or_timeout" "SKIP" "source3 DNS RX parse marker absent"
+fi
+
+if [ "$dns_s3_cache_insert_ok" -ge 1 ]; then
+    gate_sexnet_dns_source3_cache_insert_or_timeout="PASS"
+    print_row "sexnet_dns_source3_cache_insert_or_timeout" "PASS" "source3 DNS cache insert proven"
+elif [ "$dns_s3_rx_timeout_skip" -eq 1 ]; then
+    gate_sexnet_dns_source3_cache_insert_or_timeout="SKIP"
+    print_row "sexnet_dns_source3_cache_insert_or_timeout" "SKIP" "source3 DNS cache insert skipped (no response env blocked)"
+else
+    gate_sexnet_dns_source3_cache_insert_or_timeout="SKIP"
+    print_row "sexnet_dns_source3_cache_insert_or_timeout" "SKIP" "source3 DNS cache insert marker absent"
+fi
+
+if [ "$dns_s3_browser_req_ok" -eq 1 ] && [ "$dns_s3_browser_ok" -eq 1 ]; then
+    gate_sexnet_dns_source3_browser_resolve="PASS"
+    print_row "sexnet_dns_source3_browser_resolve" "PASS" "browser DNS resolve ok through source3 cache path"
+elif [ "$dns_s3_browser_req_ok" -eq 1 ] && [ "$dns_s3_browser_miss_skip" -eq 1 ]; then
+    gate_sexnet_dns_source3_browser_resolve="SKIP"
+    print_row "sexnet_dns_source3_browser_resolve" "SKIP" "browser DNS resolve miss due to cache_miss"
+else
+    gate_sexnet_dns_source3_browser_resolve="SKIP"
+    print_row "sexnet_dns_source3_browser_resolve" "SKIP" "browser DNS resolve markers absent"
+fi
+
+if [ "$dns_s3_legacy_not_used_ok" -eq 1 ]; then
+    gate_sexnet_dns_source3_legacy_source2_not_used="PASS"
+    print_row "sexnet_dns_source3_legacy_source2_not_used" "PASS" "legacy source2 DNS explicitly not used"
+else
+    gate_sexnet_dns_source3_legacy_source2_not_used="SKIP"
+    print_row "sexnet_dns_source3_legacy_source2_not_used" "SKIP" "legacy source2 DNS not-used marker absent"
+fi
+
+if [ "$dns_s3_malformed_accepted" -eq 1 ]; then
+    gate_sexnet_dns_source3_proof_v1="FAIL"
+    print_row "sexnet_dns_source3_proof_v1" "FAIL" "malformed DNS was accepted"
+elif [ "$dns_s3_udp_tx_dd0" -eq 1 ]; then
+    gate_sexnet_dns_source3_proof_v1="FAIL"
+    print_row "sexnet_dns_source3_proof_v1" "FAIL" "source3 DNS TX posted with tx_dd=0"
+elif [ "$dns_s3_source2_used_markers" -ge 1 ]; then
+    gate_sexnet_dns_source3_proof_v1="FAIL"
+    print_row "sexnet_dns_source3_proof_v1" "FAIL" "source2 DNS markers present in source3 proof lane"
+elif [ "$dns_s3_browser_ok" -eq 1 ] && [ "$dns_s3_cache_insert_ok" -eq 0 ] && [ "$dns_s3_answer_ok" -eq 0 ]; then
+    gate_sexnet_dns_source3_proof_v1="FAIL"
+    print_row "sexnet_dns_source3_proof_v1" "FAIL" "browser DNS resolved without source3 cache/answer evidence"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_sexnet_dns_source3_proof_v1="FAIL"
+    print_row "sexnet_dns_source3_proof_v1" "FAIL" "fault markers present (#PF/#GP/panic/fault.kill)"
+elif [ "$dns_s3_query_build_ok" -eq 1 ] && \
+     [ "$dns_s3_udp_tx_ok" -eq 1 ] && \
+     [ "$dns_s3_rx_parse_ok" -eq 1 ] && \
+     [ "$dns_s3_answer_ok" -ge 1 ] && \
+     [ "$dns_s3_cache_insert_ok" -ge 1 ] && \
+     [ "$dns_s3_browser_req_ok" -eq 1 ] && \
+     [ "$dns_s3_browser_ok" -eq 1 ] && \
+     [ "$dns_s3_legacy_not_used_ok" -eq 1 ]; then
+    gate_sexnet_dns_source3_proof_v1="PASS"
+    print_row "sexnet_dns_source3_proof_v1" "PASS" "source3 DNS PASS policy satisfied"
+elif [ "$dns_s3_rx_timeout_skip" -eq 1 ] || [ "$dns_s3_browser_miss_skip" -eq 1 ]; then
+    gate_sexnet_dns_source3_proof_v1="SKIP"
+    print_row "sexnet_dns_source3_proof_v1" "SKIP" "source3 DNS env-blocked no-response/cache-miss lane"
+else
+    gate_sexnet_dns_source3_proof_v1="SKIP"
+    print_row "sexnet_dns_source3_proof_v1" "SKIP" "source3 DNS proof lane not exercised"
+fi
+
 # ---- SEXNET_E1000E_RESET_RX_GATE_V1 ----
 # Gate: sexnet_e1000e_reset_rx — e1000e NIC reset before sexnet RX ownership
 # Source: sexnet source=3 (servers/sexnet/src/main.rs)
@@ -3996,6 +4117,13 @@ ALL_GATES=(
     "sexnet_dns_query_tx:$gate_sexnet_dns_query_tx"
     "sexnet_dns_response_parse:$gate_sexnet_dns_response_parse"
     "sexnet_dns_a_record_cache:$gate_sexnet_dns_a_record_cache"
+    "sexnet_dns_source3_query_build:$gate_sexnet_dns_source3_query_build"
+    "sexnet_dns_source3_udp_tx:$gate_sexnet_dns_source3_udp_tx"
+    "sexnet_dns_source3_rx_parse_or_timeout:$gate_sexnet_dns_source3_rx_parse_or_timeout"
+    "sexnet_dns_source3_cache_insert_or_timeout:$gate_sexnet_dns_source3_cache_insert_or_timeout"
+    "sexnet_dns_source3_browser_resolve:$gate_sexnet_dns_source3_browser_resolve"
+    "sexnet_dns_source3_legacy_source2_not_used:$gate_sexnet_dns_source3_legacy_source2_not_used"
+    "sexnet_dns_source3_proof_v1:$gate_sexnet_dns_source3_proof_v1"
     "sexnet_e1000e_reset_rx:$gate_sexnet_e1000e_reset_rx"
     "sexnet_tcp_handshake:$gate_sexnet_tcp_handshake"
     "sexnet_tcp_payload:$gate_sexnet_tcp_payload"

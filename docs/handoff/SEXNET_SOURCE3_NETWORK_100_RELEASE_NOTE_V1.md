@@ -221,3 +221,24 @@ All handoff documents for Phases A-O are in `docs/handoff/`:
 
 This document supersedes interim handoff documents and should be treated as the
 primary reference for the completed source3 network 100% milestone.
+
+## Amendment 2026-05-20: DNS Migration Into Source3 Gate Path
+
+After the source3 networking milestone baseline, DNS migration was wired into the
+source3 gate/documentation path via `SEXNET_SOURCE3_DNS_P6_GATES_HANDOFF_V1`.
+
+What changed:
+- Added source3 DNS policy gates in `scripts/daily_driver_master_gate.sh`:
+  - `sexnet_dns_source3_query_build`
+  - `sexnet_dns_source3_udp_tx`
+  - `sexnet_dns_source3_rx_parse_or_timeout`
+  - `sexnet_dns_source3_cache_insert_or_timeout`
+  - `sexnet_dns_source3_browser_resolve`
+  - `sexnet_dns_source3_legacy_source2_not_used`
+  - `sexnet_dns_source3_proof_v1`
+- Added handoff doc: `docs/handoff/SEXNET_DNS_SOURCE3_HANDOFF_V1.md`.
+
+Policy clarification:
+- No-response DNS environments (SLiRP no reply) are classified as honest SKIP,
+  not FAIL, when timeout/cache-miss markers are explicit.
+- HAL source2 DNS remains frozen legacy and undeleted.

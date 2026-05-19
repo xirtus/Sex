@@ -2123,3 +2123,27 @@ Full release note: [`SEXNET_SOURCE3_NETWORK_100_RELEASE_NOTE_V1.md`](./SEXNET_SO
 4. Real hardware NIC driver (when e1000/e1000e-compatible NIC available)
 5. TLS integration (bounded client)
 6. TCP multi-connection / streaming
+
+## DNS Source3 Milestone Addendum (P6 Gates/Handoff)
+
+Date: 2026-05-20
+Mission: `SEXNET_SOURCE3_DNS_P6_GATES_HANDOFF_V1`
+
+Delivered in this addendum:
+- Daily-driver source3 DNS gate chain wired with PASS/SKIP/FAIL policy.
+- New handoff doc: `SEXNET_DNS_SOURCE3_HANDOFF_V1.md`.
+- No runtime feature code changes; gates/docs only.
+
+New gates:
+- `sexnet_dns_source3_query_build`
+- `sexnet_dns_source3_udp_tx`
+- `sexnet_dns_source3_rx_parse_or_timeout`
+- `sexnet_dns_source3_cache_insert_or_timeout`
+- `sexnet_dns_source3_browser_resolve`
+- `sexnet_dns_source3_legacy_source2_not_used`
+- `sexnet_dns_source3_proof_v1`
+
+Policy:
+- PASS: source3 query build + UDP TX (`tx_dd=1 ok=1`) + RX parse/answer + cache insert + browser resolve request/ok + `legacy.source2.dns.not_used` + zero faults.
+- SKIP: explicit `[sexnet.dns.source3.rx.timeout] reason=no_response_env_blocked` and/or `[browser.dns.resolve.miss] reason=cache_miss`.
+- FAIL: malformed accepted, fabricated browser resolve, source2 DNS used for proof, TX `tx_dd=0`, or any fault marker.

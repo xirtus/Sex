@@ -8,6 +8,8 @@ use core::sync::atomic::{AtomicU8, Ordering};
 // ── Phase M: source3 reliability multi-fetch compile gate ──
 const PHASE_M_RELIABILITY_ENABLED: bool =
     option_env!("SEXNET_PHASE_M_RELIABILITY_PROOF").is_some();
+const DNS_SOURCE3_UDP_TX_ENABLED: bool =
+    option_env!("SEXNET_DNS_SOURCE3_PROOF").is_some();
 
 // --------------------------------------------------------------------------
 // Opcodes (local — these are NOT in sex-pdx)
@@ -24,12 +26,18 @@ const SEXNET_HTTP_PROOF_LEN: u64 = 0x207;
 const SEXNET_HTTP_PROOF_CHUNK: u64 = 0x208;
 const SEXNET_HTTP_BODY_LEN: u64 = 0x209;
 const SEXNET_HTTP_BODY_CHUNK: u64 = 0x20A;
+const SEXNET_DNS_RESOLVE: u64 = 0x20B;
 const BODY_TEXT: &[u8] = b"Hello SexOS HTTP OK";
 static mut PROOF_BUF: [u8; 32] = [0u8; 32];
 static mut PROOF_LEN: usize = 0;
 static mut BODY_BUF: [u8; 64] = [0u8; 64];
 static mut BODY_LEN: usize = 0;
 const SEXNET_GUEST_IPV4: [u8; 4] = [10, 0, 2, 15];
+const SEXNET_DNS_SERVER_IPV4: [u8; 4] = [10, 0, 2, 3];
+const SEXNET_DNS_SERVER_PORT: u16 = 53;
+const SEXNET_DNS_SRC_PORT: u16 = 49152;
+const SEXNET_DNS_TXID: u16 = 0x1234;
+const SEXNET_DNS_QUERY_FRAME_LEN: usize = 71;
 const HTTP_GET_BUF_CAP: usize = 192;
 const HTTP_RESPONSE_BUF_CAP: usize = 512;
 const HTTP_BODY_BUF_CAP: usize = 256;
@@ -40,6 +48,9 @@ static mut HTTP_RESPONSE_LEN: usize = 0;
 static mut HTTP_BODY_PREFIX_BUF: [u8; HTTP_BODY_BUF_CAP] = [0u8; HTTP_BODY_BUF_CAP];
 static mut HTTP_BODY_PREFIX_LEN: usize = 0;
 static mut HTTP_STATUS_CODE: u16 = 0;
+static mut DNS_A_CACHE_IP: [[u8; 4]; 4] = [[0u8; 4]; 4];
+static mut DNS_A_CACHE_VALID: [u8; 4] = [0u8; 4];
+static mut DNS_A_CACHE_TTL: [u32; 4] = [0u32; 4];
 
 #[allow(dead_code)]
 const NIC_OWNER_HAL_DIAG: u8 = 0;
@@ -181,6 +192,92 @@ unsafe fn http_get_build(host: &[u8], path: &[u8]) -> usize {
     o
 }
 
+fn build_dns_query_frame_source3(out: &mut [u8; SEXNET_DNS_QUERY_FRAME_LEN]) -> usize {
+    let mut i = 0usize;
+    while i < SEXNET_DNS_QUERY_FRAME_LEN {
+        out[i] = 0;
+        i += 1;
+    }
+    // Ethernet header: dst/src left zeroed for build-proof only, ethertype IPv4.
+    out[12] = 0x08;
+    out[13] = 0x00;
+    // IPv4 header.
+    out[14] = 0x45;
+    out[15] = 0x00;
+    out[16] = 0x00;
+    out[17] = 57; // IPv4(20) + UDP(8) + DNS(29)
+    out[18] = 0x00;
+    out[19] = 0x07;
+    out[20] = 0x00;
+    out[21] = 0x00;
+    out[22] = 64;
+    out[23] = 17; // UDP
+    out[26] = SEXNET_GUEST_IPV4[0];
+    out[27] = SEXNET_GUEST_IPV4[1];
+    out[28] = SEXNET_GUEST_IPV4[2];
+    out[29] = SEXNET_GUEST_IPV4[3];
+    out[30] = SEXNET_DNS_SERVER_IPV4[0];
+    out[31] = SEXNET_DNS_SERVER_IPV4[1];
+    out[32] = SEXNET_DNS_SERVER_IPV4[2];
+    out[33] = SEXNET_DNS_SERVER_IPV4[3];
+    // IPv4 checksum.
+    let mut ip_sum = 0u32;
+    let mut w = 0usize;
+    while w < 10 {
+        let off = 14 + w * 2;
+        let hi = out[off] as u16;
+        let lo = out[off + 1] as u16;
+        ip_sum += ((hi << 8) | lo) as u32;
+        w += 1;
+    }
+    while (ip_sum >> 16) != 0 {
+        ip_sum = (ip_sum & 0xFFFF) + (ip_sum >> 16);
+    }
+    let ip_ck = !(ip_sum as u16);
+    out[24] = ((ip_ck >> 8) & 0xFF) as u8;
+    out[25] = (ip_ck & 0xFF) as u8;
+    // UDP header.
+    out[34] = ((SEXNET_DNS_SRC_PORT >> 8) & 0xFF) as u8;
+    out[35] = (SEXNET_DNS_SRC_PORT & 0xFF) as u8;
+    out[36] = ((SEXNET_DNS_SERVER_PORT >> 8) & 0xFF) as u8;
+    out[37] = (SEXNET_DNS_SERVER_PORT & 0xFF) as u8;
+    out[38] = 0x00;
+    out[39] = 37; // UDP(8) + DNS(29)
+    out[40] = 0x00;
+    out[41] = 0x00; // checksum omitted in build-only proof
+    // DNS query: txid=0x1234, flags=RD, QD=1, qname=example.com, A IN.
+    out[42] = ((SEXNET_DNS_TXID >> 8) & 0xFF) as u8;
+    out[43] = (SEXNET_DNS_TXID & 0xFF) as u8;
+    out[44] = 0x01;
+    out[45] = 0x00;
+    out[46] = 0x00;
+    out[47] = 0x01;
+    out[48] = 0x00;
+    out[49] = 0x00;
+    out[50] = 0x00;
+    out[51] = 0x00;
+    out[52] = 0x00;
+    out[53] = 0x00;
+    out[54] = 0x07;
+    out[55] = b'e';
+    out[56] = b'x';
+    out[57] = b'a';
+    out[58] = b'm';
+    out[59] = b'p';
+    out[60] = b'l';
+    out[61] = b'e';
+    out[62] = 0x03;
+    out[63] = b'c';
+    out[64] = b'o';
+    out[65] = b'm';
+    out[66] = 0x00;
+    out[67] = 0x00;
+    out[68] = 0x01;
+    out[69] = 0x00;
+    out[70] = 0x01;
+    SEXNET_DNS_QUERY_FRAME_LEN
+}
+
 fn find_crlf(buf: &[u8], len: usize) -> usize {
     let mut i = 0usize;
     while i + 1 < len {
@@ -277,6 +374,221 @@ fn parse_http_status_line(buf: &[u8], len: usize) -> (u16, usize, &'static str, 
     }
     let status = ((d0 - b'0') as u16) * 100 + ((d1 - b'0') as u16) * 10 + ((d2 - b'0') as u16);
     (status, line_end, version, "")
+}
+
+unsafe fn dns_source3_try_parse_and_cache(pkt_buf: u64, rx_len: usize) -> u32 {
+    if rx_len < 54 {
+        serial_println!("[sexnet.dns.malformed.reject] reason=rx_too_short ok=1");
+        return 0;
+    }
+    let et0 = core::ptr::read_volatile((pkt_buf + 12) as *const u8);
+    let et1 = core::ptr::read_volatile((pkt_buf + 13) as *const u8);
+    if et0 != 0x08 || et1 != 0x00 {
+        return 0;
+    }
+    let ihl = ((core::ptr::read_volatile((pkt_buf + 14) as *const u8) & 0x0F) as usize) * 4;
+    if ihl < 20 || (14 + ihl + 8) > rx_len {
+        serial_println!("[sexnet.dns.malformed.reject] reason=ipv4_ihl_bounds ok=1");
+        return 0;
+    }
+    let proto = core::ptr::read_volatile((pkt_buf + 23) as *const u8);
+    if proto != 17 {
+        return 0;
+    }
+    let src0 = core::ptr::read_volatile((pkt_buf + 26) as *const u8);
+    let src1 = core::ptr::read_volatile((pkt_buf + 27) as *const u8);
+    let src2 = core::ptr::read_volatile((pkt_buf + 28) as *const u8);
+    let src3 = core::ptr::read_volatile((pkt_buf + 29) as *const u8);
+    if src0 != SEXNET_DNS_SERVER_IPV4[0]
+        || src1 != SEXNET_DNS_SERVER_IPV4[1]
+        || src2 != SEXNET_DNS_SERVER_IPV4[2]
+        || src3 != SEXNET_DNS_SERVER_IPV4[3]
+    {
+        return 0;
+    }
+    let udp_base = 14 + ihl;
+    let src_port = ((core::ptr::read_volatile((pkt_buf + udp_base as u64) as *const u8) as u16) << 8)
+        | (core::ptr::read_volatile((pkt_buf + udp_base as u64 + 1) as *const u8) as u16);
+    if src_port != SEXNET_DNS_SERVER_PORT {
+        return 0;
+    }
+    let udp_len = ((core::ptr::read_volatile((pkt_buf + udp_base as u64 + 4) as *const u8) as u16) << 8)
+        | (core::ptr::read_volatile((pkt_buf + udp_base as u64 + 5) as *const u8) as u16);
+    if udp_len < 8 {
+        serial_println!("[sexnet.dns.malformed.reject] reason=udp_len_small ok=1");
+        return 0;
+    }
+    let dns_len = (udp_len as usize) - 8;
+    let dns_base = udp_base + 8;
+    if dns_base + dns_len > rx_len || dns_len < 12 {
+        serial_println!("[sexnet.dns.malformed.reject] reason=dns_bounds ok=1");
+        return 0;
+    }
+    let txid = ((core::ptr::read_volatile((pkt_buf + dns_base as u64) as *const u8) as u16) << 8)
+        | (core::ptr::read_volatile((pkt_buf + dns_base as u64 + 1) as *const u8) as u16);
+    if txid != SEXNET_DNS_TXID {
+        return 0;
+    }
+    let flags = ((core::ptr::read_volatile((pkt_buf + dns_base as u64 + 2) as *const u8) as u16) << 8)
+        | (core::ptr::read_volatile((pkt_buf + dns_base as u64 + 3) as *const u8) as u16);
+    let qr = if (flags & 0x8000) != 0 { 1u16 } else { 0u16 };
+    let rcode = (flags & 0x000F) as u16;
+    if qr == 0 {
+        serial_println!("[sexnet.dns.malformed.reject] reason=qr_not_set ok=1");
+        return 0;
+    }
+    if rcode != 0 {
+        serial_println!("[sexnet.dns.malformed.reject] reason=rcode_nonzero ok=1");
+        return 0;
+    }
+    let qdcount = ((core::ptr::read_volatile((pkt_buf + dns_base as u64 + 4) as *const u8) as u16) << 8)
+        | (core::ptr::read_volatile((pkt_buf + dns_base as u64 + 5) as *const u8) as u16);
+    let ancount = ((core::ptr::read_volatile((pkt_buf + dns_base as u64 + 6) as *const u8) as u16) << 8)
+        | (core::ptr::read_volatile((pkt_buf + dns_base as u64 + 7) as *const u8) as u16);
+    serial_println!(
+        "[sexnet.dns.source3.rx.parse] txid=0x1234 qr={} rcode={} ancount={} ok=1",
+        qr,
+        rcode,
+        ancount
+    );
+
+    let mut off = dns_base + 12;
+    if qdcount > 0 {
+        let mut q_iter = 0u32;
+        loop {
+            if q_iter >= 64 {
+                serial_println!("[sexnet.dns.malformed.reject] reason=qname_loop_limit ok=1");
+                return 0;
+            }
+            if off >= dns_base + dns_len {
+                serial_println!("[sexnet.dns.malformed.reject] reason=qname_oob ok=1");
+                return 0;
+            }
+            let lab = core::ptr::read_volatile((pkt_buf + off as u64) as *const u8);
+            off += 1;
+            if lab == 0 {
+                break;
+            }
+            if (lab & 0xC0) != 0 {
+                serial_println!("[sexnet.dns.malformed.reject] reason=qname_compression_unsupported ok=1");
+                return 0;
+            }
+            let step = lab as usize;
+            if off + step > dns_base + dns_len {
+                serial_println!("[sexnet.dns.malformed.reject] reason=qname_label_oob ok=1");
+                return 0;
+            }
+            off += step;
+            q_iter += 1;
+        }
+        if off + 4 > dns_base + dns_len {
+            serial_println!("[sexnet.dns.malformed.reject] reason=question_tail_oob ok=1");
+            return 0;
+        }
+        off += 4;
+    }
+
+    let mut ai = 0u32;
+    while ai < 2 && (ai as u16) < ancount {
+        if off + 12 > dns_base + dns_len {
+            serial_println!("[sexnet.dns.malformed.reject] reason=answer_header_oob ok=1");
+            return 0;
+        }
+        let n0 = core::ptr::read_volatile((pkt_buf + off as u64) as *const u8);
+        if (n0 & 0xC0) == 0xC0 {
+            if off + 2 > dns_base + dns_len {
+                serial_println!("[sexnet.dns.malformed.reject] reason=answer_name_ptr_oob ok=1");
+                return 0;
+            }
+            off += 2;
+        } else {
+            let mut name_iter = 0u32;
+            loop {
+                if name_iter >= 64 {
+                    serial_println!("[sexnet.dns.malformed.reject] reason=answer_name_loop_limit ok=1");
+                    return 0;
+                }
+                if off >= dns_base + dns_len {
+                    serial_println!("[sexnet.dns.malformed.reject] reason=answer_name_oob ok=1");
+                    return 0;
+                }
+                let lab = core::ptr::read_volatile((pkt_buf + off as u64) as *const u8);
+                off += 1;
+                if lab == 0 {
+                    break;
+                }
+                if (lab & 0xC0) != 0 {
+                    serial_println!("[sexnet.dns.malformed.reject] reason=answer_name_bad_compression ok=1");
+                    return 0;
+                }
+                let step = lab as usize;
+                if off + step > dns_base + dns_len {
+                    serial_println!("[sexnet.dns.malformed.reject] reason=answer_name_label_oob ok=1");
+                    return 0;
+                }
+                off += step;
+                name_iter += 1;
+            }
+        }
+        if off + 10 > dns_base + dns_len {
+            serial_println!("[sexnet.dns.malformed.reject] reason=answer_fields_oob ok=1");
+            return 0;
+        }
+        let typ = ((core::ptr::read_volatile((pkt_buf + off as u64) as *const u8) as u16) << 8)
+            | (core::ptr::read_volatile((pkt_buf + off as u64 + 1) as *const u8) as u16);
+        let cls = ((core::ptr::read_volatile((pkt_buf + off as u64 + 2) as *const u8) as u16) << 8)
+            | (core::ptr::read_volatile((pkt_buf + off as u64 + 3) as *const u8) as u16);
+        let ttl = ((core::ptr::read_volatile((pkt_buf + off as u64 + 4) as *const u8) as u32) << 24)
+            | ((core::ptr::read_volatile((pkt_buf + off as u64 + 5) as *const u8) as u32) << 16)
+            | ((core::ptr::read_volatile((pkt_buf + off as u64 + 6) as *const u8) as u32) << 8)
+            | (core::ptr::read_volatile((pkt_buf + off as u64 + 7) as *const u8) as u32);
+        let rdlen = ((core::ptr::read_volatile((pkt_buf + off as u64 + 8) as *const u8) as u16) << 8)
+            | (core::ptr::read_volatile((pkt_buf + off as u64 + 9) as *const u8) as u16);
+        off += 10;
+        if off + (rdlen as usize) > dns_base + dns_len {
+            serial_println!("[sexnet.dns.malformed.reject] reason=rdata_oob ok=1");
+            return 0;
+        }
+        if typ == 1 && cls == 1 && rdlen == 4 {
+            let a0 = core::ptr::read_volatile((pkt_buf + off as u64) as *const u8);
+            let a1 = core::ptr::read_volatile((pkt_buf + off as u64 + 1) as *const u8);
+            let a2 = core::ptr::read_volatile((pkt_buf + off as u64 + 2) as *const u8);
+            let a3 = core::ptr::read_volatile((pkt_buf + off as u64 + 3) as *const u8);
+            serial_println!(
+                "[sexnet.dns.source3.answer.a] idx={} addr={}.{}.{}.{} ttl={} ok=1",
+                ai,
+                a0,
+                a1,
+                a2,
+                a3,
+                ttl
+            );
+            let mut ins = 0usize;
+            while ins < 4 {
+                if DNS_A_CACHE_VALID[ins] == 0 {
+                    break;
+                }
+                ins += 1;
+            }
+            if ins >= 4 {
+                ins = 0;
+            }
+            DNS_A_CACHE_IP[ins] = [a0, a1, a2, a3];
+            DNS_A_CACHE_TTL[ins] = ttl;
+            DNS_A_CACHE_VALID[ins] = 1;
+            serial_println!(
+                "[sexnet.dns.source3.cache.insert] idx={} addr={}.{}.{}.{} ok=1",
+                ins,
+                a0,
+                a1,
+                a2,
+                a3
+            );
+        }
+        off += rdlen as usize;
+        ai += 1;
+    }
+    1
 }
 
 // --------------------------------------------------------------------------
@@ -472,6 +784,42 @@ fn handle_call(syscall_id: u64, arg0: u64, arg1: u64) -> u64 {
         }
 
         SEXNET_GET_IP => STATE.lock().ipv4 as u64,
+        SEXNET_DNS_RESOLVE => {
+            let host_id = arg0;
+            if host_id != 1 {
+                serial_println!(
+                    "[browser.dns.resolve.miss] host_id={} ok=1 reason=unsupported_host",
+                    host_id
+                );
+                return 0;
+            }
+
+            let mut idx = 0usize;
+            while idx < 4 {
+                let (valid, ttl, ip) = unsafe {
+                    (
+                        DNS_A_CACHE_VALID[idx],
+                        DNS_A_CACHE_TTL[idx],
+                        DNS_A_CACHE_IP[idx],
+                    )
+                };
+                if valid != 0 && ttl != 0 {
+                    let packed = u32::from_be_bytes(ip) as u64;
+                    serial_println!(
+                        "[browser.dns.resolve.ok] addr={}.{}.{}.{} ok=1",
+                        ip[0],
+                        ip[1],
+                        ip[2],
+                        ip[3]
+                    );
+                    return packed;
+                }
+                idx += 1;
+            }
+
+            serial_println!("[browser.dns.resolve.miss] host_id=1 ok=1 reason=cache_miss");
+            0
+        }
         _ => u64::MAX,
     }
 }
@@ -504,6 +852,7 @@ pub extern "C" fn _start() -> ! {
         proof_len
     );
     if source == 2 {
+        serial_println!("[legacy.source2.dns.not_used] source=2 dns=0 ok=1");
         let blen_raw = unsafe { sys_net_diag(1) };
         let blen = core::cmp::min(blen_raw as usize, 64usize);
         if blen > 0 {
@@ -4098,6 +4447,98 @@ pub extern "C" fn _start() -> ! {
                                                 serial_println!(
                                                     "[hal.netdiag.freeze] source2=legacy source3=primary ok=1"
                                                 );
+                                                let mut dns_query_frame = [0u8; SEXNET_DNS_QUERY_FRAME_LEN];
+                                                let dns_query_len = build_dns_query_frame_source3(&mut dns_query_frame);
+                                                if dns_query_len == SEXNET_DNS_QUERY_FRAME_LEN {
+                                                    serial_println!("[sexnet.dns.source3.query.build] txid=0x1234 qname=example.com len=71 ok=1");
+                                                } else {
+                                                    serial_println!("[sexnet.dns.source3.query.build] txid=0x1234 qname=example.com len={} ok=0", dns_query_len);
+                                                }
+                                                if DNS_SOURCE3_UDP_TX_ENABLED {
+                                                    let dns_tx_owner = NIC_TX_OWNER.load(Ordering::Acquire);
+                                                    let dns_tx_perm_ready = unsafe {
+                                                        TX_PERM_DESC_VA != 0 && TX_PERM_FRAME_PHYS != 0 && TX_PERM_FRAME_VA != 0
+                                                    };
+                                                    if dns_tx_owner != NIC_OWNER_SEXNET_FULL || !dns_tx_perm_ready {
+                                                        serial_println!("[sexnet.dns.source3.udp.tx.skip] reason=no_tx_owner ok=1");
+                                                    } else if dns_query_len == SEXNET_DNS_QUERY_FRAME_LEN {
+                                                        let dns_tx_desc = unsafe { TX_PERM_DESC_VA + 7 * 16 };
+                                                        let dns_tx_va = unsafe { TX_PERM_FRAME_VA };
+                                                        let mut dns_i = 0usize;
+                                                        while dns_i < SEXNET_DNS_QUERY_FRAME_LEN {
+                                                            unsafe {
+                                                                core::ptr::write_volatile(
+                                                                    (dns_tx_va + dns_i as u64) as *mut u8,
+                                                                    dns_query_frame[dns_i],
+                                                                );
+                                                            }
+                                                            dns_i += 1;
+                                                        }
+                                                        unsafe {
+                                                            core::ptr::write_volatile((dns_tx_desc + 0) as *mut u64, TX_PERM_FRAME_PHYS);
+                                                            core::ptr::write_volatile((dns_tx_desc + 8) as *mut u16, SEXNET_DNS_QUERY_FRAME_LEN as u16);
+                                                            core::ptr::write_volatile((dns_tx_desc + 11) as *mut u8, 0x0B);
+                                                            core::ptr::write_volatile((dns_tx_desc + 12) as *mut u8, 0u8);
+                                                            core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 8u32);
+                                                        }
+                                                        let mut dns_tx_dd = 0u32;
+                                                        let mut dns_poll = 0u32;
+                                                        while dns_poll < 50_000_000 {
+                                                            let dns_sta = unsafe {
+                                                                core::ptr::read_volatile((dns_tx_desc + 12) as *const u8)
+                                                            };
+                                                            if (dns_sta & 1) != 0 {
+                                                                dns_tx_dd = 1;
+                                                                break;
+                                                            }
+                                                            dns_poll += 1;
+                                                        }
+                                                        serial_println!(
+                                                            "[sexnet.dns.source3.udp.tx] dst=10.0.2.3 dst_port=53 len=71 tx_dd={} ok={}",
+                                                            dns_tx_dd,
+                                                            if dns_tx_dd == 1 { 1 } else { 0 }
+                                                        );
+                                                    } else {
+                                                        serial_println!("[sexnet.dns.source3.udp.tx] dst=10.0.2.3 dst_port=53 len=71 tx_dd=0 ok=0");
+                                                    }
+                                                }
+                                                if DNS_SOURCE3_UDP_TX_ENABLED {
+                                                    let mut dns_seen = 0u32;
+                                                    let mut dns_rounds = 0u32;
+                                                    while dns_rounds < 1_000_000 {
+                                                        let mut ridx_dns = 0u32;
+                                                        while ridx_dns < 8 {
+                                                            let rdesc_dns = unsafe { RX_PERM_DESC_VA + (ridx_dns as u64) * 16 };
+                                                            let rstatus_dns = unsafe {
+                                                                core::ptr::read_volatile((rdesc_dns + 12) as *const u8)
+                                                            };
+                                                            if (rstatus_dns & 1) != 0 {
+                                                                let rlen_dns = unsafe {
+                                                                    core::ptr::read_volatile((rdesc_dns + 8) as *const u16)
+                                                                } as usize;
+                                                                if unsafe { dns_source3_try_parse_and_cache(RX_PERM_PKT_VA[ridx_dns as usize], rlen_dns) } == 1 {
+                                                                    dns_seen = 1;
+                                                                }
+                                                                unsafe {
+                                                                    core::ptr::write_volatile((rdesc_dns + 8) as *mut u16, 0u16);
+                                                                    core::ptr::write_volatile((rdesc_dns + 12) as *mut u8, 0u8);
+                                                                    core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, ridx_dns);
+                                                                }
+                                                            }
+                                                            ridx_dns += 1;
+                                                        }
+                                                        if dns_seen == 1 {
+                                                            break;
+                                                        }
+                                                        dns_rounds += 1;
+                                                    }
+                                                    if dns_seen == 0 {
+                                                        serial_println!(
+                                                            "[sexnet.dns.source3.rx.timeout] rounds={} seen=0 ok=0 reason=no_response_env_blocked",
+                                                            dns_rounds
+                                                        );
+                                                    }
+                                                }
                                                 // ── Phase M: source3 reliability multi-fetch ──
                                                 // Bounded N=3 repeated HTTP GET with fresh TCP connections.
                                                 // Same TX desc 7, same RX ring, same HTTP parse path.

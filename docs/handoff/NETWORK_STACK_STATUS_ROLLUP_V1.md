@@ -992,3 +992,13 @@ ENABLE_QEMU_USERNET_E1000=1 \
 
 - `/tmp/sexnet_phase_o_final_network.log` — Phase O final network proof log
 - `/tmp/sexnet_phase_o_real_hw_audit.log` — Host NIC audit log
+
+## DNS Source3 Status Pointer (2026-05-20)
+
+DNS migration-to-source3 gate policy and handoff are tracked in:
+- `docs/handoff/SEXNET_DNS_SOURCE3_HANDOFF_V1.md`
+
+Current state for this rollup:
+- Source3 DNS marker chain exists in `servers/sexnet/src/main.rs` and browser resolve markers.
+- Daily-driver now has explicit source3 DNS PASS/SKIP/FAIL gates.
+- HAL source2 DNS remains frozen legacy and undeleted by policy.

@@ -37,6 +37,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 }
 
 const KALEIDO_SURFACE_ID: u64 = 300;
+const SEXNET_DNS_RESOLVE: u64 = 0x20B;
 
 struct App {
     live_text: [u8; 64],
@@ -49,6 +50,20 @@ impl SexApp for App {
         let (status, _value) = sex_pdx::pdx_call(sex_pdx::SLOT_NET, 0x200, 0, 0, 0);
         sex_pdx::serial_println!("[browser.slot.net.route.call] status={}", status);
         sex_pdx::serial_println!("[browser.slot.net.static_grant.proof.done] ok=1 network=0");
+        sex_pdx::serial_println!("[browser.dns.resolve.request] host_id=1 ok=1");
+        let (_dns_status, dns_reply) = sex_pdx::pdx_call(sex_pdx::SLOT_NET, SEXNET_DNS_RESOLVE, 1, 0, 0);
+        if dns_reply != 0 {
+            let ip = (dns_reply as u32).to_be_bytes();
+            sex_pdx::serial_println!(
+                "[browser.dns.resolve.ok] addr={}.{}.{}.{} ok=1",
+                ip[0],
+                ip[1],
+                ip[2],
+                ip[3]
+            );
+        } else {
+            sex_pdx::serial_println!("[browser.dns.resolve.miss] host_id=1 ok=1 reason=cache_miss");
+        }
         sex_pdx::serial_println!("[browser.packed_text.begin]");
 
         sex_pdx::pdx_call(sex_pdx::SLOT_NET, 0x200, 0x207, 0, 0);
