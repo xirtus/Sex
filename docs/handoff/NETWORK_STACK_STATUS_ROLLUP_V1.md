@@ -491,3 +491,19 @@ Mission: `SEXNET_HTTP_STATUS_PARSE_FIX_V1`
   - added bounded PSH/ACK shape + payload peek + peer ACK progression markers.
 - Proof attempt log: `/tmp/sexnet_tcp_psh_ack_wireshape_fix.log`.
 - This run remained in `sexnet.http.handshake ... allowed=0 ... no_network_grant_no_route` and did not enter Phase I TCP runtime lane; status recorded as REVIEW ONLY for runtime proof.
+
+## 2026-05-19: SEXNET Phase I Proof Trigger Fix V1
+
+- Root cause for source=3 SKIPs was launcher truncation, not parser logic:
+  - `scripts/run_daily_driver_proof.sh` default 30s probe ended before late source=3 lane reached `[sexnet.tcp.entry]`.
+- Trigger/profile fix (launcher only):
+  - Added explicit `SEXNET_PHASE_I_HTTP_PROOF` profile input.
+  - When `SEXNET_PHASE_I_HTTP_PROOF=1`, enforce `SEXOS_HAL_TCP_PROBE` default `0` and raise probe window to minimum 90s.
+  - Default daily behavior unchanged when profile unset.
+- Verification run (`/tmp/sexnet_phase_i_trigger_fix.log`) now shows active source=3 lane markers:
+  - `[sexnet.tcp.entry] ... remote=10.0.2.2:18081 ok=1`
+  - `[sexnet.tcp.payload.tx.guard] state=SYN_SENT ok=0 reason=not_established`
+  - `[sexnet.phaseI.readiness] established=0 payload_tx=0 source=3 ok=0`
+- Current truth after trigger fix:
+  - source=3 lane execution: PRESENT
+  - HTTP source3 full PASS: NOT YET (still env-limited, no ESTABLISHED in this run)

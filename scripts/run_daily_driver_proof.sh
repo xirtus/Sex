@@ -36,6 +36,7 @@ QEMU_NET_MODEL="${QEMU_NET_MODEL:-e1000}"
 QEMU_NET_BACKEND="${QEMU_NET_BACKEND:-user}"
 QEMU_USERNET_HOSTFWD="${QEMU_USERNET_HOSTFWD:-}"
 QEMU_TAP_IFNAME="${QEMU_TAP_IFNAME:-tap0}"
+SEXNET_PHASE_I_HTTP_PROOF="${SEXNET_PHASE_I_HTTP_PROOF:-0}"
 
 # ---- helpers ----
 die() {
@@ -253,6 +254,21 @@ export SEXOS_E1000_RING_ALLOC_PROOF=1
 export SEXOS_DMA_UC_ALIAS_PROOF=1
 export SEXOS_LINEN_PERSIST_READBACK_PROOF=1
 
+# ── Sexnet Phase I source=3 explicit profile trigger ──
+# Keep daily default unchanged: only enable this widened runtime window when
+# caller explicitly requests the Phase I proof lane.
+if [ "$SEXNET_PHASE_I_HTTP_PROOF" = "1" ]; then
+    # Ensure HAL-side probe noise stays off for this lane unless caller
+    # explicitly overrides it.
+    export SEXOS_HAL_TCP_PROBE="${SEXOS_HAL_TCP_PROBE:-0}"
+    # Phase I lane executes late in boot after bounded ARP/cache polls.
+    # 30s default often truncates before [sexnet.tcp.entry], so widen only
+    # for this explicit profile.
+    if [ "$PROBE_SECONDS" -lt 90 ]; then
+        PROBE_SECONDS=90
+    fi
+fi
+
 # ── Frame Chrome model proof ──
 export SEXOS_FRAME_CHROME_MODEL_PROOF=1
 export SEXOS_SPINDLE_FRAME_CHROME_PROOF=1
@@ -285,6 +301,7 @@ echo "  iso:     $ISO"
 echo "  probe:   ${PROBE_SECONDS}s"
 echo "  nic:     ${QEMU_NET_MODEL} (backend=${QEMU_NET_BACKEND} usernet=${ENABLE_QEMU_USERNET_E1000})"
 echo "  hostfwd: ${QEMU_USERNET_HOSTFWD:-none}"
+echo "  phaseI:  ${SEXNET_PHASE_I_HTTP_PROOF}"
 echo ""
 
 # ---- 1. BUILD ----
