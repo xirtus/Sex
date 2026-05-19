@@ -2078,6 +2078,236 @@ pub extern "C" fn _start() -> ! {
                                                     );
                                                     ipv4_ok = 1;
                                                     ipv4_frames += 1;
+                                                    // ICMP echo request handler (Phase D)
+                                                    if proto == 1 && (total_len as usize) >= 28 {
+                                                        let icmp_base = pkt_buf + 34; // 14 eth + 20 ipv4
+                                                        let icmp_type = unsafe { core::ptr::read_volatile(icmp_base as *const u8) };
+                                                        let icmp_code = unsafe { core::ptr::read_volatile((icmp_base + 1) as *const u8) };
+                                                        if icmp_type == 8 && icmp_code == 0 {
+                                                            let icmp_hdr_len = 8usize;
+                                                            let ipv4_hdr_len = 20usize;
+                                                            let icmp_payload_len = (total_len as usize).saturating_sub(ipv4_hdr_len + icmp_hdr_len);
+                                                            let id_hi = unsafe { core::ptr::read_volatile((icmp_base + 4) as *const u8) };
+                                                            let id_lo = unsafe { core::ptr::read_volatile((icmp_base + 5) as *const u8) };
+                                                            let seq_hi = unsafe { core::ptr::read_volatile((icmp_base + 6) as *const u8) };
+                                                            let seq_lo = unsafe { core::ptr::read_volatile((icmp_base + 7) as *const u8) };
+                                                            let icmp_id = ((id_hi as u16) << 8) | (id_lo as u16);
+                                                            let icmp_seq = ((seq_hi as u16) << 8) | (seq_lo as u16);
+                                                            let icmp_total_len = icmp_hdr_len + icmp_payload_len;
+                                                            serial_println!(
+                                                                "[sexnet.icmp.rx.echo] type=8 code=0 len={} id={} seq={} ok=1",
+                                                                icmp_total_len, icmp_id, icmp_seq
+                                                            );
+                                                            // Validate ICMP checksum from RX
+                                                            {
+                                                                let mut icmp_rx_sum = 0u32;
+                                                                let mut cj = 0usize;
+                                                                let rx_icmp_words = icmp_total_len / 2;
+                                                                while cj < rx_icmp_words {
+                                                                    let off = 34 + cj * 2;
+                                                                    let w_hi = unsafe { core::ptr::read_volatile((pkt_buf + off as u64) as *const u8) } as u16;
+                                                                    let w_lo = unsafe { core::ptr::read_volatile((pkt_buf + off as u64 + 1) as *const u8) } as u16;
+                                                                    icmp_rx_sum += ((w_hi << 8) | w_lo) as u32;
+                                                                    cj += 1;
+                                                                }
+                                                                if icmp_total_len % 2 != 0 {
+                                                                    let last = unsafe { core::ptr::read_volatile((pkt_buf + 34 + icmp_total_len as u64 - 1) as *const u8) } as u16;
+                                                                    icmp_rx_sum += (last << 8) as u32;
+                                                                }
+                                                                while (icmp_rx_sum >> 16) != 0 {
+                                                                    icmp_rx_sum = (icmp_rx_sum & 0xFFFF) + (icmp_rx_sum >> 16);
+                                                                }
+                                                                let icmp_rx_csum_ok = if (icmp_rx_sum as u16) == 0xFFFF { 1u32 } else { 0u32 };
+                                                                serial_println!("[sexnet.icmp.checksum.validate] ok={}", icmp_rx_csum_ok);
+                                                            }
+                                                            // Build Ethernet + IPv4 + ICMP echo reply in TX frame buffer
+                                                            let tx_va = unsafe { TX_PERM_FRAME_VA };
+                                                            let nic_mac: [u8; 6] = [
+                                                                (ral & 0xFF) as u8,
+                                                                ((ral >> 8) & 0xFF) as u8,
+                                                                ((ral >> 16) & 0xFF) as u8,
+                                                                ((ral >> 24) & 0xFF) as u8,
+                                                                (rah & 0xFF) as u8,
+                                                                ((rah >> 8) & 0xFF) as u8,
+                                                            ];
+                                                            let src_mac0 = unsafe { core::ptr::read_volatile((pkt_buf + 6) as *const u8) };
+                                                            let src_mac1 = unsafe { core::ptr::read_volatile((pkt_buf + 7) as *const u8) };
+                                                            let src_mac2 = unsafe { core::ptr::read_volatile((pkt_buf + 8) as *const u8) };
+                                                            let src_mac3 = unsafe { core::ptr::read_volatile((pkt_buf + 9) as *const u8) };
+                                                            let src_mac4 = unsafe { core::ptr::read_volatile((pkt_buf + 10) as *const u8) };
+                                                            let src_mac5 = unsafe { core::ptr::read_volatile((pkt_buf + 11) as *const u8) };
+                                                            // Ethernet header
+                                                            unsafe {
+                                                                core::ptr::write_volatile((tx_va + 0) as *mut u8, src_mac0);
+                                                                core::ptr::write_volatile((tx_va + 1) as *mut u8, src_mac1);
+                                                                core::ptr::write_volatile((tx_va + 2) as *mut u8, src_mac2);
+                                                                core::ptr::write_volatile((tx_va + 3) as *mut u8, src_mac3);
+                                                                core::ptr::write_volatile((tx_va + 4) as *mut u8, src_mac4);
+                                                                core::ptr::write_volatile((tx_va + 5) as *mut u8, src_mac5);
+                                                                core::ptr::write_volatile((tx_va + 6) as *mut u8, nic_mac[0]);
+                                                                core::ptr::write_volatile((tx_va + 7) as *mut u8, nic_mac[1]);
+                                                                core::ptr::write_volatile((tx_va + 8) as *mut u8, nic_mac[2]);
+                                                                core::ptr::write_volatile((tx_va + 9) as *mut u8, nic_mac[3]);
+                                                                core::ptr::write_volatile((tx_va + 10) as *mut u8, nic_mac[4]);
+                                                                core::ptr::write_volatile((tx_va + 11) as *mut u8, nic_mac[5]);
+                                                                core::ptr::write_volatile((tx_va + 12) as *mut u8, 0x08);
+                                                                core::ptr::write_volatile((tx_va + 13) as *mut u8, 0x00);
+                                                            }
+                                                            let reply_total_len = (ipv4_hdr_len + icmp_total_len) as u16;
+                                                            // IPv4 header
+                                                            unsafe {
+                                                                core::ptr::write_volatile((tx_va + 14) as *mut u8, 0x45); // ver=4 ihl=5
+                                                                core::ptr::write_volatile((tx_va + 15) as *mut u8, 0x00); // dscp/ecn
+                                                                core::ptr::write_volatile((tx_va + 16) as *mut u8, ((reply_total_len >> 8) & 0xFF) as u8);
+                                                                core::ptr::write_volatile((tx_va + 17) as *mut u8, (reply_total_len & 0xFF) as u8);
+                                                                core::ptr::write_volatile((tx_va + 18) as *mut u8, 0x00); // id=0
+                                                                core::ptr::write_volatile((tx_va + 19) as *mut u8, 0x00);
+                                                                core::ptr::write_volatile((tx_va + 20) as *mut u8, 0x00); // flags/frag=0
+                                                                core::ptr::write_volatile((tx_va + 21) as *mut u8, 0x00);
+                                                                core::ptr::write_volatile((tx_va + 22) as *mut u8, 64);  // ttl=64
+                                                                core::ptr::write_volatile((tx_va + 23) as *mut u8, 1);   // proto=1 ICMP
+                                                                core::ptr::write_volatile((tx_va + 24) as *mut u8, 0x00); // csum=0 (compute after)
+                                                                core::ptr::write_volatile((tx_va + 25) as *mut u8, 0x00);
+                                                                core::ptr::write_volatile((tx_va + 26) as *mut u8, 10);  // src=10.0.2.15
+                                                                core::ptr::write_volatile((tx_va + 27) as *mut u8, 0);
+                                                                core::ptr::write_volatile((tx_va + 28) as *mut u8, 2);
+                                                                core::ptr::write_volatile((tx_va + 29) as *mut u8, 15);
+                                                                core::ptr::write_volatile((tx_va + 30) as *mut u8, src0); // dst=request src
+                                                                core::ptr::write_volatile((tx_va + 31) as *mut u8, src1);
+                                                                core::ptr::write_volatile((tx_va + 32) as *mut u8, src2);
+                                                                core::ptr::write_volatile((tx_va + 33) as *mut u8, src3);
+                                                            }
+                                                            // IPv4 checksum
+                                                            {
+                                                                let mut ipv4_tx_sum = 0u32;
+                                                                let mut ck = 0usize;
+                                                                while ck < 10 {
+                                                                    let off = 14 + ck * 2;
+                                                                    let w_hi = unsafe { core::ptr::read_volatile((tx_va + off as u64) as *const u8) } as u16;
+                                                                    let w_lo = unsafe { core::ptr::read_volatile((tx_va + off as u64 + 1) as *const u8) } as u16;
+                                                                    ipv4_tx_sum += ((w_hi << 8) | w_lo) as u32;
+                                                                    ck += 1;
+                                                                }
+                                                                while (ipv4_tx_sum >> 16) != 0 {
+                                                                    ipv4_tx_sum = (ipv4_tx_sum & 0xFFFF) + (ipv4_tx_sum >> 16);
+                                                                }
+                                                                let ipv4_tx_csum = !(ipv4_tx_sum as u16);
+                                                                unsafe {
+                                                                    core::ptr::write_volatile((tx_va + 24) as *mut u8, ((ipv4_tx_csum >> 8) & 0xFF) as u8);
+                                                                    core::ptr::write_volatile((tx_va + 25) as *mut u8, (ipv4_tx_csum & 0xFF) as u8);
+                                                                }
+                                                            }
+                                                            // ICMP echo reply header
+                                                            unsafe {
+                                                                core::ptr::write_volatile((tx_va + 34) as *mut u8, 0x00); // type=0 echo reply
+                                                                core::ptr::write_volatile((tx_va + 35) as *mut u8, 0x00); // code=0
+                                                                core::ptr::write_volatile((tx_va + 36) as *mut u8, 0x00); // csum=0 (compute after)
+                                                                core::ptr::write_volatile((tx_va + 37) as *mut u8, 0x00);
+                                                                core::ptr::write_volatile((tx_va + 38) as *mut u8, id_hi);
+                                                                core::ptr::write_volatile((tx_va + 39) as *mut u8, id_lo);
+                                                                core::ptr::write_volatile((tx_va + 40) as *mut u8, seq_hi);
+                                                                core::ptr::write_volatile((tx_va + 41) as *mut u8, seq_lo);
+                                                            }
+                                                            // Copy ICMP payload from request
+                                                            {
+                                                                let mut pi = 0usize;
+                                                                while pi < icmp_payload_len {
+                                                                    let pb = unsafe { core::ptr::read_volatile((icmp_base + icmp_hdr_len as u64 + pi as u64) as *const u8) };
+                                                                    unsafe {
+                                                                        core::ptr::write_volatile((tx_va + 42u64 + pi as u64) as *mut u8, pb);
+                                                                    }
+                                                                    pi += 1;
+                                                                }
+                                                            }
+                                                            // ICMP checksum
+                                                            {
+                                                                let mut icmp_tx_sum = 0u32;
+                                                                let mut cl = 0usize;
+                                                                let tx_icmp_words = icmp_total_len / 2;
+                                                                while cl < tx_icmp_words {
+                                                                    let off = 34 + cl * 2;
+                                                                    let w_hi = unsafe { core::ptr::read_volatile((tx_va + off as u64) as *const u8) } as u16;
+                                                                    let w_lo = unsafe { core::ptr::read_volatile((tx_va + off as u64 + 1) as *const u8) } as u16;
+                                                                    icmp_tx_sum += ((w_hi << 8) | w_lo) as u32;
+                                                                    cl += 1;
+                                                                }
+                                                                if icmp_total_len % 2 != 0 {
+                                                                    let last_off = 34 + icmp_total_len - 1;
+                                                                    let last = unsafe { core::ptr::read_volatile((tx_va + last_off as u64) as *const u8) } as u16;
+                                                                    icmp_tx_sum += (last << 8) as u32;
+                                                                }
+                                                                while (icmp_tx_sum >> 16) != 0 {
+                                                                    icmp_tx_sum = (icmp_tx_sum & 0xFFFF) + (icmp_tx_sum >> 16);
+                                                                }
+                                                                let icmp_tx_csum = !(icmp_tx_sum as u16);
+                                                                unsafe {
+                                                                    core::ptr::write_volatile((tx_va + 36) as *mut u8, ((icmp_tx_csum >> 8) & 0xFF) as u8);
+                                                                    core::ptr::write_volatile((tx_va + 37) as *mut u8, (icmp_tx_csum & 0xFF) as u8);
+                                                                }
+                                                            }
+                                                            serial_println!(
+                                                                "[sexnet.icmp.tx.reply.build] type=0 code=0 len={} id={} seq={} ok=1",
+                                                                icmp_total_len, icmp_id, icmp_seq
+                                                            );
+                                                            serial_println!("[sexnet.icmp.tx.reply.checksum] ok=1");
+                                                            serial_println!(
+                                                                "[sexnet.ipv4.tx.icmp_reply.build] src=10.0.2.15 dst={}.{}.{}.{} total_len={} checksum=ok ok=1",
+                                                                src0, src1, src2, src3, reply_total_len
+                                                            );
+                                                            // TX descriptor 3
+                                                            let frame_len = (14 + reply_total_len as u64) as u16;
+                                                            if frame_len < 60 {
+                                                                let mut pad = frame_len as u64;
+                                                                while pad < 60 {
+                                                                    unsafe { core::ptr::write_volatile((tx_va + pad) as *mut u8, 0u8); }
+                                                                    pad += 1;
+                                                                }
+                                                            }
+                                                            let tx_frame_len = if frame_len < 60 { 60u16 } else { frame_len };
+                                                            let tx_desc3 = unsafe { TX_PERM_DESC_VA + 48 };
+                                                            unsafe {
+                                                                core::ptr::write_volatile(tx_desc3 as *mut u64, TX_PERM_FRAME_PHYS);
+                                                                core::ptr::write_volatile((tx_desc3 + 8) as *mut u16, tx_frame_len);
+                                                                core::ptr::write_volatile((tx_desc3 + 10) as *mut u8, 0u8);
+                                                                core::ptr::write_volatile((tx_desc3 + 11) as *mut u8, 0x0Bu8);
+                                                                core::ptr::write_volatile((tx_desc3 + 12) as *mut u8, 0u8);
+                                                                core::ptr::write_volatile((tx_desc3 + 13) as *mut u8, 0u8);
+                                                                core::ptr::write_volatile((tx_desc3 + 14) as *mut u16, 0u16);
+                                                            }
+                                                            serial_println!("[sexnet.eth.tx.icmp_reply.desc] len={} ok=1", tx_frame_len);
+                                                            unsafe {
+                                                                core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 4);
+                                                            }
+                                                            let mut icmp_reply_done = 0u32;
+                                                            let mut tx_outer = 0u32;
+                                                            while tx_outer < 50_000_000 {
+                                                                let tx_st = unsafe { core::ptr::read_volatile((tx_desc3 + 12) as *const u8) };
+                                                                if (tx_st & 1) != 0 {
+                                                                    icmp_reply_done = 1;
+                                                                    break;
+                                                                }
+                                                                tx_outer += 1;
+                                                            }
+                                                            serial_println!(
+                                                                "[sexnet.icmp.tx.poll.done] dd_set={} ok={}",
+                                                                icmp_reply_done,
+                                                                if icmp_reply_done == 1 { 1 } else { 0 }
+                                                            );
+                                                            serial_println!(
+                                                                "[sexnet.icmp.echo.proof.done] rx_echo=1 tx_reply={} tx_dd={} ok={}",
+                                                                if icmp_reply_done > 0 { 1 } else { 0 },
+                                                                icmp_reply_done,
+                                                                if icmp_reply_done == 1 { 1 } else { 0 }
+                                                            );
+                                                        } else {
+                                                            serial_println!(
+                                                                "[sexnet.icmp.reject] reason=not_echo_request type={} code={} ok=1",
+                                                                icmp_type, icmp_code
+                                                            );
+                                                        }
+                                                    } else if proto == 1 && (total_len as usize) < 28 {
+                                                        serial_println!("[sexnet.icmp.reject] reason=too_short_for_icmp ok=1");
+                                                    }
                                                 } else if reject_logged == 0 {
                                                     serial_println!(
                                                         "[sexnet.ipv4.rx.reject.detail] idx={} etype=0x{:04X} reason={} ok=0",

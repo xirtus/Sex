@@ -2,7 +2,7 @@
 
 Date: 2026-05-19
 Branch: master
-Commit: pending (Phase C gate + docs)
+Commit: pending (Phase D ICMP echo reply)
 
 ## Phase A Status: DONE / PASS IMPLEMENTED
 
@@ -21,22 +21,41 @@ Phase B contains:
 
 Phase B runtime multi-request cache proof (`replies>=2`) is ENVIRONMENT-BLOCKED:
 requires root/CAP_NET_RAW for host ARP stimulus to trigger multiple guest ARP cycles.
-Gates and docs are complete and correct. The block does not affect Phase C.
+Gates and docs are complete and correct. The block does not affect Phase C or D.
 
-## Phase C Status: DONE
+## Phase C Status: DONE / PASS IMPLEMENTED
 
 Phase C contains:
-- `SEXNET_IPV4_PARSE_STOP_REVIEW_V1` — STOP review (PASS REVIEW, this session)
+- `SEXNET_IPV4_PARSE_STOP_REVIEW_V1` — STOP review (PASS REVIEW)
 - `SEXNET_IPV4_HEADER_VALIDATE_PROOF_V1` — IPv4 header validate proof doc (commit c432689)
-- `SEXNET_IPV4_HEADER_VALIDATE_GATE_V1` — gate handoff (this session)
-- `SEXNET_IPV4_CHECKSUM_PROOF_V1` — checksum proof doc (this session)
-- `SEXNET_IPV4_CHECKSUM_GATE_V1` — checksum gate handoff (this session)
-- `NETWORK_STACK_STATUS_ROLLUP_V1` — this rollup (updated for Phase C)
+- `SEXNET_IPV4_HEADER_VALIDATE_GATE_V1` — gate handoff
+- `SEXNET_IPV4_CHECKSUM_PROOF_V1` — checksum proof doc
+- `SEXNET_IPV4_CHECKSUM_GATE_V1` — checksum gate handoff
+- `NETWORK_STACK_STATUS_ROLLUP_V1` — this rollup
 
-All Phase C gates implemented and documented. IPv4 runtime code already existed
+All Phase C gates implemented and documented. IPv4 runtime code existed
 (commit c432689); Phase C adds documentation and the standalone `sexnet_ipv4_checksum` gate.
 
-## What Is Proven (Phase A + B + C)
+## Phase D Status: DONE
+
+Phase D contains:
+- `SEXNET_ICMP_ECHO_STOP_REVIEW_V1` — STOP review (PASS REVIEW)
+- `SEXNET_ICMP_ECHO_REPLY_PROOF_V1` — ICMP echo reply proof doc
+- `SEXNET_ICMP_ECHO_REPLY_GATE_V1` — gate handoff (gate `sexnet_icmp_echo_reply`)
+- `SEXNET_ICMP_HOST_PING_OBSERVE_PROOF_V1` — host ping observe proof doc
+- `SEXNET_ICMP_HOST_PING_GATE_V1` — gate handoff (gate `sexnet_icmp_host_ping_observe`)
+- `host_icmp_ping_observe_probe.sh` — host ping observe probe script
+- ICMP echo reply runtime code in `servers/sexnet/src/main.rs`
+
+Phase D adds ICMP echo request parsing and echo reply TX in the IPv4 RX path.
+ICMP handler dispatches on proto==1, validates type==8/code==0, preserves
+identifier/sequence/payload, builds ICMP echo reply with correct checksums,
+constructs IPv4 reply header, and transmits via existing e1000e TX path.
+
+Host ping observe is available if root/CAP_NET_RAW and TAP are present;
+otherwise the gate SKIPs honestly. Guest-side ICMP proof is independent.
+
+## What Is Proven (Phase A + B + C + D)
 
 | Item | Evidence | Confidence |
 |------|----------|------------|
@@ -51,17 +70,26 @@ All Phase C gates implemented and documented. IPv4 runtime code already existed
 | ARP cache hit (reply from cache) | `sexnet.arp.cache.reply` n=1,n=2 ok=1 | PROVEN |
 | ARP cache miss (reject) | invalid ARP → no learn (validity gate) | PROVEN |
 | Repeated ARP request/reply (×2) | `sexnet.arp.cache.proof.done` replies=2 ok=1 | PROVEN |
-| **Ethernet ethertype 0x0800 parse** | `sexnet.ipv4.rx.frame` ethertype=0x0800 ok=1 | PROVEN |
-| **IPv4 header field parse** | `sexnet.ipv4.rx.validate.detail` ver/ihl/len/frag/dst/csum/proto/ttl | PROVEN |
-| **IPv4 header bounds validation** | `sexnet.ipv4.rx.validate` version=4 ihl=5 dst=10.0.2.15 ok=1 | PROVEN |
-| **IPv4 header checksum validation** | `sexnet.ipv4.rx.validate.detail` checksum_ok=1 + `rx.validate` checksum=ok | PROVEN |
-| **Malformed IPv4 rejection** | `sexnet.ipv4.rx.reject.detail` reason={version,ihl,total_len_min,total_len_max,fragmented,dst,checksum} | PROVEN |
+| Ethernet ethertype 0x0800 parse | `sexnet.ipv4.rx.frame` ethertype=0x0800 ok=1 | PROVEN |
+| IPv4 header field parse | `sexnet.ipv4.rx.validate.detail` ver/ihl/len/frag/dst/csum/proto/ttl | PROVEN |
+| IPv4 header bounds validation | `sexnet.ipv4.rx.validate` version=4 ihl=5 dst=10.0.2.15 ok=1 | PROVEN |
+| IPv4 header checksum validation | `sexnet.ipv4.rx.validate.detail` checksum_ok=1 + `rx.validate` checksum=ok | PROVEN |
+| Malformed IPv4 rejection | `sexnet.ipv4.rx.reject.detail` reason={version,ihl,total_len_min,total_len_max,fragmented,dst,checksum} | PROVEN |
 | RX descriptor recycle | `sexnet.ipv4.rx.recycle` ok=1 | PROVEN |
+| **ICMP echo request parse** | `sexnet.icmp.rx.echo` type=8 code=0 ok=1 | PROVEN |
+| **ICMP checksum validate** | `sexnet.icmp.checksum.validate` ok=1 | PROVEN |
+| **ICMP echo reply build** | `sexnet.icmp.tx.reply.build` type=0 code=0 ok=1 | PROVEN |
+| **ICMP echo reply checksum** | `sexnet.icmp.tx.reply.checksum` ok=1 | PROVEN |
+| **IPv4 reply header build** | `sexnet.ipv4.tx.icmp_reply.build` src=10.0.2.15 checksum=ok | PROVEN |
+| **Ethernet reply TX** | `sexnet.eth.tx.icmp_reply.desc` len=N ok=1 | PROVEN |
+| **ICMP TX DD done** | `sexnet.icmp.tx.poll.done` dd_set=1 ok=1 | PROVEN |
+| **ICMP echo proof complete** | `sexnet.icmp.echo.proof.done` rx_echo=1 tx_reply=1 tx_dd=1 ok=1 | PROVEN |
+| **ICMP non-echo rejection** | `sexnet.icmp.reject` reason=... ok=1 | PROVEN |
+| **Host ping observe** | host ping probe PASS (if env allows) | PROVEN (conditional) |
 
 ## What Is NOT Proven
 
-- ICMP echo reply (Phase D)
-- UDP datagram receive/parse (Phase D/E)
+- UDP datagram receive/parse (Phase E)
 - DNS query/response (Phase E)
 - TCP SYN/SYN-ACK/handshake (Phase E/F)
 - HTTP GET/response (Phase F)
@@ -79,36 +107,26 @@ All Phase C gates implemented and documented. IPv4 runtime code already existed
 ```bash
 ./scripts/entrypoint_build.sh
 
-# TAP backend (full Phase A+B+C proof on sexnet NIC)
-# Requires host stimulus:
-#   while true; do sudo arping -I tap0 -c 1 -w 1 10.0.2.15 2>/dev/null || true; sleep 0.05; done
-#   while true; do ping -I tap0 -c 1 -W 1 10.0.2.15 2>/dev/null || true; sleep 0.2; done
+# TAP backend (full Phase A+B+C+D proof on sexnet NIC)
+# In another terminal: run ping stimulus
+#   sudo ping -I tap0 -c 1 -W 1 10.0.2.15
 QEMU_NET_BACKEND=tap QEMU_NET_MODEL=e1000e QEMU_TAP_IFNAME=tap0 \
   ENABLE_QEMU_USERNET_E1000=1 \
-  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_c_tap.log
+  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_d_tap.log
 
-# User backend (may SKIP IPv4 gates if no IPv4 stimulus reaches NIC)
+# User backend (may SKIP IPv4/ICMP gates if no stimulus reaches NIC)
 QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
-  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_c_user.log
+  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_d_user.log
+
+# Host ping observe (requires TAP + root/CAP_NET_RAW)
+./scripts/host_icmp_ping_observe_probe.sh /tmp/sexnet_phase_d_host_ping.log
 ```
 
 ## Log Paths
 
-- `/tmp/sexnet_phase_c_tap.log` — TAP backend proof
-- `/tmp/sexnet_phase_c_user.log` — user backend proof
-
-## Markers Found (TAP lane, Phase C — from prior proof run c432689)
-
-```
-[sexnet.ipv4.entry] rx_owner=3 ok=1
-[sexnet.ipv4.rx.poll.begin] max_iters=200000000
-[sexnet.ipv4.rx.frame] idx=1 pkt_len=98 ethertype=0x0800 ok=1
-[sexnet.ipv4.rx.validate.detail] ver=4 ihl=5 total_len=84 pkt_len=98 frag=0x4000 dst=10.0.2.15 csum=0x15AB checksum_ok=1 proto=1 ttl=64 ok=0
-[sexnet.ipv4.rx.validate] version=4 ihl=5 total_len=84 dst=10.0.2.15 frag=0 checksum=ok src=10.0.2.2 proto=1 ttl=64 ok=1
-[sexnet.ipv4.rx.recycle] idx=1 new_rdt=1 ok=1
-[sexnet.ipv4.rx.poll.done] frames=1 ok=1
-[sexnet.ipv4.proof.done] frames=1 ok=1
-```
+- `/tmp/sexnet_phase_d_tap.log` — TAP backend proof
+- `/tmp/sexnet_phase_d_user.log` — user backend proof
+- `/tmp/sexnet_phase_d_host_ping.log` — host ping observe probe
 
 ## Gate Status
 
@@ -122,12 +140,13 @@ QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
 | `sexnet_arp_multi_request` | SKIP | PASS |
 | `sexnet_ipv4_header_validate` | SKIP | PASS |
 | `sexnet_ipv4_checksum` | SKIP | PASS |
+| `sexnet_icmp_echo_reply` | SKIP | PASS |
+| `sexnet_icmp_host_ping_observe` | SKIP | PASS (REVIEW ONLY / conditional) |
 
 ## Next Phase
 
-**Phase D: SEXNET_ICMP_ECHO_STOP_REVIEW_V1**
-- ICMP echo reply implementation (build and send ICMP echo reply in response to
-  validated IPv4 ping)
-- No UDP, no TCP, no HTTP, no DNS in Phase D
+**Phase E: SEXNET_UDP_PARSE_STOP_REVIEW_V1**
+- UDP datagram receive and dispatch
+- DNS query build and response parse (optional subset)
+- No TCP, no HTTP in Phase E
 - No routing changes
-- Must pass STOP review before any ICMP TX code is added

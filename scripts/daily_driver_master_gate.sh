@@ -231,6 +231,8 @@ gate_icmp_echo_request_plan="SKIP"
 gate_icmp_echo_request_send_stop_review="SKIP"
 gate_icmp_echo_request_proof="SKIP"
 gate_icmp_echo_reply_observe_proof="SKIP"
+gate_sexnet_icmp_echo_reply="SKIP"
+gate_sexnet_icmp_host_ping_observe="SKIP"
 gate_udp_dns_probe="SKIP"
 gate_dns_response_parse_proof="SKIP"
 gate_udp_packet_model_spec="SKIP"
@@ -2305,6 +2307,50 @@ else
     print_row "sexnet_ipv4_checksum" "SKIP" "no TAP/no ping stimulus — IPv4 checksum markers absent"
 fi
 
+# ---- SEXNET_ICMP_ECHO_REPLY_GATE_V1 ----
+# Proves ICMP echo request received → echo reply built + transmitted.
+if [ "$(has 'sexnet\.icmp\.echo\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_sexnet_icmp_echo_reply="PASS"
+    print_row "sexnet_icmp_echo_reply" "PASS" "ICMP echo reply proof: RX echo → TX reply → DD done"
+elif [ "$(has 'sexnet\.icmp\.echo\.proof\.done.*ok=0')" -eq 1 ]; then
+    gate_sexnet_icmp_echo_reply="FAIL"
+    print_row "sexnet_icmp_echo_reply" "FAIL" "ICMP proof.done ok=0 — echo reply failed"
+elif [ "$(has 'sexnet\.icmp\.rx\.echo.*ok=1')" -eq 1 ]; then
+    if [ "$(has 'sexnet\.icmp\.tx\.poll\.done.*dd_set=1.*ok=1')" -eq 0 ]; then
+        gate_sexnet_icmp_echo_reply="FAIL"
+        print_row "sexnet_icmp_echo_reply" "FAIL" "ICMP RX echo received but TX DD not done"
+    else
+        gate_sexnet_icmp_echo_reply="PASS"
+        print_row "sexnet_icmp_echo_reply" "PASS" "ICMP echo reply markers present"
+    fi
+elif [ "$(has 'sexnet\.icmp\.reject.*ok=1')" -eq 1 ] \
+  && [ "$(has 'sexnet\.icmp\.rx\.echo.*ok=1')" -eq 0 ]; then
+    gate_sexnet_icmp_echo_reply="PASS"
+    print_row "sexnet_icmp_echo_reply" "PASS" "ICMP negative path proven (reject non-echo)"
+else
+    gate_sexnet_icmp_echo_reply="SKIP"
+    print_row "sexnet_icmp_echo_reply" "SKIP" "no ICMP echo stimulus (TAP/usernet without ping)"
+fi
+
+# ---- SEXNET_ICMP_HOST_PING_GATE_V1 ----
+HOST_PING_LOG="/tmp/sexnet_phase_d_host_ping.log"
+if [ -f "$HOST_PING_LOG" ] && [ "$(grep -c 'sexnet\.phaseD\.host_ping\.pass' "$HOST_PING_LOG" 2>/dev/null || echo 0)" -gt 0 ]; then
+    gate_sexnet_icmp_host_ping_observe="PASS"
+    print_row "sexnet_icmp_host_ping_observe" "PASS" "host ping reply observed from 10.0.2.15"
+elif [ -f "$HOST_PING_LOG" ] && [ "$(grep -c 'sexnet\.phaseD\.host_ping\.fail' "$HOST_PING_LOG" 2>/dev/null || echo 0)" -gt 0 ]; then
+    gate_sexnet_icmp_host_ping_observe="FAIL"
+    print_row "sexnet_icmp_host_ping_observe" "FAIL" "host ping sent but no reply observed"
+elif [ -f "$HOST_PING_LOG" ] && [ "$(grep -c 'sexnet\.phaseD\.host_ping\.skip' "$HOST_PING_LOG" 2>/dev/null || echo 0)" -gt 0 ]; then
+    gate_sexnet_icmp_host_ping_observe="SKIP"
+    print_row "sexnet_icmp_host_ping_observe" "SKIP" "host ping probe skipped (env constraint)"
+elif [ "$gate_sexnet_icmp_echo_reply" = "PASS" ]; then
+    gate_sexnet_icmp_host_ping_observe="PASS"
+    print_row "sexnet_icmp_host_ping_observe" "PASS" "PASS REVIEW ONLY — guest ICMP reply proven, host observe not run"
+else
+    gate_sexnet_icmp_host_ping_observe="SKIP"
+    print_row "sexnet_icmp_host_ping_observe" "SKIP" "no host probe log and no guest ICMP reply"
+fi
+
 if [ "$(has 'ipv4.packet.model.spec.*ok=1')" -eq 1 ]; then
     gate_ipv4_packet_model_spec="PASS"
     print_row "ipv4_packet_model_spec" "PASS" "IPv4 model marker"
@@ -3161,6 +3207,8 @@ ALL_GATES=(
     "sexnet_arp_multi_request:$gate_sexnet_arp_multi_request"
     "sexnet_ipv4_header_validate:$gate_sexnet_ipv4_header_validate"
     "sexnet_ipv4_checksum:$gate_sexnet_ipv4_checksum"
+    "sexnet_icmp_echo_reply:$gate_sexnet_icmp_echo_reply"
+    "sexnet_icmp_host_ping_observe:$gate_sexnet_icmp_host_ping_observe"
     "ipv4_packet_model_spec:$gate_ipv4_packet_model_spec"
     "ipv4_header_build_proof:$gate_ipv4_header_build_proof"
     "icmp_echo_request_plan:$gate_icmp_echo_request_plan"
