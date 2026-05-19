@@ -1,8 +1,14 @@
 # NETWORK_STACK_STATUS_ROLLUP_V1
 
-Date: 2026-05-19
+Date: 2026-05-20
 Branch: master
-Commit: Phase L HAL freeze / source3 primary gate
+Commit: 8507a4e — net: finalize source3 network 100 percent gates
+Tag: sexnet-source3-network-100-v1
+
+> **RELEASE NOTE:** The completed source3 network 100% milestone release note is at
+> [`SEXNET_SOURCE3_NETWORK_100_RELEASE_NOTE_V1.md`](./SEXNET_SOURCE3_NETWORK_100_RELEASE_NOTE_V1.md).
+> Final result: `FINAL: PASS (266 gates proved, 52 skipped, 0 faults)`.
+> This rollup provides detailed per-phase status; the release note is the authoritative baseline.
 
 ## Phase A Status: DONE / PASS IMPLEMENTED
 
