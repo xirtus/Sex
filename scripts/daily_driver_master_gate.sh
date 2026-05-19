@@ -222,6 +222,7 @@ gate_sexnet_arp_tx_dd="SKIP"
 gate_sexnet_arp_proof="SKIP"
 gate_sexnet_arp_reply_host_observe="SKIP"
 gate_sexnet_arp_cache_proof="SKIP"
+gate_sexnet_arp_multi_request="SKIP"
 gate_sexnet_ipv4_header_validate="SKIP"
 gate_ipv4_packet_model_spec="SKIP"
 gate_ipv4_header_build_proof="SKIP"
@@ -2214,6 +2215,33 @@ else
     print_row "sexnet_arp_cache_proof" "SKIP" "no TAP/no ARP cache markers in this boot"
 fi
 
+# ---- SEXNET_ARP_MULTI_REQUEST_GATE_V1 ----
+# Repeated ARP request/reply proof. Reuses existing cache proof markers
+# (sexnet.arp.cache.*) that already prove 2-request/2-reply behavior.
+# Marker mapping:
+#   sexnet.arp.cache.learn n=1    → sexnet.arp.multi.rx n=1
+#   sexnet.arp.cache.learn n=2    → sexnet.arp.multi.rx n=2
+#   sexnet.arp.cache.reply.dd n=1 → sexnet.arp.multi.tx n=1
+#   sexnet.arp.cache.reply.dd n=2 → sexnet.arp.multi.tx n=2
+#   sexnet.arp.cache.proof.done replies=2 ok=1 → sexnet.arp.multi.done
+if [ "$(has 'sexnet\.arp\.cache\.proof\.done.*ok=0')" -eq 1 ]; then
+    gate_sexnet_arp_multi_request="FAIL"
+    print_row "sexnet_arp_multi_request" "FAIL" "cache proof.done ok=0 — multi request contract failed"
+elif [ "$(has 'sexnet\.arp\.cache\.reply\.dd.*dd_set=0')" -eq 1 ]; then
+    gate_sexnet_arp_multi_request="FAIL"
+    print_row "sexnet_arp_multi_request" "FAIL" "reply.dd dd_set=0 — TX not consumed for reply"
+elif [ "$(has 'sexnet\.arp\.cache\.proof\.done.*replies=2.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.arp\.cache\.reply\.dd.*n=1.*dd_set=1.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.arp\.cache\.reply\.dd.*n=2.*dd_set=1.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.arp\.cache\.learn.*n=1.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.arp\.cache\.learn.*n=2.*ok=1')" -eq 1 ]; then
+    gate_sexnet_arp_multi_request="PASS"
+    print_row "sexnet_arp_multi_request" "PASS" "repeated ARP request/reply proven (2 cycles, all DD consumed)"
+else
+    gate_sexnet_arp_multi_request="SKIP"
+    print_row "sexnet_arp_multi_request" "SKIP" "no TAP/no ARP cache markers in this boot"
+fi
+
 # ---- SEXNET_IPV4_HEADER_VALIDATE_GATE_V1 ----
 # Proof command:
 #   while true; do sudo arping -I tap0 -c 1 -w 1 10.0.2.15 2>/dev/null || true; sleep 0.05; done
@@ -3102,6 +3130,7 @@ ALL_GATES=(
     "sexnet_arp_proof:$gate_sexnet_arp_proof"
     "sexnet_arp_reply_host_observe:$gate_sexnet_arp_reply_host_observe"
     "sexnet_arp_cache_proof:$gate_sexnet_arp_cache_proof"
+    "sexnet_arp_multi_request:$gate_sexnet_arp_multi_request"
     "sexnet_ipv4_header_validate:$gate_sexnet_ipv4_header_validate"
     "ipv4_packet_model_spec:$gate_ipv4_packet_model_spec"
     "ipv4_header_build_proof:$gate_ipv4_header_build_proof"
