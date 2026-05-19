@@ -3832,6 +3832,10 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.hid.{}.continuous.start] attempts=unbounded", dev_kind);
     serial_println!("[sexusb.poll.budget.enter] budget=1_per_iter");
     let mut saw_nonzero = false;
+    let mut hid_report_nonzero_emitted = false;
+    let mut hid_report_idle_emitted = false;
+    let mut hid_report_timeout_emitted = false;
+    let mut hid_report_total_polls: u64 = 0;
     let mut i: u32 = 0;
     let mut intr_prod: u64 = 0;
     let mut intr_pcs: u32 = 1;
@@ -3871,6 +3875,7 @@ pub extern "C" fn _start() -> ! {
         let mut intr_wait_polls: usize = 0;
         while intr_wait_polls < POLL_BUDGET {
             intr_wait_polls += 1;
+            hid_report_total_polls = hid_report_total_polls.wrapping_add(1);
             let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
             if (ev_d3 & 1) != (ev_dcs as u32) {
                 sys_yield();
@@ -3893,6 +3898,13 @@ pub extern "C" fn _start() -> ! {
         }
         if !intr_ok {
             serial_println!("[sexusb.xhci.enum.timeout] phase=RING polls={} ok=0", intr_wait_polls);
+            if !hid_report_timeout_emitted {
+                hid_report_timeout_emitted = true;
+                serial_println!(
+                    "[sexusb.hid.report.timeout] polls={} ok=0",
+                    hid_report_total_polls
+                );
+            }
             sys_yield();
             continue;
         }
@@ -4000,6 +4012,26 @@ pub extern "C" fn _start() -> ! {
         let b5 = unsafe { core::ptr::read_volatile(report_ptr.add(5)) };
         let b6 = unsafe { core::ptr::read_volatile(report_ptr.add(6)) };
         let b7 = unsafe { core::ptr::read_volatile(report_ptr.add(7)) };
+        if !hid_report_nonzero_emitted || !hid_report_idle_emitted {
+            let r0 = if intr_actual >= 1 { b0 } else { 0 };
+            let r1 = if intr_actual >= 2 { b1 } else { 0 };
+            let r2 = if intr_actual >= 3 { b2 } else { 0 };
+            if r0 != 0 || r1 != 0 || r2 != 0 {
+                if !hid_report_nonzero_emitted {
+                    hid_report_nonzero_emitted = true;
+                    serial_println!(
+                        "[sexusb.hid.report.nonzero] len={} b0={:02x} b1={:02x} b2={:02x} ok=1",
+                        intr_actual,
+                        r0,
+                        r1,
+                        r2
+                    );
+                }
+            } else if !hid_report_idle_emitted {
+                hid_report_idle_emitted = true;
+                serial_println!("[sexusb.hid.report.idle] len={} ok=1", intr_actual);
+            }
+        }
         let classify_kind = if is_keyboard_device {
             "keyboard"
         } else if is_tablet_device {
