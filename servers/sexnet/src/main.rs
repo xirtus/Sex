@@ -3813,6 +3813,8 @@ pub extern "C" fn _start() -> ! {
                                             let mut resp_truncated = 0u32;
                                             let mut got_payload = 0u32;
                                             let mut observed_payload_off = 0usize;
+                                            let mut observed_payload_len = 0usize;
+                                            let mut observed_frame_len = 0usize;
                                             let mut rx_outer = 0u32;
                                             while rx_outer < 1_000_000 {
                                                 let mut ridx = 0u32;
@@ -3837,14 +3839,27 @@ pub extern "C" fn _start() -> ! {
                                                                             | (unsafe { core::ptr::read_volatile((tbase + 3) as *const u8) } as u16);
                                                                         if src_port == unsafe { TCP_REMOTE_PORT } && dst_port == unsafe { TCP_LOCAL_PORT } {
                                                                             let dof = unsafe { core::ptr::read_volatile((tbase + 12) as *const u8) };
+                                                                            let flags = unsafe { core::ptr::read_volatile((tbase + 13) as *const u8) };
+                                                                            let flags_ack = if (flags & 0x10) != 0 { 1 } else { 0 };
+                                                                            let flags_rst = if (flags & 0x04) != 0 { 1 } else { 0 };
                                                                             let thl = ((dof >> 4) as usize) * 4;
-                                                                            if thl >= 20 {
+                                                                            let ip_total_len = (((unsafe { core::ptr::read_volatile((rva + 16) as *const u8) } as usize) << 8)
+                                                                                | (unsafe { core::ptr::read_volatile((rva + 17) as *const u8) } as usize));
+                                                                            if flags_ack == 1 && flags_rst == 0 && thl >= 20 && ip_total_len >= ihl + thl {
                                                                                 let payload_off = 14 + ihl + thl;
-                                                                                if payload_off < rlen {
+                                                                                let payload_len = ip_total_len - ihl - thl;
+                                                                                let payload_end = payload_off.saturating_add(payload_len);
+                                                                                if payload_len == 0 {
+                                                                                    serial_println!(
+                                                                                        "[sexnet.http.response.rx.skip] reason=no_tcp_payload flags=0x{:02X} flags_ack={} flags_rst={} ok=1",
+                                                                                        flags, flags_ack, flags_rst
+                                                                                    );
+                                                                                } else if payload_end <= rlen {
                                                                                     observed_payload_off = payload_off;
-                                                                                    let plen = rlen - payload_off;
+                                                                                    observed_payload_len = payload_len;
+                                                                                    observed_frame_len = rlen;
                                                                                     let mut i = 0usize;
-                                                                                    while i < plen {
+                                                                                    while i < payload_len {
                                                                                         if resp_total < HTTP_RESPONSE_BUF_CAP {
                                                                                             unsafe {
                                                                                                 HTTP_RESPONSE_BUF[resp_total] = core::ptr::read_volatile((rva + payload_off as u64 + i as u64) as *const u8);
@@ -3857,6 +3872,16 @@ pub extern "C" fn _start() -> ! {
                                                                                     }
                                                                                     got_payload = 1;
                                                                                 }
+                                                                            } else if flags_rst == 1 {
+                                                                                serial_println!(
+                                                                                    "[sexnet.http.response.rx.skip] reason=rst_segment flags=0x{:02X} flags_ack={} flags_rst={} ok=1",
+                                                                                    flags, flags_ack, flags_rst
+                                                                                );
+                                                                            } else if flags_ack == 0 {
+                                                                                serial_println!(
+                                                                                    "[sexnet.http.response.rx.skip] reason=ack_not_set flags=0x{:02X} flags_ack={} flags_rst={} ok=1",
+                                                                                    flags, flags_ack, flags_rst
+                                                                                );
                                                                             }
                                                                         }
                                                                     }
@@ -3877,6 +3902,12 @@ pub extern "C" fn _start() -> ! {
                                                 rx_outer += 1;
                                             }
                                             unsafe { HTTP_RESPONSE_LEN = resp_total; }
+                                            if got_payload == 1 {
+                                                serial_println!(
+                                                    "[sexnet.http.response.offset] tcp_payload_offset={} payload_len={} frame_len={} ok=1",
+                                                    observed_payload_off, observed_payload_len, observed_frame_len
+                                                );
+                                            }
                                             serial_println!(
                                                 "[sexnet.http.response.rx] bytes={} bounded=1 ok={}",
                                                 resp_total,
@@ -3961,10 +3992,6 @@ pub extern "C" fn _start() -> ! {
                                                     body_start += 1;
                                                 }
                                             }
-                                            serial_println!(
-                                                "[sexnet.http.response.offset] tcp_payload_offset={} payload_len={} ok=1",
-                                                observed_payload_off, resp_total
-                                            );
                                             let mut body_bytes = 0usize;
                                             if body_start < resp_total {
                                                 let mut ri = body_start;

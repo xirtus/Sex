@@ -30,3 +30,6 @@ Diagnostics:
 
 Reason: this host run (`/tmp/sexnet_http_status_parse_fix.log`) stayed on env-limited lane
 (no ESTABLISHED), so source=3 HTTP response bytes were not produced in this boot.
+
+## 2026-05-19 RX Feed Integrity Note
+Status parser contract is unchanged/strict. The feed into parser is now hardened to exclude ACK-only frames and non-payload bytes before parse.

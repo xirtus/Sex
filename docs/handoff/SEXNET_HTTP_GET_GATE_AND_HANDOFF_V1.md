@@ -23,3 +23,5 @@ SKIP if:
 2026-05-19 update:
 - parser path now emits explicit status-reject markers and bounded response peek markers
 - gate policy remains strict: malformed status never passes
+
+- 2026-05-19 payload RX fix: source=3 response copy now requires ACK=1, RST=0, payload_len>0 from IPv4/TCP header math; ACK-only frames are skipped with explicit marker.

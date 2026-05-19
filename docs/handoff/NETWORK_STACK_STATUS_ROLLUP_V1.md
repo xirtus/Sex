@@ -477,3 +477,10 @@ Mission: `SEXNET_HTTP_STATUS_PARSE_FIX_V1`
 - No kernel/HAL/TCP-state-machine redesign changes.
 - Current proof lane classification: `PASS REVIEW ONLY` (env-limited run did not reach ESTABLISHED/source=3 RX).
 - Unrelated known gate may still fail independently: `sexnet_nic_tx_frame_observe`.
+
+## 2026-05-19: Phase I HTTP RX payload-offset fix (source=3)
+- Implemented in `servers/sexnet/src/main.rs`.
+- Fixed response-copy source to use TCP payload bounds derived from IPv4 `total_len` and TCP `data_offset`.
+- Added explicit skip marker for payloadless ACK segments.
+- Parser remains strict; no acceptance of empty/zero payload as valid HTTP.
+- Current host proof run remained env-limited (`state=SYN_SENT`), so source=3 status/body parse remains `PASS REVIEW ONLY` pending an ESTABLISHED lane run.

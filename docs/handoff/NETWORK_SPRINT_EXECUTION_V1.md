@@ -1727,3 +1727,9 @@ Proof run:
 - `sexnet_http_phase_i_readiness`: SKIP in this boot (env-limited lane)
 - `sexnet_http_get_source3`: SKIP in this boot
 - `faults_zero`: PASS
+
+## 2026-05-19 Update: SEXNET_HTTP_RESPONSE_PAYLOAD_RX_FIX_V1
+- File changed: `servers/sexnet/src/main.rs`.
+- Problem fixed: Phase I HTTP RX previously copied bytes from descriptor tail region (`rlen - payload_off`) and could parse ACK-only/non-payload bytes.
+- Fix: response RX now computes payload bounds from IPv4 total length + TCP data offset, requires ACK=1 and RST=0, and skips `payload_len=0` segments with explicit marker.
+- Proof status in this run: implementation landed; live source=3 HTTP parse still env-limited due no SYN-ACK/ESTABLISHED in `/tmp/sexnet_http_response_payload_rx_fix.log`.
