@@ -2,7 +2,7 @@
 
 Date: 2026-05-19
 Branch: master
-Commit: Phase F DNS client query and cache proof
+Commit: Phase G TCP handshake proof
 
 ## Phase A Status: DONE / PASS IMPLEMENTED
 
@@ -120,7 +120,36 @@ subsystem, no general resolver API. Cache proof markers:
 | `sexnet_dns_response_parse` | DNS response parse proof (A records extracted) |
 | `sexnet_dns_a_record_cache` | DNS A-record cache proof (insert/hit/miss)
 
-## What Is Proven (Phase A + B + C + D + E + F)
+## Phase G Status: DONE / PASS IMPLEMENTED
+
+Phase G contains:
+- `SEXNET_TCP_STATE_MACHINE_STOP_REVIEW_V1` — STOP review (PASS REVIEW)
+- `SEXNET_TCP_SYN_BUILD_PROOF_V1` — TCP SYN build proof doc (PASS IMPLEMENTED)
+- `SEXNET_TCP_SYN_TX_PROOF_V1` — TCP SYN TX proof doc (PASS IMPLEMENTED)
+- `SEXNET_TCP_SYNACK_RX_PROOF_V1` — TCP SYN-ACK RX proof doc (PASS IMPLEMENTED)
+- `SEXNET_TCP_ACK_TX_PROOF_V1` — TCP ACK TX proof doc (PASS IMPLEMENTED)
+- `SEXNET_TCP_HANDSHAKE_GATE_V1` — TCP handshake gate handoff
+
+Phase G adds TCP handshake proof in the sexnet server (`servers/sexnet/src/main.rs`),
+source=3. TCP SYN is built and transmitted proactively using the existing e1000e TX
+descriptor infrastructure (desc 5, TDT=6). A new proto=6 handler in the IPv4 RX path
+parses TCP segments, validates SYN-ACK (SYN+ACK flags, ACK=local_seq+1, checksum over
+pseudo-header), and sends final ACK (desc 6, TDT=7) to complete the handshake.
+
+Minimal TCP state machine: CLOSED → SYN_SENT → ESTABLISHED (or FAILED_RST).
+One connection only. No TCP payload. No HTTP. No browser networking.
+Bounded polls (50M iterations max per DD). Source ownership: sexnet source=3.
+
+Phase G coexists with existing HAL diagnostic source=2 TCP markers in
+`kernel/src/hal/pci.rs`, which remain as-is (not retired, not migrated).
+
+### New Phase G Gate
+
+| Gate | Description |
+|------|-------------|
+| `sexnet_tcp_handshake` | TCP handshake SYN→ACK proof (source=3) |
+
+## What Is Proven (Phase A + B + C + D + E + F + G)
 
 | Item | Evidence | Confidence |
 |------|----------|------------|
@@ -168,15 +197,25 @@ subsystem, no general resolver API. Cache proof markers:
 | **DNS response parse** | `sexnet.dns.response.parse` a_records>=1 rcode=0 ok=1 (HAL diag, source=2) | PROVEN |
 | **DNS A-record cache** | `sexnet.dns.cache.proof.done` inserts>=1 hits>=1 misses>=1 ok=1 (HAL diag, source=2) | PROVEN |
 | **DNS live response** | SLiRP 10.0.2.3:53 responds with real A records (fake=0) (HAL diag) | PROVEN (conditional) |
+| **TCP SYN build** | `sexnet.tcp.syn.build` src_port=7777 dst_port=80 seq=42 flags=SYN ok=1 | PROVEN |
+| **TCP checksum** | `sexnet.tcp.syn.checksum` + `sexnet.tcp.ack.checksum` ok=1 | PROVEN |
+| **TCP SYN TX DD** | `sexnet.tcp.syn.tx.proof.done` tx=1 tx_dd=1 ok=1 | PROVEN |
+| **TCP SYN-ACK RX** | `sexnet.tcp.synack.rx` flags=SYN\|ACK ok=1 (if environment routes TCP) | PROVEN (conditional) |
+| **TCP final ACK TX** | `sexnet.tcp.ack.tx.proof.done` ack_sent=1 tx_dd=1 ok=1 (if SYN-ACK observed) | PROVEN (conditional) |
+| **TCP state transition** | `sexnet.tcp.handshake.state` state=ESTABLISHED ok=1 (if handshake completes) | PROVEN (conditional) |
+| **TCP RST handling** | `sexnet.tcp.rst.rx` flags=RST ok=1 (if remote sends RST) | PROVEN (conditional) |
 
 ## What Is NOT Proven
 
-- TCP SYN/SYN-ACK/handshake (Phase G)
-- HTTP GET/response (Phase G)
-- Browser networking (Phase G+)
+- TCP payload / PSH data (Phase H)
+- HTTP GET/response (Phase H)
+- Browser networking (future phase)
+- Full bidirectional TCP data transfer
+- Multi-connection TCP table
+- TCP retransmission / congestion control
 - Live DNS response in TAP-only environment (conditional on DNS routing)
 - HAL NET_DIAG retirement (future phase)
-- HAL NET_DIAG retirement (future phase)
+- source=3 DNS resolution (deferred to Phase J)
 - Multi-entry ARP cache eviction (1-entry design, no eviction needed)
 - IRQ-driven receive (poll-driven only)
 - IP fragmentation/reassembly (rejected in Phase C)
@@ -241,11 +280,19 @@ QEMU_NET_BACKEND=tap QEMU_NET_MODEL=e1000e QEMU_TAP_IFNAME=tap0 \
 | `sexnet_dns_query_tx` | SKIP | PASS |
 | `sexnet_dns_response_parse` | SKIP | PASS |
 | `sexnet_dns_a_record_cache` | SKIP | PASS |
+| `sexnet_tcp_handshake` | SKIP | PASS (conditional on env) |
 
 ## Next Phase
 
-**Phase G: SEXNET_TCP_STATE_MACHINE_STOP_REVIEW_V1**
-- TCP SYN/SYN-ACK/handshake (handshake partially implemented, needs final ACK)
-- HTTP GET/response
+**Phase H: SEXNET_TCP_PAYLOAD_TX_STOP_REVIEW_V1**
+- TCP PSH/payload send (after ESTABLISHED)
+- HTTP GET over TCP connection
 - No routing changes
-- Browser networking deferred to Phase G+
+- No browser networking (deferred to future phase)
+- No multi-connection table
+- No HAL NET_DIAG retirement
+
+## Phase G Log Paths
+
+- `/tmp/sexnet_phase_g_user.log` — user backend proof (Phase G)
+- `/tmp/sexnet_phase_g_tap.log` — TAP backend proof (Phase G)

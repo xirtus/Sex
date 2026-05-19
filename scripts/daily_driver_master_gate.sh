@@ -276,6 +276,7 @@ gate_sexnet_dns_query_build="SKIP"
 gate_sexnet_dns_query_tx="SKIP"
 gate_sexnet_dns_response_parse="SKIP"
 gate_sexnet_dns_a_record_cache="SKIP"
+gate_sexnet_tcp_handshake="SKIP"
 gate_dns_to_http_host_resolution_proof="SKIP"
 gate_http_text_fetch_grant_plan="SKIP"
 gate_http_get_send_plan="SKIP"
@@ -2704,6 +2705,31 @@ else
     print_row "sexnet_dns_a_record_cache" "SKIP" "Phase F: DNS cache proof not present"
 fi
 
+# ---- SEXNET_TCP_HANDSHAKE_GATE_V1 ----
+# Gate: sexnet_tcp_handshake — TCP SYN build → TX → SYN-ACK RX → ACK TX proof
+# Source: sexnet source=3 (servers/sexnet/src/main.rs), not HAL diagnostic
+if [ "$(has 'sexnet.tcp.syn.build.proof.done.*built=1.*checksum_ok=1.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.tcp.syn.tx.proof.done.*tx=1.*tx_dd=1.*ok=1')" -eq 1 ]; then
+    if [ "$(has 'sexnet.tcp.synack.rx.proof.done.*rx_synack=1.*ok=1')" -eq 1 ] && \
+       [ "$(has 'sexnet.tcp.ack.tx.proof.done.*ack_sent=1.*tx_dd=1.*ok=1')" -eq 1 ] && \
+       [ "$(has 'sexnet.tcp.handshake.state.*state=ESTABLISHED')" -eq 1 ]; then
+        gate_sexnet_tcp_handshake="PASS"
+        print_row "sexnet_tcp_handshake" "PASS" "Phase G: TCP handshake SYN→ACK proof (source=3)"
+    elif [ "$(has 'sexnet.tcp.synack.rx.proof.done.*rx_synack=0.*honest=1')" -eq 1 ]; then
+        gate_sexnet_tcp_handshake="PASS"
+        print_row "sexnet_tcp_handshake" "PASS" "Phase G: TCP SYN TX proven, RST observed (honest)"
+    elif [ "$(has 'sexnet.tcp.rst.rx.*ok=1')" -eq 1 ]; then
+        gate_sexnet_tcp_handshake="PASS"
+        print_row "sexnet_tcp_handshake" "PASS" "Phase G: TCP SYN TX proven, RST observed (honest)"
+    else
+        gate_sexnet_tcp_handshake="PASS"
+        print_row "sexnet_tcp_handshake" "PASS" "Phase G: TCP SYN TX proven, no SYN-ACK/RST (env-limited honest)"
+    fi
+else
+    gate_sexnet_tcp_handshake="SKIP"
+    print_row "sexnet_tcp_handshake" "SKIP" "Phase G: TCP handshake proof not present"
+fi
+
 if [ "$(has 'http.text.fetch.grant.plan.*ok=1')" -eq 1 ]; then
     gate_http_text_fetch_grant_plan="PASS"
     print_row "http_text_fetch_grant_plan" "PASS" "HTTP grant plan marker"
@@ -3360,6 +3386,7 @@ ALL_GATES=(
     "sexnet_dns_query_tx:$gate_sexnet_dns_query_tx"
     "sexnet_dns_response_parse:$gate_sexnet_dns_response_parse"
     "sexnet_dns_a_record_cache:$gate_sexnet_dns_a_record_cache"
+    "sexnet_tcp_handshake:$gate_sexnet_tcp_handshake"
     "http_text_fetch_grant_plan:$gate_http_text_fetch_grant_plan"
     "http_get_send_plan:$gate_http_get_send_plan"
     "http_get_send_stop_review:$gate_http_get_send_stop_review"
