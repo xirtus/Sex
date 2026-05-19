@@ -1872,22 +1872,25 @@ else
     gate_sexnet_nic_rx_packet_observe="SKIP"
 fi
 
-# ---- sexnet_nic_tx_frame_observe (temporary tx observe/restore proof) ----
+# ---- sexnet_nic_tx_frame_observe (temporary tx observe/restore proof, reset-aware) ----
+# After e1000e CTRL.RST, tctl_en may be 0 (post-reset default) or 1 (HAL pre-enabled).
+# The restore marker reports tctl_en_orig and tctl_en; the gate trusts ok=1 (which
+# internally validates tctl_en_orig == tctl_en_restored).
 if [ "$(has 'sexnet\.nic\.tx\.observe\.alloc.*ok=1')" -eq 1 ] \
    && [ "$(has 'sexnet\.nic\.tx\.observe\.frame\.write.*ethertype=0x88B5.*len=60.*ok=1')" -eq 1 ] \
    && [ "$(has 'sexnet\.nic\.tx\.observe\.desc\.write.*len=60.*cmd=0x0B.*sta=0.*ok=1')" -eq 1 ] \
    && [ "$(has 'sexnet\.nic\.tx\.observe\.ring\.program.*tdlen=128.*ok=1')" -eq 1 ] \
    && [ "$(has 'sexnet\.nic\.tx\.observe\.post.*tdt=1.*ok=1')" -eq 1 ] \
    && [ "$(has 'sexnet\.nic\.tx\.observe\.poll\.done.*dd_set=1.*desc_idx=0.*ok=1')" -eq 1 ] \
-   && [ "$(has 'sexnet\.nic\.tx\.observe\.ring\.restore.*tctl_en=1.*ok=1')" -eq 1 ] \
+   && [ "$(has 'sexnet\.nic\.tx\.observe\.ring\.restore.*tctl_en_orig=.*tctl_en=.*ok=1')" -eq 1 ] \
    && [ "$(has 'sexnet\.nic\.tx\.observe\.proof\.done.*dd_set=1.*ok=1')" -eq 1 ]; then
     gate_sexnet_nic_tx_frame_observe="PASS"
-    print_row "sexnet_nic_tx_frame_observe" "PASS" "temporary tx observe/restore proof with descriptor DD"
+    print_row "sexnet_nic_tx_frame_observe" "PASS" "tx observe/restore proof (reset-aware, DD proven)"
 elif [ "$(has 'sexnet\.nic\.tx\.observe\.poll\.done.*dd_set=0.*ok=1')" -eq 1 ] \
-     && [ "$(has 'sexnet\.nic\.tx\.observe\.ring\.restore.*tctl_en=1.*ok=1')" -eq 1 ]; then
+     && [ "$(has 'sexnet\.nic\.tx\.observe\.ring\.restore.*tctl_en_orig=.*tctl_en=.*ok=1')" -eq 1 ]; then
     gate_sexnet_nic_tx_frame_observe="SKIP"
-    print_row "sexnet_nic_tx_frame_observe" "SKIP" "no TX DD observed in window; restore succeeded"
-elif [ "$(has 'sexnet\.nic\.tx\.observe\.ring\.restore.*tctl_en=0')" -eq 1 ] \
+    print_row "sexnet_nic_tx_frame_observe" "SKIP" "no TX DD observed; restore succeeded (reset-aware)"
+elif [ "$(has 'sexnet\.nic\.tx\.observe\.ring\.restore.*ok=0')" -eq 1 ] \
      || [ "$(has 'sexnet\.nic\.tx\.observe\.proof\.done.*ok=0')" -eq 1 ]; then
     gate_sexnet_nic_tx_frame_observe="FAIL"
     print_row "sexnet_nic_tx_frame_observe" "FAIL" "tx observe proof reported restore/proof failure"

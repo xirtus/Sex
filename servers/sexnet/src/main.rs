@@ -1292,14 +1292,16 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[sexnet.nic.tx.observe.desc.write] len=60 cmd=0x0B sta=0 ok=1");
 
                 let tx_tctl_orig = unsafe { core::ptr::read_volatile((nic_va + 0x0400) as *const u32) };
+                let tx_tctl_en_orig = if (tx_tctl_orig & (1 << 1)) != 0 { 1 } else { 0 };
                 let tx_tdbal_orig = unsafe { core::ptr::read_volatile((nic_va + 0x3800) as *const u32) };
                 let tx_tdbah_orig = unsafe { core::ptr::read_volatile((nic_va + 0x3804) as *const u32) };
                 let tx_tdlen_orig = unsafe { core::ptr::read_volatile((nic_va + 0x3808) as *const u32) };
                 let tx_tdh_orig = unsafe { core::ptr::read_volatile((nic_va + 0x3810) as *const u32) };
                 let tx_tdt_orig = unsafe { core::ptr::read_volatile((nic_va + 0x3818) as *const u32) };
                 serial_println!(
-                    "[sexnet.nic.tx.observe.ring.save] tctl=0x{:08X} tdbal=0x{:08X} tdlen={} tdt={} ok=1",
+                    "[sexnet.nic.tx.observe.ring.save] tctl=0x{:08X} tctl_en={} tdbal=0x{:08X} tdlen={} tdt={} ok=1",
                     tx_tctl_orig,
+                    tx_tctl_en_orig,
                     tx_tdbal_orig,
                     tx_tdlen_orig,
                     tx_tdt_orig
@@ -1365,14 +1367,15 @@ pub extern "C" fn _start() -> ! {
                 let tx_rest_tctl = unsafe { core::ptr::read_volatile((nic_va + 0x0400) as *const u32) };
                 let tx_rest_tdbal = unsafe { core::ptr::read_volatile((nic_va + 0x3800) as *const u32) };
                 let tx_tctl_en_restored = if (tx_rest_tctl & (1 << 1)) != 0 { 1 } else { 0 };
-                let tx_restore_ok = if tx_tctl_en_restored == 1 && tx_rest_tdbal == tx_tdbal_orig {
+                let tx_restore_ok = if tx_tctl_en_restored == tx_tctl_en_orig && tx_rest_tdbal == tx_tdbal_orig {
                     1
                 } else {
                     0
                 };
                 serial_println!(
-                    "[sexnet.nic.tx.observe.ring.restore] tctl_orig=0x{:08X} tctl_en={} tdbal=0x{:08X} ok={}",
+                    "[sexnet.nic.tx.observe.ring.restore] tctl_orig=0x{:08X} tctl_en_orig={} tctl_en={} tdbal=0x{:08X} ok={}",
                     tx_tctl_orig,
+                    tx_tctl_en_orig,
                     tx_tctl_en_restored,
                     tx_rest_tdbal,
                     tx_restore_ok
