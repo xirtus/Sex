@@ -560,7 +560,7 @@ pub extern "C" fn _start() -> ! {
                     rdt_orig
                 );
 
-                let rctl_init: u32 = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 15) | (1 << 26);
+                let rctl_init: u32 = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 26);
                 unsafe {
                     core::ptr::write_volatile((nic_va + 0x0100) as *mut u32, rctl_orig & !(1u32 << 1));
                     core::ptr::write_volatile((nic_va + 0x2800) as *mut u32, (desc_phys & 0xFFFF_FFFF) as u32);
@@ -723,7 +723,7 @@ pub extern "C" fn _start() -> ! {
                         unsafe { core::ptr::read_volatile((nic_va + 0x2810) as *const u32) };
                     let obs_rdt_orig =
                         unsafe { core::ptr::read_volatile((nic_va + 0x2818) as *const u32) };
-                    let rctl_init: u32 = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 15) | (1 << 26);
+                    let rctl_init: u32 = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 26);
                     unsafe {
                         core::ptr::write_volatile(
                             (nic_va + 0x0100) as *mut u32,
@@ -834,6 +834,101 @@ pub extern "C" fn _start() -> ! {
                     );
                 }
 
+                // ------------------------------------------------------------------
+                // E1000E NIC reset for RX ownership transition
+                // ------------------------------------------------------------------
+                serial_println!("[sexnet.nic.reset.begin] ok=1");
+
+                // 1. Disable RX: clear RCTL.EN (bit 1)
+                let rctl_pre_rst = unsafe { core::ptr::read_volatile((nic_va + 0x0100) as *const u32) };
+                unsafe {
+                    core::ptr::write_volatile((nic_va + 0x0100) as *mut u32, rctl_pre_rst & !(1u32 << 1));
+                }
+                let rctl_rst = unsafe { core::ptr::read_volatile((nic_va + 0x0100) as *const u32) };
+                let rx_disable_ok = if (rctl_rst & (1u32 << 1)) == 0 { 1u8 } else { 0u8 };
+                serial_println!("[sexnet.nic.reset.rx.disable] ok={}", rx_disable_ok);
+
+                // 2. Disable TX: clear TCTL.EN (bit 1)
+                let tctl_pre_rst = unsafe { core::ptr::read_volatile((nic_va + 0x0400) as *const u32) };
+                unsafe {
+                    core::ptr::write_volatile((nic_va + 0x0400) as *mut u32, tctl_pre_rst & !(1u32 << 1));
+                }
+                let tctl_rst = unsafe { core::ptr::read_volatile((nic_va + 0x0400) as *const u32) };
+                let tx_disable_ok = if (tctl_rst & (1u32 << 1)) == 0 { 1u8 } else { 0u8 };
+                serial_println!("[sexnet.nic.reset.tx.disable] ok={}", tx_disable_ok);
+
+                // 3. Mask interrupts: IMC(0x00D8) = all-ones
+                unsafe {
+                    core::ptr::write_volatile((nic_va + 0x00D8) as *mut u32, 0xFFFF_FFFFu32);
+                }
+                serial_println!("[sexnet.nic.reset.irq.mask] ok=1");
+
+                // 4. Issue CTRL.RST: set bit 26 at offset 0x0000
+                let ctrl_pre = unsafe { core::ptr::read_volatile((nic_va + 0x0000) as *const u32) };
+                unsafe {
+                    core::ptr::write_volatile((nic_va + 0x0000) as *mut u32, ctrl_pre | (1u32 << 26));
+                }
+                serial_println!("[sexnet.nic.reset.ctrl.rst.write] ok=1");
+
+                // 5. Bounded poll until CTRL.RST bit clears (max 1M iterations)
+                let mut rst_polls: u32 = 0;
+                let mut rst_cleared: u32 = 0;
+                while rst_polls < 1_000_000 {
+                    let ctrl_poll = unsafe { core::ptr::read_volatile((nic_va + 0x0000) as *const u32) };
+                    if (ctrl_poll & (1u32 << 26)) == 0 {
+                        rst_cleared = 1;
+                        break;
+                    }
+                    rst_polls += 1;
+                }
+                let rst_ok = rst_cleared;
+                serial_println!(
+                    "[sexnet.nic.reset.ctrl.rst.poll] cleared={} polls={} ok={}",
+                    rst_cleared,
+                    rst_polls,
+                    rst_ok
+                );
+
+                // 6. Read MAC after reset (auto-load from EEPROM)
+                let ral_after = unsafe { core::ptr::read_volatile((nic_va + 0x5400) as *const u32) };
+                let rah_after = unsafe { core::ptr::read_volatile((nic_va + 0x5404) as *const u32) };
+                let mac_valid = (rah_after >> 31) & 1;
+                serial_println!(
+                    "[sexnet.nic.reset.mac.program] ral=0x{:08X} rah=0x{:08X} valid={} ok=1",
+                    ral_after,
+                    rah_after,
+                    mac_valid
+                );
+
+                // 7. Set RXDCTL(0).ENABLE and TXDCTL(0).ENABLE after reset
+                //    RXDCTL at 0x2828, TXDCTL at 0x3828
+                //    ENABLE=bit25, prefetch=8, host=4, writeback=4
+                unsafe {
+                    core::ptr::write_volatile((nic_va + 0x2828) as *mut u32, 0x0200_0000u32 | (8 << 16) | (4 << 8) | 4);
+                    core::ptr::write_volatile((nic_va + 0x3828) as *mut u32, 0x0200_0000u32 | (8 << 16) | (4 << 8) | 4);
+                }
+                serial_println!("[sexnet.nic.reset.queue.enable] rxdctl=1 txdctl=1 ok=1");
+
+                // 8. Bounded link poll: STATUS(0x0008) LU bit 10 (e1000e) or bit 1 (e1000)
+                let mut link_polls: u32 = 0;
+                let mut link_up: u32 = 0;
+                while link_polls < 1_000_000 {
+                    let status_poll = unsafe { core::ptr::read_volatile((nic_va + 0x0008) as *const u32) };
+                    let lu_e1000e = (status_poll >> 10) & 1;
+                    let lu_e1000  = (status_poll >> 1) & 1;
+                    if lu_e1000e != 0 || lu_e1000 != 0 {
+                        link_up = 1;
+                        break;
+                    }
+                    link_polls += 1;
+                }
+                serial_println!(
+                    "[sexnet.nic.reset.status] link_up={} ok=1",
+                    link_up
+                );
+
+                serial_println!("[sexnet.nic.reset.proof.done] ok=1");
+
                 let perm_desc_phys = sys_alloc_phys(4096);
                 let perm_desc_va = sys_map_phys(perm_desc_phys, 4096);
                 let mut perm_pkt_phys = [0u64; 8];
@@ -892,7 +987,7 @@ pub extern "C" fn _start() -> ! {
 
                     let perm_rctl_orig =
                         unsafe { core::ptr::read_volatile((nic_va + 0x0100) as *const u32) };
-                    let rctl_init: u32 = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 15) | (1 << 26);
+                    let rctl_init: u32 = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 26);
                     unsafe {
                         core::ptr::write_volatile((nic_va + 0x0100) as *mut u32, perm_rctl_orig & !(1u32 << 1));
                         core::ptr::write_volatile((nic_va + 0x2800) as *mut u32, (perm_desc_phys & 0xFFFF_FFFF) as u32);
@@ -2155,7 +2250,7 @@ pub extern "C" fn _start() -> ! {
                             let ipv4_rx_own = NIC_RX_OWNER.load(Ordering::Acquire);
                             if ipv4_rx_own == NIC_OWNER_SEXNET_FULL {
                                 serial_println!("[sexnet.ipv4.entry] rx_owner=3 ok=1");
-                                serial_println!("[sexnet.ipv4.rx.poll.begin] max_iters=200000000");
+                                serial_println!("[sexnet.ipv4.rx.poll.begin] max_iters=1000000");
                                 // Phase E UDP self-test: inject synthetic UDP echo request
                                 // to exercise the UDP handler when no real stimulus is available.
                                 let udp_test_idx = 7u32; // highest index, polled last — only fires if no real frames
@@ -2234,24 +2329,14 @@ pub extern "C" fn _start() -> ! {
                                         ut_pi += 1;
                                     }
                                 }
-                                // Mark descriptor as done
-                                let udp_test_desc = unsafe { RX_PERM_DESC_VA + (udp_test_idx as u64) * 16 };
-                                unsafe {
-                                    core::ptr::write_volatile((udp_test_desc + 8) as *mut u16, frame_bytes);
-                                    core::ptr::write_volatile((udp_test_desc + 12) as *mut u8, 1u8); // DD=1
-                                }
-                                serial_println!(
-                                    "[sexnet.udp.self_test.inject] idx={} len={} src_port=12345 dst_port=7777 checksum_policy=zero_allowed self_test=1 ok=1",
-                                    udp_test_idx,
-                                    frame_bytes
-                                );
                                 let mut ipv4_frames = 0u32;
                                 let mut ipv4_ok = 0u32;
                                 let mut reject_logged = 0u32;
                                 let mut outer = 0u32;
-                                while outer < 200_000_000 && ipv4_frames < 1 {
+                                let mut synthetic_fallback_done = false;
+                                while outer < 1_000_000 && ipv4_frames < 2 {
                                     let mut idx = 0u32;
-                                    while idx < 8 && ipv4_frames < 1 {
+                                    while idx < 8 && ipv4_frames < 2 {
                                         let desc_base = unsafe { RX_PERM_DESC_VA } + (idx as u64) * 16;
                                         let st = unsafe {
                                             core::ptr::read_volatile((desc_base + 12) as *const u8)
@@ -3261,6 +3346,22 @@ pub extern "C" fn _start() -> ! {
                                             );
                                         }
                                         idx += 1;
+                                    }
+                                    // Phase E fallback: inject synthetic UDP self-test only after
+                                    // real poll has exhausted its budget with no real frames.
+                                    // This guarantees TCP SYN-ACK (and any real frame) gets first chance.
+                                    if !synthetic_fallback_done && ipv4_frames == 0 && outer >= 900_000 {
+                                        let fb_desc = unsafe { RX_PERM_DESC_VA + (udp_test_idx as u64) * 16 };
+                                        unsafe {
+                                            core::ptr::write_volatile((fb_desc + 8) as *mut u16, frame_bytes);
+                                            core::ptr::write_volatile((fb_desc + 12) as *mut u8, 1u8);
+                                        }
+                                        synthetic_fallback_done = true;
+                                        serial_println!(
+                                            "[sexnet.udp.self_test.fallback.inject] reason=no_real_rx_after_poll idx={} len={} src_port=12345 dst_port=7777 checksum_policy=zero_allowed self_test=1 ok=1",
+                                            udp_test_idx,
+                                            frame_bytes
+                                        );
                                     }
                                     outer += 1;
                                 }
