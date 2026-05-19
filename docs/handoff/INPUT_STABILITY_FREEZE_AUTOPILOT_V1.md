@@ -47,3 +47,57 @@ Reason: source contains `ps2.input_ring.drop` marker path proving ring-full drop
 - Any fix requiring scheduler changes.
 - Any fix requiring display/sexdisplay or silk-shell policy edits.
 - Any fix requiring broad xHCI ring/descriptor redesign.
+
+## Runtime Proof Attempt - 2026-05-20 (INPUT_REALITY_RUNTIME_PROOF_V1)
+- Backup: `/tmp/microkernel-backup-20260520-013632-INPUT_REALITY_RUNTIME_PROOF_V1.tar.gz`
+- Build command: `./scripts/entrypoint_build.sh`
+- Build result: PASS (`[SEXOS ENTRYPOINT] success`)
+- Runtime command: `timeout 35s env SEXOS_QEMU_DISPLAY=none ./dev.sh > /tmp/input_freeze_runtime_v1.log 2>&1`
+- Runtime exit: expected timeout (`RUNTIME_RC=124`) after ~30s capture window
+- Log path: `/tmp/input_freeze_runtime_v1.log` (3778 lines)
+
+### Marker Summary
+- `sexusb.xhci.map.ok`: present (1)
+- `sexusb.xhci.map.bad`: absent (0)
+- `sexusb.xhci.enum.timeout`: present (60); boot continues with scheduler/cycle markers, no hard spin freeze proven in window
+- `sexusb.route.sexinput.ready`: present (1)
+- `sexusb.route.sexinput.missing`: absent (0)
+- `sexinput.synthetic.click.proof.gated`: absent (0)
+- `ps2.input_ring.drop`: absent (0)
+- Fault markers `#PF`, `#GP`, `panic`, `fault.kill`: all absent (0)
+
+### Gate Verdict
+- FAIL: required marker `sexinput.synthetic.click.proof.gated` not observed in this runtime capture.
+- Notes: route marker honesty and no-fault gates pass for this run; xHCI timeout markers are present while runtime continues.
+
+## Runtime Proof Attempt - 2026-05-20 (INPUT_REALITY_RUNTIME_PROOF_V1, autopilot rerun)
+- Backup: `/tmp/microkernel-backup-20260520-014203`
+- Build command: `./scripts/entrypoint_build.sh`
+- Build result: PASS (`[SEXOS ENTRYPOINT] success`)
+- Runtime command: `./scripts/qemu_harness.sh --timeout 30`
+- Runtime exit: expected timeout (`124`) after 30s capture window
+- Log path: `/tmp/input_reality_runtime_proof_v1.log`
+
+### Marker Summary
+- `sexusb.xhci.map.ok`: present (1)
+- `sexusb.xhci.map.bad`: absent (0)
+- `sexusb.xhci.enum.timeout`: present (55); boot continues
+- `sexusb.route.sexinput.ready`: present (1)
+- `sexusb.route.sexinput.missing`: absent (0)
+- `sexinput.synthetic.click.proof.gated`: absent (0)
+- `ps2.input_ring.drop`: absent (0)
+- Fault markers `#PF`, `#GP`, `panic`, `fault.kill`: all absent (0)
+
+### Gate Verdict
+- FAIL: required marker `sexinput.synthetic.click.proof.gated` not observed in this runtime capture.
+- STOP: mission chain halted at Phase 1 per autopilot stop rule (do not skip ahead after failed phase).
+
+## Marker Fix Rerun - 2026-05-20 (INPUT_SYNTHETIC_CLICK_GATING_MARKER_FIX_V1)
+- Runtime log: `/tmp/input_reality_runtime_proof_v1_rerun.log`
+- Required marker `sexinput.synthetic.click.proof.gated` is now present exactly once.
+- Route/fault snapshot from rerun:
+  - `sexusb.xhci.map.ok`: present
+  - `sexusb.route.sexinput.ready`: present
+  - `sexusb.route.sexinput.missing`: absent
+  - `ps2.input_ring.drop`: absent
+  - `#PF/#GP/panic/fault.kill`: absent in capture

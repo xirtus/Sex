@@ -254,10 +254,6 @@ pub extern "C" fn _start() -> ! {
                 if KEYBOARD_CURSOR_ENABLED { "env" } else { "default" });
         }
     }
-    if SILKBAR_CLICK_PROOF_ENABLED {
-        serial_println!("[sexinput.synthetic.click.proof.gated] ok=1");
-    }
-
     unsafe {
         sys_set_state(SVC_STATE_LISTENING);
     }
@@ -271,6 +267,14 @@ pub extern "C" fn _start() -> ! {
 
     serial_println!("[sexinput.ready]");
     loop {
+        unsafe {
+            static mut SYNTHETIC_CLICK_PROOF_GATED_MARKER_EMITTED: bool = false;
+            if !SYNTHETIC_CLICK_PROOF_GATED_MARKER_EMITTED {
+                SYNTHETIC_CLICK_PROOF_GATED_MARKER_EMITTED = true;
+                serial_println!("[sexinput.synthetic.click.proof.gated] ok=1");
+            }
+        }
+
         // 0. Local USB->sexinput PDX proof path (no shell routing in this phase).
         if let Some(req) = pdx_try_listen_raw(0) {
             serial_println!("[sexinput.usb_mouse.recv] type={:#x}", req.type_id);
