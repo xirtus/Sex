@@ -2,8 +2,8 @@
 
 Date: 2026-05-19
 Branch: master
-Predecessor: SEXNET_PHASE_G_RUNTIME_REPROOF_V1
-Depends on: Phase G proves ESTABLISHED
+Predecessor: SEXNET_PHASE_G_RUNTIME_REPROOF_V1, SEXNET_E1000E_NIC_RESET_FOR_RX_V1
+Depends on: Phase G proves ESTABLISHED (e1000e CTRL.RST enables RX for SYN-ACK)
 
 ## Goal
 

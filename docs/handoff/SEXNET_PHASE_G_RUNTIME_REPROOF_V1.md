@@ -3,7 +3,7 @@
 Date: 2026-05-19
 Branch: master
 Predecessor: SEXNET_TCP_ESTABLISHED_ENV_PROOF_V1
-Depends on: SEXNET_TCP_ESTABLISHED_ENV_PROOF_V1 (environment), host_tcp_established_env_probe.sh (listener)
+Depends on: SEXNET_E1000E_NIC_RESET_FOR_RX_V1 (e1000e CTRL.RST for RX ownership), SEXNET_TCP_ESTABLISHED_ENV_PROOF_V1 (environment), host_tcp_established_env_probe.sh (listener)
 
 ## Goal
 
@@ -65,7 +65,17 @@ kill $LISTENER_PID 2>/dev/null || true
 ## Source Changes Required
 
 - `TCP_REMOTE_PORT`: 80 → 18080 (tiny proof-target edit)
+- E1000E NIC reset sequence added (SEXNET_E1000E_NIC_RESET_FOR_RX_V1):
+  CTRL.RST before permanent ring programming, RXDCTL/TXDCTL enable, bounded link poll
 - No other source changes for Phase G
+
+## New Reset Markers Expected
+
+| Marker | Expected Value | Meaning |
+|--------|---------------|---------|
+| `[sexnet.nic.reset.begin]` | ok=1 | Reset sequence started |
+| `[sexnet.nic.reset.ctrl.rst.poll]` | cleared=1 ok=1 | CTRL.RST bit cleared after poll |
+| `[sexnet.nic.reset.proof.done]` | ok=1 | Reset sequence complete |
 
 ## Gate Impact
 
