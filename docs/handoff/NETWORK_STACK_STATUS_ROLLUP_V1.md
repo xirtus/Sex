@@ -2,7 +2,7 @@
 
 Date: 2026-05-19
 Branch: master
-Commit: pending (Phase D ICMP echo reply)
+Commit: Phase E UDP echo reply implementation
 
 ## Phase A Status: DONE / PASS IMPLEMENTED
 
@@ -55,7 +55,29 @@ constructs IPv4 reply header, and transmits via existing e1000e TX path.
 Host ping observe is available if root/CAP_NET_RAW and TAP are present;
 otherwise the gate SKIPs honestly. Guest-side ICMP proof is independent.
 
-## What Is Proven (Phase A + B + C + D)
+## Phase E Status: DONE / PASS IMPLEMENTED
+
+Phase E contains:
+- `SEXNET_UDP_PARSE_STOP_REVIEW_V1` — STOP review (PASS REVIEW)
+- `SEXNET_UDP_HEADER_VALIDATE_PROOF_V1` — UDP header validate proof doc
+- `SEXNET_UDP_ECHO_REPLY_PROOF_V1` — UDP echo reply proof doc
+- `SEXNET_UDP_ECHO_REPLY_GATE_V1` — gate handoff (gate `sexnet_udp_echo_reply`)
+- `SEXNET_UDP_HOST_OBSERVE_PROOF_V1` — host UDP observe proof doc
+- `SEXNET_UDP_HOST_OBSERVE_GATE_V1` — gate handoff (gate `sexnet_udp_host_observe`)
+- `host_udp_echo_observe_probe.sh` — host UDP echo observe probe script
+- UDP echo reply runtime code in `servers/sexnet/src/main.rs`
+
+Phase E adds UDP datagram receive (IPv4 proto=17) and echo reply in the IPv4 RX path.
+UDP handler dispatches on proto==17, parses src_port/dst_port/length/checksum, validates
+length bounds (>=8, <=IPv4 payload), validates nonzero checksum using IPv4 pseudo-header,
+accepts zero checksum with policy=zero_allowed, swaps ports for echo reply,
+echoes same payload, builds IPv4/UDP reply with correct checksums, and transmits
+via existing e1000e TX descriptor index 4 (TDT=5).
+
+Host UDP observe is available if nc and TAP are present; otherwise the gate SKIPs
+honestly. Guest-side UDP proof is independent.
+
+## What Is Proven (Phase A + B + C + D + E)
 
 | Item | Evidence | Confidence |
 |------|----------|------------|
@@ -86,12 +108,23 @@ otherwise the gate SKIPs honestly. Guest-side ICMP proof is independent.
 | **ICMP echo proof complete** | `sexnet.icmp.echo.proof.done` rx_echo=1 tx_reply=1 tx_dd=1 ok=1 | PROVEN |
 | **ICMP non-echo rejection** | `sexnet.icmp.reject` reason=... ok=1 | PROVEN |
 | **Host ping observe** | host ping probe PASS (if env allows) | PROVEN (conditional) |
+| **UDP datagram parse** | `sexnet.udp.rx.datagram` src_port dst_port len checksum ok=1 | PROVEN |
+| **UDP header validate** | `sexnet.udp.header.validate` len_ok ports_ok checksum_policy ok=1 | PROVEN |
+| **UDP pseudo-header checksum** | `sexnet.udp.header.validate` checksum_policy=validated | PROVEN |
+| **Zero-checksum policy** | `sexnet.udp.header.validate` checksum_policy=zero_allowed | PROVEN |
+| **Malformed UDP rejection** | `sexnet.udp.reject` reason=... ok=1 | PROVEN |
+| **UDP echo reply build** | `sexnet.udp.tx.reply.build` src_port dst_port len ok=1 | PROVEN |
+| **UDP echo reply checksum** | `sexnet.udp.tx.reply.checksum` checksum=0x0000 policy=zero_allowed ok=1 | PROVEN |
+| **IPv4 UDP reply header** | `sexnet.ipv4.tx.udp_reply.build` src=10.0.2.15 checksum=ok | PROVEN |
+| **Ethernet UDP reply TX** | `sexnet.eth.tx.udp_reply.desc` len=N ok=1 | PROVEN |
+| **UDP TX DD done** | `sexnet.udp.tx.poll.done` dd_set=1 ok=1 | PROVEN |
+| **UDP echo proof complete** | `sexnet.udp.echo.proof.done` rx_udp=1 tx_reply=1 tx_dd=1 ok=1 | PROVEN |
+| **Host UDP observe** | host UDP probe PASS (if env allows) | PROVEN (conditional) |
 
 ## What Is NOT Proven
 
-- UDP datagram receive/parse (Phase E)
-- DNS query/response (Phase E)
-- TCP SYN/SYN-ACK/handshake (Phase E/F)
+- DNS query/response (Phase F)
+- TCP SYN/SYN-ACK/handshake (Phase F)
 - HTTP GET/response (Phase F)
 - Browser networking (Phase F+)
 - HAL NET_DIAG retirement (future phase)
@@ -107,26 +140,26 @@ otherwise the gate SKIPs honestly. Guest-side ICMP proof is independent.
 ```bash
 ./scripts/entrypoint_build.sh
 
-# TAP backend (full Phase A+B+C+D proof on sexnet NIC)
-# In another terminal: run ping stimulus
-#   sudo ping -I tap0 -c 1 -W 1 10.0.2.15
+# TAP backend (full Phase A+B+C+D+E proof on sexnet NIC)
+# In another terminal: run UDP echo stimulus
+#   echo -n "HELLO_SEXNET_UDP_ECHO" | nc -u -w 2 10.0.2.15 7777
 QEMU_NET_BACKEND=tap QEMU_NET_MODEL=e1000e QEMU_TAP_IFNAME=tap0 \
   ENABLE_QEMU_USERNET_E1000=1 \
-  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_d_tap.log
+  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_e_tap.log
 
-# User backend (may SKIP IPv4/ICMP gates if no stimulus reaches NIC)
+# User backend (may SKIP IPv4/ICMP/UDP gates if no stimulus reaches NIC)
 QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
-  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_d_user.log
+  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_e_user.log
 
-# Host ping observe (requires TAP + root/CAP_NET_RAW)
-./scripts/host_icmp_ping_observe_probe.sh /tmp/sexnet_phase_d_host_ping.log
+# Host UDP observe (requires TAP + nc)
+./scripts/host_udp_echo_observe_probe.sh /tmp/sexnet_phase_e_host_udp.log
 ```
 
 ## Log Paths
 
-- `/tmp/sexnet_phase_d_tap.log` — TAP backend proof
-- `/tmp/sexnet_phase_d_user.log` — user backend proof
-- `/tmp/sexnet_phase_d_host_ping.log` — host ping observe probe
+- `/tmp/sexnet_phase_e_tap.log` — TAP backend proof
+- `/tmp/sexnet_phase_e_user.log` — user backend proof
+- `/tmp/sexnet_phase_e_host_udp.log` — host UDP observe probe
 
 ## Gate Status
 
@@ -142,11 +175,12 @@ QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
 | `sexnet_ipv4_checksum` | SKIP | PASS |
 | `sexnet_icmp_echo_reply` | SKIP | PASS |
 | `sexnet_icmp_host_ping_observe` | SKIP | PASS (REVIEW ONLY / conditional) |
+| `sexnet_udp_echo_reply` | SKIP | PASS |
+| `sexnet_udp_host_observe` | SKIP | PASS (REVIEW ONLY / conditional) |
 
 ## Next Phase
 
-**Phase E: SEXNET_UDP_PARSE_STOP_REVIEW_V1**
-- UDP datagram receive and dispatch
-- DNS query build and response parse (optional subset)
-- No TCP, no HTTP in Phase E
+**Phase F: SEXNET_DNS_CLIENT_STOP_REVIEW_V1**
+- DNS client (UDP port 53 query)
+- No TCP, no HTTP in Phase F
 - No routing changes

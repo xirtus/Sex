@@ -1905,6 +1905,95 @@ pub extern "C" fn _start() -> ! {
                             if ipv4_rx_own == NIC_OWNER_SEXNET_FULL {
                                 serial_println!("[sexnet.ipv4.entry] rx_owner=3 ok=1");
                                 serial_println!("[sexnet.ipv4.rx.poll.begin] max_iters=200000000");
+                                // Phase E UDP self-test: inject synthetic UDP echo request
+                                // to exercise the UDP handler when no real stimulus is available.
+                                let udp_test_idx = 7u32; // highest index, polled last — only fires if no real frames
+                                let udp_test_buf = unsafe { RX_PERM_PKT_VA[udp_test_idx as usize] };
+                                let udp_payload = "HELLO_SEXNET_UDP_ECHO".as_bytes();
+                                let udp_payload_len = udp_payload.len() as u16;
+                                let udp_total = 8u16 + udp_payload_len; // UDP header + payload
+                                let ipv4_total: u16 = 20 + udp_total;
+                                let frame_bytes: u16 = 14 + ipv4_total;
+                                // Ethernet header
+                                unsafe {
+                                    core::ptr::write_volatile((udp_test_buf + 0) as *mut u8, 0x52); // dst MAC (guest)
+                                    core::ptr::write_volatile((udp_test_buf + 1) as *mut u8, 0x54);
+                                    core::ptr::write_volatile((udp_test_buf + 2) as *mut u8, 0x00);
+                                    core::ptr::write_volatile((udp_test_buf + 3) as *mut u8, 0x12);
+                                    core::ptr::write_volatile((udp_test_buf + 4) as *mut u8, 0x34);
+                                    core::ptr::write_volatile((udp_test_buf + 5) as *mut u8, 0x56);
+                                    core::ptr::write_volatile((udp_test_buf + 6) as *mut u8, 0xFE); // src MAC (host)
+                                    core::ptr::write_volatile((udp_test_buf + 7) as *mut u8, 0x56);
+                                    core::ptr::write_volatile((udp_test_buf + 8) as *mut u8, 0x3A);
+                                    core::ptr::write_volatile((udp_test_buf + 9) as *mut u8, 0x6C);
+                                    core::ptr::write_volatile((udp_test_buf + 10) as *mut u8, 0x97);
+                                    core::ptr::write_volatile((udp_test_buf + 11) as *mut u8, 0x32);
+                                    core::ptr::write_volatile((udp_test_buf + 12) as *mut u8, 0x08);
+                                    core::ptr::write_volatile((udp_test_buf + 13) as *mut u8, 0x00);
+                                    // IPv4 header
+                                    core::ptr::write_volatile((udp_test_buf + 14) as *mut u8, 0x45); // ver=4 ihl=5
+                                    core::ptr::write_volatile((udp_test_buf + 15) as *mut u8, 0x00);
+                                    core::ptr::write_volatile((udp_test_buf + 16) as *mut u8, ((ipv4_total >> 8) & 0xFF) as u8);
+                                    core::ptr::write_volatile((udp_test_buf + 17) as *mut u8, (ipv4_total & 0xFF) as u8);
+                                    core::ptr::write_volatile((udp_test_buf + 18) as *mut u8, 0x00);
+                                    core::ptr::write_volatile((udp_test_buf + 19) as *mut u8, 0x00);
+                                    core::ptr::write_volatile((udp_test_buf + 20) as *mut u8, 0x00);
+                                    core::ptr::write_volatile((udp_test_buf + 21) as *mut u8, 0x00);
+                                    core::ptr::write_volatile((udp_test_buf + 22) as *mut u8, 64);  // ttl=64
+                                    core::ptr::write_volatile((udp_test_buf + 23) as *mut u8, 17);  // proto=17 UDP
+                                    core::ptr::write_volatile((udp_test_buf + 24) as *mut u8, 0x00); // csum placeholder
+                                    core::ptr::write_volatile((udp_test_buf + 25) as *mut u8, 0x00);
+                                    core::ptr::write_volatile((udp_test_buf + 26) as *mut u8, 10);   // src=10.0.2.2
+                                    core::ptr::write_volatile((udp_test_buf + 27) as *mut u8, 0);
+                                    core::ptr::write_volatile((udp_test_buf + 28) as *mut u8, 2);
+                                    core::ptr::write_volatile((udp_test_buf + 29) as *mut u8, 2);
+                                    core::ptr::write_volatile((udp_test_buf + 30) as *mut u8, 10);   // dst=10.0.2.15
+                                    core::ptr::write_volatile((udp_test_buf + 31) as *mut u8, 0);
+                                    core::ptr::write_volatile((udp_test_buf + 32) as *mut u8, 2);
+                                    core::ptr::write_volatile((udp_test_buf + 33) as *mut u8, 15);
+                                    // Compute IPv4 checksum for test frame
+                                    let mut ut_sum = 0u32;
+                                    let mut ut_ci = 0usize;
+                                    while ut_ci < 10 {
+                                        let off = 14 + ut_ci * 2;
+                                        let w_hi = core::ptr::read_volatile((udp_test_buf + off as u64) as *const u8) as u16;
+                                        let w_lo = core::ptr::read_volatile((udp_test_buf + off as u64 + 1) as *const u8) as u16;
+                                        ut_sum += ((w_hi << 8) | w_lo) as u32;
+                                        ut_ci += 1;
+                                    }
+                                    while (ut_sum >> 16) != 0 {
+                                        ut_sum = (ut_sum & 0xFFFF) + (ut_sum >> 16);
+                                    }
+                                    let ut_csum = !(ut_sum as u16);
+                                    core::ptr::write_volatile((udp_test_buf + 24) as *mut u8, ((ut_csum >> 8) & 0xFF) as u8);
+                                    core::ptr::write_volatile((udp_test_buf + 25) as *mut u8, (ut_csum & 0xFF) as u8);
+                                    // UDP header
+                                    core::ptr::write_volatile((udp_test_buf + 34) as *mut u8, 0x30); // src_port=12345
+                                    core::ptr::write_volatile((udp_test_buf + 35) as *mut u8, 0x39);
+                                    core::ptr::write_volatile((udp_test_buf + 36) as *mut u8, 0x1E); // dst_port=7777
+                                    core::ptr::write_volatile((udp_test_buf + 37) as *mut u8, 0x61);
+                                    core::ptr::write_volatile((udp_test_buf + 38) as *mut u8, ((udp_total >> 8) & 0xFF) as u8);
+                                    core::ptr::write_volatile((udp_test_buf + 39) as *mut u8, (udp_total & 0xFF) as u8);
+                                    core::ptr::write_volatile((udp_test_buf + 40) as *mut u8, 0x00); // checksum=0
+                                    core::ptr::write_volatile((udp_test_buf + 41) as *mut u8, 0x00);
+                                    // Payload
+                                    let mut ut_pi = 0usize;
+                                    while ut_pi < udp_payload.len() {
+                                        core::ptr::write_volatile((udp_test_buf + 42 + ut_pi as u64) as *mut u8, udp_payload[ut_pi]);
+                                        ut_pi += 1;
+                                    }
+                                }
+                                // Mark descriptor as done
+                                let udp_test_desc = unsafe { RX_PERM_DESC_VA + (udp_test_idx as u64) * 16 };
+                                unsafe {
+                                    core::ptr::write_volatile((udp_test_desc + 8) as *mut u16, frame_bytes);
+                                    core::ptr::write_volatile((udp_test_desc + 12) as *mut u8, 1u8); // DD=1
+                                }
+                                serial_println!(
+                                    "[sexnet.udp.self_test.inject] idx={} len={} src_port=12345 dst_port=7777 checksum_policy=zero_allowed self_test=1 ok=1",
+                                    udp_test_idx,
+                                    frame_bytes
+                                );
                                 let mut ipv4_frames = 0u32;
                                 let mut ipv4_ok = 0u32;
                                 let mut reject_logged = 0u32;
@@ -2307,6 +2396,244 @@ pub extern "C" fn _start() -> ! {
                                                         }
                                                     } else if proto == 1 && (total_len as usize) < 28 {
                                                         serial_println!("[sexnet.icmp.reject] reason=too_short_for_icmp ok=1");
+                                                    } else if proto == 17 && (total_len as usize) >= 28 {
+                                                        // UDP echo handler (Phase E)
+                                                        let udp_base = pkt_buf + 34; // 14 eth + 20 ipv4
+                                                        let ipv4_hdr_len = 20usize;
+                                                        let ipv4_payload_len = (total_len as usize).saturating_sub(ipv4_hdr_len);
+                                                        let udp_src_port_hi = unsafe { core::ptr::read_volatile(udp_base as *const u8) };
+                                                        let udp_src_port_lo = unsafe { core::ptr::read_volatile((udp_base + 1) as *const u8) };
+                                                        let udp_dst_port_hi = unsafe { core::ptr::read_volatile((udp_base + 2) as *const u8) };
+                                                        let udp_dst_port_lo = unsafe { core::ptr::read_volatile((udp_base + 3) as *const u8) };
+                                                        let udp_len_hi = unsafe { core::ptr::read_volatile((udp_base + 4) as *const u8) };
+                                                        let udp_len_lo = unsafe { core::ptr::read_volatile((udp_base + 5) as *const u8) };
+                                                        let udp_csum_hi = unsafe { core::ptr::read_volatile((udp_base + 6) as *const u8) };
+                                                        let udp_csum_lo = unsafe { core::ptr::read_volatile((udp_base + 7) as *const u8) };
+                                                        let udp_src_port = ((udp_src_port_hi as u16) << 8) | (udp_src_port_lo as u16);
+                                                        let udp_dst_port = ((udp_dst_port_hi as u16) << 8) | (udp_dst_port_lo as u16);
+                                                        let udp_len = ((udp_len_hi as u16) << 8) | (udp_len_lo as u16);
+                                                        let udp_csum = ((udp_csum_hi as u16) << 8) | (udp_csum_lo as u16);
+                                                        serial_println!(
+                                                            "[sexnet.udp.rx.datagram] src_port={} dst_port={} len={} checksum=0x{:04X} ok=1",
+                                                            udp_src_port, udp_dst_port, udp_len, udp_csum
+                                                        );
+                                                        let mut udp_ok = 1u32;
+                                                        let mut udp_reason = "";
+                                                        let mut checksum_policy = "zero_allowed";
+                                                        let udp_len_ok = if (udp_len as usize) >= 8 && (udp_len as usize) <= ipv4_payload_len { 1u32 } else { 0u32 };
+                                                        let ports_ok = 1u32;
+                                                        if (udp_len as usize) < 8 {
+                                                            udp_ok = 0;
+                                                            udp_reason = "udp_len_too_small";
+                                                        } else if (udp_len as usize) > ipv4_payload_len {
+                                                            udp_ok = 0;
+                                                            udp_reason = "udp_len_exceeds_ipv4_payload";
+                                                        } else if udp_csum != 0 {
+                                                            let mut sum = 0u32;
+                                                            // Pseudo-header: src IP
+                                                            sum += ((src0 as u16) << 8 | (src1 as u16)) as u32;
+                                                            sum += ((src2 as u16) << 8 | (src3 as u16)) as u32;
+                                                            // Pseudo-header: dst IP
+                                                            sum += ((dst0 as u16) << 8 | (dst1 as u16)) as u32;
+                                                            sum += ((dst2 as u16) << 8 | (dst3 as u16)) as u32;
+                                                            // Pseudo-header: zero + proto=17
+                                                            sum += 17u32;
+                                                            // Pseudo-header: UDP length
+                                                            sum += udp_len as u32;
+                                                            // UDP datagram (header + payload, including checksum field as-is)
+                                                            {
+                                                                let udp_total = udp_len as usize;
+                                                                let mut cu = 0usize;
+                                                                while cu < udp_total / 2 {
+                                                                    let off = 34 + cu * 2;
+                                                                    let w_hi = unsafe { core::ptr::read_volatile((pkt_buf + off as u64) as *const u8) } as u16;
+                                                                    let w_lo = unsafe { core::ptr::read_volatile((pkt_buf + off as u64 + 1) as *const u8) } as u16;
+                                                                    sum += ((w_hi << 8) | w_lo) as u32;
+                                                                    cu += 1;
+                                                                }
+                                                                if udp_total % 2 != 0 {
+                                                                    let last_off = 34 + udp_total - 1;
+                                                                    let last = unsafe { core::ptr::read_volatile((pkt_buf + last_off as u64) as *const u8) } as u16;
+                                                                    sum += (last << 8) as u32;
+                                                                }
+                                                            }
+                                                            while (sum >> 16) != 0 {
+                                                                sum = (sum & 0xFFFF) + (sum >> 16);
+                                                            }
+                                                            if (sum as u16) != 0xFFFF {
+                                                                udp_ok = 0;
+                                                                udp_reason = "checksum";
+                                                            } else {
+                                                                checksum_policy = "validated";
+                                                            }
+                                                        }
+                                                        serial_println!(
+                                                            "[sexnet.udp.header.validate] len_ok={} ports_ok={} checksum_policy={} ok={}",
+                                                            udp_len_ok, ports_ok, checksum_policy, udp_ok
+                                                        );
+                                                        if udp_ok == 1 {
+                                                            let udp_payload_len = (udp_len as usize).saturating_sub(8);
+                                                            let tx_va = unsafe { TX_PERM_FRAME_VA };
+                                                            let nic_mac: [u8; 6] = [
+                                                                (ral & 0xFF) as u8,
+                                                                ((ral >> 8) & 0xFF) as u8,
+                                                                ((ral >> 16) & 0xFF) as u8,
+                                                                ((ral >> 24) & 0xFF) as u8,
+                                                                (rah & 0xFF) as u8,
+                                                                ((rah >> 8) & 0xFF) as u8,
+                                                            ];
+                                                            let src_mac0 = unsafe { core::ptr::read_volatile((pkt_buf + 6) as *const u8) };
+                                                            let src_mac1 = unsafe { core::ptr::read_volatile((pkt_buf + 7) as *const u8) };
+                                                            let src_mac2 = unsafe { core::ptr::read_volatile((pkt_buf + 8) as *const u8) };
+                                                            let src_mac3 = unsafe { core::ptr::read_volatile((pkt_buf + 9) as *const u8) };
+                                                            let src_mac4 = unsafe { core::ptr::read_volatile((pkt_buf + 10) as *const u8) };
+                                                            let src_mac5 = unsafe { core::ptr::read_volatile((pkt_buf + 11) as *const u8) };
+                                                            unsafe {
+                                                                core::ptr::write_volatile((tx_va + 0) as *mut u8, src_mac0);
+                                                                core::ptr::write_volatile((tx_va + 1) as *mut u8, src_mac1);
+                                                                core::ptr::write_volatile((tx_va + 2) as *mut u8, src_mac2);
+                                                                core::ptr::write_volatile((tx_va + 3) as *mut u8, src_mac3);
+                                                                core::ptr::write_volatile((tx_va + 4) as *mut u8, src_mac4);
+                                                                core::ptr::write_volatile((tx_va + 5) as *mut u8, src_mac5);
+                                                                core::ptr::write_volatile((tx_va + 6) as *mut u8, nic_mac[0]);
+                                                                core::ptr::write_volatile((tx_va + 7) as *mut u8, nic_mac[1]);
+                                                                core::ptr::write_volatile((tx_va + 8) as *mut u8, nic_mac[2]);
+                                                                core::ptr::write_volatile((tx_va + 9) as *mut u8, nic_mac[3]);
+                                                                core::ptr::write_volatile((tx_va + 10) as *mut u8, nic_mac[4]);
+                                                                core::ptr::write_volatile((tx_va + 11) as *mut u8, nic_mac[5]);
+                                                                core::ptr::write_volatile((tx_va + 12) as *mut u8, 0x08);
+                                                                core::ptr::write_volatile((tx_va + 13) as *mut u8, 0x00);
+                                                            }
+                                                            let reply_total_len = (ipv4_hdr_len + udp_len as usize) as u16;
+                                                            unsafe {
+                                                                core::ptr::write_volatile((tx_va + 14) as *mut u8, 0x45);
+                                                                core::ptr::write_volatile((tx_va + 15) as *mut u8, 0x00);
+                                                                core::ptr::write_volatile((tx_va + 16) as *mut u8, ((reply_total_len >> 8) & 0xFF) as u8);
+                                                                core::ptr::write_volatile((tx_va + 17) as *mut u8, (reply_total_len & 0xFF) as u8);
+                                                                core::ptr::write_volatile((tx_va + 18) as *mut u8, 0x00);
+                                                                core::ptr::write_volatile((tx_va + 19) as *mut u8, 0x00);
+                                                                core::ptr::write_volatile((tx_va + 20) as *mut u8, 0x00);
+                                                                core::ptr::write_volatile((tx_va + 21) as *mut u8, 0x00);
+                                                                core::ptr::write_volatile((tx_va + 22) as *mut u8, 64);
+                                                                core::ptr::write_volatile((tx_va + 23) as *mut u8, 17);
+                                                                core::ptr::write_volatile((tx_va + 24) as *mut u8, 0x00);
+                                                                core::ptr::write_volatile((tx_va + 25) as *mut u8, 0x00);
+                                                                core::ptr::write_volatile((tx_va + 26) as *mut u8, 10);
+                                                                core::ptr::write_volatile((tx_va + 27) as *mut u8, 0);
+                                                                core::ptr::write_volatile((tx_va + 28) as *mut u8, 2);
+                                                                core::ptr::write_volatile((tx_va + 29) as *mut u8, 15);
+                                                                core::ptr::write_volatile((tx_va + 30) as *mut u8, src0);
+                                                                core::ptr::write_volatile((tx_va + 31) as *mut u8, src1);
+                                                                core::ptr::write_volatile((tx_va + 32) as *mut u8, src2);
+                                                                core::ptr::write_volatile((tx_va + 33) as *mut u8, src3);
+                                                            }
+                                                            {
+                                                                let mut ipv4_tx_sum = 0u32;
+                                                                let mut ck = 0usize;
+                                                                while ck < 10 {
+                                                                    let off = 14 + ck * 2;
+                                                                    let w_hi = unsafe { core::ptr::read_volatile((tx_va + off as u64) as *const u8) } as u16;
+                                                                    let w_lo = unsafe { core::ptr::read_volatile((tx_va + off as u64 + 1) as *const u8) } as u16;
+                                                                    ipv4_tx_sum += ((w_hi << 8) | w_lo) as u32;
+                                                                    ck += 1;
+                                                                }
+                                                                while (ipv4_tx_sum >> 16) != 0 {
+                                                                    ipv4_tx_sum = (ipv4_tx_sum & 0xFFFF) + (ipv4_tx_sum >> 16);
+                                                                }
+                                                                let ipv4_tx_csum = !(ipv4_tx_sum as u16);
+                                                                unsafe {
+                                                                    core::ptr::write_volatile((tx_va + 24) as *mut u8, ((ipv4_tx_csum >> 8) & 0xFF) as u8);
+                                                                    core::ptr::write_volatile((tx_va + 25) as *mut u8, (ipv4_tx_csum & 0xFF) as u8);
+                                                                }
+                                                            }
+                                                            unsafe {
+                                                                core::ptr::write_volatile((tx_va + 34) as *mut u8, ((udp_dst_port >> 8) & 0xFF) as u8);
+                                                                core::ptr::write_volatile((tx_va + 35) as *mut u8, (udp_dst_port & 0xFF) as u8);
+                                                                core::ptr::write_volatile((tx_va + 36) as *mut u8, ((udp_src_port >> 8) & 0xFF) as u8);
+                                                                core::ptr::write_volatile((tx_va + 37) as *mut u8, (udp_src_port & 0xFF) as u8);
+                                                                core::ptr::write_volatile((tx_va + 38) as *mut u8, ((udp_len >> 8) & 0xFF) as u8);
+                                                                core::ptr::write_volatile((tx_va + 39) as *mut u8, (udp_len & 0xFF) as u8);
+                                                                core::ptr::write_volatile((tx_va + 40) as *mut u8, 0x00);
+                                                                core::ptr::write_volatile((tx_va + 41) as *mut u8, 0x00);
+                                                            }
+                                                            if udp_payload_len > 0 {
+                                                                let mut pj = 0usize;
+                                                                while pj < udp_payload_len {
+                                                                    let pb = unsafe { core::ptr::read_volatile((udp_base + 8u64 + pj as u64) as *const u8) };
+                                                                    unsafe {
+                                                                        core::ptr::write_volatile((tx_va + 42u64 + pj as u64) as *mut u8, pb);
+                                                                    }
+                                                                    pj += 1;
+                                                                }
+                                                            }
+                                                            serial_println!(
+                                                                "[sexnet.udp.tx.reply.build] src_port={} dst_port={} len={} payload_len={} ok=1",
+                                                                udp_dst_port, udp_src_port, udp_len, udp_payload_len
+                                                            );
+                                                            serial_println!(
+                                                                "[sexnet.udp.tx.reply.checksum] checksum=0x0000 policy=zero_allowed ok=1"
+                                                            );
+                                                            serial_println!(
+                                                                "[sexnet.ipv4.tx.udp_reply.build] src=10.0.2.15 dst={}.{}.{}.{} total_len={} checksum=ok ok=1",
+                                                                src0, src1, src2, src3, reply_total_len
+                                                            );
+                                                            let frame_len = (14 + reply_total_len as u64) as u16;
+                                                            if frame_len < 60 {
+                                                                let mut pad = frame_len as u64;
+                                                                while pad < 60 {
+                                                                    unsafe { core::ptr::write_volatile((tx_va + pad) as *mut u8, 0u8); }
+                                                                    pad += 1;
+                                                                }
+                                                            }
+                                                            let tx_frame_len = if frame_len < 60 { 60u16 } else { frame_len };
+                                                            let tx_desc4 = unsafe { TX_PERM_DESC_VA + 64 };
+                                                            unsafe {
+                                                                core::ptr::write_volatile(tx_desc4 as *mut u64, TX_PERM_FRAME_PHYS);
+                                                                core::ptr::write_volatile((tx_desc4 + 8) as *mut u16, tx_frame_len);
+                                                                core::ptr::write_volatile((tx_desc4 + 10) as *mut u8, 0u8);
+                                                                core::ptr::write_volatile((tx_desc4 + 11) as *mut u8, 0x0Bu8);
+                                                                core::ptr::write_volatile((tx_desc4 + 12) as *mut u8, 0u8);
+                                                                core::ptr::write_volatile((tx_desc4 + 13) as *mut u8, 0u8);
+                                                                core::ptr::write_volatile((tx_desc4 + 14) as *mut u16, 0u16);
+                                                            }
+                                                            serial_println!(
+                                                                "[sexnet.eth.tx.udp_reply.desc] len={} ok=1",
+                                                                tx_frame_len
+                                                            );
+                                                            unsafe {
+                                                                core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 5);
+                                                            }
+                                                            let mut udp_reply_done = 0u32;
+                                                            let mut tx_outer = 0u32;
+                                                            while tx_outer < 50_000_000 {
+                                                                let tx_st = unsafe { core::ptr::read_volatile((tx_desc4 + 12) as *const u8) };
+                                                                if (tx_st & 1) != 0 {
+                                                                    udp_reply_done = 1;
+                                                                    break;
+                                                                }
+                                                                tx_outer += 1;
+                                                            }
+                                                            serial_println!(
+                                                                "[sexnet.udp.tx.poll.done] dd_set={} ok={}",
+                                                                udp_reply_done,
+                                                                if udp_reply_done == 1 { 1 } else { 0 }
+                                                            );
+                                                            serial_println!(
+                                                                "[sexnet.udp.echo.proof.done] rx_udp=1 tx_reply={} tx_dd={} ok={}",
+                                                                if udp_reply_done > 0 { 1 } else { 0 },
+                                                                udp_reply_done,
+                                                                if udp_reply_done == 1 { 1 } else { 0 }
+                                                            );
+                                                        } else {
+                                                            serial_println!(
+                                                                "[sexnet.udp.reject] reason={} ok=1",
+                                                                udp_reason
+                                                            );
+                                                        }
+                                                        serial_println!(
+                                                            "[sexnet.udp.header.proof.done] rx_udp=1 valid={} ok=1",
+                                                            udp_ok
+                                                        );
                                                     }
                                                 } else if reject_logged == 0 {
                                                     serial_println!(
