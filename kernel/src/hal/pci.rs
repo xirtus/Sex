@@ -2728,19 +2728,31 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                             // Ethernet+IPv4+TCP headers with computed checksums.
                             // No TX descriptor post. No TDT advance. syn_sent=0, tcp_sent=0.
                             // Requires: c_gw_mac, c_src_mac, q_a_ip[0] from DNS A record.
-                            let tcp_built: u8;
-                            let ipv4_csum_built: u16;
-                            let tcp_csum_built: u16;
-                            let checksum_ok: u8;
-                            let tcp_ok: u8;
+                            //
+                            // Compile-time gate: SEXOS_HAL_TCP_PROBE=0 disables HAL TCP probe
+                            // so sexnet source=3 gets the sole SLiRP TCP connection slot.
+                            let hal_tcp_probe_enabled: bool =
+                                match option_env!("SEXOS_HAL_TCP_PROBE") {
+                                    Some("0") => false,
+                                    _ => true,
+                                };
 
-                            let mut resolved_dst_ip: [u8; 4] = [10, 0, 2, 2];
+                            let mut tcp_built: u8 = 0;
+                            let mut ipv4_csum_built: u16 = 0;
+                            let mut tcp_csum_built: u16 = 0;
+                            let mut checksum_ok: u8 = 0;
+                            let mut tcp_ok: u8 = 0;
+
+                            let resolved_dst_ip: [u8; 4] = [10, 0, 2, 2];
                             let tcp_probe_dst_port: u16 = 18080;
                             let mut dst_ip_source_dns: u8 = 0;
-                            serial_println!("[tcp.guest.host.10_0_2_2.plan] dst_ip=10.0.2.2 dst_port={} source=slirp_gateway_host_probe fake=0 ok=1 reason=guest_to_host_tcp_probe_selected",
-                                tcp_probe_dst_port);
 
-                            if resolved_dst_ip != [0, 0, 0, 0] {
+                            if hal_tcp_probe_enabled {
+                                serial_println!("[hal.tcp.probe.gate] enabled=1 ok=1");
+                                serial_println!("[tcp.guest.host.10_0_2_2.plan] dst_ip=10.0.2.2 dst_port={} source=slirp_gateway_host_probe fake=0 ok=1 reason=guest_to_host_tcp_probe_selected",
+                                    tcp_probe_dst_port);
+
+                                if resolved_dst_ip != [0, 0, 0, 0] {
                                 let dst_ip = resolved_dst_ip;
                                 let mut syn_frame: [u8; 60] = [0; 60];
 
@@ -3487,12 +3499,9 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
                                     ((syn_tx_dd == 1 && synack_seen == 0 && rst_seen == 0 && http_mock_mode == 1 && http_resp_seen == 1 && http_status == 200) as u32),
                                     syn_tx_dd, synack_seen, rst_seen, http_mock_mode, http_resp_seen, http_status,
                                     ((syn_tx_dd == 1 && synack_seen == 0 && rst_seen == 0 && http_mock_mode == 1 && http_resp_seen == 1 && http_status == 200) as u32));
+                                }
                             } else {
-                                checksum_ok = 0;
-                                ipv4_csum_built = 0;
-                                tcp_csum_built = 0;
-                                tcp_built = 0;
-                                serial_println!("[tcp.syn.build.frame] eth_dst=00:00:00:00:00:00 eth_src=00:00:00:00:00:00 ethertype=0x0000 src_ip=0.0.0.0 dst_ip=0.0.0.0 proto=0 ttl=0 total_len=0 ok=0 reason=no_resolved_or_fallback_target");
+                                serial_println!("[hal.tcp.probe.gate] enabled=0 reason=SEXOS_HAL_TCP_PROBE=0 ok=1");
                             }
 
                             tcp_ok = (tcp_built & checksum_ok);

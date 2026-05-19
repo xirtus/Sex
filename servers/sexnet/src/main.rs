@@ -196,7 +196,7 @@ enum TcpState { Closed, SynSent, Established, FailedRst, FailedTimeout }
 
 static TCP_STATE: Mutex<TcpState> = Mutex::new(TcpState::Closed);
 static mut TCP_LOCAL_PORT: u16 = 7777;
-static mut TCP_REMOTE_PORT: u16 = 18080;
+static mut TCP_REMOTE_PORT: u16 = 18081;
 static mut TCP_LOCAL_SEQ: u32 = 42;
 static mut TCP_REMOTE_SEQ: u32 = 0;
 static mut TCP_REMOTE_IP: [u8; 4] = [10, 0, 2, 2]; // gateway
