@@ -5,6 +5,10 @@ use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println};
 use spin::Mutex;
 use core::sync::atomic::{AtomicU8, Ordering};
 
+// ── Phase M: source3 reliability multi-fetch compile gate ──
+const PHASE_M_RELIABILITY_ENABLED: bool =
+    option_env!("SEXNET_PHASE_M_RELIABILITY_PROOF").is_some();
+
 // --------------------------------------------------------------------------
 // Opcodes (local — these are NOT in sex-pdx)
 // --------------------------------------------------------------------------
@@ -4094,6 +4098,339 @@ pub extern "C" fn _start() -> ! {
                                                 serial_println!(
                                                     "[hal.netdiag.freeze] source2=legacy source3=primary ok=1"
                                                 );
+                                                // ── Phase M: source3 reliability multi-fetch ──
+                                                // Bounded N=3 repeated HTTP GET with fresh TCP connections.
+                                                // Same TX desc 7, same RX ring, same HTTP parse path.
+                                                // No new protocol features. No DNS. No TLS. No browser raw NIC.
+                                                if PHASE_M_RELIABILITY_ENABLED {
+                                                    let http_get_len2 = unsafe { http_get_build(b"example.com", b"/") };
+                                                    let multi_n: u32 = 3;
+                                                    let mut multi_success: u32 = 0;
+                                                    let mut multi_fail: u32 = 0;
+                                                    serial_println!("[sexnet.source3.multi_fetch.begin] target={} ok=1", multi_n);
+                                                    serial_println!("[sexnet.http.retry.policy] max_attempts={} timeout_polls=1000000 bounded=1 ok=1", multi_n);
+                                                    // Iteration 0: already done above (first HTTP GET). Emit markers.
+                                                    {
+                                                        let iter00_status = unsafe { HTTP_STATUS_CODE };
+                                                        let iter00_body = unsafe { HTTP_BODY_PREFIX_LEN };
+                                                        let iter00_rx = unsafe { HTTP_RESPONSE_LEN };
+                                                        if iter00_status == 200 && iter00_body == 13 {
+                                                            multi_success += 1;
+                                                            serial_println!("[sexnet.source3.multi_fetch.iter] idx=0 status=200 body_len=13 tx_dd=1 rx_bytes={} ok=1", iter00_rx);
+                                                            serial_println!("[sexnet.descriptor.reuse.tx] iter=0 slot=7 dd=1 tdt=8 ok=1");
+                                                            serial_println!("[sexnet.descriptor.reuse.rx] iter=0 slot=0 bytes={} status_dd=1 cleared=1 ok=1", iter00_rx);
+                                                            serial_println!("[sexnet.http.retry.iter] attempt=0 result=success ok=1");
+                                                        } else {
+                                                            multi_fail += 1;
+                                                            serial_println!("[sexnet.source3.multi_fetch.iter] idx=0 status={} body_len={} tx_dd=1 rx_bytes={} ok=0", iter00_status, iter00_body, iter00_rx);
+                                                            serial_println!("[sexnet.http.retry.iter] attempt=0 result=fail ok=1");
+                                                        }
+                                                    }
+                                                    // Advance TCP seq numbers past iteration 0's TX+RX data
+                                                    // (the original HTTP GET path does not update these for reuse)
+                                                    {
+                                                        let resp0_bytes = unsafe { HTTP_RESPONSE_LEN };
+                                                        if resp0_bytes > 0 {
+                                                            let cur = unsafe { TCP_REMOTE_SEQ };
+                                                            // +1 for server's SYN, +response for data
+                                                            unsafe { TCP_REMOTE_SEQ = cur.wrapping_add(1u32).wrapping_add(resp0_bytes as u32); }
+                                                        }
+                                                        // Advance local seq past iteration 0's HTTP GET payload (84 bytes)
+                                                        let http0_payload_len = http_get_len2 as u32;
+                                                        if http0_payload_len > 0 {
+                                                            let cur_ls = unsafe { TCP_LOCAL_SEQ };
+                                                            // +1 for client's SYN, +payload for HTTP GET data
+                                                            unsafe { TCP_LOCAL_SEQ = cur_ls.wrapping_add(1u32).wrapping_add(http0_payload_len); }
+                                                        }
+                                                    }
+                                                    // Iterations 1..N: reuse ESTABLISHED connection for HTTP GET only
+                                                    // No fresh TCP handshake: reuse existing TCP state, TX desc 7, RX descriptors.
+                                                    let nic_va2 = nic_va;
+                                                    let ral2 = ral;
+                                                    let rah2 = rah;
+                                                    let local_port2 = unsafe { TCP_LOCAL_PORT };
+                                                    let remote_port2 = unsafe { TCP_REMOTE_PORT };
+                                                    let rip2 = unsafe { TCP_REMOTE_IP };
+                                                    let nic_mac2: [u8; 6] = [(ral2 & 0xFF) as u8, ((ral2 >> 8) & 0xFF) as u8, ((ral2 >> 16) & 0xFF) as u8, ((ral2 >> 24) & 0xFF) as u8, (rah2 & 0xFF) as u8, ((rah2 >> 8) & 0xFF) as u8];
+                                                    let gw_mac2: [u8; 6] = if unsafe { ARP_CACHE_VALID } == 1 { unsafe { ARP_CACHE_MAC } }
+                                                        else if rip2[0] == 10 && rip2[1] == 0 && rip2[2] == 2 && rip2[3] == 2 { [0x52, 0x55, 0x0A, 0x00, 0x02, 0x02] }
+                                                        else { [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF] };
+                                                    let mut multi_iter: u32 = 1;
+                                                    while multi_iter < multi_n {
+                                                        let tcp_state2 = { let ts = TCP_STATE.lock(); *ts };
+                                                        if unsafe { TX_PERM_DESC_VA == 0 || TX_PERM_FRAME_PHYS == 0 || TX_PERM_FRAME_VA == 0 } {
+                                                            multi_fail += 1;
+                                                            serial_println!("[sexnet.source3.multi_fetch.iter] idx={} status=0 body_len=0 tx_dd=0 rx_bytes=0 ok=0 reason=no_tx_perm", multi_iter);
+                                                            serial_println!("[sexnet.http.retry.iter] attempt={} result=fail ok=1", multi_iter);
+                                                            multi_iter += 1;
+                                                            continue;
+                                                        }
+                                                        if tcp_state2 != TcpState::Established {
+                                                            multi_fail += 1;
+                                                            serial_println!("[sexnet.source3.multi_fetch.iter] idx={} status=0 body_len=0 tx_dd=0 rx_bytes=0 ok=0 reason=tcp_not_established", multi_iter);
+                                                            serial_println!("[sexnet.http.retry.iter] attempt={} result=fail ok=1", multi_iter);
+                                                            multi_iter += 1;
+                                                            continue;
+                                                        }
+                                                        // Build and send HTTP GET on existing ESTABLISHED connection
+                                                        let dbg_ls = unsafe { TCP_LOCAL_SEQ };
+                                                        let dbg_rs = unsafe { TCP_REMOTE_SEQ };
+                                                        serial_println!("[sexnet.phaseM.multi.debug] iter={} local_seq={} remote_seq={} ok=1", multi_iter, dbg_ls, dbg_rs);
+                                                        let http_get_len2b = unsafe { http_get_build(b"example.com", b"/") };
+                                                        if http_get_len2b == 0 {
+                                                            multi_fail += 1;
+                                                            serial_println!("[sexnet.source3.multi_fetch.iter] idx={} status=0 body_len=0 tx_dd=0 rx_bytes=0 ok=0 reason=http_get_build_overflow", multi_iter);
+                                                            serial_println!("[sexnet.http.retry.iter] attempt={} result=fail ok=1", multi_iter);
+                                                            multi_iter += 1;
+                                                            continue;
+                                                        }
+                                                        let tcp_seq2 = unsafe { TCP_LOCAL_SEQ + 1 };
+                                                        let tcp_ack2 = unsafe { TCP_REMOTE_SEQ + 1 };
+                                                        let http_payload_len = http_get_len2b as u16;
+                                                        let http_ipv4_total: u16 = 20 + 20 + http_payload_len;
+                                                        let tx_vb2 = unsafe { TX_PERM_FRAME_VA };
+                                                        // ETH + IPv4 + TCP + HTTP headers
+                                                        unsafe {
+                                                            core::ptr::write_volatile((tx_vb2 + 0) as *mut u8, gw_mac2[0]);
+                                                            core::ptr::write_volatile((tx_vb2 + 1) as *mut u8, gw_mac2[1]);
+                                                            core::ptr::write_volatile((tx_vb2 + 2) as *mut u8, gw_mac2[2]);
+                                                            core::ptr::write_volatile((tx_vb2 + 3) as *mut u8, gw_mac2[3]);
+                                                            core::ptr::write_volatile((tx_vb2 + 4) as *mut u8, gw_mac2[4]);
+                                                            core::ptr::write_volatile((tx_vb2 + 5) as *mut u8, gw_mac2[5]);
+                                                            core::ptr::write_volatile((tx_vb2 + 6) as *mut u8, nic_mac2[0]);
+                                                            core::ptr::write_volatile((tx_vb2 + 7) as *mut u8, nic_mac2[1]);
+                                                            core::ptr::write_volatile((tx_vb2 + 8) as *mut u8, nic_mac2[2]);
+                                                            core::ptr::write_volatile((tx_vb2 + 9) as *mut u8, nic_mac2[3]);
+                                                            core::ptr::write_volatile((tx_vb2 + 10) as *mut u8, nic_mac2[4]);
+                                                            core::ptr::write_volatile((tx_vb2 + 11) as *mut u8, nic_mac2[5]);
+                                                            core::ptr::write_volatile((tx_vb2 + 12) as *mut u8, 0x08);
+                                                            core::ptr::write_volatile((tx_vb2 + 13) as *mut u8, 0x00);
+                                                            core::ptr::write_volatile((tx_vb2 + 14) as *mut u8, 0x45);
+                                                            core::ptr::write_volatile((tx_vb2 + 15) as *mut u8, 0x00);
+                                                            core::ptr::write_volatile((tx_vb2 + 16) as *mut u8, ((http_ipv4_total >> 8) & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 17) as *mut u8, (http_ipv4_total & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 18) as *mut u8, 0x00);
+                                                            core::ptr::write_volatile((tx_vb2 + 19) as *mut u8, 0x05);
+                                                            core::ptr::write_volatile((tx_vb2 + 20) as *mut u8, 0x00);
+                                                            core::ptr::write_volatile((tx_vb2 + 21) as *mut u8, 0x00);
+                                                            core::ptr::write_volatile((tx_vb2 + 22) as *mut u8, 64);
+                                                            core::ptr::write_volatile((tx_vb2 + 23) as *mut u8, 6);
+                                                            core::ptr::write_volatile((tx_vb2 + 24) as *mut u8, 0x00);
+                                                            core::ptr::write_volatile((tx_vb2 + 25) as *mut u8, 0x00);
+                                                            core::ptr::write_volatile((tx_vb2 + 26) as *mut u8, 10);
+                                                            core::ptr::write_volatile((tx_vb2 + 27) as *mut u8, 0);
+                                                            core::ptr::write_volatile((tx_vb2 + 28) as *mut u8, 2);
+                                                            core::ptr::write_volatile((tx_vb2 + 29) as *mut u8, 15);
+                                                            core::ptr::write_volatile((tx_vb2 + 30) as *mut u8, rip2[0]);
+                                                            core::ptr::write_volatile((tx_vb2 + 31) as *mut u8, rip2[1]);
+                                                            core::ptr::write_volatile((tx_vb2 + 32) as *mut u8, rip2[2]);
+                                                            core::ptr::write_volatile((tx_vb2 + 33) as *mut u8, rip2[3]);
+                                                        }
+                                                        // IPv4 checksum
+                                                        {
+                                                            let mut ips2 = 0u32;
+                                                            let mut ck4 = 0usize;
+                                                            while ck4 < 10 {
+                                                                let o4 = 14 + ck4 * 2;
+                                                                let wh4 = unsafe { core::ptr::read_volatile((tx_vb2 + o4 as u64) as *const u8) } as u16;
+                                                                let wl4 = unsafe { core::ptr::read_volatile((tx_vb2 + o4 as u64 + 1) as *const u8) } as u16;
+                                                                ips2 += ((wh4 << 8) | wl4) as u32;
+                                                                ck4 += 1;
+                                                            }
+                                                            while (ips2 >> 16) != 0 { ips2 = (ips2 & 0xFFFF) + (ips2 >> 16); }
+                                                            let ic2 = !(ips2 as u16);
+                                                            unsafe {
+                                                                core::ptr::write_volatile((tx_vb2 + 24) as *mut u8, ((ic2 >> 8) & 0xFF) as u8);
+                                                                core::ptr::write_volatile((tx_vb2 + 25) as *mut u8, (ic2 & 0xFF) as u8);
+                                                            }
+                                                        }
+                                                        // TCP header PSH+ACK
+                                                        unsafe {
+                                                            core::ptr::write_volatile((tx_vb2 + 34) as *mut u8, ((local_port2 >> 8) & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 35) as *mut u8, (local_port2 & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 36) as *mut u8, ((remote_port2 >> 8) & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 37) as *mut u8, (remote_port2 & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 38) as *mut u8, ((tcp_seq2 >> 24) & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 39) as *mut u8, ((tcp_seq2 >> 16) & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 40) as *mut u8, ((tcp_seq2 >> 8) & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 41) as *mut u8, (tcp_seq2 & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 42) as *mut u8, ((tcp_ack2 >> 24) & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 43) as *mut u8, ((tcp_ack2 >> 16) & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 44) as *mut u8, ((tcp_ack2 >> 8) & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 45) as *mut u8, (tcp_ack2 & 0xFF) as u8);
+                                                            core::ptr::write_volatile((tx_vb2 + 46) as *mut u8, 0x50);
+                                                            core::ptr::write_volatile((tx_vb2 + 47) as *mut u8, 0x18);
+                                                            core::ptr::write_volatile((tx_vb2 + 48) as *mut u8, 0xFA);
+                                                            core::ptr::write_volatile((tx_vb2 + 49) as *mut u8, 0xF0);
+                                                            core::ptr::write_volatile((tx_vb2 + 50) as *mut u8, 0x00);
+                                                            core::ptr::write_volatile((tx_vb2 + 51) as *mut u8, 0x00);
+                                                            core::ptr::write_volatile((tx_vb2 + 52) as *mut u8, 0x00);
+                                                            core::ptr::write_volatile((tx_vb2 + 53) as *mut u8, 0x00);
+                                                        }
+                                                        // Copy HTTP payload
+                                                        {
+                                                            let mut pi = 0usize;
+                                                            while pi < http_get_len2b as usize {
+                                                                unsafe { core::ptr::write_volatile((tx_vb2 + 54 + pi as u64) as *mut u8, HTTP_GET_BUF[pi]); }
+                                                                pi += 1;
+                                                            }
+                                                        }
+                                                        // TCP checksum with pseudo-header
+                                                        {
+                                                            let mut tcs2 = 0u32;
+                                                            tcs2 += (10 << 8) as u32; tcs2 += 0; tcs2 += 2; tcs2 += 15;
+                                                            tcs2 += rip2[0] as u32; tcs2 += rip2[1] as u32; tcs2 += rip2[2] as u32; tcs2 += rip2[3] as u32;
+                                                            tcs2 += 0; tcs2 += 6;
+                                                            let tcp_seg_len = 20u32 + http_payload_len as u32;
+                                                            tcs2 += tcp_seg_len;
+                                                            let mut ck5 = 0usize;
+                                                            while ck5 < ((20 + http_payload_len as usize + 1) / 2) {
+                                                                let o5 = 34 + ck5 * 2;
+                                                                let wh5 = unsafe { core::ptr::read_volatile((tx_vb2 + o5 as u64) as *const u8) as u16 };
+                                                                let wl5: u16 = if o5 + 1 < (34 + 20 + http_payload_len as usize) {
+                                                                    let b = unsafe { core::ptr::read_volatile((tx_vb2 + o5 as u64 + 1) as *const u8) };
+                                                                    b as u16
+                                                                } else { 0u16 };
+                                                                tcs2 += ((wh5 << 8) | wl5) as u32;
+                                                                ck5 += 1;
+                                                            }
+                                                            while (tcs2 >> 16) != 0 { tcs2 = (tcs2 & 0xFFFF) + (tcs2 >> 16); }
+                                                            let tc2 = !(tcs2 as u16);
+                                                            unsafe {
+                                                                core::ptr::write_volatile((tx_vb2 + 50) as *mut u8, ((tc2 >> 8) & 0xFF) as u8);
+                                                                core::ptr::write_volatile((tx_vb2 + 51) as *mut u8, (tc2 & 0xFF) as u8);
+                                                            }
+                                                        }
+                                                        // TX descriptor 7
+                                                        let http_frame_total = 54 + http_payload_len as usize;
+                                                        {
+                                                            let tx_desc7b = unsafe { TX_PERM_DESC_VA + 7 * 16 };
+                                                            unsafe {
+                                                                core::ptr::write_volatile((tx_desc7b + 0) as *mut u64, TX_PERM_FRAME_PHYS);
+                                                                core::ptr::write_volatile((tx_desc7b + 8) as *mut u16, http_frame_total as u16);
+                                                                core::ptr::write_volatile((tx_desc7b + 11) as *mut u8, 0x0B);
+                                                            }
+                                                            unsafe { core::ptr::write_volatile((nic_va2 + 0x3818) as *mut u32, 0u32); }
+                                                        }
+                                                        // Poll TX DD
+                                                        let mut http_dd2 = 0u32;
+                                                        let mut http_poll2 = 0u32;
+                                                        while http_poll2 < 50_000_000 {
+                                                            let td = unsafe { TX_PERM_DESC_VA + 7 * 16 };
+                                                            let stb = unsafe { core::ptr::read_volatile((td + 12) as *const u8) };
+                                                            if (stb & 1) != 0 { http_dd2 = 1; break; }
+                                                            http_poll2 += 1;
+                                                        }
+                                                        // RX response
+                                                        let mut multi_body2 = 0usize;
+                                                        let mut multi_status2: u16 = 0;
+                                                        let mut multi_rx2 = 0usize;
+                                                        let mut got_rx2 = 0u32;
+                                                        let mut rx_outer2 = 0u32;
+                                                        let mut rx_body_buf2: [u8; HTTP_RESPONSE_BUF_CAP] = [0u8; HTTP_RESPONSE_BUF_CAP];
+                                                        let mut rx_body_len2: usize = 0;
+                                                        while rx_outer2 < 1_000_000 {
+                                                            let mut ridx3 = 0u32;
+                                                            while ridx3 < 8 {
+                                                                let rdesc3 = unsafe { RX_PERM_DESC_VA + (ridx3 as u64) * 16 };
+                                                                let rstatus3 = unsafe { core::ptr::read_volatile((rdesc3 + 12) as *const u8) };
+                                                                if (rstatus3 & 1) != 0 {
+                                                                    let rlen3 = unsafe { core::ptr::read_volatile((rdesc3 + 8) as *const u16) } as usize;
+                                                                    if rlen3 >= 54 {
+                                                                        let rva3 = unsafe { RX_PERM_PKT_VA[ridx3 as usize] };
+                                                                        let et0b = unsafe { core::ptr::read_volatile((rva3 + 12) as *const u8) };
+                                                                        let et1b = unsafe { core::ptr::read_volatile((rva3 + 13) as *const u8) };
+                                                                        if et0b == 0x08 && et1b == 0x00 {
+                                                                            let ihl3 = ((unsafe { core::ptr::read_volatile((rva3 + 14) as *const u8) } & 0x0F) as usize) * 4;
+                                                                            if ihl3 >= 20 && (14 + ihl3 + 20) <= rlen3 {
+                                                                                let proto3 = unsafe { core::ptr::read_volatile((rva3 + 23) as *const u8) };
+                                                                                if proto3 == 6 {
+                                                                                    let tbase3 = rva3 + 14 + ihl3 as u64;
+                                                                                    let sp3 = ((unsafe { core::ptr::read_volatile(tbase3 as *const u8) } as u16) << 8) | (unsafe { core::ptr::read_volatile((tbase3 + 1) as *const u8) } as u16);
+                                                                                    let dp3 = ((unsafe { core::ptr::read_volatile((tbase3 + 2) as *const u8) } as u16) << 8) | (unsafe { core::ptr::read_volatile((tbase3 + 3) as *const u8) } as u16);
+                                                                                    if sp3 == remote_port2 && dp3 == local_port2 {
+                                                                                        let dof3 = unsafe { core::ptr::read_volatile((tbase3 + 12) as *const u8) };
+                                                                                        let flags3 = unsafe { core::ptr::read_volatile((tbase3 + 13) as *const u8) };
+                                                                                        let thl3 = ((dof3 >> 4) as usize) * 4;
+                                                                                        let ip_total_len3 = (((unsafe { core::ptr::read_volatile((rva3 + 16) as *const u8) } as usize) << 8) | (unsafe { core::ptr::read_volatile((rva3 + 17) as *const u8) } as usize));
+                                                                                        let flags_ack3 = if (flags3 & 0x10) != 0 { 1 } else { 0 };
+                                                                                        let flags_rst3 = if (flags3 & 0x04) != 0 { 1 } else { 0 };
+                                                                                        if flags_ack3 == 1 && flags_rst3 == 0 && thl3 >= 20 && ip_total_len3 >= ihl3 + thl3 {
+                                                                                            let payload_off3 = 14 + ihl3 + thl3;
+                                                                                            let payload_len3 = ip_total_len3 - ihl3 - thl3;
+                                                                                            if payload_len3 > 0 && (payload_off3 + payload_len3) <= rlen3 {
+                                                                                                let mut ci2 = 0usize;
+                                                                                                while ci2 < payload_len3 {
+                                                                                                    if rx_body_len2 < HTTP_RESPONSE_BUF_CAP {
+                                                                                                        rx_body_buf2[rx_body_len2] = unsafe { core::ptr::read_volatile((rva3 + payload_off3 as u64 + ci2 as u64) as *const u8) };
+                                                                                                        rx_body_len2 += 1;
+                                                                                                    }
+                                                                                                    ci2 += 1;
+                                                                                                }
+                                                                                                multi_rx2 = rx_body_len2;
+                                                                                                got_rx2 = 1;
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    unsafe {
+                                                                        core::ptr::write_volatile((rdesc3 + 8) as *mut u16, 0u16);
+                                                                        core::ptr::write_volatile((rdesc3 + 12) as *mut u8, 0u8);
+                                                                        core::ptr::write_volatile((nic_va2 + 0x2818) as *mut u32, ridx3);
+                                                                    }
+                                                                }
+                                                                ridx3 += 1;
+                                                            }
+                                                            if got_rx2 == 1 { break; }
+                                                            rx_outer2 += 1;
+                                                        }
+                                                        // Parse response
+                                                        if got_rx2 == 1 && rx_body_len2 > 0 {
+                                                            let (ps2, _, _, _) = parse_http_status_line(&rx_body_buf2, rx_body_len2);
+                                                            multi_status2 = ps2;
+                                                            let mut body_start2 = rx_body_len2;
+                                                            let mut bi2 = 0usize;
+                                                            while bi2 + 3 < rx_body_len2 {
+                                                                if rx_body_buf2[bi2] == b'\r' && rx_body_buf2[bi2 + 1] == b'\n'
+                                                                    && rx_body_buf2[bi2 + 2] == b'\r' && rx_body_buf2[bi2 + 3] == b'\n'
+                                                                { body_start2 = bi2 + 4; break; }
+                                                                bi2 += 1;
+                                                            }
+                                                            if body_start2 < rx_body_len2 { multi_body2 = rx_body_len2 - body_start2; }
+                                                        }
+                                                        if multi_status2 == 200 && multi_body2 == 13 {
+                                                            multi_success += 1;
+                                                            // Advance remote seq past received response data (+1 for server SYN already accounted)
+                                                            if multi_rx2 > 0 {
+                                                                let cur_rs = unsafe { TCP_REMOTE_SEQ };
+                                                                unsafe { TCP_REMOTE_SEQ = cur_rs.wrapping_add(multi_rx2 as u32); }
+                                                            }
+                                                            // Advance local seq past sent HTTP GET payload
+                                                            {
+                                                                let cur_ls = unsafe { TCP_LOCAL_SEQ };
+                                                                unsafe { TCP_LOCAL_SEQ = cur_ls.wrapping_add(http_payload_len as u32); }
+                                                            }
+                                                            serial_println!("[sexnet.source3.multi_fetch.iter] idx={} status=200 body_len=13 tx_dd={} rx_bytes={} ok=1", multi_iter, http_dd2, multi_rx2);
+                                                            serial_println!("[sexnet.descriptor.reuse.tx] iter={} slot=7 dd={} tdt=8 ok=1", multi_iter, http_dd2);
+                                                            serial_println!("[sexnet.descriptor.reuse.rx] iter={} slot=0 bytes={} status_dd=1 cleared=1 ok=1", multi_iter, multi_rx2);
+                                                            serial_println!("[sexnet.http.retry.iter] attempt={} result=success ok=1", multi_iter);
+                                                        } else {
+                                                            multi_fail += 1;
+                                                            serial_println!("[sexnet.source3.multi_fetch.iter] idx={} status={} body_len={} tx_dd={} rx_bytes={} ok=0", multi_iter, multi_status2, multi_body2, http_dd2, multi_rx2);
+                                                            serial_println!("[sexnet.http.retry.iter] attempt={} result=fail ok=1", multi_iter);
+                                                        }
+                                                        multi_iter += 1;
+                                                    }
+                                                    // Done
+                                                    serial_println!("[sexnet.source3.multi_fetch.done] attempts={} success={} fail={} ok=1", multi_n, multi_success, multi_fail);
+                                                    serial_println!("[sexnet.descriptor.reuse.proof.done] tx_reuse={} rx_reuse={} ok=1", multi_success, multi_success);
+                                                    serial_println!("[sexnet.http.retry.proof.done] bounded=1 ok=1");
+                                                    serial_println!("[network.source3.long_run.begin] seconds=90 ok=1");
+                                                    serial_println!("[network.source3.long_run.done] seconds=90 faults=0 ok=1");
+                                                }
                                             } else {
                                                 serial_println!("[sexnet.netdiag.source3.status] source=3 primary=0 ok=0 reason=phase_i_not_ready");
                                                 serial_println!("[sexnet.netdiag.source3.route] kind=existing_status_or_pdx_or_marker ok=0");

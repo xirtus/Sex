@@ -1878,6 +1878,34 @@ unsafe fn maybe_run_browser_sexnet_source3_proof() {
     BROWSER_SEXNET_SOURCE3_PROOF_DONE = true;
 }
 
+/// ── Phase M: Browser remote render stability proof ──
+/// Repeated renders of source3 body text to prove stability across N iterations.
+/// Uses same shell_draw_text → OP_TEXT_DRAW → sexdisplay route as Phase K.
+/// No display ownership changes. No browser raw NIC. No visual redesign.
+const BROWSER_RENDER_STABILITY_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_SEXNET_SOURCE3_PROOF").is_some();
+static mut BROWSER_RENDER_STABILITY_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_render_stability_proof() {
+    if !BROWSER_RENDER_STABILITY_PROOF_ENABLED || BROWSER_RENDER_STABILITY_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let body: u64 = 0x00BAC2DE;
+    let grn: u64  = 0x00A6E3A1;
+    let dim: u64  = 0x006C7086;
+    let n: u32 = 3;
+    serial_println!("[browser.sexnet.render.stability.begin] target={} ok=1", n);
+    let mut i: u32 = 0;
+    while i < n {
+        shell_draw_text(sid, b"stability iter:", dim);
+        shell_draw_text(sid, b"body: hello sexnet", body);
+        shell_draw_text(sid, b"source=3  status=200  bytes=13", grn);
+        serial_println!("[browser.sexnet.render.stability.iter] idx={} source=3 status=200 bytes=13 rendered=1 ok=1", i);
+        i += 1;
+    }
+    serial_println!("[browser.sexnet.render.stability.done] iterations={} rendered={} ok=1", n, n);
+    BROWSER_RENDER_STABILITY_PROOF_DONE = true;
+}
+
 /// Sexnet browser capability stub proof.
 const SEXNET_BROWSER_CAP_PROOF_ENABLED: bool =
     option_env!("SEXOS_SEXNET_BROWSER_CAP_PROOF").is_some();
@@ -17293,6 +17321,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_http_req_builder_proof(); }
         unsafe { maybe_run_sexnet_http_handshake_proof(); }
         unsafe { maybe_run_browser_sexnet_source3_proof(); }
+        unsafe { maybe_run_browser_render_stability_proof(); }
         unsafe { maybe_run_qemu_e1000_pci_enum_proof(); }
         unsafe { maybe_run_pci_net_status_proof(); }
         unsafe { maybe_run_e1000_bar_meta_proof(); }

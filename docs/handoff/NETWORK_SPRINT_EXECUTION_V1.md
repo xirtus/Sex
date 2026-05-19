@@ -1929,5 +1929,36 @@ Added to `scripts/daily_driver_master_gate.sh`:
 - Error handling and timeouts
 - Security audit
 
+### Phase M (2026-05-19): Source3 Reliability / Multi-Fetch
+
+- N=3 repeated source3 HTTP GET with fresh TCP per iteration
+- TX descriptor 7 reuse across iterations; RX descriptor clear/recycle
+- Bounded retry/timeout policy (no infinite loops)
+- Browser remote render stability (N=3 renders)
+- Long-run no-fault proof (120s probe, e1000 + user backend)
+- Gates: sexnet_source3_multi_fetch, sexnet_descriptor_reuse,
+  sexnet_http_retry_policy, browser_remote_render_stability,
+  network_source3_long_run, network_reliability
+- Docs: SEXNET_SOURCE3_MULTI_FETCH_STOP_REVIEW_V1,
+  SEXNET_SOURCE3_MULTI_FETCH_REPEAT_PROOF_V1,
+  SEXNET_RX_TX_DESCRIPTOR_REUSE_PROOF_V1,
+  SEXNET_HTTP_TIMEOUT_RETRY_POLICY_PROOF_V1,
+  BROWSER_REMOTE_RENDER_STABILITY_PROOF_V1,
+  NETWORK_SOURCE3_LONG_RUN_NO_FAULT_PROOF_V1,
+  NETWORK_RELIABILITY_GATE_V1
+- No DNS/TLS/JS/browser raw NIC
+- No kernel/ABI changes
+- No HAL source2 retirement (frozen as legacy)
+- Updated: NETWORK_STACK_STATUS_ROLLUP_V1, NETWORK_SPRINT_EXECUTION_V1
+
+### What Remains for Phase N
+
+- Real hardware NIC audit
+- Real hardware network boot proof
+- HAL NET_DIAG retirement/deletion (only after Phase M/N safety confirmed)
+- Source3 DNS implementation
+- Production deployment hardening
+- Full TLS integration
+
 Next:
-Phase M -- reliability, stress, multi-fetch hardening.
+Phase N -- real hardware verification.

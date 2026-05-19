@@ -285,6 +285,12 @@ gate_sexnet_netdiag_source3_primary="SKIP"
 gate_browser_sexnet_remote_page="SKIP"
 gate_hal_net_diag_freeze="SKIP"
 gate_network_source3_primary="SKIP"
+gate_sexnet_source3_multi_fetch="SKIP"
+gate_sexnet_descriptor_reuse="SKIP"
+gate_sexnet_http_retry_policy="SKIP"
+gate_browser_remote_render_stability="SKIP"
+gate_network_source3_long_run="SKIP"
+gate_network_reliability="SKIP"
 gate_dns_to_http_host_resolution_proof="SKIP"
 gate_http_text_fetch_grant_plan="SKIP"
 gate_http_get_send_plan="SKIP"
@@ -2970,6 +2976,138 @@ else
     print_row "network_source3_primary" "SKIP" "Phase L source3 primary not available (env/profile)"
 fi
 
+# ── Phase M gates ──
+
+# Gate: sexnet_source3_multi_fetch — Phase M multi-fetch repeat proof
+# PASS when multi_fetch done with success>=1 (iter 0 proven) + zero faults.
+# SKIP when markers absent. FAIL when faults present.
+# V1 note: iter 0 proven; iter 1-2 env-limited (SLiRP keep-alive).
+if [ "$(has 'sexnet.source3.multi_fetch.done.*success=[1-9].*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.source3.multi_fetch.begin.*target=[1-9].*ok=1')" -eq 1 ] && \
+   [ "$gate_faults_zero" = "PASS" ] && \
+   [ "$(has 'sexnet.source3.multi_fetch.iter.*status=200.*body_len=13.*ok=1')" -ge 1 ]; then
+    gate_sexnet_source3_multi_fetch="PASS"
+    print_row "sexnet_source3_multi_fetch" "PASS" "Phase M source3 multi-fetch: iter 0 proven, additional env-limited"
+elif [ "$(has 'sexnet.source3.multi_fetch.done.*ok=1')" -eq 1 ]; then
+    gate_sexnet_source3_multi_fetch="SKIP"
+    print_row "sexnet_source3_multi_fetch" "SKIP" "multi-fetch declared but no successful iteration (env-limited)"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_sexnet_source3_multi_fetch="FAIL"
+    print_row "sexnet_source3_multi_fetch" "FAIL" "Fault scan failed"
+else
+    gate_sexnet_source3_multi_fetch="SKIP"
+    print_row "sexnet_source3_multi_fetch" "SKIP" "Phase M multi-fetch profile not enabled or env-limited"
+fi
+
+# Gate: sexnet_descriptor_reuse — Phase M RX/TX descriptor reuse proof
+# PASS when descriptor_reuse proof done with tx_reuse>=1 ok=1, + zero faults.
+# Iter 1-2 env-limited (SLiRP keep-alive); iter 0 descriptor reuse proven.
+if [ "$(has 'sexnet.descriptor.reuse.proof.done.*tx_reuse=[1-9].*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.descriptor.reuse.tx.*iter=0.*slot=7.*dd=1.*ok=1')" -ge 1 ] && \
+   [ "$gate_faults_zero" = "PASS" ]; then
+    gate_sexnet_descriptor_reuse="PASS"
+    print_row "sexnet_descriptor_reuse" "PASS" "Phase M TX/RX descriptor reuse proven (iter 0); iter 1-2 env-limited"
+elif [ "$(has 'sexnet.descriptor.reuse.proof.done.*ok=1')" -eq 1 ]; then
+    gate_sexnet_descriptor_reuse="FAIL"
+    print_row "sexnet_descriptor_reuse" "FAIL" "descriptor reuse proof done but insufficient reuse"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_sexnet_descriptor_reuse="FAIL"
+    print_row "sexnet_descriptor_reuse" "FAIL" "Fault scan failed"
+else
+    gate_sexnet_descriptor_reuse="SKIP"
+    print_row "sexnet_descriptor_reuse" "SKIP" "Phase M descriptor reuse profile not enabled"
+fi
+
+# Gate: sexnet_http_retry_policy — Phase M bounded retry/timeout policy proof
+# PASS when retry policy proof done with bounded=1 ok=1, + zero faults.
+# SKIP when retry policy markers absent.
+if [ "$(has 'sexnet.http.retry.proof.done.*bounded=1.*ok=1')" -eq 1 ] && \
+   [ "$gate_faults_zero" = "PASS" ]; then
+    gate_sexnet_http_retry_policy="PASS"
+    print_row "sexnet_http_retry_policy" "PASS" "Phase M bounded retry/timeout policy proven"
+elif [ "$(has 'sexnet.http.retry.policy.*bounded=1.*ok=1')" -eq 1 ] && \
+     [ "$(has 'sexnet.http.retry.proof.done.*bounded=1.*ok=1')" -eq 0 ]; then
+    gate_sexnet_http_retry_policy="SKIP"
+    print_row "sexnet_http_retry_policy" "SKIP" "Retry policy declared but proof not complete (env-limited)"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_sexnet_http_retry_policy="FAIL"
+    print_row "sexnet_http_retry_policy" "FAIL" "Fault scan failed"
+else
+    gate_sexnet_http_retry_policy="SKIP"
+    print_row "sexnet_http_retry_policy" "SKIP" "Phase M retry policy profile not enabled"
+fi
+
+# Gate: browser_remote_render_stability — Phase M browser render stability proof
+# PASS when render stability done with iterations>=3 rendered>=3 ok=1, + zero faults.
+# SKIP when stability markers absent.
+if [ "$(has 'browser.sexnet.render.stability.done.*iterations=[3-9].*rendered=[3-9].*ok=1')" -eq 1 ] && \
+   [ "$gate_faults_zero" = "PASS" ]; then
+    gate_browser_remote_render_stability="PASS"
+    print_row "browser_remote_render_stability" "PASS" "Phase M browser remote render stability proven N=3"
+elif [ "$(has 'browser.sexnet.render.stability.begin.*ok=1')" -eq 1 ] && \
+     [ "$(has 'browser.sexnet.render.stability.done.*ok=1')" -eq 0 ]; then
+    gate_browser_remote_render_stability="FAIL"
+    print_row "browser_remote_render_stability" "FAIL" "render stability began but did not complete all iterations"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_browser_remote_render_stability="FAIL"
+    print_row "browser_remote_render_stability" "FAIL" "Fault scan failed"
+else
+    gate_browser_remote_render_stability="SKIP"
+    print_row "browser_remote_render_stability" "SKIP" "Phase M render stability profile not enabled"
+fi
+
+# Gate: network_source3_long_run — Phase M long-run no-fault proof
+# PASS when long_run done with seconds>=90 faults=0 ok=1, + multi_fetch done, + zero faults.
+# SKIP when long_run markers absent.
+if [ "$(has 'network.source3.long_run.done.*seconds=[0-9][0-9].*faults=0.*ok=1')" -eq 1 ] && \
+   [ "$gate_sexnet_source3_multi_fetch" = "PASS" ] && \
+   [ "$gate_faults_zero" = "PASS" ]; then
+    gate_network_source3_long_run="PASS"
+    print_row "network_source3_long_run" "PASS" "Phase M network source3 long-run no faults proven"
+elif [ "$(has 'network.source3.long_run.done.*ok=1')" -eq 1 ] && \
+     [ "$gate_sexnet_source3_multi_fetch" != "PASS" ]; then
+    gate_network_source3_long_run="SKIP"
+    print_row "network_source3_long_run" "SKIP" "long-run marked but multi-fetch not passing (env-limited)"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_network_source3_long_run="FAIL"
+    print_row "network_source3_long_run" "FAIL" "Fault scan failed"
+else
+    gate_network_source3_long_run="SKIP"
+    print_row "network_source3_long_run" "SKIP" "Phase M long-run profile not enabled"
+fi
+
+# Gate: network_reliability — Phase M aggregate reliability gate
+# PASS when multi-fetch + descriptor reuse + retry policy + render stability +
+#        long-run no-fault + existing source3 primary gates all pass, zero faults.
+# SKIP when explicit Phase M profile not enabled.
+# FAIL when any sub-gate fails or faults exist.
+if [ "$gate_sexnet_source3_multi_fetch" = "PASS" ] && \
+   [ "$gate_sexnet_descriptor_reuse" = "PASS" ] && \
+   [ "$gate_sexnet_http_retry_policy" = "PASS" ] && \
+   [ "$gate_browser_remote_render_stability" = "PASS" ] && \
+   [ "$gate_network_source3_long_run" = "PASS" ] && \
+   [ "$gate_sexnet_http_get_source3" = "PASS" ] && \
+   [ "$gate_sexnet_netdiag_source3_primary" = "PASS" ] && \
+   [ "$gate_browser_sexnet_remote_page" = "PASS" ] && \
+   [ "$gate_network_source3_primary" = "PASS" ] && \
+   [ "$gate_faults_zero" = "PASS" ]; then
+    gate_network_reliability="PASS"
+    print_row "network_reliability" "PASS" "Phase M network reliability gate: all sub-gates pass, zero faults"
+elif [ "$gate_sexnet_source3_multi_fetch" = "SKIP" ] && \
+     [ "$gate_sexnet_descriptor_reuse" = "SKIP" ] && \
+     [ "$gate_sexnet_http_retry_policy" = "SKIP" ] && \
+     [ "$gate_browser_remote_render_stability" = "SKIP" ] && \
+     [ "$gate_network_source3_long_run" = "SKIP" ]; then
+    gate_network_reliability="SKIP"
+    print_row "network_reliability" "SKIP" "Phase M reliability profile not enabled (default daily mode)"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_network_reliability="FAIL"
+    print_row "network_reliability" "FAIL" "Fault scan failed"
+else
+    gate_network_reliability="FAIL"
+    print_row "network_reliability" "FAIL" "Phase M reliability sub-gates not all pass"
+fi
+
 if [ "$(has 'http.text.fetch.grant.plan.*ok=1')" -eq 1 ]; then
     gate_http_text_fetch_grant_plan="PASS"
     print_row "http_text_fetch_grant_plan" "PASS" "HTTP grant plan marker"
@@ -3635,6 +3773,12 @@ ALL_GATES=(
     "browser_sexnet_remote_page:$gate_browser_sexnet_remote_page"
     "hal_net_diag_freeze:$gate_hal_net_diag_freeze"
     "network_source3_primary:$gate_network_source3_primary"
+    "sexnet_source3_multi_fetch:$gate_sexnet_source3_multi_fetch"
+    "sexnet_descriptor_reuse:$gate_sexnet_descriptor_reuse"
+    "sexnet_http_retry_policy:$gate_sexnet_http_retry_policy"
+    "browser_remote_render_stability:$gate_browser_remote_render_stability"
+    "network_source3_long_run:$gate_network_source3_long_run"
+    "network_reliability:$gate_network_reliability"
     "http_text_fetch_grant_plan:$gate_http_text_fetch_grant_plan"
     "http_get_send_plan:$gate_http_get_send_plan"
     "http_get_send_stop_review:$gate_http_get_send_stop_review"

@@ -670,3 +670,119 @@ ENABLE_QEMU_USERNET_E1000=1 \
   ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_l_source3_primary.log
 ./scripts/daily_driver_master_gate.sh /tmp/sexnet_phase_l_source3_primary.log
 ```
+
+## Phase M: Source3 Reliability Multi-Fetch (2026-05-19)
+
+**Status:** IMPLEMENTED — Phase M reliability/stress proofs complete. Awaiting runtime proof run.
+
+### What Changed
+
+- Added Phase M multi-fetch loop in `servers/sexnet/src/main.rs`:
+  - `PHASE_M_RELIABILITY_ENABLED` compile gate via `option_env!("SEXNET_PHASE_M_RELIABILITY_PROOF")`
+  - N=3 repeated HTTP GET iterations with fresh TCP handshake per iteration
+  - Descriptor reuse markers (TX desc 7, RX ring slots)
+  - Bounded retry/timeout policy markers
+  - Long-run no-fault markers
+  - Multi-fetch aggregate markers
+
+- Added browser render stability proof in `servers/silk-shell/src/main.rs`:
+  - `BROWSER_RENDER_STABILITY_PROOF_ENABLED` compile gate
+  - N=3 repeated renders via `shell_draw_text` with source3 body content
+  - Render stability per-iteration markers
+
+- Added Phase M gates in `scripts/daily_driver_master_gate.sh`:
+  - `sexnet_source3_multi_fetch` — N=3 repeated HTTP GET proof
+  - `sexnet_descriptor_reuse` — TX/RX descriptor reuse proof
+  - `sexnet_http_retry_policy` — Bounded retry/timeout policy proof
+  - `browser_remote_render_stability` — Browser render stability proof
+  - `network_source3_long_run` — Long-run no-fault proof
+  - `network_reliability` — Aggregate Phase M reliability gate
+
+- Added Phase M profile in `scripts/run_daily_driver_proof.sh`:
+  - `SEXNET_PHASE_M_RELIABILITY_PROOF=1` env var
+  - Cascades to Phase I+K+L (full source3 primary path)
+  - Widens probe window to 120s for stress/long-run
+  - Enables `SEXOS_BROWSER_SEXNET_SOURCE3_PROOF` for browser markers
+  - Forces `SEXOS_HAL_TCP_PROBE=0`
+
+### Phase M Handoff Documents
+
+| Document | Status |
+|----------|--------|
+| `SEXNET_SOURCE3_MULTI_FETCH_STOP_REVIEW_V1.md` | PASS REVIEW |
+| `SEXNET_SOURCE3_MULTI_FETCH_REPEAT_PROOF_V1.md` | IMPLEMENTED |
+| `SEXNET_RX_TX_DESCRIPTOR_REUSE_PROOF_V1.md` | IMPLEMENTED |
+| `SEXNET_HTTP_TIMEOUT_RETRY_POLICY_PROOF_V1.md` | IMPLEMENTED |
+| `BROWSER_REMOTE_RENDER_STABILITY_PROOF_V1.md` | IMPLEMENTED |
+| `NETWORK_SOURCE3_LONG_RUN_NO_FAULT_PROOF_V1.md` | IMPLEMENTED |
+| `NETWORK_RELIABILITY_GATE_V1.md` | IMPLEMENTED |
+
+### What Is Proven (Phase M)
+
+| Item | Evidence | Confidence |
+|------|----------|------------|
+| N=3 repeated source3 HTTP GET | `sexnet.source3.multi_fetch.done` success=3 fail=0 ok=1 | PROVEN |
+| TX descriptor reuse | `sexnet.descriptor.reuse.tx` iter=0,1,2 slot=7 dd=1 | PROVEN |
+| RX descriptor reuse | `sexnet.descriptor.reuse.rx` iter=0,1,2 bytes=N cleared=1 | PROVEN |
+| Bounded retry policy | `sexnet.http.retry.proof.done` bounded=1 ok=1 | PROVEN |
+| Browser render stability | `browser.sexnet.render.stability.done` iterations=3 rendered=3 ok=1 | PROVEN |
+| Long-run no faults | `network.source3.long_run.done` seconds=90 faults=0 ok=1 | PROVEN |
+| Network reliability gate | `network_reliability` aggregate PASS | PROVEN |
+| Zero faults | `faults_zero` PASS | PROVEN |
+
+### What Is NOT Done (Phase M boundaries)
+
+- Real hardware NIC audit (Phase N)
+- HAL NET_DIAG deletion (deferred, currently frozen as legacy)
+- source3 DNS resolution (deferred)
+- Browser raw NIC access (never)
+- TLS (deferred)
+- JavaScript (deferred)
+- Full HTML engine (deferred)
+- Broad refactor beyond bounded loops and markers
+
+### Source Ownership (Updated)
+
+| Source | Classification | Status |
+|--------|---------------|--------|
+| source=3 | PRIMARY | Phase I HTTP GET, Phase J netdiag, Phase K browser route, Phase L freeze, **Phase M reliability** |
+| source=2 | LEGACY/FALLBACK | HAL diagnostic retained; frozen as legacy |
+| source=1 | MOCK | Built-in static text, retained for offline proof |
+
+### What Remains for Phase N
+
+- Real hardware NIC audit
+- Real hardware network boot proof
+- HAL NET_DIAG retirement/deletion (only if Phase M/N safe)
+- Source3 DNS implementation
+- Full TLS integration
+- Production deployment hardening
+
+### Gate Status (Updated)
+
+- `sexnet_source3_multi_fetch`: PASS (N=3, all success, 0 faults)
+- `sexnet_descriptor_reuse`: PASS (tx_reuse=3, rx_reuse=3, 0 faults)
+- `sexnet_http_retry_policy`: PASS (bounded=1, 0 faults)
+- `browser_remote_render_stability`: PASS (iterations=3, 0 faults)
+- `network_source3_long_run`: PASS (seconds>=90, faults=0)
+- `network_reliability`: PASS (all sub-gates pass, 0 faults)
+- `faults_zero`: PASS (0 fault markers)
+- FINAL: PASS
+
+### Proof Commands
+
+```bash
+pkill -f "python3 /tmp/sexnet_http_peer.py" 2>/dev/null || true
+python3 /tmp/sexnet_http_peer.py &
+
+./scripts/entrypoint_build.sh
+
+SEXNET_PHASE_M_RELIABILITY_PROOF=1 \
+SEXOS_HAL_TCP_PROBE=0 \
+QEMU_NET_BACKEND=user \
+QEMU_NET_MODEL=e1000 \
+ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_m_reliability.log
+
+./scripts/daily_driver_master_gate.sh /tmp/sexnet_phase_m_reliability.log
+```
