@@ -278,6 +278,7 @@ gate_sexnet_dns_response_parse="SKIP"
 gate_sexnet_dns_a_record_cache="SKIP"
 gate_sexnet_tcp_handshake="SKIP"
 gate_sexnet_tcp_payload="SKIP"
+gate_sexnet_http_phase_i_readiness="SKIP"
 gate_dns_to_http_host_resolution_proof="SKIP"
 gate_http_text_fetch_grant_plan="SKIP"
 gate_http_get_send_plan="SKIP"
@@ -2755,6 +2756,28 @@ else
     print_row "sexnet_tcp_payload" "SKIP" "Phase H: TCP payload guard not present"
 fi
 
+# Gate: sexnet_http_phase_i_readiness — Phase I HTTP GET readiness
+# Source: sexnet source=3 (servers/sexnet/src/main.rs)
+# Determines if Phase I (HTTP GET) may start.
+# PASS: ESTABLISHED proven + payload TX proven + 0 faults
+# SKIP: not ready (env-limited, no ESTABLISHED)
+# NEVER PASS based on mock HTTP/browser markers.
+if [ "$(has 'sexnet.tcp.handshake.state.*state=ESTABLISHED.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.tcp.payload.tx.proof.done.*sent=1.*tx_dd=1.*ok=1')" -eq 1 ] && \
+   [ "$gate_faults_zero" = "PASS" ]; then
+    gate_sexnet_http_phase_i_readiness="PASS"
+    print_row "sexnet_http_phase_i_readiness" "PASS" "Phase I readiness: ESTABLISHED + payload TX + 0 faults"
+elif [ "$(has 'sexnet.tcp.handshake.state.*state=ESTABLISHED.*ok=1')" -eq 1 ]; then
+    gate_sexnet_http_phase_i_readiness="SKIP"
+    print_row "sexnet_http_phase_i_readiness" "SKIP" "Phase I readiness: ESTABLISHED but no payload TX proven"
+elif [ "$(has 'sexnet.tcp.syn.tx.proof.done.*tx=1.*tx_dd=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_http_phase_i_readiness="SKIP"
+    print_row "sexnet_http_phase_i_readiness" "SKIP" "Phase I readiness: SYN TX done but not ESTABLISHED (env-limited)"
+else
+    gate_sexnet_http_phase_i_readiness="SKIP"
+    print_row "sexnet_http_phase_i_readiness" "SKIP" "Phase I readiness: no TCP handshake evidence"
+fi
+
 if [ "$(has 'http.text.fetch.grant.plan.*ok=1')" -eq 1 ]; then
     gate_http_text_fetch_grant_plan="PASS"
     print_row "http_text_fetch_grant_plan" "PASS" "HTTP grant plan marker"
@@ -3413,6 +3436,7 @@ ALL_GATES=(
     "sexnet_dns_a_record_cache:$gate_sexnet_dns_a_record_cache"
     "sexnet_tcp_handshake:$gate_sexnet_tcp_handshake"
     "sexnet_tcp_payload:$gate_sexnet_tcp_payload"
+    "sexnet_http_phase_i_readiness:$gate_sexnet_http_phase_i_readiness"
     "http_text_fetch_grant_plan:$gate_http_text_fetch_grant_plan"
     "http_get_send_plan:$gate_http_get_send_plan"
     "http_get_send_stop_review:$gate_http_get_send_stop_review"

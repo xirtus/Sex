@@ -338,16 +338,88 @@ in the current usernet environment. No HTTP. No browser networking. No TCP strea
 - HAL NET_DIAG retirement (future phase)
 - source=3 DNS resolution (deferred to Phase J)
 
+## Phase GHI Detour: ESTABLISHED Environment Reproof
+
+**Date:** 2026-05-19
+**Mission:** SEXNET_PHASE_GHI_ESTABLISHED_ENV_AUTOPILOT_V1
+
+### Detour Summary
+
+Before Phase I (HTTP GET), this detour creates a real TCP ESTABLISHED environment
+so Phase G/H can become runtime-proven.
+
+### Phase G Runtime Reproof Status: TBD (awaiting proof run)
+
+- Environment: QEMU SLIRP user-mode + host TCP listener on port 18080
+- Source edit: TCP_REMOTE_PORT changed from 80 to 18080 (tiny proof-target edit)
+- Expected: SYN → SYN-ACK → final ACK → ESTABLISHED
+- Doc: `SEXNET_PHASE_G_RUNTIME_REPROOF_V1.md`
+
+### Phase H Runtime Reproof Status: TBD (awaiting Phase G result)
+
+- PSH+ACK payload TX implemented behind guard
+- Payload: "sexnet-phase-h" (13 bytes bounded)
+- TX via desc 7, TDT=8
+- Doc: `SEXNET_PHASE_H_RUNTIME_REPROOF_V1.md`
+
+### Phase I Readiness: TBD
+
+- Depends on Phase G (ESTABLISHED) and Phase H (payload TX)
+- Gate: `sexnet_http_phase_i_readiness`
+- Doc: `SEXNET_HTTP_PHASE_I_READINESS_GATE_V1.md`
+
+### Detour Documents
+
+| Document | Status |
+|----------|--------|
+| `SEXNET_TCP_ESTABLISHED_ENV_PROOF_V1.md` | PASS REVIEW ONLY |
+| `SEXNET_PHASE_G_RUNTIME_REPROOF_V1.md` | Created |
+| `SEXNET_PHASE_H_RUNTIME_REPROOF_V1.md` | Created |
+| `SEXNET_HTTP_PHASE_I_READINESS_GATE_V1.md` | Created |
+| `host_tcp_established_env_probe.sh` | Created |
+
+### Environment
+
+- Backend: QEMU SLIRP user-mode (QEMU_NET_BACKEND=user)
+- NIC: e1000e (QEMU_NET_MODEL=e1000e)
+- Guest IP: 10.0.2.15
+- Gateway: 10.0.2.2
+- Target port: 18080 (changed from 80)
+- Host listener: nc -l -p 18080 (unprivileged)
+
+### Key Source Changes
+
+- `TCP_REMOTE_PORT`: 80 → 18080 (tiny edit)
+- PSH+ACK payload TX code implemented in Phase H guard (source=3)
+- No kernel, ABI, or protocol changes
+
+## HTTP GET: NOT IMPLEMENTED
+
+Phase I HTTP GET remains NOT IMPLEMENTED. Implementation deferred until:
+1. Phase G runtime reproof proves ESTABLISHED
+2. Phase H runtime reproof proves PSH+ACK payload TX
+3. Phase I readiness gate PASSES
+
+## Browser Networking: NOT IMPLEMENTED
+
+Browser networking remains NOT IMPLEMENTED. Deferred to future phase.
+
+## HAL NET_DIAG Retirement: Deferred
+
+HAL diagnostic source=2 TCP markers remain as-is (not retired, not migrated).
+
 ## Next Phase
 
-**Phase I: SEXNET_HTTP_GET_STOP_REVIEW_V1**
+**Phase I: SEXNET_HTTP_GET_STOP_REVIEW_V1** (when readiness gate PASSES)
 - HTTP GET build over established TCP connection
 - HTTP response parse
 - No browser networking (deferred to future phase)
 - No TLS
 - No streaming
 
-## Phase H Log Paths
+## Phase GHI Detour Log Paths
 
-- `/tmp/sexnet_phase_h_user.log` — user backend proof (Phase H)
-- `/tmp/sexnet_phase_h_tap.log` — TAP backend proof (Phase H)
+- `/tmp/sexnet_phase_ghi_user.log` — user backend proof (GHI detour)
+- `/tmp/sexnet_phase_ghi_host_env.log` — host TCP listener probe
+- `/tmp/sexnet_phase_ghi_user_hostfwd.log` — hostfwd variant (if supported)
+- `/tmp/sexnet_phase_ghi_tap.log` — TAP variant (if available)

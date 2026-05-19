@@ -196,7 +196,7 @@ enum TcpState { Closed, SynSent, Established, FailedRst, FailedTimeout }
 
 static TCP_STATE: Mutex<TcpState> = Mutex::new(TcpState::Closed);
 static mut TCP_LOCAL_PORT: u16 = 7777;
-static mut TCP_REMOTE_PORT: u16 = 80;
+static mut TCP_REMOTE_PORT: u16 = 18080;
 static mut TCP_LOCAL_SEQ: u32 = 42;
 static mut TCP_REMOTE_SEQ: u32 = 0;
 static mut TCP_REMOTE_IP: [u8; 4] = [10, 0, 2, 2]; // gateway
@@ -3292,17 +3292,246 @@ pub extern "C" fn _start() -> ! {
                                         TcpState::FailedTimeout => "FAILED_TIMEOUT",
                                     };
                                     // Payload TX guard: must be ESTABLISHED
+                                    let mut payload_tx_sent: u32 = 0;
+                                    let mut payload_tx_dd: u32 = 0;
                                     if is_established == 1 {
                                         serial_println!(
                                             "[sexnet.tcp.payload.tx.guard] state=ESTABLISHED ok=1"
                                         );
-                                        // Phase H PSH+ACK payload TX would be invoked here
-                                        // - build ETH+IPv4+TCP headers with PSH|ACK flags
-                                        // - payload "sexnet-phase-h" (13 bytes bounded)
-                                        // - seq=local_seq+1, ack=remote_seq+1
-                                        // - TCP checksum over pseudo-header+header+payload
-                                        // - IPv4 total_len = 20 + 20 + payload_len
-                                        // - TX via desc 7, TDT=8, DD poll
+                                        // ── Phase H PSH+ACK payload TX ──
+                                        // Build ETH+IPv4+TCP headers with PSH|ACK flags
+                                        // payload "sexnet-phase-h" (13 bytes bounded)
+                                        // seq=local_seq+1, ack=remote_seq+1
+                                        // TX via desc 7, TDT=8, DD poll
+                                        let tx_perm_ready2 = unsafe {
+                                            TX_PERM_DESC_VA != 0 && TX_PERM_FRAME_PHYS != 0 && TX_PERM_FRAME_VA != 0
+                                        };
+                                        if tx_perm_ready2 {
+                                            let tx_va = unsafe { TX_PERM_FRAME_VA };
+                                            let nic_mac: [u8; 6] = [
+                                                (ral & 0xFF) as u8,
+                                                ((ral >> 8) & 0xFF) as u8,
+                                                ((ral >> 16) & 0xFF) as u8,
+                                                ((ral >> 24) & 0xFF) as u8,
+                                                (rah & 0xFF) as u8,
+                                                ((rah >> 8) & 0xFF) as u8,
+                                            ];
+                                            // Gateway MAC: prefer ARP cache, fallback broadcast
+                                            let gw_mac: [u8; 6] = if unsafe { ARP_CACHE_VALID } == 1 {
+                                                unsafe { ARP_CACHE_MAC }
+                                            } else {
+                                                [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+                                            };
+                                            let local_port = unsafe { TCP_LOCAL_PORT };
+                                            let remote_port = unsafe { TCP_REMOTE_PORT };
+                                            let local_seq = unsafe { TCP_LOCAL_SEQ };
+                                            let remote_seq = unsafe { TCP_REMOTE_SEQ };
+                                            let tcp_seq = local_seq + 1;
+                                            let tcp_ack = remote_seq + 1;
+                                            let payload: &[u8] = b"sexnet-phase-h";
+                                            let payload_len = payload.len() as u16;
+                                            let ipv4_total: u16 = 20 + 20 + payload_len;
+                                            // Ethernet header: dst=gateway MAC
+                                            unsafe {
+                                                core::ptr::write_volatile((tx_va + 0) as *mut u8, gw_mac[0]);
+                                                core::ptr::write_volatile((tx_va + 1) as *mut u8, gw_mac[1]);
+                                                core::ptr::write_volatile((tx_va + 2) as *mut u8, gw_mac[2]);
+                                                core::ptr::write_volatile((tx_va + 3) as *mut u8, gw_mac[3]);
+                                                core::ptr::write_volatile((tx_va + 4) as *mut u8, gw_mac[4]);
+                                                core::ptr::write_volatile((tx_va + 5) as *mut u8, gw_mac[5]);
+                                                core::ptr::write_volatile((tx_va + 6) as *mut u8, nic_mac[0]);
+                                                core::ptr::write_volatile((tx_va + 7) as *mut u8, nic_mac[1]);
+                                                core::ptr::write_volatile((tx_va + 8) as *mut u8, nic_mac[2]);
+                                                core::ptr::write_volatile((tx_va + 9) as *mut u8, nic_mac[3]);
+                                                core::ptr::write_volatile((tx_va + 10) as *mut u8, nic_mac[4]);
+                                                core::ptr::write_volatile((tx_va + 11) as *mut u8, nic_mac[5]);
+                                                core::ptr::write_volatile((tx_va + 12) as *mut u8, 0x08);
+                                                core::ptr::write_volatile((tx_va + 13) as *mut u8, 0x00);
+                                            }
+                                            // IPv4 header
+                                            unsafe {
+                                                core::ptr::write_volatile((tx_va + 14) as *mut u8, 0x45);
+                                                core::ptr::write_volatile((tx_va + 15) as *mut u8, 0x00);
+                                                core::ptr::write_volatile((tx_va + 16) as *mut u8, ((ipv4_total >> 8) & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 17) as *mut u8, (ipv4_total & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 18) as *mut u8, 0x00);
+                                                core::ptr::write_volatile((tx_va + 19) as *mut u8, 0x02);
+                                                core::ptr::write_volatile((tx_va + 20) as *mut u8, 0x00);
+                                                core::ptr::write_volatile((tx_va + 21) as *mut u8, 0x00);
+                                                core::ptr::write_volatile((tx_va + 22) as *mut u8, 64);
+                                                core::ptr::write_volatile((tx_va + 23) as *mut u8, 6);
+                                                core::ptr::write_volatile((tx_va + 24) as *mut u8, 0x00);
+                                                core::ptr::write_volatile((tx_va + 25) as *mut u8, 0x00);
+                                                core::ptr::write_volatile((tx_va + 26) as *mut u8, 10);  // src=10.0.2.15
+                                                core::ptr::write_volatile((tx_va + 27) as *mut u8, 0);
+                                                core::ptr::write_volatile((tx_va + 28) as *mut u8, 2);
+                                                core::ptr::write_volatile((tx_va + 29) as *mut u8, 15);
+                                                let rip = unsafe { TCP_REMOTE_IP };
+                                                core::ptr::write_volatile((tx_va + 30) as *mut u8, rip[0]);
+                                                core::ptr::write_volatile((tx_va + 31) as *mut u8, rip[1]);
+                                                core::ptr::write_volatile((tx_va + 32) as *mut u8, rip[2]);
+                                                core::ptr::write_volatile((tx_va + 33) as *mut u8, rip[3]);
+                                            }
+                                            // IPv4 checksum
+                                            {
+                                                let mut ipv4_sum = 0u32;
+                                                let mut ck = 0usize;
+                                                while ck < 10 {
+                                                    let off = 14 + ck * 2;
+                                                    let w_hi = unsafe { core::ptr::read_volatile((tx_va + off as u64) as *const u8) } as u16;
+                                                    let w_lo = unsafe { core::ptr::read_volatile((tx_va + off as u64 + 1) as *const u8) } as u16;
+                                                    ipv4_sum += ((w_hi << 8) | w_lo) as u32;
+                                                    ck += 1;
+                                                }
+                                                while (ipv4_sum >> 16) != 0 {
+                                                    ipv4_sum = (ipv4_sum & 0xFFFF) + (ipv4_sum >> 16);
+                                                }
+                                                let ipv4_csum = !(ipv4_sum as u16);
+                                                unsafe {
+                                                    core::ptr::write_volatile((tx_va + 24) as *mut u8, ((ipv4_csum >> 8) & 0xFF) as u8);
+                                                    core::ptr::write_volatile((tx_va + 25) as *mut u8, (ipv4_csum & 0xFF) as u8);
+                                                }
+                                            }
+                                            // TCP header
+                                            let tcp_flags: u8 = 0x18; // PSH|ACK
+                                            unsafe {
+                                                core::ptr::write_volatile((tx_va + 34) as *mut u8, ((local_port >> 8) & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 35) as *mut u8, (local_port & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 36) as *mut u8, ((remote_port >> 8) & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 37) as *mut u8, (remote_port & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 38) as *mut u8, ((tcp_seq >> 24) & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 39) as *mut u8, ((tcp_seq >> 16) & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 40) as *mut u8, ((tcp_seq >> 8) & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 41) as *mut u8, (tcp_seq & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 42) as *mut u8, ((tcp_ack >> 24) & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 43) as *mut u8, ((tcp_ack >> 16) & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 44) as *mut u8, ((tcp_ack >> 8) & 0xFF) as u8);
+                                                core::ptr::write_volatile((tx_va + 45) as *mut u8, (tcp_ack & 0xFF) as u8);
+                                                let dof = (5u8 << 4) | ((tcp_flags >> 0) & 0x01);
+                                                let reserved_flags = (tcp_flags & 0x3F);
+                                                core::ptr::write_volatile((tx_va + 46) as *mut u8, dof);
+                                                core::ptr::write_volatile((tx_va + 47) as *mut u8, reserved_flags);
+                                                core::ptr::write_volatile((tx_va + 48) as *mut u8, 0xFF); // window=65535
+                                                core::ptr::write_volatile((tx_va + 49) as *mut u8, 0xFF);
+                                                core::ptr::write_volatile((tx_va + 50) as *mut u8, 0x00); // csum placeholder
+                                                core::ptr::write_volatile((tx_va + 51) as *mut u8, 0x00);
+                                                core::ptr::write_volatile((tx_va + 52) as *mut u8, 0x00); // urgent=0
+                                                core::ptr::write_volatile((tx_va + 53) as *mut u8, 0x00);
+                                            }
+                                            // Write payload at offset 54 (14 eth + 20 ip + 20 tcp)
+                                            {
+                                                let mut pi = 0usize;
+                                                while pi < payload.len() {
+                                                    unsafe {
+                                                        core::ptr::write_volatile((tx_va + 54 + pi as u64) as *mut u8, payload[pi]);
+                                                    }
+                                                    pi += 1;
+                                                }
+                                            }
+                                            // TCP checksum over pseudo-header + TCP header + payload
+                                            {
+                                                let mut tcp_sum = 0u32;
+                                                let tcp_seg_len: u16 = 20 + payload_len;
+                                                // pseudo-header: src IP
+                                                tcp_sum += ((10u16 << 8) | 0u16) as u32;
+                                                tcp_sum += ((2u16 << 8) | 15u16) as u32;
+                                                // pseudo-header: dst IP
+                                                let rip = unsafe { TCP_REMOTE_IP };
+                                                tcp_sum += ((rip[0] as u16) << 8 | (rip[1] as u16)) as u32;
+                                                tcp_sum += ((rip[2] as u16) << 8 | (rip[3] as u16)) as u32;
+                                                // pseudo-header: zero + proto=6
+                                                tcp_sum += 6u32;
+                                                // pseudo-header: TCP length
+                                                tcp_sum += tcp_seg_len as u32;
+                                                // TCP header + payload words
+                                                let tcp_bytes = tcp_seg_len as usize;
+                                                let tcp_words = tcp_bytes / 2;
+                                                let mut cw = 0usize;
+                                                while cw < tcp_words {
+                                                    let off = 34 + cw * 2;
+                                                    let w_hi = unsafe { core::ptr::read_volatile((tx_va + off as u64) as *const u8) } as u16;
+                                                    let w_lo = unsafe { core::ptr::read_volatile((tx_va + off as u64 + 1) as *const u8) } as u16;
+                                                    tcp_sum += ((w_hi << 8) | w_lo) as u32;
+                                                    cw += 1;
+                                                }
+                                                if tcp_bytes % 2 != 0 {
+                                                    let last_off = 34 + tcp_bytes - 1;
+                                                    let last = unsafe { core::ptr::read_volatile((tx_va + last_off as u64) as *const u8) } as u16;
+                                                    tcp_sum += (last << 8) as u32;
+                                                }
+                                                while (tcp_sum >> 16) != 0 {
+                                                    tcp_sum = (tcp_sum & 0xFFFF) + (tcp_sum >> 16);
+                                                }
+                                                let tcp_csum = !(tcp_sum as u16);
+                                                unsafe {
+                                                    core::ptr::write_volatile((tx_va + 50) as *mut u8, ((tcp_csum >> 8) & 0xFF) as u8);
+                                                    core::ptr::write_volatile((tx_va + 51) as *mut u8, (tcp_csum & 0xFF) as u8);
+                                                }
+                                                serial_println!("[sexnet.tcp.psh_ack.checksum] checksum=0x{:04X} ok=1", tcp_csum);
+                                            }
+                                            serial_println!(
+                                                "[sexnet.tcp.psh_ack.build] src_port={} dst_port={} seq={} ack={} flags=PSH|ACK payload_len={} ok=1",
+                                                local_port, remote_port, tcp_seq, tcp_ack, payload_len
+                                            );
+                                            serial_println!(
+                                                "[sexnet.ipv4.tx.psh_ack.build] src=10.0.2.15 dst={}.{}.{}.{} total_len={} checksum=ok ok=1",
+                                                unsafe { TCP_REMOTE_IP[0] }, unsafe { TCP_REMOTE_IP[1] },
+                                                unsafe { TCP_REMOTE_IP[2] }, unsafe { TCP_REMOTE_IP[3] },
+                                                ipv4_total
+                                            );
+                                            // Pad to 60 bytes if needed
+                                            let frame_len = (14 + ipv4_total as u64) as u16;
+                                            if frame_len < 60 {
+                                                let mut pad = frame_len as u64;
+                                                while pad < 60 {
+                                                    unsafe { core::ptr::write_volatile((tx_va + pad) as *mut u8, 0u8); }
+                                                    pad += 1;
+                                                }
+                                            }
+                                            let tx_frame_len = if frame_len < 60 { 60u16 } else { frame_len };
+                                            // TX descriptor 7 (offset 112) for PSH+ACK payload
+                                            let tx_desc7 = unsafe { TX_PERM_DESC_VA + 112 };
+                                            unsafe {
+                                                core::ptr::write_volatile(tx_desc7 as *mut u64, TX_PERM_FRAME_PHYS);
+                                                core::ptr::write_volatile((tx_desc7 + 8) as *mut u16, tx_frame_len);
+                                                core::ptr::write_volatile((tx_desc7 + 10) as *mut u8, 0u8);
+                                                core::ptr::write_volatile((tx_desc7 + 11) as *mut u8, 0x0Bu8);
+                                                core::ptr::write_volatile((tx_desc7 + 12) as *mut u8, 0u8);
+                                                core::ptr::write_volatile((tx_desc7 + 13) as *mut u8, 0u8);
+                                                core::ptr::write_volatile((tx_desc7 + 14) as *mut u16, 0u16);
+                                            }
+                                            serial_println!("[sexnet.eth.tx.psh_ack.desc] len={} ok=1", tx_frame_len);
+                                            unsafe {
+                                                core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 8);
+                                            }
+                                            serial_println!("[sexnet.tcp.psh_ack.tx.post] slot=8 ok=1");
+                                            // Poll DD
+                                            let mut tx_outer = 0u32;
+                                            while tx_outer < 50_000_000 {
+                                                let tx_st = unsafe { core::ptr::read_volatile((tx_desc7 + 12) as *const u8) };
+                                                if (tx_st & 1) != 0 {
+                                                    payload_tx_dd = 1;
+                                                    break;
+                                                }
+                                                tx_outer += 1;
+                                            }
+                                            serial_println!(
+                                                "[sexnet.tcp.psh_ack.tx.poll.done] dd_set={} ok={}",
+                                                payload_tx_dd,
+                                                if payload_tx_dd == 1 { 1 } else { 0 }
+                                            );
+                                            if payload_tx_dd == 1 {
+                                                payload_tx_sent = 1;
+                                            }
+                                            serial_println!(
+                                                "[sexnet.tcp.payload.tx.proof.done] sent={} tx_dd={} ok={}",
+                                                payload_tx_sent,
+                                                payload_tx_dd,
+                                                if payload_tx_sent == 1 && payload_tx_dd == 1 { 1 } else { 0 }
+                                            );
+                                        } else {
+                                            serial_println!("[sexnet.tcp.psh_ack.build] ok=0 reason=no_tx_perm");
+                                        }
                                     } else {
                                         serial_println!(
                                             "[sexnet.tcp.payload.tx.guard] state={} ok=0 reason=not_established",
@@ -3339,10 +3568,13 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     // Phase H payload proof done marker
                                     serial_println!(
-                                        "[sexnet.tcp.payload.proof.done] established={} payload_tx=0 payload_rx=0 rst=0 fin=0 ok={} reason={}",
+                                        "[sexnet.tcp.payload.proof.done] established={} payload_tx={} payload_rx=0 rst=0 fin=0 ok={} reason={}",
                                         is_established,
-                                        if is_established == 0 { 1 } else { 0 },
-                                        if is_established == 0 { "guard_blocked_not_established" } else { "guard_pass_established" }
+                                        payload_tx_sent,
+                                        if is_established == 0 { 1 } else { if payload_tx_sent == 1 { 1 } else { 0 } },
+                                        if is_established == 0 { "guard_blocked_not_established" }
+                                        else if payload_tx_sent == 1 { "payload_tx_proven" }
+                                        else { "guard_pass_established_no_tx" }
                                     );
                                 }
                             } else {
