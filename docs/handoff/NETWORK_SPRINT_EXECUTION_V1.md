@@ -1733,3 +1733,8 @@ Proof run:
 - Problem fixed: Phase I HTTP RX previously copied bytes from descriptor tail region (`rlen - payload_off`) and could parse ACK-only/non-payload bytes.
 - Fix: response RX now computes payload bounds from IPv4 total length + TCP data offset, requires ACK=1 and RST=0, and skips `payload_len=0` segments with explicit marker.
 - Proof status in this run: implementation landed; live source=3 HTTP parse still env-limited due no SYN-ACK/ESTABLISHED in `/tmp/sexnet_http_response_payload_rx_fix.log`.
+
+## 2026-05-19 Mission Update: SEXNET_TCP_PSH_ACK_WIRESHAPE_FIX_V1
+- Implemented runtime fix in `servers/sexnet/src/main.rs` for PSH+ACK payload TX tail publish on desc7 ring wrap.
+- Added mission diagnostics for payload shape, bounded payload peek, expected ACK, and peer ACK progression.
+- Reproof command produced environment-limited lane (`no_network_grant_no_route`) in this workspace run; Phase I TCP/HTTP source3 was not re-proven from that log.

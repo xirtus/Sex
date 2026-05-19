@@ -3594,6 +3594,7 @@ pub extern "C" fn _start() -> ! {
                                                 serial_println!("[sexnet.http.get.proof.done] built=0 len=0 ok=0");
                                             }
                                             let payload_len = http_get_len as u16;
+                                            let expected_ack_after_payload = tcp_seq.wrapping_add(payload_len as u32);
                                             let ipv4_total: u16 = 20 + 20 + payload_len;
                                             // Ethernet header: dst=gateway MAC
                                             unsafe {
@@ -3692,6 +3693,25 @@ pub extern "C" fn _start() -> ! {
                                                     pi += 1;
                                                 }
                                             }
+                                            {
+                                                let peek_len = if http_get_len < 64 { http_get_len } else { 64 };
+                                                let mut hex_out = [0u8; 64 * 3];
+                                                let mut ascii_out = [0u8; 64];
+                                                let hex_len = build_hex_peek(unsafe { &HTTP_GET_BUF[..peek_len] }, peek_len, &mut hex_out);
+                                                let ascii_len = build_ascii_peek(unsafe { &HTTP_GET_BUF[..peek_len] }, peek_len, &mut ascii_out);
+                                                let hex_str = core::str::from_utf8(&hex_out[..hex_len]).unwrap_or("");
+                                                let ascii_str = core::str::from_utf8(&ascii_out[..ascii_len]).unwrap_or("");
+                                                serial_println!(
+                                                    "[sexnet.tcp.psh_ack.payload.peek.hex] len={} bytes={}",
+                                                    peek_len,
+                                                    hex_str
+                                                );
+                                                serial_println!(
+                                                    "[sexnet.tcp.psh_ack.payload.peek.ascii] len={} text={}",
+                                                    peek_len,
+                                                    ascii_str
+                                                );
+                                            }
                                             // TCP checksum over pseudo-header + TCP header + payload
                                             {
                                                 let mut tcp_sum = 0u32;
@@ -3738,6 +3758,20 @@ pub extern "C" fn _start() -> ! {
                                                 local_port, remote_port, tcp_seq, tcp_ack, payload_len
                                             );
                                             serial_println!(
+                                                "[sexnet.tcp.psh_ack.shape] seq={} ack={} data_offset={} tcp_len={} payload_len={} ip_total_len={} frame_len={} ok=1",
+                                                tcp_seq,
+                                                tcp_ack,
+                                                5,
+                                                20 + payload_len,
+                                                payload_len,
+                                                ipv4_total,
+                                                14 + ipv4_total as u32
+                                            );
+                                            serial_println!(
+                                                "[sexnet.tcp.psh_ack.ack_expect] expect_ack={} ok=1",
+                                                expected_ack_after_payload
+                                            );
+                                            serial_println!(
                                                 "[sexnet.ipv4.tx.psh_ack.build] src=10.0.2.15 dst={}.{}.{}.{} total_len={} checksum=ok ok=1",
                                                 unsafe { TCP_REMOTE_IP[0] }, unsafe { TCP_REMOTE_IP[1] },
                                                 unsafe { TCP_REMOTE_IP[2] }, unsafe { TCP_REMOTE_IP[3] },
@@ -3765,10 +3799,11 @@ pub extern "C" fn _start() -> ! {
                                                 core::ptr::write_volatile((tx_desc7 + 14) as *mut u16, 0u16);
                                             }
                                             serial_println!("[sexnet.eth.tx.psh_ack.desc] len={} ok=1", tx_frame_len);
+                                            let psh_tdt_next = 0u32; // ring has 8 descriptors; desc7 publish wraps tail to 0.
                                             unsafe {
-                                                core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 8);
+                                                core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, psh_tdt_next);
                                             }
-                                            serial_println!("[sexnet.tcp.psh_ack.tx.post] slot=8 ok=1");
+                                            serial_println!("[sexnet.tcp.psh_ack.tx.post] slot=8 tdt_next=0 ok=1");
                                             // Poll DD
                                             let mut tx_outer = 0u32;
                                             while tx_outer < 50_000_000 {
@@ -3845,6 +3880,19 @@ pub extern "C" fn _start() -> ! {
                                                                             let thl = ((dof >> 4) as usize) * 4;
                                                                             let ip_total_len = (((unsafe { core::ptr::read_volatile((rva + 16) as *const u8) } as usize) << 8)
                                                                                 | (unsafe { core::ptr::read_volatile((rva + 17) as *const u8) } as usize));
+                                                                            let peer_ack = ((unsafe { core::ptr::read_volatile((tbase + 8) as *const u8) } as u32) << 24)
+                                                                                | ((unsafe { core::ptr::read_volatile((tbase + 9) as *const u8) } as u32) << 16)
+                                                                                | ((unsafe { core::ptr::read_volatile((tbase + 10) as *const u8) } as u32) << 8)
+                                                                                | (unsafe { core::ptr::read_volatile((tbase + 11) as *const u8) } as u32);
+                                                                            let peer_ack_advanced = if peer_ack == expected_ack_after_payload { 1 } else { 0 };
+                                                                            serial_println!(
+                                                                                "[sexnet.tcp.psh_ack.peer_ack] ack={} expect_ack={} advanced={} flags=0x{:02X} ok={}",
+                                                                                peer_ack,
+                                                                                expected_ack_after_payload,
+                                                                                peer_ack_advanced,
+                                                                                flags,
+                                                                                peer_ack_advanced
+                                                                            );
                                                                             if flags_ack == 1 && flags_rst == 0 && thl >= 20 && ip_total_len >= ihl + thl {
                                                                                 let payload_off = 14 + ihl + thl;
                                                                                 let payload_len = ip_total_len - ihl - thl;

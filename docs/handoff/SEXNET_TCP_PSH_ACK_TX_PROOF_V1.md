@@ -98,3 +98,12 @@ environment can establish a TCP connection.
 - `docs/handoff/SEXNET_TCP_PSH_ACK_TX_PROOF_V1.md` — this proof doc
 - `docs/handoff/SEXNET_TCP_PAYLOAD_TX_STOP_REVIEW_V1.md` — STOP review
 
+
+## 2026-05-19 PSH+ACK Wire-Shape Patch
+- Implemented TX tail wrap fix for desc7 payload post: publish `TDT=0` (ring wrap) instead of `TDT=8`.
+- Added bounded payload/shape diagnostics:
+  - `[sexnet.tcp.psh_ack.shape]`
+  - `[sexnet.tcp.psh_ack.payload.peek.hex]`
+  - `[sexnet.tcp.psh_ack.payload.peek.ascii]`
+  - `[sexnet.tcp.psh_ack.ack_expect]`
+  - `[sexnet.tcp.psh_ack.peer_ack]`

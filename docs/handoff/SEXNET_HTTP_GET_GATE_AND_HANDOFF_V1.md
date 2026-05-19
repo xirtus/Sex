@@ -25,3 +25,12 @@ SKIP if:
 - gate policy remains strict: malformed status never passes
 
 - 2026-05-19 payload RX fix: source=3 response copy now requires ACK=1, RST=0, payload_len>0 from IPv4/TCP header math; ACK-only frames are skipped with explicit marker.
+
+## 2026-05-19 PSH+ACK Shape Notes
+- `servers/sexnet/src/main.rs` now emits explicit shape/payload/expectation markers for source3 GET TX:
+  - `[sexnet.tcp.psh_ack.shape]`
+  - `[sexnet.tcp.psh_ack.payload.peek.hex]`
+  - `[sexnet.tcp.psh_ack.payload.peek.ascii]`
+  - `[sexnet.tcp.psh_ack.ack_expect]`
+  - `[sexnet.tcp.psh_ack.peer_ack]`
+- Runtime reproof is pending in a lane that reaches Phase I TCP handshake/payload.

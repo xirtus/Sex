@@ -484,3 +484,10 @@ Mission: `SEXNET_HTTP_STATUS_PARSE_FIX_V1`
 - Added explicit skip marker for payloadless ACK segments.
 - Parser remains strict; no acceptance of empty/zero payload as valid HTTP.
 - Current host proof run remained env-limited (`state=SYN_SENT`), so source=3 status/body parse remains `PASS REVIEW ONLY` pending an ESTABLISHED lane run.
+
+## 2026-05-19: PSH+ACK Wire-Shape Fix (Phase I)
+- Implemented in `servers/sexnet/src/main.rs`:
+  - desc7 payload post tail publication fixed to wrapped `TDT=0` on 8-descriptor ring.
+  - added bounded PSH/ACK shape + payload peek + peer ACK progression markers.
+- Proof attempt log: `/tmp/sexnet_tcp_psh_ack_wireshape_fix.log`.
+- This run remained in `sexnet.http.handshake ... allowed=0 ... no_network_grant_no_route` and did not enter Phase I TCP runtime lane; status recorded as REVIEW ONLY for runtime proof.
