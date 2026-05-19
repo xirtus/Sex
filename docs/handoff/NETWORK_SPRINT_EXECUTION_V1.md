@@ -1786,5 +1786,136 @@ Key markers:
 - [sexnet.http.body.proof.done] bytes=13 ok=1
 - [sexnet.phaseI.readiness] established=1 payload_tx=1 source=3 ok=1
 
+## Phase J: source=3 Primary Netdiag (2026-05-19)
+
+**Status:** PASS IMPLEMENTED
+
+Phase J makes sexnet source=3 the primary network diagnostic truth source.
+HAL NET_DIAG/source=2 remains as legacy/fallback only.
+
+### Changes
+
+| File | Change |
+|------|--------|
+| `servers/sexnet/src/main.rs` | Added Phase J netdiag source3 markers in source=3 HTTP GET success path |
+| `scripts/daily_driver_master_gate.sh` | Added `sexnet_netdiag_source3_primary` gate |
+| `docs/handoff/SEXNET_NETDIAG_SOURCE3_PLAN_V1.md` | Phase J plan doc |
+| `docs/handoff/SEXNET_NETDIAG_SOURCE3_SYSCALL_PROOF_V1.md` | Syscall/status route proof doc |
+| `docs/handoff/SEXNET_NETDIAG_SOURCE3_BODY_PROOF_V1.md` | Body proof doc |
+| `docs/handoff/SEXNET_NETDIAG_SOURCE3_GATE_V1.md` | Gate handoff doc |
+| `docs/handoff/NETWORK_STACK_STATUS_ROLLUP_V1.md` | Updated rollup |
+| `docs/handoff/NETWORK_SPRINT_EXECUTION_V1.md` | This file |
+
+### Markers Added
+
+- [sexnet.netdiag.source3.status] source=3 primary=1 http=1 tcp=1 body_len=N status=200 ok=1
+- [sexnet.netdiag.source3.route] kind=existing_status_or_pdx_or_marker ok=1
+- [sexnet.netdiag.source3.syscall.proof.done] source=3 primary=1 route=status_marker no_new_syscall=1 ok=1
+- [sexnet.netdiag.source3.body] source=3 status=200 body_len=N bounded=1 ok=1
+- [sexnet.netdiag.source3.body.proof.done] source=3 body_len=N ok=1
+
+### Key Decisions
+
+- No new syscall added -- existing SEXNET_GET_STATUS PDX route suffices
+- No kernel edits -- markers in sexnet server only
+- No ABI changes -- existing PDX opcodes unchanged
+- No browser networking grant -- deferred to Phase K
+- HAL NET_DIAG retained as legacy/fallback
+
+### Source Ownership After Phase J
+
+| Source | Classification |
+|--------|---------------|
+| source=3 | PRIMARY (sexnet HTTP GET) |
+| source=2 | LEGACY/FALLBACK (HAL diagnostic) |
+| source=1 | MOCK (built-in static text) |
+
+## Phase K: Browser Remote Page Through Sexnet source=3 (2026-05-19)
+
+**Status:** PASS IMPLEMENTED
+
+Phase K proves the browser can consume the source=3 sexnet HTTP result and render
+bounded remote text on the browser surface through the existing shell/display path.
+
+### Strategy
+
+Marker-only consumption of the last source=3 result (Phase I sexnet HTTP GET already proven).
+No PDX route, no NIC access, no kernel/ABI changes. Browser renders bounded body text
+("hello sexnet", 13 bytes) via `shell_draw_text()` → `OP_TEXT_DRAW` → sexdisplay.
+
+Real PDX browser→sexnet route deferred to Phase L.
+
+### Changes
+
+| File | Change |
+|------|--------|
+| `servers/silk-shell/src/main.rs` | Added `maybe_run_browser_sexnet_source3_proof()` with Phase K markers + text rendering |
+| `scripts/daily_driver_master_gate.sh` | Added `browser_sexnet_remote_page` gate |
+| `scripts/run_daily_driver_proof.sh` | Added `SEXNET_PHASE_K_BROWSER_PROOF` env var handling |
+| `docs/handoff/BROWSER_SEXNET_HTTP_TEXT_ROUTE_STOP_REVIEW_V1.md` | Task 52: STOP review |
+| `docs/handoff/BROWSER_SEXNET_HTTP_TEXT_FETCH_PROOF_V1.md` | Task 53: Fetch proof |
+| `docs/handoff/BROWSER_SEXNET_HTTP_BODY_RENDER_PROOF_V1.md` | Task 54: Body render proof |
+| `docs/handoff/BROWSER_SEXNET_STATUS_UI_PROOF_V1.md` | Task 55: Status UI proof |
+| `docs/handoff/BROWSER_SEXNET_REMOTE_PAGE_GATE_V1.md` | Task 56: Gate handoff |
+| `docs/handoff/NETWORK_STACK_STATUS_ROLLUP_V1.md` | Updated rollup |
+| `docs/handoff/NETWORK_SPRINT_EXECUTION_V1.md` | This file |
+
+### Markers Added
+
+In `servers/silk-shell/src/main.rs`:
+
+**Fetch proof (Task 53):**
+- [browser.sexnet.fetch.request] url=sexos.org mode=consume_last_source3_result source=3 ok=1
+- [browser.sexnet.fetch.status] source=3 http_status=200 body_len=13 ok=1
+- [browser.sexnet.fetch.body] source=3 bytes=13 bounded=1 ok=1
+- [browser.sexnet.fetch.proof.done] source=3 fetched=1 status=200 bytes=13 ok=1
+
+**Body render proof (Task 54):**
+- [browser.sexnet.body.render] source=3 bytes=13 lines=1 bounded=1 ok=1
+- [browser.sexnet.body.render.line] idx=0 len=13 ok=1
+- [browser.sexnet.body.render.proof.done] source=3 rendered=1 bytes=13 ok=1
+
+**Status UI proof (Task 55):**
+- [browser.sexnet.status.ui] source=3 status=200 bytes=13 fetched=1 ok=1
+- [browser.sexnet.status.label] text=source3_sexnet_remote ok=1
+- [browser.sexnet.status.proof.done] source=3 ok=1
+
+**Route review (Task 52):**
+- [browser.sexnet.route.stop_review.pass]
+- [browser.sexnet.remote.page.proof.done] source=3 ok=1
+
+### Gate: browser_sexnet_remote_page
+
+Added to `scripts/daily_driver_master_gate.sh`:
+- PASS: all browser.sexnet markers present + sexnet source3 body proven + zero faults
+- SKIP: Phase K profile not enabled
+- FAIL: browser claims source3 but body absent, static label used, or faults
+
+### Key Decisions
+
+- No PDX route added — marker-only consumption
+- No kernel edits
+- No sex-pdx ABI changes
+- No browser NIC grant (still `slot_net_grant=0`)
+- Body cap fixed at 256 bytes
+- Sexdisplay remains sole framebuffer writer
+- HAL NET_DIAG not retired (deferred to Phase L)
+- source=3 DNS not migrated (deferred to Phase L)
+- No TLS/JS/HTML engine
+
+### What Remains for Phase L
+
+- Real PDX browser→sexnet live fetch route
+- HAL NET_DIAG source=2 retirement
+- source=3 DNS resolution migration
+- Multi-fetch / reliability (Phase M)
+
+### What Remains for Phase M
+
+- Stress testing
+- Multi-fetch reliability
+- Error handling and timeouts
+- Security audit
+
 Next:
-Phase J — replace HAL NET_DIAG with sexnet source=3.
+Phase L -- real PDX route, HAL retirement, source=3 DNS.

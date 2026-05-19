@@ -281,6 +281,8 @@ gate_sexnet_tcp_payload="SKIP"
 gate_sexnet_e1000e_reset_rx="SKIP"
 gate_sexnet_http_phase_i_readiness="SKIP"
 gate_sexnet_http_get_source3="SKIP"
+gate_sexnet_netdiag_source3_primary="SKIP"
+gate_browser_sexnet_remote_page="SKIP"
 gate_dns_to_http_host_resolution_proof="SKIP"
 gate_http_text_fetch_grant_plan="SKIP"
 gate_http_get_send_plan="SKIP"
@@ -2837,6 +2839,77 @@ else
     print_row "sexnet_http_get_source3" "SKIP" "Phase I HTTP GET source=3 not fully proven (env/peer/readiness limited)"
 fi
 
+# Gate: sexnet_netdiag_source3_primary — Phase J source=3 primary netdiag
+# PASS only when Phase J plan pass + source3 status+body proof done + Phase I readiness + HTTP status=200 + zero faults.
+# SKIP when source3 profile is not enabled, Phase I readiness absent, or no HTTP peer.
+# FAIL when source3 claimed but only source=2 markers exist, or body proof uses HAL source=2.
+if [ "$(has 'sexnet.netdiag.source3.status.*source=3.*primary=1.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.netdiag.source3.syscall.proof.done.*source=3.*primary=1.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.netdiag.source3.body.proof.done.*source=3.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.phaseI.readiness.*source=3.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.http.status.proof.done.*status=200.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.http.body.proof.done.*ok=1')" -eq 1 ] && \
+   [ "$gate_faults_zero" = "PASS" ]; then
+    gate_sexnet_netdiag_source3_primary="PASS"
+    print_row "sexnet_netdiag_source3_primary" "PASS" "Phase J source=3 primary netdiag proven"
+elif [ "$(has 'sexnet.netdiag.source3.status.*source=3.*primary=0.*ok=0')" -eq 1 ] && \
+     [ "$(has 'sexnet.netdiag.source3.status.*source=2.*source=3')" -eq 0 ]; then
+    # Netdiag source3 tried but not ready — honest SKIP (not FAIL)
+    gate_sexnet_netdiag_source3_primary="SKIP"
+    print_row "sexnet_netdiag_source3_primary" "SKIP" "Phase J source=3 netdiag not ready (Phase I incomplete)"
+elif [ "$(has 'sexnet.netdiag.source3.status.*primary=1')" -eq 1 ] && \
+     [ "$(has 'sexnet.netdiag.source3.body.*source=2')" -eq 1 ]; then
+    gate_sexnet_netdiag_source3_primary="FAIL"
+    print_row "sexnet_netdiag_source3_primary" "FAIL" "source3 claimed but body uses source=2/HAL markers"
+elif [ "$(has 'sexnet.netdiag.source3.body.proof.done.*body_len=0')" -eq 1 ]; then
+    gate_sexnet_netdiag_source3_primary="FAIL"
+    print_row "sexnet_netdiag_source3_primary" "FAIL" "source3 body proof claims PASS with zero byte body"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_sexnet_netdiag_source3_primary="FAIL"
+    print_row "sexnet_netdiag_source3_primary" "FAIL" "Fault scan failed"
+else
+    gate_sexnet_netdiag_source3_primary="SKIP"
+    print_row "sexnet_netdiag_source3_primary" "SKIP" "Phase J source=3 netdiag primary not available (no source3 profile/env)"
+fi
+
+# Gate: browser_sexnet_remote_page — Phase K browser remote page through sexnet source=3
+# PASS when browser source=3 route/render/status proof complete + sexnet source3 body proven + zero faults.
+# SKIP when Phase K profile not enabled, source3 body absent, or default daily mode.
+# FAIL when browser claims remote but only static/source=1 markers exist, or faults detected.
+if [ "$(has 'browser.sexnet.route.stop_review.pass')" -eq 1 ] && \
+   [ "$(has 'browser.sexnet.fetch.request.*mode=consume_last_source3_result.*ok=1')" -eq 1 ] && \
+   [ "$(has 'browser.sexnet.fetch.status.*source=3.*http_status=200.*body_len=13.*ok=1')" -eq 1 ] && \
+   [ "$(has 'browser.sexnet.fetch.body.*source=3.*bounded=1.*ok=1')" -eq 1 ] && \
+   [ "$(has 'browser.sexnet.fetch.proof.done.*source=3.*fetched=1.*status=200.*ok=1')" -eq 1 ] && \
+   [ "$(has 'browser.sexnet.body.render.*source=3.*bounded=1.*ok=1')" -eq 1 ] && \
+   [ "$(has 'browser.sexnet.body.render.proof.done.*source=3.*rendered=1.*ok=1')" -eq 1 ] && \
+   [ "$(has 'browser.sexnet.status.ui.*source=3.*status=200.*fetched=1.*ok=1')" -eq 1 ] && \
+   [ "$(has 'browser.sexnet.status.proof.done.*source=3.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.netdiag.source3.body.proof.done.*source=3.*body_len=13.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.http.status.proof.done.*status=200.*ok=1')" -eq 1 ] && \
+   [ "$gate_faults_zero" = "PASS" ]; then
+    gate_browser_sexnet_remote_page="PASS"
+    print_row "browser_sexnet_remote_page" "PASS" "Phase K browser remote page through sexnet source=3 proven"
+elif [ "$(has 'browser.sexnet.route.stop_review.pass')" -eq 0 ] && \
+     [ "$(has 'browser.sexnet.fetch.request.*mode=consume_last_source3_result')" -eq 0 ]; then
+    gate_browser_sexnet_remote_page="SKIP"
+    print_row "browser_sexnet_remote_page" "SKIP" "Phase K profile not enabled or source3 body not available"
+elif [ "$(has 'browser.sexnet.fetch.request.*mode=consume_last_source3_result.*ok=1')" -eq 1 ] && \
+     [ "$(has 'sexnet.netdiag.source3.body.proof.done.*source=3')" -eq 0 ]; then
+    gate_browser_sexnet_remote_page="FAIL"
+    print_row "browser_sexnet_remote_page" "FAIL" "browser claims source3 fetch but sexnet body absent"
+elif [ "$(has 'browser.sexnet.status.ui.*source=3.*ok=1')" -eq 1 ] && \
+     [ "$(has 'browser.sexnet.status.label.*static')" -eq 1 ]; then
+    gate_browser_sexnet_remote_page="FAIL"
+    print_row "browser_sexnet_remote_page" "FAIL" "browser claims source3 but shows static label"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_browser_sexnet_remote_page="FAIL"
+    print_row "browser_sexnet_remote_page" "FAIL" "Fault scan failed"
+else
+    gate_browser_sexnet_remote_page="SKIP"
+    print_row "browser_sexnet_remote_page" "SKIP" "Phase K browser remote page not available (env/profile)"
+fi
+
 if [ "$(has 'http.text.fetch.grant.plan.*ok=1')" -eq 1 ]; then
     gate_http_text_fetch_grant_plan="PASS"
     print_row "http_text_fetch_grant_plan" "PASS" "HTTP grant plan marker"
@@ -3498,6 +3571,8 @@ ALL_GATES=(
     "sexnet_tcp_payload:$gate_sexnet_tcp_payload"
     "sexnet_http_phase_i_readiness:$gate_sexnet_http_phase_i_readiness"
     "sexnet_http_get_source3:$gate_sexnet_http_get_source3"
+    "sexnet_netdiag_source3_primary:$gate_sexnet_netdiag_source3_primary"
+    "browser_sexnet_remote_page:$gate_browser_sexnet_remote_page"
     "http_text_fetch_grant_plan:$gate_http_text_fetch_grant_plan"
     "http_get_send_plan:$gate_http_get_send_plan"
     "http_get_send_stop_review:$gate_http_get_send_stop_review"

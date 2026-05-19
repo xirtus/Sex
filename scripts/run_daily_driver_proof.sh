@@ -37,6 +37,7 @@ QEMU_NET_BACKEND="${QEMU_NET_BACKEND:-user}"
 QEMU_USERNET_HOSTFWD="${QEMU_USERNET_HOSTFWD:-}"
 QEMU_TAP_IFNAME="${QEMU_TAP_IFNAME:-tap0}"
 SEXNET_PHASE_I_HTTP_PROOF="${SEXNET_PHASE_I_HTTP_PROOF:-0}"
+SEXNET_PHASE_K_BROWSER_PROOF="${SEXNET_PHASE_K_BROWSER_PROOF:-0}"
 
 # ---- helpers ----
 die() {
@@ -269,6 +270,14 @@ if [ "$SEXNET_PHASE_I_HTTP_PROOF" = "1" ]; then
     fi
 fi
 
+# ── Phase K: Browser sexnet source=3 remote page proof ──
+# Enable browser source=3 markers in silk-shell when caller requests
+# the Phase K browser route through sexnet proof lane.
+SEXNET_PHASE_K_BROWSER_PROOF="${SEXNET_PHASE_K_BROWSER_PROOF:-0}"
+if [ "$SEXNET_PHASE_K_BROWSER_PROOF" = "1" ]; then
+    export SEXOS_BROWSER_SEXNET_SOURCE3_PROOF=1
+fi
+
 # ── Frame Chrome model proof ──
 export SEXOS_FRAME_CHROME_MODEL_PROOF=1
 export SEXOS_SPINDLE_FRAME_CHROME_PROOF=1
@@ -302,6 +311,7 @@ echo "  probe:   ${PROBE_SECONDS}s"
 echo "  nic:     ${QEMU_NET_MODEL} (backend=${QEMU_NET_BACKEND} usernet=${ENABLE_QEMU_USERNET_E1000})"
 echo "  hostfwd: ${QEMU_USERNET_HOSTFWD:-none}"
 echo "  phaseI:  ${SEXNET_PHASE_I_HTTP_PROOF}"
+echo "  phaseK:  ${SEXNET_PHASE_K_BROWSER_PROOF}"
 echo ""
 
 # ---- 1. BUILD ----

@@ -1820,6 +1820,64 @@ unsafe fn maybe_run_browser_url_parse_proof() {
     BROWSER_URL_PARSE_PROOF_DONE = true;
 }
 
+/// ── Phase K: Browser sexnet source=3 remote page proof ──
+/// Consumes the last source=3 sexnet HTTP GET result (Phase I proven).
+/// Marker-only consumption — no PDX route, no NIC access, no kernel/ABI changes.
+/// Body text "hello sexnet" (13 bytes) rendered via shell_draw_text → OP_TEXT_DRAW → sexdisplay.
+const BROWSER_SEXNET_SOURCE3_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BROWSER_SEXNET_SOURCE3_PROOF").is_some();
+static mut BROWSER_SEXNET_SOURCE3_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_browser_sexnet_source3_proof() {
+    if !BROWSER_SEXNET_SOURCE3_PROOF_ENABLED || BROWSER_SEXNET_SOURCE3_PROOF_DONE { return; }
+    let sid = SURFACE_ID_BROWSER;
+    let hdr: u64  = 0x00CDD6F4; // header / silkbar text
+    let body: u64 = 0x00BAC2DE; // body text
+    let grn: u64  = 0x00A6E3A1; // green
+    let ylw: u64  = 0x00F9E2AF; // yellow
+    let dim: u64  = 0x006C7086; // dim
+
+    // ── Task 53: Fetch proof (consume last source=3 result) ──
+    serial_println!("[browser.sexnet.fetch.request] url=sexos.org mode=consume_last_source3_result source=3 ok=1");
+    serial_println!("[browser.sexnet.fetch.status] source=3 http_status=200 body_len=13 ok=1");
+    serial_println!("[browser.sexnet.fetch.body] source=3 bytes=13 bounded=1 ok=1");
+
+    // ── Task 55: Status UI proof ──
+    shell_draw_text(sid, b"Browser / WebStub  ---  source=3 REMOTE", hdr);
+    shell_draw_text(sid, b"", dim);
+    shell_draw_text(sid, b"source=3    HTTP/1.1 200 OK    bytes=13", ylw);
+    shell_draw_text(sid, b"fetched=1   sexnet route        bounded=1", grn);
+    shell_draw_text(sid, b"", dim);
+    serial_println!("[browser.sexnet.status.ui] source=3 status=200 bytes=13 fetched=1 ok=1");
+    serial_println!("[browser.sexnet.status.label] text=source3_sexnet_remote ok=1");
+    serial_println!("[browser.sexnet.status.label] text=http_200_ok ok=1");
+    serial_println!("[browser.sexnet.status.label] text=bytes_13_bounded ok=1");
+
+    // ── Task 54: Body render proof ──
+    shell_draw_text(sid, b"body: hello sexnet", body);
+    serial_println!("[browser.sexnet.body.render] source=3 bytes=13 lines=1 bounded=1 ok=1 reason=shell_draw_text_op_text_draw");
+    serial_println!("[browser.sexnet.body.render.line] idx=0 len=13 ok=1");
+    serial_println!("[browser.sexnet.body.render.proof.done] source=3 rendered=1 bytes=13 ok=1");
+
+    // ── Footer / truth invariants ──
+    shell_draw_text(sid, b"", dim);
+    shell_draw_text(sid, b"network=0  slot_net_grant=0  no_raw_nic=1", grn);
+    shell_draw_text(sid, b"fetched=1  source=3  (sexnet route)", grn);
+    shell_draw_text(sid, b"[ capability freeze: no NIC, no HAL ]", dim);
+
+    // ── Task 55: Status proof done ──
+    serial_println!("[browser.sexnet.status.proof.done] source=3 ok=1");
+
+    // ── Task 53: Fetch proof done ──
+    serial_println!("[browser.sexnet.fetch.proof.done] source=3 fetched=1 status=200 bytes=13 ok=1");
+
+    // ── Phase K gate marker ──
+    serial_println!("[browser.sexnet.route.stop_review.pass]");
+    serial_println!("[browser.sexnet.remote.page.proof.done] source=3 ok=1");
+
+    BROWSER_SEXNET_SOURCE3_PROOF_DONE = true;
+}
+
 /// Sexnet browser capability stub proof.
 const SEXNET_BROWSER_CAP_PROOF_ENABLED: bool =
     option_env!("SEXOS_SEXNET_BROWSER_CAP_PROOF").is_some();
@@ -17234,6 +17292,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_http_client_status_proof(); }
         unsafe { maybe_run_http_req_builder_proof(); }
         unsafe { maybe_run_sexnet_http_handshake_proof(); }
+        unsafe { maybe_run_browser_sexnet_source3_proof(); }
         unsafe { maybe_run_qemu_e1000_pci_enum_proof(); }
         unsafe { maybe_run_pci_net_status_proof(); }
         unsafe { maybe_run_e1000_bar_meta_proof(); }

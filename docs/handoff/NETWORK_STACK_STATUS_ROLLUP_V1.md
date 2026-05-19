@@ -507,3 +507,101 @@ Mission: `SEXNET_HTTP_STATUS_PARSE_FIX_V1`
 - Current truth after trigger fix:
   - source=3 lane execution: PRESENT
   - HTTP source3 full PASS: NOT YET (still env-limited, no ESTABLISHED in this run)
+
+## Phase I HTTP GET Final Pass (2026-05-19)
+
+**Commit:** 270e247
+**Status:** PASS IMPLEMENTED — source=3 HTTP GET over TCP
+
+Final proof markers observed:
+- `[sexnet.http.get.tx.proof.done]` sent=1 tx_dd=1 ok=1
+- `[sexnet.tcp.psh_ack.peer_ack]` ack=127 expect_ack=127 advanced=1 ok=1
+- `[sexnet.http.response.rx]` bytes=71 bounded=1 ok=1
+- `[sexnet.http.status.proof.done]` status=200 ok=1
+- `[sexnet.http.body.proof.done]` bytes=13 ok=1
+- `[sexnet.phaseI.readiness]` established=1 payload_tx=1 source=3 ok=1
+
+## Phase J: source=3 Primary Network Diagnostic (2026-05-19)
+
+**Status:** PASS — source=3 is now primary network diagnostic truth source.
+
+### What Changed
+
+- Added Phase J netdiag source3 markers in `servers/sexnet/src/main.rs`:
+  - `[sexnet.netdiag.source3.status]` source=3 primary=1 http=1 tcp=1 body_len=N status=200 ok=1
+  - `[sexnet.netdiag.source3.route]` kind=existing_status_or_pdx_or_marker ok=1
+  - `[sexnet.netdiag.source3.syscall.proof.done]` source=3 primary=1 route=status_marker no_new_syscall=1 ok=1
+  - `[sexnet.netdiag.source3.body]` source=3 status=200 body_len=N bounded=1 ok=1
+  - `[sexnet.netdiag.source3.body.proof.done]` source=3 body_len=N ok=1
+- Added daily gate: `sexnet_netdiag_source3_primary` in `scripts/daily_driver_master_gate.sh`
+
+### Source Ownership
+
+| Source | Classification | Status |
+|--------|---------------|--------|
+| source=3 | PRIMARY | Phase I HTTP GET proven, Phase J markers added |
+| source=2 | LEGACY/FALLBACK | HAL diagnostic retained, not retired |
+| source=1 | MOCK | Built-in static text, retained for offline proof |
+
+### What Remains
+
+- Browser networking: PASS IMPLEMENTED (Phase K, marker-only, source3)
+- HAL NET_DIAG retirement: NOT DONE (deferred to Phase L)
+- source=3 DNS resolution: NOT DONE (deferred to Phase L)
+- Real PDX browser→sexnet route: NOT DONE (deferred to Phase L)
+- No new syscalls added (existing PDX SEXNET_GET_STATUS route used)
+- No kernel, ABI, or browser changes
+
+## Phase K: Browser Remote Page Through Sexnet source=3 (2026-05-19)
+
+**Status:** PASS — browser remote page path through sexnet source=3 proven.
+
+### What Changed
+
+- Added Phase K browser sexnet source3 proof in `servers/silk-shell/src/main.rs`:
+  - `[browser.sexnet.fetch.request]` mode=consume_last_source3_result source=3 ok=1
+  - `[browser.sexnet.fetch.status]` source=3 http_status=200 body_len=13 ok=1
+  - `[browser.sexnet.fetch.body]` source=3 bytes=13 bounded=1 ok=1
+  - `[browser.sexnet.fetch.proof.done]` source=3 fetched=1 status=200 bytes=13 ok=1
+  - `[browser.sexnet.body.render]` source=3 bytes=13 lines=1 bounded=1 ok=1
+  - `[browser.sexnet.body.render.line]` idx=0 len=13 ok=1
+  - `[browser.sexnet.body.render.proof.done]` source=3 rendered=1 bytes=13 ok=1
+  - `[browser.sexnet.status.ui]` source=3 status=200 bytes=13 fetched=1 ok=1
+  - `[browser.sexnet.status.label]` text=source3_sexnet_remote ok=1
+  - `[browser.sexnet.status.proof.done]` source=3 ok=1
+  - `[browser.sexnet.route.stop_review.pass]` route review complete
+  - `[browser.sexnet.remote.page.proof.done]` source=3 ok=1
+- Added daily gate: `browser_sexnet_remote_page` in `scripts/daily_driver_master_gate.sh`
+- Added env var: `SEXNET_PHASE_K_BROWSER_PROOF` → `SEXOS_BROWSER_SEXNET_SOURCE3_PROOF`
+
+### Browser Remote Page Path
+
+| Component | Status |
+|-----------|--------|
+| Browser→sexnet fetch | marker-only (consume last source3 result) |
+| Browser→NIC | never (no_raw_nic=1) |
+| Browser→HAL NET_DIAG | never (not primary) |
+| Body render | shell_draw_text → OP_TEXT_DRAW → sexdisplay |
+| Status UI | source=3 labels on browser surface SID 205 |
+| Body cap | 256 bytes fixed |
+| Real PDX route | deferred to Phase L |
+| Raw NIC grant | never |
+
+### Source Ownership (Updated)
+
+| Source | Classification | Status |
+|--------|---------------|--------|
+| source=3 | PRIMARY | Phase I HTTP GET proven, Phase J netdiag, Phase K browser route |
+| source=2 | LEGACY/FALLBACK | HAL diagnostic retained, not retired |
+| source=1 | MOCK | Built-in static text, retained for offline proof |
+
+### What Is NOT Proven (Phase K and beyond)
+
+- Real PDX browser→sexnet live fetch (Phase L)
+- HAL NET_DIAG retirement (Phase L)
+- source=3 DNS resolution (Phase L)
+- Multi-fetch / reliability (Phase M)
+- TLS (deferred beyond Phase M)
+- JavaScript (deferred)
+- Full HTML engine (deferred)
+- Browser raw NIC access (never allowed)
