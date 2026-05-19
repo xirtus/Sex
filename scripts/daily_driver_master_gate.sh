@@ -224,6 +224,7 @@ gate_sexnet_arp_reply_host_observe="SKIP"
 gate_sexnet_arp_cache_proof="SKIP"
 gate_sexnet_arp_multi_request="SKIP"
 gate_sexnet_ipv4_header_validate="SKIP"
+gate_sexnet_ipv4_checksum="SKIP"
 gate_ipv4_packet_model_spec="SKIP"
 gate_ipv4_header_build_proof="SKIP"
 gate_icmp_echo_request_plan="SKIP"
@@ -2277,6 +2278,33 @@ else
     print_row "sexnet_ipv4_header_validate" "SKIP" "no TAP/no ping stimulus — IPv4 markers absent"
 fi
 
+# ---- SEXNET_IPV4_CHECKSUM_GATE_V1 ----
+# Reuses same markers as sexnet_ipv4_header_validate, focused on checksum fields.
+# PASS requires:
+#   [sexnet.ipv4.rx.validate.detail] ... checksum_ok=1 ...
+#   [sexnet.ipv4.rx.validate] ... checksum=ok ... ok=1
+#   [sexnet.ipv4.proof.done] ... ok=1
+# Negative: [sexnet.ipv4.rx.reject.detail] ... reason=checksum ok=0
+if [ "$(has 'sexnet\.ipv4\.proof\.done.*ok=0')" -eq 1 ]; then
+    gate_sexnet_ipv4_checksum="FAIL"
+    print_row "sexnet_ipv4_checksum" "FAIL" "proof.done ok=0 — checksum validation failed"
+elif [ "$(has 'sexnet\.ipv4\.rx\.validate\.detail.*checksum_ok=0')" -eq 1 ] \
+     && [ "$(has 'sexnet\.ipv4\.rx\.validate\.detail.*checksum_ok=1')" -eq 0 ]; then
+    gate_sexnet_ipv4_checksum="FAIL"
+    print_row "sexnet_ipv4_checksum" "FAIL" "checksum_ok=0 with no later checksum_ok=1"
+elif [ "$(has 'sexnet\.ipv4\.rx\.validate\.detail.*checksum_ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.ipv4\.rx\.validate.*checksum=ok.*ok=1')" -eq 1 ] \
+     && [ "$(has 'sexnet\.ipv4\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_sexnet_ipv4_checksum="PASS"
+    print_row "sexnet_ipv4_checksum" "PASS" "IPv4 checksum compute+validate proven"
+elif [ "$(has 'sexnet\.ipv4\.rx\.reject\.detail.*reason=checksum')" -eq 1 ]; then
+    gate_sexnet_ipv4_checksum="PASS"
+    print_row "sexnet_ipv4_checksum" "PASS" "negative checksum rejection proven (no positive frame)"
+else
+    gate_sexnet_ipv4_checksum="SKIP"
+    print_row "sexnet_ipv4_checksum" "SKIP" "no TAP/no ping stimulus — IPv4 checksum markers absent"
+fi
+
 if [ "$(has 'ipv4.packet.model.spec.*ok=1')" -eq 1 ]; then
     gate_ipv4_packet_model_spec="PASS"
     print_row "ipv4_packet_model_spec" "PASS" "IPv4 model marker"
@@ -3132,6 +3160,7 @@ ALL_GATES=(
     "sexnet_arp_cache_proof:$gate_sexnet_arp_cache_proof"
     "sexnet_arp_multi_request:$gate_sexnet_arp_multi_request"
     "sexnet_ipv4_header_validate:$gate_sexnet_ipv4_header_validate"
+    "sexnet_ipv4_checksum:$gate_sexnet_ipv4_checksum"
     "ipv4_packet_model_spec:$gate_ipv4_packet_model_spec"
     "ipv4_header_build_proof:$gate_ipv4_header_build_proof"
     "icmp_echo_request_plan:$gate_icmp_echo_request_plan"

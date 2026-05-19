@@ -1679,3 +1679,5 @@ Detailed handoff:
 - 2026-05-19: Added gate `sexnet_arp_cache_proof` (bounded ARP cache replies=2 with DD checks and slot/TDT contract checks). Handoff: `SEXNET_ARP_CACHE_PROOF_V1.md`.
 
 - 2026-05-19: Added gate `sexnet_ipv4_header_validate` — IPv4 header receive/parse/validate proof on TAP/e1000e lane. One real ICMP echo request frame received from host ping, IPv4 header parsed and checksum validated. No ICMP reply, no UDP/TCP/HTTP/DNS, no routing, no fragmentation. Handoff: `SEXNET_IPV4_HEADER_VALIDATE_PROOF_V1.md`.
+
+- 2026-05-19: Phase C documentation completed. Added STOP review (`SEXNET_IPV4_PARSE_STOP_REVIEW_V1.md`), header validate gate handoff (`SEXNET_IPV4_HEADER_VALIDATE_GATE_V1.md`), checksum proof doc (`SEXNET_IPV4_CHECKSUM_PROOF_V1.md`), checksum gate handoff (`SEXNET_IPV4_CHECKSUM_GATE_V1.md`), and standalone gate `sexnet_ipv4_checksum` in daily driver script. Phase C rollup updated in `NETWORK_STACK_STATUS_ROLLUP_V1.md`. All IPv4 parse/validate/checksum runtime code pre-existed (commit c432689); Phase C adds formal gate contracts and documentation. No runtime code changes. Next: Phase D SEXNET_ICMP_ECHO_STOP_REVIEW_V1.
