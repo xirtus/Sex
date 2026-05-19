@@ -1763,3 +1763,28 @@ Key markers:
 
 Next:
 Phase J — replace HAL NET_DIAG with sexnet source=3.
+
+## SEXNET_PHASE_I_HTTP_GET_FINAL_PASS_V1
+
+Result: PASS IMPLEMENTED
+
+Proof:
+- FINAL: PASS (251 gates proved, 46 skipped, 0 faults)
+- source=3 TCP reached ESTABLISHED
+- HTTP GET built and sent over PSH+ACK
+- peer ACK advanced to expected sequence
+- HTTP response RX bytes=71
+- HTTP status parsed: 200
+- body buffered: 13 bytes
+- Phase I readiness: established=1 payload_tx=1 source=3 ok=1
+
+Key markers:
+- [sexnet.http.get.tx.proof.done] sent=1 tx_dd=1 ok=1
+- [sexnet.tcp.psh_ack.peer_ack] ack=127 expect_ack=127 advanced=1 ok=1
+- [sexnet.http.response.rx] bytes=71 bounded=1 ok=1
+- [sexnet.http.status.proof.done] status=200 ok=1
+- [sexnet.http.body.proof.done] bytes=13 ok=1
+- [sexnet.phaseI.readiness] established=1 payload_tx=1 source=3 ok=1
+
+Next:
+Phase J — replace HAL NET_DIAG with sexnet source=3.
