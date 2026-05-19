@@ -461,3 +461,19 @@ HAL diagnostic source=2 TCP markers remain as-is (not retired, not migrated).
   - Browser networking: NOT DONE
   - HAL NET_DIAG retirement: NOT DONE
   - Next phase target: Phase J (source=3 NET_DIAG replacement)
+
+## Phase I HTTP Status Parse Fix (2026-05-19)
+
+Mission: `SEXNET_HTTP_STATUS_PARSE_FIX_V1`
+
+- Implemented in `servers/sexnet/src/main.rs`:
+  - bounded status-line parser for `HTTP/1.0` / `HTTP/1.1`
+  - strict 3-digit status parsing
+  - bounded line scan (`max 128`)
+  - explicit reject reasons
+  - bounded response peek diagnostics (`hex/ascii`, max 64 bytes)
+  - payload offset marker for response RX path
+  - bounded body-start fallback after status line when header separator not present
+- No kernel/HAL/TCP-state-machine redesign changes.
+- Current proof lane classification: `PASS REVIEW ONLY` (env-limited run did not reach ESTABLISHED/source=3 RX).
+- Unrelated known gate may still fail independently: `sexnet_nic_tx_frame_observe`.

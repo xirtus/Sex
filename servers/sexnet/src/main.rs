@@ -188,33 +188,91 @@ fn find_crlf(buf: &[u8], len: usize) -> usize {
     len
 }
 
-fn parse_http_status_line(buf: &[u8], len: usize) -> u16 {
-    let line_end = find_crlf(buf, len);
-    if line_end < 12 {
-        return 0;
-    }
-    if buf[0] != b'H' || buf[1] != b'T' || buf[2] != b'T' || buf[3] != b'P' || buf[4] != b'/' {
-        return 0;
-    }
-    let mut sp = 0usize;
+fn build_hex_peek(buf: &[u8], len: usize, out: &mut [u8]) -> usize {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut o = 0usize;
     let mut i = 0usize;
-    while i < line_end {
-        if buf[i] == b' ' {
-            sp = i;
+    while i < len {
+        if o + 2 > out.len() {
+            break;
+        }
+        let b = buf[i];
+        out[o] = HEX[(b >> 4) as usize];
+        out[o + 1] = HEX[(b & 0x0F) as usize];
+        o += 2;
+        if i + 1 < len {
+            if o + 1 > out.len() {
+                break;
+            }
+            out[o] = b' ';
+            o += 1;
+        }
+        i += 1;
+    }
+    o
+}
+
+fn build_ascii_peek(buf: &[u8], len: usize, out: &mut [u8]) -> usize {
+    let mut o = 0usize;
+    let mut i = 0usize;
+    while i < len && o < out.len() {
+        let b = buf[i];
+        out[o] = if (0x20..=0x7e).contains(&b) { b } else { b'.' };
+        o += 1;
+        i += 1;
+    }
+    o
+}
+
+fn parse_http_status_line(buf: &[u8], len: usize) -> (u16, usize, &'static str, &'static str) {
+    const MAX_STATUS_LINE: usize = 128;
+    if len == 0 {
+        return (0, 0, "", "empty");
+    }
+    let scan_cap = if len < MAX_STATUS_LINE { len } else { MAX_STATUS_LINE };
+    let mut line_end = scan_cap;
+    let mut i = 0usize;
+    while i < scan_cap {
+        let b = buf[i];
+        if b == b'\n' || b == b'\r' {
+            line_end = i;
             break;
         }
         i += 1;
     }
-    if sp == 0 || sp + 3 >= line_end {
-        return 0;
+    if line_end == scan_cap {
+        if len >= MAX_STATUS_LINE {
+            return (0, line_end, "", "status_line_too_long");
+        }
+        return (0, line_end, "", "missing_line_ending");
     }
-    let d0 = buf[sp + 1];
-    let d1 = buf[sp + 2];
-    let d2 = buf[sp + 3];
-    if d0 < b'0' || d0 > b'9' || d1 < b'0' || d1 > b'9' || d2 < b'0' || d2 > b'9' {
-        return 0;
+    if line_end < 12 {
+        return (0, line_end, "", "status_line_too_short");
     }
-    ((d0 - b'0') as u16) * 100 + ((d1 - b'0') as u16) * 10 + ((d2 - b'0') as u16)
+    if buf[0] != b'H' || buf[1] != b'T' || buf[2] != b'T' || buf[3] != b'P' || buf[4] != b'/' || buf[5] != b'1' || buf[6] != b'.' {
+        return (0, line_end, "", "bad_http_prefix");
+    }
+    let version = if buf[7] == b'0' {
+        "HTTP/1.0"
+    } else if buf[7] == b'1' {
+        "HTTP/1.1"
+    } else {
+        return (0, line_end, "", "unsupported_http_version");
+    };
+    if buf[8] != b' ' {
+        return (0, line_end, "", "missing_status_space");
+    }
+    let d0 = buf[9];
+    let d1 = buf[10];
+    let d2 = buf[11];
+    if !d0.is_ascii_digit() || !d1.is_ascii_digit() || !d2.is_ascii_digit() {
+        return (0, line_end, "", "status_digits_invalid");
+    }
+    if line_end > 12 && buf[12] != b' ' {
+        return (0, line_end, "", "missing_reason_separator");
+    }
+    let status = ((d0 - b'0') as u16) * 100 + ((d1 - b'0') as u16) * 10 + ((d2 - b'0') as u16);
+    (status, line_end, version, "")
 }
 
 // --------------------------------------------------------------------------
@@ -3751,6 +3809,7 @@ pub extern "C" fn _start() -> ! {
                                             let mut resp_total = 0usize;
                                             let mut resp_truncated = 0u32;
                                             let mut got_payload = 0u32;
+                                            let mut observed_payload_off = 0usize;
                                             let mut rx_outer = 0u32;
                                             while rx_outer < 1_000_000 {
                                                 let mut ridx = 0u32;
@@ -3779,6 +3838,7 @@ pub extern "C" fn _start() -> ! {
                                                                             if thl >= 20 {
                                                                                 let payload_off = 14 + ihl + thl;
                                                                                 if payload_off < rlen {
+                                                                                    observed_payload_off = payload_off;
                                                                                     let plen = rlen - payload_off;
                                                                                     let mut i = 0usize;
                                                                                     while i < plen {
@@ -3825,25 +3885,57 @@ pub extern "C" fn _start() -> ! {
                                                 resp_total,
                                                 if got_payload == 1 { 1 } else { 0 }
                                             );
+                                            let peek_len = if resp_total < 64 { resp_total } else { 64 };
+                                            let mut hex_out = [0u8; 64 * 3];
+                                            let mut ascii_out = [0u8; 64];
+                                            let hex_len = build_hex_peek(unsafe { &HTTP_RESPONSE_BUF[..peek_len] }, peek_len, &mut hex_out);
+                                            let ascii_len = build_ascii_peek(unsafe { &HTTP_RESPONSE_BUF[..peek_len] }, peek_len, &mut ascii_out);
+                                            let hex_txt = unsafe { core::str::from_utf8_unchecked(&hex_out[..hex_len]) };
+                                            let ascii_txt = unsafe { core::str::from_utf8_unchecked(&ascii_out[..ascii_len]) };
+                                            serial_println!(
+                                                "[sexnet.http.response.peek.hex] len={} bytes={}",
+                                                peek_len,
+                                                hex_txt
+                                            );
+                                            serial_println!(
+                                                "[sexnet.http.response.peek.ascii] len={} text={}",
+                                                peek_len,
+                                                ascii_txt
+                                            );
                                             let mut status_code = 0u16;
+                                            let mut status_line_len = 0usize;
+                                            let mut status_version: &'static str = "";
+                                            let mut status_reject: &'static str = "empty";
                                             if resp_total > 0 {
-                                                status_code = parse_http_status_line(unsafe { &HTTP_RESPONSE_BUF }, resp_total);
+                                                let (parsed_status, parsed_line_len, parsed_version, reject_reason) =
+                                                    parse_http_status_line(unsafe { &HTTP_RESPONSE_BUF }, resp_total);
+                                                status_code = parsed_status;
+                                                status_line_len = parsed_line_len;
+                                                status_version = parsed_version;
+                                                status_reject = reject_reason;
                                             }
                                             unsafe { HTTP_STATUS_CODE = status_code; }
                                             if status_code > 0 {
                                                 serial_println!(
-                                                    "[sexnet.http.status.parse] version=HTTP/1.x status={} ok=1",
-                                                    status_code
+                                                    "[sexnet.http.status.parse] version={} status={} line_len={} ok=1",
+                                                    status_version, status_code, status_line_len
                                                 );
                                                 serial_println!(
                                                     "[sexnet.http.status.proof.done] status={} ok=1",
                                                     status_code
                                                 );
                                             } else {
-                                                serial_println!("[sexnet.http.status.parse] status=0 ok=0 reason=malformed_or_missing");
-                                                serial_println!("[sexnet.http.status.proof.done] status=0 ok=0");
+                                                serial_println!(
+                                                    "[sexnet.http.status.reject] reason={} ok=1",
+                                                    status_reject
+                                                );
+                                                serial_println!(
+                                                    "[sexnet.http.status.proof.done] status=0 ok=0 reason={}",
+                                                    status_reject
+                                                );
                                             }
                                             let mut body_start = resp_total;
+                                            let mut used_header_sep = 0u32;
                                             let mut bi = 0usize;
                                             while bi + 3 < resp_total {
                                                 if unsafe { HTTP_RESPONSE_BUF[bi] } == b'\r'
@@ -3852,10 +3944,24 @@ pub extern "C" fn _start() -> ! {
                                                     && unsafe { HTTP_RESPONSE_BUF[bi + 3] } == b'\n'
                                                 {
                                                     body_start = bi + 4;
+                                                    used_header_sep = 1;
                                                     break;
                                                 }
                                                 bi += 1;
                                             }
+                                            if used_header_sep == 0 && status_line_len > 0 && status_line_len < resp_total {
+                                                body_start = status_line_len;
+                                                while body_start < resp_total
+                                                    && (unsafe { HTTP_RESPONSE_BUF[body_start] } == b'\r'
+                                                        || unsafe { HTTP_RESPONSE_BUF[body_start] } == b'\n')
+                                                {
+                                                    body_start += 1;
+                                                }
+                                            }
+                                            serial_println!(
+                                                "[sexnet.http.response.offset] tcp_payload_offset={} payload_len={} ok=1",
+                                                observed_payload_off, resp_total
+                                            );
                                             let mut body_bytes = 0usize;
                                             if body_start < resp_total {
                                                 let mut ri = body_start;

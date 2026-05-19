@@ -1703,3 +1703,27 @@ Detailed handoff:
 - 2026-05-19: Phase H TCP payload guard implementation completed. STOP review (`SEXNET_TCP_PAYLOAD_TX_STOP_REVIEW_V1.md`) concludes: ENV-BLOCKED — usernet environment does not deliver SYN-ACK, TCP state never reaches ESTABLISHED. Added payload TX guard in `servers/sexnet/src/main.rs` (source=3) that reads TCP_STATE after handshake attempt and emits honest markers: `[sexnet.tcp.payload.tx.guard] state=SYN_SENT ok=0 reason=not_established`, `[sexnet.tcp.payload.rx.guard] state=SYN_SENT ok=0 reason=not_established`, `[sexnet.tcp.fin_rst.guard] state=SYN_SENT rst=0 fin=0 ok=0 reason=not_connected`, `[sexnet.tcp.payload.proof.done] established=0 payload_tx=0 payload_rx=0 rst=0 fin=0 ok=1 reason=guard_blocked_not_established`. Guard correctly prevents payload TX/RX before ESTABLISHED. No actual PSH+ACK payload is built or transmitted (forbidden by contract). RST handling proven in Phase G. FIN handling deferred (requires ESTABLISHED). Gate `sexnet_tcp_payload` added to daily driver script (PASSes when guard proven, SKIPs when guard not present). Proof docs created: `SEXNET_TCP_PAYLOAD_TX_STOP_REVIEW_V1.md`, `SEXNET_TCP_PSH_ACK_TX_PROOF_V1.md`, `SEXNET_TCP_PAYLOAD_RX_PROOF_V1.md`, `SEXNET_TCP_FIN_RST_HANDLING_PROOF_V1.md`, `SEXNET_TCP_PAYLOAD_GATE_AND_HANDOFF_V1.md`. Phase H rollup updated in `NETWORK_STACK_STATUS_ROLLUP_V1.md`. No HTTP, no browser networking, no TCP streaming, no kernel/ABI/sex-pdx edits. Next: Phase I SEXNET_HTTP_GET_STOP_REVIEW_V1 (deferred until ESTABLISHED environment available).
 
 - 2026-05-19: Phase I HTTP GET source=3 implementation added in `servers/sexnet/src/main.rs` with strict bounded buffers and markers: `[sexnet.http.get.build]`, `[sexnet.http.get.tx.proof.done]`, `[sexnet.http.response.rx.proof.done]`, `[sexnet.http.status.proof.done]`, `[sexnet.http.body.proof.done]`, plus `[sexnet.phaseI.readiness] ... source=3`. Added `sexnet_http_get_source3` gate in `scripts/daily_driver_master_gate.sh` with PASS/SKIP/FAIL semantics: PASS only on ESTABLISHED+payload TX + GET build/TX + response RX + status parse + body buffer + source=3 + zero faults; SKIP on env/peer-readiness limits; FAIL on malformed parse, false HTTP claim, or faults. Browser networking and HAL NET_DIAG retirement remain deferred.
+
+## Update 2026-05-19: SEXNET_HTTP_STATUS_PARSE_FIX_V1
+
+Status: `PASS REVIEW ONLY`
+
+Changes:
+- `servers/sexnet/src/main.rs`
+  - Added bounded response peek markers:
+    - `[sexnet.http.response.peek.hex]`
+    - `[sexnet.http.response.peek.ascii]`
+    - `[sexnet.http.response.offset]`
+  - Replaced loose status parse with strict bounded parser:
+    - accepts `HTTP/1.0` and `HTTP/1.1`
+    - parses exactly 3 status digits
+    - bounded line scan (`<=128`)
+    - explicit reject reasons via `[sexnet.http.status.reject]`
+  - Preserved strict proof behavior: malformed status stays FAIL-path (`status=0 ok=0`).
+
+Proof run:
+- `./scripts/entrypoint_build.sh` PASS
+- `QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000 ... run_daily_driver_proof` completed
+- `sexnet_http_phase_i_readiness`: SKIP in this boot (env-limited lane)
+- `sexnet_http_get_source3`: SKIP in this boot
+- `faults_zero`: PASS
