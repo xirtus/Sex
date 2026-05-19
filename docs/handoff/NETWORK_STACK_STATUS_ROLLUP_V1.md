@@ -2,7 +2,7 @@
 
 Date: 2026-05-19
 Branch: master
-Commit: Phase E UDP echo reply implementation
+Commit: Phase F DNS client query and cache proof
 
 ## Phase A Status: DONE / PASS IMPLEMENTED
 
@@ -77,7 +77,50 @@ via existing e1000e TX descriptor index 4 (TDT=5).
 Host UDP observe is available if nc and TAP are present; otherwise the gate SKIPs
 honestly. Guest-side UDP proof is independent.
 
-## What Is Proven (Phase A + B + C + D + E)
+## Phase F Status: DONE / PASS IMPLEMENTED
+
+Phase F contains:
+- `SEXNET_DNS_CLIENT_STOP_REVIEW_V1` — STOP review (PASS REVIEW)
+- `SEXNET_DNS_QUERY_BUILD_PROOF_V1` — DNS query build proof doc (PASS REVIEW ONLY)
+- `SEXNET_DNS_QUERY_TX_PROOF_V1` — DNS query TX proof doc (PASS REVIEW ONLY)
+- `SEXNET_DNS_RESPONSE_PARSE_PROOF_V1` — DNS response parse proof doc (PASS REVIEW ONLY)
+- `SEXNET_DNS_A_RECORD_CACHE_PROOF_V1` — DNS A-record cache proof doc (PASS IMPLEMENTED)
+- `SEXNET_DNS_CLIENT_GATE_AND_HANDOFF_V1` — gate handoff with 4 new sexnet_dns_* gates
+
+Phase F DNS client proofs live in the **kernel HAL diagnostic lane** (`kernel/src/hal/pci.rs`),
+NOT in the sexnet server (`servers/sexnet/src/main.rs`). The HAL diagnostic lane already
+contained DNS query build, UDP TX, and bounded response parse with A-record extraction
+(from sprints r30-r31). Phase F adds:
+- Formal STOP review per Phase F contract
+- Documentation of existing DNS query build/TX/parse proofs
+- Tiny bounded 4-entry DNS A-record cache (HAL diagnostic lane, stack-only, 36 bytes)
+- Cache hit/miss proof with `[sexnet.dns.cache.*]` markers
+- Four new sexnet_dns_* gates in daily driver script
+- Markers use `sexnet.dns.` prefix per network-stack naming convention;
+  implementation is HAL diagnostic, not sexnet server
+- No TCP, no HTTP, no browser networking in Phase F
+
+### DNS A-Record Cache
+
+A tiny bounded 4-entry fixed-slot cache stores A records from live DNS responses.
+Deterministic replacement (empty-first, slot-0 round-robin). No heap, no TTL expiry
+subsystem, no general resolver API. Cache proof markers:
+- `[sexnet.dns.cache.init] cap=4`
+- `[sexnet.dns.cache.insert] host=example.com addr=A ok=1`
+- `[sexnet.dns.cache.hit] host=example.com addr=A ok=1`
+- `[sexnet.dns.cache.miss] host=nonexistent.host ok=1`
+- `[sexnet.dns.cache.proof.done] inserts=N hits=N misses=N ok=1`
+
+### New Phase F Gates
+
+| Gate | Description |
+|------|-------------|
+| `sexnet_dns_query_build` | DNS query build proof (example.com A query) |
+| `sexnet_dns_query_tx` | DNS query TX proof (tx_dd=1 confirmed) |
+| `sexnet_dns_response_parse` | DNS response parse proof (A records extracted) |
+| `sexnet_dns_a_record_cache` | DNS A-record cache proof (insert/hit/miss)
+
+## What Is Proven (Phase A + B + C + D + E + F)
 
 | Item | Evidence | Confidence |
 |------|----------|------------|
@@ -120,13 +163,19 @@ honestly. Guest-side UDP proof is independent.
 | **UDP TX DD done** | `sexnet.udp.tx.poll.done` dd_set=1 ok=1 | PROVEN |
 | **UDP echo proof complete** | `sexnet.udp.echo.proof.done` rx_udp=1 tx_reply=1 tx_dd=1 ok=1 | PROVEN |
 | **Host UDP observe** | host UDP probe PASS (if env allows) | PROVEN (conditional) |
+| **DNS query build** | `sexnet.dns.query.build` host=example.com qtype=A len=71 ok=1 (HAL diag, source=2) | PROVEN |
+| **DNS query UDP TX** | `sexnet.dns.query.tx` dst_port=53 tx_dd=1 ok=1 (HAL diag, source=2) | PROVEN |
+| **DNS response parse** | `sexnet.dns.response.parse` a_records>=1 rcode=0 ok=1 (HAL diag, source=2) | PROVEN |
+| **DNS A-record cache** | `sexnet.dns.cache.proof.done` inserts>=1 hits>=1 misses>=1 ok=1 (HAL diag, source=2) | PROVEN |
+| **DNS live response** | SLiRP 10.0.2.3:53 responds with real A records (fake=0) (HAL diag) | PROVEN (conditional) |
 
 ## What Is NOT Proven
 
-- DNS query/response (Phase F)
-- TCP SYN/SYN-ACK/handshake (Phase F)
-- HTTP GET/response (Phase F)
-- Browser networking (Phase F+)
+- TCP SYN/SYN-ACK/handshake (Phase G)
+- HTTP GET/response (Phase G)
+- Browser networking (Phase G+)
+- Live DNS response in TAP-only environment (conditional on DNS routing)
+- HAL NET_DIAG retirement (future phase)
 - HAL NET_DIAG retirement (future phase)
 - Multi-entry ARP cache eviction (1-entry design, no eviction needed)
 - IRQ-driven receive (poll-driven only)
@@ -153,13 +202,24 @@ QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
 
 # Host UDP observe (requires TAP + nc)
 ./scripts/host_udp_echo_observe_probe.sh /tmp/sexnet_phase_e_host_udp.log
+
+# Phase F DNS proofs (reuse existing e1000e DNS probe lane)
+QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_f_user.log
+
+QEMU_NET_BACKEND=tap QEMU_NET_MODEL=e1000e QEMU_TAP_IFNAME=tap0 \
+  ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_f_tap.log
 ```
 
 ## Log Paths
 
-- `/tmp/sexnet_phase_e_tap.log` — TAP backend proof
-- `/tmp/sexnet_phase_e_user.log` — user backend proof
+- `/tmp/sexnet_phase_e_tap.log` — TAP backend proof (Phase E)
+- `/tmp/sexnet_phase_e_user.log` — user backend proof (Phase E)
 - `/tmp/sexnet_phase_e_host_udp.log` — host UDP observe probe
+- `/tmp/sexnet_phase_f_tap.log` — TAP backend proof (Phase F)
+- `/tmp/sexnet_phase_f_user.log` — user backend proof (Phase F)
+- `/tmp/sexnet_phase_f_host_dns.log` — host DNS observe probe
 
 ## Gate Status
 
@@ -177,10 +237,15 @@ QEMU_NET_BACKEND=user QEMU_NET_MODEL=e1000e ENABLE_QEMU_USERNET_E1000=1 \
 | `sexnet_icmp_host_ping_observe` | SKIP | PASS (REVIEW ONLY / conditional) |
 | `sexnet_udp_echo_reply` | SKIP | PASS |
 | `sexnet_udp_host_observe` | SKIP | PASS (REVIEW ONLY / conditional) |
+| `sexnet_dns_query_build` | SKIP | PASS |
+| `sexnet_dns_query_tx` | SKIP | PASS |
+| `sexnet_dns_response_parse` | SKIP | PASS |
+| `sexnet_dns_a_record_cache` | SKIP | PASS |
 
 ## Next Phase
 
-**Phase F: SEXNET_DNS_CLIENT_STOP_REVIEW_V1**
-- DNS client (UDP port 53 query)
-- No TCP, no HTTP in Phase F
+**Phase G: SEXNET_TCP_STATE_MACHINE_STOP_REVIEW_V1**
+- TCP SYN/SYN-ACK/handshake (handshake partially implemented, needs final ACK)
+- HTTP GET/response
 - No routing changes
+- Browser networking deferred to Phase G+

@@ -54,12 +54,14 @@ Status note:
 - TCP SYN send: ✅ SYN posted to e1000e TX lane, tx_dd=1. REAL SYN-ACK received from example.com (104.20.23.154) in round 1: flags=0x12, ack_num=1, peer_seq=64001. No final ACK sent. No HTTP sent. peer_seq captured for handshake completion.
 - TCP handshake: pending — needs final ACK (seq=1, ack=64002, flags=ACK).
 
-### Bundle D: DNS/HTTP core client (in progress: DNS parse + host resolution implemented; HTTP markers next)
+### Bundle D: DNS/HTTP core client (DNS client complete; HTTP markers deferred)
+
 - `DNS_CLIENT_PLAN_V1`
 - `DNS_QUERY_BUILD_PROOF_V1`
 - `DNS_QUERY_SEND_STOP_REVIEW_V1`
 - `DNS_RESPONSE_PARSE_PROOF_V1`
 - `DNS_TO_HTTP_HOST_RESOLUTION_PROOF_V1` ✅ IMPLEMENTED
+- `SEXNET_DNS_A_RECORD_CACHE_V1` ✅ IMPLEMENTED (Phase F)
 - `HTTP_TEXT_FETCH_GRANT_PLAN_V1`
 - `HTTP_GET_SEND_PLAN_V1`
 - `HTTP_GET_SEND_STOP_REVIEW_V1`
@@ -68,9 +70,10 @@ Status note:
 - `HTTP_404_AND_ERROR_PAGE_PROOF_V1`
 
 Status note:
-- Implemented DNS/HTTP plan/build marker chain with bounded no-network claims.
+- DNS client Phase F complete: query build, UDP TX, response parse, A-record cache all proven.
 - DNS parse + DNS-to-HTTP host resolution: ✅ IMPLEMENTED on e1000e lane.
-- HTTP GET send remains explicit stop-review marker until transport lane is wired.
+- HTTP GET send remains deferred until TCP handshake completion.
+- Phase F adds 4 new gates: sexnet_dns_query_build, sexnet_dns_query_tx, sexnet_dns_response_parse, sexnet_dns_a_record_cache.
 
 ### Bundle E: Collar/browser network integration (in progress: marker/stub lane implemented)
 - `BROWSER_HTTP_FETCH_GRANT_PLAN_V1`
@@ -1683,3 +1686,5 @@ Detailed handoff:
 - 2026-05-19: Phase C documentation completed. Added STOP review (`SEXNET_IPV4_PARSE_STOP_REVIEW_V1.md`), header validate gate handoff (`SEXNET_IPV4_HEADER_VALIDATE_GATE_V1.md`), checksum proof doc (`SEXNET_IPV4_CHECKSUM_PROOF_V1.md`), checksum gate handoff (`SEXNET_IPV4_CHECKSUM_GATE_V1.md`), and standalone gate `sexnet_ipv4_checksum` in daily driver script. Phase C rollup updated in `NETWORK_STACK_STATUS_ROLLUP_V1.md`. All IPv4 parse/validate/checksum runtime code pre-existed (commit c432689); Phase C adds formal gate contracts and documentation. No runtime code changes. Next: Phase D SEXNET_ICMP_ECHO_STOP_REVIEW_V1.
 
 - 2026-05-19: Phase D ICMP echo reply implementation completed. Added STOP review (`SEXNET_ICMP_ECHO_STOP_REVIEW_V1.md`), echo reply proof doc (`SEXNET_ICMP_ECHO_REPLY_PROOF_V1.md`), echo reply gate handoff (`SEXNET_ICMP_ECHO_REPLY_GATE_V1.md`), host ping observe proof doc (`SEXNET_ICMP_HOST_PING_OBSERVE_PROOF_V1.md`), host ping observe gate handoff (`SEXNET_ICMP_HOST_PING_GATE_V1.md`), and host ping observe probe script (`host_icmp_ping_observe_probe.sh`). Runtime code added in `servers/sexnet/src/main.rs`: ICMP echo request parse (type=8 code=0), ICMP checksum validation, ICMP echo reply build (type=0 code=0) with correct ICMP+IPv4+Ethernet headers, TX via descriptor 3 (TDT=4), bounded DD poll. Gates `sexnet_icmp_echo_reply` and `sexnet_icmp_host_ping_observe` added to daily driver script. Phase D rollup updated in `NETWORK_STACK_STATUS_ROLLUP_V1.md`. No kernel, sex-pdx, ABI, scheduler, browser, UDP, DNS, TCP, HTTP, or routing changes. Next: Phase E SEXNET_UDP_PARSE_STOP_REVIEW_V1.
+
+- 2026-05-19: Phase F DNS client implementation completed. Added STOP review (`SEXNET_DNS_CLIENT_STOP_REVIEW_V1.md` — PASS REVIEW, existing DNS code already proven). Added documentation proofs for DNS query build (`SEXNET_DNS_QUERY_BUILD_PROOF_V1.md`), DNS query TX (`SEXNET_DNS_QUERY_TX_PROOF_V1.md`), and DNS response parse (`SEXNET_DNS_RESPONSE_PARSE_PROOF_V1.md`). Added tiny bounded 4-entry DNS A-record cache in `kernel/src/hal/pci.rs` with `[sexnet.dns.cache.*]` markers including init (cap=4), insert (host=example.com), hit, miss, and proof done. Added cache proof doc (`SEXNET_DNS_A_RECORD_CACHE_PROOF_V1.md`) and gate handoff doc (`SEXNET_DNS_CLIENT_GATE_AND_HANDOFF_V1.md`). Four new `sexnet_dns_*` gates added to `scripts/daily_driver_master_gate.sh`: `sexnet_dns_query_build`, `sexnet_dns_query_tx`, `sexnet_dns_response_parse`, `sexnet_dns_a_record_cache`. Phase F rollup updated in `NETWORK_STACK_STATUS_ROLLUP_V1.md`. DNS query build, TX, and response parse runtime code pre-existed in `kernel/src/hal/pci.rs` (from sprint r30-r31 DNS probe lanes). Cache addition is minimal (36 bytes stack, 4 entries, deterministic replacement). No TCP, HTTP, browser networking, routing, ARP cache redesign, HAL NET_DIAG retirement, or architecture changes. Live DNS response from SLiRP 10.0.2.3:53 proven (fake=0). Next: Phase G SEXNET_TCP_STATE_MACHINE_STOP_REVIEW_V1.

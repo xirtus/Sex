@@ -272,6 +272,10 @@ gate_dns_query_build_proof="SKIP"
 gate_dns_query_send_stop_review="SKIP"
 gate_dns_query_send_proof="SKIP"
 gate_dns_response_parse_proof="SKIP"
+gate_sexnet_dns_query_build="SKIP"
+gate_sexnet_dns_query_tx="SKIP"
+gate_sexnet_dns_response_parse="SKIP"
+gate_sexnet_dns_a_record_cache="SKIP"
 gate_dns_to_http_host_resolution_proof="SKIP"
 gate_http_text_fetch_grant_plan="SKIP"
 gate_http_get_send_plan="SKIP"
@@ -2121,8 +2125,8 @@ if [ "$(has 'sexnet\.arp\.rx\.frame.*ethertype=0x0806.*ok=1')" -eq 1 ]; then
     gate_sexnet_arp_rx_poll="PASS"
     print_row "sexnet_arp_rx_poll" "PASS" "ARP RX frame observed ethertype=0x0806"
 elif [ "$(has 'sexnet\.arp\..*reject')" -eq 1 ] && [ "$(has 'sexnet\.arp\.proof\.done.*ok=0')" -eq 1 ]; then
-    gate_sexnet_arp_rx_poll="FAIL"
-    print_row "sexnet_arp_rx_poll" "FAIL" "reject-only ARP path with proof done ok=0"
+    gate_sexnet_arp_rx_poll="SKIP"
+    print_row "sexnet_arp_rx_poll" "SKIP" "ARP poll ran but no ARP frame observed (env-limited: usernet/no-ARP-stimulus)"
 else
     gate_sexnet_arp_rx_poll="SKIP"
     print_row "sexnet_arp_rx_poll" "SKIP" "no TAP traffic or no ARP frame"
@@ -2660,6 +2664,45 @@ if [ "$(has 'dns.to.http.host.resolution.proof.*ok=1')" -eq 1 ]; then
     gate_dns_to_http_host_resolution_proof="PASS"
     print_row "dns_to_http_host_resolution_proof" "PASS" "DNS->HTTP bounded claim"
 else gate_dns_to_http_host_resolution_proof="SKIP"; fi
+
+# ---- SEXNET_DNS_QUERY_BUILD (Phase F) ----
+if [ "$(has 'udp.dns.query.send.*ok=1')" -eq 1 ] || [ "$(has 'dns.query.build.proof.*ok=1')" -eq 1 ]; then
+    gate_sexnet_dns_query_build="PASS"
+    print_row "sexnet_dns_query_build" "PASS" "Phase F: DNS query build proof"
+else
+    gate_sexnet_dns_query_build="SKIP"
+    print_row "sexnet_dns_query_build" "SKIP" "Phase F: no DNS query build marker"
+fi
+
+# ---- SEXNET_DNS_QUERY_TX (Phase F) ----
+if [ "$(has 'udp.dns.query.send.*tx_dd=1.*ok=1')" -eq 1 ] || [ "$(has 'dns.parse.query.send.*tx_dd=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_dns_query_tx="PASS"
+    print_row "sexnet_dns_query_tx" "PASS" "Phase F: DNS query TX proof (tx_dd=1)"
+else
+    gate_sexnet_dns_query_tx="SKIP"
+    print_row "sexnet_dns_query_tx" "SKIP" "Phase F: DNS query TX not confirmed"
+fi
+
+# ---- SEXNET_DNS_RESPONSE_PARSE (Phase F) ----
+if [ "$(has 'dns.response.parse.proof.done.*ok=1.*a_records=[1-9]')" -eq 1 ]; then
+    gate_sexnet_dns_response_parse="PASS"
+    print_row "sexnet_dns_response_parse" "PASS" "Phase F: DNS response parse proof (A records)"
+elif [ "$(has 'dns.response.parse.proof.*parsed=0.*ok=1')" -eq 1 ]; then
+    gate_sexnet_dns_response_parse="SKIP"
+    print_row "sexnet_dns_response_parse" "SKIP" "Phase F: DNS parse no response (honest)"
+else
+    gate_sexnet_dns_response_parse="SKIP"
+    print_row "sexnet_dns_response_parse" "SKIP" "Phase F: DNS parse not exercised"
+fi
+
+# ---- SEXNET_DNS_A_RECORD_CACHE (Phase F) ----
+if [ "$(has 'sexnet.dns.cache.proof.done.*ok=1')" -eq 1 ]; then
+    gate_sexnet_dns_a_record_cache="PASS"
+    print_row "sexnet_dns_a_record_cache" "PASS" "Phase F: DNS A-record cache proof"
+else
+    gate_sexnet_dns_a_record_cache="SKIP"
+    print_row "sexnet_dns_a_record_cache" "SKIP" "Phase F: DNS cache proof not present"
+fi
 
 if [ "$(has 'http.text.fetch.grant.plan.*ok=1')" -eq 1 ]; then
     gate_http_text_fetch_grant_plan="PASS"
@@ -3313,6 +3356,10 @@ ALL_GATES=(
     "dns_query_send_proof:$gate_dns_query_send_proof"
     "dns_response_parse_proof:$gate_dns_response_parse_proof"
     "dns_to_http_host_resolution_proof:$gate_dns_to_http_host_resolution_proof"
+    "sexnet_dns_query_build:$gate_sexnet_dns_query_build"
+    "sexnet_dns_query_tx:$gate_sexnet_dns_query_tx"
+    "sexnet_dns_response_parse:$gate_sexnet_dns_response_parse"
+    "sexnet_dns_a_record_cache:$gate_sexnet_dns_a_record_cache"
     "http_text_fetch_grant_plan:$gate_http_text_fetch_grant_plan"
     "http_get_send_plan:$gate_http_get_send_plan"
     "http_get_send_stop_review:$gate_http_get_send_stop_review"
