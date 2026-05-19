@@ -220,6 +220,7 @@ gate_sexnet_arp_rx_valid="SKIP"
 gate_sexnet_arp_tx_reply="SKIP"
 gate_sexnet_arp_tx_dd="SKIP"
 gate_sexnet_arp_proof="SKIP"
+gate_sexnet_arp_reply_host_observe="SKIP"
 gate_sexnet_arp_cache_proof="SKIP"
 gate_sexnet_ipv4_header_validate="SKIP"
 gate_ipv4_packet_model_spec="SKIP"
@@ -341,7 +342,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V33"
+echo " DAILY-DRIVER MASTER GATE V34"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -2168,6 +2169,28 @@ else
     print_row "sexnet_arp_proof" "SKIP" "no TAP/no ARP proof markers"
 fi
 
+# ---- SEXNET_ARP_REPLY_HOST_OBSERVE_GATE_V1 ----
+# Host-observed ARP reply proof. Two lanes:
+#  Lane A (host probe): scripts/host_arp_reply_observe_probe.sh confirms
+#    reply_seen=1 via arping on TAP interface.
+#  Lane B (guest-side REVIEW ONLY): sexnet.arp.proof.done rx_arp=1 tx_dd=1
+#    ok=1 proves NIC transmitted ARP reply; accepted when host probe cannot
+#    run (no TAP, no root).
+if [ "$(has 'arp\.host\.observe\.proof\.done.*reply_seen=1.*ok=1')" -eq 1 ] || \
+   [ "$(has 'sexnet\.phaseA\.arp\.host_observe\.pass')" -eq 1 ]; then
+    gate_sexnet_arp_reply_host_observe="PASS"
+    print_row "sexnet_arp_reply_host_observe" "PASS" "host probe confirmed ARP reply from guest"
+elif [ "$(has 'sexnet\.arp\.proof\.done.*rx_arp=1.*tx_dd=1.*ok=1')" -eq 1 ]; then
+    gate_sexnet_arp_reply_host_observe="PASS"
+    print_row "sexnet_arp_reply_host_observe" "PASS" "REVIEW ONLY — guest-side ARP TX dd=1; host probe not run"
+elif [ "$(has 'arp\.host\.observe\.proof\.done.*reply_seen=0.*ok=0')" -eq 1 ]; then
+    gate_sexnet_arp_reply_host_observe="FAIL"
+    print_row "sexnet_arp_reply_host_observe" "FAIL" "host probe ran but found no ARP reply"
+else
+    gate_sexnet_arp_reply_host_observe="SKIP"
+    print_row "sexnet_arp_reply_host_observe" "SKIP" "no host probe result and no TAP guest-side ARP TX proof"
+fi
+
 # ---- SEXNET_ARP_CACHE_GATE_AND_HANDOFF_V1 (bounded 1-entry cache proof) ----
 if [ "$(has 'sexnet\.arp\.cache\.proof\.done.*ok=0')" -eq 1 ]; then
     gate_sexnet_arp_cache_proof="FAIL"
@@ -3077,6 +3100,7 @@ ALL_GATES=(
     "sexnet_arp_tx_reply:$gate_sexnet_arp_tx_reply"
     "sexnet_arp_tx_dd:$gate_sexnet_arp_tx_dd"
     "sexnet_arp_proof:$gate_sexnet_arp_proof"
+    "sexnet_arp_reply_host_observe:$gate_sexnet_arp_reply_host_observe"
     "sexnet_arp_cache_proof:$gate_sexnet_arp_cache_proof"
     "sexnet_ipv4_header_validate:$gate_sexnet_ipv4_header_validate"
     "ipv4_packet_model_spec:$gate_ipv4_packet_model_spec"
