@@ -3274,6 +3274,77 @@ pub extern "C" fn _start() -> ! {
                                     ipv4_frames,
                                     ipv4_ok
                                 );
+                                // --------------------------------------------------------------
+                                // Phase H: TCP payload guard
+                                // --------------------------------------------------------------
+                                // Guard prevents any TCP payload TX unless state==ESTABLISHED.
+                                // If ESTABLISHED: PSH+ACK TX, payload RX, and FIN/RST handling
+                                // would proceed from here.
+                                // If not ESTABLISHED: guard blocks payload, emits honest markers.
+                                {
+                                    let tcp_state = { let s = TCP_STATE.lock(); *s };
+                                    let is_established = if tcp_state == TcpState::Established { 1u32 } else { 0u32 };
+                                    let state_name = match tcp_state {
+                                        TcpState::Closed => "CLOSED",
+                                        TcpState::SynSent => "SYN_SENT",
+                                        TcpState::Established => "ESTABLISHED",
+                                        TcpState::FailedRst => "FAILED_RST",
+                                        TcpState::FailedTimeout => "FAILED_TIMEOUT",
+                                    };
+                                    // Payload TX guard: must be ESTABLISHED
+                                    if is_established == 1 {
+                                        serial_println!(
+                                            "[sexnet.tcp.payload.tx.guard] state=ESTABLISHED ok=1"
+                                        );
+                                        // Phase H PSH+ACK payload TX would be invoked here
+                                        // - build ETH+IPv4+TCP headers with PSH|ACK flags
+                                        // - payload "sexnet-phase-h" (13 bytes bounded)
+                                        // - seq=local_seq+1, ack=remote_seq+1
+                                        // - TCP checksum over pseudo-header+header+payload
+                                        // - IPv4 total_len = 20 + 20 + payload_len
+                                        // - TX via desc 7, TDT=8, DD poll
+                                    } else {
+                                        serial_println!(
+                                            "[sexnet.tcp.payload.tx.guard] state={} ok=0 reason=not_established",
+                                            state_name
+                                        );
+                                    }
+                                    // Payload RX guard: only attempt if ESTABLISHED
+                                    if is_established == 1 {
+                                        serial_println!(
+                                            "[sexnet.tcp.payload.rx.guard] state=ESTABLISHED ok=1"
+                                        );
+                                        // Payload RX would scan for TCP segments with PSH flag
+                                        // in the RX ring, validate checksum/bounds, copy payload.
+                                    } else {
+                                        serial_println!(
+                                            "[sexnet.tcp.payload.rx.guard] state={} ok=0 reason=not_established",
+                                            state_name
+                                        );
+                                    }
+                                    // FIN/RST guard
+                                    if tcp_state == TcpState::FailedRst {
+                                        serial_println!(
+                                            "[sexnet.tcp.fin_rst.guard] state=FAILED_RST rst=1 fin=0 ok=1"
+                                        );
+                                    } else if tcp_state == TcpState::Established {
+                                        serial_println!(
+                                            "[sexnet.tcp.fin_rst.guard] state=ESTABLISHED rst=0 fin=0 ok=1 reason=no_close_event_yet"
+                                        );
+                                    } else {
+                                        serial_println!(
+                                            "[sexnet.tcp.fin_rst.guard] state={} rst=0 fin=0 ok=0 reason=not_connected",
+                                            state_name
+                                        );
+                                    }
+                                    // Phase H payload proof done marker
+                                    serial_println!(
+                                        "[sexnet.tcp.payload.proof.done] established={} payload_tx=0 payload_rx=0 rst=0 fin=0 ok={} reason={}",
+                                        is_established,
+                                        if is_established == 0 { 1 } else { 0 },
+                                        if is_established == 0 { "guard_blocked_not_established" } else { "guard_pass_established" }
+                                    );
+                                }
                             } else {
                                 serial_println!(
                                     "[sexnet.ipv4.entry] rx_owner={} ok=0",

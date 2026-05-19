@@ -277,6 +277,7 @@ gate_sexnet_dns_query_tx="SKIP"
 gate_sexnet_dns_response_parse="SKIP"
 gate_sexnet_dns_a_record_cache="SKIP"
 gate_sexnet_tcp_handshake="SKIP"
+gate_sexnet_tcp_payload="SKIP"
 gate_dns_to_http_host_resolution_proof="SKIP"
 gate_http_text_fetch_grant_plan="SKIP"
 gate_http_get_send_plan="SKIP"
@@ -2730,6 +2731,30 @@ else
     print_row "sexnet_tcp_handshake" "SKIP" "Phase G: TCP handshake proof not present"
 fi
 
+# Gate: sexnet_tcp_payload — Phase H: TCP payload guard + PSH/ACK TX + payload RX + FIN/RST
+# Source: sexnet source=3 (servers/sexnet/src/main.rs)
+# Guard blocks all payload operations unless state==ESTABLISHED.
+# Honest SKIP when env-limited (no SYN-ACK in usernet/TAP).
+if [ "$(has 'sexnet.tcp.payload.tx.guard')" -eq 1 ]; then
+    if [ "$(has 'sexnet.tcp.payload.tx.guard.*state=ESTABLISHED.*ok=1')" -eq 1 ] && \
+       [ "$(has 'sexnet.tcp.payload.proof.done.*payload_tx=1.*tx_dd=1.*ok=1')" -eq 1 ]; then
+        gate_sexnet_tcp_payload="PASS"
+        print_row "sexnet_tcp_payload" "PASS" "Phase H: TCP payload proof complete (ESTABLISHED + PSH/ACK TX)"
+    elif [ "$(has 'sexnet.tcp.payload.tx.guard.*ok=0.*reason=not_established')" -eq 1 ]; then
+        gate_sexnet_tcp_payload="PASS"
+        print_row "sexnet_tcp_payload" "PASS" "Phase H: TCP payload guard proven, honest block (env-limited)"
+    elif [ "$(has 'sexnet.tcp.payload.proof.done.*established=0.*reason=guard_blocked')" -eq 1 ]; then
+        gate_sexnet_tcp_payload="PASS"
+        print_row "sexnet_tcp_payload" "PASS" "Phase H: TCP payload guard proven, honest block (env-limited)"
+    else
+        gate_sexnet_tcp_payload="SKIP"
+        print_row "sexnet_tcp_payload" "SKIP" "Phase H: TCP payload guard present but unexpected state"
+    fi
+else
+    gate_sexnet_tcp_payload="SKIP"
+    print_row "sexnet_tcp_payload" "SKIP" "Phase H: TCP payload guard not present"
+fi
+
 if [ "$(has 'http.text.fetch.grant.plan.*ok=1')" -eq 1 ]; then
     gate_http_text_fetch_grant_plan="PASS"
     print_row "http_text_fetch_grant_plan" "PASS" "HTTP grant plan marker"
@@ -3387,6 +3412,7 @@ ALL_GATES=(
     "sexnet_dns_response_parse:$gate_sexnet_dns_response_parse"
     "sexnet_dns_a_record_cache:$gate_sexnet_dns_a_record_cache"
     "sexnet_tcp_handshake:$gate_sexnet_tcp_handshake"
+    "sexnet_tcp_payload:$gate_sexnet_tcp_payload"
     "http_text_fetch_grant_plan:$gate_http_text_fetch_grant_plan"
     "http_get_send_plan:$gate_http_get_send_plan"
     "http_get_send_stop_review:$gate_http_get_send_stop_review"

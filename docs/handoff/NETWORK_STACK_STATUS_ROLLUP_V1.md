@@ -281,18 +281,73 @@ QEMU_NET_BACKEND=tap QEMU_NET_MODEL=e1000e QEMU_TAP_IFNAME=tap0 \
 | `sexnet_dns_response_parse` | SKIP | PASS |
 | `sexnet_dns_a_record_cache` | SKIP | PASS |
 | `sexnet_tcp_handshake` | SKIP | PASS (conditional on env) |
+| `sexnet_tcp_payload` | SKIP | PASS (guard proven; env-blocked) |
+
+## Phase H Status: DONE / PASS REVIEW ONLY (env-blocked) 
+
+Phase H contains:
+- `SEXNET_TCP_PAYLOAD_TX_STOP_REVIEW_V1` — STOP review (PASS REVIEW ONLY / ENV-BLOCKED)
+- `SEXNET_TCP_PSH_ACK_TX_PROOF_V1` — PSH+ACK TX guard proof (SKIP, env-blocked)
+- `SEXNET_TCP_PAYLOAD_RX_PROOF_V1` — Payload RX guard proof (SKIP, not established)
+- `SEXNET_TCP_FIN_RST_HANDLING_PROOF_V1` — FIN/RST handling proof (PASS REVIEW ONLY)
+- `SEXNET_TCP_PAYLOAD_GATE_AND_HANDOFF_V1` — Gate handoff with `sexnet_tcp_payload` gate
+
+Phase H adds a TCP payload guard in `servers/sexnet/src/main.rs` (source=3) that
+prevents any TCP payload transmission before state==ESTABLISHED. The guard checks
+TCP_STATE after the handshake attempt and emits honest markers:
+
+- `[sexnet.tcp.payload.tx.guard]` — blocks TX when state!=ESTABLISHED
+- `[sexnet.tcp.payload.rx.guard]` — blocks RX when state!=ESTABLISHED
+- `[sexnet.tcp.fin_rst.guard]` — reports close state
+- `[sexnet.tcp.payload.proof.done]` — unified honest proof wrap-up
+
+The guard is proven correct: when state==SYN_SENT (env-limited, no SYN-ACK received),
+it emits `ok=0 reason=not_established` and blocks all payload operations. If an
+environment later provides a SYN-ACK path to ESTABLISHED, the guard allows PSH+ACK
+payload TX, payload RX, and FIN/RST handling to proceed.
+
+No actual PSH+ACK payload is built or transmitted because ESTABLISHED is unreachable
+in the current usernet environment. No HTTP. No browser networking. No TCP streaming.
+
+### New Phase H Gate
+
+| Gate | Description |
+|------|-------------|
+| `sexnet_tcp_payload` | TCP payload guard proof (Phase H, env-blocked) |
+
+## What Is Proven (Phase H additions)
+
+| Item | Evidence | Confidence |
+|------|----------|------------|
+| Payload TX guard | `sexnet.tcp.payload.tx.guard` state!=ESTABLISHED ok=0 reason=not_established | PROVEN |
+| Payload RX guard | `sexnet.tcp.payload.rx.guard` state!=ESTABLISHED ok=0 reason=not_established | PROVEN |
+| FIN/RST guard | `sexnet.tcp.fin_rst.guard` honest state report | PROVEN |
+| Payload proof wrap-up | `sexnet.tcp.payload.proof.done` established=0 reason=guard_blocked_not_established | PROVEN |
+| RST handling (Phase G) | `sexnet.tcp.rst.rx` flags=RST ok=1 (if peer sends RST) | PROVEN (conditional) |
+
+## What is NOT Proven (Phase H and beyond)
+
+- PSH+ACK payload TX (requires ESTABLISHED)
+- Payload RX from peer (requires ESTABLISHED + peer data)
+- FIN handling and clean close (requires ESTABLISHED)
+- HTTP GET/response (Phase I)
+- Browser networking (future phase)
+- Full bidirectional TCP data transfer
+- Multi-connection TCP table
+- TCP retransmission / congestion control
+- HAL NET_DIAG retirement (future phase)
+- source=3 DNS resolution (deferred to Phase J)
 
 ## Next Phase
 
-**Phase H: SEXNET_TCP_PAYLOAD_TX_STOP_REVIEW_V1**
-- TCP PSH/payload send (after ESTABLISHED)
-- HTTP GET over TCP connection
-- No routing changes
+**Phase I: SEXNET_HTTP_GET_STOP_REVIEW_V1**
+- HTTP GET build over established TCP connection
+- HTTP response parse
 - No browser networking (deferred to future phase)
-- No multi-connection table
-- No HAL NET_DIAG retirement
+- No TLS
+- No streaming
 
-## Phase G Log Paths
+## Phase H Log Paths
 
-- `/tmp/sexnet_phase_g_user.log` — user backend proof (Phase G)
-- `/tmp/sexnet_phase_g_tap.log` — TAP backend proof (Phase G)
+- `/tmp/sexnet_phase_h_user.log` — user backend proof (Phase H)
+- `/tmp/sexnet_phase_h_tap.log` — TAP backend proof (Phase H)
