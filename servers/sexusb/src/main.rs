@@ -252,6 +252,8 @@ const OP_USB_KEYBOARD_REPORT: u64 = 0x261;
 static CAP_READY_SEXINPUT: AtomicBool = AtomicBool::new(false);
 static DEFER_EMITTED_SEXINPUT: AtomicBool = AtomicBool::new(false);
 static EDGE_SEND_EMITTED_SEXINPUT: AtomicBool = AtomicBool::new(false);
+static ROUTE_READY_EMITTED_SEXINPUT: AtomicBool = AtomicBool::new(false);
+static ROUTE_MISSING_EMITTED_SEXINPUT: AtomicBool = AtomicBool::new(false);
 static BOOTGRAPH_PROOF_SENT: AtomicBool = AtomicBool::new(false);
 static BOOTGRAPH_PROOF_MARKER_EMITTED: AtomicBool = AtomicBool::new(false);
 // Gate per-iteration ring-advance and idle-poll serial logs.
@@ -261,6 +263,9 @@ const HID_VERBOSE_RING_LOG: bool = false;
 fn send_report_to_sexinput(op: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u64> {
     if CAP_READY_SEXINPUT.load(Ordering::Relaxed) {
         return pdx_call_checked(SLOT_USB_SEXINPUT, op, arg0, arg1, arg2).map(|_| {
+            if !ROUTE_READY_EMITTED_SEXINPUT.swap(true, Ordering::Relaxed) {
+                serial_println!("[sexusb.route.sexinput.ready] slot={} ok=1", SLOT_USB_SEXINPUT);
+            }
             if !BOOTGRAPH_PROOF_MARKER_EMITTED.swap(true, Ordering::Relaxed) {
                 serial_println!("[sexusb.bootgraph.proof_report]");
             }
@@ -274,6 +279,9 @@ fn send_report_to_sexinput(op: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<b
     match pdx_call_checked(SLOT_USB_SEXINPUT, op, arg0, arg1, arg2) {
         Ok(_) => {
             CAP_READY_SEXINPUT.store(true, Ordering::Relaxed);
+            if !ROUTE_READY_EMITTED_SEXINPUT.swap(true, Ordering::Relaxed) {
+                serial_println!("[sexusb.route.sexinput.ready] slot={} ok=1", SLOT_USB_SEXINPUT);
+            }
             if !BOOTGRAPH_PROOF_MARKER_EMITTED.swap(true, Ordering::Relaxed) {
                 serial_println!("[sexusb.bootgraph.proof_report]");
             }
@@ -283,6 +291,9 @@ fn send_report_to_sexinput(op: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<b
             Ok(true)
         }
         Err(e) if e == sex_pdx::ERR_CAP_INVALID => {
+            if !ROUTE_MISSING_EMITTED_SEXINPUT.swap(true, Ordering::Relaxed) {
+                serial_println!("[sexusb.route.sexinput.missing] slot={} ok=0", SLOT_USB_SEXINPUT);
+            }
             if !DEFER_EMITTED_SEXINPUT.swap(true, Ordering::Relaxed) {
                 serial_println!("[bootgraph.edge.defer from=sexusb to=sexinput slot=9 reason=missing_cap]");
             }
@@ -352,8 +363,18 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[usb.host.discovery.start]");
     serial_println!("[usb.host.pci.scan] slot={} bar=0", SLOT_USB_HOST);
 
-    let map_va = map_xhci_bar0(MAP_BYTES);
+    let mut map_va = 0u64;
+    let mut map_attempts: u32 = 0;
+    while map_attempts < 3 {
+        map_attempts += 1;
+        map_va = map_xhci_bar0(MAP_BYTES);
+        if map_va != 0 && map_va != u64::MAX {
+            break;
+        }
+        sys_yield();
+    }
     if map_va == 0 || map_va == u64::MAX {
+        serial_println!("[sexusb.xhci.map.bad] reason=bar_zero_after_retry attempts=3 ok=0");
         serial_println!("[usb.host.controller.none] map_va={:#x}", map_va);
         serial_println!("[usb.host.discovery.done]");
         loop { sys_yield(); }
@@ -676,7 +697,9 @@ pub extern "C" fn _start() -> ! {
 
     // Consume command completion event at ev_idx.
     let mut noop_ok = false;
+    let mut enable_slot_polls: usize = 0;
     for _ in 0..POLL_BUDGET {
+        enable_slot_polls += 1;
         let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
         if (ev_d3 & 1) == (ev_dcs as u32) {
             let ev_type = (ev_d3 >> 10) & 0x3F;
@@ -780,6 +803,7 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[sexusb.xhci.enable_slot.complete.ok]");
         serial_println!("[sexusb.xhci.enable_slot.slot.ok] {}", en_slot_id);
     } else {
+        serial_println!("[sexusb.xhci.enum.timeout] phase=SLOT polls={} ok=0", enable_slot_polls);
         serial_println!("[sexusb.xhci.enable_slot.complete.bad]");
     }
 
@@ -3844,7 +3868,9 @@ pub extern "C" fn _start() -> ! {
         // Wait indefinitely: xHCI retries interrupt-IN until device sends data.
         let mut intr_ok = false;
         let mut intr_residue: u32 = 0;
-        loop {
+        let mut intr_wait_polls: usize = 0;
+        while intr_wait_polls < POLL_BUDGET {
+            intr_wait_polls += 1;
             let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
             if (ev_d3 & 1) != (ev_dcs as u32) {
                 sys_yield();
@@ -3862,9 +3888,14 @@ pub extern "C" fn _start() -> ! {
                     let d = &devices[midx];
                     if d.active && slot == d.slot_id && ep == d.intr_dci {
                         matched_idx = midx as i32;
-                        break;
-                    }
-                }
+                break;
+            }
+        }
+        if !intr_ok {
+            serial_println!("[sexusb.xhci.enum.timeout] phase=RING polls={} ok=0", intr_wait_polls);
+            sys_yield();
+            continue;
+        }
                 if SEXUSB_SLOT2_OWNERSHIP_PROOF {
                     unsafe {
                         static mut OWN_BUDGET: u32 = 64;

@@ -30,7 +30,7 @@ lazy_static! {
     pub static ref SEXT_QUEUE: RingBuffer<PageFaultEvent, 256> = RingBuffer::new();
 
     /// Global lock-free input ring buffer for Ring-3 consumption
-    pub static ref INPUT_RING: RingBuffer<u8, 256> = RingBuffer::new();
+    pub static ref INPUT_RING: RingBuffer<u8, 512> = RingBuffer::new();
 }
 
 static VECTOR_OWNERS: [AtomicU32; 256] = [const { AtomicU32::new(0) }; 256];

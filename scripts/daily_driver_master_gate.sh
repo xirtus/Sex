@@ -363,6 +363,10 @@ gate_mesh_graph_status="SKIP"
 gate_collar_grant_status="SKIP"
 gate_top_strip_hash="SKIP"
 gate_spindle_atlas="SKIP"
+gate_input_freeze_xhci_bounded="SKIP"
+gate_input_freeze_route_ready_or_missing="SKIP"
+gate_input_freeze_synthetic_click_gated="SKIP"
+gate_input_freeze_no_faults="SKIP"
 gate_faults_zero="PASS"   # innocent until proven guilty
 
 # ---- arg parse ----
@@ -391,6 +395,39 @@ echo ""
 echo "  log:     $LOG"
 echo "  lines:   $LOG_LINES"
 echo ""
+
+# ---- Input Freeze Autopilot V1 gates ----
+if [ "$(has 'sexusb\.xhci\.enum\.timeout|sexusb\.xhci\.enable_slot\.complete\.ok|sexusb\.xhci\.cmd\.noop\.complete\.ok')" -eq 1 ]; then
+    gate_input_freeze_xhci_bounded="PASS"
+    print_row "input_freeze_xhci_bounded" "PASS" "bounded xHCI wait markers present"
+else
+    gate_input_freeze_xhci_bounded="FAIL"
+    print_row "input_freeze_xhci_bounded" "FAIL" "missing xHCI bounded-wait/timeout markers"
+fi
+
+if [ "$(has 'sexusb\.route\.sexinput\.(ready|missing)')" -eq 1 ]; then
+    gate_input_freeze_route_ready_or_missing="PASS"
+    print_row "input_freeze_route_ready_or_missing" "PASS" "sexusb route state emitted"
+else
+    gate_input_freeze_route_ready_or_missing="FAIL"
+    print_row "input_freeze_route_ready_or_missing" "FAIL" "no sexusb route ready/missing marker"
+fi
+
+if [ "$(has 'sexinput\.synthetic\.click\.proof\.gated')" -eq 1 ]; then
+    gate_input_freeze_synthetic_click_gated="PASS"
+    print_row "input_freeze_synthetic_click_gated" "PASS" "synthetic click proof gating marker present"
+else
+    gate_input_freeze_synthetic_click_gated="FAIL"
+    print_row "input_freeze_synthetic_click_gated" "FAIL" "missing synthetic click proof gating marker"
+fi
+
+if [ "$(has 'fault\.isolated|faulted_task_halt|panic')" -eq 1 ]; then
+    gate_input_freeze_no_faults="FAIL"
+    print_row "input_freeze_no_faults" "FAIL" "fault/panic markers present"
+else
+    gate_input_freeze_no_faults="PASS"
+    print_row "input_freeze_no_faults" "PASS" "no fault/panic markers observed"
+fi
 
 # ---- 1. keyboard_gui ----
 # Evidence: silkbar clock ticks, silk-shell frame creation, cursor surface init.
@@ -4218,6 +4255,10 @@ ALL_GATES=(
     "collar_grant_status:$gate_collar_grant_status"
     "top_strip_hash:$gate_top_strip_hash"
     "spindle_atlas:$gate_spindle_atlas"
+    "input_freeze_xhci_bounded:$gate_input_freeze_xhci_bounded"
+    "input_freeze_route_ready_or_missing:$gate_input_freeze_route_ready_or_missing"
+    "input_freeze_synthetic_click_gated:$gate_input_freeze_synthetic_click_gated"
+    "input_freeze_no_faults:$gate_input_freeze_no_faults"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
 )

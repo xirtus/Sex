@@ -58,6 +58,7 @@ const KEYBOARD_PROOF_ENABLED: bool = option_env!("SEXOS_KEYBOARD_PROOF").is_some
 // Prevents the drag proof from wrapping and replaying endlessly every 120 ticks.
 // Also set true when a real USB mouse input arrives, cancelling remaining proofs.
 static mut SYNTHETIC_DRAG_PROOF_DONE: bool = false;
+static mut SYNTHETIC_SILKBAR_CLICK_PROOF_DONE: bool = false;
 
 #[derive(Copy, Clone)]
 struct HidPointerRawReport {
@@ -252,6 +253,9 @@ pub extern "C" fn _start() -> ! {
                 if KEYBOARD_CURSOR_ENABLED { 1 } else { 0 },
                 if KEYBOARD_CURSOR_ENABLED { "env" } else { "default" });
         }
+    }
+    if SILKBAR_CLICK_PROOF_ENABLED {
+        serial_println!("[sexinput.synthetic.click.proof.gated] ok=1");
     }
 
     unsafe {
@@ -731,7 +735,8 @@ pub extern "C" fn _start() -> ! {
         // 4. Synthetic SilkBar click proof via HID_EVENT path.
         //    Fires clicks on launcher, workspace, status chip, clock.
         //    Resets CLICK_ACTIVE before each click to avoid drag-proof interference.
-        if !SYNTHETIC_INPUT_PROOFS_DISABLED && SILKBAR_CLICK_PROOF_ENABLED {
+        if !SYNTHETIC_INPUT_PROOFS_DISABLED && SILKBAR_CLICK_PROOF_ENABLED
+            && !unsafe { SYNTHETIC_SILKBAR_CLICK_PROOF_DONE } {
             match silkbar_click_stage {
                 // Reset CLICK_ACTIVE from drag proof (stage 0 at tick 0 sets left held)
                 0 if tick == 2 => {
@@ -849,6 +854,7 @@ pub extern "C" fn _start() -> ! {
                 24 if tick == 33 => {
                     pdx_call(SLOT_SHELL, OP_HID_EVENT, 1, 0, EV_BTN);
                     silkbar_click_stage = 25;
+                    unsafe { SYNTHETIC_SILKBAR_CLICK_PROOF_DONE = true; }
                 }
                 _ => {}
             }
