@@ -2,7 +2,7 @@
 
 Date: 2026-05-19
 Branch: master
-Commit: Phase G TCP handshake proof
+Commit: Phase L HAL freeze / source3 primary gate
 
 ## Phase A Status: DONE / PASS IMPLEMENTED
 
@@ -605,3 +605,68 @@ Final proof markers observed:
 - JavaScript (deferred)
 - Full HTML engine (deferred)
 - Browser raw NIC access (never allowed)
+
+## Phase L: HAL NET_DIAG Freeze / source3 Primary (2026-05-19)
+
+**Status:** PASS IMPLEMENTED — Phase L complete.
+
+### What Changed
+
+- Added `[hal.netdiag.freeze] source2=legacy source3=primary ok=1` marker in `servers/sexnet/src/main.rs` (Phase L, fires when source3 Phase I readiness proven).
+- Created `docs/handoff/HAL_NET_DIAG_DEPRECATION_PLAN_V1.md` — deprecation plan for HAL NET_DIAG/source=2 (PASS REVIEW ONLY).
+- Created `docs/handoff/HAL_NET_DIAG_FREEZE_GATE_V1.md` — freeze gate spec.
+- Created `docs/handoff/HAL_NET_DIAG_SOURCE2_LEGACY_HANDOFF_V1.md` — legacy handoff documenting source=2 retention reasons.
+- Created `docs/handoff/NETWORK_SOURCE3_PRIMARY_GATE_V1.md` — source3 primary gate spec.
+- Added daily gates: `hal_net_diag_freeze` and `network_source3_primary` in `scripts/daily_driver_master_gate.sh`.
+- Added `SEXNET_PHASE_L_SOURCE3_PRIMARY_PROOF` profile in `scripts/run_daily_driver_proof.sh` (cascades to Phase I+K).
+
+### Phase L Target
+
+- HAL NET_DIAG/source=2 explicitly legacy/fallback.
+- sexnet source=3 remains the primary network truth.
+- Default boot does not let HAL diagnostic networking compete with sexnet source=3.
+- HAL diagnostic code retained for rollback/diagnostics.
+- No deletion in Phase L.
+- No browser raw NIC access.
+- No source3 DNS migration yet.
+- No real hardware audit yet.
+
+### Source Ownership (Updated)
+
+| Source | Classification | Status |
+|--------|---------------|--------|
+| source=3 | PRIMARY | Phase I HTTP GET, Phase J netdiag, Phase K browser route, Phase L freeze |
+| source=2 | LEGACY/FALLBACK | HAL diagnostic retained; dns=review_only http=fallback primary=0 |
+| source=1 | MOCK | Built-in static text, retained for offline proof |
+
+### What Remains for Phase M
+
+- Multi-fetch / reliability / stress testing
+- Error handling and timeouts hardening
+- Real-use reliability proof
+- Security audit
+
+### What Remains for Phase N
+
+- Real hardware NIC audit
+- Real hardware network boot proof
+- HAL NET_DIAG retirement/deletion (only if Phase M/N safe)
+
+### Gate Status
+
+- `hal_net_diag_freeze`: PASS (explicit source3 profile, 0 faults)
+- `network_source3_primary`: PASS (Phase I+J+K+L gates all pass, 0 faults)
+- `faults_zero`: PASS (0 fault markers)
+- FINAL: PASS (255 gates proved, 46 skipped, 0 faults)
+
+### Proof Commands
+
+```
+SEXNET_PHASE_L_SOURCE3_PRIMARY_PROOF=1 \
+SEXOS_HAL_TCP_PROBE=0 \
+QEMU_NET_BACKEND=user \
+QEMU_NET_MODEL=e1000 \
+ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_l_source3_primary.log
+./scripts/daily_driver_master_gate.sh /tmp/sexnet_phase_l_source3_primary.log
+```

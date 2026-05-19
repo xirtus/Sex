@@ -283,6 +283,8 @@ gate_sexnet_http_phase_i_readiness="SKIP"
 gate_sexnet_http_get_source3="SKIP"
 gate_sexnet_netdiag_source3_primary="SKIP"
 gate_browser_sexnet_remote_page="SKIP"
+gate_hal_net_diag_freeze="SKIP"
+gate_network_source3_primary="SKIP"
 gate_dns_to_http_host_resolution_proof="SKIP"
 gate_http_text_fetch_grant_plan="SKIP"
 gate_http_get_send_plan="SKIP"
@@ -2910,6 +2912,64 @@ else
     print_row "browser_sexnet_remote_page" "SKIP" "Phase K browser remote page not available (env/profile)"
 fi
 
+# Gate: hal_net_diag_freeze — Phase L HAL NET_DIAG frozen as legacy/fallback
+# PASS when source3 primary gates pass + HAL TCP probe disabled + source2 legacy-only + zero faults.
+# SKIP when explicit source3 profile not active.
+# FAIL when source2 claims primary while source3 present, or HAL TCP probe runs during source3 proof.
+if [ "$gate_sexnet_netdiag_source3_primary" = "PASS" ] && \
+   [ "$(has 'hal\.tcp\.probe\.gate.*enabled=0.*ok=1')" -eq 1 ] && \
+   [ "$(has 'hal\.netdiag\.freeze.*source2=legacy.*source3=primary.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet\.netdiag\.source3\.body\.proof\.done.*source=3.*body_len=13.*ok=1')" -eq 1 ] && \
+   [ "$gate_faults_zero" = "PASS" ]; then
+    gate_hal_net_diag_freeze="PASS"
+    print_row "hal_net_diag_freeze" "PASS" "Phase L HAL NET_DIAG frozen as legacy; source3 primary"
+elif [ "$gate_sexnet_netdiag_source3_primary" = "SKIP" ] && \
+     [ "$(has 'hal\.tcp\.probe\.gate.*enabled=0')" -eq 0 ]; then
+    gate_hal_net_diag_freeze="SKIP"
+    print_row "hal_net_diag_freeze" "SKIP" "Phase L HAL freeze not active (source3 profile not enabled)"
+elif [ "$(has 'hal\.netdiag\.freeze.*source2=legacy.*source3=primary.*ok=1')" -eq 1 ] && \
+     [ "$(has 'hal\.tcp\.probe\.gate.*enabled=1')" -eq 1 ]; then
+    gate_hal_net_diag_freeze="FAIL"
+    print_row "hal_net_diag_freeze" "FAIL" "hal.netdiag.freeze marker present but HAL TCP probe still enabled"
+elif [ "$(has 'sexnet\.netdiag\.source3\.status.*primary=1.*ok=1')" -eq 1 ] && \
+     [ "$(has 'hal\.tcp\.probe\.gate.*enabled=0')" -eq 0 ]; then
+    gate_hal_net_diag_freeze="FAIL"
+    print_row "hal_net_diag_freeze" "FAIL" "source3 claims primary but HAL TCP probe gate absent"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_hal_net_diag_freeze="FAIL"
+    print_row "hal_net_diag_freeze" "FAIL" "Fault scan failed"
+else
+    gate_hal_net_diag_freeze="SKIP"
+    print_row "hal_net_diag_freeze" "SKIP" "Phase L HAL freeze not available (env/profile)"
+fi
+
+# Gate: network_source3_primary — Phase L source=3 primary network truth
+# PASS when Phase I+J+K source3 proofs all pass + HAL frozen as legacy + zero faults.
+# SKIP when explicit source3 profile not active.
+# FAIL when source2 counted as primary while source3 present.
+if [ "$gate_sexnet_http_get_source3" = "PASS" ] && \
+   [ "$gate_sexnet_netdiag_source3_primary" = "PASS" ] && \
+   [ "$gate_browser_sexnet_remote_page" = "PASS" ] && \
+   [ "$gate_hal_net_diag_freeze" = "PASS" ] && \
+   [ "$gate_faults_zero" = "PASS" ]; then
+    gate_network_source3_primary="PASS"
+    print_row "network_source3_primary" "PASS" "Phase L source=3 sole primary network truth proven"
+elif [ "$gate_hal_net_diag_freeze" = "FAIL" ]; then
+    gate_network_source3_primary="FAIL"
+    print_row "network_source3_primary" "FAIL" "HAL freeze failed — source2 may still compete with source3"
+elif [ "$gate_sexnet_http_get_source3" = "SKIP" ] && \
+     [ "$gate_sexnet_netdiag_source3_primary" = "SKIP" ] && \
+     [ "$gate_browser_sexnet_remote_page" = "SKIP" ]; then
+    gate_network_source3_primary="SKIP"
+    print_row "network_source3_primary" "SKIP" "Phase L source3 primary not available (env/profile)"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_network_source3_primary="FAIL"
+    print_row "network_source3_primary" "FAIL" "Fault scan failed"
+else
+    gate_network_source3_primary="SKIP"
+    print_row "network_source3_primary" "SKIP" "Phase L source3 primary not available (env/profile)"
+fi
+
 if [ "$(has 'http.text.fetch.grant.plan.*ok=1')" -eq 1 ]; then
     gate_http_text_fetch_grant_plan="PASS"
     print_row "http_text_fetch_grant_plan" "PASS" "HTTP grant plan marker"
@@ -3573,6 +3633,8 @@ ALL_GATES=(
     "sexnet_http_get_source3:$gate_sexnet_http_get_source3"
     "sexnet_netdiag_source3_primary:$gate_sexnet_netdiag_source3_primary"
     "browser_sexnet_remote_page:$gate_browser_sexnet_remote_page"
+    "hal_net_diag_freeze:$gate_hal_net_diag_freeze"
+    "network_source3_primary:$gate_network_source3_primary"
     "http_text_fetch_grant_plan:$gate_http_text_fetch_grant_plan"
     "http_get_send_plan:$gate_http_get_send_plan"
     "http_get_send_stop_review:$gate_http_get_send_stop_review"

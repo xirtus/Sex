@@ -1910,6 +1910,18 @@ Added to `scripts/daily_driver_master_gate.sh`:
 - source=3 DNS resolution migration
 - Multi-fetch / reliability (Phase M)
 
+### Phase L (2026-05-19): HAL Freeze / source3 Primary Gate
+
+- HAL NET_DIAG/source=2 frozen as legacy/fallback
+- source=3 confirmed sole primary network truth
+- Gates: hal_net_diag_freeze, network_source3_primary
+- Docs: HAL_NET_DIAG_DEPRECATION_PLAN_V1, HAL_NET_DIAG_FREEZE_GATE_V1,
+  HAL_NET_DIAG_SOURCE2_LEGACY_HANDOFF_V1, NETWORK_SOURCE3_PRIMARY_GATE_V1
+- HAL code retained, no deletion
+- DNS source3 deferred
+- Real PDX browser→sexnet live fetch deferred
+- No kernel/ABI/sex-pdx changes
+
 ### What Remains for Phase M
 
 - Stress testing
@@ -1918,4 +1930,4 @@ Added to `scripts/daily_driver_master_gate.sh`:
 - Security audit
 
 Next:
-Phase L -- real PDX route, HAL retirement, source=3 DNS.
+Phase M -- reliability, stress, multi-fetch hardening.

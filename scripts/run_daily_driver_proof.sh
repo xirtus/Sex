@@ -255,6 +255,14 @@ export SEXOS_E1000_RING_ALLOC_PROOF=1
 export SEXOS_DMA_UC_ALIAS_PROOF=1
 export SEXOS_LINEN_PERSIST_READBACK_PROOF=1
 
+# ── Phase L: source=3 primary network truth proof ──
+# Must come FIRST: when caller requests Phase L, it cascades to Phase I+K.
+SEXNET_PHASE_L_SOURCE3_PRIMARY_PROOF="${SEXNET_PHASE_L_SOURCE3_PRIMARY_PROOF:-0}"
+if [ "$SEXNET_PHASE_L_SOURCE3_PRIMARY_PROOF" = "1" ]; then
+    export SEXNET_PHASE_I_HTTP_PROOF=1
+    export SEXNET_PHASE_K_BROWSER_PROOF=1
+fi
+
 # ── Sexnet Phase I source=3 explicit profile trigger ──
 # Keep daily default unchanged: only enable this widened runtime window when
 # caller explicitly requests the Phase I proof lane.
@@ -312,6 +320,7 @@ echo "  nic:     ${QEMU_NET_MODEL} (backend=${QEMU_NET_BACKEND} usernet=${ENABLE
 echo "  hostfwd: ${QEMU_USERNET_HOSTFWD:-none}"
 echo "  phaseI:  ${SEXNET_PHASE_I_HTTP_PROOF}"
 echo "  phaseK:  ${SEXNET_PHASE_K_BROWSER_PROOF}"
+echo "  phaseL:  ${SEXNET_PHASE_L_SOURCE3_PRIMARY_PROOF}"
 echo ""
 
 # ---- 1. BUILD ----

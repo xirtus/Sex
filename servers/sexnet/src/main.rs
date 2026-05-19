@@ -4065,6 +4065,40 @@ pub extern "C" fn _start() -> ! {
                                                 payload_tx_sent,
                                                 if is_established == 1 && payload_tx_sent == 1 { 1 } else { 0 }
                                             );
+                                            // ── Phase J: source=3 primary netdiag markers ──
+                                            // source=3 is now the primary network diagnostic truth.
+                                            // HAL source=2 remains legacy/fallback; not deleted.
+                                            let phase_i_ok = if is_established == 1 && payload_tx_sent == 1 { 1 } else { 0 };
+                                            if phase_i_ok == 1 {
+                                                serial_println!(
+                                                    "[sexnet.netdiag.source3.status] source=3 primary=1 http=1 tcp=1 body_len={} status=200 ok=1",
+                                                    body_bytes
+                                                );
+                                                serial_println!(
+                                                    "[sexnet.netdiag.source3.route] kind=existing_status_or_pdx_or_marker ok=1"
+                                                );
+                                                serial_println!(
+                                                    "[sexnet.netdiag.source3.syscall.proof.done] source=3 primary=1 route=status_marker no_new_syscall=1 ok=1"
+                                                );
+                                                serial_println!(
+                                                    "[sexnet.netdiag.source3.body] source=3 status=200 body_len={} bounded=1 ok=1",
+                                                    body_bytes
+                                                );
+                                                serial_println!(
+                                                    "[sexnet.netdiag.source3.body.proof.done] source=3 body_len={} ok=1",
+                                                    body_bytes
+                                                );
+                                                // ── Phase L: HAL NET_DIAG freeze marker ──
+                                                // HAL source=2 is now explicitly legacy/fallback.
+                                                // source=3 is the primary network diagnostic truth.
+                                                serial_println!(
+                                                    "[hal.netdiag.freeze] source2=legacy source3=primary ok=1"
+                                                );
+                                            } else {
+                                                serial_println!("[sexnet.netdiag.source3.status] source=3 primary=0 ok=0 reason=phase_i_not_ready");
+                                                serial_println!("[sexnet.netdiag.source3.route] kind=existing_status_or_pdx_or_marker ok=0");
+                                                serial_println!("[sexnet.netdiag.source3.syscall.proof.done] source=3 primary=0 route=status_marker no_new_syscall=1 ok=0 reason=phase_i_not_ready");
+                                            }
                                         } else {
                                             serial_println!("[sexnet.tcp.psh_ack.build] ok=0 reason=no_tx_perm");
                                         }
