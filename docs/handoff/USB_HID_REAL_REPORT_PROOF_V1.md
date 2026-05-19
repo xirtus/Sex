@@ -48,3 +48,32 @@ Status: SKIP
 - Runtime safety (fault-free): PASS
 - Real/QMP-injected nonzero HID report proof: not provable in this host lane due to QMP socket permission block.
 - Final classification for this mission run: SKIP.
+
+## 2026-05-20 host update (USB_QMP_INPUT_LANE_FIX_V1)
+- QMP socket blocker in host launcher fixed.
+- `dev.sh` no longer binds fixed `/tmp/sexos-qmp.sock` when QMP is enabled.
+- Per-run socket now used (`/tmp/sexos-qmp-${USER:-sexos}-$$.sock`) with pre/post cleanup and trap cleanup.
+- `scripts/qemu_harness.sh` supports `--qmp PATH` and forwards `SEXOS_QMP_SOCK` + `SEXOS_QEMU_QMP=1`.
+- `scripts/qmp_input_probe.py` now accepts socket from argv or `SEXOS_QMP_SOCK`.
+
+### Verified host behavior
+- QMP bind permission error for fixed `/tmp/sexos-qmp.sock` is no longer on active path.
+- Harness run with explicit per-run socket showed `QMP monitor: /tmp/sexos-qmp-test-<pid>.sock`.
+- Socket cleanup verified after exit.
+
+### Next proof command
+```bash
+sock="/tmp/sexos-qmp-${USER:-sexos}-$$.sock"
+log="/tmp/usb_hid_real_report_proof_v1_qmp.log"
+
+SEXUSB_QEMU_DEVICE=mouse \
+SEXOS_QMP_SOCK="$sock" \
+./scripts/qemu_harness.sh --timeout 30 --qmp "$sock" > "$log" 2>&1 &
+qpid=$!
+
+for _ in $(seq 1 40); do [ -S "$sock" ] && break; sleep 0.25; done
+SEXOS_QMP_SOCK="$sock" ./scripts/qmp_input_probe.py "$sock" w a s d || true
+
+wait "$qpid" || true
+rg -n "sexusb\.hid\.report\.nonzero|sexusb\.hid\.report\.timeout|sexusb\.route\.sexinput\.ready" "$log"
+```

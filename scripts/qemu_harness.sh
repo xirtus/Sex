@@ -23,6 +23,7 @@ DO_MARKERS=false
 PRINT_CMD=false
 DISPLAY="${SEXOS_QEMU_DISPLAY:-none}"
 USB_DEV="${SEXUSB_QEMU_DEVICE:-tablet}"
+QMP_SOCK="${SEXOS_QMP_SOCK:-}"
 
 # ---- arg parse --------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -31,6 +32,7 @@ while [[ $# -gt 0 ]]; do
         -m|--markers)  DO_MARKERS=true; shift ;;
         -p|--print-cmd) PRINT_CMD=true; shift ;;
         --display)     DISPLAY="$2";  shift 2 ;;
+        --qmp)         QMP_SOCK="$2"; shift 2 ;;
         -h|--help)
             cat <<'HELP'
 Usage: scripts/qemu_harness.sh [OPTIONS]
@@ -42,6 +44,7 @@ Options:
   -m, --markers        Extract diagnostic markers from serial log
   -p, --print-cmd      Print canonical command and exit
   --display MODE       Display mode: none|sdl|gtk (default: none)
+  --qmp PATH           Enable QMP and bind PATH as unix socket
   -h, --help           Show this message
 
 Environment variables (passed to dev.sh):
@@ -78,6 +81,10 @@ fi
 # ---- export canonical env for dev.sh ----------------------------------------
 export SEXOS_QEMU_DISPLAY="$DISPLAY"
 export SEXUSB_QEMU_DEVICE="$USB_DEV"
+if [ -n "$QMP_SOCK" ]; then
+    export SEXOS_QEMU_QMP=1
+    export SEXOS_QMP_SOCK="$QMP_SOCK"
+fi
 
 # ---- print-only mode --------------------------------------------------------
 if [ "$PRINT_CMD" = true ]; then
@@ -117,6 +124,9 @@ echo " ISO:      $ISO"
 echo " Size:     $(du -h "$ISO" | cut -f1)"
 echo " USB dev:  $USB_DEV"
 echo " Display:  $DISPLAY"
+if [ -n "$QMP_SOCK" ]; then
+    echo " QMP sock: $QMP_SOCK"
+fi
 echo " Log:      $LOG_FILE"
 [ -n "$TIMEOUT" ] && echo " Timeout:  ${TIMEOUT}s"
 echo "--------------------------------------------"

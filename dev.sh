@@ -46,9 +46,22 @@ fi
 
 # QMP monitor socket for deterministic input injection (dev infra only).
 QMP_ARG=""
+QMP_SOCK=""
+cleanup_qmp_sock() {
+    if [ -n "${QMP_SOCK:-}" ] && [ -e "$QMP_SOCK" ]; then
+        rm -f "$QMP_SOCK"
+    fi
+}
 if [ -n "$SEXOS_QEMU_INPUT_INJECT" ] || [ -n "$SEXOS_QEMU_QMP" ]; then
-    QMP_ARG="-qmp unix:/tmp/sexos-qmp.sock,server=on,wait=off"
-    echo "QMP monitor: /tmp/sexos-qmp.sock"
+    if [ -n "${SEXOS_QMP_SOCK:-}" ]; then
+        QMP_SOCK="$SEXOS_QMP_SOCK"
+    else
+        QMP_SOCK="/tmp/sexos-qmp-${USER:-sexos}-$$.sock"
+    fi
+    cleanup_qmp_sock
+    trap cleanup_qmp_sock EXIT INT TERM
+    QMP_ARG="-qmp unix:${QMP_SOCK},server=on,wait=off"
+    echo "QMP monitor: $QMP_SOCK"
 fi
 
 # Optional: disable QEMU i8042/PS2 controller so host keyboard events route to USB HID.
@@ -85,6 +98,9 @@ if [ "$PRINT_CMD_ONLY" = "1" ]; then
     echo "XHCI trace:  ${SEXUSB_XHCI_TRACE:-0}"
     echo "QMP inject:  ${SEXOS_QEMU_INPUT_INJECT:-0}"
     echo "QMP:         ${SEXOS_QEMU_QMP:-0}"
+    if [ -n "$QMP_SOCK" ]; then
+        echo "QMP sock:    $QMP_SOCK"
+    fi
     echo ""
     echo "=== Single-line command ==="
     echo "$QEMU_BIN ${QEMU_ARGS[*]}"
@@ -120,6 +136,7 @@ case "$CMD" in
     echo "  SEXOS_QEMU_I8042=off              disable i8042/PS2 controller (USB HID input)"
     echo "  SEXOS_QEMU_QMP=1                  enable QMP socket (for deterministic input injection)"
     echo "  SEXOS_QEMU_INPUT_INJECT=1         alias for SEXOS_QEMU_QMP=1"
+    echo "  SEXOS_QMP_SOCK=/tmp/path.sock     explicit QMP socket path (default: /tmp/sexos-qmp-\${USER:-sexos}-\$\$.sock)"
     echo "  SEXUSB_XHCI_TRACE=1              enable xHCI trace events"
     echo "  QEMU_PRINT_CMD=1                 print argv and exit"
     exit 1

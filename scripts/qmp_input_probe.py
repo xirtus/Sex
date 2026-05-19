@@ -4,7 +4,8 @@ Deterministic QMP input injector for SexOS dev proofs.
 Connects to QEMU QMP socket, injects keyboard events via input-send-event.
 
 Usage:
-  ./scripts/qmp_input_probe.py /tmp/sexos-qmp.sock [key1 key2 ...]
+  ./scripts/qmp_input_probe.py [/path/to/qmp.sock] [key1 key2 ...]
+  SEXOS_QMP_SOCK=/path/to/qmp.sock ./scripts/qmp_input_probe.py [key1 key2 ...]
 
 Default keys: w a s d Up Down Left Right
 Each key is pressed and released with a short delay.
@@ -18,8 +19,16 @@ import time
 import socket
 import os
 
-QMP_SOCK = sys.argv[1] if len(sys.argv) > 1 else "/tmp/sexos-qmp.sock"
-KEYS = sys.argv[2:] if len(sys.argv) > 2 else ["w", "a", "s", "d", "up", "down", "left", "right"]
+DEFAULT_QMP_SOCK = "/tmp/sexos-qmp.sock"
+argv = sys.argv[1:]
+if argv and argv[0].startswith("/"):
+    qmp_sock = argv[0]
+    keys = argv[1:]
+else:
+    qmp_sock = os.environ.get("SEXOS_QMP_SOCK", DEFAULT_QMP_SOCK)
+    keys = argv
+QMP_SOCK = qmp_sock
+KEYS = keys if keys else ["w", "a", "s", "d", "up", "down", "left", "right"]
 DELAY = 0.05  # seconds between events
 
 
