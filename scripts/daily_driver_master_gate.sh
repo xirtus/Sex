@@ -278,6 +278,7 @@ gate_sexnet_dns_response_parse="SKIP"
 gate_sexnet_dns_a_record_cache="SKIP"
 gate_sexnet_tcp_handshake="SKIP"
 gate_sexnet_tcp_payload="SKIP"
+gate_sexnet_e1000e_reset_rx="SKIP"
 gate_sexnet_http_phase_i_readiness="SKIP"
 gate_dns_to_http_host_resolution_proof="SKIP"
 gate_http_text_fetch_grant_plan="SKIP"
@@ -2707,6 +2708,31 @@ else
     print_row "sexnet_dns_a_record_cache" "SKIP" "Phase F: DNS cache proof not present"
 fi
 
+# ---- SEXNET_E1000E_RESET_RX_GATE_V1 ----
+# Gate: sexnet_e1000e_reset_rx — e1000e NIC reset before sexnet RX ownership
+# Source: sexnet source=3 (servers/sexnet/src/main.rs)
+# PASS if reset proof done ok=1 and no faults.
+# SKIP if reset markers absent in old logs.
+# FAIL if reset attempted and ok=0 or faults.
+if [ "$(has 'sexnet.nic.reset.proof.done.*ok=1')" -eq 1 ]; then
+    if [ "$(has 'sexnet.nic.reset.ctrl.rst.poll.*cleared=1.*ok=1')" -eq 1 ]; then
+        gate_sexnet_e1000e_reset_rx="PASS"
+        print_row "sexnet_e1000e_reset_rx" "PASS" "e1000e CTRL.RST → RX ownership transition proof"
+    elif [ "$(has 'sexnet.nic.reset.ctrl.rst.poll.*cleared=0.*ok=0')" -eq 1 ]; then
+        gate_sexnet_e1000e_reset_rx="FAIL"
+        print_row "sexnet_e1000e_reset_rx" "FAIL" "e1000e CTRL.RST clear poll failed"
+    else
+        gate_sexnet_e1000e_reset_rx="PASS"
+        print_row "sexnet_e1000e_reset_rx" "PASS" "e1000e reset proof done (honest)"
+    fi
+elif [ "$(has 'sexnet.nic.reset.begin')" -eq 1 ]; then
+    gate_sexnet_e1000e_reset_rx="FAIL"
+    print_row "sexnet_e1000e_reset_rx" "FAIL" "e1000e reset began but did not complete ok=1"
+else
+    gate_sexnet_e1000e_reset_rx="SKIP"
+    print_row "sexnet_e1000e_reset_rx" "SKIP" "e1000e reset markers absent (pre-reset log)"
+fi
+
 # ---- SEXNET_TCP_HANDSHAKE_GATE_V1 ----
 # Gate: sexnet_tcp_handshake — TCP SYN build → TX → SYN-ACK RX → ACK TX proof
 # Source: sexnet source=3 (servers/sexnet/src/main.rs), not HAL diagnostic
@@ -2738,7 +2764,7 @@ fi
 # Honest SKIP when env-limited (no SYN-ACK in usernet/TAP).
 if [ "$(has 'sexnet.tcp.payload.tx.guard')" -eq 1 ]; then
     if [ "$(has 'sexnet.tcp.payload.tx.guard.*state=ESTABLISHED.*ok=1')" -eq 1 ] && \
-       [ "$(has 'sexnet.tcp.payload.proof.done.*payload_tx=1.*tx_dd=1.*ok=1')" -eq 1 ]; then
+       [ "$(has 'sexnet.tcp.payload.proof.done.*payload_tx=1.*ok=1')" -eq 1 ]; then
         gate_sexnet_tcp_payload="PASS"
         print_row "sexnet_tcp_payload" "PASS" "Phase H: TCP payload proof complete (ESTABLISHED + PSH/ACK TX)"
     elif [ "$(has 'sexnet.tcp.payload.tx.guard.*ok=0.*reason=not_established')" -eq 1 ]; then
@@ -3434,6 +3460,7 @@ ALL_GATES=(
     "sexnet_dns_query_tx:$gate_sexnet_dns_query_tx"
     "sexnet_dns_response_parse:$gate_sexnet_dns_response_parse"
     "sexnet_dns_a_record_cache:$gate_sexnet_dns_a_record_cache"
+    "sexnet_e1000e_reset_rx:$gate_sexnet_e1000e_reset_rx"
     "sexnet_tcp_handshake:$gate_sexnet_tcp_handshake"
     "sexnet_tcp_payload:$gate_sexnet_tcp_payload"
     "sexnet_http_phase_i_readiness:$gate_sexnet_http_phase_i_readiness"

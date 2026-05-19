@@ -2039,15 +2039,29 @@ pub extern "C" fn _start() -> ! {
                                         (rah & 0xFF) as u8,
                                         ((rah >> 8) & 0xFF) as u8,
                                     ];
-                                    // Ethernet header: src=NIC MAC, dst=broadcast
+                                    // Ethernet header: src=NIC MAC, dst=gateway MAC
+                                    // Prefer ARP cache. For QEMU usernet/SLiRP gateway
+                                    // 10.0.2.2, use known SLiRP MAC 52:55:0A:00:02:02.
+                                    // Broadcast only as last resort for unknown destinations.
+                                    let syn_rip = unsafe { TCP_REMOTE_IP };
+                                    let dst_mac: [u8; 6] = if unsafe { ARP_CACHE_VALID } == 1 {
+                                        unsafe { ARP_CACHE_MAC }
+                                    } else if syn_rip[0] == 10 && syn_rip[1] == 0 && syn_rip[2] == 2 && syn_rip[3] == 2 {
+                                        serial_println!(
+                                            "[sexnet.tcp.syn.mac.resolve] mode=slirp_static dst_ip=10.0.2.2 mac=52:55:0A:00:02:02 ok=1"
+                                        );
+                                        [0x52, 0x55, 0x0A, 0x00, 0x02, 0x02]
+                                    } else {
+                                        [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+                                    };
                                     unsafe {
-                                        // dst MAC: broadcast
-                                        core::ptr::write_volatile((tx_va + 0) as *mut u8, 0xFF);
-                                        core::ptr::write_volatile((tx_va + 1) as *mut u8, 0xFF);
-                                        core::ptr::write_volatile((tx_va + 2) as *mut u8, 0xFF);
-                                        core::ptr::write_volatile((tx_va + 3) as *mut u8, 0xFF);
-                                        core::ptr::write_volatile((tx_va + 4) as *mut u8, 0xFF);
-                                        core::ptr::write_volatile((tx_va + 5) as *mut u8, 0xFF);
+                                        // dst MAC: gateway or broadcast
+                                        core::ptr::write_volatile((tx_va + 0) as *mut u8, dst_mac[0]);
+                                        core::ptr::write_volatile((tx_va + 1) as *mut u8, dst_mac[1]);
+                                        core::ptr::write_volatile((tx_va + 2) as *mut u8, dst_mac[2]);
+                                        core::ptr::write_volatile((tx_va + 3) as *mut u8, dst_mac[3]);
+                                        core::ptr::write_volatile((tx_va + 4) as *mut u8, dst_mac[4]);
+                                        core::ptr::write_volatile((tx_va + 5) as *mut u8, dst_mac[5]);
                                         // src MAC: NIC
                                         core::ptr::write_volatile((tx_va + 6) as *mut u8, nic_mac[0]);
                                         core::ptr::write_volatile((tx_va + 7) as *mut u8, nic_mac[1]);
@@ -3417,9 +3431,15 @@ pub extern "C" fn _start() -> ! {
                                                 (rah & 0xFF) as u8,
                                                 ((rah >> 8) & 0xFF) as u8,
                                             ];
-                                            // Gateway MAC: prefer ARP cache, fallback broadcast
+                                            // Gateway MAC: prefer ARP cache, then SLiRP static for
+                                            // QEMU usernet (10.0.2.2 → 52:55:0A:00:02:02), broadcast last.
+                                            let payload_rip = unsafe { TCP_REMOTE_IP };
                                             let gw_mac: [u8; 6] = if unsafe { ARP_CACHE_VALID } == 1 {
                                                 unsafe { ARP_CACHE_MAC }
+                                            } else if payload_rip[0] == 10 && payload_rip[1] == 0
+                                                && payload_rip[2] == 2 && payload_rip[3] == 2
+                                            {
+                                                [0x52, 0x55, 0x0A, 0x00, 0x02, 0x02]
                                             } else {
                                                 [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
                                             };
