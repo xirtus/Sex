@@ -291,6 +291,11 @@ gate_sexnet_http_retry_policy="SKIP"
 gate_browser_remote_render_stability="SKIP"
 gate_network_source3_long_run="SKIP"
 gate_network_reliability="SKIP"
+gate_sexnet_network_stack_final_rollup="SKIP"
+gate_sexnet_internet_http_final="SKIP"
+gate_browser_real_webpage_final="SKIP"
+gate_network_fault_containment_final="SKIP"
+gate_network_100_percent="SKIP"
 gate_dns_to_http_host_resolution_proof="SKIP"
 gate_http_text_fetch_grant_plan="SKIP"
 gate_http_get_send_plan="SKIP"
@@ -3196,6 +3201,145 @@ else
     print_row "phase_n_real_hw_audit" "FAIL" "Phase N: audit incomplete or QEMU regression failed"
 fi
 
+
+	# ══════════════════════════════════════════════════════════════════
+	# Phase O gates: Final Network 100% (Tasks 73-77)
+	# ══════════════════════════════════════════════════════════════════
+
+
+	# Gate 74: sexnet_internet_http_final — final internet HTTP gate
+	if [ "$gate_sexnet_http_get_source3" = "PASS" ] && \
+	   [ "$gate_sexnet_netdiag_source3_primary" = "PASS" ] && \
+	   [ "$gate_network_source3_primary" = "PASS" ] && \
+	   [ "$gate_network_reliability" = "PASS" ] && \
+	   [ "$(has 'sexnet.http.status.proof.done.*status=200')" -eq 1 ] && \
+	   [ "$(has 'sexnet.http.body.proof.done.*bytes=[1-9]')" -eq 1 ] && \
+	   [ "$gate_faults_zero" = "PASS" ]; then
+	    gate_sexnet_internet_http_final="PASS"
+	    print_row "sexnet_internet_http_final" "PASS" "Phase O: internet HTTP final — source3 full path proven status=200 body>0"
+	elif [ "$gate_sexnet_http_get_source3" = "FAIL" ]; then
+	    gate_sexnet_internet_http_final="FAIL"
+	    print_row "sexnet_internet_http_final" "FAIL" "Phase O: source3 HTTP GET failed"
+	elif [ "$gate_faults_zero" != "PASS" ]; then
+	    gate_sexnet_internet_http_final="FAIL"
+	    print_row "sexnet_internet_http_final" "FAIL" "Phase O: faults detected"
+	elif [ "$gate_sexnet_http_get_source3" = "SKIP" ] && \
+	     [ "$gate_sexnet_netdiag_source3_primary" = "SKIP" ] && \
+	     [ "$gate_network_source3_primary" = "SKIP" ] && \
+	     [ "$gate_network_reliability" = "SKIP" ]; then
+	    gate_sexnet_internet_http_final="SKIP"
+	    print_row "sexnet_internet_http_final" "SKIP" "Phase O: source3 profile not enabled or HTTP peer absent"
+	else
+	    gate_sexnet_internet_http_final="FAIL"
+	    print_row "sexnet_internet_http_final" "FAIL" "Phase O: source3 HTTP path incomplete"
+	fi
+
+	# Gate 75: browser_real_webpage_final — final browser real webpage gate
+	if [ "$gate_browser_sexnet_remote_page" = "PASS" ] && \
+	   [ "$(has 'browser.sexnet.body.render.proof.done.*source=3')" -eq 1 ] && \
+	   [ "$(has 'browser.sexnet.status.proof.done.*source=3.*ok=1')" -eq 1 ] && \
+	   [ "$(has 'browser.raw.nic')" -eq 0 ] && \
+	   [ "$gate_faults_zero" = "PASS" ]; then
+	    gate_browser_real_webpage_final="PASS"
+	    print_row "browser_real_webpage_final" "PASS" "Phase O: browser real webpage final — source3 body render proven raw NIC denied"
+	elif [ "$gate_browser_sexnet_remote_page" = "FAIL" ]; then
+	    gate_browser_real_webpage_final="FAIL"
+	    print_row "browser_real_webpage_final" "FAIL" "Phase O: browser remote page source3 failed"
+	elif [ "$(has 'browser.raw.nic')" -eq 1 ]; then
+	    gate_browser_real_webpage_final="FAIL"
+	    print_row "browser_real_webpage_final" "FAIL" "Phase O: browser raw NIC detected — forbidden"
+	elif [ "$gate_faults_zero" != "PASS" ]; then
+	    gate_browser_real_webpage_final="FAIL"
+	    print_row "browser_real_webpage_final" "FAIL" "Phase O: faults detected"
+	elif [ "$gate_browser_sexnet_remote_page" = "SKIP" ]; then
+	    gate_browser_real_webpage_final="SKIP"
+	    print_row "browser_real_webpage_final" "SKIP" "Phase O: browser source3 profile not enabled"
+	else
+	    gate_browser_real_webpage_final="FAIL"
+	    print_row "browser_real_webpage_final" "FAIL" "Phase O: browser source3 path incomplete"
+	fi
+
+	# Gate 76: network_fault_containment_final — final fault containment gate
+	if [ "$gate_faults_zero" = "PASS" ] && \
+	   [ "$gate_hal_net_diag_freeze" = "PASS" ] && \
+	   [ "$gate_network_source3_primary" = "PASS" ] && \
+	   [ "$gate_real_hw_rx_tx_stop_review" = "SKIP" ] && \
+	   [ "$(has 'browser.raw.nic')" -eq 0 ] && \
+	   [ "$gate_sexnet_http_retry_policy" = "PASS" ]; then
+	    gate_network_fault_containment_final="PASS"
+	    print_row "network_fault_containment_final" "PASS" "Phase O: fault containment final — all boundaries enforced zero faults"
+	elif [ "$gate_faults_zero" != "PASS" ]; then
+	    gate_network_fault_containment_final="FAIL"
+	    print_row "network_fault_containment_final" "FAIL" "Phase O: faults detected"
+	elif [ "$gate_hal_net_diag_freeze" = "FAIL" ]; then
+	    gate_network_fault_containment_final="FAIL"
+	    print_row "network_fault_containment_final" "FAIL" "Phase O: HAL source2 not frozen"
+	elif [ "$(has 'browser.raw.nic')" -eq 1 ]; then
+	    gate_network_fault_containment_final="FAIL"
+	    print_row "network_fault_containment_final" "FAIL" "Phase O: browser raw NIC detected"
+	elif [ "$gate_real_hw_rx_tx_stop_review" != "SKIP" ] && [ "$gate_real_hw_rx_tx_stop_review" != "PASS" ]; then
+	    gate_network_fault_containment_final="FAIL"
+	    print_row "network_fault_containment_final" "FAIL" "Phase O: real HW safety boundary breach"
+	elif [ "$gate_hal_net_diag_freeze" = "SKIP" ] && \
+	     [ "$gate_network_source3_primary" = "SKIP" ]; then
+	    gate_network_fault_containment_final="SKIP"
+	    print_row "network_fault_containment_final" "SKIP" "Phase O: fault containment profile not enabled"
+	else
+	    gate_network_fault_containment_final="FAIL"
+	    print_row "network_fault_containment_final" "FAIL" "Phase O: fault containment boundary incomplete"
+	fi
+
+
+	# Gate 73: sexnet_network_stack_final_rollup — final rollup (moved after 74-76)
+	# PASS when Phase O runtime sub-gates (74+75+76) all PASS, or marker present.
+	# This gate depends on gates 74/75/76 being evaluated first.
+	if [ "$gate_sexnet_internet_http_final" = "PASS" ] && \
+	   [ "$gate_browser_real_webpage_final" = "PASS" ] && \
+	   [ "$gate_network_fault_containment_final" = "PASS" ]; then
+	    gate_sexnet_network_stack_final_rollup="PASS"
+	    print_row "sexnet_network_stack_final_rollup" "PASS" "Phase O: final network stack rollup — all Phase O runtime gates pass"
+	elif [ "$(has 'sexnet.network.final.rollup.*source3=primary.*qemu=1.*ok=1')" -eq 1 ]; then
+	    gate_sexnet_network_stack_final_rollup="PASS"
+	    print_row "sexnet_network_stack_final_rollup" "PASS" "Phase O: final network stack rollup marker present"
+	elif [ "$gate_sexnet_internet_http_final" = "SKIP" ] && \
+	     [ "$gate_browser_real_webpage_final" = "SKIP" ] && \
+	     [ "$gate_network_fault_containment_final" = "SKIP" ]; then
+	    gate_sexnet_network_stack_final_rollup="SKIP"
+	    print_row "sexnet_network_stack_final_rollup" "SKIP" "Phase O: final rollup not available (profile not enabled)"
+	else
+	    gate_sexnet_network_stack_final_rollup="FAIL"
+	    print_row "sexnet_network_stack_final_rollup" "FAIL" "Phase O: final rollup incomplete — sub-gates not all passing"
+	fi
+	# Gate 77: network_100_percent — final 100% handoff gate
+	# Gate 77: network_100_percent — final 100% handoff gate
+	# PASS when Phase O runtime gates (http/browser/fault) all PASS, reliability PASS,
+	# rollup PASS, faults_zero, and real HW audit is PASS or SKIP (separate host audit log).
+	if [ "$gate_sexnet_internet_http_final" = "PASS" ] && \
+	   [ "$gate_browser_real_webpage_final" = "PASS" ] && \
+	   [ "$gate_network_fault_containment_final" = "PASS" ] && \
+	   [ "$gate_network_reliability" = "PASS" ] && \
+	   { [ "$gate_phase_n_real_hw_audit" = "PASS" ] || [ "$gate_phase_n_real_hw_audit" = "SKIP" ]; } && \
+	   [ "$gate_sexnet_network_stack_final_rollup" = "PASS" ] && \
+	   [ "$gate_faults_zero" = "PASS" ]; then
+	    gate_network_100_percent="PASS"
+	    print_row "network_100_percent" "PASS" "Phase O: final network 100% handoff — QEMU source3 proven all gates pass zero faults"
+	elif [ "$gate_faults_zero" != "PASS" ]; then
+	    gate_network_100_percent="FAIL"
+	    print_row "network_100_percent" "FAIL" "Phase O: faults detected"
+	elif [ "$gate_sexnet_internet_http_final" = "FAIL" ] || \
+	     [ "$gate_browser_real_webpage_final" = "FAIL" ] || \
+	     [ "$gate_network_fault_containment_final" = "FAIL" ]; then
+	    gate_network_100_percent="FAIL"
+	    print_row "network_100_percent" "FAIL" "Phase O: sub-gate failure"
+	elif [ "$gate_sexnet_internet_http_final" = "SKIP" ] && \
+	     [ "$gate_browser_real_webpage_final" = "SKIP" ] && \
+	     [ "$gate_network_fault_containment_final" = "SKIP" ]; then
+	    gate_network_100_percent="SKIP"
+	    print_row "network_100_percent" "SKIP" "Phase O: final 100% profile not enabled (honest SKIP)"
+	else
+	    gate_network_100_percent="FAIL"
+	    print_row "network_100_percent" "FAIL" "Phase O: 100% handoff incomplete — sub-gates not all passing"
+	fi
 if [ "$(has 'http.text.fetch.grant.plan.*ok=1')" -eq 1 ]; then
     gate_http_text_fetch_grant_plan="PASS"
     print_row "http_text_fetch_grant_plan" "PASS" "HTTP grant plan marker"
@@ -3873,6 +4017,11 @@ ALL_GATES=(
     "real_hw_arp:$gate_real_hw_arp"
     "real_hw_ping:$gate_real_hw_ping"
     "phase_n_real_hw_audit:$gate_phase_n_real_hw_audit"
+	    "sexnet_network_stack_final_rollup:$gate_sexnet_network_stack_final_rollup"
+	    "sexnet_internet_http_final:$gate_sexnet_internet_http_final"
+	    "browser_real_webpage_final:$gate_browser_real_webpage_final"
+	    "network_fault_containment_final:$gate_network_fault_containment_final"
+	    "network_100_percent:$gate_network_100_percent"
     "http_text_fetch_grant_plan:$gate_http_text_fetch_grant_plan"
     "http_get_send_plan:$gate_http_get_send_plan"
     "http_get_send_stop_review:$gate_http_get_send_stop_review"

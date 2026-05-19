@@ -322,6 +322,24 @@ if [ "$SEXNET_PHASE_N_REAL_HW_AUDIT" = "1" ]; then
     fi
 fi
 
+	# ── Phase O: final network 100% gates ──
+	# Cascades through Phase I+K+L+M+N (full source3 primary path).
+	# Widens probe window to 120s for comprehensive final proof.
+	SEXNET_PHASE_O_FINAL_NETWORK_PROOF="${SEXNET_PHASE_O_FINAL_NETWORK_PROOF:-0}"
+	if [ "$SEXNET_PHASE_O_FINAL_NETWORK_PROOF" = "1" ]; then
+	    export SEXNET_PHASE_O_FINAL_NETWORK_PROOF=1
+	    export SEXNET_PHASE_I_HTTP_PROOF=1
+	    export SEXNET_PHASE_K_BROWSER_PROOF=1
+	    export SEXNET_PHASE_L_SOURCE3_PRIMARY_PROOF=1
+	    export SEXNET_PHASE_M_RELIABILITY_PROOF=1
+	    export SEXNET_PHASE_N_REAL_HW_AUDIT=1
+	    export SEXOS_BROWSER_SEXNET_SOURCE3_PROOF=1
+	    export SEXOS_HAL_TCP_PROBE=0
+	    if [ "$PROBE_SECONDS" -lt 120 ]; then
+	        PROBE_SECONDS=120
+	    fi
+	fi
+
 # ── Frame Chrome model proof ──
 export SEXOS_FRAME_CHROME_MODEL_PROOF=1
 export SEXOS_SPINDLE_FRAME_CHROME_PROOF=1
@@ -359,6 +377,7 @@ echo "  phaseK:  ${SEXNET_PHASE_K_BROWSER_PROOF}"
 echo "  phaseL:  ${SEXNET_PHASE_L_SOURCE3_PRIMARY_PROOF}"
 echo "  phaseM:  ${SEXNET_PHASE_M_RELIABILITY_PROOF}"
 echo "  phaseN:  ${SEXNET_PHASE_N_REAL_HW_AUDIT}"
+	echo "  phaseO:  ${SEXNET_PHASE_O_FINAL_NETWORK_PROOF}"
 echo ""
 
 # ---- 1. BUILD ----
