@@ -348,6 +348,26 @@ in the current usernet environment. No HTTP. No browser networking. No TCP strea
 Before Phase I (HTTP GET), this detour creates a real TCP ESTABLISHED environment
 so Phase G/H can become runtime-proven.
 
+### E1000E NIC Reset for RX: IMPLEMENTED (awaiting proof)
+
+**Date:** 2026-05-19
+**Mission:** SEXNET_E1000E_NIC_RESET_FOR_RX_V1
+
+Root cause: HAL diagnostic (source=2) fully enables e1000e RX/TX with its own ring
+addresses (RCTL.EN=1, TCTL.EN=1, IMS, RXDCTL, SRRCTL). When sexnet (source=3)
+takes ownership, it swaps ring addresses without CTRL.RST device reset, leaving the
+e1000e internal state machine (descriptor fetch engine, FIFO, DMA engine) in an
+inconsistent state. TX works because it's push-driven; RX fails because the
+descriptor fetch engine/queue controls are latched to HAL's old state.
+
+Fix: Added CTRL.RST (bit 26) device reset sequence in sexnet NIC init before
+permanent ring programming, plus RXDCTL/TXDCTL queue enable and bounded link poll.
+
+Markers:
+- `[sexnet.nic.reset.begin]` through `[sexnet.nic.reset.proof.done]`
+- Gate: `sexnet_e1000e_reset_rx`
+- Doc: `SEXNET_E1000E_NIC_RESET_FOR_RX_V1.md`
+
 ### Phase G Runtime Reproof Status: TBD (awaiting proof run)
 
 - Environment: QEMU SLIRP user-mode + host TCP listener on port 18080
@@ -372,6 +392,7 @@ so Phase G/H can become runtime-proven.
 
 | Document | Status |
 |----------|--------|
+| `SEXNET_E1000E_NIC_RESET_FOR_RX_V1.md` | IMPLEMENTED (awaiting proof) |
 | `SEXNET_TCP_ESTABLISHED_ENV_PROOF_V1.md` | PASS REVIEW ONLY |
 | `SEXNET_PHASE_G_RUNTIME_REPROOF_V1.md` | Created |
 | `SEXNET_PHASE_H_RUNTIME_REPROOF_V1.md` | Created |
@@ -423,3 +444,20 @@ HAL diagnostic source=2 TCP markers remain as-is (not retired, not migrated).
 - `/tmp/sexnet_phase_ghi_host_env.log` — host TCP listener probe
 - `/tmp/sexnet_phase_ghi_user_hostfwd.log` — hostfwd variant (if supported)
 - `/tmp/sexnet_phase_ghi_tap.log` — TAP variant (if available)
+
+## Phase I HTTP GET (2026-05-19)
+
+- Scope: source=3 sexnet only, no browser path.
+- Added bounded Phase I markers in `servers/sexnet/src/main.rs`:
+  - stop review pass marker
+  - HTTP GET build marker
+  - GET TX over ESTABLISHED marker
+  - bounded response RX marker
+  - status-line parse marker
+  - body-prefix buffer marker
+  - readiness marker `source=3`
+- Added daily gate: `sexnet_http_get_source3` in `scripts/daily_driver_master_gate.sh`.
+- Truth boundary retained:
+  - Browser networking: NOT DONE
+  - HAL NET_DIAG retirement: NOT DONE
+  - Next phase target: Phase J (source=3 NET_DIAG replacement)

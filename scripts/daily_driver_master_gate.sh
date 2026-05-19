@@ -280,6 +280,7 @@ gate_sexnet_tcp_handshake="SKIP"
 gate_sexnet_tcp_payload="SKIP"
 gate_sexnet_e1000e_reset_rx="SKIP"
 gate_sexnet_http_phase_i_readiness="SKIP"
+gate_sexnet_http_get_source3="SKIP"
 gate_dns_to_http_host_resolution_proof="SKIP"
 gate_http_text_fetch_grant_plan="SKIP"
 gate_http_get_send_plan="SKIP"
@@ -2804,6 +2805,35 @@ else
     print_row "sexnet_http_phase_i_readiness" "SKIP" "Phase I readiness: no TCP handshake evidence"
 fi
 
+# Gate: sexnet_http_get_source3 — Phase I source=3 HTTP GET
+# PASS only on established+payload TX + build+tx+rx+status+body + zero faults.
+# SKIP when environment/readiness/peer response is missing.
+# FAIL when HTTP is claimed without established TCP, malformed parse, or faults.
+if [ "$(has 'sexnet.http.get.tx.proof.done.*sent=1.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.tcp.handshake.state.*state=ESTABLISHED.*ok=1')" -eq 0 ]; then
+    gate_sexnet_http_get_source3="FAIL"
+    print_row "sexnet_http_get_source3" "FAIL" "HTTP TX claimed without ESTABLISHED TCP"
+elif [ "$(has 'sexnet.http.status.proof.done.*status=0.*ok=0')" -eq 1 ]; then
+    gate_sexnet_http_get_source3="FAIL"
+    print_row "sexnet_http_get_source3" "FAIL" "HTTP status parse malformed"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_sexnet_http_get_source3="FAIL"
+    print_row "sexnet_http_get_source3" "FAIL" "Fault scan failed"
+elif [ "$(has 'sexnet.phaseI.stop_review.pass')" -eq 1 ] && \
+     [ "$(has 'sexnet.http.get.proof.done.*built=1.*ok=1')" -eq 1 ] && \
+     [ "$(has 'sexnet.http.get.tx.proof.done.*sent=1.*tx_dd=1.*ok=1')" -eq 1 ] && \
+     [ "$(has 'sexnet.http.response.rx.proof.done.*received=1.*ok=1')" -eq 1 ] && \
+     [ "$(has 'sexnet.http.status.proof.done.*status=[1-9][0-9][0-9].*ok=1')" -eq 1 ] && \
+     [ "$(has 'sexnet.http.body.proof.done.*ok=1')" -eq 1 ] && \
+     [ "$(has 'sexnet.phaseI.readiness.*source=3.*ok=1')" -eq 1 ] && \
+     [ "$gate_faults_zero" = "PASS" ]; then
+    gate_sexnet_http_get_source3="PASS"
+    print_row "sexnet_http_get_source3" "PASS" "Phase I HTTP GET source=3 proven end-to-end"
+else
+    gate_sexnet_http_get_source3="SKIP"
+    print_row "sexnet_http_get_source3" "SKIP" "Phase I HTTP GET source=3 not fully proven (env/peer/readiness limited)"
+fi
+
 if [ "$(has 'http.text.fetch.grant.plan.*ok=1')" -eq 1 ]; then
     gate_http_text_fetch_grant_plan="PASS"
     print_row "http_text_fetch_grant_plan" "PASS" "HTTP grant plan marker"
@@ -3464,6 +3494,7 @@ ALL_GATES=(
     "sexnet_tcp_handshake:$gate_sexnet_tcp_handshake"
     "sexnet_tcp_payload:$gate_sexnet_tcp_payload"
     "sexnet_http_phase_i_readiness:$gate_sexnet_http_phase_i_readiness"
+    "sexnet_http_get_source3:$gate_sexnet_http_get_source3"
     "http_text_fetch_grant_plan:$gate_http_text_fetch_grant_plan"
     "http_get_send_plan:$gate_http_get_send_plan"
     "http_get_send_stop_review:$gate_http_get_send_stop_review"

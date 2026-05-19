@@ -26,6 +26,16 @@ static mut PROOF_LEN: usize = 0;
 static mut BODY_BUF: [u8; 64] = [0u8; 64];
 static mut BODY_LEN: usize = 0;
 const SEXNET_GUEST_IPV4: [u8; 4] = [10, 0, 2, 15];
+const HTTP_GET_BUF_CAP: usize = 192;
+const HTTP_RESPONSE_BUF_CAP: usize = 512;
+const HTTP_BODY_BUF_CAP: usize = 256;
+static mut HTTP_GET_BUF: [u8; HTTP_GET_BUF_CAP] = [0u8; HTTP_GET_BUF_CAP];
+static mut HTTP_GET_LEN: usize = 0;
+static mut HTTP_RESPONSE_BUF: [u8; HTTP_RESPONSE_BUF_CAP] = [0u8; HTTP_RESPONSE_BUF_CAP];
+static mut HTTP_RESPONSE_LEN: usize = 0;
+static mut HTTP_BODY_PREFIX_BUF: [u8; HTTP_BODY_BUF_CAP] = [0u8; HTTP_BODY_BUF_CAP];
+static mut HTTP_BODY_PREFIX_LEN: usize = 0;
+static mut HTTP_STATUS_CODE: u16 = 0;
 
 #[allow(dead_code)]
 const NIC_OWNER_HAL_DIAG: u8 = 0;
@@ -147,6 +157,64 @@ unsafe fn proof_build(status: u32, bytes: u16, source: u8) {
         2 => proof_push_str("real"),
         _ => proof_push_str("unset"),
     }
+}
+
+unsafe fn http_get_build(host: &[u8], path: &[u8]) -> usize {
+    let p0 = b"GET ";
+    let p1 = b" HTTP/1.1\r\nHost: ";
+    let p2 = b"\r\nConnection: close\r\nUser-Agent: sexnet/phase-i\r\n\r\n";
+    let needed = p0.len() + path.len() + p1.len() + host.len() + p2.len();
+    if needed > HTTP_GET_BUF_CAP {
+        return 0;
+    }
+    let mut o = 0usize;
+    for &b in p0 { HTTP_GET_BUF[o] = b; o += 1; }
+    for &b in path { HTTP_GET_BUF[o] = b; o += 1; }
+    for &b in p1 { HTTP_GET_BUF[o] = b; o += 1; }
+    for &b in host { HTTP_GET_BUF[o] = b; o += 1; }
+    for &b in p2 { HTTP_GET_BUF[o] = b; o += 1; }
+    HTTP_GET_LEN = o;
+    o
+}
+
+fn find_crlf(buf: &[u8], len: usize) -> usize {
+    let mut i = 0usize;
+    while i + 1 < len {
+        if buf[i] == b'\r' && buf[i + 1] == b'\n' {
+            return i;
+        }
+        i += 1;
+    }
+    len
+}
+
+fn parse_http_status_line(buf: &[u8], len: usize) -> u16 {
+    let line_end = find_crlf(buf, len);
+    if line_end < 12 {
+        return 0;
+    }
+    if buf[0] != b'H' || buf[1] != b'T' || buf[2] != b'T' || buf[3] != b'P' || buf[4] != b'/' {
+        return 0;
+    }
+    let mut sp = 0usize;
+    let mut i = 0usize;
+    while i < line_end {
+        if buf[i] == b' ' {
+            sp = i;
+            break;
+        }
+        i += 1;
+    }
+    if sp == 0 || sp + 3 >= line_end {
+        return 0;
+    }
+    let d0 = buf[sp + 1];
+    let d1 = buf[sp + 2];
+    let d2 = buf[sp + 3];
+    if d0 < b'0' || d0 > b'9' || d1 < b'0' || d1 > b'9' || d2 < b'0' || d2 > b'9' {
+        return 0;
+    }
+    ((d0 - b'0') as u16) * 100 + ((d1 - b'0') as u16) * 10 + ((d2 - b'0') as u16)
 }
 
 // --------------------------------------------------------------------------
@@ -3413,6 +3481,7 @@ pub extern "C" fn _start() -> ! {
                                         serial_println!(
                                             "[sexnet.tcp.payload.tx.guard] state=ESTABLISHED ok=1"
                                         );
+                                        serial_println!("[sexnet.phaseI.stop_review.pass]");
                                         // ── Phase H PSH+ACK payload TX ──
                                         // Build ETH+IPv4+TCP headers with PSH|ACK flags
                                         // payload "sexnet-phase-h" (13 bytes bounded)
@@ -3449,8 +3518,21 @@ pub extern "C" fn _start() -> ! {
                                             let remote_seq = unsafe { TCP_REMOTE_SEQ };
                                             let tcp_seq = local_seq + 1;
                                             let tcp_ack = remote_seq + 1;
-                                            let payload: &[u8] = b"sexnet-phase-h";
-                                            let payload_len = payload.len() as u16;
+                                            let http_get_len = unsafe { http_get_build(b"example.com", b"/") };
+                                            if http_get_len > 0 {
+                                                serial_println!(
+                                                    "[sexnet.http.get.build] host=example.com path=/ len={} ok=1",
+                                                    http_get_len
+                                                );
+                                                serial_println!(
+                                                    "[sexnet.http.get.proof.done] built=1 len={} ok=1",
+                                                    http_get_len
+                                                );
+                                            } else {
+                                                serial_println!("[sexnet.http.get.build] host=example.com path=/ len=0 ok=0 reason=overflow");
+                                                serial_println!("[sexnet.http.get.proof.done] built=0 len=0 ok=0");
+                                            }
+                                            let payload_len = http_get_len as u16;
                                             let ipv4_total: u16 = 20 + 20 + payload_len;
                                             // Ethernet header: dst=gateway MAC
                                             unsafe {
@@ -3542,9 +3624,9 @@ pub extern "C" fn _start() -> ! {
                                             // Write payload at offset 54 (14 eth + 20 ip + 20 tcp)
                                             {
                                                 let mut pi = 0usize;
-                                                while pi < payload.len() {
+                                                while pi < http_get_len {
                                                     unsafe {
-                                                        core::ptr::write_volatile((tx_va + 54 + pi as u64) as *mut u8, payload[pi]);
+                                                        core::ptr::write_volatile((tx_va + 54 + pi as u64) as *mut u8, HTTP_GET_BUF[pi]);
                                                     }
                                                     pi += 1;
                                                 }
@@ -3641,14 +3723,163 @@ pub extern "C" fn _start() -> ! {
                                                 payload_tx_dd,
                                                 if payload_tx_dd == 1 { 1 } else { 0 }
                                             );
-                                            if payload_tx_dd == 1 {
+                                            if payload_tx_dd == 1 && payload_len > 0 {
                                                 payload_tx_sent = 1;
+                                            }
+                                            if payload_tx_sent == 1 {
+                                                serial_println!("[sexnet.http.get.tx.guard] state=ESTABLISHED ok=1");
+                                                serial_println!(
+                                                    "[sexnet.http.get.tx.psh_ack] payload_len={} tx_dd={} ok={}",
+                                                    payload_len,
+                                                    payload_tx_dd,
+                                                    if payload_tx_dd == 1 { 1 } else { 0 }
+                                                );
+                                                serial_println!(
+                                                    "[sexnet.http.get.tx.proof.done] sent={} tx_dd={} ok={}",
+                                                    payload_tx_sent,
+                                                    payload_tx_dd,
+                                                    if payload_tx_sent == 1 && payload_tx_dd == 1 { 1 } else { 0 }
+                                                );
                                             }
                                             serial_println!(
                                                 "[sexnet.tcp.payload.tx.proof.done] sent={} tx_dd={} ok={}",
                                                 payload_tx_sent,
                                                 payload_tx_dd,
                                                 if payload_tx_sent == 1 && payload_tx_dd == 1 { 1 } else { 0 }
+                                            );
+                                            // Phase I RX/status/body bounded proof (source=3, no browser route).
+                                            let mut resp_total = 0usize;
+                                            let mut resp_truncated = 0u32;
+                                            let mut got_payload = 0u32;
+                                            let mut rx_outer = 0u32;
+                                            while rx_outer < 1_000_000 {
+                                                let mut ridx = 0u32;
+                                                while ridx < 8 {
+                                                    let rdesc = unsafe { RX_PERM_DESC_VA + (ridx as u64) * 16 };
+                                                    let rstatus = unsafe { core::ptr::read_volatile((rdesc + 12) as *const u8) };
+                                                    if (rstatus & 1) != 0 {
+                                                        let rlen = unsafe { core::ptr::read_volatile((rdesc + 8) as *const u16) } as usize;
+                                                        if rlen >= 54 {
+                                                            let rva = unsafe { RX_PERM_PKT_VA[ridx as usize] };
+                                                            let et0 = unsafe { core::ptr::read_volatile((rva + 12) as *const u8) };
+                                                            let et1 = unsafe { core::ptr::read_volatile((rva + 13) as *const u8) };
+                                                            if et0 == 0x08 && et1 == 0x00 {
+                                                                let ihl = ((unsafe { core::ptr::read_volatile((rva + 14) as *const u8) } & 0x0F) as usize) * 4;
+                                                                if ihl >= 20 && (14 + ihl + 20) <= rlen {
+                                                                    let proto = unsafe { core::ptr::read_volatile((rva + 23) as *const u8) };
+                                                                    if proto == 6 {
+                                                                        let tbase = rva + 14 + ihl as u64;
+                                                                        let src_port = ((unsafe { core::ptr::read_volatile(tbase as *const u8) } as u16) << 8)
+                                                                            | (unsafe { core::ptr::read_volatile((tbase + 1) as *const u8) } as u16);
+                                                                        let dst_port = ((unsafe { core::ptr::read_volatile((tbase + 2) as *const u8) } as u16) << 8)
+                                                                            | (unsafe { core::ptr::read_volatile((tbase + 3) as *const u8) } as u16);
+                                                                        if src_port == unsafe { TCP_REMOTE_PORT } && dst_port == unsafe { TCP_LOCAL_PORT } {
+                                                                            let dof = unsafe { core::ptr::read_volatile((tbase + 12) as *const u8) };
+                                                                            let thl = ((dof >> 4) as usize) * 4;
+                                                                            if thl >= 20 {
+                                                                                let payload_off = 14 + ihl + thl;
+                                                                                if payload_off < rlen {
+                                                                                    let plen = rlen - payload_off;
+                                                                                    let mut i = 0usize;
+                                                                                    while i < plen {
+                                                                                        if resp_total < HTTP_RESPONSE_BUF_CAP {
+                                                                                            unsafe {
+                                                                                                HTTP_RESPONSE_BUF[resp_total] = core::ptr::read_volatile((rva + payload_off as u64 + i as u64) as *const u8);
+                                                                                            }
+                                                                                            resp_total += 1;
+                                                                                        } else {
+                                                                                            resp_truncated = 1;
+                                                                                        }
+                                                                                        i += 1;
+                                                                                    }
+                                                                                    got_payload = 1;
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        unsafe {
+                                                            core::ptr::write_volatile((rdesc + 8) as *mut u16, 0u16);
+                                                            core::ptr::write_volatile((rdesc + 12) as *mut u8, 0u8);
+                                                            core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, ridx);
+                                                        }
+                                                    }
+                                                    ridx += 1;
+                                                }
+                                                if got_payload == 1 {
+                                                    break;
+                                                }
+                                                rx_outer += 1;
+                                            }
+                                            unsafe { HTTP_RESPONSE_LEN = resp_total; }
+                                            serial_println!(
+                                                "[sexnet.http.response.rx] bytes={} bounded=1 ok={}",
+                                                resp_total,
+                                                if got_payload == 1 { 1 } else { 0 }
+                                            );
+                                            serial_println!(
+                                                "[sexnet.http.response.rx.proof.done] received={} bytes={} ok={}",
+                                                got_payload,
+                                                resp_total,
+                                                if got_payload == 1 { 1 } else { 0 }
+                                            );
+                                            let mut status_code = 0u16;
+                                            if resp_total > 0 {
+                                                status_code = parse_http_status_line(unsafe { &HTTP_RESPONSE_BUF }, resp_total);
+                                            }
+                                            unsafe { HTTP_STATUS_CODE = status_code; }
+                                            if status_code > 0 {
+                                                serial_println!(
+                                                    "[sexnet.http.status.parse] version=HTTP/1.x status={} ok=1",
+                                                    status_code
+                                                );
+                                                serial_println!(
+                                                    "[sexnet.http.status.proof.done] status={} ok=1",
+                                                    status_code
+                                                );
+                                            } else {
+                                                serial_println!("[sexnet.http.status.parse] status=0 ok=0 reason=malformed_or_missing");
+                                                serial_println!("[sexnet.http.status.proof.done] status=0 ok=0");
+                                            }
+                                            let mut body_start = resp_total;
+                                            let mut bi = 0usize;
+                                            while bi + 3 < resp_total {
+                                                if unsafe { HTTP_RESPONSE_BUF[bi] } == b'\r'
+                                                    && unsafe { HTTP_RESPONSE_BUF[bi + 1] } == b'\n'
+                                                    && unsafe { HTTP_RESPONSE_BUF[bi + 2] } == b'\r'
+                                                    && unsafe { HTTP_RESPONSE_BUF[bi + 3] } == b'\n'
+                                                {
+                                                    body_start = bi + 4;
+                                                    break;
+                                                }
+                                                bi += 1;
+                                            }
+                                            let mut body_bytes = 0usize;
+                                            if body_start < resp_total {
+                                                let mut ri = body_start;
+                                                while ri < resp_total {
+                                                    if body_bytes < HTTP_BODY_BUF_CAP {
+                                                        unsafe { HTTP_BODY_PREFIX_BUF[body_bytes] = HTTP_RESPONSE_BUF[ri]; }
+                                                        body_bytes += 1;
+                                                    }
+                                                    ri += 1;
+                                                }
+                                            }
+                                            unsafe { HTTP_BODY_PREFIX_LEN = body_bytes; }
+                                            serial_println!(
+                                                "[sexnet.http.body.buffer] bytes={} cap={} truncated={} ok=1",
+                                                body_bytes,
+                                                HTTP_BODY_BUF_CAP,
+                                                if resp_truncated == 1 || (resp_total > body_start && (resp_total - body_start) > body_bytes) { 1 } else { 0 }
+                                            );
+                                            serial_println!("[sexnet.http.body.proof.done] bytes={} ok=1", body_bytes);
+                                            serial_println!(
+                                                "[sexnet.phaseI.readiness] established={} payload_tx={} source=3 ok={}",
+                                                is_established,
+                                                payload_tx_sent,
+                                                if is_established == 1 && payload_tx_sent == 1 { 1 } else { 0 }
                                             );
                                         } else {
                                             serial_println!("[sexnet.tcp.psh_ack.build] ok=0 reason=no_tx_perm");
@@ -3658,6 +3889,11 @@ pub extern "C" fn _start() -> ! {
                                             "[sexnet.tcp.payload.tx.guard] state={} ok=0 reason=not_established",
                                             state_name
                                         );
+                                        serial_println!(
+                                            "[sexnet.http.get.tx.guard] state={} ok=0 reason=not_established",
+                                            state_name
+                                        );
+                                        serial_println!("[sexnet.phaseI.readiness] established=0 payload_tx=0 source=3 ok=0");
                                     }
                                     // Payload RX guard: only attempt if ESTABLISHED
                                     if is_established == 1 {
