@@ -304,6 +304,24 @@ if [ "$SEXNET_PHASE_M_RELIABILITY_PROOF" = "1" ]; then
     fi
 fi
 
+# ── Phase N: real hardware audit ──
+# Enables Phase N real hardware audit markers in sexnet.
+# Does NOT change NIC model, BAR mapping, or kernel behavior.
+# Does NOT enable real hardware MMIO writes.
+# Uses same QEMU e1000 path for regression verification.
+SEXNET_PHASE_N_REAL_HW_AUDIT="${SEXNET_PHASE_N_REAL_HW_AUDIT:-0}"
+if [ "$SEXNET_PHASE_N_REAL_HW_AUDIT" = "1" ]; then
+    export SEXNET_PHASE_N_REAL_HW_AUDIT=1
+    export SEXNET_PHASE_I_HTTP_PROOF=1
+    export SEXNET_PHASE_K_BROWSER_PROOF=1
+    export SEXNET_PHASE_L_SOURCE3_PRIMARY_PROOF=1
+    export SEXOS_BROWSER_SEXNET_SOURCE3_PROOF=1
+    export SEXOS_HAL_TCP_PROBE=0
+    if [ "$PROBE_SECONDS" -lt 90 ]; then
+        PROBE_SECONDS=90
+    fi
+fi
+
 # ── Frame Chrome model proof ──
 export SEXOS_FRAME_CHROME_MODEL_PROOF=1
 export SEXOS_SPINDLE_FRAME_CHROME_PROOF=1
@@ -328,7 +346,7 @@ export SEXOS_MESH_GRAPH_STATUS_PROOF=1
 export SEXOS_COLLAR_GRANT_STATUS_PROOF=1
 
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V32"
+echo " DAILY-DRIVER PROOF PROFILE V33"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -340,6 +358,7 @@ echo "  phaseI:  ${SEXNET_PHASE_I_HTTP_PROOF}"
 echo "  phaseK:  ${SEXNET_PHASE_K_BROWSER_PROOF}"
 echo "  phaseL:  ${SEXNET_PHASE_L_SOURCE3_PRIMARY_PROOF}"
 echo "  phaseM:  ${SEXNET_PHASE_M_RELIABILITY_PROOF}"
+echo "  phaseN:  ${SEXNET_PHASE_N_REAL_HW_AUDIT}"
 echo ""
 
 # ---- 1. BUILD ----

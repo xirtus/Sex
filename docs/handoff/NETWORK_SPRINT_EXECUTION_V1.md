@@ -1960,5 +1960,36 @@ Added to `scripts/daily_driver_master_gate.sh`:
 - Production deployment hardening
 - Full TLS integration
 
-Next:
-Phase N -- real hardware verification.
+Next (completed):
+Phase N -- real hardware verification: PASS REVIEW ONLY.
+
+### Phase N Execution (2026-05-19)
+
+**Status:** DONE / PASS REVIEW ONLY — hardware audit complete, no supported NIC.
+
+- Host NIC: Realtek Killer E3000 (0x10EC:0x3000), r8169 driver — UNSUPPORTED_MODERN_NIC
+- WiFi: Intel AX210 (0x8086:0x2725), iwlwifi — unsupported (WiFi)
+- Wired link: DOWN (NO-CARRIER)
+- Classification: UNSUPPORTED_MODERN_NIC — no e1000/e1000e-compatible NIC found
+- BAR map proof: SKIP (no supported NIC)
+- RX/TX stop review: STOP FIRST (unsupported NIC, unknown register layout)
+- ARP proof: SKIP
+- Ping proof: SKIP
+- QEMU source3 regression: PASS
+- 0 faults
+- No real NIC MMIO writes performed
+- No HAL source2 deleted
+- No new NIC driver added
+- New files: scripts/host_real_hw_nic_audit.sh, 5 Phase N handoff docs
+- New gates: real_hw_nic_model_audit, real_hw_bar_map, real_hw_rx_tx_stop_review,
+  real_hw_arp, real_hw_ping, phase_n_real_hw_audit
+- Recommendation: DEFER real hardware NIC support until e1000-compatible NIC available
+
+### What Remains for Phase O
+
+- Phase O final 100% gates
+- Decision: real hardware NIC driver scope (deferred or in-scope)
+- HAL NET_DIAG retirement/deletion (only if safe)
+- Source3 DNS implementation
+- Production deployment hardening
+- Full TLS integration

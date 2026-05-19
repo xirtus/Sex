@@ -336,6 +336,12 @@ gate_network_sprint_final_runtime_smoke="SKIP"
 gate_network_sprint_final_runtime_smoke_v1="SKIP"
 gate_network_sprint_handoff_freeze="SKIP"
 gate_network_sprint_handoff_freeze_v1="SKIP"
+gate_real_hw_nic_model_audit="SKIP"
+gate_real_hw_bar_map="SKIP"
+gate_real_hw_rx_tx_stop_review="SKIP"
+gate_real_hw_arp="SKIP"
+gate_real_hw_ping="SKIP"
+gate_phase_n_real_hw_audit="SKIP"
 gate_net_real_http_body_prefix="SKIP"
 gate_sexnet_passive="SKIP"
 gate_scene_lifecycle_markers="SKIP"
@@ -3108,6 +3114,88 @@ else
     print_row "network_reliability" "FAIL" "Phase M reliability sub-gates not all pass"
 fi
 
+# ── Phase N gates: Real Hardware Audit ──
+# Gate: real_hw_nic_model_audit — host NIC model audit classification
+# PASS when host audit log shows a classification (supported or unsupported).
+# SKIP when host audit log not provided or no classification marker.
+if [ "$(has 'sexnet.real_hw.nic_model.audit.done.*classification=.*ok=1')" -eq 1 ]; then
+    gate_real_hw_nic_model_audit="PASS"
+    print_row "real_hw_nic_model_audit" "PASS" "Phase N real hw NIC model audit: classification complete"
+else
+    gate_real_hw_nic_model_audit="SKIP"
+    print_row "real_hw_nic_model_audit" "SKIP" "Phase N host audit log not provided or no classification"
+fi
+
+# Gate: real_hw_bar_map — BAR/MMIO mapping proof or honest SKIP
+if [ "$(has 'sexnet.real_hw.bar.proof.done.*ok=1')" -eq 1 ]; then
+    gate_real_hw_bar_map="PASS"
+    print_row "real_hw_bar_map" "PASS" "Phase N BAR map proof: real hardware BAR readback confirmed"
+elif [ "$(has 'sexnet.real_hw.bar.proof.skip.*ok=1')" -eq 1 ]; then
+    gate_real_hw_bar_map="SKIP"
+    print_row "real_hw_bar_map" "SKIP" "Phase N BAR map proof skipped: no supported NIC or no real boot log"
+else
+    gate_real_hw_bar_map="SKIP"
+    print_row "real_hw_bar_map" "SKIP" "Phase N BAR map proof not attempted"
+fi
+
+# Gate: real_hw_rx_tx_stop_review — RX/TX safety review
+if [ "$(has 'sexnet.real_hw.rx_tx.stop_review.pass')" -eq 1 ]; then
+    gate_real_hw_rx_tx_stop_review="PASS"
+    print_row "real_hw_rx_tx_stop_review" "PASS" "Phase N RX/TX stop review: safe to attempt"
+elif [ "$(has 'sexnet.real_hw.rx_tx.stop_review.skip.*ok=1')" -eq 1 ]; then
+    gate_real_hw_rx_tx_stop_review="SKIP"
+    print_row "real_hw_rx_tx_stop_review" "SKIP" "Phase N RX/TX stop review: skipped (no hardware env)"
+elif [ "$(has 'sexnet.real_hw.rx_tx.stop_review.stop_first')" -eq 1 ]; then
+    gate_real_hw_rx_tx_stop_review="SKIP"
+    print_row "real_hw_rx_tx_stop_review" "SKIP" "Phase N RX/TX stop review: STOP FIRST — unsupported NIC"
+else
+    gate_real_hw_rx_tx_stop_review="SKIP"
+    print_row "real_hw_rx_tx_stop_review" "SKIP" "Phase N RX/TX stop review not found in log"
+fi
+
+# Gate: real_hw_arp — real hardware ARP proof or honest SKIP
+if [ "$(has 'sexnet.real_hw.arp.proof.done.*ok=1')" -eq 1 ]; then
+    gate_real_hw_arp="PASS"
+    print_row "real_hw_arp" "PASS" "Phase N real hw ARP: request TX + reply RX proven"
+elif [ "$(has 'sexnet.real_hw.arp.proof.skip.*ok=1')" -eq 1 ]; then
+    gate_real_hw_arp="SKIP"
+    print_row "real_hw_arp" "SKIP" "Phase N real hw ARP skipped: no supported NIC or RX/TX blocked"
+else
+    gate_real_hw_arp="SKIP"
+    print_row "real_hw_arp" "SKIP" "Phase N real hw ARP not attempted"
+fi
+
+# Gate: real_hw_ping — real hardware ICMP ping proof or honest SKIP
+if [ "$(has 'sexnet.real_hw.ping.proof.done.*ok=1')" -eq 1 ]; then
+    gate_real_hw_ping="PASS"
+    print_row "real_hw_ping" "PASS" "Phase N real hw ICMP ping: echo TX + reply RX proven"
+elif [ "$(has 'sexnet.real_hw.ping.proof.skip.*ok=1')" -eq 1 ]; then
+    gate_real_hw_ping="SKIP"
+    print_row "real_hw_ping" "SKIP" "Phase N real hw ping skipped: no supported NIC or ARP blocked"
+else
+    gate_real_hw_ping="SKIP"
+    print_row "real_hw_ping" "SKIP" "Phase N real hw ping not attempted"
+fi
+
+# Gate: phase_n_real_hw_audit — Phase N aggregate gate
+# PASS when NIC model audit done AND QEMU regression passes AND faults zero
+# (real hw BAR/RX/TX/ARP/PING may be SKIP if unsupported NIC)
+if [ "$gate_real_hw_nic_model_audit" = "PASS" ] && \
+   [ "$gate_faults_zero" = "PASS" ] && \
+   [ "$gate_network_source3_primary" = "PASS" ]; then
+    gate_phase_n_real_hw_audit="PASS"
+    print_row "phase_n_real_hw_audit" "PASS" "Phase N real hw audit: NIC model classified, QEMU regression PASS, 0 faults"
+elif [ "$gate_real_hw_nic_model_audit" = "SKIP" ]; then
+    gate_phase_n_real_hw_audit="SKIP"
+    print_row "phase_n_real_hw_audit" "SKIP" "Phase N real hw audit: host audit not available"
+elif [ "$gate_faults_zero" != "PASS" ]; then
+    gate_phase_n_real_hw_audit="FAIL"
+    print_row "phase_n_real_hw_audit" "FAIL" "Phase N: faults detected"
+else
+    gate_phase_n_real_hw_audit="FAIL"
+    print_row "phase_n_real_hw_audit" "FAIL" "Phase N: audit incomplete or QEMU regression failed"
+fi
+
 if [ "$(has 'http.text.fetch.grant.plan.*ok=1')" -eq 1 ]; then
     gate_http_text_fetch_grant_plan="PASS"
     print_row "http_text_fetch_grant_plan" "PASS" "HTTP grant plan marker"
@@ -3536,7 +3624,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V32 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V33 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -3779,6 +3867,12 @@ ALL_GATES=(
     "browser_remote_render_stability:$gate_browser_remote_render_stability"
     "network_source3_long_run:$gate_network_source3_long_run"
     "network_reliability:$gate_network_reliability"
+    "real_hw_nic_model_audit:$gate_real_hw_nic_model_audit"
+    "real_hw_bar_map:$gate_real_hw_bar_map"
+    "real_hw_rx_tx_stop_review:$gate_real_hw_rx_tx_stop_review"
+    "real_hw_arp:$gate_real_hw_arp"
+    "real_hw_ping:$gate_real_hw_ping"
+    "phase_n_real_hw_audit:$gate_phase_n_real_hw_audit"
     "http_text_fetch_grant_plan:$gate_http_text_fetch_grant_plan"
     "http_get_send_plan:$gate_http_get_send_plan"
     "http_get_send_stop_review:$gate_http_get_send_stop_review"

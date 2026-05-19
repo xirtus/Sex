@@ -786,3 +786,113 @@ ENABLE_QEMU_USERNET_E1000=1 \
 
 ./scripts/daily_driver_master_gate.sh /tmp/sexnet_phase_m_reliability.log
 ```
+
+## Phase N: Real Hardware Audit (2026-05-19)
+
+**Status:** PASS REVIEW ONLY — hardware audit complete, no supported NIC, QEMU regression PASS.
+
+### What Changed
+
+Phase N is a real hardware safety audit, NOT a new feature implementation phase.
+It adds documentation, a host audit script, and gate infrastructure to assess whether
+SexNet can safely touch a real physical NIC.
+
+- Created `scripts/host_real_hw_nic_audit.sh` — host-side, read-only NIC probe script.
+- Created 5 handoff docs for Phase N tasks (68-72).
+- Added 6 Phase N gates in `scripts/daily_driver_master_gate.sh`:
+  - `real_hw_nic_model_audit` — NIC model classification
+  - `real_hw_bar_map` — BAR/MMIO mapping proof or honest SKIP
+  - `real_hw_rx_tx_stop_review` — RX/TX safety review
+  - `real_hw_arp` — ARP proof or honest SKIP
+  - `real_hw_ping` — ICMP ping proof or honest SKIP
+  - `phase_n_real_hw_audit` — Phase N aggregate gate
+- Added `SEXNET_PHASE_N_REAL_HW_AUDIT` profile in `scripts/run_daily_driver_proof.sh`.
+
+### Host Hardware Audit Result
+
+| Field | Value |
+|-------|-------|
+| Wired NIC | Realtek Killer E3000 2.5GbE (0x10EC:0x3000) |
+| NIC driver | r8169 |
+| Wired link | DOWN (NO-CARRIER) |
+| WiFi | Intel AX210 (0x8086:0x2725), iwlwifi — unsupported |
+| e1000/e1000e compatible | NO |
+| Classification | **UNSUPPORTED_MODERN_NIC** |
+| BAR map proof | **SKIP** (no supported NIC) |
+| RX/TX stop review | **STOP FIRST** (unsupported NIC, unknown register map) |
+| ARP proof | **SKIP** (RX/TX blocked) |
+| Ping proof | **SKIP** (ARP blocked) |
+
+### What Phase N Does NOT Do
+
+- Does NOT write any real NIC MMIO registers.
+- Does NOT change the NIC driver or add a new driver.
+- Does NOT delete HAL source2 diagnostics.
+- Does NOT implement new protocol features.
+- Does NOT change the QEMU source3 primary path.
+- Does NOT require root access.
+- Does NOT perform destructive actions.
+
+### Phase N Documents
+
+| Document | Status |
+|----------|--------|
+| `SEXNET_REAL_HARDWARE_NIC_MODEL_AUDIT_V1.md` | PASS REVIEW ONLY |
+| `SEXNET_REAL_HARDWARE_BAR_MAP_PROOF_V1.md` | SKIP (no supported NIC) |
+| `SEXNET_REAL_HARDWARE_RX_TX_STOP_REVIEW_V1.md` | STOP FIRST (unsupported NIC) |
+| `SEXNET_REAL_HARDWARE_ARP_PROOF_V1.md` | SKIP (RX/TX blocked) |
+| `SEXNET_REAL_HARDWARE_PING_PROOF_V1.md` | SKIP (ARP blocked) |
+
+### Source Ownership (Updated)
+
+| Source | Classification | Status |
+|--------|---------------|--------|
+| source=3 | PRIMARY | Phase I-K-L-M proven on QEMU e1000; **only proven path** |
+| source=2 | LEGACY/FALLBACK | HAL diagnostic retained; frozen |
+| source=1 | MOCK | Built-in static text, offline proof |
+| Real HW | NOT SUPPORTED | Realtek E3000 — no driver, no MMIO, no RX/TX |
+
+### What Remains for Phase O
+
+- Phase O final 100% gates
+- Decision: is real hardware support in-scope or deferred?
+  - Current recommendation: **DEFER** — add e1000e driver when Intel I219 NIC available
+  - QEMU source3 path is the primary proven path
+- HAL NET_DIAG retirement/deletion (only if Phase O safe)
+- Source3 DNS implementation (deferred)
+- TLS integration (deferred)
+- Production deployment hardening (deferred)
+
+### Gate Status
+
+| Gate | Status | Notes |
+|------|--------|-------|
+| `real_hw_nic_model_audit` | PASS | classification=UNSUPPORTED_MODERN_NIC |
+| `real_hw_bar_map` | SKIP | no supported NIC |
+| `real_hw_rx_tx_stop_review` | SKIP | STOP FIRST — unsupported NIC |
+| `real_hw_arp` | SKIP | RX/TX blocked |
+| `real_hw_ping` | SKIP | ARP blocked |
+| `phase_n_real_hw_audit` | PASS | audit complete, QEMU regression PASS, 0 faults |
+
+### Proof Commands
+
+```bash
+# Host NIC audit (read-only, no root)
+./scripts/host_real_hw_nic_audit.sh /tmp/sexnet_real_hw_nic_audit.log
+
+# Build
+./scripts/entrypoint_build.sh
+
+# QEMU regression (ensures Phase N changes don't break source3)
+SEXNET_PHASE_M_RELIABILITY_PROOF=1 \
+SEXOS_HAL_TCP_PROBE=0 \
+QEMU_NET_BACKEND=user \
+QEMU_NET_MODEL=e1000 \
+ENABLE_QEMU_USERNET_E1000=1 \
+  ./scripts/run_daily_driver_proof.sh /tmp/sexnet_phase_n_qemu_regression.log
+
+./scripts/daily_driver_master_gate.sh /tmp/sexnet_phase_n_qemu_regression.log
+
+# Phase N gate scan on host audit log
+./scripts/daily_driver_master_gate.sh /tmp/sexnet_real_hw_nic_audit.log
+```
