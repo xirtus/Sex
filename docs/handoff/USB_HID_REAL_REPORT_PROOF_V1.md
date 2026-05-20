@@ -77,3 +77,16 @@ SEXOS_QMP_SOCK="$sock" ./scripts/qmp_input_probe.py "$sock" w a s d || true
 wait "$qpid" || true
 rg -n "sexusb\.hid\.report\.nonzero|sexusb\.hid\.report\.timeout|sexusb\.route\.sexinput\.ready" "$log"
 ```
+
+## 2026-05-20 route audit update (USB_HID_QEMU_DEVICE_ROUTE_AUDIT_V1)
+- Added infra visibility and timing controls:
+  - `scripts/qemu_harness.sh`: explicit resolved USB arg + QMP arg in output.
+  - `scripts/qmp_input_probe.py`: `--delay SECONDS` support.
+- Ran two lanes with delayed injection (`--delay 8`):
+  - `SEXUSB_QEMU_DEVICE=mouse` + QMP mouse events
+  - `SEXUSB_QEMU_DEVICE=tablet` + QMP mouse events
+- In both lanes:
+  - QMP greeting/capabilities/input-send-event all succeeded.
+  - SexOS boot + xHCI markers and `sexusb.route.sexinput.ready` appeared.
+  - No `sexusb.hid.report.nonzero`; repeated `sexusb.hid.report.timeout` observed.
+- Classification for this route-audit run: **SKIP** (QMP accepted, but no proof of real HID report delivery to SexOS endpoint path).

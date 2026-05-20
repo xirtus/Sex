@@ -17,19 +17,36 @@ from typing import Any, Dict, List, Optional, Tuple
 
 DEFAULT_QMP_SOCK = "/tmp/sexos-qmp.sock"
 DEFAULT_TIMEOUT = float(os.environ.get("SEXOS_QMP_TIMEOUT", "5.0"))
-DELAY = float(os.environ.get("SEXOS_QMP_EVENT_DELAY", "0.05"))
+DEFAULT_EVENT_DELAY = float(os.environ.get("SEXOS_QMP_EVENT_DELAY", "0.05"))
 
 
 class QMPError(Exception):
     pass
 
 
-def parse_args(argv: List[str]) -> Tuple[str, str, List[str]]:
+def parse_args(argv: List[str]) -> Tuple[str, str, List[str], float]:
     qmp_sock = os.environ.get("SEXOS_QMP_SOCK", DEFAULT_QMP_SOCK)
+    delay = DEFAULT_EVENT_DELAY
     rest = list(argv)
 
     if rest and rest[0].startswith("/"):
         qmp_sock = rest.pop(0)
+
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if tok == "--delay":
+            if i + 1 >= len(rest):
+                raise QMPError("missing value for --delay")
+            try:
+                delay = float(rest[i + 1])
+            except ValueError as exc:
+                raise QMPError(f"invalid --delay value: {rest[i + 1]!r}") from exc
+            if delay < 0:
+                raise QMPError("--delay must be >= 0")
+            del rest[i : i + 2]
+            continue
+        i += 1
 
     mode = "mouse"
     tokens: List[str] = []
@@ -43,7 +60,7 @@ def parse_args(argv: List[str]) -> Tuple[str, str, List[str]]:
             mode = "key"
             tokens = rest
 
-    return qmp_sock, mode, tokens
+    return qmp_sock, mode, tokens, delay
 
 
 def summarize(msg: Dict[str, Any]) -> str:
@@ -208,13 +225,16 @@ def mouse_events() -> List[Tuple[str, Dict[str, Any]]]:
 
 
 def main() -> int:
-    qmp_sock, mode, tokens = parse_args(sys.argv[1:])
+    qmp_sock, mode, tokens, delay = parse_args(sys.argv[1:])
 
     if not os.path.exists(qmp_sock):
         print(f"ERROR: QMP socket not found: {qmp_sock}")
         return 1
 
-    print(f"[qmp] socket={qmp_sock} mode={mode} timeout={DEFAULT_TIMEOUT:.2f}s")
+    print(
+        f"[qmp] socket={qmp_sock} mode={mode} timeout={DEFAULT_TIMEOUT:.2f}s "
+        f"delay={delay:.2f}s"
+    )
 
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     buf = bytearray()
@@ -254,7 +274,7 @@ def main() -> int:
                 print(f"ERROR: event rejected: {label}")
                 continue
             ok += 1
-            time.sleep(DELAY)
+            time.sleep(delay)
 
         print(f"[qmp.summary] attempted={len(commands)} succeeded={ok} mode={mode}")
         return 0 if ok > 0 else 4

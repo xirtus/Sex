@@ -25,6 +25,15 @@ DISPLAY="${SEXOS_QEMU_DISPLAY:-none}"
 USB_DEV="${SEXUSB_QEMU_DEVICE:-tablet}"
 QMP_SOCK="${SEXOS_QMP_SOCK:-}"
 
+usb_qemu_arg() {
+    case "$1" in
+        mouse) echo "usb-mouse" ;;
+        tablet) echo "usb-tablet" ;;
+        kbd) echo "usb-kbd" ;;
+        *) echo "$1" ;;
+    esac
+}
+
 # ---- arg parse --------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -88,6 +97,7 @@ fi
 
 # ---- print-only mode --------------------------------------------------------
 if [ "$PRINT_CMD" = true ]; then
+    USB_QEMU_DEV="$(usb_qemu_arg "$USB_DEV")"
     echo "=== Canonical QEMU command ==="
     echo
     echo "  qemu-system-x86_64 \\"
@@ -96,19 +106,29 @@ if [ "$PRINT_CMD" = true ]; then
     echo "      -cpu max,+pku \\"
     echo "      -cdrom sexos-v1.0.0.iso \\"
     echo "      -device nec-usb-xhci,id=xhci \\"
-    echo "      -device ${USB_DEV},bus=xhci.0 \\"
+    echo "      -device ${USB_QEMU_DEV},bus=xhci.0 \\"
     echo "      -serial stdio \\"
-    echo "      -display none"
+    echo "      -display none \\"
+    if [ -n "$QMP_SOCK" ]; then
+        echo "      -qmp unix:${QMP_SOCK},server=on,wait=off"
+    else
+        echo "      # (no -qmp)"
+    fi
     echo
     echo "USB device:  $USB_DEV"
+    echo "USB arg:     -device ${USB_QEMU_DEV},bus=xhci.0"
     echo "Display:     $DISPLAY"
     echo
     echo "Single line:"
     echo "  qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku \\"
     echo "    -cdrom sexos-v1.0.0.iso \\"
     echo "    -device nec-usb-xhci,id=xhci \\"
-    echo "    -device ${USB_DEV},bus=xhci.0 \\"
-    echo "    -serial stdio -display none"
+    echo "    -device ${USB_QEMU_DEV},bus=xhci.0 \\"
+    if [ -n "$QMP_SOCK" ]; then
+        echo "    -serial stdio -display none -qmp unix:${QMP_SOCK},server=on,wait=off"
+    else
+        echo "    -serial stdio -display none"
+    fi
     exit 0
 fi
 
@@ -120,12 +140,15 @@ rm -f "$LOG_FILE"
 echo "============================================"
 echo " QEMU_HARNESS_V1"
 echo "============================================"
+USB_QEMU_DEV="$(usb_qemu_arg "$USB_DEV")"
 echo " ISO:      $ISO"
 echo " Size:     $(du -h "$ISO" | cut -f1)"
 echo " USB dev:  $USB_DEV"
+echo " USB arg:  -device ${USB_QEMU_DEV},bus=xhci.0"
 echo " Display:  $DISPLAY"
 if [ -n "$QMP_SOCK" ]; then
     echo " QMP sock: $QMP_SOCK"
+    echo " QMP arg:  -qmp unix:${QMP_SOCK},server=on,wait=off"
 fi
 echo " Log:      $LOG_FILE"
 [ -n "$TIMEOUT" ] && echo " Timeout:  ${TIMEOUT}s"
