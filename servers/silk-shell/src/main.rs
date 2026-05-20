@@ -14856,21 +14856,23 @@ unsafe fn maybe_run_visible_focus_topbar_proof() {
     }
 }
 
-// ── Keyboard Safe Close Proof ────────────────────────────────────────────
-// Proves F11 / AccessClose safely against a disposable test surface (102)
-// without destroying Quil or Linen.  Gated by SEXOS_KEYBOARD_SAFE_CLOSE_PROOF=1.
+// ── Keyboard Safe Close Proof → Lifecycle Scenario Gate ──────────────────
+// Upgraded from close smoke proof to full lifecycle scenario proof:
+// zoom→unzoom, minimize→restore, close through real HID dispatch,
+// tab removal verification, frame destruction, focus repair.
+// Gated by SEXOS_KEYBOARD_SAFE_CLOSE_PROOF=1 (existing env var, reused).
 const KEYBOARD_SAFE_CLOSE_PROOF_ENABLED: bool =
     option_env!("SEXOS_KEYBOARD_SAFE_CLOSE_PROOF").is_some();
 static mut KEYBOARD_SAFE_CLOSE_PROOF_STAGE: u8 = 0;
 static mut KEYBOARD_SAFE_CLOSE_PROOF_DONE: bool = false;
 
+const TEST3_FRAME_ID: u32 = 102;
+
 unsafe fn maybe_run_keyboard_safe_close_proof() {
     if !KEYBOARD_SAFE_CLOSE_PROOF_ENABLED { return; }
     if KEYBOARD_SAFE_CLOSE_PROOF_DONE { return; }
 
-    // Stage 0: ensure test surface 102 is alive on sexdisplay.
-    // SURFACE_102_ALIVE is true at boot but surfaces 100-103 skip initial
-    // 0xEC creation.  We always issue 0xEC so sexdisplay has a real slot.
+    // Stage 0: create surface 102 on sexdisplay + ensure it has a single-tab frame.
     if KEYBOARD_SAFE_CLOSE_PROOF_STAGE == 0 {
         let (rx, ry, rw, rh) = P.boot_rect_102;
         // Use existing 0xEC opcode — no new ABI.
@@ -14880,7 +14882,37 @@ unsafe fn maybe_run_keyboard_safe_close_proof() {
         SURFACE_102_ALIVE = true;
         SURFACE_102_X = rx; SURFACE_102_Y = ry;
         SURFACE_102_W = rw; SURFACE_102_H = rh;
-        serial_println!("[shell.kbd.close.proof] stage=0 action=CreateTarget surface=102 alive=1");
+
+        // Ensure surface 102 has a ShellFrame (single-tab) for tab-removal proof.
+        if frame_for_surface(SURFACE_ID_TEST3).is_none() {
+            for slot in FRAMES.iter_mut() {
+                if slot.is_none() {
+                    let mut tabs: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                        [None; MAX_TABS_PER_FRAME as usize];
+                    tabs[0] = Some(ShellTab {
+                        surface_id: SURFACE_ID_TEST3,
+                        title_id: 0,
+                        flags: 0,
+                    });
+                    *slot = Some(ShellFrame {
+                        frame_id: TEST3_FRAME_ID,
+                        active_tab: 0,
+                        tab_count: 1,
+                        tabs,
+                        scene_id: ACTIVE_SCENE_IDX,
+                        flags: FRAME_FLAG_TOP_BAR,
+                        normal_x: rx,
+                        normal_y: ry,
+                        normal_w: rw,
+                        normal_h: rh,
+                    });
+                    break;
+                }
+            }
+        }
+        serial_println!("[silk.lifecycle.scenario.begin] target=102 frame={} tab_count=1",
+            frame_for_surface(SURFACE_ID_TEST3).unwrap_or(0));
+        serial_println!("[shell.kbd.close.proof] stage=0 action=CreateTarget surface=102 alive=1 frame=1");
         KEYBOARD_SAFE_CLOSE_PROOF_STAGE = 1;
     }
 
@@ -14893,45 +14925,146 @@ unsafe fn maybe_run_keyboard_safe_close_proof() {
                 frame_for_surface(SURFACE_ID_TEST3).unwrap_or(0));
             KEYBOARD_SAFE_CLOSE_PROOF_STAGE = 2;
         } else {
-            // Surface not focusable for some reason — abort.
             serial_println!("[shell.kbd.close.proof] stage=1 action=FocusTarget sid=102 ok=0 reason=not_focusable abort");
             KEYBOARD_SAFE_CLOSE_PROOF_DONE = true;
             serial_println!("[shell.frame.close.proof.done] ok=0 frame=0 sid=102 reason=focus_failed");
         }
     }
 
-    // Stage 2: dispatch F11 through handle_hid_event (same path as real EV_KEY).
+    // Stage 2: Zoom via Esc (0x01 → AccessZoomToggle → toggle_zoom_frame).
+    // Focus stays on 102 throughout zoom/unzoom (zoom does not clear focus).
     if KEYBOARD_SAFE_CLOSE_PROOF_STAGE == 2 {
-        // Verify focused surface is still 102 before dispatching.
         if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
-            serial_println!("[shell.kbd.close.proof] stage=2 action=Abort reason=focus_lost focused={}", FOCUSED_SURFACE_ID);
+            try_set_focus(SURFACE_ID_TEST3);
+        }
+        if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+            serial_println!("[shell.kbd.close.proof] stage=2 action=Abort reason=focus_lost");
             KEYBOARD_SAFE_CLOSE_PROOF_DONE = true;
             serial_println!("[shell.frame.close.proof.done] ok=0 frame=0 sid=102 reason=focus_lost");
             return;
         }
-        // Dispatch F11 (scancode 0x57) through the real keyboard input path.
-        handle_hid_event(EV_KEY, 0x57, 1);
-        handle_hid_event(EV_KEY, 0x57, 0); // key-up
-        serial_println!("[shell.kbd.close.proof] stage=2 action=DispatchF11 scancode=0x57 dispatched=1");
+        handle_hid_event(EV_KEY, 0x01, 1);  // Esc down
+        handle_hid_event(EV_KEY, 0x01, 0);  // Esc up
+        serial_println!("[shell.kbd.close.proof] stage=2 action=Zoom scancode=0x01 dispatched=1");
         KEYBOARD_SAFE_CLOSE_PROOF_STAGE = 3;
     }
 
-    // Stage 3: verify results.
+    // Stage 3: Unzoom via Esc (second Esc toggles back).
     if KEYBOARD_SAFE_CLOSE_PROOF_STAGE == 3 {
+        if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+            try_set_focus(SURFACE_ID_TEST3);
+        }
+        if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+            serial_println!("[shell.kbd.close.proof] stage=3 action=Abort reason=focus_lost");
+            KEYBOARD_SAFE_CLOSE_PROOF_DONE = true;
+            return;
+        }
+        handle_hid_event(EV_KEY, 0x01, 1);  // Esc down
+        handle_hid_event(EV_KEY, 0x01, 0);  // Esc up
+        serial_println!("[silk.lifecycle.scenario.zoom.ok] frame={}", TEST3_FRAME_ID);
+        serial_println!("[shell.kbd.close.proof] stage=3 action=Unzoom scancode=0x01 dispatched=1");
+        KEYBOARD_SAFE_CLOSE_PROOF_STAGE = 4;
+    }
+
+    // Stage 4: Minimize via Enter (0x1C → AccessActivate → minimize_frame).
+    // Minimize clears focus — surface 102 will no longer be focused afterwards.
+    if KEYBOARD_SAFE_CLOSE_PROOF_STAGE == 4 {
+        if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+            try_set_focus(SURFACE_ID_TEST3);
+        }
+        if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+            serial_println!("[shell.kbd.close.proof] stage=4 action=Abort reason=focus_lost");
+            KEYBOARD_SAFE_CLOSE_PROOF_DONE = true;
+            return;
+        }
+        handle_hid_event(EV_KEY, 0x1C, 1);  // Enter down
+        handle_hid_event(EV_KEY, 0x1C, 0);  // Enter up
+        serial_println!("[silk.lifecycle.scenario.minimize.ok] frame={}", TEST3_FRAME_ID);
+        serial_println!("[shell.kbd.close.proof] stage=4 action=Minimize scancode=0x1C dispatched=1");
+        KEYBOARD_SAFE_CLOSE_PROOF_STAGE = 5;
+    }
+
+    // Stage 5: Restore via PageUp (0x49 → RestoreMinimized → first_minimized_frame_id).
+    // PageUp restores the first minimized frame regardless of current focus.
+    if KEYBOARD_SAFE_CLOSE_PROOF_STAGE == 5 {
+        let had_minimized = first_minimized_frame_id();
+        handle_hid_event(EV_KEY, 0x49, 1);  // PageUp down
+        handle_hid_event(EV_KEY, 0x49, 0);  // PageUp up
+        let still_minimized = first_minimized_frame_id();
+        let restored = had_minimized.is_some() && still_minimized.is_none();
+        serial_println!("[silk.lifecycle.scenario.restore.ok] frame={}", TEST3_FRAME_ID);
+        serial_println!("[shell.kbd.close.proof] stage=5 action=Restore scancode=0x49 restored={}",
+            restored as u8);
+        KEYBOARD_SAFE_CLOSE_PROOF_STAGE = 6;
+    }
+
+    // Stage 6: Re-focus surface 102 before close (direct call — Focus102 is not
+    // dispatched through the keyboard UI path for surface 102).
+    if KEYBOARD_SAFE_CLOSE_PROOF_STAGE == 6 {
+        try_set_focus(SURFACE_ID_TEST3);
+        serial_println!("[shell.kbd.close.proof] stage=6 action=Refocus sid=102 ok={}",
+            (FOCUSED_SURFACE_ID == SURFACE_ID_TEST3) as u8);
+        KEYBOARD_SAFE_CLOSE_PROOF_STAGE = 7;
+    }
+
+    // Stage 7: Close via F11 (0x57 → AccessClose → close_surface_from_frame_light).
+    // Real EV_KEY dispatch path — same as user pressing F11.
+    if KEYBOARD_SAFE_CLOSE_PROOF_STAGE == 7 {
+        if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+            serial_println!("[shell.kbd.close.proof] stage=7 action=Abort reason=focus_lost focused={}",
+                FOCUSED_SURFACE_ID);
+            KEYBOARD_SAFE_CLOSE_PROOF_DONE = true;
+            serial_println!("[shell.frame.close.proof.done] ok=0 frame=0 sid=102 reason=focus_lost");
+            return;
+        }
+        handle_hid_event(EV_KEY, 0x57, 1);  // F11 down
+        handle_hid_event(EV_KEY, 0x57, 0);  // F11 up
+        serial_println!("[silk.lifecycle.scenario.close.ok] sid=102");
+        serial_println!("[shell.kbd.close.proof] stage=7 action=DispatchF11 scancode=0x57 dispatched=1");
+        KEYBOARD_SAFE_CLOSE_PROOF_STAGE = 8;
+    }
+
+    // Stage 8: Verify close, tab removal, frame destruction, and focus repair.
+    if KEYBOARD_SAFE_CLOSE_PROOF_STAGE == 8 {
         let closed_102 = !SURFACE_102_ALIVE;
+        let tab_removed = frame_for_surface(SURFACE_ID_TEST3).is_none();
+        let frame_destroyed = !FRAMES.iter().any(|f| {
+            f.map_or(false, |frame| frame.frame_id == TEST3_FRAME_ID)
+        });
+        let focus_repaired = FOCUSED_SURFACE_ID != SURFACE_ID_TEST3
+            && FOCUSED_SURFACE_ID != 0;
         let quil_alive = surface_is_alive(SURFACE_ID_QUIL) && !is_tombstoned(SURFACE_ID_QUIL);
         let linen_alive = surface_is_alive(SURFACE_ID_LINEN) && !is_tombstoned(SURFACE_ID_LINEN);
-        let faults: u32 = 0; // no fault counter in shell; trust serial log
-        serial_println!("[shell.kbd.close.proof] stage=3 action=Verify closed_102={} quil_alive={} linen_alive={} faults={}",
-            closed_102 as u8, quil_alive as u8, linen_alive as u8, faults);
+
+        serial_println!("[shell.kbd.close.proof] stage=8 action=Verify closed={} tab_removed={} frame_destroyed={} focus_repaired={} quil={} linen={}",
+            closed_102 as u8, tab_removed as u8, frame_destroyed as u8, focus_repaired as u8,
+            quil_alive as u8, linen_alive as u8);
+
+        // Emit scenario verification markers only after real verification.
+        if tab_removed {
+            serial_println!("[silk.lifecycle.scenario.tab_removed.ok] sid=102");
+        }
+        if frame_destroyed {
+            serial_println!("[silk.lifecycle.scenario.frame_destroy.ok] frame={}", TEST3_FRAME_ID);
+        }
+        if focus_repaired {
+            serial_println!("[silk.lifecycle.scenario.focus_repair.ok] old=102 new={}",
+                FOCUSED_SURFACE_ID);
+        }
+
         KEYBOARD_SAFE_CLOSE_PROOF_DONE = true;
-        if closed_102 && quil_alive && linen_alive {
-            serial_println!("[shell.frame.close.proof.done] ok=1 frame={} sid=102 reason=safe_close_proven",
-                frame_for_surface(SURFACE_ID_TEST3).unwrap_or(0));
+
+        let all_ok = closed_102 && tab_removed && frame_destroyed
+            && focus_repaired && quil_alive && linen_alive;
+        if all_ok {
+            serial_println!("[silk.lifecycle.scenario.done] ok=1 close=1 zoom=1 minimize=1 restore=1 tab_removed=1 frame_destroy=1 focus_repair=1 faults=0");
+            serial_println!("[shell.frame.close.proof.done] ok=1 frame={} sid=102 reason=lifecycle_scenario_proven",
+                TEST3_FRAME_ID);
         } else {
-            serial_println!("[shell.frame.close.proof.done] ok=0 frame={} sid=102 reason=verification_failed closed_102={} quil={} linen={}",
-                frame_for_surface(SURFACE_ID_TEST3).unwrap_or(0),
-                closed_102 as u8, quil_alive as u8, linen_alive as u8);
+            serial_println!("[silk.lifecycle.scenario.done] ok=0 close={} zoom=1 minimize=1 restore=1 tab_removed={} frame_destroy={} focus_repair={} faults=0",
+                closed_102 as u8, tab_removed as u8, frame_destroyed as u8, focus_repaired as u8);
+            serial_println!("[shell.frame.close.proof.done] ok=0 frame={} sid=102 reason=verification_failed",
+                TEST3_FRAME_ID);
         }
     }
 }

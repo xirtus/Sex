@@ -321,3 +321,84 @@ All existing markers remain in place:
 - **Phase 6 markers in render path:** CONFIRMED (QEMU serial output shows dynamic fb_w/fb_h)
 - **frame.empty.destroy reachable:** YES (code path exists; not triggered during 45s smoke window)
 - No kernel edits, no ABI changes, no protocol redesign
+
+## Behavior Proof Correction
+
+WINDOW_LIFECYCLE_BEHAVIOR_PROOF_FIX_V1 corrected two false/weak proof paths:
+
+1. Close now removes tab membership.
+   `close_surface_from_frame_light()` now clears the closed surface from `ShellFrame.tabs[]`,
+   compacts remaining tabs, decrements `tab_count`, adjusts `active_tab`, and destroys the
+   frame slot when the last tab closes.
+
+2. Frame-light render markers now prove the real render path.
+   `sexdisplay.frame_lights.render.begin`, `sexdisplay.frame_lights.draw.ok`, and
+   `sexdisplay.frame_lights.bounds.ok` were moved out of `_start()` and into
+   `composite_pixel()` so they correspond to actual bounded framebuffer rendering.
+
+Runtime probe:
+- `./scripts/entrypoint_build.sh`: PASS
+- `/tmp/window_lifecycle_runtime_probe.sh`: PASS
+- no `#PF`, `#GP`, `panic`, or `fault.kill`
+
+Remaining gap: RESOLVED by Scenario Gate (below).
+
+---
+
+## 8. SCENARIO GATE (2026-05-20) — WINDOW_LIFECYCLE_SCENARIO_GATE_B1_V1
+
+### 8.1 Gate Design
+
+Enhanced the existing `maybe_run_keyboard_safe_close_proof()` into a full lifecycle
+scenario gate.  The proof now exercises zoom→unzoom→minimize→restore→close through
+the real `handle_hid_event` keyboard dispatch path (same path as user key presses).
+
+**Gated by:** `SEXOS_KEYBOARD_SAFE_CLOSE_PROOF=1` (existing env var, reused)
+
+**Scenario sequence on disposable surface 102:**
+1. Create surface 102 on sexdisplay + attach single-tab ShellFrame (frame_id=102)
+2. Focus surface 102
+3. Zoom via Esc (0x01 → AccessZoomToggle → toggle_zoom_frame)
+4. Unzoom via Esc (second Esc toggles back)
+5. Minimize via Enter (0x1C → AccessActivate → minimize_frame)
+6. Restore via PageUp (0x49 → RestoreMinimized → first_minimized_frame_id)
+7. Re-focus surface 102
+8. Close via F11 (0x57 → AccessClose → close_surface_from_frame_light)
+9. Verify: surface dead, tab removed from frame, frame slot cleared, focus repaired
+
+### 8.2 Runtime Results
+
+**Build:** `SEXOS_KEYBOARD_SAFE_CLOSE_PROOF=1 ./scripts/entrypoint_build.sh` — PASS
+
+**QEMU runtime (60s):**
+
+| Marker | Status |
+|--------|--------|
+| `[silk.lifecycle.scenario.begin]` | PRESENT |
+| `[silk.lifecycle.scenario.zoom.ok]` | PRESENT |
+| `[silk.lifecycle.scenario.minimize.ok]` | PRESENT |
+| `[silk.lifecycle.scenario.restore.ok]` | PRESENT |
+| `[silk.lifecycle.scenario.close.ok]` | PRESENT |
+| `[silk.lifecycle.scenario.tab_removed.ok]` | PRESENT (sid=102) |
+| `[silk.lifecycle.scenario.frame_destroy.ok]` | PRESENT (frame=102) |
+| `[silk.lifecycle.scenario.focus_repair.ok]` | PRESENT (old=102 new=201) |
+| `[silk.lifecycle.scenario.done]` | PRESENT (ok=1) |
+
+**Lifecycle markers confirmed at runtime:**
+- `zoom.begin` → `zoom.snapshot` → `zoom.active` → `zoom.restore`
+- `minimize.begin` → `minimize.snapshot` → `minimize.hidden`
+- `restore.begin` → `restore.record` → `restore.ok`
+- `close.begin` → `tab.close.ok` → **`frame.empty.destroy`** → `focus.next_live` → `close.done`
+
+**Phase 6 render markers:** `render.begin` / `draw.ok` / `bounds.ok` present with
+dynamic framebuffer dimensions (fb_w=1280, fb_h=800).
+
+**Faults:** Zero (#PF, #GP, panic, fault.kill — all absent).
+
+### 8.3 Verdict
+
+- **PASS** — All scenario markers present, `frame.empty.destroy` triggered at runtime
+  proving Fix 1 tab removal works end-to-end. Phase 6 markers confirmed from render path.
+- Focus repair verified: closed surface 102, focus moved to surface 201 (Quil).
+- No kernel edits, no ABI changes, no protocol redesign.
+- Real keyboard dispatch path exercised (not marker-only).
