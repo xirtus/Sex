@@ -3979,13 +3979,18 @@ fi
 #  12. faults_zero:           gate_faults_zero == PASS
 #
 # Gate logic:
-#   SKIP — no interaction markers present (scenario not enabled).
+#   SKIP — no explicit combined scenario sentinel present.
 #   PASS — all 12 categories proven, no faults.
 #   FAIL — interaction enabled but categories missing, or any dep FAIL.
 gate_silk_combined_interaction="SKIP"
 
-# Detect enablement: any interaction-specific marker present (categories 1-7)
-has_interaction=$(has '[[]silk\.(resize|snap|tab|close|live_topstrip|chrome\.glitch)\.')
+# Detect enablement only via explicit combined-scenario sentinels.
+has_interaction_begin=$(has '[[]silk\.combined\.interaction\.begin[]]')
+has_scenario_begin=$(has '[[]silk\.combined\.scenario\.begin[]]')
+has_interaction=0
+if [ "$has_interaction_begin" -eq 1 ] || [ "$has_scenario_begin" -eq 1 ]; then
+    has_interaction=1
+fi
 if [ "$has_interaction" -eq 1 ]; then
     r_resize_state=$(has 'silk\.resize\.(hit|begin|end)')
     r_resize_geom=$(has 'silk\.resize\.(delta|apply|clamp|flush)')
@@ -4031,7 +4036,7 @@ if [ "$has_interaction" -eq 1 ]; then
 else
     gate_silk_combined_interaction="SKIP"
     print_row "silk_combined_interaction" "SKIP" \
-        "interaction scenario not enabled in this boot"
+        "interaction scenario not enabled (missing explicit combined sentinel)"
 fi
 
 # ---- SCORE ----

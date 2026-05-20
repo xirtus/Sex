@@ -150,5 +150,20 @@ regression.
 
 ---
 
+## 10. Correction Notes (SILK_COMBINED_GATE_SKIP_FIX_V1)
+
+- Root cause: scenario enablement was inferred from generic interaction markers
+  (`silk.resize|snap|tab|close|live_topstrip|chrome.glitch`), which can appear in
+  normal boots and incorrectly force FAIL when some categories are absent.
+- Semantics fix: `silk_combined_interaction` now activates only when an explicit
+  combined scenario sentinel is present:
+  - `[silk.combined.interaction.begin]`, or
+  - `[silk.combined.scenario.begin]`
+- If neither sentinel exists in the log, gate reports:
+  - `SKIP interaction scenario not enabled (missing explicit combined sentinel)`
+- PASS/FAIL behavior when sentinel is present is unchanged:
+  - PASS only with all required markers and no dependent failures.
+  - FAIL if required markers are missing or dependent/fault gates fail.
+
 *End of SILK_COMBINED_INTERACTION_PROOF_V1. No source edits made. Gate evaluates
 existing markers only.*
