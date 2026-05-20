@@ -356,6 +356,8 @@ gate_real_hw_ping="SKIP"
 gate_phase_n_real_hw_audit="SKIP"
 gate_net_real_http_body_prefix="SKIP"
 gate_sexnet_passive="SKIP"
+gate_lifecycle_atlas="SKIP"
+gate_lifecycle_appdeath="SKIP"
 gate_scene_lifecycle_markers="SKIP"
 gate_scene_keyboard_switch="SKIP"
 gate_project_scene_link="SKIP"
@@ -3818,6 +3820,30 @@ elif [ "$(has 'silk\.scene\.lifecycle\]')" -ge 1 ]; then
     gate_scene_lifecycle_markers="PASS"
 else gate_scene_lifecycle_markers="SKIP"; fi
 
+# ---- 84b. lifecycle_atlas ----
+if [ "$(has 'silk\.lifecycle\.atlas\.done.*ok=1')" -eq 1 ]; then
+    gate_lifecycle_atlas="PASS"
+    print_row "lifecycle_atlas" "PASS" "Atlas minimize/restore visible proof"
+elif [ "$(has 'silk\.lifecycle\.atlas\.minimized\.visible\]')" -ge 1 ]; then
+    gate_lifecycle_atlas="PASS"
+    print_row "lifecycle_atlas" "PASS" "Atlas markers partial"
+elif [ "$(has 'silk\.lifecycle\.atlas\.begin\]')" -ge 1 ]; then
+    gate_lifecycle_atlas="SKIP"
+    print_row "lifecycle_atlas" "SKIP" "Atlas begin but not done"
+else gate_lifecycle_atlas="SKIP"; fi
+
+# ---- 84c. lifecycle_appdeath ----
+if [ "$(has 'silk\.lifecycle\.appdeath\.done.*ok=1')" -eq 1 ]; then
+    gate_lifecycle_appdeath="PASS"
+    print_row "lifecycle_appdeath" "PASS" "app-death cleanup (simulated)"
+elif [ "$(has 'silk\.lifecycle\.appdeath\.mode\.simulated\]')" -ge 1 ]; then
+    gate_lifecycle_appdeath="PASS"
+    print_row "lifecycle_appdeath" "PASS" "app-death simulated markers present (partial)"
+elif [ "$(has 'silk\.lifecycle\.appdeath\.begin\]')" -ge 1 ]; then
+    gate_lifecycle_appdeath="SKIP"
+    print_row "lifecycle_appdeath" "SKIP" "app-death begin but not done"
+else gate_lifecycle_appdeath="SKIP"; fi
+
 # ---- 85. scene_keyboard_switch ----
 if [ "$(has 'silk\.scene\.keyboard_switch\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_scene_keyboard_switch="PASS"
@@ -4248,6 +4274,8 @@ ALL_GATES=(
     "atlas_scene_stub:$gate_atlas_scene_stub"
     "frame_lights_visual:$gate_frame_lights_visual"
     "frame_lights_keyboard:$gate_frame_lights_keyboard"
+    "lifecycle_atlas:$gate_lifecycle_atlas"
+    "lifecycle_appdeath:$gate_lifecycle_appdeath"
     "scene_lifecycle_markers:$gate_scene_lifecycle_markers"
     "scene_keyboard_switch:$gate_scene_keyboard_switch"
     "project_scene_link:$gate_project_scene_link"

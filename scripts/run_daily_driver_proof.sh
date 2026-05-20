@@ -363,8 +363,12 @@ export SEXOS_PROJECT_SCENE_LINK_PROOF=1
 export SEXOS_MESH_GRAPH_STATUS_PROOF=1
 export SEXOS_COLLAR_GRANT_STATUS_PROOF=1
 
+# ── Lifecycle final5 proofs ──
+export SEXOS_LIFECYCLE_ATLAS_PROOF=1
+export SEXOS_LIFECYCLE_APPDEATH_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V33"
+echo " DAILY-DRIVER PROOF PROFILE V34"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"

@@ -3004,6 +3004,242 @@ unsafe fn maybe_run_atlas_scene_stub_proof() {
     ATLAS_SCENE_STUB_PROOF_DONE = true;
 }
 
+// ── Atlas Visible Restore Proof ──────────────────────────────────────────
+// Proves that minimized-frame restore produces visible, focusable, scene-valid
+// state. Uses real minimize/restore keyboard dispatch path (Enter/PageUp).
+// Gate: SEXOS_LIFECYCLE_ATLAS_PROOF=1 (default unset, zero behavior change)
+
+const ATLAS_VISIBLE_RESTORE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LIFECYCLE_ATLAS_PROOF").is_some();
+static mut ATLAS_VISIBLE_RESTORE_PROOF_DONE: bool = false;
+static mut ATLAS_VISIBLE_RESTORE_PROOF_STAGE: u8 = 0;
+
+unsafe fn maybe_run_atlas_visible_restore_proof() {
+    if !ATLAS_VISIBLE_RESTORE_PROOF_ENABLED || ATLAS_VISIBLE_RESTORE_PROOF_DONE { return; }
+
+    static mut DEFER_BUDGET: u32 = 240;
+
+    loop {
+        let stage = ATLAS_VISIBLE_RESTORE_PROOF_STAGE;
+
+        // ── Stage 0: Create surface 103 + single-tab frame ──────────────
+        if stage == 0 {
+            // Clean up any stale surface 103 from prior proofs.
+            if SURFACE_103_ALIVE && surface_is_alive(SURFACE_ID_TEST4) {
+                if let Some(fid) = frame_for_surface(SURFACE_ID_TEST4) {
+                    close_surface_from_frame_light(SURFACE_ID_TEST4);
+                    for ti in 0..TOMBSTONE_RING_SIZE {
+                        if let Some(ref ev) = TOMBSTONE_RING[ti] {
+                            if ev.surface_id == SURFACE_ID_TEST4 {
+                                TOMBSTONE_RING[ti] = None;
+                            }
+                        }
+                    }
+                }
+            }
+            // Clear stale frame slots that might contain surface 103.
+            for slot in FRAMES.iter_mut() {
+                if let Some(ref frame) = slot {
+                    let has_103 = frame.tabs.iter().any(|t|
+                        t.map_or(false, |tab| tab.surface_id == SURFACE_ID_TEST4));
+                    if has_103 {
+                        *slot = None;
+                    }
+                }
+            }
+
+            let (rx, ry, rw, rh) = P.boot_rect_103;
+            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST4,
+                (ry as u64) << 32 | rx as u64,
+                (rh as u64) << 32 | rw as u64);
+            SURFACE_103_ALIVE = true;
+            SURFACE_103_X = rx; SURFACE_103_Y = ry;
+            SURFACE_103_W = rw; SURFACE_103_H = rh;
+            lifecycle_register(SURFACE_ID_TEST4, LifecycleState::Mapped);
+            if frame_for_surface(SURFACE_ID_TEST4).is_none() {
+                for slot in FRAMES.iter_mut() {
+                    if slot.is_none() {
+                        let mut tabs: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                            [None; MAX_TABS_PER_FRAME as usize];
+                        tabs[0] = Some(ShellTab {
+                            surface_id: SURFACE_ID_TEST4,
+                            title_id: 0,
+                            flags: 0,
+                        });
+                        *slot = Some(ShellFrame {
+                            frame_id: TEST4_FRAME_ID,
+                            active_tab: 0,
+                            tab_count: 1,
+                            tabs,
+                            scene_id: ACTIVE_SCENE_IDX,
+                            flags: FRAME_FLAG_TOP_BAR,
+                            normal_x: rx,
+                            normal_y: ry,
+                            normal_w: rw,
+                            normal_h: rh,
+                        });
+                        break;
+                    }
+                }
+            }
+            serial_println!("[silk.lifecycle.atlas.begin]");
+            serial_println!("[silk.lifecycle.atlas.begin] frame={} surface=103 tab_count=1",
+                TEST4_FRAME_ID);
+            ATLAS_VISIBLE_RESTORE_PROOF_STAGE = 1;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 1: Focus surface 103 ──────────────────────────────────
+        if stage == 1 {
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST4 {
+                try_set_focus(SURFACE_ID_TEST4);
+            }
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST4 {
+                if DEFER_BUDGET > 0 { DEFER_BUDGET -= 1; sys_yield(); continue; }
+                serial_println!("[silk.lifecycle.atlas.done] ok=0 reason=focus_timeout");
+                ATLAS_VISIBLE_RESTORE_PROOF_DONE = true;
+                return;
+            }
+            // Verify frame is in active scene and visible.
+            let vis = frame_for_surface(SURFACE_ID_TEST4).map_or(false, |fid| {
+                FRAMES.iter().any(|s| s.map_or(false, |f| {
+                    f.frame_id == fid
+                        && f.scene_id == ACTIVE_SCENE_IDX
+                        && (f.flags & FRAME_FLAG_MINIMIZED) == 0
+                }))
+            });
+            serial_println!("[silk.lifecycle.atlas.focus.ok] frame={} surface=103 visible={}",
+                TEST4_FRAME_ID, vis as u8);
+            ATLAS_VISIBLE_RESTORE_PROOF_STAGE = 2;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 2: Minimize via Enter key (real dispatch) ─────────────
+        if stage == 2 {
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST4 {
+                try_set_focus(SURFACE_ID_TEST4);
+            }
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST4 {
+                if DEFER_BUDGET > 0 { DEFER_BUDGET -= 1; sys_yield(); continue; }
+                serial_println!("[silk.lifecycle.atlas.done] ok=0 reason=focus_lost_before_minimize");
+                ATLAS_VISIBLE_RESTORE_PROOF_DONE = true;
+                return;
+            }
+            // Real keyboard minimize via Enter (0x1C)
+            handle_hid_event(EV_KEY, 0x1C, 1);
+            handle_hid_event(EV_KEY, 0x1C, 0);
+            serial_println!("[silk.lifecycle.atlas.minimize.action] frame={} scancode=0x1C dispatched=1",
+                TEST4_FRAME_ID);
+            ATLAS_VISIBLE_RESTORE_PROOF_STAGE = 3;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 3: Verify minimized state ─────────────────────────────
+        if stage == 3 {
+            let minimized = frame_is_minimized(TEST4_FRAME_ID);
+            let in_first_min = first_minimized_frame_id() == Some(TEST4_FRAME_ID);
+
+            // Scene should have HAS_MINIMIZED flag now.
+            let scene_has_min = SCENES.get(ACTIVE_SCENE_IDX as usize).map_or(false, |sd| {
+                (sd.flags & SCENE_FLAG_HAS_MINIMIZED) != 0
+            });
+
+            // Verify frame is hidden from active tile participation.
+            let tiles_visible = !FRAMES.iter().any(|s| s.map_or(false, |f| {
+                f.frame_id == TEST4_FRAME_ID && (f.flags & FRAME_FLAG_MINIMIZED) == 0
+            }));
+
+            serial_println!("[silk.lifecycle.atlas.minimized.visible] frame={} minimized={} first_minimized={} scene_has_minimized={} tiles_hidden={}",
+                TEST4_FRAME_ID, minimized as u8, in_first_min as u8, scene_has_min as u8, tiles_visible as u8);
+
+            if !minimized {
+                serial_println!("[silk.lifecycle.atlas.done] ok=0 reason=minimize_failed");
+                ATLAS_VISIBLE_RESTORE_PROOF_DONE = true;
+                return;
+            }
+            serial_println!("[silk.lifecycle.atlas.snapshot.ok] frame={} minimized=1",
+                TEST4_FRAME_ID);
+            ATLAS_VISIBLE_RESTORE_PROOF_STAGE = 4;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 4: Restore via PageUp (real dispatch) ─────────────────
+        if stage == 4 {
+            let had_minimized = first_minimized_frame_id();
+            handle_hid_event(EV_KEY, 0x49, 1);
+            handle_hid_event(EV_KEY, 0x49, 0);
+            let still_minimized = first_minimized_frame_id();
+            let restored = had_minimized.is_some() && still_minimized.is_none();
+            serial_println!("[silk.lifecycle.atlas.restore.action] frame={} scancode=0x49 dispatched=1 restored={}",
+                TEST4_FRAME_ID, restored as u8);
+            if !restored {
+                serial_println!("[silk.lifecycle.atlas.done] ok=0 reason=restore_failed");
+                ATLAS_VISIBLE_RESTORE_PROOF_DONE = true;
+                return;
+            }
+            ATLAS_VISIBLE_RESTORE_PROOF_STAGE = 5;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 5: Verify restored visible state ──────────────────────
+        if stage == 5 {
+            let not_minimized = !frame_is_minimized(TEST4_FRAME_ID);
+            let surface_live = surface_is_alive(SURFACE_ID_TEST4);
+
+            // Verify frame is visible/tile-eligible after restore.
+            let tile_eligible = FRAMES.iter().any(|s| s.map_or(false, |f| {
+                f.frame_id == TEST4_FRAME_ID
+                    && (f.flags & FRAME_FLAG_MINIMIZED) == 0
+            }));
+
+            // Re-focus the restored surface.
+            try_set_focus(SURFACE_ID_TEST4);
+            let focused = FOCUSED_SURFACE_ID == SURFACE_ID_TEST4;
+
+            // Verify geometry is sane (non-zero width/height).
+            let geom_sane = match get_surface_bounds(SURFACE_ID_TEST4) {
+                Some((_x, _y, w, h)) => w > 0 && h > 0,
+                None => false,
+            };
+
+            serial_println!("[silk.lifecycle.atlas.restore.visible] frame={} not_minimized={} surface_live={} tile_eligible={} focused={} geom_sane={}",
+                TEST4_FRAME_ID, not_minimized as u8, surface_live as u8, tile_eligible as u8,
+                focused as u8, geom_sane as u8);
+
+            if !not_minimized || !surface_live || !tile_eligible || !focused || !geom_sane {
+                serial_println!("[silk.lifecycle.atlas.done] ok=0 reason=restore_verification_failed");
+                ATLAS_VISIBLE_RESTORE_PROOF_DONE = true;
+                return;
+            }
+
+            serial_println!("[silk.lifecycle.atlas.focus.ok] frame={} surface=103 restored=1 focused=1",
+                TEST4_FRAME_ID);
+
+            // Clean up: close the proof surface.
+            if SURFACE_103_ALIVE && surface_is_alive(SURFACE_ID_TEST4) {
+                close_surface_from_frame_light(SURFACE_ID_TEST4);
+            }
+            // Clear tombstones.
+            for ti in 0..TOMBSTONE_RING_SIZE {
+                if let Some(ref ev) = TOMBSTONE_RING[ti] {
+                    if ev.surface_id == SURFACE_ID_TEST4 {
+                        TOMBSTONE_RING[ti] = None;
+                    }
+                }
+            }
+
+            ATLAS_VISIBLE_RESTORE_PROOF_DONE = true;
+            serial_println!("[silk.lifecycle.atlas.done] ok=1");
+            return;
+        }
+    }
+}
+
 /// Scene lifecycle markers proof.
 const SCENE_LIFECYCLE_MARKERS_PROOF_ENABLED: bool =
     option_env!("SEXOS_SCENE_LIFECYCLE_MARKERS_PROOF").is_some();
@@ -3033,6 +3269,247 @@ unsafe fn maybe_run_scene_lifecycle_markers_proof() {
     serial_println!("[silk.scene.lifecycle.summary] scenes=1 active=1 ready=1 minimized=0 urgent=0 switching=0 visual=0 pointer=0 ok=1");
     serial_println!("[silk.scene.lifecycle.markers.done] ok=1 scenes=1 switching=0 visual=0 pointer=0");
     SCENE_LIFECYCLE_MARKERS_PROOF_DONE = true;
+}
+
+// ── App-Death Cleanup Proof (SIMULATED) ────────────────────────────────
+// Simulates app surface death and proves shell cleanup: focus clears,
+// input rejects, restore rejects, tab removes, frame destroys.
+// Mode SIMULATED because SexOS has no process-exit ABI (kernel/scheduler
+// does not notify silk-shell of app death).  Surface death is simulated
+// via local SURFACE_*_ALIVE=false and lifecycle Tombstoned→Destroyed.
+// Gate: SEXOS_LIFECYCLE_APPDEATH_PROOF=1 (default unset, zero behavior change)
+
+const APPDEATH_CLEANUP_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LIFECYCLE_APPDEATH_PROOF").is_some();
+static mut APPDEATH_CLEANUP_PROOF_DONE: bool = false;
+static mut APPDEATH_CLEANUP_PROOF_STAGE: u8 = 0;
+
+unsafe fn maybe_run_appdeath_cleanup_proof() {
+    if !APPDEATH_CLEANUP_PROOF_ENABLED || APPDEATH_CLEANUP_PROOF_DONE { return; }
+
+    static mut DEFER_BUDGET: u32 = 240;
+
+    loop {
+        let stage = APPDEATH_CLEANUP_PROOF_STAGE;
+
+        // ── Stage 0: Create surface 103 + single-tab frame ──────────────
+        if stage == 0 {
+            // Clean up any stale surface 103 from prior proofs.
+            if SURFACE_103_ALIVE && surface_is_alive(SURFACE_ID_TEST4) {
+                if let Some(fid) = frame_for_surface(SURFACE_ID_TEST4) {
+                    close_surface_from_frame_light(SURFACE_ID_TEST4);
+                    for ti in 0..TOMBSTONE_RING_SIZE {
+                        if let Some(ref ev) = TOMBSTONE_RING[ti] {
+                            if ev.surface_id == SURFACE_ID_TEST4 {
+                                TOMBSTONE_RING[ti] = None;
+                            }
+                        }
+                    }
+                }
+            }
+            for slot in FRAMES.iter_mut() {
+                if let Some(ref frame) = slot {
+                    let has_103 = frame.tabs.iter().any(|t|
+                        t.map_or(false, |tab| tab.surface_id == SURFACE_ID_TEST4));
+                    if has_103 { *slot = None; }
+                }
+            }
+
+            let (rx, ry, rw, rh) = P.boot_rect_103;
+            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST4,
+                (ry as u64) << 32 | rx as u64,
+                (rh as u64) << 32 | rw as u64);
+            SURFACE_103_ALIVE = true;
+            SURFACE_103_X = rx; SURFACE_103_Y = ry;
+            SURFACE_103_W = rw; SURFACE_103_H = rh;
+            lifecycle_register(SURFACE_ID_TEST4, LifecycleState::Mapped);
+            if frame_for_surface(SURFACE_ID_TEST4).is_none() {
+                for slot in FRAMES.iter_mut() {
+                    if slot.is_none() {
+                        let mut tabs: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                            [None; MAX_TABS_PER_FRAME as usize];
+                        tabs[0] = Some(ShellTab {
+                            surface_id: SURFACE_ID_TEST4,
+                            title_id: 0,
+                            flags: 0,
+                        });
+                        *slot = Some(ShellFrame {
+                            frame_id: TEST4_FRAME_ID,
+                            active_tab: 0,
+                            tab_count: 1,
+                            tabs,
+                            scene_id: ACTIVE_SCENE_IDX,
+                            flags: FRAME_FLAG_TOP_BAR,
+                            normal_x: rx,
+                            normal_y: ry,
+                            normal_w: rw,
+                            normal_h: rh,
+                        });
+                        break;
+                    }
+                }
+            }
+            serial_println!("[silk.lifecycle.appdeath.begin]");
+            serial_println!("[silk.lifecycle.appdeath.mode.simulated]");
+            serial_println!("[silk.lifecycle.appdeath.begin] frame={} surface=103 tab_count=1 mode=simulated",
+                TEST4_FRAME_ID);
+            APPDEATH_CLEANUP_PROOF_STAGE = 1;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 1: Focus surface 103 ──────────────────────────────────
+        if stage == 1 {
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST4 {
+                try_set_focus(SURFACE_ID_TEST4);
+            }
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST4 {
+                if DEFER_BUDGET > 0 { DEFER_BUDGET -= 1; sys_yield(); continue; }
+                serial_println!("[silk.lifecycle.appdeath.done] ok=0 reason=focus_timeout");
+                APPDEATH_CLEANUP_PROOF_DONE = true;
+                return;
+            }
+            APPDEATH_CLEANUP_PROOF_STAGE = 2;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 2: Simulate app death ─────────────────────────────────
+        // Mark surface dead as if its owning app exited without clean close.
+        if stage == 2 {
+            let old_state = lifecycle_state(SURFACE_ID_TEST4).unwrap_or(LifecycleState::Mapped);
+            // Transition: live → Closing → Tombstoned → Destroyed
+            set_lifecycle_state(SURFACE_ID_TEST4, LifecycleState::Closing);
+            record_tombstone_event(SURFACE_ID_TEST4, old_state, LifecycleState::Closing,
+                TombstoneReason::DestroyCommand);
+            set_lifecycle_state(SURFACE_ID_TEST4, LifecycleState::Tombstoned);
+            record_tombstone_event(SURFACE_ID_TEST4, LifecycleState::Closing, LifecycleState::Tombstoned,
+                TombstoneReason::DestroyCommand);
+            set_lifecycle_state(SURFACE_ID_TEST4, LifecycleState::Destroyed);
+            record_tombstone_event(SURFACE_ID_TEST4, LifecycleState::Tombstoned, LifecycleState::Destroyed,
+                TombstoneReason::FinalDestroy);
+            SURFACE_103_ALIVE = false;
+
+            serial_println!("[silk.lifecycle.appdeath.mark_dead] surface=103 alive=0 lifecycle=Destroyed");
+            APPDEATH_CLEANUP_PROOF_STAGE = 3;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 3: Verify focus cleared from dead surface ─────────────
+        if stage == 3 {
+            clear_focus_if_dead();
+            let focus_cleared = FOCUSED_SURFACE_ID != SURFACE_ID_TEST4
+                && FOCUSED_SURFACE_ID != 0;
+            serial_println!("[silk.lifecycle.appdeath.focus_clear.ok] old_focus=103 new_focus={} cleared={}",
+                FOCUSED_SURFACE_ID, focus_cleared as u8);
+            if !focus_cleared {
+                serial_println!("[silk.lifecycle.appdeath.done] ok=0 reason=focus_not_cleared");
+                APPDEATH_CLEANUP_PROOF_DONE = true;
+                return;
+            }
+            APPDEATH_CLEANUP_PROOF_STAGE = 4;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 4: Verify input rejection on dead surface ─────────────
+        if stage == 4 {
+            let focus_rejected = !try_set_focus(SURFACE_ID_TEST4);
+            serial_println!("[silk.lifecycle.appdeath.input_reject.ok] surface=103 focus_rejected={}",
+                focus_rejected as u8);
+
+            // Also verify restore is rejected for dead surface.
+            // First, set minimized flag on the dead frame so we can test restore-reject.
+            let was_min = frame_is_minimized(TEST4_FRAME_ID);
+            if !was_min {
+                set_frame_minimized(TEST4_FRAME_ID, true);
+            }
+            let restore_rejected = !restore_minimized_frame(TEST4_FRAME_ID);
+            if !was_min {
+                // Clear the flag we set for testing.
+                set_frame_minimized(TEST4_FRAME_ID, false);
+            }
+            serial_println!("[silk.lifecycle.appdeath.restore_reject.ok] surface=103 restore_rejected={}",
+                restore_rejected as u8);
+
+            if !focus_rejected || !restore_rejected {
+                serial_println!("[silk.lifecycle.appdeath.done] ok=0 reason=rejection_failed focus={} restore={}",
+                    focus_rejected as u8, restore_rejected as u8);
+                APPDEATH_CLEANUP_PROOF_DONE = true;
+                return;
+            }
+            APPDEATH_CLEANUP_PROOF_STAGE = 5;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 5: Remove dead tab and destroy frame ──────────────────
+        if stage == 5 {
+            // Inline tab removal + frame destruction (simulates what
+            // a real process-exit notification handler would do).
+            let mut frame_destroyed = false;
+            for slot in FRAMES.iter_mut() {
+                if let Some(ref mut frame) = slot {
+                    let mut removed_idx: Option<usize> = None;
+                    for (ti, tab_opt) in frame.tabs.iter().enumerate() {
+                        if let Some(tab) = tab_opt {
+                            if tab.surface_id == SURFACE_ID_TEST4 {
+                                removed_idx = Some(ti);
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(ti) = removed_idx {
+                        frame.tabs[ti] = None;
+                        // Left-compact.
+                        for j in ti..(MAX_TABS_PER_FRAME as usize - 1) {
+                            frame.tabs[j] = frame.tabs[j + 1];
+                        }
+                        frame.tabs[MAX_TABS_PER_FRAME as usize - 1] = None;
+                        frame.tab_count -= 1;
+                        if frame.tab_count == 0 {
+                            serial_println!("[silk.lifecycle.appdeath.frame_destroy.ok] frame={}",
+                                frame.frame_id);
+                            *slot = None;
+                            frame_destroyed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            serial_println!("[silk.lifecycle.appdeath.tab_removed.ok] surface=103 frame_destroyed={}",
+                frame_destroyed as u8);
+
+            // Deactivate the dead surface on sexdisplay.
+            pdx_call(SLOT_DISPLAY, OP_SURFACE_DEACTIVATE, SURFACE_ID_TEST4, 0, 0);
+
+            // Verify frame is gone.
+            let frame_gone = !FRAMES.iter().any(|s| s.map_or(false, |f| {
+                f.frame_id == TEST4_FRAME_ID
+            }));
+
+            if !frame_gone {
+                serial_println!("[silk.lifecycle.appdeath.done] ok=0 reason=frame_not_destroyed");
+                APPDEATH_CLEANUP_PROOF_DONE = true;
+                return;
+            }
+
+            // Clear tombstones from this proof.
+            for ti in 0..TOMBSTONE_RING_SIZE {
+                if let Some(ref ev) = TOMBSTONE_RING[ti] {
+                    if ev.surface_id == SURFACE_ID_TEST4 {
+                        TOMBSTONE_RING[ti] = None;
+                    }
+                }
+            }
+
+            APPDEATH_CLEANUP_PROOF_DONE = true;
+            serial_println!("[silk.lifecycle.appdeath.done] ok=1 mode=simulated");
+            return;
+        }
+    }
 }
 
 /// Scene keyboard switch proof.
@@ -11156,6 +11633,8 @@ const PALETTE_LIST_BG_COLOR: u32 = 0x00101820; // dark slate
 const SPINDLE_FRAME_ID: u32 = 9;
 /// Frame ID for the disposable test surface 102 used by lifecycle proofs.
 const TEST3_FRAME_ID: u32 = 102;
+/// Frame ID for the disposable test surface 103 used by Atlas/appdeath proofs.
+const TEST4_FRAME_ID: u32 = 103;
 const SPINDLE_BOOT_X: i32 = 200;
 const SPINDLE_BOOT_Y: i32 = 200;
 const SPINDLE_BOOT_W: u32 = 500;
@@ -18120,6 +18599,8 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_quil_visible_typing_e2e_proof(); }
         unsafe { maybe_run_atlas_scene_stub_proof(); }
         unsafe { maybe_run_scene_lifecycle_markers_proof(); }
+        unsafe { maybe_run_atlas_visible_restore_proof(); }
+        unsafe { maybe_run_appdeath_cleanup_proof(); }
         unsafe { maybe_run_project_scene_link_proof(); }
         unsafe { maybe_run_mesh_graph_status_proof(); }
         unsafe { maybe_run_collar_grant_status_proof(); }
