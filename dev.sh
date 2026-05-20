@@ -62,6 +62,8 @@ if [ -n "$SEXOS_QEMU_INPUT_INJECT" ] || [ -n "$SEXOS_QEMU_QMP" ]; then
     trap cleanup_qmp_sock EXIT INT TERM
     QMP_ARG="-qmp unix:${QMP_SOCK},server=on,wait=off"
     echo "QMP monitor: $QMP_SOCK"
+    echo "[dev.qmp.arg] sock=$QMP_SOCK ok=1"
+    echo "[dev.qmp.cmd] $QMP_ARG"
 fi
 
 # Optional: disable QEMU i8042/PS2 controller so host keyboard events route to USB HID.
@@ -115,16 +117,20 @@ case "$CMD" in
     "$QEMU_BIN" "${QEMU_ARGS[@]}"
     ;;
   run-nographic)
-    "$QEMU_BIN" \
-      $MACHINE_ARG \
-      -m 512M \
-      -cpu max,+pku \
-      -cdrom sexos-v1.0.0.iso \
-      -device nec-usb-xhci,id=xhci \
-      $USB_DEVICE_ARG \
-      $TRACE_ARGS \
-      -display none \
+    QEMU_NOGRAPHIC_ARGS=(
+      $MACHINE_ARG
+      -m 512M
+      -cpu max,+pku
+      -cdrom sexos-v1.0.0.iso
+      -device nec-usb-xhci,id=xhci
+      $USB_DEVICE_ARG
+      $TRACE_ARGS
+      -display none
       -serial stdio
+      $NODEFAULTS_ARG
+      $QMP_ARG
+    )
+    "$QEMU_BIN" "${QEMU_NOGRAPHIC_ARGS[@]}"
     ;;
   *)
     echo "usage: ./dev.sh [run|run-nographic]"

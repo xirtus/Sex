@@ -75,3 +75,24 @@ SEXUSB_QEMU_DEVICE=mouse SEXOS_QEMU_DISPLAY=sdl-grab ./dev.sh run > "$log" 2>&1
 - QMP socket path was findable and patchable in allowed files.
 - No broad harness rewrite required.
 - No OS code changes required.
+
+## 2026-05-20 - QMP_ARG_NOT_PASSED_TO_QEMU_FIX_V1
+
+- Root cause: `dev.sh run-nographic` launched a separate hardcoded QEMU argv that did not include `QMP_ARG`, so `QMP monitor: ...` was printed but no `-qmp unix:...` reached QEMU.
+- Fix: added QMP visibility marker in `dev.sh`:
+  - `[dev.qmp.arg] sock=PATH ok=1`
+- Fix: added `QMP_ARG` to the actual `run-nographic` QEMU invocation by switching to `QEMU_NOGRAPHIC_ARGS` array and launching via `"${QEMU_NOGRAPHIC_ARGS[@]}"`.
+- Fix: print-cmd path in `scripts/qemu_harness.sh` now prints the `-qmp unix:...` argument whenever `--qmp`/`SEXOS_QMP_SOCK` is set.
+- Marker extraction typo check: verified `"scene.*render" "$LOG_FILE"` form is now correct.
+
+## 2026-05-20 - QMP_HANDSHAKE_TIMEOUT_FIX_V1
+
+- Observed root cause in probe path: `scripts/qmp_input_probe.py` read raw `recv(4096)` blobs and attempted whole-buffer JSON decode, which is fragile for QMP line-delimited multi-message streams and produced greeting/capability timeouts.
+- Probe fix in allowed file:
+  - switched to robust line-delimited JSON receive with explicit timeout diagnostics
+  - explicit greeting wait (`QMP` key required), then `qmp_capabilities`
+  - added command/response logging (`[qmp.send]`, `[qmp.recv]`, `[qmp.event]`, `[qmp.summary]`)
+  - default mode changed to `mouse` (relative move + left click press/release)
+  - preserved keyboard mode via `key`/legacy key-list forms (`... key w a s d` or `... w a s d`)
+- Dev-side visibility improvement:
+  - `dev.sh` now emits `[dev.qmp.cmd] -qmp unix:PATH,server=on,wait=off` when QMP is enabled.
