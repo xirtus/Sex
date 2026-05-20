@@ -6809,6 +6809,13 @@ enum InteractionState {
         pending_dx: i32,
         pending_dy: i32,
     },
+    TabDragging {
+        frame_id: u32,
+        start_tab: u8,
+        start_x: i32,
+        start_y: i32,
+        current_tab: u8,
+    },
 }
 
 struct DesktopPolicy {
@@ -8210,6 +8217,8 @@ static mut DRAG_PENDING_TARGET: u64 = 0;
 static mut DRAG_PENDING_KIND: u8 = 0; // 0=none 1=app 2=rim 3=chrome 4=tab/light
 static mut DRAG_PENDING_START_X: i32 = 0;
 static mut DRAG_PENDING_START_Y: i32 = 0;
+static mut TAB_DRAG_PENDING_FRAME_ID: u32 = 0;
+static mut TAB_DRAG_PENDING_START_TAB: u8 = 0;
 static mut POINTER_WHEEL_ACCUM: i32 = 0;
 static mut POINTER_USB_STATE_INIT: bool = false;
 /// Set true by apply_rel_pointer on first real relative input.
@@ -8818,6 +8827,12 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     InteractionState::Resizing { surface_id, edge, pending_dx, pending_dy, .. } => {
                         serial_println!("[silk.resize.end] sid={} edge={:?} x={} y={} dx={} dy={}",
                             surface_id, edge, POINTER_X, POINTER_Y, pending_dx, pending_dy);
+                        try_transition(InteractionState::Idle);
+                    }
+                    InteractionState::TabDragging { frame_id, start_tab, current_tab, .. } => {
+                        serial_println!("[silk.tab.drag.end] frame={} start_tab={} end_tab={} x={} y={}",
+                            frame_id, start_tab, current_tab, POINTER_X, POINTER_Y);
+                        DRAG_PENDING_ACTIVE = false;
                         try_transition(InteractionState::Idle);
                     }
                     _ => {}
@@ -16708,6 +16723,39 @@ unsafe fn frame_tab_at(frame_id: u32, x: i32, y: i32) -> Option<u32> {
     Some(tab_index as u32)
 }
 
+/// Swap two tab slots within a frame's tab array.
+/// Adjusts active_tab if the active tab is one of the swapped slots.
+/// Returns false if indices are out-of-bounds, equal, or either slot is None.
+unsafe fn swap_frame_tabs(frame_id: u32, idx_a: u8, idx_b: u8) -> bool {
+    let frame = match FRAMES.iter_mut().find_map(|f| {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id { Some(frame) } else { None }
+        } else {
+            None
+        }
+    }) {
+        Some(f) => f,
+        None => return false,
+    };
+    if idx_a >= frame.tab_count || idx_b >= frame.tab_count {
+        return false;
+    }
+    if idx_a == idx_b {
+        return true;
+    }
+    if frame.tabs[idx_a as usize].is_none() || frame.tabs[idx_b as usize].is_none() {
+        return false;
+    }
+    frame.tabs.swap(idx_a as usize, idx_b as usize);
+    if frame.active_tab == idx_a {
+        frame.active_tab = idx_b;
+    } else if frame.active_tab == idx_b {
+        frame.active_tab = idx_a;
+    }
+    serial_println!("[silk.tab.reorder.swap] frame={} a={} b={}", frame_id, idx_a, idx_b);
+    true
+}
+
 /// Send current tab metadata for the given frame to sexdisplay via OP_SURFACE_TAB_INFO.
 /// Called after frame init, on tab changes, and on hover state transitions.
 /// Packs chrome flags into arg2 bits 8-15:
@@ -16897,8 +16945,8 @@ unsafe fn switch_to_tab(frame_id: u32, tab_index: u32) -> bool {
 /// Does not modify focus, drag, or any interaction state.
 /// Does not produce FrameChrome hits yet — V1 only maps Surface hits to frames.
 unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
-    // Skip during active drag — pointer is captured by drag action.
-    if matches!(INTERACTION, InteractionState::Dragging { .. }) {
+    // Skip during active drag or tab reorder — pointer is captured.
+    if matches!(INTERACTION, InteractionState::Dragging { .. } | InteractionState::TabDragging { .. }) {
         return false;
     }
 
@@ -17223,10 +17271,14 @@ unsafe fn try_transition(next: InteractionState) {
         (InteractionState::ClickPending, InteractionState::PanelActive { .. }) => true,
         // ClickPending → Resizing (resize start)
         (InteractionState::ClickPending, InteractionState::Resizing { .. }) => true,
+        // ClickPending → TabDragging (tab reorder drag start)
+        (InteractionState::ClickPending, InteractionState::TabDragging { .. }) => true,
         // Dragging → Idle (release)
         (InteractionState::Dragging { .. }, InteractionState::Idle) => true,
         // Resizing → Idle (release)
         (InteractionState::Resizing { .. }, InteractionState::Idle) => true,
+        // TabDragging → Idle (release)
+        (InteractionState::TabDragging { .. }, InteractionState::Idle) => true,
         // PanelActive → Idle (panel close) or ClickPending (click while panel open)
         (InteractionState::PanelActive { .. }, InteractionState::Idle) => true,
         (InteractionState::PanelActive { .. }, InteractionState::ClickPending) => true,
@@ -17842,6 +17894,12 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                         "[shell.drag.pending] target={} kind=resize start_x={} start_y={} buttons={:#x}",
                         frame_id, px, py, buttons_val
                     );
+                } else if kind == FRAME_CHROME_TAB_STRIP {
+                    DRAG_PENDING_KIND = 5;
+                    serial_println!(
+                        "[shell.drag.pending] target={} kind=tab_strip start_x={} start_y={} buttons={:#x}",
+                        frame_id, px, py, buttons_val
+                    );
                 } else {
                     DRAG_PENDING_KIND = 4;
                     serial_println!(
@@ -18020,7 +18078,12 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
             } else if kind == FRAME_CHROME_TAB_STRIP {
                 // Tab strip click: switch to tab at pointer position.
                 if let Some(tab_index) = frame_tab_at(frame_id, px, py) {
-                    if !switch_to_tab(frame_id, tab_index) {
+                    serial_println!("[silk.tab.hit] frame={} tab={} x={} y={}", frame_id, tab_index, px, py);
+                    TAB_DRAG_PENDING_FRAME_ID = frame_id;
+                    TAB_DRAG_PENDING_START_TAB = tab_index as u8;
+                    if switch_to_tab(frame_id, tab_index) {
+                        serial_println!("[silk.tab.select] frame={} tab={}", frame_id, tab_index);
+                    } else {
                         unsafe {
                             static mut TAB_SWITCH_REJECT_BUDGET: u32 = 4;
                             let b = &mut TAB_SWITCH_REJECT_BUDGET;
@@ -20807,6 +20870,44 @@ pub extern "C" fn _start() -> ! {
                                     dx, dy, dist, required, buttons, pass as u8
                                 );
                             }
+                            // Tab drag (ABS): threshold → TabDragging.
+                            if matches!(INTERACTION, InteractionState::ClickPending) && DRAG_PENDING_ACTIVE && DRAG_PENDING_KIND == 5 {
+                                let pdx = POINTER_X - DRAG_PENDING_START_X;
+                                let pdy = POINTER_Y - DRAG_PENDING_START_Y;
+                                let dist = pdx.abs().max(pdy.abs());
+                                if dist >= 6 && (POINTER_BUTTONS & 0x01) != 0 {
+                                    let fid = TAB_DRAG_PENDING_FRAME_ID;
+                                    let stab = TAB_DRAG_PENDING_START_TAB;
+                                    serial_println!("[silk.tab.drag.begin] frame={} tab={} x={} y={}", fid, stab, POINTER_X, POINTER_Y);
+                                    try_transition(InteractionState::TabDragging {
+                                        frame_id: fid,
+                                        start_tab: stab,
+                                        start_x: DRAG_PENDING_START_X,
+                                        start_y: DRAG_PENDING_START_Y,
+                                        current_tab: stab,
+                                    });
+                                    DRAG_PENDING_ACTIVE = false;
+                                }
+                            }
+                            // Tab reorder: swap on move.
+                            let tab_drag_update_abs = if let InteractionState::TabDragging { frame_id, current_tab, .. } = INTERACTION {
+                                frame_tab_at(frame_id, POINTER_X, POINTER_Y).map(|new_tab| (frame_id, current_tab, new_tab as u8))
+                            } else {
+                                None
+                            };
+                            if let Some((fid, old_tab, new_tab)) = tab_drag_update_abs {
+                                if new_tab != old_tab {
+                                    if swap_frame_tabs(fid, old_tab, new_tab) {
+                                        send_frame_tab_info(fid);
+                                        if let InteractionState::TabDragging { ref mut current_tab, .. } = INTERACTION {
+                                            *current_tab = new_tab;
+                                        }
+                                        mutated = true;
+                                    } else {
+                                        serial_println!("[silk.tab.reorder.reject] frame={} from={} to={} reason=invalid", fid, old_tab, new_tab);
+                                    }
+                                }
+                            }
                         } else if event_class == EV_REL {
                             let dx_raw = msg.arg0 as i32;
                             let dy_raw = msg.arg1 as i32;
@@ -20852,6 +20953,45 @@ pub extern "C" fn _start() -> ! {
                                     "[shell.drag.threshold] dx={} dy={} dist={} required={} buttons={:#x} pass={}",
                                     pdx, pdy, dist, required, buttons, pass as u8
                                 );
+                            }
+
+                            // Tab drag: ClickPending + kind=tab_strip → TabDragging after threshold.
+                            if matches!(INTERACTION, InteractionState::ClickPending) && DRAG_PENDING_ACTIVE && DRAG_PENDING_KIND == 5 {
+                                let pdx = POINTER_X - DRAG_PENDING_START_X;
+                                let pdy = POINTER_Y - DRAG_PENDING_START_Y;
+                                let dist = pdx.abs().max(pdy.abs());
+                                if dist >= 6 && (POINTER_BUTTONS & 0x01) != 0 {
+                                    let fid = TAB_DRAG_PENDING_FRAME_ID;
+                                    let stab = TAB_DRAG_PENDING_START_TAB;
+                                    serial_println!("[silk.tab.drag.begin] frame={} tab={} x={} y={}", fid, stab, POINTER_X, POINTER_Y);
+                                    try_transition(InteractionState::TabDragging {
+                                        frame_id: fid,
+                                        start_tab: stab,
+                                        start_x: DRAG_PENDING_START_X,
+                                        start_y: DRAG_PENDING_START_Y,
+                                        current_tab: stab,
+                                    });
+                                    DRAG_PENDING_ACTIVE = false;
+                                }
+                            }
+                            // Tab reorder: swap tabs when dragged over a different tab slot.
+                            let tab_drag_update = if let InteractionState::TabDragging { frame_id, current_tab, .. } = INTERACTION {
+                                frame_tab_at(frame_id, POINTER_X, POINTER_Y).map(|new_tab| (frame_id, current_tab, new_tab as u8))
+                            } else {
+                                None
+                            };
+                            if let Some((fid, old_tab, new_tab)) = tab_drag_update {
+                                if new_tab != old_tab {
+                                    if swap_frame_tabs(fid, old_tab, new_tab) {
+                                        send_frame_tab_info(fid);
+                                        if let InteractionState::TabDragging { ref mut current_tab, .. } = INTERACTION {
+                                            *current_tab = new_tab;
+                                        }
+                                        mutated = true;
+                                    } else {
+                                        serial_println!("[silk.tab.reorder.reject] frame={} from={} to={} reason=invalid", fid, old_tab, new_tab);
+                                    }
+                                }
                             }
 
                             // ── Drag movement: move drag target surface by delta while button held ──
@@ -20962,6 +21102,12 @@ pub extern "C" fn _start() -> ! {
                                         InteractionState::Resizing { surface_id, edge, pending_dx, pending_dy, .. } => {
                                             serial_println!("[silk.resize.end] sid={} edge={:?} x={} y={} dx={} dy={}",
                                                 surface_id, edge, POINTER_X, POINTER_Y, pending_dx, pending_dy);
+                                            try_transition(InteractionState::Idle);
+                                        }
+                                        InteractionState::TabDragging { frame_id, start_tab, current_tab, .. } => {
+                                            serial_println!("[silk.tab.drag.end] frame={} start_tab={} end_tab={} x={} y={}",
+                                                frame_id, start_tab, current_tab, POINTER_X, POINTER_Y);
+                                            DRAG_PENDING_ACTIVE = false;
                                             try_transition(InteractionState::Idle);
                                         }
                                         _ => {}
