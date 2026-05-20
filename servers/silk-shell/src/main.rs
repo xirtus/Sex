@@ -14901,11 +14901,14 @@ unsafe fn frame_close_allowed(frame_id: u32) -> bool {
 /// Reuses the same destroy mechanism as keyboard SurfaceAction::DestroyFocused.
 /// Returns true if the surface was actually destroyed.
 unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
+    serial_println!("[silk.close.request] sid={}", surface_id);
     serial_println!("[silk.lifecycle.close.begin] sid={}", surface_id);
     // Must be closeable (checks registry, lifecycle registration, or alive flags).
     if !is_closeable_surface(surface_id) {
+        serial_println!("[silk.close.blocked.core] sid={} reason=not_closeable", surface_id);
         return false;
     }
+    serial_println!("[silk.close.allowed] sid={}", surface_id);
     // A6: Reject close if surface already in Closing/Tombstoned/Destroyed state.
     if let Some(state) = lifecycle_state(surface_id) {
         match state {
@@ -14925,7 +14928,24 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
             // A6: Record tombstone for drag cancelled before close.
             let st = lifecycle_state(surface_id).unwrap_or(LifecycleState::Allocated);
             record_tombstone_event(surface_id, st, st, TombstoneReason::DragCancelled);
+            serial_println!("[silk.close.state.clear] sid={} reason=drag_cancel", surface_id);
             try_transition(InteractionState::Idle);
+        }
+    }
+    // Clear Resizing state if target surface is being resized.
+    if let InteractionState::Resizing { surface_id: res_sid, .. } = INTERACTION {
+        if res_sid == surface_id {
+            serial_println!("[silk.close.state.clear] sid={} reason=resize_cancel", surface_id);
+            try_transition(InteractionState::Idle);
+        }
+    }
+    // Clear TabDragging state if the dragged tab belongs to the closing surface's frame.
+    if let InteractionState::TabDragging { frame_id: td_fid, .. } = INTERACTION {
+        if let Some(close_fid) = frame_for_surface(surface_id) {
+            if td_fid == close_fid {
+                serial_println!("[silk.close.state.clear] sid={} reason=tab_drag_cancel", surface_id);
+                try_transition(InteractionState::Idle);
+            }
         }
     }
     // A5: Clear focus first if this surface was focused.
@@ -14941,6 +14961,7 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     }
     // A3/A6: Track lifecycle state transition: live -> Closing -> Tombstoned.
     // Record tombstone events for each stage.
+    serial_println!("[silk.close.tombstone] sid={}", surface_id);
     let old_state = lifecycle_state(surface_id).unwrap_or(LifecycleState::Visible);
     set_lifecycle_state(surface_id, LifecycleState::Closing);
     record_tombstone_event(surface_id, old_state, LifecycleState::Closing, TombstoneReason::CloseRequested);
@@ -14960,6 +14981,7 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     // [silk.lifecycle.frame.empty.destroy] reachable because tab_count is
     // actually decremented and the tab slot is cleared.
     let mut frame_emptied: Option<u32> = None;
+    let mut next_focus_sid: Option<u64> = None;
     for frame_slot in FRAMES.iter_mut() {
         if let Some(frame) = frame_slot {
             let mut removed_idx: Option<usize> = None;
@@ -14992,6 +15014,10 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
                         // Active tab index shifted left by compaction.
                         frame.active_tab -= 1;
                     }
+                    // Capture the new active tab's surface for focus handoff.
+                    if let Some(next_tab) = frame.tabs[frame.active_tab as usize] {
+                        next_focus_sid = Some(next_tab.surface_id);
+                    }
                 }
                 if frame.tab_count == 0 {
                     frame_emptied = Some(frame.frame_id);
@@ -15002,6 +15028,7 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     }
     // Destroy empty frame and clear the FRAMES slot.
     if let Some(fid) = frame_emptied {
+        serial_println!("[silk.close.frame.empty] frame={} sid={}", fid, surface_id);
         serial_println!("[silk.lifecycle.frame.empty.destroy] frame={} sid={}", fid, surface_id);
         for frame_slot in FRAMES.iter_mut() {
             if let Some(frame) = frame_slot {
@@ -15014,6 +15041,13 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     }
     // Focus fallback: clear remaining stale focus and drag.
     clear_focus_if_dead();
+    // Prefer neighbor tab in same frame over z-order fallback.
+    if let Some(nsid) = next_focus_sid {
+        if surface_is_alive(nsid) && !is_tombstoned(nsid) {
+            serial_println!("[silk.close.focus.next] sid={} next={}", surface_id, nsid);
+            try_set_focus(nsid);
+        }
+    }
     // Phase 3 marker: after clearing dead focus, next live surface may be selected.
     serial_println!("[silk.lifecycle.focus.next_live] after_close_sid={} current_focus={}", surface_id, FOCUSED_SURFACE_ID);
     clear_drag_if_dead();
@@ -15021,6 +15055,7 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     clear_hover_if_wrong_scene();
     // Clear hover if the closed surface's frame is no longer valid.
     clear_hover_if_wrong_scene();
+    serial_println!("[silk.close.state.clear] sid={} reason=post_close_sweep", surface_id);
     // Re-tile remaining visible frames (empty frame already removed above).
     tile_active_scene_frames();
     snap_capture_layout();
