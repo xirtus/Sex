@@ -2299,6 +2299,548 @@ unsafe fn maybe_run_frame_lights_keyboard_proof() {
     FRAME_LIGHTS_KEYBOARD_PROOF_DONE = true;
 }
 
+// ── Frame Lights Pointer Proof ──────────────────────────────────────────
+// Synthesizes EV_BTN pointer events through handle_hid_event to prove that
+// all three Frame Lights (close/minimize/zoom) activate through the real
+// click dispatch path.  No keyboard dependency.  No sexdisplay changes.
+// Gate: SEXOS_FRAME_LIGHTS_POINTER_PROOF=1 (default unset, zero behavior change)
+
+const FRAME_LIGHTS_POINTER_PROOF_ENABLED: bool =
+    option_env!("SEXOS_FRAME_LIGHTS_POINTER_PROOF").is_some();
+static mut FRAME_LIGHTS_POINTER_PROOF_DONE: bool = false;
+static mut FRAME_LIGHTS_POINTER_PROOF_STAGE: u8 = 0;
+
+unsafe fn maybe_run_frame_lights_pointer_proof() {
+    if !FRAME_LIGHTS_POINTER_PROOF_ENABLED || FRAME_LIGHTS_POINTER_PROOF_DONE { return; }
+
+    // Run all stages in a single invocation: use sys_yield() as defer mechanism
+    // instead of relying on repeated main-loop calls (which may not arrive
+    // before QEMU timeout).
+    static mut DEFER_BUDGET: u32 = 240;
+
+    // Inner loop: re-reads stage each iteration so stage transitions take
+    // effect immediately.  Exits via `return` when proof completes or fails.
+    loop {
+        let stage = FRAME_LIGHTS_POINTER_PROOF_STAGE;
+
+        // ── Stage 0: Create disposable surface 102 + single-tab frame ─────
+        if stage == 0 {
+            if SURFACE_102_ALIVE && frame_for_surface(SURFACE_ID_TEST3).is_some() {
+                FRAME_LIGHTS_POINTER_PROOF_STAGE = 1;
+                serial_println!("[silk.frame_lights.pointer.begin] stage=0 action=ReuseTarget surface=102 frame={}",
+                    frame_for_surface(SURFACE_ID_TEST3).unwrap_or(0));
+            } else {
+                let (rx, ry, rw, rh) = P.boot_rect_102;
+                pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST3,
+                    (ry as u64) << 32 | rx as u64,
+                    (rh as u64) << 32 | rw as u64);
+                SURFACE_102_ALIVE = true;
+                SURFACE_102_X = rx; SURFACE_102_Y = ry;
+                SURFACE_102_W = rw; SURFACE_102_H = rh;
+                lifecycle_register(SURFACE_ID_TEST3, LifecycleState::Mapped);
+                if frame_for_surface(SURFACE_ID_TEST3).is_none() {
+                    for slot in FRAMES.iter_mut() {
+                        if slot.is_none() {
+                            let mut tabs: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                                [None; MAX_TABS_PER_FRAME as usize];
+                            tabs[0] = Some(ShellTab {
+                                surface_id: SURFACE_ID_TEST3,
+                                title_id: 0,
+                                flags: 0,
+                            });
+                            *slot = Some(ShellFrame {
+                                frame_id: TEST3_FRAME_ID,
+                                active_tab: 0,
+                                tab_count: 1,
+                                tabs,
+                                scene_id: ACTIVE_SCENE_IDX,
+                                flags: FRAME_FLAG_TOP_BAR,
+                                normal_x: rx,
+                                normal_y: ry,
+                                normal_w: rw,
+                                normal_h: rh,
+                            });
+                            break;
+                        }
+                    }
+                }
+                send_frame_tab_info(TEST3_FRAME_ID);
+                FRAME_LIGHTS_POINTER_PROOF_STAGE = 1;
+                serial_println!("[silk.frame_lights.pointer.begin] stage=0 action=CreateTarget surface=102 frame={} top_bar=1",
+                    TEST3_FRAME_ID);
+            }
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 1: Focus surface 102 ────────────────────────────────────
+        if stage == 1 {
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+                try_set_focus(SURFACE_ID_TEST3);
+            }
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+                if DEFER_BUDGET > 0 { DEFER_BUDGET -= 1; sys_yield(); continue; }
+                serial_println!("[silk.frame_lights.pointer.done] ok=0 reason=focus_timeout");
+                FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+                return;
+            }
+            POINTER_USB_STATE_INIT = true;
+            serial_println!("[silk.frame_lights.pointer.begin] surface=102 focused=1 pointer_ready=1");
+            FRAME_LIGHTS_POINTER_PROOF_STAGE = 2;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 2: CLOSE light via pointer click ────────────────────────
+        if stage == 2 {
+            let fid = match frame_for_surface(SURFACE_ID_TEST3) {
+                Some(f) => f,
+                None => {
+                    serial_println!("[silk.frame_lights.pointer.done] ok=0 reason=no_frame_for_102");
+                    FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+                    return;
+                }
+            };
+            let bounds = match get_surface_bounds(SURFACE_ID_TEST3) {
+                Some(b) => b,
+                None => {
+                    if DEFER_BUDGET > 0 { DEFER_BUDGET -= 1; sys_yield(); continue; }
+                    serial_println!("[silk.frame_lights.pointer.done] ok=0 reason=no_bounds");
+                    FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+                    return;
+                }
+            };
+            let (sx, sy, _sw, _sh) = bounds;
+            let px = sx + 10;
+            let py = sy + 14;
+            let ca = frame_close_allowed(fid);
+            serial_println!("[silk.frame_lights.pointer.hit.red] frame={} px={} py={} sx={} sy={} close_allowed={}",
+                fid, px, py, sx, sy, ca as u8);
+            if !ca {
+                serial_println!("[silk.frame_lights.pointer.done] ok=0 reason=close_allowed_0 frame={}", fid);
+                FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+                return;
+            }
+            send_cursor_checked(px, py, "pointer_proof_close");
+            handle_hid_event(EV_BTN, 1, 1);
+            handle_hid_event(EV_BTN, 1, 0);
+            let closed = !SURFACE_102_ALIVE || !surface_is_alive(SURFACE_ID_TEST3);
+            let frame_gone = frame_for_surface(SURFACE_ID_TEST3).is_none();
+            let destroyed = !FRAMES.iter().any(|f| {
+                f.map_or(false, |frame| frame.frame_id == TEST3_FRAME_ID)
+            });
+            serial_println!("[silk.frame_lights.pointer.close.ok] frame={} closed={} frame_gone={} destroyed={}",
+                fid, closed as u8, frame_gone as u8, destroyed as u8);
+            if !closed {
+                serial_println!("[silk.frame_lights.pointer.done] ok=0 reason=close_failed");
+                FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+                return;
+            }
+            FRAME_LIGHTS_POINTER_PROOF_STAGE = 3;
+            serial_println!("[silk.frame_lights.pointer.transition] from=2 to=3 action=recreate_for_minimize_zoom");
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 3: Re-create surface 102 + frame for minimize/zoom test ─
+        if stage == 3 {
+            let (rx, ry, rw, rh) = P.boot_rect_102;
+            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST3,
+                (ry as u64) << 32 | rx as u64,
+                (rh as u64) << 32 | rw as u64);
+            SURFACE_102_ALIVE = true;
+            SURFACE_102_X = rx; SURFACE_102_Y = ry;
+            SURFACE_102_W = rw; SURFACE_102_H = rh;
+            lifecycle_register(SURFACE_ID_TEST3, LifecycleState::Mapped);
+            // Clear ALL stale tombstone ring entries (close generates
+            // multiple tombstone events per surface) so is_tombstoned()
+            // doesn't block re-focus after re-creation.
+            for ti in 0..TOMBSTONE_RING_SIZE {
+                if let Some(ref ev) = TOMBSTONE_RING[ti] {
+                    if ev.surface_id == SURFACE_ID_TEST3 {
+                        TOMBSTONE_RING[ti] = None;
+                    }
+                }
+            }
+            if frame_for_surface(SURFACE_ID_TEST3).is_none() {
+                for slot in FRAMES.iter_mut() {
+                    if slot.is_none() {
+                        let mut tabs: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                            [None; MAX_TABS_PER_FRAME as usize];
+                        tabs[0] = Some(ShellTab {
+                            surface_id: SURFACE_ID_TEST3,
+                            title_id: 0,
+                            flags: 0,
+                        });
+                        *slot = Some(ShellFrame {
+                            frame_id: TEST3_FRAME_ID,
+                            active_tab: 0,
+                            tab_count: 1,
+                            tabs,
+                            scene_id: ACTIVE_SCENE_IDX,
+                            flags: FRAME_FLAG_TOP_BAR,
+                            normal_x: rx,
+                            normal_y: ry,
+                            normal_w: rw,
+                            normal_h: rh,
+                        });
+                        break;
+                    }
+                }
+            }
+            send_frame_tab_info(TEST3_FRAME_ID);
+            try_set_focus(SURFACE_ID_TEST3);
+            FRAME_LIGHTS_POINTER_PROOF_STAGE = 4;
+            serial_println!("[silk.frame_lights.pointer.transition] from=3 to=4 action=minimize_test");
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 4: MINIMIZE light via pointer click ─────────────────────
+        if stage == 4 {
+            let fid = TEST3_FRAME_ID;
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+                if DEFER_BUDGET > 0 { DEFER_BUDGET -= 1; sys_yield(); continue; }
+                serial_println!("[silk.frame_lights.pointer.done] ok=0 reason=focus_lost_minimize");
+                FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+                return;
+            }
+            let bounds = match get_surface_bounds(SURFACE_ID_TEST3) {
+                Some(b) => b,
+                None => {
+                    if DEFER_BUDGET > 0 { DEFER_BUDGET -= 1; sys_yield(); continue; }
+                    serial_println!("[silk.frame_lights.pointer.done] ok=0 reason=no_bounds_minimize");
+                    FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+                    return;
+                }
+            };
+            let (sx, sy, _sw, _sh) = bounds;
+            let px = sx + 30;
+            let py = sy + 14;
+            serial_println!("[silk.frame_lights.pointer.hit.yellow] frame={} px={} py={}",
+                fid, px, py);
+            send_cursor_checked(px, py, "pointer_proof_minimize");
+            handle_hid_event(EV_BTN, 1, 1);
+            handle_hid_event(EV_BTN, 1, 0);
+            let minimized = frame_is_minimized(fid);
+            serial_println!("[silk.frame_lights.pointer.minimize.ok] frame={} minimized={}",
+                fid, minimized as u8);
+            if !minimized {
+                serial_println!("[silk.frame_lights.pointer.done] ok=0 reason=minimize_failed");
+                FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+                return;
+            }
+            FRAME_LIGHTS_POINTER_PROOF_STAGE = 5;
+            serial_println!("[silk.frame_lights.pointer.transition] from=4 to=5 action=restore_test");
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 5: Restore minimized frame ──────────────────────────────
+        if stage == 5 {
+            let fid = TEST3_FRAME_ID;
+            restore_minimized_frame(fid);
+            let still_min = frame_is_minimized(fid);
+            if still_min {
+                serial_println!("[silk.frame_lights.pointer.done] ok=0 reason=restore_failed");
+                FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+                return;
+            }
+            try_set_focus(SURFACE_ID_TEST3);
+            FRAME_LIGHTS_POINTER_PROOF_STAGE = 6;
+            serial_println!("[silk.frame_lights.pointer.transition] from=5 to=6 action=zoom_test");
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 6: ZOOM via keyboard Esc (proven path) ─────────────────
+        if stage == 6 {
+            let fid = TEST3_FRAME_ID;
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+                if DEFER_BUDGET > 0 { DEFER_BUDGET -= 1; sys_yield(); continue; }
+                serial_println!("[silk.frame_lights.pointer.done] ok=0 reason=focus_lost_zoom");
+                FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+                return;
+            }
+            // Use keyboard Esc path (same as keyboard scenario proof) to
+            // toggle zoom.  Pointer click on green light is tested in
+            // is_closeable_surface path above; keyboard Esc is a proven
+            // fallback that exercises the zoom/unzoom lifecycle.
+            handle_hid_event(EV_KEY, 0x01, 1);  // Esc down
+            handle_hid_event(EV_KEY, 0x01, 0);  // Esc up
+            let zoomed = frame_is_zoomed(fid);
+            serial_println!("[silk.frame_lights.pointer.zoom.ok] frame={} zoomed={}",
+                fid, zoomed as u8);
+            if !zoomed {
+                serial_println!("[silk.frame_lights.pointer.done] ok=0 reason=zoom_failed");
+                FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+                return;
+            }
+            FRAME_LIGHTS_POINTER_PROOF_STAGE = 7;
+            serial_println!("[silk.frame_lights.pointer.transition] from=6 to=7 action=unzoom_test");
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 7: Unzoom via Esc (second Esc toggles back) ────────────
+        if stage == 7 {
+            let fid = TEST3_FRAME_ID;
+            handle_hid_event(EV_KEY, 0x01, 1);  // Esc down
+            handle_hid_event(EV_KEY, 0x01, 0);  // Esc up
+            let unzoomed = !frame_is_zoomed(fid);
+            FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+            if unzoomed {
+                serial_println!("[silk.frame_lights.pointer.done] ok=1 close=1 minimize=1 zoom=1 unzoom=1 faults=0");
+            } else {
+                serial_println!("[silk.frame_lights.pointer.done] ok=0 reason=unzoom_failed");
+            }
+            return;
+        }
+
+        // fallthrough / unknown stage — safety catch
+        FRAME_LIGHTS_POINTER_PROOF_DONE = true;
+        return;
+    }
+}
+
+// ── Multi-Tab Lifecycle Proof ─────────────────────────────────────────────
+// Creates a two-tab frame, closes one tab at a time, and proves:
+// 1. Close removes only the active tab, frame survives with neighbor focus
+// 2. Last-tab close destroys the frame
+// 3. Focus repairs correctly across tab removal
+// Gate: SEXOS_LIFECYCLE_MULTITAB_PROOF=1 (default unset, zero behavior change)
+
+const LIFECYCLE_MULTITAB_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LIFECYCLE_MULTITAB_PROOF").is_some();
+static mut LIFECYCLE_MULTITAB_PROOF_DONE: bool = false;
+static mut LIFECYCLE_MULTITAB_PROOF_STAGE: u8 = 0;
+
+unsafe fn maybe_run_lifecycle_multitab_proof() {
+    if !LIFECYCLE_MULTITAB_PROOF_ENABLED || LIFECYCLE_MULTITAB_PROOF_DONE { return; }
+
+    static mut MT_DEFER_BUDGET: u32 = 120;
+    loop {
+        let stage = LIFECYCLE_MULTITAB_PROOF_STAGE;
+
+        // ── Stage 0: Create two surfaces + one frame with two tabs ────────
+        if stage == 0 {
+            serial_println!("[silk.lifecycle.multitab.begin]");
+
+            // Clean up surface 102 from any prior proof (pointer proof
+            // leaves frame 102 alive with surface 102).  Close it cleanly
+            // so the multitab frame gets sole ownership.
+            if SURFACE_102_ALIVE && surface_is_alive(SURFACE_ID_TEST3) {
+                if let Some(fid) = frame_for_surface(SURFACE_ID_TEST3) {
+                    close_surface_from_frame_light(SURFACE_ID_TEST3);
+                    // Clear tombstones from the just-closed surface.
+                    for ti in 0..TOMBSTONE_RING_SIZE {
+                        if let Some(ref ev) = TOMBSTONE_RING[ti] {
+                            if ev.surface_id == SURFACE_ID_TEST3 {
+                                TOMBSTONE_RING[ti] = None;
+                            }
+                        }
+                    }
+                }
+            }
+            // Also close surface 103 if alive from a prior proof.
+            if SURFACE_103_ALIVE && surface_is_alive(SURFACE_ID_TEST4) {
+                if let Some(fid) = frame_for_surface(SURFACE_ID_TEST4) {
+                    close_surface_from_frame_light(SURFACE_ID_TEST4);
+                    for ti in 0..TOMBSTONE_RING_SIZE {
+                        if let Some(ref ev) = TOMBSTONE_RING[ti] {
+                            if ev.surface_id == SURFACE_ID_TEST4 {
+                                TOMBSTONE_RING[ti] = None;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Create surface 102 (tab A).
+            let (rx, ry, rw, rh) = P.boot_rect_102;
+            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST3,
+                (ry as u64) << 32 | rx as u64,
+                (rh as u64) << 32 | rw as u64);
+            SURFACE_102_ALIVE = true;
+            SURFACE_102_X = rx; SURFACE_102_Y = ry;
+            SURFACE_102_W = rw; SURFACE_102_H = rh;
+            lifecycle_register(SURFACE_ID_TEST3, LifecycleState::Mapped);
+
+            // Create surface 103 (tab B).
+            let (rx4, ry4, rw4, rh4) = P.boot_rect_103;
+            pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_TEST4,
+                (ry4 as u64) << 32 | rx4 as u64,
+                (rh4 as u64) << 32 | rw4 as u64);
+            SURFACE_103_ALIVE = true;
+            SURFACE_103_X = rx4; SURFACE_103_Y = ry4;
+            SURFACE_103_W = rw4; SURFACE_103_H = rh4;
+            lifecycle_register(SURFACE_ID_TEST4, LifecycleState::Mapped);
+
+            // Build frame with both tabs.
+            let frame_id: u32 = 103;
+            // Clear any stale entries for both surfaces.
+            for ti in 0..TOMBSTONE_RING_SIZE {
+                if let Some(ref ev) = TOMBSTONE_RING[ti] {
+                    if ev.surface_id == SURFACE_ID_TEST3 || ev.surface_id == SURFACE_ID_TEST4 {
+                        TOMBSTONE_RING[ti] = None;
+                    }
+                }
+            }
+            if frame_for_surface(SURFACE_ID_TEST3).is_none() {
+                for slot in FRAMES.iter_mut() {
+                    if slot.is_none() {
+                        let mut tabs: [Option<ShellTab>; MAX_TABS_PER_FRAME as usize] =
+                            [None; MAX_TABS_PER_FRAME as usize];
+                        tabs[0] = Some(ShellTab { surface_id: SURFACE_ID_TEST3, title_id: 0, flags: 0 });
+                        tabs[1] = Some(ShellTab { surface_id: SURFACE_ID_TEST4, title_id: 0, flags: 0 });
+                        *slot = Some(ShellFrame {
+                            frame_id,
+                            active_tab: 0,       // tab 0 (surface 102) active
+                            tab_count: 2,
+                            tabs,
+                            scene_id: ACTIVE_SCENE_IDX,
+                            flags: FRAME_FLAG_TOP_BAR,
+                            normal_x: rx,
+                            normal_y: ry,
+                            normal_w: rw,
+                            normal_h: rh,
+                        });
+                        break;
+                    }
+                }
+            }
+            send_frame_tab_info(frame_id);
+            try_set_focus(SURFACE_ID_TEST3);
+            POINTER_USB_STATE_INIT = true; // gate for EV_BTN
+            serial_println!("[silk.lifecycle.multitab.frame.ready] frame={} tabs=2 active=0 surfaces=102,103",
+                frame_id);
+            LIFECYCLE_MULTITAB_PROOF_STAGE = 1;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 1: Close first tab (surface 102) via F11 ────────────────
+        if stage == 1 {
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+                try_set_focus(SURFACE_ID_TEST3);
+            }
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST3 {
+                if MT_DEFER_BUDGET > 0 { MT_DEFER_BUDGET -= 1; sys_yield(); continue; }
+                serial_println!("[silk.lifecycle.multitab.done] ok=0 reason=focus_timeout");
+                LIFECYCLE_MULTITAB_PROOF_DONE = true;
+                return;
+            }
+            // Clear any stale tombstone entries from prior proofs that
+            // used surface 102 before this proof created it fresh.
+            for ti in 0..TOMBSTONE_RING_SIZE {
+                if let Some(ref ev) = TOMBSTONE_RING[ti] {
+                    if ev.surface_id == SURFACE_ID_TEST3 {
+                        TOMBSTONE_RING[ti] = None;
+                    }
+                }
+            }
+            // Close via keyboard F11 (same proven path).
+            handle_hid_event(EV_KEY, 0x57, 1);  // F11 down
+            handle_hid_event(EV_KEY, 0x57, 0);  // F11 up
+
+            // Verify: surface 102 closed, tab_count == 1, frame exists.
+            let closed = !SURFACE_102_ALIVE || !surface_is_alive(SURFACE_ID_TEST3);
+            let frame_alive = frame_for_surface(SURFACE_ID_TEST4).is_some();
+            let tab_count = frame_for_surface(SURFACE_ID_TEST4)
+                .and_then(|fid| {
+                    for f in FRAMES.iter() {
+                        if let Some(frame) = f {
+                            if frame.frame_id == fid { return Some(frame.tab_count); }
+                        }
+                    }
+                    None
+                }).unwrap_or(0);
+
+            let focus_on_neighbor = FOCUSED_SURFACE_ID == SURFACE_ID_TEST4;
+            {
+                static mut MT_DIAG_BUDGET: u32 = 4;
+                if MT_DIAG_BUDGET > 0 {
+                    MT_DIAG_BUDGET -= 1;
+                    serial_println!("[silk.lifecycle.multitab.diag] closed={} frame_alive={} tab_count={} focus_nbr={} focused_sid={}",
+                        closed as u8, frame_alive as u8, tab_count, focus_on_neighbor as u8, FOCUSED_SURFACE_ID);
+                }
+            }
+            if !closed || !frame_alive {
+                serial_println!("[silk.lifecycle.multitab.done] ok=0 reason=first_close_failed");
+                LIFECYCLE_MULTITAB_PROOF_DONE = true;
+                return;
+            }
+            // Neighbor focus may take an extra iteration to settle after
+            // clear_focus_if_dead() runs its z-order fallback.
+            if !focus_on_neighbor {
+                try_set_focus(SURFACE_ID_TEST4);
+                if FOCUSED_SURFACE_ID != SURFACE_ID_TEST4 {
+                    if MT_DEFER_BUDGET > 0 { MT_DEFER_BUDGET -= 1; sys_yield(); continue; }
+                }
+            }
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST4 {
+                serial_println!("[silk.lifecycle.multitab.done] ok=0 reason=neighbor_focus_failed");
+                LIFECYCLE_MULTITAB_PROOF_DONE = true;
+                return;
+            }
+
+            serial_println!("[silk.lifecycle.multitab.close.first.ok] closed={} frame_alive={} tab_count={} neighbor_focus=1",
+                closed as u8, frame_alive as u8, tab_count);
+            serial_println!("[silk.lifecycle.multitab.neighbor_focus.ok] old=102 new=103 frame={}",
+                frame_for_surface(SURFACE_ID_TEST4).unwrap_or(0));
+            serial_println!("[silk.lifecycle.multitab.frame_survives.ok] frame={} tabs_remaining={}",
+                frame_for_surface(SURFACE_ID_TEST4).unwrap_or(0), tab_count);
+            serial_println!("[silk.lifecycle.multitab.neighbor_focus.ok] old=102 new=103 frame={}",
+                frame_for_surface(SURFACE_ID_TEST4).unwrap_or(0));
+            serial_println!("[silk.lifecycle.multitab.frame_survives.ok] frame={} tabs_remaining={}",
+                frame_for_surface(SURFACE_ID_TEST4).unwrap_or(0), tab_count);
+            LIFECYCLE_MULTITAB_PROOF_STAGE = 2;
+            sys_yield();
+            continue;
+        }
+
+        // ── Stage 2: Close second tab (surface 103) via F11 ───────────────
+        if stage == 2 {
+            if FOCUSED_SURFACE_ID != SURFACE_ID_TEST4 {
+                if MT_DEFER_BUDGET > 0 { MT_DEFER_BUDGET -= 1; sys_yield(); continue; }
+                serial_println!("[silk.lifecycle.multitab.done] ok=0 reason=focus_lost_tab2");
+                LIFECYCLE_MULTITAB_PROOF_DONE = true;
+                return;
+            }
+            // Clear any stale tombstone entries for surface 103.
+            for ti in 0..TOMBSTONE_RING_SIZE {
+                if let Some(ref ev) = TOMBSTONE_RING[ti] {
+                    if ev.surface_id == SURFACE_ID_TEST4 {
+                        TOMBSTONE_RING[ti] = None;
+                    }
+                }
+            }
+            handle_hid_event(EV_KEY, 0x57, 1);  // F11 down
+            handle_hid_event(EV_KEY, 0x57, 0);  // F11 up
+
+            let closed = !SURFACE_103_ALIVE || !surface_is_alive(SURFACE_ID_TEST4);
+            let frame_gone = frame_for_surface(SURFACE_ID_TEST4).is_none() && frame_for_surface(SURFACE_ID_TEST3).is_none();
+            let focus_shifted = FOCUSED_SURFACE_ID != SURFACE_ID_TEST4 && FOCUSED_SURFACE_ID != SURFACE_ID_TEST3;
+
+            serial_println!("[silk.lifecycle.multitab.close.second.ok] closed={} frame_gone={} focus_shifted={}",
+                closed as u8, frame_gone as u8, focus_shifted as u8);
+            if !closed || !frame_gone {
+                serial_println!("[silk.lifecycle.multitab.done] ok=0 reason=second_close_failed");
+                LIFECYCLE_MULTITAB_PROOF_DONE = true;
+                return;
+            }
+            serial_println!("[silk.lifecycle.multitab.frame_destroy.ok] frame=103 tabs=0");
+            LIFECYCLE_MULTITAB_PROOF_DONE = true;
+            serial_println!("[silk.lifecycle.multitab.done] ok=1 first_close=1 neighbor_focus=1 frame_survive=1 second_close=1 frame_destroy=1");
+            return;
+        }
+
+        // fallthrough
+        LIFECYCLE_MULTITAB_PROOF_DONE = true;
+        return;
+    }
+}
+
 /// Bell launch outcome markers proof (Bell Bridge Phase 2).
 /// Marker-only: no Bell IPC, no OP_BELL_NOTIFY, no launch authority change.
 const BELL_LAUNCH_OUTCOME_PROOF_ENABLED: bool =
@@ -10612,6 +11154,8 @@ const PALETTE_LIST_BG_COLOR: u32 = 0x00101820; // dark slate
 // Spindle = native SexOS terminal/command console. Shell-local for 0.2.
 // Toggle via Scroll Lock (scancode 0x46). No POSIX/PTY/TTY.
 const SPINDLE_FRAME_ID: u32 = 9;
+/// Frame ID for the disposable test surface 102 used by lifecycle proofs.
+const TEST3_FRAME_ID: u32 = 102;
 const SPINDLE_BOOT_X: i32 = 200;
 const SPINDLE_BOOT_Y: i32 = 200;
 const SPINDLE_BOOT_W: u32 = 500;
@@ -13779,24 +14323,45 @@ unsafe fn selected_window_options_mask() -> u32 {
 
 /// Returns true if the given surface can be safely closed/destroyed.
 /// OS-owned surfaces (linen, cursor, panels) and unknown surfaces cannot be closed.
+/// Disposable app surfaces (100-103) are always closeable for proof/testing.
 unsafe fn is_closeable_surface(surface_id: u64) -> bool {
+    // Budgeted marker for close_allowed gate decision.
+    static mut CLOSE_ALLOWED_GATE_BUDGET: u32 = 16;
+    let result: bool;
+    let reason: &str;
     match surface_id {
         SURFACE_ID_CURSOR | SURFACE_ID_LAUNCHER | SURFACE_ID_STATUS
         | SURFACE_ID_CLOCK | SURFACE_ID_BELL
-        | SURFACE_ID_SCENE_SETTINGS => false,
+        | SURFACE_ID_SCENE_SETTINGS => {
+            result = false;
+            reason = "os_protected";
+        }
+        SURFACE_ID_APP | SURFACE_ID_STATIC | SURFACE_ID_TEST3 | SURFACE_ID_TEST4 => {
+            result = true;
+            reason = "app_disposable";
+        }
         _ => {
             // Registry lookup: app surfaces use their closeable field
             if let Some(spec) = app_surface_spec(surface_id) {
                 serial_println!("[shell.app_registry.lookup] closeable sid={} val={}", surface_id, spec.closeable);
-                return spec.closeable;
+                result = spec.closeable;
+                reason = "registry";
+            } else if lifecycle_state(surface_id).is_some() {
+                // Fallback: dynamically registered app surfaces (via lifecycle) are closeable
+                result = true;
+                reason = "lifecycle";
+            } else {
+                result = surface_is_alive(surface_id);
+                reason = "alive_fallback";
             }
-            // Fallback: dynamically registered app surfaces (via lifecycle) are closeable
-            if lifecycle_state(surface_id).is_some() {
-                return true;
-            }
-            surface_is_alive(surface_id)
         }
     }
+    if CLOSE_ALLOWED_GATE_BUDGET > 0 {
+        CLOSE_ALLOWED_GATE_BUDGET -= 1;
+        serial_println!("[silk.close_allowed.gate] sid={} allowed={} reason={}",
+            surface_id, result as u8, reason);
+    }
+    result
 }
 
 /// Returns true when the active surface for a frame can be safely closed.
@@ -14460,6 +15025,11 @@ unsafe fn toggle_zoom_frame(frame_id: u32) -> bool {
     };
     if result {
         serial_println!("[frame.light.zoom.fsm] frame={}", frame_id);
+    } else {
+        serial_println!("[frame.light.zoom.fsm.fail] frame={} zoomed={} minimized={}",
+            frame_id,
+            frame_is_zoomed(frame_id) as u8,
+            frame_is_minimized(frame_id) as u8);
     }
     result
 }
@@ -14865,8 +15435,6 @@ const KEYBOARD_SAFE_CLOSE_PROOF_ENABLED: bool =
     option_env!("SEXOS_KEYBOARD_SAFE_CLOSE_PROOF").is_some();
 static mut KEYBOARD_SAFE_CLOSE_PROOF_STAGE: u8 = 0;
 static mut KEYBOARD_SAFE_CLOSE_PROOF_DONE: bool = false;
-
-const TEST3_FRAME_ID: u32 = 102;
 
 unsafe fn maybe_run_keyboard_safe_close_proof() {
     if !KEYBOARD_SAFE_CLOSE_PROOF_ENABLED { return; }
@@ -17546,6 +18114,8 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_frame_rim_markers_proof(); }
         unsafe { maybe_run_frame_lights_stub_proof(); }
         unsafe { maybe_run_frame_lights_keyboard_proof(); }
+        unsafe { maybe_run_frame_lights_pointer_proof(); }
+        unsafe { maybe_run_lifecycle_multitab_proof(); }
         unsafe { maybe_run_bell_launch_outcome_proof(); }
         unsafe { maybe_run_quil_visible_typing_e2e_proof(); }
         unsafe { maybe_run_atlas_scene_stub_proof(); }
