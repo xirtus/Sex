@@ -6788,11 +6788,27 @@ enum HitTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResizeEdge {
+    Left, Right, Top, Bottom,
+    TopLeft, TopRight, BottomLeft, BottomRight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InteractionState {
     Idle,
     ClickPending,
     Dragging { surface_id: u64, current_x: i32, current_y: i32 },
     PanelActive { panel: PanelKind },
+    Resizing {
+        surface_id: u64,
+        edge: ResizeEdge,
+        start_x: i32,
+        start_y: i32,
+        start_w: u32,
+        start_h: u32,
+        pending_dx: i32,
+        pending_dy: i32,
+    },
 }
 
 struct DesktopPolicy {
@@ -7331,8 +7347,16 @@ const SILK_CHROME_TEMPLATE_DEFAULT: ChromeTemplate = ChromeTemplate {
 const FRAME_CHROME_RIM: u32 = 1;
 /// Chrome hit-target kind for a tab strip band (reserved, not produced in V1).
 const FRAME_CHROME_TAB_STRIP: u32 = 2;
+/// Chrome hit-target kind for a resize edge or corner zone.
+const FRAME_CHROME_RESIZE: u32 = 3;
 /// Thickness of the neon rim edge band in pixels.
 const FRAME_RIM_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.rim_px;
+/// Resize hit zone thickness in pixels (same as rim).
+const FRAME_RESIZE_ZONE_PX: i32 = FRAME_RIM_PX;
+/// Pixels from left/right screen edge that trigger drag-to-snap.
+const SNAP_EDGE_PX: i32 = 24;
+/// Pixels below the SilkBar that trigger drag-to-top-snap (zoom).
+const SNAP_TOP_PX: i32 = 16;
 /// Height of the tab strip band in pixels (0 = disabled in V1).
 const FRAME_TAB_STRIP_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.tab_strip_px;
 /// X-width of the Frame Lights exclusion zone in the top rim band.
@@ -8788,6 +8812,12 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                             surface_id, POINTER_X, POINTER_Y
                         );
                         DRAG_PENDING_ACTIVE = false;
+                        let _ = try_snap_on_drag_release(surface_id, POINTER_X, POINTER_Y);
+                        try_transition(InteractionState::Idle);
+                    }
+                    InteractionState::Resizing { surface_id, edge, pending_dx, pending_dy, .. } => {
+                        serial_println!("[silk.resize.end] sid={} edge={:?} x={} y={} dx={} dy={}",
+                            surface_id, edge, POINTER_X, POINTER_Y, pending_dx, pending_dy);
                         try_transition(InteractionState::Idle);
                     }
                     _ => {}
@@ -17191,8 +17221,12 @@ unsafe fn try_transition(next: InteractionState) {
         (InteractionState::ClickPending, InteractionState::Dragging { .. }) => true,
         (InteractionState::ClickPending, InteractionState::Idle) => true,
         (InteractionState::ClickPending, InteractionState::PanelActive { .. }) => true,
+        // ClickPending → Resizing (resize start)
+        (InteractionState::ClickPending, InteractionState::Resizing { .. }) => true,
         // Dragging → Idle (release)
         (InteractionState::Dragging { .. }, InteractionState::Idle) => true,
+        // Resizing → Idle (release)
+        (InteractionState::Resizing { .. }, InteractionState::Idle) => true,
         // PanelActive → Idle (panel close) or ClickPending (click while panel open)
         (InteractionState::PanelActive { .. }, InteractionState::Idle) => true,
         (InteractionState::PanelActive { .. }, InteractionState::ClickPending) => true,
@@ -17281,6 +17315,233 @@ unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
     }
 }
 
+/// Compute the resize edge/corner from pointer position relative to surface bounds.
+fn compute_resize_edge(px: i32, py: i32, sx: i32, sy: i32, sw: u32, sh: u32) -> ResizeEdge {
+    let right = sx + sw as i32 - 1;
+    let bottom = sy + sh as i32 - 1;
+    let rz = FRAME_RESIZE_ZONE_PX;
+    let on_left   = px < sx + rz;
+    let on_right  = px > right - rz;
+    let on_top    = py < sy + rz;
+    let on_bottom = py > bottom - rz;
+    match (on_left, on_right, on_top, on_bottom) {
+        (true,  _,    true,  _    ) => ResizeEdge::TopLeft,
+        (_,     true, true,  _    ) => ResizeEdge::TopRight,
+        (true,  _,    _,     true ) => ResizeEdge::BottomLeft,
+        (_,     true, _,     true ) => ResizeEdge::BottomRight,
+        (true,  _,    _,     _    ) => ResizeEdge::Left,
+        (_,     true, _,     _    ) => ResizeEdge::Right,
+        (_,     _,    true,  _    ) => ResizeEdge::Top,
+        _                           => ResizeEdge::Bottom,
+    }
+}
+
+/// Accumulate pointer delta into the current Resizing state.
+/// Returns true if state was updated (caller should set mutated).
+unsafe fn resize_accumulate_delta(dx: i32, dy: i32) -> bool {
+    if let InteractionState::Resizing { surface_id, edge, start_x, start_y, start_w, start_h, pending_dx, pending_dy } = INTERACTION {
+        let new_dx = pending_dx + dx;
+        let new_dy = pending_dy + dy;
+        INTERACTION = InteractionState::Resizing {
+            surface_id, edge, start_x, start_y, start_w, start_h,
+            pending_dx: new_dx, pending_dy: new_dy,
+        };
+        unsafe {
+            static mut RESIZE_DELTA_BUDGET: u32 = 16;
+            let b = &mut RESIZE_DELTA_BUDGET;
+            if *b > 0 {
+                *b -= 1;
+                serial_println!("[silk.resize.delta] sid={} edge={:?} dx={} dy={} total_dx={} total_dy={}", surface_id, edge, dx, dy, new_dx, new_dy);
+            }
+        }
+        true
+    } else {
+        false
+    }
+}
+
+/// If currently resizing a surface that is dead, cancel the resize.
+unsafe fn clear_resize_if_dead() {
+    if let InteractionState::Resizing { surface_id, .. } = INTERACTION {
+        if !surface_is_alive(surface_id) {
+            serial_println!("[shell.resize.clear_dead] sid={} reason=dead", surface_id);
+            try_transition(InteractionState::Idle);
+        }
+    }
+}
+
+/// Evaluate drag-to-snap at pointer release. Applies SnapLeft, SnapRight, or zoom
+/// based on final pointer position. Uses existing 0xEC display path. Frame-only.
+/// Returns true if snap was applied (caller should set mutated).
+unsafe fn try_snap_on_drag_release(surface_id: u64, px: i32, py: i32) -> bool {
+    if !surface_is_alive(surface_id) || is_tombstoned(surface_id) {
+        serial_println!("[silk.snap.reject.dead] sid={} reason=dead", surface_id);
+        return false;
+    }
+    let frame_id = match frame_for_surface(surface_id) {
+        Some(fid) => fid,
+        None => {
+            serial_println!("[silk.snap.none] sid={} reason=no_frame x={} y={}", surface_id, px, py);
+            return false;
+        }
+    };
+    if frame_is_minimized(frame_id) {
+        serial_println!("[silk.snap.reject.dead] sid={} reason=minimized", surface_id);
+        return false;
+    }
+    let near_top   = py < P.bar_height + SNAP_TOP_PX;
+    let near_left  = px < SNAP_EDGE_PX;
+    let near_right = px >= P.width - SNAP_EDGE_PX;
+    if near_top {
+        serial_println!("[silk.snap.hit.top] sid={} frame={} x={} y={}", surface_id, frame_id, px, py);
+        if !frame_is_zoomed(frame_id) && zoom_frame(frame_id) {
+            serial_println!("[silk.snap.apply] sid={} frame={} kind=top", surface_id, frame_id);
+            return true;
+        }
+        serial_println!("[silk.snap.none] sid={} reason=top_zoom_skip x={} y={}", surface_id, px, py);
+        return false;
+    }
+    if near_left {
+        serial_println!("[silk.snap.hit.left] sid={} frame={} x={} y={}", surface_id, frame_id, px, py);
+        let cw = P.width as u32;
+        let ch = (P.height - P.bar_height) as u32;
+        let (nx, ny, nw, nh) = (0i32, P.bar_height, cw / 2, ch);
+        pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
+            (ny as u64) << 32 | nx as u64,
+            (nh as u64) << 32 | nw as u64);
+        update_local_geometry(surface_id, nx, ny, nw, nh);
+        serial_println!("[silk.snap.apply] sid={} frame={} kind=left x={} y={} w={} h={}", surface_id, frame_id, nx, ny, nw, nh);
+        return true;
+    }
+    if near_right {
+        serial_println!("[silk.snap.hit.right] sid={} frame={} x={} y={}", surface_id, frame_id, px, py);
+        let cw = P.width as u32;
+        let ch = (P.height - P.bar_height) as u32;
+        let half_w = cw / 2;
+        let (nx, ny, nw, nh) = (half_w as i32, P.bar_height, cw - half_w, ch);
+        pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
+            (ny as u64) << 32 | nx as u64,
+            (nh as u64) << 32 | nw as u64);
+        update_local_geometry(surface_id, nx, ny, nw, nh);
+        serial_println!("[silk.snap.apply] sid={} frame={} kind=right x={} y={} w={} h={}", surface_id, frame_id, nx, ny, nw, nh);
+        return true;
+    }
+    serial_println!("[silk.snap.none] sid={} x={} y={}", surface_id, px, py);
+    false
+}
+
+/// Compute new surface geometry from current bounds, edge, and pointer delta.
+/// Clamps to screen bounds and minimums. Adjusts leading-edge position when
+/// size clamping prevents further shrinking (right/bottom stays fixed).
+fn compute_resize_rect(
+    cur_x: i32, cur_y: i32, cur_w: u32, cur_h: u32,
+    edge: ResizeEdge, dx: i32, dy: i32,
+) -> (i32, i32, u32, u32) {
+    let (raw_x, raw_w_i) = match edge {
+        ResizeEdge::Left | ResizeEdge::BottomLeft | ResizeEdge::TopLeft =>
+            (cur_x + dx, cur_w as i32 - dx),
+        ResizeEdge::Right | ResizeEdge::BottomRight | ResizeEdge::TopRight =>
+            (cur_x, cur_w as i32 + dx),
+        _ => (cur_x, cur_w as i32),
+    };
+    let (raw_y, raw_h_i) = match edge {
+        ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight =>
+            (cur_y + dy, cur_h as i32 - dy),
+        ResizeEdge::Bottom | ResizeEdge::BottomLeft | ResizeEdge::BottomRight =>
+            (cur_y, cur_h as i32 + dy),
+        _ => (cur_y, cur_h as i32),
+    };
+    let raw_w = raw_w_i.max(0) as u32;
+    let raw_h = raw_h_i.max(0) as u32;
+    let (clamped_w, clamped_h) = clamp_surface_size(raw_x, raw_y, raw_w, raw_h);
+    // If left/top edge moved and size was clamped, keep opposite edge fixed.
+    let adj_x = match edge {
+        ResizeEdge::Left | ResizeEdge::BottomLeft | ResizeEdge::TopLeft => {
+            (cur_x + cur_w as i32) - clamped_w as i32
+        }
+        _ => raw_x,
+    };
+    let adj_y = match edge {
+        ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight => {
+            (cur_y + cur_h as i32) - clamped_h as i32
+        }
+        _ => raw_y,
+    };
+    let (fx, fy) = clamp_position(adj_x, adj_y, clamped_w, clamped_h);
+    (fx, fy, clamped_w, clamped_h)
+}
+
+/// Apply pointer resize geometry delta to the surface in Resizing state.
+/// Uses existing 0xEC display path. Skips zoomed frames.
+/// Returns true if geometry was sent to display.
+unsafe fn apply_resize_geometry(dx: i32, dy: i32) -> bool {
+    let (surface_id, edge) = match INTERACTION {
+        InteractionState::Resizing { surface_id, edge, .. } => (surface_id, edge),
+        _ => return false,
+    };
+    if !surface_is_alive(surface_id) {
+        serial_println!("[silk.resize.reject.dead] sid={} reason=dead", surface_id);
+        try_transition(InteractionState::Idle);
+        return false;
+    }
+    // Skip resize for zoomed frames (geometry is maximized).
+    if let Some(fid) = frame_for_surface(surface_id) {
+        if frame_is_zoomed(fid) {
+            return false;
+        }
+    }
+    let (cur_x, cur_y, cur_w, cur_h) = match get_surface_bounds(surface_id) {
+        Some(b) => b,
+        None => {
+            serial_println!("[silk.resize.reject.dead] sid={} reason=no_bounds", surface_id);
+            return false;
+        }
+    };
+    let (nx, ny, nw, nh) = compute_resize_rect(cur_x, cur_y, cur_w, cur_h, edge, dx, dy);
+    if nx == cur_x && ny == cur_y && nw == cur_w && nh == cur_h {
+        return false;
+    }
+    // Detect if size was clamped (minimum or screen boundary hit).
+    let expected_w = match edge {
+        ResizeEdge::Right | ResizeEdge::BottomRight | ResizeEdge::TopRight =>
+            (cur_w as i32 + dx).max(0) as u32,
+        ResizeEdge::Left | ResizeEdge::BottomLeft | ResizeEdge::TopLeft =>
+            (cur_w as i32 - dx).max(0) as u32,
+        _ => cur_w,
+    };
+    let expected_h = match edge {
+        ResizeEdge::Bottom | ResizeEdge::BottomLeft | ResizeEdge::BottomRight =>
+            (cur_h as i32 + dy).max(0) as u32,
+        ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight =>
+            (cur_h as i32 - dy).max(0) as u32,
+        _ => cur_h,
+    };
+    if nw != expected_w || nh != expected_h {
+        unsafe {
+            static mut RESIZE_CLAMP_BUDGET: u32 = 16;
+            let b = &mut RESIZE_CLAMP_BUDGET;
+            if *b > 0 {
+                *b -= 1;
+                serial_println!("[silk.resize.clamp] sid={} edge={:?} want_w={} got_w={} want_h={} got_h={}", surface_id, edge, expected_w, nw, expected_h, nh);
+            }
+        }
+    }
+    serial_println!("[silk.resize.apply] sid={} edge={:?} x={} y={} w={} h={}", surface_id, edge, nx, ny, nw, nh);
+    pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
+        (ny as u64) << 32 | nx as u64,
+        (nh as u64) << 32 | nw as u64);
+    update_local_geometry(surface_id, nx, ny, nw, nh);
+    unsafe {
+        static mut RESIZE_FLUSH_BUDGET: u32 = 16;
+        let b = &mut RESIZE_FLUSH_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!("[silk.resize.flush] sid={} x={} y={} w={} h={}", surface_id, nx, ny, nw, nh);
+        }
+    }
+    true
+}
+
 /// Check if (x, y) hits frame chrome (rim or tab strip) for a given surface.
 /// Priority: tab strip > rim > None (content area).
 /// Returns None if the surface has no frame, or point is in content area.
@@ -17346,15 +17607,28 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
         }
     }
 
-    // Rim (edge band): check all four edges of the surface.
-    // In default mode, the top edge uses band_height (=top bar height) instead of FRAME_RIM_PX.
+    // Resize edge/corner zones: left, right, bottom edges and top-rim corners.
+    // Top bar (band_height) is the drag handle; other rim zones become resize handles.
     let right = sx + sw as i32 - 1;
     let bottom = sy + sh as i32 - 1;
+    let rz = FRAME_RESIZE_ZONE_PX;
+    let on_left   = x >= sx && x < sx + rz;
+    let on_right  = x > right - rz && x <= right;
+    let on_top    = y >= sy && y < sy + rz;
+    let on_bottom = y > bottom - rz && y <= bottom;
+    let in_resize =
+        on_bottom
+        || ((on_left || on_right) && y >= sy + band_height)
+        || ((on_left || on_right) && on_top);
+    if in_resize {
+        return Some(HitTarget::FrameChrome { frame_id, kind: FRAME_CHROME_RESIZE });
+    }
+    // Rim (drag band): top bar area is the drag handle after resize zones are intercepted.
     let in_rim =
-        (x >= sx && x < sx + FRAME_RIM_PX)                            // left edge
-        || (x > right - FRAME_RIM_PX && x <= right)                   // right edge
-        || (y >= sy && y < sy + band_height)                          // top edge (or top bar)
-        || (y > bottom - FRAME_RIM_PX && y <= bottom);                // bottom edge
+        (x >= sx && x < sx + FRAME_RIM_PX)
+        || (x > right - FRAME_RIM_PX && x <= right)
+        || (y >= sy && y < sy + band_height)
+        || (y > bottom - FRAME_RIM_PX && y <= bottom);
     if in_rim {
         return Some(HitTarget::FrameChrome { frame_id, kind: FRAME_CHROME_RIM });
     }
@@ -17516,6 +17790,8 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                 HitTarget::FrameChrome { frame_id, kind } => {
                     if kind == FRAME_CHROME_RIM {
                         ("rim", 1)
+                    } else if kind == FRAME_CHROME_RESIZE {
+                        ("resize", 0)
                     } else {
                         let light = frame_light_at(frame_id, px, py);
                         if light == FRAME_LIGHT_CLOSE {
@@ -17558,6 +17834,12 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                     DRAG_PENDING_KIND = 2;
                     serial_println!(
                         "[shell.drag.pending] target={} kind=rim start_x={} start_y={} buttons={:#x}",
+                        frame_id, px, py, buttons_val
+                    );
+                } else if kind == FRAME_CHROME_RESIZE {
+                    DRAG_PENDING_KIND = 3;
+                    serial_println!(
+                        "[shell.drag.pending] target={} kind=resize start_x={} start_y={} buttons={:#x}",
                         frame_id, px, py, buttons_val
                     );
                 } else {
@@ -17702,6 +17984,38 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                     } else {
                         serial_println!("[shell.frame.rim.drag.reject] frame={} reason=no_active_surface", frame_id);
                     }
+                }
+            } else if kind == FRAME_CHROME_RESIZE {
+                // Resize zone click: begin Resizing state.
+                if let Some(surface_id) = active_surface_for_frame(frame_id) {
+                    if surface_is_alive(surface_id) {
+                        if let Some((bx, by, bw, bh)) = get_surface_bounds(surface_id) {
+                            let edge = compute_resize_edge(px, py, bx, by, bw, bh);
+                            serial_println!("[silk.resize.hit] frame={} surface={} edge={:?} x={} y={}", frame_id, surface_id, edge, px, py);
+                            try_transition(InteractionState::Resizing {
+                                surface_id,
+                                edge,
+                                start_x: px,
+                                start_y: py,
+                                start_w: bw,
+                                start_h: bh,
+                                pending_dx: 0,
+                                pending_dy: 0,
+                            });
+                            unsafe {
+                                static mut RESIZE_BEGIN_BUDGET: u32 = 8;
+                                let b = &mut RESIZE_BEGIN_BUDGET;
+                                if *b > 0 {
+                                    *b -= 1;
+                                    serial_println!("[silk.resize.begin] sid={} frame={} edge={:?} x={} y={} w={} h={}", surface_id, frame_id, edge, bx, by, bw, bh);
+                                }
+                            }
+                        }
+                    } else {
+                        serial_println!("[shell.frame.resize.reject] frame={} reason=dead", frame_id);
+                    }
+                } else {
+                    serial_println!("[shell.frame.resize.reject] frame={} reason=no_active_surface", frame_id);
                 }
             } else if kind == FRAME_CHROME_TAB_STRIP {
                 // Tab strip click: switch to tab at pointer position.
@@ -19271,6 +19585,7 @@ pub extern "C" fn _start() -> ! {
                         // Surface-lifetime safety guards before any focus/drag operation
                         clear_focus_if_dead();
                         clear_drag_if_dead();
+                        clear_resize_if_dead();
                         clear_hover_if_dead();
                         clear_hover_if_wrong_scene();
                         if !POINTER_USB_STATE_INIT {
@@ -19329,6 +19644,14 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 InteractionState::Dragging { surface_id, .. } => {
                                     serial_println!("[shell.interact.drag.end] sid={} x={} y={}", surface_id, POINTER_X, POINTER_Y);
+                                    if try_snap_on_drag_release(surface_id, POINTER_X, POINTER_Y) {
+                                        mutated = true;
+                                    }
+                                    try_transition(InteractionState::Idle);
+                                }
+                                InteractionState::Resizing { surface_id, edge, pending_dx, pending_dy, .. } => {
+                                    serial_println!("[silk.resize.end] sid={} edge={:?} x={} y={} dx={} dy={}",
+                                        surface_id, edge, POINTER_X, POINTER_Y, pending_dx, pending_dy);
                                     try_transition(InteractionState::Idle);
                                 }
                                 _ => {}
@@ -19354,6 +19677,12 @@ pub extern "C" fn _start() -> ! {
                         // so focus changes during drag do not corrupt the target.
                         clear_drag_if_dead();
                         if drag_move_focused(dx as i32, dy as i32) {
+                            mutated = true;
+                        }
+                        if resize_accumulate_delta(dx as i32, dy as i32) {
+                            mutated = true;
+                        }
+                        if apply_resize_geometry(dx as i32, dy as i32) {
                             mutated = true;
                         }
                     }
@@ -20531,6 +20860,12 @@ pub extern "C" fn _start() -> ! {
                             if drag_move_focused(dx, dy) {
                                 mutated = true;
                             }
+                            if resize_accumulate_delta(dx, dy) {
+                                mutated = true;
+                            }
+                            if apply_resize_geometry(dx, dy) {
+                                mutated = true;
+                            }
 
                             serial_println!("[silk-shell] Pointer REL d=({},{}) pos=({},{})",
                                 dx, dy, POINTER_X, POINTER_Y);
@@ -20619,6 +20954,14 @@ pub extern "C" fn _start() -> ! {
                                         InteractionState::Dragging { surface_id, .. } => {
                                             serial_println!("[shell.interact.drag.end] sid={} x={} y={}", surface_id, POINTER_X, POINTER_Y);
                                             DRAG_PENDING_ACTIVE = false;
+                                            if try_snap_on_drag_release(surface_id, POINTER_X, POINTER_Y) {
+                                                mutated = true;
+                                            }
+                                            try_transition(InteractionState::Idle);
+                                        }
+                                        InteractionState::Resizing { surface_id, edge, pending_dx, pending_dy, .. } => {
+                                            serial_println!("[silk.resize.end] sid={} edge={:?} x={} y={} dx={} dy={}",
+                                                surface_id, edge, POINTER_X, POINTER_Y, pending_dx, pending_dy);
                                             try_transition(InteractionState::Idle);
                                         }
                                         _ => {}
