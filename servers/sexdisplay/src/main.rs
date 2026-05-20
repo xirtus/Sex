@@ -324,7 +324,15 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                     }
 
                     // ── TOP BAR ZONE (default chrome mode, R6 glass) ──
-                    if top_bar_active && ly < FRAME_TOP_BAR_HEIGHT_PX {
+                    // [silk.live_topstrip.v2.clip] Safety: frame chrome must never render
+                    // above the global SilkBar strip. y is the global framebuffer row;
+                    // composite_pixel is only called for y >= 51 (see render/redraw_surface_area),
+                    // but this belt-and-suspenders guard catches any future path that might
+                    // call composite_pixel at y < BAR_BG_H+1.
+                    if y < (BAR_BG_H + 1) {
+                        // y is in or above the SilkBar glow row — skip frame chrome entirely.
+                        // This pixel will get bar_color or panel_glow from the top strip pass.
+                    } else if top_bar_active && ly < FRAME_TOP_BAR_HEIGHT_PX {
                         // Frosted glass toolbar background.
                         let base_alpha: u8 = if frame_hovered { 220 } else { 200 };
                         let toolbar_alpha = scale_alpha(base_alpha, chrome_dim);
@@ -1283,6 +1291,67 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         Some(v) => v,
         None => return,
     };
+    // [silk.live_topstrip.v2.fb_clear] Clear actual framebuffer rows 0..BAR_BG_H
+    // with the raw desktop gradient BEFORE refilling buffers and rendering the bar.
+    // This is a forward defensive clear: bar_color()/glass_over_bg() read from
+    // BAR_BLUR_BUF, not the framebuffer, so the rendering loop overwrites every
+    // pixel correctly. The clear only matters if any pixel in rows 0..50 is
+    // somehow NOT written by the bar loop — it guarantees a clean gradient instead
+    // of a stale fragment (e.g., cursor/launcher pixels from a previous
+    // redraw_surface_area -> draw_cursor_z_top pass). No visible change on
+    // correct boots; prevents topstrip glitch artifacts on live clock ticks.
+    {
+        let clear_h = BAR_BG_H.min(h);
+        for y in 0..clear_h {
+            let clear_color = bg(y, h);
+            let row_base = y * w;
+            for x in 0..w {
+                let idx = row_base + x;
+                if idx < total_pixels {
+                    unsafe { core::ptr::write_volatile(fb.add(idx), clear_color); }
+                }
+            }
+        }
+    }
+
+    // [silk.live_topstrip.v2.audit] Row-sampled hash diagnostics for top strip rows.
+    // Emitted at first live redraw (ss=any) and again at ss=4 to narrow down
+    // which row range carries the artifact. Each row gets a compact 32-bit FNV-1a
+    // hash seeded from the actual framebuffer pixel row (post-clear, pre-bar-render).
+    // Only the first 64 rows are sampled to bound log output.
+    unsafe {
+        static mut LIVE_TOPSTRIP_V2_ROWS_DIAG_DONE: bool = false;
+        static mut LIVE_TOPSTRIP_V2_ROWS_SS4_DONE: bool = false;
+        let do_diag = !LIVE_TOPSTRIP_V2_ROWS_DIAG_DONE
+            || (bar.clock_ss >= 4 && !LIVE_TOPSTRIP_V2_ROWS_SS4_DONE);
+        if do_diag {
+            let sample_rows: [usize; 10] = [0, 25, 46, 47, 48, 49, 50, 51, 55, 63];
+            let max_row = sample_rows.iter().max().copied().unwrap_or(63);
+            if h > max_row {
+                for &ry in sample_rows.iter() {
+                    let row_base = ry * w;
+                    let mut h_val: u32 = 0x811c9dc5u32;
+                    for x in 0..w {
+                        let idx = row_base + x;
+                        if idx < total_pixels {
+                            let px = core::ptr::read_volatile(fb.add(idx));
+                            h_val ^= px as u32;
+                            h_val = h_val.wrapping_mul(0x01000193u32);
+                        }
+                    }
+                    serial_println!("[silk.live_topstrip.v2.rows] row={} hash=0x{:08X} ss={}",
+                        ry, h_val, bar.clock_ss);
+                }
+            }
+            if !LIVE_TOPSTRIP_V2_ROWS_DIAG_DONE {
+                LIVE_TOPSTRIP_V2_ROWS_DIAG_DONE = true;
+            }
+            if bar.clock_ss >= 4 && !LIVE_TOPSTRIP_V2_ROWS_SS4_DONE {
+                LIVE_TOPSTRIP_V2_ROWS_SS4_DONE = true;
+            }
+        }
+    }
+
     // [silk.live_topstrip.glitch.fix] Refill bar background blur buffer before each live
     // top-strip redraw. Prevents stale glass artifacts when a clock tick triggers a
     // strip-only redraw without a preceding full render() call. The gradient colors are
