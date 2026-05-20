@@ -90,3 +90,16 @@ rg -n "sexusb\.hid\.report\.nonzero|sexusb\.hid\.report\.timeout|sexusb\.route\.
   - SexOS boot + xHCI markers and `sexusb.route.sexinput.ready` appeared.
   - No `sexusb.hid.report.nonzero`; repeated `sexusb.hid.report.timeout` observed.
 - Classification for this route-audit run: **SKIP** (QMP accepted, but no proof of real HID report delivery to SexOS endpoint path).
+
+## 2026-05-20 physical operator lane (USB_PHYSICAL_HID_OPERATOR_PROOF_V1)
+- Added operator-required proof doc: `docs/handoff/USB_PHYSICAL_HID_OPERATOR_PROOF_V1.md`.
+- Added host-only runner: `scripts/usb_physical_hid_operator_probe.sh`.
+- Runner behavior:
+  - defaults to `mouse` mode, supports `tablet`
+  - uses GTK display + xHCI via `qemu_harness.sh`
+  - logs to `/tmp/usb_physical_hid_operator_probe.log`
+  - asks operator to move/click mouse for at least 10 seconds
+  - classifies:
+    - PASS -> `sexusb.hid.report.nonzero` and no faults (exit 0)
+    - SKIP -> no nonzero and no faults (exit 2)
+    - FAIL -> build/harness error or fault markers (exit 1)
