@@ -692,3 +692,23 @@ timeout 90s qemu-system-x86_64 -M q35 -m 512M -cpu max,+pku \
   `SEXOS_LIFECYCLE_APPDEATH_PROOF=1` env exports
 - `scripts/daily_driver_master_gate.sh` — added lifecycle_atlas + lifecycle_appdeath gates
 - `docs/handoff/WINDOW_APP_LIFECYCLE_V1.md` — final5 status documentation
+
+## Final Milestone
+
+Window/app lifecycle moved from 55–60% to 100% for the current shell lifecycle scope.
+
+Final proof:
+- Keyboard lifecycle scenario: PASS
+- Pointer Frame Lights runtime proof: PASS
+- Multi-tab close + neighbor focus: PASS
+- Atlas/minimized restore visible shell proof: PASS
+- Simulated app-death cleanup: PASS
+- Final daily driver lifecycle gate: PASS
+- Fault scan: zero #PF, #GP, panic, KERNEL PANIC, fault.kill
+
+Deferred beyond current lifecycle scope:
+- real app-death process-exit ABI
+- full graphical Atlas UI
+
+Status:
+Window/app lifecycle V1 + final5 shell lifecycle gates: 100%.
