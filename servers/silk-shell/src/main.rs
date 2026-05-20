@@ -14980,7 +14980,11 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     // Remove the closed surface's tab from its owning frame.  This makes
     // [silk.lifecycle.frame.empty.destroy] reachable because tab_count is
     // actually decremented and the tab slot is cleared.
+    // [silk.chrome.glitch.audit] Track surviving frame so we can push updated
+    // tab_count to sexdisplay after tab removal.  Without this, sexdisplay
+    // retains the old tab_count and renders ghost tab slots in the chrome strip.
     let mut frame_emptied: Option<u32> = None;
+    let mut surviving_frame_id: Option<u32> = None;
     let mut next_focus_sid: Option<u64> = None;
     for frame_slot in FRAMES.iter_mut() {
         if let Some(frame) = frame_slot {
@@ -15021,6 +15025,10 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
                 }
                 if frame.tab_count == 0 {
                     frame_emptied = Some(frame.frame_id);
+                } else {
+                    // [silk.chrome.glitch.root] Frame survives with fewer tabs.
+                    // Capture frame_id so we can push updated tab_count to sexdisplay.
+                    surviving_frame_id = Some(frame.frame_id);
                 }
                 break; // surface belongs to at most one frame
             }
@@ -15038,6 +15046,13 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
                 }
             }
         }
+    }
+    // [silk.chrome.glitch.fix] Push updated tab_count/active_tab to sexdisplay
+    // for the surviving frame.  Without this, sexdisplay retains the pre-close
+    // tab_count and renders ghost tab slots, producing the top chrome glitch strip.
+    if let Some(fid) = surviving_frame_id {
+        serial_println!("[silk.chrome.glitch.fix] frame={} sid={} pushing updated tab_count to sexdisplay", fid, surface_id);
+        send_frame_tab_info(fid);
     }
     // Focus fallback: clear remaining stale focus and drag.
     clear_focus_if_dead();
