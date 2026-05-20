@@ -365,6 +365,7 @@ gate_mesh_graph_status="SKIP"
 gate_collar_grant_status="SKIP"
 gate_top_strip_hash="SKIP"
 gate_spindle_atlas="SKIP"
+gate_silk_combined_interaction="SKIP"
 gate_input_freeze_xhci_bounded="SKIP"
 gate_input_freeze_route_ready_or_missing="SKIP"
 gate_input_freeze_synthetic_click_gated="SKIP"
@@ -391,7 +392,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V34"
+echo " DAILY-DRIVER MASTER GATE V35"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -3959,10 +3960,84 @@ else
     print_row "faults_zero" "FAIL" "FAULTS FOUND:${FAULT_HITS}"
 fi
 
+# ---- silk_combined_interaction ----
+# Combined Silk interaction proof: verifies all Silk DE interaction
+# markers coexist in a single boot, proving the completed batch is intact.
+#
+# Required evidence categories:
+#   1. Pointer resize state:  silk.resize.(hit|begin|end)
+#   2. Pointer resize geometry: silk.resize.(delta|apply|clamp|flush)
+#   3. Drag-to-snap:          silk.snap.(hit|apply|none)
+#   4. Tab hit/select/reorder: silk.tab.(hit|select|reorder|drag)
+#   5. Safe close/tombstone:  silk.close.(request|allowed|tombstone|state)
+#   6. Live topstrip:         silk.live_topstrip.(tick4|glitch|audit)
+#   7. Chrome glitch fix:     silk.chrome.glitch.fix
+#   8. clock_visible_seconds: gate_clock_visible_seconds != FAIL
+#   9. top_strip_hash:        gate_top_strip_hash != FAIL
+#  10. frame_rim_visual:      gate_frame_rim_visual != FAIL
+#  11. frame_lights_visual:   gate_frame_lights_visual != FAIL
+#  12. faults_zero:           gate_faults_zero == PASS
+#
+# Gate logic:
+#   SKIP — no interaction markers present (scenario not enabled).
+#   PASS — all 12 categories proven, no faults.
+#   FAIL — interaction enabled but categories missing, or any dep FAIL.
+gate_silk_combined_interaction="SKIP"
+
+# Detect enablement: any interaction-specific marker present (categories 1-7)
+has_interaction=$(has '[[]silk\.(resize|snap|tab|close|live_topstrip|chrome\.glitch)\.')
+if [ "$has_interaction" -eq 1 ]; then
+    r_resize_state=$(has 'silk\.resize\.(hit|begin|end)')
+    r_resize_geom=$(has 'silk\.resize\.(delta|apply|clamp|flush)')
+    r_snap=$(has 'silk\.snap\.(hit|apply|none)')
+    r_tab=$(has 'silk\.tab\.(hit|select|reorder|drag)')
+    r_close=$(has 'silk\.close\.(request|allowed|tombstone|state)')
+    r_live_topstrip=$(has 'silk\.live_topstrip\.(tick4|glitch|audit)')
+    r_chrome_glitch=$(has 'silk\.chrome\.glitch\.fix')
+
+    missing=""
+    [ "$r_resize_state" -eq 0 ] && missing="${missing} resize_state"
+    [ "$r_resize_geom" -eq 0 ] && missing="${missing} resize_geom"
+    [ "$r_snap" -eq 0 ] && missing="${missing} snap"
+    [ "$r_tab" -eq 0 ] && missing="${missing} tab"
+    [ "$r_close" -eq 0 ] && missing="${missing} close"
+    [ "$r_live_topstrip" -eq 0 ] && missing="${missing} live_topstrip"
+    [ "$r_chrome_glitch" -eq 0 ] && missing="${missing} chrome_glitch"
+
+    dep_fail=""
+    [ "$gate_clock_visible_seconds" = "FAIL" ] && dep_fail="${dep_fail} clock_visible_seconds(FAIL)"
+    [ "$gate_top_strip_hash" = "FAIL" ] && dep_fail="${dep_fail} top_strip_hash(FAIL)"
+    [ "$gate_frame_rim_visual" = "FAIL" ] && dep_fail="${dep_fail} frame_rim_visual(FAIL)"
+    [ "$gate_frame_lights_visual" = "FAIL" ] && dep_fail="${dep_fail} frame_lights_visual(FAIL)"
+    [ "$gate_faults_zero" != "PASS" ] && dep_fail="${dep_fail} faults_zero(!PASS)"
+
+    if [ -z "$missing" ] && [ -z "$dep_fail" ]; then
+        gate_silk_combined_interaction="PASS"
+        print_row "silk_combined_interaction" "PASS" \
+            "all 12 interaction proof categories proven, 0 faults"
+    elif [ -n "$missing" ] && [ -n "$dep_fail" ]; then
+        gate_silk_combined_interaction="FAIL"
+        print_row "silk_combined_interaction" "FAIL" \
+            "missing:${missing}; dep_fail:${dep_fail}"
+    elif [ -n "$missing" ]; then
+        gate_silk_combined_interaction="FAIL"
+        print_row "silk_combined_interaction" "FAIL" \
+            "interaction scenario enabled but markers missing:${missing}"
+    else
+        gate_silk_combined_interaction="FAIL"
+        print_row "silk_combined_interaction" "FAIL" \
+            "dependent gates failed:${dep_fail}"
+    fi
+else
+    gate_silk_combined_interaction="SKIP"
+    print_row "silk_combined_interaction" "SKIP" \
+        "interaction scenario not enabled in this boot"
+fi
+
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V33 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V35 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -4293,6 +4368,7 @@ ALL_GATES=(
     "collar_grant_status:$gate_collar_grant_status"
     "top_strip_hash:$gate_top_strip_hash"
     "spindle_atlas:$gate_spindle_atlas"
+    "silk_combined_interaction:$gate_silk_combined_interaction"
     "input_freeze_xhci_bounded:$gate_input_freeze_xhci_bounded"
     "input_freeze_route_ready_or_missing:$gate_input_freeze_route_ready_or_missing"
     "input_freeze_synthetic_click_gated:$gate_input_freeze_synthetic_click_gated"
