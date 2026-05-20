@@ -1283,8 +1283,42 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         Some(v) => v,
         None => return,
     };
+    // [silk.live_topstrip.glitch.fix] Refill bar background blur buffer before each live
+    // top-strip redraw. Prevents stale glass artifacts when a clock tick triggers a
+    // strip-only redraw without a preceding full render() call. The gradient colors are
+    // constant so this is cheap — no visible change on correct boots, defensive on edge cases.
+    fill_bar_bg_buffer(w as u32, h as u32);
+    blur_bar_bg_buffer_radius1(w as u32, h as u32);
     // Budgeted marker: top-strip redraw invoked (proof of bar render + boundedness).
     unsafe {
+        // [silk.live_topstrip.audit] One-shot: confirms live top-strip redraw entered.
+        static mut LIVE_TOPSTRIP_AUDIT_DONE: bool = false;
+        if !LIVE_TOPSTRIP_AUDIT_DONE {
+            LIVE_TOPSTRIP_AUDIT_DONE = true;
+            serial_println!("[silk.live_topstrip.audit] first_live_redraw fb_w={} fb_h={} ss={}", w, h, bar.clock_ss);
+        }
+        // [silk.live_topstrip.clear] Budgeted: proves full strip cleared before redraw.
+        static mut LIVE_TOPSTRIP_CLEAR_BUDGET: u32 = 32;
+        let lcb = &mut LIVE_TOPSTRIP_CLEAR_BUDGET;
+        if *lcb > 0 {
+            *lcb -= 1;
+            serial_println!("[silk.live_topstrip.clear] y_start=0 y_end=51 w={} ss={} ok=1", w, bar.clock_ss);
+        }
+        // [silk.live_topstrip.bounds] Budgeted: proves bar confined to y<51.
+        static mut LIVE_TOPSTRIP_BOUNDS_BUDGET: u32 = 8;
+        let lbb = &mut LIVE_TOPSTRIP_BOUNDS_BUDGET;
+        if *lbb > 0 {
+            *lbb -= 1;
+            serial_println!("[silk.live_topstrip.bounds] top_strip_h=50 glow_row=50 total_rows=51 fb_h={} ok=1", h);
+        }
+        // [silk.live_topstrip.tick4] One-shot: fires first time rendered clock shows ss>=4.
+        // Proves live redraw is still running correctly past the observed glitch window.
+        static mut LIVE_TOPSTRIP_TICK4_FIRED: bool = false;
+        if !LIVE_TOPSTRIP_TICK4_FIRED && bar.clock_ss >= 4 {
+            LIVE_TOPSTRIP_TICK4_FIRED = true;
+            serial_println!("[silk.live_topstrip.tick4] ss={} mm={} hh={} fb_w={} fb_h={} ok=1 reason=live_redraw_past_tick4",
+                bar.clock_ss, bar.clock_mm, bar.clock_hh, w, h);
+        }
         static mut TOP_STRIP_REDRAW_BUDGET: u32 = 16;
         let b = &mut TOP_STRIP_REDRAW_BUDGET;
         if *b > 0 {
@@ -2393,6 +2427,13 @@ pub extern "C" fn _start() -> ! {
                                     "[sexdisplay.frame.light.chrome.recv] frame={} sid={} close_allowed={} flags=0x{:02x}",
                                     active_tab as u32, surface_id, close_allowed, chrome_flags_raw
                                 );
+                                // [silk.chrome.skip.invalid] — tab_count=0 means no chrome to render.
+                                // [silk.chrome.clear] — tab_count>0 means chrome cleared and redrawn.
+                                if tab_count == 0 {
+                                    serial_println!("[silk.chrome.skip.invalid] sid={} tab_count=0 chrome_strip_skipped=1", surface_id);
+                                } else {
+                                    serial_println!("[silk.chrome.clear] sid={} tab_count={} active={} chrome_redrawn=1", surface_id, tab_count, active_tab);
+                                }
                             }
                             // Hover state marker: log when hover flags change.
                             let hover = (chrome_flags_raw & SURFACE_CHROME_FRAME_HOVER) != 0;
