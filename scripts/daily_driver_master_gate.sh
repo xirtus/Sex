@@ -2796,6 +2796,16 @@ dns_s3_browser_miss_skip="$(has 'browser\.dns\.resolve\.miss.*reason=cache_miss'
 dns_s3_legacy_not_used_ok="$(has 'legacy\.source2\.dns\.not_used.*ok=1')"
 dns_s3_source2_used_markers="$(count 'sexnet\.dns\.(query\.build|query\.tx|response\.parse|cache\.)')"
 dns_s3_malformed_accepted="$(has 'sexnet\.dns\.malformed\.accepted')"
+# source3 active: at least one source3-specific marker present (query build, UDP TX,
+# RX parse, answer, cache insert, timeout, or UDP TX skip)
+dns_s3_active="0"
+if [ "$dns_s3_query_build_ok" -eq 1 ] || [ "$dns_s3_query_build_bad" -eq 1 ] || \
+   [ "$dns_s3_udp_tx_ok" -eq 1 ] || [ "$dns_s3_udp_tx_dd0" -eq 1 ] || [ "$dns_s3_udp_tx_bad" -eq 1 ] || \
+   [ "$dns_s3_rx_parse_ok" -eq 1 ] || [ "$dns_s3_answer_ok" -ge 1 ] || \
+   [ "$dns_s3_cache_insert_ok" -ge 1 ] || [ "$dns_s3_rx_timeout_skip" -eq 1 ] || \
+   [ "$(has 'sexnet\.dns\.source3\.udp\.tx\.skip')" -eq 1 ]; then
+    dns_s3_active="1"
+fi
 
 if [ "$dns_s3_query_build_bad" -eq 1 ]; then
     gate_sexnet_dns_source3_query_build="FAIL"
@@ -2866,7 +2876,7 @@ if [ "$dns_s3_malformed_accepted" -eq 1 ]; then
 elif [ "$dns_s3_udp_tx_dd0" -eq 1 ]; then
     gate_sexnet_dns_source3_proof_v1="FAIL"
     print_row "sexnet_dns_source3_proof_v1" "FAIL" "source3 DNS TX posted with tx_dd=0"
-elif [ "$dns_s3_source2_used_markers" -ge 1 ]; then
+elif [ "$dns_s3_active" -eq 1 ] && [ "$dns_s3_source2_used_markers" -ge 1 ]; then
     gate_sexnet_dns_source3_proof_v1="FAIL"
     print_row "sexnet_dns_source3_proof_v1" "FAIL" "source2 DNS markers present in source3 proof lane"
 elif [ "$dns_s3_browser_ok" -eq 1 ] && [ "$dns_s3_cache_insert_ok" -eq 0 ] && [ "$dns_s3_answer_ok" -eq 0 ]; then
