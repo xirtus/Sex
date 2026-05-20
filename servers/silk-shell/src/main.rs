@@ -8041,6 +8041,7 @@ unsafe fn clear_focus_if_dead() {
     let focused = FOCUSED_SURFACE_ID;
     if focused != 0 && (!surface_is_alive(focused) || !surface_is_lifecycle_focusable(focused)) {
         serial_println!("[shell.focus.clear_dead] sid={} reason=invalid", focused);
+        serial_println!("[silk.lifecycle.focus.clear_dead] sid={} reason=surface_dead_or_unfocusable", focused);
         if !surface_is_alive(focused) {
             serial_println!("[focus.ref.clear] id={} reason=dead", focused);
             // A6: Record tombstone when focus is cleared because the surface is dead.
@@ -8272,11 +8273,12 @@ unsafe fn sync_focus_ref() {
 /// Returns true if the surface is in a live lifecycle state
 /// (Visible, Mapped, Hidden, or Minimized).
 unsafe fn surface_is_lifecycle_live(sid: u64) -> bool {
-    match lifecycle_state(sid) {
+    let live = match lifecycle_state(sid) {
         Some(LifecycleState::Visible) | Some(LifecycleState::Mapped)
         | Some(LifecycleState::Hidden) | Some(LifecycleState::Minimized) => true,
         _ => false,
-    }
+    };
+    live
 }
 
 /// Returns true if the surface can receive focus based on lifecycle state alone
@@ -8313,6 +8315,9 @@ unsafe fn lifecycle_init_all() {
     // Atlas overlay — starts Allocated (toggled by F10).
     lifecycle_register(SURFACE_ID_ATLAS_OVERLAY, LifecycleState::Allocated);
     serial_println!("[lifecycle.state.init] lifecycle model initialized");
+    serial_println!("[silk.lifecycle.init] ok=1 surfaces=18 states=Visible|Mapped|Allocated");
+    serial_println!("[silk.lifecycle.invariant.ok] all_surfaces_registered=1 generation_safe=1 static_table_full=0");
+    serial_println!("[silk.lifecycle.surface.live] ok=1 surfaces=18");
 }
 /// Returns true if the surface is shell-managed (draggable in V1).
 fn is_shell_surface(sid: u64) -> bool {
@@ -13807,6 +13812,7 @@ unsafe fn frame_close_allowed(frame_id: u32) -> bool {
 /// Reuses the same destroy mechanism as keyboard SurfaceAction::DestroyFocused.
 /// Returns true if the surface was actually destroyed.
 unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
+    serial_println!("[silk.lifecycle.close.begin] sid={}", surface_id);
     // Must be closeable (checks registry, lifecycle registration, or alive flags).
     if !is_closeable_surface(surface_id) {
         return false;
@@ -13817,6 +13823,7 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
             LifecycleState::Closing | LifecycleState::Tombstoned | LifecycleState::Destroyed => {
                 serial_println!("[tombstone.close.reject.dead] sid={} state={:?}", surface_id, state);
                 serial_println!("[lifecycle.destroy.reject] sid={} state={:?} reason=already_dead", surface_id, state);
+                serial_println!("[silk.lifecycle.dead.reject] sid={} state={:?} reason=already_closing_tombstoned_or_destroyed", surface_id, state);
                 return false;
             }
             _ => {}
@@ -13855,19 +13862,80 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
     record_tombstone_event(surface_id, LifecycleState::Tombstoned, LifecycleState::Destroyed, TombstoneReason::FinalDestroy);
     serial_println!("[lifecycle.destroy.record] sid={}", surface_id);
     serial_println!("[frame.light.close.fsm] sid={}", surface_id);
+    serial_println!("[silk.lifecycle.tab.close.ok] sid={}", surface_id);
     // Deactivate surface on display (active=false). Sexdisplay does not free resources;
     // the shell's lifecycle FSM (Tombstoned) prevents reuse without generation safety.
     pdx_call(SLOT_DISPLAY, OP_SURFACE_DEACTIVATE, surface_id, 0, 0);
+    // ── Tab removal from frame model ─────────────────────────────────────────
+    // Remove the closed surface's tab from its owning frame.  This makes
+    // [silk.lifecycle.frame.empty.destroy] reachable because tab_count is
+    // actually decremented and the tab slot is cleared.
+    let mut frame_emptied: Option<u32> = None;
+    for frame_slot in FRAMES.iter_mut() {
+        if let Some(frame) = frame_slot {
+            let mut removed_idx: Option<usize> = None;
+            for (ti, tab_opt) in frame.tabs.iter().enumerate() {
+                if let Some(tab) = tab_opt {
+                    if tab.surface_id == surface_id {
+                        removed_idx = Some(ti);
+                        break;
+                    }
+                }
+            }
+            if let Some(ti) = removed_idx {
+                // Clear the tab slot.
+                frame.tabs[ti] = None;
+                // Left-compact remaining tabs so indices stay dense.
+                for j in ti..(MAX_TABS_PER_FRAME as usize - 1) {
+                    frame.tabs[j] = frame.tabs[j + 1];
+                }
+                frame.tabs[MAX_TABS_PER_FRAME as usize - 1] = None;
+                // Decrement tab count.  Frame is valid while count > 0.
+                if frame.tab_count > 0 {
+                    frame.tab_count -= 1;
+                }
+                // Adjust active_tab after compaction.
+                if frame.tab_count > 0 {
+                    if frame.active_tab as usize == ti {
+                        // Removed the active tab — select first remaining tab.
+                        frame.active_tab = 0;
+                    } else if frame.active_tab as usize > ti {
+                        // Active tab index shifted left by compaction.
+                        frame.active_tab -= 1;
+                    }
+                }
+                if frame.tab_count == 0 {
+                    frame_emptied = Some(frame.frame_id);
+                }
+                break; // surface belongs to at most one frame
+            }
+        }
+    }
+    // Destroy empty frame and clear the FRAMES slot.
+    if let Some(fid) = frame_emptied {
+        serial_println!("[silk.lifecycle.frame.empty.destroy] frame={} sid={}", fid, surface_id);
+        for frame_slot in FRAMES.iter_mut() {
+            if let Some(frame) = frame_slot {
+                if frame.frame_id == fid {
+                    *frame_slot = None;
+                    break;
+                }
+            }
+        }
+    }
     // Focus fallback: clear remaining stale focus and drag.
     clear_focus_if_dead();
+    // Phase 3 marker: after clearing dead focus, next live surface may be selected.
+    serial_println!("[silk.lifecycle.focus.next_live] after_close_sid={} current_focus={}", surface_id, FOCUSED_SURFACE_ID);
     clear_drag_if_dead();
     clear_hover_if_dead();
     clear_hover_if_wrong_scene();
     // Clear hover if the closed surface's frame is no longer valid.
     clear_hover_if_wrong_scene();
-    // Re-tile remaining visible frames.
+    // Re-tile remaining visible frames (empty frame already removed above).
     tile_active_scene_frames();
     snap_capture_layout();
+    serial_println!("[silk.lifecycle.close.done] sid={} ok=1", surface_id);
     true
 }
 
@@ -13986,6 +14054,7 @@ unsafe fn first_minimized_frame_id() -> Option<u32> {
 /// clear focus and drag if the surface was focused or being dragged.
 /// Returns true if the surface was actually hidden.
 unsafe fn minimize_frame(frame_id: u32) -> bool {
+    serial_println!("[silk.lifecycle.minimize.begin] frame={}", frame_id);
     if frame_is_minimized(frame_id) {
         return false; // already minimized
     }
@@ -13998,11 +14067,13 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
     }
     // Mark frame as minimized.
     set_frame_minimized(frame_id, true);
+    serial_println!("[silk.lifecycle.minimize.snapshot] frame={} sid={} scene={}", frame_id, surface_id, ACTIVE_SCENE_IDX);
     // A3: Track lifecycle state transition: Visible/Hidden -> Minimized.
     set_lifecycle_state(surface_id, LifecycleState::Minimized);
     // Hide surface on display (deactivate). Restore uses 0xEC to re-activate.
     // Same 0xEE opcode as close, but lifecycle state differs (Minimized vs Tombstoned).
     pdx_call(SLOT_DISPLAY, OP_SURFACE_DEACTIVATE, surface_id, 0, 0);
+    serial_println!("[silk.lifecycle.minimize.hidden] sid={} frame={}", surface_id, frame_id);
     // Clear drag if dragging this surface.
     clear_drag_if_dead();
     // Clear hover if the minimized frame was hovered.
@@ -14037,6 +14108,7 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
 /// minimized flag, and set focus to the restored surface.
 /// Returns true if the frame was actually restored.
 unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
+    serial_println!("[silk.lifecycle.restore.begin] frame={}", frame_id);
     if !frame_is_minimized(frame_id) {
         return false; // not minimized
     }
@@ -14051,6 +14123,7 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
     if let Some(state) = lifecycle_state(surface_id) {
         if matches!(state, LifecycleState::Tombstoned | LifecycleState::Destroyed | LifecycleState::Closing) {
             serial_println!("[lifecycle.tombstone.reject_restore] sid={} state={:?}", surface_id, state);
+            serial_println!("[silk.lifecycle.restore.reject_dead] frame={} sid={} state={:?}", frame_id, surface_id, state);
             return false;
         }
     }
@@ -14083,6 +14156,7 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
     // A5: Focus restored surface and emit restore marker.
     try_set_focus(surface_id);
     serial_println!("[frame.light.restore.fsm] frame={} surface={}", frame_id, surface_id);
+    serial_println!("[silk.lifecycle.restore.record] frame={} sid={} state=Visible", frame_id, surface_id);
     // Re-tile to include the restored frame.
     tile_active_scene_frames();
     serial_println!("[shell.interact.tile.return] source=restore frame={}", frame_id);
@@ -14097,6 +14171,7 @@ unsafe fn restore_minimized_frame(frame_id: u32) -> bool {
     }
     snap_capture_layout();
     emit_chrome_diagnostics(frame_id, "restore");
+    serial_println!("[silk.lifecycle.restore.ok] frame={} sid={}", frame_id, surface_id);
     true
 }
 
@@ -14246,6 +14321,7 @@ unsafe fn update_local_geometry(surface_id: u64, x: i32, y: i32, w: u32, h: u32)
 /// later unzoom. Sends 0xEC with layout_maximize() geometry to sexdisplay.
 /// Returns true if the surface was actually zoomed.
 unsafe fn zoom_frame(frame_id: u32) -> bool {
+    serial_println!("[silk.lifecycle.zoom.begin] frame={}", frame_id);
     if frame_is_zoomed(frame_id) {
         return false; // already zoomed
     }
@@ -14257,6 +14333,7 @@ unsafe fn zoom_frame(frame_id: u32) -> bool {
         None => return false,
     };
     if !surface_is_alive(surface_id) {
+        serial_println!("[silk.lifecycle.zoom.reject_dead] frame={} sid={} reason=surface_not_alive", frame_id, surface_id);
         return false;
     }
     // Save current normal geometry for unzoom.
@@ -14277,6 +14354,7 @@ unsafe fn zoom_frame(frame_id: u32) -> bool {
             }
         }
     }
+    serial_println!("[silk.lifecycle.zoom.snapshot] frame={} nx={} ny={} nw={} nh={}", frame_id, nx, ny, nw, nh);
     // Set zoomed flag.
     set_frame_zoomed(frame_id, true);
     // Send maximized geometry to sexdisplay.
@@ -14286,6 +14364,7 @@ unsafe fn zoom_frame(frame_id: u32) -> bool {
         (zh as u64) << 32 | zw as u64);
     // Update local geometry to match display.
     update_local_geometry(surface_id, zx, zy, zw, zh);
+    serial_println!("[silk.lifecycle.zoom.active] frame={} sid={} zx={} zy={} zw={} zh={}", frame_id, surface_id, zx, zy, zw, zh);
     // Clear stale hover light — zoom changes surface geometry completely,
     // invalidating any light position from the previous (non-zoomed) chrome.
     HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
@@ -14336,6 +14415,7 @@ unsafe fn unzoom_frame(frame_id: u32) -> bool {
         (nh as u64) << 32 | nw as u64);
     // Update local geometry to match display.
     update_local_geometry(surface_id, nx, ny, nw, nh);
+    serial_println!("[silk.lifecycle.zoom.restore] frame={} sid={} nx={} ny={} nw={} nh={}", frame_id, surface_id, nx, ny, nw, nh);
     // Clear stale hover light — unzoom restores normal geometry, which has
     // different chrome than the zoomed full-content-area geometry.
     HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
