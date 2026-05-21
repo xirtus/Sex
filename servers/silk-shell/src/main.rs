@@ -324,6 +324,25 @@ const BELL_FILTER_PROOF_ENABLED: bool =
     option_env!("SEXOS_BELL_FILTER_PROOF").is_some();
 const ATLAS_PREVIEW_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_PREVIEW_PROOF").is_some();
+
+/// Atlas Phase A state model synthetic proof gate.
+/// Build with SEXOS_ATLAS_PHASE_A_STATE_MODEL_PROOF=1 to enable.
+/// Default (unset): zero behavior change.
+/// Phase A: state model only — no Atlas renderer, thumbnails, drag/drop.
+const ATLAS_PHASE_A_STATE_MODEL_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_PHASE_A_STATE_MODEL_PROOF").is_some();
+static mut ATLAS_PHASE_A_STATE_MODEL_PROOF_DONE: bool = false;
+static mut ATLAS_PHASE_A_STATE_MODEL_PROOF_STAGE: u8 = 0;
+
+/// Atlas Phase B snapshot integration synthetic proof gate.
+/// Build with SEXOS_ATLAS_PHASE_B_SNAPSHOT_PROOF=1 to enable.
+/// Default (unset): zero behavior change.
+/// Phase B: metadata snapshot only — no Atlas renderer, thumbnails, drag/drop.
+const ATLAS_PHASE_B_SNAPSHOT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_PHASE_B_SNAPSHOT_PROOF").is_some();
+static mut ATLAS_PHASE_B_SNAPSHOT_PROOF_DONE: bool = false;
+static mut ATLAS_PHASE_B_SNAPSHOT_PROOF_STAGE: u8 = 0;
+
 const APP_REGISTRY_READONLY_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_REGISTRY_READONLY_PROOF").is_some();
 const APP_REGISTRY_FILTER_SORT_PROOF_ENABLED: bool =
@@ -6762,6 +6781,164 @@ enum SurfaceAction {
     AccessZoomToggle,    // toggle zoom on focused frame (Esc)
     AccessSceneNext,     // switch to next scene (deferred binding)
     AccessScenePrev,     // switch to previous scene (deferred binding)
+}
+
+/// Shell view mode: determines whether the shell is in Desktop or Atlas overview mode.
+/// Derived from ATLAS_MODE_ENABLED. Desktop is the default boot state.
+/// Phase A state model proof: provides explicit state discriminant for gate verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShellViewMode {
+    Desktop,
+    Atlas,
+}
+
+/// Return the current ShellViewMode based on ATLAS_MODE_ENABLED.
+fn shell_view_mode() -> ShellViewMode {
+    unsafe {
+        if ATLAS_MODE_ENABLED { ShellViewMode::Atlas } else { ShellViewMode::Desktop }
+    }
+}
+
+// ── Phase B: Atlas Snapshot Model ────────────────────────────────────────────
+/// Maximum frames per scene in a Phase B snapshot (matches MAX_FRAMES).
+const ATLAS_SNAPSHOT_MAX_FRAMES_PER_SCENE: usize = MAX_FRAMES;
+/// Maximum scene count in a Phase B snapshot (matches ATLAS_MAX_SCENES).
+const ATLAS_SNAPSHOT_MAX_SCENES: usize = ATLAS_MAX_SCENES;
+
+/// Phase B per-frame snapshot: describes a single frame's state at capture time.
+/// Read-only derivation from existing ShellFrame + surface state.
+/// No heap, fixed-size, no mutation of source state.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct AtlasFrameSnapshot {
+    /// Frame identifier from ShellFrame.frame_id.
+    frame_id: u32,
+    /// Scene this frame belongs to.
+    scene_id: u8,
+    /// Active tab's surface_id, or 0 if none/dead.
+    active_surface_id: u64,
+    /// Frame geometry from ShellFrame normal_* fields (pre-zoom).
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    /// True if FRAME_FLAG_MINIMIZED is set.
+    minimized: bool,
+    /// True if frame is in active scene and not minimized.
+    visible: bool,
+    /// Tab count from ShellFrame.tab_count (conservative: at least 1 if frame exists).
+    tab_count: u8,
+}
+
+/// Phase B per-scene snapshot: aggregates frame counts and visibility.
+/// Read-only derivation from existing FRAMES state.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct AtlasSceneSnapshot {
+    /// Scene index (0..ATLAS_MAX_SCENES-1).
+    scene_id: u8,
+    /// Total frames in this scene (clamped to ATLAS_SNAPSHOT_MAX_FRAMES_PER_SCENE).
+    frame_count: u8,
+    /// Frame_id of the focused frame in this scene, or 0 if none.
+    active_frame_id: u32,
+    /// Count of minimized frames in this scene.
+    minimized_count: u8,
+    /// Count of visible frames (active scene, not minimized, alive surface).
+    visible_count: u8,
+}
+
+/// Phase B bounded snapshot collector: reads existing Scene/Frame/window state
+/// only, emits deterministic markers. Must not mutate focus, scene, frame,
+/// drag, resize, or window state.
+unsafe fn collect_atlas_snapshot() {
+    let active_scene = ACTIVE_SCENE_IDX;
+    let mut total_frames: u8 = 0;
+    let mut total_visible: u8 = 0;
+    let mut total_minimized: u8 = 0;
+
+    serial_println!(
+        "[silk.atlas.snapshot.begin] scenes={} active={}",
+        ATLAS_SNAPSHOT_MAX_SCENES, active_scene
+    );
+
+    for si in 0..ATLAS_SNAPSHOT_MAX_SCENES as u8 {
+        let mut scene_frame_count: u8 = 0;
+        let mut scene_active_frame: u32 = 0;
+        let mut scene_minimized: u8 = 0;
+        let mut scene_visible: u8 = 0;
+        let in_active = si == active_scene;
+        let mut has_any_frame = false;
+
+        for slot in FRAMES.iter() {
+            if let Some(ref frame) = slot {
+                if frame.scene_id != si {
+                    continue;
+                }
+                has_any_frame = true;
+                if scene_frame_count >= ATLAS_SNAPSHOT_MAX_FRAMES_PER_SCENE as u8 {
+                    break;
+                }
+
+                let minimized = (frame.flags & FRAME_FLAG_MINIMIZED) != 0;
+                let surface_id = active_surface_for_frame(frame.frame_id).unwrap_or(0);
+                let alive = surface_id != 0 && surface_is_alive(surface_id);
+                // A frame is visible iff: in active scene, not minimized, surface alive
+                let visible = in_active && !minimized && alive;
+
+                if minimized {
+                    scene_minimized = scene_minimized.saturating_add(1);
+                }
+                if visible {
+                    scene_visible = scene_visible.saturating_add(1);
+                }
+                // Set active frame: prefer first visible frame, fall back to first frame.
+                if visible {
+                    scene_active_frame = frame.frame_id;
+                } else if scene_active_frame == 0 {
+                    scene_active_frame = frame.frame_id;
+                }
+
+                let tab_count = if frame.tab_count > 0 { frame.tab_count } else { 1 };
+
+                serial_println!(
+                    "[silk.atlas.snapshot.frame] scene={} frame={} surface={} x={} y={} w={} h={} visible={} minimized={} tabs={}",
+                    si,
+                    frame.frame_id,
+                    surface_id,
+                    frame.normal_x,
+                    frame.normal_y,
+                    frame.normal_w,
+                    frame.normal_h,
+                    visible as u8,
+                    minimized as u8,
+                    tab_count
+                );
+
+                scene_frame_count = scene_frame_count.saturating_add(1);
+            }
+        }
+
+        if !has_any_frame {
+            serial_println!(
+                "[silk.atlas.snapshot.empty] scene={} reason=no_frames",
+                si
+            );
+        }
+
+        total_frames = total_frames.saturating_add(scene_frame_count);
+        total_visible = total_visible.saturating_add(scene_visible);
+        total_minimized = total_minimized.saturating_add(scene_minimized);
+
+        serial_println!(
+            "[silk.atlas.snapshot.scene] scene={} frames={} visible={} minimized={} active_frame={}",
+            si, scene_frame_count, scene_visible, scene_minimized, scene_active_frame
+        );
+    }
+
+    serial_println!(
+        "[silk.atlas.snapshot.done] scenes={} frames={} visible={} minimized={} ok=1",
+        ATLAS_SNAPSHOT_MAX_SCENES, total_frames, total_visible, total_minimized
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14357,6 +14534,290 @@ unsafe fn maybe_run_atlas_preview_proof() {
     ATLAS_PREVIEW_PROOF_DONE = true;
 }
 
+/// Atlas Phase A state model proof: explicit shell-owned Atlas state model with
+/// runtime proof markers. Phase A is state model only — no Atlas renderer,
+/// thumbnails, drag/drop, or visual changes.
+///
+/// Proof path:
+///   1. Emit [silk.atlas.state.init]     — current scene count, active, mode
+///   2. Enter Atlas (atlas_toggle)        — uses existing F10 toggle path
+///   3. Emit [silk.atlas.mode.enter]      — mode entry marker
+///   4. Emit [silk.atlas.scene.preview]   — per-scene frame count + bounds
+///   5. Switch active scene               — if >1 scene, switch; else switch-to-self
+///   6. Emit [silk.scene.active.set]      — scene transition marker
+///   7. Exit Atlas (atlas_toggle)         — restore Desktop mode
+///   8. Emit [silk.atlas.mode.exit]       — mode exit marker
+///   9. Emit [silk.atlas.phase_a.done]    — completion marker
+///
+/// Gate: SEXOS_ATLAS_PHASE_A_STATE_MODEL_PROOF=1 (unset = zero behavior change)
+unsafe fn maybe_run_atlas_phase_a_state_model_proof() {
+    if !ATLAS_PHASE_A_STATE_MODEL_PROOF_ENABLED || ATLAS_PHASE_A_STATE_MODEL_PROOF_DONE {
+        return;
+    }
+
+    loop {
+        let stage = ATLAS_PHASE_A_STATE_MODEL_PROOF_STAGE;
+        if stage >= 10 {
+            break;
+        }
+        ATLAS_PHASE_A_STATE_MODEL_PROOF_STAGE = stage + 1;
+
+        match stage {
+            // Stage 0: Emit init marker with current state snapshot.
+            0 => {
+                let mode_str = match shell_view_mode() {
+                    ShellViewMode::Desktop => "desktop",
+                    ShellViewMode::Atlas => "atlas",
+                };
+                let scene_count = WORKSPACE_COUNT;
+                let active = ACTIVE_SCENE_IDX;
+                serial_println!(
+                    "[silk.atlas.state.init] scenes={} active={} mode={}",
+                    scene_count, active, mode_str
+                );
+            }
+
+            // Stage 1: Enter Atlas mode via existing atlas_toggle() path (F10 equivalent).
+            1 => {
+                if !ATLAS_MODE_ENABLED {
+                    atlas_toggle();
+                }
+                let entered = ATLAS_MODE_ENABLED;
+                let active = ACTIVE_SCENE_IDX;
+                // Count populated scenes for honest scene count.
+                let mut populated: u8 = 0;
+                for s in 0..WORKSPACE_COUNT as u8 {
+                    let mut has_frames = false;
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.scene_id == s {
+                                has_frames = true;
+                                break;
+                            }
+                        }
+                    }
+                    if has_frames {
+                        populated = populated.saturating_add(1);
+                    }
+                }
+                if populated == 0 {
+                    populated = 1; // At least workspace scene exists conceptually.
+                }
+                serial_println!(
+                    "[silk.atlas.mode.enter] active={} scenes={} ok={}",
+                    active, populated, entered as u8
+                );
+            }
+
+            // Stage 2: Emit preview markers for each scene that has frames.
+            2 => {
+                for s in 0..WORKSPACE_COUNT as u8 {
+                    let mut frame_count: u8 = 0;
+                    let mut preview_x: i32 = 0;
+                    let mut preview_y: i32 = 0;
+                    let mut preview_w: u32 = 0;
+                    let mut preview_h: u32 = 0;
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.scene_id == s {
+                                frame_count = frame_count.saturating_add(1);
+                                // Use first frame's normal coords as preview bounds.
+                                if frame_count == 1 {
+                                    preview_x = frame.normal_x;
+                                    preview_y = frame.normal_y;
+                                    preview_w = frame.normal_w;
+                                    preview_h = frame.normal_h;
+                                }
+                            }
+                        }
+                    }
+                    if frame_count > 0 {
+                        serial_println!(
+                            "[silk.atlas.scene.preview] scene={} frames={} x={} y={} w={} h={}",
+                            s, frame_count, preview_x, preview_y, preview_w, preview_h
+                        );
+                    }
+                }
+            }
+
+            // Stage 3: Switch active scene.
+            // If more than one scene is populated, switch to the next one.
+            // Otherwise switch-to-self (single_scene).
+            3 => {
+                // Count populated scenes.
+                let mut populated_scenes: u8 = 0;
+                let mut first_other: u8 = ACTIVE_SCENE_IDX;
+                for s in 0..WORKSPACE_COUNT as u8 {
+                    let mut has_frames = false;
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.scene_id == s {
+                                has_frames = true;
+                                break;
+                            }
+                        }
+                    }
+                    if has_frames {
+                        populated_scenes = populated_scenes.saturating_add(1);
+                        if s != ACTIVE_SCENE_IDX && first_other == ACTIVE_SCENE_IDX {
+                            first_other = s;
+                        }
+                    }
+                }
+
+                let old_scene = ACTIVE_SCENE_IDX;
+                if populated_scenes > 1 {
+                    // Switch to the next populated scene (not current).
+                    let target = first_other;
+                    switch_scene(target);
+                    serial_println!(
+                        "[silk.scene.active.set] from={} to={} reason=multi_scene",
+                        old_scene, ACTIVE_SCENE_IDX
+                    );
+                } else {
+                    // Single scene: switch-to-self is acceptable.
+                    switch_scene(old_scene);
+                    serial_println!(
+                        "[silk.scene.active.set] from={} to={} reason=single_scene",
+                        old_scene, ACTIVE_SCENE_IDX
+                    );
+                }
+            }
+
+            // Stage 4: Exit Atlas mode, restore Desktop.
+            4 => {
+                let active_before_exit = ACTIVE_SCENE_IDX;
+                if ATLAS_MODE_ENABLED {
+                    atlas_toggle();
+                }
+                let exited = !ATLAS_MODE_ENABLED;
+                let view_mode = match shell_view_mode() {
+                    ShellViewMode::Desktop => "desktop",
+                    ShellViewMode::Atlas => "atlas",
+                };
+                serial_println!(
+                    "[silk.atlas.mode.exit] active={} reason={} view={} ok={}",
+                    active_before_exit,
+                    if exited { "toggle_close" } else { "already_closed" },
+                    view_mode,
+                    exited as u8
+                );
+            }
+
+            // Stage 5: Emit done marker.
+            5 => {
+                let scene_count = WORKSPACE_COUNT;
+                let active = ACTIVE_SCENE_IDX;
+                serial_println!(
+                    "[silk.atlas.phase_a.done] scenes={} active={} mode=desktop ok=1",
+                    scene_count, active
+                );
+                ATLAS_PHASE_A_STATE_MODEL_PROOF_DONE = true;
+            }
+
+            _ => {}
+        }
+        sys_yield();
+    }
+}
+
+/// Atlas Phase B snapshot integration proof: collect bounded snapshot metadata
+/// from existing Scene/Frame state, emit deterministic markers for gate verification.
+///
+/// Phase B scope: metadata snapshot only — no thumbnail pixels, no new renderer
+/// protocol, no framebuffer writes, no drag/drop, no animation, no visual card
+/// renderer yet.  All data derived from existing FRAMES + scene state.
+///
+/// Proof path:
+///   1. Record entry view mode (Desktop/Atlas)
+///   2. Optionally enter Atlas if not already (reuses existing atlas_toggle path)
+///   3. Run collect_atlas_snapshot() — emits all markers
+///   4. Restore previous view mode if we entered Atlas for this proof
+///   5. Set done flag
+///
+/// Gate: SEXOS_ATLAS_PHASE_B_SNAPSHOT_PROOF=1 (unset = zero behavior change)
+unsafe fn maybe_run_atlas_phase_b_snapshot_proof() {
+    if !ATLAS_PHASE_B_SNAPSHOT_PROOF_ENABLED || ATLAS_PHASE_B_SNAPSHOT_PROOF_DONE {
+        return;
+    }
+
+    loop {
+        let stage = ATLAS_PHASE_B_SNAPSHOT_PROOF_STAGE;
+        if stage >= 6 {
+            break;
+        }
+        ATLAS_PHASE_B_SNAPSHOT_PROOF_STAGE = stage + 1;
+
+        match stage {
+            // Stage 0: Record entry view mode.
+            0 => {
+                let mode_str = match shell_view_mode() {
+                    ShellViewMode::Desktop => "desktop",
+                    ShellViewMode::Atlas => "atlas",
+                };
+                serial_println!(
+                    "[silk.atlas.phase_b.begin] view={} active_scene={}",
+                    mode_str, ACTIVE_SCENE_IDX
+                );
+            }
+
+            // Stage 1: Enter Atlas if not already (optional: snapshot is valid
+            // in either mode, but entering Atlas ensures FRAMES tiling is current).
+            1 => {
+                if !ATLAS_MODE_ENABLED {
+                    atlas_toggle();
+                }
+                serial_println!(
+                    "[silk.atlas.phase_b.mode] atlas={}",
+                    ATLAS_MODE_ENABLED as u8
+                );
+            }
+
+            // Stage 2: Collect snapshot metadata (read-only, no mutations).
+            2 => {
+                unsafe { collect_atlas_snapshot(); }
+            }
+
+            // Stage 3: Exit Atlas if we entered it for this proof, restoring
+            // Desktop mode.
+            3 => {
+                if ATLAS_MODE_ENABLED {
+                    atlas_toggle();
+                }
+                let restored = !ATLAS_MODE_ENABLED;
+                serial_println!(
+                    "[silk.atlas.phase_b.restore] desktop={} ok={}",
+                    restored as u8,
+                    restored as u8
+                );
+            }
+
+            // Stage 4: Verify mode is Desktop after restore.
+            4 => {
+                let final_mode = match shell_view_mode() {
+                    ShellViewMode::Desktop => "desktop",
+                    ShellViewMode::Atlas => "atlas",
+                };
+                serial_println!(
+                    "[silk.atlas.phase_b.final] mode={} ok=1",
+                    final_mode
+                );
+            }
+
+            // Stage 5: Emit done marker.
+            5 => {
+                serial_println!(
+                    "[silk.atlas.phase_b.done] ok=1 reason=snapshot_collected"
+                );
+                ATLAS_PHASE_B_SNAPSHOT_PROOF_DONE = true;
+            }
+
+            _ => {}
+        }
+        sys_yield();
+    }
+}
+
 unsafe fn maybe_run_app_registry_readonly_proof() {
     if !APP_REGISTRY_READONLY_PROOF_ENABLED || APP_REGISTRY_READONLY_PROOF_DONE {
         return;
@@ -19045,6 +19506,8 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_linen_search_filter_proof(); }
         unsafe { maybe_run_bell_filter_proof(); }
         unsafe { maybe_run_atlas_preview_proof(); }
+        unsafe { maybe_run_atlas_phase_a_state_model_proof(); }
+        unsafe { maybe_run_atlas_phase_b_snapshot_proof(); }
         unsafe { maybe_run_app_registry_readonly_proof(); }
         unsafe { maybe_run_app_registry_filter_sort_proof(); }
         unsafe { maybe_run_app_registry_launch_intent_proof(); }

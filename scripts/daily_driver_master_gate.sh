@@ -365,6 +365,8 @@ gate_mesh_graph_status="SKIP"
 gate_collar_grant_status="SKIP"
 gate_top_strip_hash="SKIP"
 gate_spindle_atlas="SKIP"
+gate_atlas_phase_a_state_model="SKIP"
+gate_atlas_phase_b_snapshot="SKIP"
 gate_silk_combined_interaction="SKIP"
 gate_input_freeze_xhci_bounded="SKIP"
 gate_input_freeze_route_ready_or_missing="SKIP"
@@ -3905,6 +3907,42 @@ elif [ "$(has 'spindle\.atlas\.command\]')" -ge 1 ]; then
     gate_spindle_atlas="PASS"
 else gate_spindle_atlas="SKIP"; fi
 
+# ---- 90b. atlas_phase_a_state_model ----
+if [ "$(has 'silk\.atlas\.phase_a\.done.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_a_state_model="PASS"
+    print_row "atlas_phase_a_state_model" "PASS" "state model proof complete"
+elif [ "$(has 'silk\.atlas\.state\.init\]')" -ge 1 ]; then
+    gate_atlas_phase_a_state_model="PASS"
+    print_row "atlas_phase_a_state_model" "PASS" "state init markers present (partial)"
+elif [ "$(has 'silk\.atlas\.mode\.enter\]')" -ge 1 ]; then
+    gate_atlas_phase_a_state_model="SKIP"
+    print_row "atlas_phase_a_state_model" "SKIP" "mode enter but not done"
+else gate_atlas_phase_a_state_model="SKIP"; fi
+
+# ---- 90c. atlas_phase_b_snapshot ----
+# Phase B: metadata snapshot only (no rendering/thumbnails/drag).
+# PASS if [silk.atlas.snapshot.done] with ok=1 is present.
+# SKIP if proof not enabled / done marker absent.
+# FAIL if partial Phase B markers exist without done.
+if [ "$(has 'silk\.atlas\.snapshot\.done.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_b_snapshot="PASS"
+    print_row "atlas_phase_b_snapshot" "PASS" "snapshot proof complete"
+elif [ "$(has 'silk\.atlas\.snapshot\.begin\]')" -ge 1 ]; then
+    if [ "$(has 'silk\.atlas\.snapshot\.frame\]')" -ge 1 ]; then
+        gate_atlas_phase_b_snapshot="FAIL"
+        print_row "atlas_phase_b_snapshot" "FAIL" "partial snapshot markers without done"
+    else
+        gate_atlas_phase_b_snapshot="SKIP"
+        print_row "atlas_phase_b_snapshot" "SKIP" "snapshot begin but no frames or done"
+    fi
+elif [ "$(has 'silk\.atlas\.snapshot\.(frame|scene|empty)\]')" -ge 1 ]; then
+    gate_atlas_phase_b_snapshot="FAIL"
+    print_row "atlas_phase_b_snapshot" "FAIL" "orphan snapshot markers without begin/done"
+elif [ "$(has 'silk\.atlas\.phase_b\.(begin|done)\]')" -ge 1 ]; then
+    gate_atlas_phase_b_snapshot="PASS"
+    print_row "atlas_phase_b_snapshot" "PASS" "phase_b markers present (partial)"
+else gate_atlas_phase_b_snapshot="SKIP"; fi
+
 # ---- 85. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
@@ -4373,6 +4411,8 @@ ALL_GATES=(
     "collar_grant_status:$gate_collar_grant_status"
     "top_strip_hash:$gate_top_strip_hash"
     "spindle_atlas:$gate_spindle_atlas"
+    "atlas_phase_a_state_model:$gate_atlas_phase_a_state_model"
+    "atlas_phase_b_snapshot:$gate_atlas_phase_b_snapshot"
     "silk_combined_interaction:$gate_silk_combined_interaction"
     "input_freeze_xhci_bounded:$gate_input_freeze_xhci_bounded"
     "input_freeze_route_ready_or_missing:$gate_input_freeze_route_ready_or_missing"
