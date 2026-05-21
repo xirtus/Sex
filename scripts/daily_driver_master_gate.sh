@@ -368,6 +368,7 @@ gate_spindle_atlas="SKIP"
 gate_atlas_phase_a_state_model="SKIP"
 gate_atlas_phase_b_snapshot="SKIP"
 gate_atlas_phase_c_render_stub="SKIP"
+gate_atlas_phase_d_frame_preview_stub="SKIP"
 gate_silk_combined_interaction="SKIP"
 gate_input_freeze_xhci_bounded="SKIP"
 gate_input_freeze_route_ready_or_missing="SKIP"
@@ -3963,6 +3964,31 @@ elif [ "$(has 'silk\.atlas\.phase_c\.(begin|done)\]')" -ge 1 ]; then
     print_row "atlas_phase_c_render_stub" "PASS" "shell-side phase_c markers present (partial)"
 else gate_atlas_phase_c_render_stub="SKIP"; fi
 
+# ---- 90e. atlas_phase_d_frame_preview_stub ----
+# Phase D: interior mini-frame rectangles inside Phase C cards.
+# PASS if [sexdisplay.atlas.phase_d.done] with previews=N ok=1 is present.
+# SKIP if proof not enabled / done marker absent.
+# FAIL if phase_d begin/layout/draw markers exist without done.
+if [ "$(has 'sexdisplay\.atlas\.phase_d\.done.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_d_frame_preview_stub="PASS"
+    print_row "atlas_phase_d_frame_preview_stub" "PASS" "frame preview stub proof complete"
+elif [ "$(has 'sexdisplay\.atlas\.frame\.preview\.layout\]')" -ge 1 ]; then
+    gate_atlas_phase_d_frame_preview_stub="FAIL"
+    print_row "atlas_phase_d_frame_preview_stub" "FAIL" "preview layout markers without phase_d.done"
+elif [ "$(has 'sexdisplay\.atlas\.frame\.preview\.draw\]')" -ge 1 ]; then
+    gate_atlas_phase_d_frame_preview_stub="FAIL"
+    print_row "atlas_phase_d_frame_preview_stub" "FAIL" "preview draw markers without phase_d.done"
+elif [ "$(has 'sexdisplay\.atlas\.frame\.preview\.skip\]')" -ge 1 ]; then
+    gate_atlas_phase_d_frame_preview_stub="FAIL"
+    print_row "atlas_phase_d_frame_preview_stub" "FAIL" "preview skip markers without phase_d.done"
+elif [ "$(has 'sexdisplay\.atlas\.phase_d\.begin\]')" -ge 1 ]; then
+    gate_atlas_phase_d_frame_preview_stub="FAIL"
+    print_row "atlas_phase_d_frame_preview_stub" "FAIL" "phase_d begin without done"
+elif [ "$(has 'silk\.atlas\.phase_d\.(begin|done)\]')" -ge 1 ]; then
+    gate_atlas_phase_d_frame_preview_stub="PASS"
+    print_row "atlas_phase_d_frame_preview_stub" "PASS" "shell-side phase_d markers present (partial)"
+else gate_atlas_phase_d_frame_preview_stub="SKIP"; fi
+
 # ---- 85. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
@@ -4434,6 +4460,7 @@ ALL_GATES=(
     "atlas_phase_a_state_model:$gate_atlas_phase_a_state_model"
     "atlas_phase_b_snapshot:$gate_atlas_phase_b_snapshot"
     "atlas_phase_c_render_stub:$gate_atlas_phase_c_render_stub"
+    "atlas_phase_d_frame_preview_stub:$gate_atlas_phase_d_frame_preview_stub"
     "silk_combined_interaction:$gate_silk_combined_interaction"
     "input_freeze_xhci_bounded:$gate_input_freeze_xhci_bounded"
     "input_freeze_route_ready_or_missing:$gate_input_freeze_route_ready_or_missing"

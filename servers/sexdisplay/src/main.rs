@@ -45,6 +45,25 @@ const ATLAS_CARD_BORDER_PX: usize = 2;
 /// Maximum cards rendered in one pass.
 const ATLAS_CARD_MAX_CARDS: usize = 16;
 
+/// Atlas Phase D frame preview interior stub proof gate.
+/// When enabled, draws bounded mini-frame rectangles inside Phase C cards
+/// (or computed card geometry).  Interior previews only — no live thumbnails,
+/// no surface capture, no framebuffer copy, no backing-buffer redesign.
+/// Default unset = zero behavior change.
+/// Build: SEXOS_ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF=1
+const ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF").is_some();
+/// Interior preview inner margin (pixels inset from card edges).
+const ATLAS_PREVIEW_INNER_MARGIN: usize = 4;
+/// Maximum interior previews rendered in one pass.
+const ATLAS_PREVIEW_MAX_PREVIEWS: usize = 16;
+/// Interior preview color for focused/active surface — lavender.
+const ATLAS_PREVIEW_ACTIVE_COLOR: u32 = 0x00B880FF;
+/// Interior preview color for visible (non-focused active) surface — cool blue.
+const ATLAS_PREVIEW_VISIBLE_COLOR: u32 = 0x003070A0;
+/// Interior preview color for minimized — dim steel gray.
+const ATLAS_PREVIEW_MINIMIZED_COLOR: u32 = 0x00505058;
+
 const BAR_BG_W_CAP: usize = 2560;
 const BAR_BG_H: usize = 50;
 
@@ -1285,6 +1304,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         }
     }
     draw_atlas_cards_pass(fb, w, h, total_pixels);
+    draw_atlas_frame_previews_pass(fb, w, h, total_pixels);
     draw_cursor_z_top(fb, w, h, total_pixels);
     draw_launcher_panel(fb, w, h, total_pixels);
 }
@@ -1525,6 +1545,7 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
         }
     }
     draw_atlas_cards_pass(fb, w, h, total_pixels);
+    draw_atlas_frame_previews_pass(fb, w, h, total_pixels);
     draw_cursor_z_top(fb, w, h, total_pixels);
     draw_launcher_panel(fb, w, h, total_pixels);
 }
@@ -1890,6 +1911,197 @@ fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize) 
             serial_println!(
                 "[sexdisplay.atlas.phase_c.done] cards={} ok=1",
                 card_count
+            );
+        }
+    }
+}
+
+/// Atlas Phase D frame preview interior stub pass: draws bounded mini-frame
+/// rectangles inside each card's interior area.  Uses the same SURFACES iteration
+/// and clamp_surface() card geometry as Phase C.  Each interior preview is a
+/// flat filled rectangle, inset by ATLAS_PREVIEW_INNER_MARGIN from the card
+/// edges, with per-pixel bounds checks.
+///
+/// State derivation (local_stub): focused surface → active preview, other active
+/// surfaces → visible preview.  Minimized state is not detectable from SURFACES
+/// alone without new ABI, so all previews use source=local_stub.
+///
+/// Safety: writes only within framebuffer bounds (checked per-pixel via idx <
+/// total_pixels).  Only touches rows y>=51 (below SilkBar).  Interior previews
+/// are flat ARGB, no alpha/blur/shadows.
+///
+/// Runs after draw_atlas_cards_pass when SEXOS_ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF=1;
+/// markers are budgeted to prevent log spam.
+fn draw_atlas_frame_previews_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
+    if !ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED {
+        return;
+    }
+    if h < 52 {
+        return;
+    }
+
+    let mut preview_count: u32 = 0;
+
+    // Budgeted begin marker: first 8 redraws.
+    unsafe {
+        static mut ATLAS_PREVIEW_PASS_BUDGET: u32 = 8;
+        let b = &mut ATLAS_PREVIEW_PASS_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            // Count eligible surfaces for honest N in begin marker.
+            let mut eligible: u32 = 0;
+            for si in 0..MAX_SURFACES {
+                if eligible >= ATLAS_PREVIEW_MAX_PREVIEWS as u32 { break; }
+                let surf = &SURFACES[si];
+                if !surf.active { continue; }
+                if surf.surface_id == CURSOR_SURFACE_ID || surf.surface_id == LAUNCHER_PANEL_SURFACE_ID { continue; }
+                let (_, sy, sw, sh) = clamp_surface(surf, w, h);
+                if sw == 0 || sh == 0 || sy < 51 { continue; }
+                let inner_w = sw.saturating_sub(2 * ATLAS_PREVIEW_INNER_MARGIN);
+                let inner_h = sh.saturating_sub(2 * ATLAS_PREVIEW_INNER_MARGIN);
+                if inner_w < 4 || inner_h < 4 { continue; }
+                eligible = eligible.saturating_add(1);
+            }
+            serial_println!(
+                "[sexdisplay.atlas.phase_d.begin] cards={} mode=interior_stub",
+                eligible
+            );
+        }
+    }
+
+    unsafe {
+        for si in 0..MAX_SURFACES {
+            if preview_count >= ATLAS_PREVIEW_MAX_PREVIEWS as u32 {
+                break;
+            }
+            let surf = &SURFACES[si];
+            if !surf.active {
+                continue;
+            }
+            if surf.surface_id == CURSOR_SURFACE_ID || surf.surface_id == LAUNCHER_PANEL_SURFACE_ID {
+                continue;
+            }
+
+            let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+            if sw == 0 || sh == 0 {
+                unsafe {
+                    static mut ATLAS_PREVIEW_SKIP_BUDGET: u32 = 8;
+                    let b = &mut ATLAS_PREVIEW_SKIP_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!(
+                            "[sexdisplay.atlas.frame.preview.skip] scene={} frame=0 reason=zero_area_clamped",
+                            si as u32
+                        );
+                    }
+                }
+                continue;
+            }
+            if sy < 51 {
+                unsafe {
+                    static mut ATLAS_PREVIEW_SKIP_BUDGET: u32 = 8;
+                    let b = &mut ATLAS_PREVIEW_SKIP_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!(
+                            "[sexdisplay.atlas.frame.preview.skip] scene={} frame=0 reason=overlaps_top_strip sy={}",
+                            si as u32, sy
+                        );
+                    }
+                }
+                continue;
+            }
+
+            let margin = ATLAS_PREVIEW_INNER_MARGIN;
+            let inner_x = sx.saturating_add(margin);
+            let inner_y = sy.saturating_add(margin);
+            let inner_w = sw.saturating_sub(2 * margin);
+            let inner_h = sh.saturating_sub(2 * margin);
+
+            if inner_w < 4 || inner_h < 4 {
+                unsafe {
+                    static mut ATLAS_PREVIEW_SKIP_BUDGET: u32 = 8;
+                    let b = &mut ATLAS_PREVIEW_SKIP_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!(
+                            "[sexdisplay.atlas.frame.preview.skip] scene={} frame=0 reason=inner_area_too_small",
+                            si as u32
+                        );
+                    }
+                }
+                continue;
+            }
+
+            let inner_right = inner_x.saturating_add(inner_w).min(w);
+            let inner_bottom = inner_y.saturating_add(inner_h).min(h);
+            if inner_right <= inner_x || inner_bottom <= inner_y {
+                continue;
+            }
+
+            let active_flag: u8 = if surf.surface_id == FOCUSED_SURFACE_ID { 1 } else { 0 };
+            let is_active = active_flag == 1;
+
+            // local_stub: active=focused, visible=non-focused active, minimized not detectable
+            let (preview_color, state) = if is_active {
+                (ATLAS_PREVIEW_ACTIVE_COLOR, "active")
+            } else {
+                (ATLAS_PREVIEW_VISIBLE_COLOR, "visible")
+            };
+
+            // Budgeted layout marker.
+            unsafe {
+                static mut ATLAS_PREVIEW_LAYOUT_BUDGET: u32 = 32;
+                let b = &mut ATLAS_PREVIEW_LAYOUT_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!(
+                        "[sexdisplay.atlas.frame.preview.layout] scene={} frame=0 x={} y={} w={} h={} state={} source=local_stub",
+                        si as u32, inner_x, inner_y, inner_w, inner_h, state
+                    );
+                }
+            }
+
+            // Draw interior fill — flat ARGB, per-pixel bounds-checked.
+            for py in inner_y..inner_bottom {
+                if py >= 51 {
+                    for px in inner_x..inner_right {
+                        if px < w {
+                            let idx = py * w + px;
+                            if idx < total_pixels {
+                                core::ptr::write_volatile(fb.add(idx), preview_color);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Budgeted draw marker.
+            unsafe {
+                static mut ATLAS_PREVIEW_DRAW_BUDGET: u32 = 32;
+                let b = &mut ATLAS_PREVIEW_DRAW_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!(
+                        "[sexdisplay.atlas.frame.preview.draw] scene={} frame=0 ok=1",
+                        si as u32
+                    );
+                }
+            }
+
+            preview_count = preview_count.saturating_add(1);
+        }
+    }
+
+    // Budgeted done marker.
+    unsafe {
+        static mut ATLAS_PREVIEW_DONE_BUDGET: u32 = 8;
+        let b = &mut ATLAS_PREVIEW_DONE_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!(
+                "[sexdisplay.atlas.phase_d.done] previews={} ok=1",
+                preview_count
             );
         }
     }

@@ -353,6 +353,16 @@ const ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED: bool =
 static mut ATLAS_PHASE_C_RENDER_STUB_PROOF_DONE: bool = false;
 static mut ATLAS_PHASE_C_RENDER_STUB_PROOF_STAGE: u8 = 0;
 
+/// Atlas Phase D frame preview interior stub proof gate.
+/// When enabled, shell emits begin/snapshot/done markers to complement the
+/// sexdisplay interior preview pass.  Reuses collect_atlas_snapshot() for
+/// frame/scene metadata.  Does NOT toggle Atlas mode.
+/// Build: SEXOS_ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF=1
+const ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF").is_some();
+static mut ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_DONE: bool = false;
+static mut ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_STAGE: u8 = 0;
+
 const APP_REGISTRY_READONLY_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_REGISTRY_READONLY_PROOF").is_some();
 const APP_REGISTRY_FILTER_SORT_PROOF_ENABLED: bool =
@@ -14895,6 +14905,74 @@ unsafe fn maybe_run_atlas_phase_c_render_stub_proof() {
     }
 }
 
+/// Atlas Phase D frame preview interior stub proof (shell-side).
+/// Emits begin/snapshot/done markers to complement the sexdisplay interior
+/// preview pass.  Reuses collect_atlas_snapshot() for frame/scene metadata
+/// (read-only, no mutations).  Does NOT toggle Atlas mode — operates on
+/// whatever mode is current at boot.
+///
+/// Phase D scope: interior mini-frame rectangles only — no live thumbnails,
+/// no surface capture, no framebuffer copy, no backing-buffer redesign.
+/// Gate: SEXOS_ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF=1 (unset = zero behavior change)
+unsafe fn maybe_run_atlas_phase_d_frame_preview_stub_proof() {
+    if !ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED || ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_DONE {
+        return;
+    }
+
+    loop {
+        let stage = ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_STAGE;
+        if stage >= 4 {
+            break;
+        }
+        ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_STAGE = stage + 1;
+
+        match stage {
+            // Stage 0: Count populated scenes for honest N in begin marker.
+            0 => {
+                let mut populated_scenes: u8 = 0;
+                for s in 0..WORKSPACE_COUNT as u8 {
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.scene_id == s {
+                                populated_scenes = populated_scenes.saturating_add(1);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if populated_scenes == 0 {
+                    populated_scenes = 1;
+                }
+                serial_println!(
+                    "[silk.atlas.phase_d.begin] scenes={} active={}",
+                    populated_scenes, ACTIVE_SCENE_IDX
+                );
+            }
+
+            // Stage 1: Collect snapshot to emit frame/scene metadata markers.
+            // This proves the shell-side knows about the frame geometry that
+            // sexdisplay uses for interior previews.
+            1 => {
+                unsafe { collect_atlas_snapshot(); }
+                serial_println!(
+                    "[silk.atlas.phase_d.snapshot] ok=1 reason=collected_for_frame_preview"
+                );
+            }
+
+            // Stage 2: Emit done marker.
+            2 => {
+                serial_println!(
+                    "[silk.atlas.phase_d.done] ok=1 reason=shell_side_participates"
+                );
+                ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_DONE = true;
+            }
+
+            _ => {}
+        }
+        sys_yield();
+    }
+}
+
 unsafe fn maybe_run_app_registry_readonly_proof() {
     if !APP_REGISTRY_READONLY_PROOF_ENABLED || APP_REGISTRY_READONLY_PROOF_DONE {
         return;
@@ -19586,6 +19664,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_phase_a_state_model_proof(); }
         unsafe { maybe_run_atlas_phase_b_snapshot_proof(); }
         unsafe { maybe_run_atlas_phase_c_render_stub_proof(); }
+        unsafe { maybe_run_atlas_phase_d_frame_preview_stub_proof(); }
         unsafe { maybe_run_app_registry_readonly_proof(); }
         unsafe { maybe_run_app_registry_filter_sort_proof(); }
         unsafe { maybe_run_app_registry_launch_intent_proof(); }
