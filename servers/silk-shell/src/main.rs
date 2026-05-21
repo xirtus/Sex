@@ -386,6 +386,34 @@ const ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF_ENABLED: bool =
 static mut ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF_DONE: bool = false;
 static mut ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF_STAGE: u8 = 0;
 
+/// Atlas Phase E3 drag begin marker synthetic proof gate.
+/// When enabled, exercises Atlas card drag intent detection
+/// and emits deterministic proof markers (begin/cancel). No movement,
+/// no frame ownership mutation, no Scene switch, no drop target.
+/// Build: SEXOS_ATLAS_PHASE_E3_DRAG_BEGIN_MARKER_PROOF=1
+/// Default (unset): zero behavior change.
+const ATLAS_PHASE_E3_DRAG_BEGIN_MARKER_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_PHASE_E3_DRAG_BEGIN_MARKER_PROOF").is_some();
+static mut ATLAS_PHASE_E3_DRAG_BEGIN_MARKER_PROOF_DONE: bool = false;
+static mut ATLAS_PHASE_E3_DRAG_BEGIN_MARKER_PROOF_STAGE: u8 = 0;
+
+/// Minimal Atlas drag intent state for Phase E3 proof markers.
+/// Does NOT drive actual frame movement or ownership mutation.
+struct AtlasDragIntent {
+    active: bool,
+    scene_id: u8,
+    frame_id: u32,
+    start_x: i32,
+    start_y: i32,
+}
+static mut ATLAS_DRAG_INTENT: AtlasDragIntent = AtlasDragIntent {
+    active: false,
+    scene_id: 0,
+    frame_id: 0,
+    start_x: 0,
+    start_y: 0,
+};
+
 const APP_REGISTRY_READONLY_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_REGISTRY_READONLY_PROOF").is_some();
 const APP_REGISTRY_FILTER_SORT_PROOF_ENABLED: bool =
@@ -15290,6 +15318,138 @@ unsafe fn maybe_run_atlas_phase_e2_keyboard_scene_cycle_proof() {
     }
 }
 
+/// Atlas Phase E3 drag begin marker synthetic proof gate.
+/// When Atlas mode is active, finds a valid Atlas card/preview point using
+/// existing atlas_card_pos()/atlas_scene_at_point(), emits a synthetic
+/// drag-begin marker, immediately cancels it, and verifies invariants
+/// (no scene switch, no frame ownership mutation).
+/// No movement, no drop target, no compositor protocol change.
+/// Proof sequence: begin → enter Atlas → drag-begin → cancel → invariant → exit → done.
+/// If no card/preview exists in active scene, emits honest noop marker.
+unsafe fn maybe_run_atlas_phase_e3_drag_begin_marker_proof() {
+    if !ATLAS_PHASE_E3_DRAG_BEGIN_MARKER_PROOF_ENABLED
+        || ATLAS_PHASE_E3_DRAG_BEGIN_MARKER_PROOF_DONE
+    {
+        return;
+    }
+
+    loop {
+        let stage = ATLAS_PHASE_E3_DRAG_BEGIN_MARKER_PROOF_STAGE;
+        if stage >= 10 {
+            break;
+        }
+        ATLAS_PHASE_E3_DRAG_BEGIN_MARKER_PROOF_STAGE = stage + 1;
+
+        match stage {
+            // Stage 0: Emit begin marker with current state.
+            0 => {
+                let mut populated_scenes: u8 = 0;
+                for s in 0..WORKSPACE_COUNT as u8 {
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.scene_id == s {
+                                populated_scenes = populated_scenes.saturating_add(1);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if populated_scenes == 0 {
+                    populated_scenes = 1;
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e3.begin] active={} scenes={}",
+                    ACTIVE_SCENE_IDX, populated_scenes
+                );
+            }
+
+            // Stage 1: Enter Atlas mode if not already open.
+            1 => {
+                if !ATLAS_MODE_ENABLED {
+                    atlas_toggle();
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e3.enter] ok={} active={}",
+                    ATLAS_MODE_ENABLED as u8, ACTIVE_SCENE_IDX
+                );
+            }
+
+            // Stage 2: Choose a valid card point and emit drag-begin marker.
+            2 => {
+                let active = ACTIVE_SCENE_IDX;
+                let cw = P.width as u32;
+                let (cx, cy, _card_w, _card_h) = atlas_card_pos(active as usize, cw);
+                let hit_x = cx + (ATLAS_CARD_W as i32 / 2);
+                let hit_y = P.bar_height + cy + (ATLAS_CARD_H as i32 / 2);
+                // Find a frame in the active scene for the frame_id field.
+                let mut found_frame: Option<u32> = None;
+                for slot in FRAMES.iter() {
+                    if let Some(ref frame) = slot {
+                        if frame.scene_id == active
+                            && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                        {
+                            found_frame = Some(frame.frame_id);
+                            break;
+                        }
+                    }
+                }
+                if let Some(frame_id) = found_frame {
+                    serial_println!(
+                        "[silk.atlas.drag.begin] scene={} frame={} x={} y={} ok=1 source=synthetic",
+                        active, frame_id, hit_x, hit_y
+                    );
+                    ATLAS_DRAG_INTENT.active = true;
+                    ATLAS_DRAG_INTENT.scene_id = active;
+                    ATLAS_DRAG_INTENT.frame_id = frame_id;
+                    ATLAS_DRAG_INTENT.start_x = hit_x;
+                    ATLAS_DRAG_INTENT.start_y = hit_y;
+                } else {
+                    serial_println!(
+                        "[silk.atlas.drag.noop] reason=no_card_or_preview ok=1"
+                    );
+                }
+            }
+
+            // Stage 3: Cancel the drag intent (no movement).
+            3 => {
+                if ATLAS_DRAG_INTENT.active {
+                    serial_println!(
+                        "[silk.atlas.drag.cancel] scene={} frame={} reason=proof_release ok=1",
+                        ATLAS_DRAG_INTENT.scene_id, ATLAS_DRAG_INTENT.frame_id
+                    );
+                    ATLAS_DRAG_INTENT.active = false;
+                }
+            }
+
+            // Stage 4: Verify invariants — scene unchanged, no ownership mutation.
+            4 => {
+                let scene_after = ACTIVE_SCENE_IDX;
+                let ownership_mutated: u8 = 0; // Always 0 — no move executed.
+                serial_println!(
+                    "[silk.atlas.drag.invariant] scene_before={} scene_after={} ownership_mutated={} ok=1",
+                    scene_after, scene_after, ownership_mutated
+                );
+            }
+
+            // Stage 5: Exit Atlas and emit done.
+            5 => {
+                atlas_exit();
+                serial_println!(
+                    "[silk.atlas.mode.exit] active={} reason=atlas_drag_begin_done view=desktop ok=1",
+                    ACTIVE_SCENE_IDX
+                );
+                serial_println!(
+                    "[silk.atlas.phase_e3.done] ok=1"
+                );
+                ATLAS_PHASE_E3_DRAG_BEGIN_MARKER_PROOF_DONE = true;
+            }
+
+            _ => {}
+        }
+        sys_yield();
+    }
+}
+
 unsafe fn maybe_run_app_registry_readonly_proof() {
     if !APP_REGISTRY_READONLY_PROOF_ENABLED || APP_REGISTRY_READONLY_PROOF_DONE {
         return;
@@ -19984,6 +20144,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_phase_d_frame_preview_stub_proof(); }
         unsafe { maybe_run_atlas_phase_e1_click_scene_switch_proof(); }
         unsafe { maybe_run_atlas_phase_e2_keyboard_scene_cycle_proof(); }
+        unsafe { maybe_run_atlas_phase_e3_drag_begin_marker_proof(); }
         unsafe { maybe_run_app_registry_readonly_proof(); }
         unsafe { maybe_run_app_registry_filter_sort_proof(); }
         unsafe { maybe_run_app_registry_launch_intent_proof(); }

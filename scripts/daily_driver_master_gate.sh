@@ -371,6 +371,7 @@ gate_atlas_phase_c_render_stub="SKIP"
 gate_atlas_phase_d_frame_preview_stub="SKIP"
 gate_atlas_phase_e1_click_scene_switch="SKIP"
 gate_atlas_phase_e2_keyboard_scene_cycle="SKIP"
+gate_atlas_phase_e3_drag_begin_marker="SKIP"
 gate_silk_combined_interaction="SKIP"
 gate_input_freeze_xhci_bounded="SKIP"
 gate_input_freeze_route_ready_or_missing="SKIP"
@@ -398,7 +399,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V35"
+echo " DAILY-DRIVER MASTER GATE V36"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -4049,6 +4050,30 @@ elif [ "$(has 'silk\.atlas\.phase_e2\.begin\]')" -ge 1 ]; then
     print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "phase_e2 begin without done"
 else gate_atlas_phase_e2_keyboard_scene_cycle="SKIP"; fi
 
+# ---- 90h. atlas_phase_e3_drag_begin_marker ----
+# Phase E3: drag-begin marker proof — no movement, no ownership mutation.
+# PASS if [silk.atlas.phase_e3.done] ok=1 is present.
+# Also PASS if [silk.atlas.drag.noop] ok=1 (no card/preview in active scene).
+# SKIP if proof not enabled / markers absent.
+# FAIL if drag.begin exists without drag.cancel or phase_e3.done.
+# FAIL if ownership_mutated=1.
+if [ "$(has 'silk\.atlas\.phase_e3\.done.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_e3_drag_begin_marker="PASS"
+    print_row "atlas_phase_e3_drag_begin_marker" "PASS" "drag begin marker proof complete"
+elif [ "$(has 'silk\.atlas\.drag\.noop.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_e3_drag_begin_marker="PASS"
+    print_row "atlas_phase_e3_drag_begin_marker" "PASS" "drag noop (no card/preview)"
+elif [ "$(has 'silk\.atlas\.drag\.begin\]')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e3\.done')" -eq 0 ] && [ "$(has 'silk\.atlas\.drag\.cancel')" -eq 0 ]; then
+    gate_atlas_phase_e3_drag_begin_marker="FAIL"
+    print_row "atlas_phase_e3_drag_begin_marker" "FAIL" "drag begin without cancel or phase_e3.done"
+elif [ "$(has 'silk\.atlas\.drag\.invariant.*ownership_mutated=1')" -eq 1 ]; then
+    gate_atlas_phase_e3_drag_begin_marker="FAIL"
+    print_row "atlas_phase_e3_drag_begin_marker" "FAIL" "ownership mutated — invariant violated"
+elif [ "$(has 'silk\.atlas\.phase_e3\.begin\]')" -ge 1 ]; then
+    gate_atlas_phase_e3_drag_begin_marker="FAIL"
+    print_row "atlas_phase_e3_drag_begin_marker" "FAIL" "phase_e3 begin without done"
+else gate_atlas_phase_e3_drag_begin_marker="SKIP"; fi
+
 # ---- 85. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
@@ -4186,7 +4211,7 @@ fi
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V35 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V36 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -4523,6 +4548,7 @@ ALL_GATES=(
     "atlas_phase_d_frame_preview_stub:$gate_atlas_phase_d_frame_preview_stub"
     "atlas_phase_e1_click_scene_switch:$gate_atlas_phase_e1_click_scene_switch"
     "atlas_phase_e2_keyboard_scene_cycle:$gate_atlas_phase_e2_keyboard_scene_cycle"
+    "atlas_phase_e3_drag_begin_marker:$gate_atlas_phase_e3_drag_begin_marker"
     "silk_combined_interaction:$gate_silk_combined_interaction"
     "input_freeze_xhci_bounded:$gate_input_freeze_xhci_bounded"
     "input_freeze_route_ready_or_missing:$gate_input_freeze_route_ready_or_missing"
