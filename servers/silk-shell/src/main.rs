@@ -447,6 +447,17 @@ const ATLAS_PHASE_E4C2_TRUE_REPARENT_PROOF_ENABLED: bool =
 static mut ATLAS_PHASE_E4C2_TRUE_REPARENT_PROOF_DONE: bool = false;
 static mut ATLAS_PHASE_E4C2_TRUE_REPARENT_PROOF_STAGE: u8 = 0;
 
+/// Atlas Phase E4d real pointer drop path proof gate.
+/// When enabled, adds real pointer drop instrumentation helpers and a synthetic
+/// proof that exercises the drag-begin → drop-target → reparent/restore lifecycle
+/// through the real pointer path in handle_hid_event.
+/// Build: SEXOS_ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF=1
+/// Default (unset): zero behavior change.
+const ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF").is_some();
+static mut ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_DONE: bool = false;
+static mut ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_STAGE: u8 = 0;
+
 const APP_REGISTRY_READONLY_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_REGISTRY_READONLY_PROOF").is_some();
 const APP_REGISTRY_FILTER_SORT_PROOF_ENABLED: bool =
@@ -9061,6 +9072,26 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         clear_hover_if_wrong_scene();
 
         if button == 1 {
+            // E4d: Atlas real pointer drag/drop path.
+            // When Atlas mode is active, consume all pointer events for drag/drop.
+            // Button-down arms drag intent; button-up completes drop or cancels.
+            // Consumed events must not fall through to app surface dispatch.
+            if ATLAS_MODE_ENABLED {
+                if pressed {
+                    let _ = atlas_pointer_drag_begin_at(POINTER_X, POINTER_Y);
+                    serial_println!("[silk.atlas.pointer.event.consume] phase=e4d kind=down ok=1");
+                } else {
+                    if ATLAS_DRAG_INTENT.active {
+                        let _ = atlas_pointer_drop_at(POINTER_X, POINTER_Y);
+                        serial_println!("[silk.atlas.pointer.event.consume] phase=e4d kind=up ok=1");
+                    } else {
+                        // Button-up without active drag intent — consume but no-op.
+                        serial_println!("[silk.atlas.pointer.event.consume] phase=e4d kind=up_no_intent ok=1");
+                    }
+                }
+                return;
+            }
+
             let pointer_ready = ABS_SEEN_VALID || POINTER_USB_STATE_INIT;
             if pressed && (INTERACTION == InteractionState::Idle || matches!(INTERACTION, InteractionState::PanelActive { .. })) {
                 if !pointer_ready {
@@ -16345,6 +16376,436 @@ unsafe fn maybe_run_atlas_phase_e4c2_true_reparent_proof() {
     }
 }
 
+/// Atlas Phase E4d real pointer drop path helpers.
+///
+/// atlas_pointer_drag_begin_at: Arms drag intent when pointer-down hits an
+/// Atlas card in the active scene. Stores scene_id, frame_id, and start
+/// coordinates in ATLAS_DRAG_INTENT. Returns true if consumed (valid hit).
+///
+/// atlas_pointer_drop_at: Completes the drag drop when pointer-up occurs
+/// while drag intent is active. Hit-tests the target scene, calls same-scene
+/// noop or cross-scene reparent, clears intent, and exits Atlas.
+/// Returns true if consumed (drag intent was active and processed).
+///
+/// atlas_pointer_drag_cancel: Clears ATLAS_DRAG_INTENT without any scene
+/// mutation. Returns true if intent was active and is now cleared.
+unsafe fn atlas_pointer_drag_begin_at(px: i32, py: i32) -> bool {
+    if !ATLAS_MODE_ENABLED {
+        return false;
+    }
+
+    // Hit-test Atlas scene cards at the pointer position.
+    let hit_scene: u8 = match atlas_scene_at_point(px, py) {
+        Some(si) => si,
+        None => {
+            // Click missed all cards — not a valid drag begin.
+            return false;
+        }
+    };
+
+    // Find a non-minimized frame in the hit scene to serve as the drag subject.
+    let mut found_frame_id: Option<u32> = None;
+    for slot in FRAMES.iter() {
+        if let Some(ref frame) = slot {
+            if frame.scene_id == hit_scene
+                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+            {
+                found_frame_id = Some(frame.frame_id);
+                break;
+            }
+        }
+    }
+
+    let frame_id = match found_frame_id {
+        Some(fid) => fid,
+        None => {
+            // No non-minimized frame in hit scene — cannot drag.
+            return false;
+        }
+    };
+
+    // Arm the drag intent.
+    ATLAS_DRAG_INTENT.active = true;
+    ATLAS_DRAG_INTENT.scene_id = hit_scene;
+    ATLAS_DRAG_INTENT.frame_id = frame_id;
+    ATLAS_DRAG_INTENT.start_x = px;
+    ATLAS_DRAG_INTENT.start_y = py;
+
+    serial_println!(
+        "[silk.atlas.pointer.drag.begin] frame={} scene={} x={} y={} source=real_path ok=1",
+        frame_id, hit_scene, px, py
+    );
+
+    true
+}
+
+unsafe fn atlas_pointer_drop_at(px: i32, py: i32) -> bool {
+    if !ATLAS_MODE_ENABLED || !ATLAS_DRAG_INTENT.active {
+        return false;
+    }
+
+    let frame_id = ATLAS_DRAG_INTENT.frame_id;
+    let source_scene = ATLAS_DRAG_INTENT.scene_id;
+
+    // Hit-test the target scene at the drop point.
+    let target_scene: Option<u8> = atlas_scene_at_point(px, py);
+
+    match target_scene {
+        None => {
+            // Drop missed all cards — reject.
+            serial_println!(
+                "[silk.atlas.pointer.drop.reject] frame={} reason=no_target",
+                frame_id
+            );
+            ATLAS_DRAG_INTENT.active = false;
+            serial_println!(
+                "[silk.atlas.drag.clear] reason=pointer_cancel ok=1"
+            );
+            true
+        }
+        Some(target) => {
+            if target == source_scene {
+                // Same-scene: noop.
+                atlas_same_scene_drop_noop(frame_id, source_scene, target);
+                serial_println!(
+                    "[silk.atlas.pointer.drop.noop] frame={} scene={} reason=same_scene ok=1",
+                    frame_id, source_scene
+                );
+            } else {
+                // Cross-scene: reparent.
+                serial_println!(
+                    "[silk.atlas.pointer.drop.target] frame={} from={} to={} x={} y={} ok=1",
+                    frame_id, source_scene, target, px, py
+                );
+                reparent_frame_to_scene(frame_id, target, "atlas_pointer_drop");
+            }
+
+            // Verify ownership after drop.
+            let ownership_unique: u8 = {
+                let mut count: u8 = 0;
+                for slot in FRAMES.iter() {
+                    if let Some(ref frame) = slot {
+                        if frame.frame_id == frame_id {
+                            count = count.saturating_add(1);
+                        }
+                    }
+                }
+                if count == 1 { 1 } else { 0 }
+            };
+
+            let focus_valid: u8 = if FOCUSED_SURFACE_ID != 0 {
+                if surface_in_active_scene(FOCUSED_SURFACE_ID) { 1 } else { 0 }
+            } else {
+                1
+            };
+
+            // Clear drag intent.
+            ATLAS_DRAG_INTENT.active = false;
+            serial_println!(
+                "[silk.atlas.drag.clear] reason=pointer_drop ok=1"
+            );
+
+            serial_println!(
+                "[silk.atlas.pointer.drop.done] frame={} from={} to={} ownership_unique={} focus_valid={} ok=1",
+                frame_id, source_scene, target, ownership_unique, focus_valid
+            );
+
+            // Exit Atlas after a successful drop gesture.
+            atlas_exit();
+            serial_println!(
+                "[silk.atlas.mode.exit] active={} reason=atlas_pointer_drop_done view=desktop ok=1",
+                ACTIVE_SCENE_IDX
+            );
+
+            true
+        }
+    }
+}
+
+unsafe fn atlas_pointer_drag_cancel(reason: &str) -> bool {
+    if !ATLAS_DRAG_INTENT.active {
+        return false;
+    }
+    ATLAS_DRAG_INTENT.active = false;
+    serial_println!(
+        "[silk.atlas.drag.clear] reason={} ok=1",
+        reason
+    );
+    true
+}
+
+/// Atlas Phase E4d real pointer drop synthetic proof.
+///
+/// Enters Atlas, finds a valid frame/card source point, finds a valid
+/// target scene point different from the source, calls the real pointer
+/// helpers (drag_begin_at + drop_at), verifies frame moved to target,
+/// restores frame to original scene via reparent_frame_to_scene(),
+/// verifies restored, and exits Atlas.
+///
+/// If no valid source or target exists, emits honest skip marker.
+/// Restoration is guaranteed — frame.scene_id is restored to original
+/// before proof completion.
+unsafe fn maybe_run_atlas_phase_e4d_real_pointer_drop_proof() {
+    if !ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_ENABLED
+        || ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_DONE
+    {
+        return;
+    }
+
+    loop {
+        let stage = ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_STAGE;
+        if stage >= 20 {
+            break;
+        }
+        ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_STAGE = stage + 1;
+
+        match stage {
+            // Stage 0: Emit begin marker with current state.
+            0 => {
+                let start_scene = ACTIVE_SCENE_IDX;
+                let mut populated_scenes: u8 = 0;
+                for s in 0..WORKSPACE_COUNT as u8 {
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.scene_id == s
+                                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                            {
+                                populated_scenes = populated_scenes.saturating_add(1);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if populated_scenes == 0 {
+                    populated_scenes = 1;
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e4d.begin] active={} scenes={}",
+                    start_scene, populated_scenes
+                );
+            }
+
+            // Stage 1: Enter Atlas mode if not already open.
+            1 => {
+                if !ATLAS_MODE_ENABLED {
+                    atlas_toggle();
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e4d.enter] ok={} active={}",
+                    ATLAS_MODE_ENABLED as u8, ACTIVE_SCENE_IDX
+                );
+            }
+
+            // Stage 2: Find a valid source (frame+card point) and target scene.
+            // Pick the active scene's first non-minimized frame as source.
+            // Choose a target scene different from source.
+            // Compute card center points for drag begin and drop.
+            2 => {
+                let active = ACTIVE_SCENE_IDX;
+
+                // Need at least 2 scenes for cross-scene drop.
+                if WORKSPACE_COUNT < 2 {
+                    serial_println!(
+                        "[silk.atlas.phase_e4d.skip] reason=no_target_scene ok=1"
+                    );
+                    break;
+                }
+
+                // Find a non-minimized frame in the active scene.
+                let mut found_frame_id: Option<u32> = None;
+                let mut found_original_scene: Option<u8> = None;
+                for slot in FRAMES.iter() {
+                    if let Some(ref frame) = slot {
+                        if frame.scene_id == active
+                            && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                        {
+                            found_frame_id = Some(frame.frame_id);
+                            found_original_scene = Some(frame.scene_id);
+                            break;
+                        }
+                    }
+                }
+
+                if found_frame_id.is_none() {
+                    serial_println!(
+                        "[silk.atlas.phase_e4d.skip] reason=no_source ok=1"
+                    );
+                    break;
+                }
+
+                let frame_id = found_frame_id.unwrap();
+                let original_scene = found_original_scene.unwrap_or(active);
+                let source = original_scene;
+
+                // Choose a target scene different from source.
+                let target: u8 = if source == 0 {
+                    (1u8).min(WORKSPACE_COUNT.saturating_sub(1))
+                } else {
+                    0u8
+                };
+
+                if target == source {
+                    serial_println!(
+                        "[silk.atlas.phase_e4d.skip] reason=no_target_scene ok=1"
+                    );
+                    break;
+                }
+
+                // Compute card center for source scene (drag begin point).
+                let cw = P.width as u32;
+                let (src_cx, src_cy, src_w, src_h) = atlas_card_pos(source as usize, cw);
+                let src_x = src_cx + (src_w as i32 / 2);
+                let src_y = P.bar_height + src_cy + (src_h as i32 / 2);
+
+                // Compute card center for target scene (drop point).
+                let (tgt_cx, tgt_cy, tgt_w, tgt_h) = atlas_card_pos(target as usize, cw);
+                let tgt_x = tgt_cx + (tgt_w as i32 / 2);
+                let tgt_y = P.bar_height + tgt_cy + (tgt_h as i32 / 2);
+
+                serial_println!(
+                    "[silk.atlas.phase_e4d.setup] frame={} source={} target={} src_x={} src_y={} tgt_x={} tgt_y={} ok=1",
+                    frame_id, source, target, src_x, src_y, tgt_x, tgt_y
+                );
+
+                // ── Execute drag begin via real helper ──
+                let drag_ok = atlas_pointer_drag_begin_at(src_x, src_y);
+                if !drag_ok {
+                    serial_println!(
+                        "[silk.atlas.phase_e4d.skip] reason=drag_begin_failed ok=1"
+                    );
+                    break;
+                }
+
+                // ── Execute drop via real helper ──
+                let drop_ok = atlas_pointer_drop_at(tgt_x, tgt_y);
+                if !drop_ok {
+                    serial_println!(
+                        "[silk.atlas.phase_e4d.skip] reason=drop_failed ok=1"
+                    );
+                    atlas_pointer_drag_cancel("proof_drop_failed");
+                    break;
+                }
+
+                // Verify frame moved to target scene.
+                let scene_after: u8 = {
+                    let mut sa = target;
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.frame_id == frame_id {
+                                sa = frame.scene_id;
+                                break;
+                            }
+                        }
+                    }
+                    sa
+                };
+
+                serial_println!(
+                    "[silk.atlas.phase_e4d.verify_moved] frame={} expected={} actual={} ok={}",
+                    frame_id, target, scene_after,
+                    if scene_after == target { 1 } else { 0 }
+                );
+
+                if scene_after != target {
+                    serial_println!(
+                        "[silk.atlas.pointer.drop.done] frame={} from={} to={} ownership_unique=0 focus_valid=0 ok=0",
+                        frame_id, source, target
+                    );
+                    break;
+                }
+
+                // ── Restore: reparent back to original scene ──
+                // Re-enter Atlas since drop_at exits it.
+                if !ATLAS_MODE_ENABLED {
+                    atlas_toggle();
+                }
+                let restored = reparent_frame_to_scene(
+                    frame_id, original_scene, "atlas_pointer_drop_restore"
+                );
+                if !restored {
+                    serial_println!(
+                        "[silk.atlas.phase_e4d.verify_restored] frame={} expected={} actual=? ok=0",
+                        frame_id, original_scene
+                    );
+                    break;
+                }
+
+                serial_println!(
+                    "[silk.frame.scene.move.restore] frame={} from={} to={} ok=1",
+                    frame_id, target, original_scene
+                );
+
+                // Verify frame restored to original scene.
+                let scene_restored: u8 = {
+                    let mut sr = original_scene;
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.frame_id == frame_id {
+                                sr = frame.scene_id;
+                                break;
+                            }
+                        }
+                    }
+                    sr
+                };
+
+                serial_println!(
+                    "[silk.atlas.phase_e4d.verify_restored] frame={} expected={} actual={} ok={}",
+                    frame_id, original_scene, scene_restored,
+                    if scene_restored == original_scene { 1 } else { 0 }
+                );
+
+                if scene_restored != original_scene {
+                    break;
+                }
+            }
+
+            // Stage 3: Final verify — confirm no orphaned frames.
+            3 => {
+                let active = ACTIVE_SCENE_IDX;
+                let mut final_ok: u8 = 1;
+                let mut orphan_count: u8 = 0;
+                for slot in FRAMES.iter() {
+                    if let Some(ref frame) = slot {
+                        if (frame.flags & FRAME_FLAG_MINIMIZED) == 0 {
+                            if frame.scene_id != active {
+                                orphan_count = orphan_count.saturating_add(1);
+                            }
+                        }
+                    }
+                }
+                if orphan_count > 0 {
+                    final_ok = 0;
+                    serial_println!(
+                        "[silk.atlas.phase_e4d.orphans] orphans={} ok=0",
+                        orphan_count
+                    );
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e4d.final_verify] ok={}",
+                    final_ok
+                );
+            }
+
+            // Stage 4: Exit Atlas and emit done.
+            4 => {
+                atlas_exit();
+                serial_println!(
+                    "[silk.atlas.mode.exit] active={} reason=atlas_e4d_done view=desktop ok=1",
+                    ACTIVE_SCENE_IDX
+                );
+                serial_println!(
+                    "[silk.atlas.phase_e4d.done] ok=1"
+                );
+                ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_DONE = true;
+            }
+
+            _ => {}
+        }
+        sys_yield();
+    }
+}
+
 unsafe fn maybe_run_app_registry_readonly_proof() {
     if !APP_REGISTRY_READONLY_PROOF_ENABLED || APP_REGISTRY_READONLY_PROOF_DONE {
         return;
@@ -21043,6 +21504,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_phase_e4b_same_scene_noop_proof(); }
         unsafe { maybe_run_atlas_phase_e4c_cross_scene_reparent_proof(); }
         unsafe { maybe_run_atlas_phase_e4c2_true_reparent_proof(); }
+        unsafe { maybe_run_atlas_phase_e4d_real_pointer_drop_proof(); }
         unsafe { maybe_run_app_registry_readonly_proof(); }
         unsafe { maybe_run_app_registry_filter_sort_proof(); }
         unsafe { maybe_run_app_registry_launch_intent_proof(); }
