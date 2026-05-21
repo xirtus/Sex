@@ -16929,6 +16929,17 @@ unsafe fn maybe_run_atlas_phase_e4d_real_pointer_drop_proof() {
 /// No new topology mutation. No visual effects. No ABI changes.
 /// Only runs once per boot when all subphases are confirmed complete.
 unsafe fn maybe_run_atlas_overview_final_closeout_proof() {
+    static mut ATLAS_OVERVIEW_FINAL_CLOSEOUT_CALLPATH_MARKERS_EMITTED: bool = false;
+    if !ATLAS_OVERVIEW_FINAL_CLOSEOUT_CALLPATH_MARKERS_EMITTED {
+        ATLAS_OVERVIEW_FINAL_CLOSEOUT_CALLPATH_MARKERS_EMITTED = true;
+        serial_println!("[silk.atlas.overview.final.callpath.enter] ok=1");
+        serial_println!(
+            "[silk.atlas.overview.final.callpath.enabled] enabled={} ok={}",
+            ATLAS_OVERVIEW_FINAL_CLOSEOUT_PROOF_ENABLED as u8,
+            ATLAS_OVERVIEW_FINAL_CLOSEOUT_PROOF_ENABLED as u8
+        );
+    }
+
     if !ATLAS_OVERVIEW_FINAL_CLOSEOUT_PROOF_ENABLED
         || ATLAS_OVERVIEW_FINAL_CLOSEOUT_PROOF_DONE
     {
