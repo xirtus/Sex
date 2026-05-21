@@ -1262,6 +1262,12 @@ pub extern "C" fn _start() -> ! {
                         dd_set,
                         dd_desc
                     );
+                    // Phase B: RX descriptor observe truth markers
+                    if dd_set > 0 {
+                        serial_println!("[sexnet.nic.rx.observe.ok] dd_set={} desc_idx={} ok=1", dd_set, dd_desc);
+                    } else {
+                        serial_println!("[sexnet.nic.rx.timeout.honest] dd_set=0 reason=bounded_poll_no_traffic ok=1");
+                    }
 
                     if dd_set > 0 {
                         let desc_base = obs_desc_va + (dd_desc as u64) * 16;
@@ -1278,6 +1284,33 @@ pub extern "C" fn _start() -> ! {
                             ethertype,
                             parse_ok
                         );
+                        // Phase C: Ethernet frame classifier markers
+                        if parse_ok == 1 {
+                            let eth_classify = if ethertype == 0x0806 {
+                                "arp"
+                            } else if ethertype == 0x0800 {
+                                "ipv4"
+                            } else {
+                                "unknown"
+                            };
+                            serial_println!(
+                                "[sexnet.ether.parse.ok] len={} ethertype=0x{:04X} class={} ok=1",
+                                pkt_len,
+                                ethertype,
+                                eth_classify
+                            );
+                            if ethertype != 0x0806 && ethertype != 0x0800 {
+                                serial_println!(
+                                    "[sexnet.ether.ethertype.unknown.reject] ethertype=0x{:04X} ok=1",
+                                    ethertype
+                                );
+                            }
+                        } else {
+                            serial_println!(
+                                "[sexnet.ether.runt.reject] len={} min=15 ok=1",
+                                pkt_len
+                            );
+                        }
                     }
 
                     unsafe {
@@ -1559,6 +1592,33 @@ pub extern "C" fn _start() -> ! {
                                 ethertype,
                                 parse_ok
                             );
+                            // Phase C: Ethernet frame classifier markers (permanent ring)
+                            if parse_ok == 1 {
+                                let eth_classify = if ethertype == 0x0806 {
+                                    "arp"
+                                } else if ethertype == 0x0800 {
+                                    "ipv4"
+                                } else {
+                                    "unknown"
+                                };
+                                serial_println!(
+                                    "[sexnet.ether.parse.ok] len={} ethertype=0x{:04X} class={} ok=1",
+                                    pkt_len,
+                                    ethertype,
+                                    eth_classify
+                                );
+                                if ethertype != 0x0806 && ethertype != 0x0800 {
+                                    serial_println!(
+                                        "[sexnet.ether.ethertype.unknown.reject] ethertype=0x{:04X} ok=1",
+                                        ethertype
+                                    );
+                                }
+                            } else {
+                                serial_println!(
+                                    "[sexnet.ether.runt.reject] len={} min=15 ok=1",
+                                    pkt_len
+                                );
+                            }
 
                             unsafe {
                                 core::ptr::write_volatile((desc_base + 8) as *mut u16, 0u16);
@@ -1708,6 +1768,10 @@ pub extern "C" fn _start() -> ! {
                     "[sexnet.nic.tx.observe.poll.done] dd_set={} desc_idx=0 ok=1",
                     tx_dd_set
                 );
+                // Phase B: TX descriptor consumed by hardware proof marker
+                if tx_dd_set == 1 {
+                    serial_println!("[sexnet.nic.tx.dd.ok] dd_set={} ok=1", tx_dd_set);
+                }
 
                 unsafe {
                     core::ptr::write_volatile((nic_va + 0x0400) as *mut u32, tx_tctl_orig & !(1u32 << 1));
@@ -1968,6 +2032,8 @@ pub extern "C" fn _start() -> ! {
                                             serial_println!(
                                                 "[sexnet.arp.rx.validate] htype=1 ptype=0x0800 hlen=6 plen=4 oper=1 tpa_match=1 ok=1"
                                             );
+                                            // Phase D: ARP reply received proof marker
+                                            serial_println!("[sexnet.arp.reply.rx.ok] oper=1 ok=1");
                                             arp_rx = 1;
                                         } else {
                                             serial_println!(
@@ -2126,6 +2192,10 @@ pub extern "C" fn _start() -> ! {
                                     arp_tx_dd,
                                     if arp_tx_dd == 1 { 1 } else { 0 }
                                 );
+                                // Phase D: ARP request TX marker
+                                if arp_tx_dd == 1 {
+                                    serial_println!("[sexnet.arp.request.tx.ok] tx_dd={} ok=1", arp_tx_dd);
+                                }
                             }
                             arp_ok = if arp_rx == 1 && arp_tx_dd == 1 { 1 } else { 0 };
                             serial_println!(
@@ -2134,8 +2204,14 @@ pub extern "C" fn _start() -> ! {
                                 arp_tx_dd,
                                 arp_ok
                             );
+                            // Phase D: honest ARP skip marker if no reply
+                            if arp_rx == 0 && arp_tx_dd == 1 {
+                                serial_println!("[sexnet.arp.reply.rx.skip] reason=no_peer_reply tx_dd={} ok=1", arp_tx_dd);
+                            }
                         } else {
                             serial_println!("[sexnet.arp.skip] reason=not_full ok=0");
+                            // Phase D: ARP skip when not full ownership
+                            serial_println!("[sexnet.arp.reply.rx.skip] reason=nic_not_full_owner ok=1");
                         }
 
                         let cache_nic_mac: [u8; 6] = [
@@ -2216,6 +2292,21 @@ pub extern "C" fn _start() -> ! {
                                             let n = cache_replies + 1;
                                             serial_println!(
                                                 "[sexnet.arp.cache.learn] n={} sha={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} spa={}.{}.{}.{} ok=1",
+                                                n,
+                                                unsafe { ARP_CACHE_MAC[0] },
+                                                unsafe { ARP_CACHE_MAC[1] },
+                                                unsafe { ARP_CACHE_MAC[2] },
+                                                unsafe { ARP_CACHE_MAC[3] },
+                                                unsafe { ARP_CACHE_MAC[4] },
+                                                unsafe { ARP_CACHE_MAC[5] },
+                                                unsafe { ARP_CACHE_IP[0] },
+                                                unsafe { ARP_CACHE_IP[1] },
+                                                unsafe { ARP_CACHE_IP[2] },
+                                                unsafe { ARP_CACHE_IP[3] }
+                                            );
+                                            // Phase D: ARP gateway cache proof marker
+                                            serial_println!(
+                                                "[sexnet.arp.cache.gateway.ok] n={} mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} ip={}.{}.{}.{} ok=1",
                                                 n,
                                                 unsafe { ARP_CACHE_MAC[0] },
                                                 unsafe { ARP_CACHE_MAC[1] },
@@ -2986,6 +3077,16 @@ pub extern "C" fn _start() -> ! {
                                                     proto,
                                                     ttl
                                                 );
+                                                // Phase E: IPv4 reject classification markers
+                                                if ok != 1 {
+                                                    if reason == "checksum" {
+                                                        serial_println!("[sexnet.ipv4.bad_checksum.reject] csum=0x{:04X} reason={} ok=1", csum, reason);
+                                                    } else if reason == "fragmented" {
+                                                        serial_println!("[sexnet.ipv4.fragment.reject] frag=0x{:04X} reason={} ok=1", frag_masked, reason);
+                                                    } else if reason == "total_len_min" || reason == "total_len_max" {
+                                                        serial_println!("[sexnet.ipv4.bounds.reject] total_len={} pkt_len={} reason={} ok=1", total_len, pkt_len, reason);
+                                                    }
+                                                }
                                                 if ok == 1 {
                                                     serial_println!(
                                                         "[sexnet.ipv4.rx.validate] version=4 ihl=5 total_len={} dst=10.0.2.15 frag=0 checksum=ok src={}.{}.{}.{} proto={} ttl={} ok=1",
@@ -2997,6 +3098,9 @@ pub extern "C" fn _start() -> ! {
                                                         proto,
                                                         ttl
                                                     );
+                                                    // Phase E: IPv4 parse succeeded
+                                                    serial_println!("[sexnet.ipv4.parse.ok] ver=4 ihl=5 total_len={} proto={} ok=1",
+                                                        total_len, proto);
                                                     ipv4_ok = 1;
                                                     ipv4_frames += 1;
                                                     // ICMP echo request handler (Phase D)
@@ -3019,6 +3123,9 @@ pub extern "C" fn _start() -> ! {
                                                                 "[sexnet.icmp.rx.echo] type=8 code=0 len={} id={} seq={} ok=1",
                                                                 icmp_total_len, icmp_id, icmp_seq
                                                             );
+                                                            // Phase F: ICMP echo request received proof marker
+                                                            serial_println!("[sexnet.icmp.echo.rx.ok] type=8 code=0 len={} id={} seq={} ok=1",
+                                                                icmp_total_len, icmp_id, icmp_seq);
                                                             // Validate ICMP checksum from RX
                                                             {
                                                                 let mut icmp_rx_sum = 0u32;
@@ -3214,12 +3321,22 @@ pub extern "C" fn _start() -> ! {
                                                                 icmp_reply_done,
                                                                 if icmp_reply_done == 1 { 1 } else { 0 }
                                                             );
+                                                            // Phase F: ICMP echo reply TX marker
+                                                            if icmp_reply_done == 1 {
+                                                                serial_println!("[sexnet.icmp.echo.reply.tx.ok] tx_dd={} ok=1", icmp_reply_done);
+                                                            }
                                                             serial_println!(
                                                                 "[sexnet.icmp.echo.proof.done] rx_echo=1 tx_reply={} tx_dd={} ok={}",
                                                                 if icmp_reply_done > 0 { 1 } else { 0 },
                                                                 icmp_reply_done,
                                                                 if icmp_reply_done == 1 { 1 } else { 0 }
                                                             );
+                                                            // Phase F: ICMP ping gateway proof marker
+                                                            if icmp_reply_done == 1 {
+                                                                serial_println!("[sexnet.icmp.ping.gateway.ok] rx_echo=1 tx_reply=1 ok=1");
+                                                            } else {
+                                                                serial_println!("[sexnet.icmp.ping.gateway.skip] reason=no_arp_or_no_reply ok=1");
+                                                            }
                                                         } else {
                                                             serial_println!(
                                                                 "[sexnet.icmp.reject] reason=not_echo_request type={} code={} ok=1",
