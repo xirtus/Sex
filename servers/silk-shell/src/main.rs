@@ -457,6 +457,28 @@ const ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF").is_some();
 static mut ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_DONE: bool = false;
 static mut ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_STAGE: u8 = 0;
+/// E4d proof cross-stage state: frame_id, original_scene, target_scene, final_ok.
+/// Set during stage 2, consumed by stages 3 and 4.
+static mut ATLAS_PHASE_E4D_PROOF_FRAME_ID: u32 = 0;
+static mut ATLAS_PHASE_E4D_PROOF_ORIGINAL_SCENE: u8 = 0;
+static mut ATLAS_PHASE_E4D_PROOF_TARGET_SCENE: u8 = 0;
+static mut ATLAS_PHASE_E4D_PROOF_FINAL_OK: u8 = 0;
+/// Tracks whether stage 2 verify_moved and verify_restored passed.
+/// Set during stage 2, consumed by stage 3 to distinguish real failures
+/// from frames that were never moved.
+static mut ATLAS_PHASE_E4D_PROOF_MOVED_OK: u8 = 0;
+static mut ATLAS_PHASE_E4D_PROOF_RESTORED_OK: u8 = 0;
+
+/// Atlas Overview final closeout proof gate.
+/// Marker-only: waits until all subphase proofs (A through E4d) have
+/// completed in a single boot, then emits a final closeout marker
+/// declaring Atlas/Overview 100% for the current tier.
+/// No new topology mutation. No visual effects. No ABI changes.
+/// Build: SEXOS_ATLAS_OVERVIEW_FINAL_CLOSEOUT_PROOF=1
+/// Default (unset): zero behavior change.
+const ATLAS_OVERVIEW_FINAL_CLOSEOUT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_OVERVIEW_FINAL_CLOSEOUT_PROOF").is_some();
+static mut ATLAS_OVERVIEW_FINAL_CLOSEOUT_PROOF_DONE: bool = false;
 
 const APP_REGISTRY_READONLY_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_REGISTRY_READONLY_PROOF").is_some();
@@ -16608,6 +16630,7 @@ unsafe fn maybe_run_atlas_phase_e4d_real_pointer_drop_proof() {
                     serial_println!(
                         "[silk.atlas.phase_e4d.skip] reason=no_target_scene ok=1"
                     );
+                    ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_STAGE = 20;
                     break;
                 }
 
@@ -16630,6 +16653,7 @@ unsafe fn maybe_run_atlas_phase_e4d_real_pointer_drop_proof() {
                     serial_println!(
                         "[silk.atlas.phase_e4d.skip] reason=no_source ok=1"
                     );
+                    ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_STAGE = 20;
                     break;
                 }
 
@@ -16648,6 +16672,7 @@ unsafe fn maybe_run_atlas_phase_e4d_real_pointer_drop_proof() {
                     serial_println!(
                         "[silk.atlas.phase_e4d.skip] reason=no_target_scene ok=1"
                     );
+                    ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_STAGE = 20;
                     break;
                 }
 
@@ -16667,22 +16692,49 @@ unsafe fn maybe_run_atlas_phase_e4d_real_pointer_drop_proof() {
                     frame_id, source, target, src_x, src_y, tgt_x, tgt_y
                 );
 
-                // ── Execute drag begin via real helper ──
-                let drag_ok = atlas_pointer_drag_begin_at(src_x, src_y);
-                if !drag_ok {
+                // Store cross-stage state early so stages 3/4 can consume
+                // it even if a verification break occurs later in stage 2.
+                ATLAS_PHASE_E4D_PROOF_FRAME_ID = frame_id;
+                ATLAS_PHASE_E4D_PROOF_ORIGINAL_SCENE = original_scene;
+                ATLAS_PHASE_E4D_PROOF_TARGET_SCENE = target;
+                ATLAS_PHASE_E4D_PROOF_MOVED_OK = 0;
+                ATLAS_PHASE_E4D_PROOF_RESTORED_OK = 0;
+
+                // ── Execute drag begin via handle_hid_event (real pointer path) ──
+                // Set pointer position to source card center, then inject
+                // button-down through handle_hid_event so the
+                // [silk.atlas.pointer.event.consume] kind=down marker is emitted.
+                POINTER_X = src_x;
+                POINTER_Y = src_y;
+                handle_hid_event(EV_BTN, 1, 1);
+                if !ATLAS_DRAG_INTENT.active {
                     serial_println!(
                         "[silk.atlas.phase_e4d.skip] reason=drag_begin_failed ok=1"
                     );
+                    ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_STAGE = 20;
                     break;
                 }
 
-                // ── Execute drop via real helper ──
-                let drop_ok = atlas_pointer_drop_at(tgt_x, tgt_y);
-                if !drop_ok {
+                // ── Execute drop via handle_hid_event (real pointer path) ──
+                // Set pointer position to target card center, then inject
+                // button-up through handle_hid_event so the
+                // [silk.atlas.pointer.event.consume] kind=up marker is emitted.
+                POINTER_X = tgt_x;
+                POINTER_Y = tgt_y;
+                handle_hid_event(EV_BTN, 1, 0);
+                // Drop path should have cleared drag intent and exited Atlas.
+                // If intent is still active, the drop path failed internally.
+                if ATLAS_DRAG_INTENT.active {
+                    atlas_pointer_drag_cancel("proof_drop_incomplete");
                     serial_println!(
-                        "[silk.atlas.phase_e4d.skip] reason=drop_failed ok=1"
+                        "[silk.atlas.phase_e4d.verify_moved] frame={} expected={} actual=? ok=0",
+                        frame_id, target
                     );
-                    atlas_pointer_drag_cancel("proof_drop_failed");
+                    serial_println!(
+                        "[silk.atlas.pointer.drop.done] frame={} from={} to={} ownership_unique=0 focus_valid=0 ok=0",
+                        frame_id, source, target
+                    );
+                    // MOVED_OK stays 0; stage 3 will detect the failure.
                     break;
                 }
 
@@ -16713,6 +16765,9 @@ unsafe fn maybe_run_atlas_phase_e4d_real_pointer_drop_proof() {
                     );
                     break;
                 }
+
+                // verify_moved passed.
+                ATLAS_PHASE_E4D_PROOF_MOVED_OK = 1;
 
                 // ── Restore: reparent back to original scene ──
                 // Re-enter Atlas since drop_at exits it.
@@ -16758,52 +16813,175 @@ unsafe fn maybe_run_atlas_phase_e4d_real_pointer_drop_proof() {
                 if scene_restored != original_scene {
                     break;
                 }
+
+                // verify_restored passed.
+                ATLAS_PHASE_E4D_PROOF_RESTORED_OK = 1;
             }
 
-            // Stage 3: Final verify — confirm no orphaned frames.
+            // Stage 3: Final verify — confirm moved frame restored, no orphans.
             3 => {
-                let active = ACTIVE_SCENE_IDX;
+                let frame_id = ATLAS_PHASE_E4D_PROOF_FRAME_ID;
+                let original = ATLAS_PHASE_E4D_PROOF_ORIGINAL_SCENE;
+                let target = ATLAS_PHASE_E4D_PROOF_TARGET_SCENE;
+                let moved_ok = ATLAS_PHASE_E4D_PROOF_MOVED_OK;
+                let restored_ok = ATLAS_PHASE_E4D_PROOF_RESTORED_OK;
                 let mut final_ok: u8 = 1;
                 let mut orphan_count: u8 = 0;
-                for slot in FRAMES.iter() {
-                    if let Some(ref frame) = slot {
-                        if (frame.flags & FRAME_FLAG_MINIMIZED) == 0 {
-                            if frame.scene_id != active {
-                                orphan_count = orphan_count.saturating_add(1);
+
+                // Gate: stage 2 must have passed verify_moved and verify_restored.
+                if moved_ok == 0 {
+                    orphan_count = orphan_count.saturating_add(1);
+                    serial_println!(
+                        "[silk.atlas.phase_e4d.orphans] reason=verify_moved_not_ok orphans={} ok=0",
+                        orphan_count
+                    );
+                }
+                if restored_ok == 0 {
+                    orphan_count = orphan_count.saturating_add(1);
+                    serial_println!(
+                        "[silk.atlas.phase_e4d.orphans] reason=verify_restored_not_ok orphans={} ok=0",
+                        orphan_count
+                    );
+                }
+
+                // If both verifications passed, run the structural orphan check.
+                if moved_ok == 1 && restored_ok == 1 {
+                    // Invariant 1: the moved frame must be back in its original scene.
+                    let mut frame_in_original: bool = false;
+                    let mut frame_in_target: bool = false;
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.frame_id == frame_id
+                                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                            {
+                                if frame.scene_id == original {
+                                    frame_in_original = true;
+                                } else if frame.scene_id == target {
+                                    frame_in_target = true;
+                                }
+                                break;
                             }
                         }
                     }
+                    // The moved frame must be in the original scene after restore.
+                    if !frame_in_original {
+                        orphan_count = orphan_count.saturating_add(1);
+                    }
+                    // The moved frame must NOT be in the target scene after restore.
+                    if frame_in_target {
+                        orphan_count = orphan_count.saturating_add(1);
+                    }
                 }
+
                 if orphan_count > 0 {
                     final_ok = 0;
-                    serial_println!(
-                        "[silk.atlas.phase_e4d.orphans] orphans={} ok=0",
-                        orphan_count
-                    );
+                    if moved_ok == 1 && restored_ok == 1 {
+                        // Orphans from structural checks — emit the standard marker.
+                        serial_println!(
+                            "[silk.atlas.phase_e4d.orphans] orphans={} ok=0",
+                            orphan_count
+                        );
+                    }
                 }
                 serial_println!(
                     "[silk.atlas.phase_e4d.final_verify] ok={}",
                     final_ok
                 );
+                // Store final_ok for stage 4 gating.
+                ATLAS_PHASE_E4D_PROOF_FINAL_OK = final_ok;
             }
 
-            // Stage 4: Exit Atlas and emit done.
+            // Stage 4: Exit Atlas and emit done/reject based on final_verify.
             4 => {
+                let final_ok = ATLAS_PHASE_E4D_PROOF_FINAL_OK;
                 atlas_exit();
                 serial_println!(
-                    "[silk.atlas.mode.exit] active={} reason=atlas_e4d_done view=desktop ok=1",
-                    ACTIVE_SCENE_IDX
+                    "[silk.atlas.mode.exit] active={} reason=atlas_e4d_done view=desktop ok={}",
+                    ACTIVE_SCENE_IDX, final_ok
                 );
-                serial_println!(
-                    "[silk.atlas.phase_e4d.done] ok=1"
-                );
-                ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_DONE = true;
+                if final_ok == 1 {
+                    serial_println!(
+                        "[silk.atlas.phase_e4d.done] ok=1"
+                    );
+                    ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_DONE = true;
+                } else {
+                    serial_println!(
+                        "[silk.atlas.phase_e4d.reject] reason=final_verify_failed ok=0"
+                    );
+                    // Do NOT set DONE — leave gate incomplete so closeout
+                    // cannot fire spuriously.  The proof must be retried or
+                    // the invariant must be fixed.
+                }
             }
 
             _ => {}
         }
         sys_yield();
     }
+}
+
+/// Atlas Overview final closeout proof.
+///
+/// Marker-only: waits until all subphase proofs (A through E4d) have
+/// completed their DONE flags in a single boot, then emits a final
+/// closeout marker declaring Atlas/Overview 100% for the current tier.
+///
+/// No new topology mutation. No visual effects. No ABI changes.
+/// Only runs once per boot when all subphases are confirmed complete.
+unsafe fn maybe_run_atlas_overview_final_closeout_proof() {
+    if !ATLAS_OVERVIEW_FINAL_CLOSEOUT_PROOF_ENABLED
+        || ATLAS_OVERVIEW_FINAL_CLOSEOUT_PROOF_DONE
+    {
+        return;
+    }
+
+    // Wait until all subphase proofs have completed their DONE flags.
+    // Each subphase independently sets its DONE flag after its proof
+    // completes.  The closeout only fires once all subphases are done.
+    let all_subphases_done = ATLAS_PHASE_A_STATE_MODEL_PROOF_DONE
+        && ATLAS_PHASE_B_SNAPSHOT_PROOF_DONE
+        && ATLAS_PHASE_C_RENDER_STUB_PROOF_DONE
+        && ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_DONE
+        && ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_DONE
+        && ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF_DONE
+        && ATLAS_PHASE_E3_DRAG_BEGIN_MARKER_PROOF_DONE
+        && ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_DONE
+        && ATLAS_PHASE_E4C_CROSS_SCENE_REPARENT_PROOF_DONE
+        && ATLAS_PHASE_E4C2_TRUE_REPARENT_PROOF_DONE
+        && ATLAS_PHASE_E4D_REAL_POINTER_DROP_PROOF_DONE;
+
+    if !all_subphases_done {
+        return; // Some subphases still in progress or not enabled.
+    }
+
+    // All subphases confirmed complete. Emit final closeout markers.
+    let mut populated_scenes: u8 = 0;
+    for s in 0..WORKSPACE_COUNT as u8 {
+        for slot in FRAMES.iter() {
+            if let Some(ref frame) = slot {
+                if frame.scene_id == s
+                    && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                {
+                    populated_scenes = populated_scenes.saturating_add(1);
+                    break;
+                }
+            }
+        }
+    }
+    if populated_scenes == 0 {
+        populated_scenes = 1;
+    }
+
+    serial_println!(
+        "[silk.atlas.overview.final.begin] tier=current scenes={}",
+        populated_scenes
+    );
+
+    serial_println!(
+        "[silk.atlas.overview.final.done] tier=current percent=100 ok=1"
+    );
+
+    ATLAS_OVERVIEW_FINAL_CLOSEOUT_PROOF_DONE = true;
 }
 
 unsafe fn maybe_run_app_registry_readonly_proof() {
@@ -21505,6 +21683,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_phase_e4c_cross_scene_reparent_proof(); }
         unsafe { maybe_run_atlas_phase_e4c2_true_reparent_proof(); }
         unsafe { maybe_run_atlas_phase_e4d_real_pointer_drop_proof(); }
+        unsafe { maybe_run_atlas_overview_final_closeout_proof(); }
         unsafe { maybe_run_app_registry_readonly_proof(); }
         unsafe { maybe_run_app_registry_filter_sort_proof(); }
         unsafe { maybe_run_app_registry_launch_intent_proof(); }

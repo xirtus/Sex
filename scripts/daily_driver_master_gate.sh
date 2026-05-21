@@ -376,6 +376,7 @@ gate_atlas_phase_e4b_same_scene_noop="SKIP"
 gate_atlas_phase_e4c_cross_scene_reparent="SKIP"
 gate_atlas_phase_e4c2_true_cross_scene_reparent="SKIP"
 gate_atlas_phase_e4d_real_pointer_drop="SKIP"
+gate_atlas_overview_final_closeout="SKIP"
 gate_silk_combined_interaction="SKIP"
 gate_input_freeze_xhci_bounded="SKIP"
 gate_input_freeze_route_ready_or_missing="SKIP"
@@ -4194,25 +4195,53 @@ else gate_atlas_phase_e4c2_true_cross_scene_reparent="SKIP"; fi
 
 # ---- 90l. atlas_phase_e4d_real_pointer_drop ----
 # Phase E4d: real pointer drop path proof.
-# PASS only if [silk.atlas.phase_e4d.done] ok=1 AND verify_moved ok=1 AND verify_restored ok=1.
-# SKIP if phase_e4d.skip ok=1 with honest reason (no_source/no_target/no_target_scene).
-# FAIL if drag.begin exists without drop.done/drop.reject/drag.clear.
-# FAIL if drop.done exists without event.consume.
-# FAIL if ownership_unique=0.
-# FAIL if focus_valid=0 unless focus_cleared=1.
-# FAIL if verify_restored missing after moved.
-# SKIP if proof not enabled / markers absent.
+# PASS requires ALL of:
+#   [silk.atlas.phase_e4d.done] ok=1
+#   [silk.atlas.phase_e4d.final_verify] ok=1
+#   [silk.atlas.phase_e4d.verify_moved] ok=1
+#   [silk.atlas.phase_e4d.verify_restored] ok=1
+#   [silk.atlas.pointer.event.consume] kind=down ok=1
+#   [silk.atlas.pointer.event.consume] kind=up ok=1
+#
+# FAIL on:
+#   phase_e4d.final_verify ok=0 (orphans or verification failure)
+#   phase_e4d.orphans ok=0
+#   phase_e4d.done ok=1 without final_verify ok=1
+#   phase_e4d.verify_moved ok=0
+#   phase_e4d.verify_restored ok=0
+#   pointer.drop.done without pointer.event.consume
+#   drag.begin without corresponding drop/reject/clear
+#   phase_e4d.reject ok=0 (explicit proof failure)
+#   ownership_unique=0
+#
+# SKIP if phase_e4d.skip ok=1 with honest reason.
 if [ "$(has 'silk\.atlas\.phase_e4d\.done.*ok=1')" -eq 1 ] \
+    && [ "$(has 'silk\.atlas\.phase_e4d\.final_verify.*ok=1')" -eq 1 ] \
     && [ "$(has 'silk\.atlas\.phase_e4d\.verify_moved.*ok=1')" -eq 1 ] \
-    && [ "$(has 'silk\.atlas\.phase_e4d\.verify_restored.*ok=1')" -eq 1 ]; then
+    && [ "$(has 'silk\.atlas\.phase_e4d\.verify_restored.*ok=1')" -eq 1 ] \
+    && [ "$(has 'silk\.atlas\.pointer\.event\.consume.*kind=down.*ok=1')" -eq 1 ] \
+    && [ "$(has 'silk\.atlas\.pointer\.event\.consume.*kind=up.*ok=1')" -eq 1 ]; then
     gate_atlas_phase_e4d_real_pointer_drop="PASS"
-    print_row "atlas_phase_e4d_real_pointer_drop" "PASS" "real pointer drop proof complete"
+    print_row "atlas_phase_e4d_real_pointer_drop" "PASS" "real pointer drop proof complete (final_verify+consume down/up)"
 elif [ "$(has 'silk\.atlas\.phase_e4d\.skip.*ok=1')" -eq 1 ]; then
     gate_atlas_phase_e4d_real_pointer_drop="SKIP"
     print_row "atlas_phase_e4d_real_pointer_drop" "SKIP" "honest skip — no source, no target, or insufficient scenes"
+elif [ "$(has 'silk\.atlas\.phase_e4d\.reject.*ok=0')" -eq 1 ]; then
+    gate_atlas_phase_e4d_real_pointer_drop="FAIL"
+    print_row "atlas_phase_e4d_real_pointer_drop" "FAIL" "proof rejected — final_verify failed"
+elif [ "$(has 'silk\.atlas\.phase_e4d\.done.*ok=1')" -eq 1 ] \
+    && [ "$(has 'silk\.atlas\.phase_e4d\.final_verify.*ok=1')" -eq 0 ]; then
+    gate_atlas_phase_e4d_real_pointer_drop="FAIL"
+    print_row "atlas_phase_e4d_real_pointer_drop" "FAIL" "done emitted without final_verify ok=1"
+elif [ "$(has 'silk\.atlas\.phase_e4d\.final_verify.*ok=0')" -eq 1 ]; then
+    gate_atlas_phase_e4d_real_pointer_drop="FAIL"
+    print_row "atlas_phase_e4d_real_pointer_drop" "FAIL" "final_verify ok=0 — invariants violated"
+elif [ "$(has 'silk\.atlas\.phase_e4d\.orphans.*ok=0')" -eq 1 ]; then
+    gate_atlas_phase_e4d_real_pointer_drop="FAIL"
+    print_row "atlas_phase_e4d_real_pointer_drop" "FAIL" "orphans detected — frame state corruption"
 elif [ "$(has 'silk\.atlas\.phase_e4d\.verify_moved.*ok=0')" -eq 1 ]; then
     gate_atlas_phase_e4d_real_pointer_drop="FAIL"
-    print_row "atlas_phase_e4d_real_pointer_drop" "FAIL" "verify_moved failed"
+    print_row "atlas_phase_e4d_real_pointer_drop" "FAIL" "verify_moved failed — frame did not reach target scene"
 elif [ "$(has 'silk\.atlas\.phase_e4d\.verify_restored.*ok=0')" -eq 1 ]; then
     gate_atlas_phase_e4d_real_pointer_drop="FAIL"
     print_row "atlas_phase_e4d_real_pointer_drop" "FAIL" "verify_restored failed — frame scene_id drift"
@@ -4237,6 +4266,52 @@ elif [ "$(has 'silk\.atlas\.phase_e4d\.begin\]')" -ge 1 ]; then
     gate_atlas_phase_e4d_real_pointer_drop="FAIL"
     print_row "atlas_phase_e4d_real_pointer_drop" "FAIL" "phase_e4d begin without done"
 else gate_atlas_phase_e4d_real_pointer_drop="SKIP"; fi
+
+# ---- 90m. atlas_overview_final_closeout ----
+# Phase E4e/F: final integrated closeout proof — Atlas/Overview 100% current tier.
+# PASS only if all subphase .done markers are present AND final closeout marker exists.
+# Subphase markers required (any enabled at build time):
+#   phase_a.done, phase_b.done, phase_c.done, phase_d.done,
+#   phase_e1.done, phase_e2.done, phase_e3.done,
+#   phase_e4b.done, phase_e4c2.done, phase_e4d.done
+#   phase_e4d.verify_restored ok=1
+#   pointer.event.consume kind=down ok=1
+#   pointer.event.consume kind=up ok=1
+# SKIP if final closeout proof not enabled / final marker absent.
+# FAIL if final.done emitted but any required subphase marker missing.
+if [ "$(has 'silk\.atlas\.overview\.final\.done.*ok=1')" -eq 1 ]; then
+    # Check all required subphase markers exist.
+    MISSING_SUBPHASES=""
+    [ "$(has 'silk\.atlas\.phase_a\.done.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} A"
+    [ "$(has 'silk\.atlas\.phase_b\.done.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} B"
+    [ "$(has 'silk\.atlas\.phase_c\.done.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} C"
+    [ "$(has 'silk\.atlas\.phase_d\.done.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} D"
+    [ "$(has 'silk\.atlas\.phase_e1\.done.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} E1"
+    [ "$(has 'silk\.atlas\.phase_e2\.done.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} E2"
+    [ "$(has 'silk\.atlas\.phase_e3\.done.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} E3"
+    [ "$(has 'silk\.atlas\.phase_e4b\.done.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} E4b"
+    [ "$(has 'silk\.atlas\.phase_e4c\.done.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} E4c"
+    [ "$(has 'silk\.atlas\.phase_e4c2\.done.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} E4c2"
+    [ "$(has 'silk\.atlas\.phase_e4d\.done.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} E4d"
+    [ "$(has 'silk\.atlas\.phase_e4d\.final_verify.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} E4d-final"
+    [ "$(has 'silk\.atlas\.phase_e4d\.verify_restored.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} E4d-restored"
+    [ "$(has 'silk\.atlas\.pointer\.event\.consume.*kind=down.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} E4d-consume-down"
+    [ "$(has 'silk\.atlas\.pointer\.event\.consume.*kind=up.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} E4d-consume-up"
+
+    if [ -z "$MISSING_SUBPHASES" ]; then
+        gate_atlas_overview_final_closeout="PASS"
+        print_row "atlas_overview_final_closeout" "PASS" "Atlas/Overview 100% current tier — all subphases complete"
+    else
+        gate_atlas_overview_final_closeout="FAIL"
+        print_row "atlas_overview_final_closeout" "FAIL" "final.done emitted but subphase markers missing:${MISSING_SUBPHASES}"
+    fi
+elif [ "$(has 'silk\.atlas\.overview\.final\.begin')" -ge 1 ]; then
+    gate_atlas_overview_final_closeout="FAIL"
+    print_row "atlas_overview_final_closeout" "FAIL" "final.begin without final.done"
+else
+    gate_atlas_overview_final_closeout="SKIP"
+    print_row "atlas_overview_final_closeout" "SKIP" "final closeout proof not enabled or incomplete"
+fi
 
 # ---- 85. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
@@ -4717,6 +4792,7 @@ ALL_GATES=(
     "atlas_phase_e4c_cross_scene_reparent:$gate_atlas_phase_e4c_cross_scene_reparent"
     "atlas_phase_e4c2_true_cross_scene_reparent:$gate_atlas_phase_e4c2_true_cross_scene_reparent"
     "atlas_phase_e4d_real_pointer_drop:$gate_atlas_phase_e4d_real_pointer_drop"
+    "atlas_overview_final_closeout:$gate_atlas_overview_final_closeout"
     "silk_combined_interaction:$gate_silk_combined_interaction"
     "input_freeze_xhci_bounded:$gate_input_freeze_xhci_bounded"
     "input_freeze_route_ready_or_missing:$gate_input_freeze_route_ready_or_missing"
