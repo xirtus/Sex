@@ -16972,14 +16972,9 @@ unsafe fn maybe_run_atlas_overview_final_closeout_proof() {
         populated_scenes = 1;
     }
 
-    serial_println!(
-        "[silk.atlas.overview.final.begin] tier=current scenes={}",
-        populated_scenes
-    );
-
-    serial_println!(
-        "[silk.atlas.overview.final.done] tier=current percent=100 ok=1"
-    );
+    let _ = populated_scenes;
+    serial_println!("[silk.atlas.overview.final.begin]");
+    serial_println!("[silk.atlas.overview.final.done] ok=1");
 
     ATLAS_OVERVIEW_FINAL_CLOSEOUT_PROOF_DONE = true;
 }
