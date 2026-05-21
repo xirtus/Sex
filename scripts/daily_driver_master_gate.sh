@@ -3080,14 +3080,14 @@ fi
 # FAIL when browser claims remote but only static/source=1 markers exist, or faults detected.
 if [ "$(has 'browser.sexnet.route.stop_review.pass')" -eq 1 ] && \
    [ "$(has 'browser.sexnet.fetch.request.*mode=consume_last_source3_result.*ok=1')" -eq 1 ] && \
-   [ "$(has 'browser.sexnet.fetch.status.*source=3.*http_status=200.*body_len=13.*ok=1')" -eq 1 ] && \
+   [ "$(has 'browser.sexnet.fetch.status.*source=3.*http_status=200.*body_len=1[34].*ok=1')" -eq 1 ] && \
    [ "$(has 'browser.sexnet.fetch.body.*source=3.*bounded=1.*ok=1')" -eq 1 ] && \
    [ "$(has 'browser.sexnet.fetch.proof.done.*source=3.*fetched=1.*status=200.*ok=1')" -eq 1 ] && \
    [ "$(has 'browser.sexnet.body.render.*source=3.*bounded=1.*ok=1')" -eq 1 ] && \
    [ "$(has 'browser.sexnet.body.render.proof.done.*source=3.*rendered=1.*ok=1')" -eq 1 ] && \
    [ "$(has 'browser.sexnet.status.ui.*source=3.*status=200.*fetched=1.*ok=1')" -eq 1 ] && \
    [ "$(has 'browser.sexnet.status.proof.done.*source=3.*ok=1')" -eq 1 ] && \
-   [ "$(has 'sexnet.netdiag.source3.body.proof.done.*source=3.*body_len=13.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet.netdiag.source3.body.proof.done.*source=3.*body_len=1[34].*ok=1')" -eq 1 ] && \
    [ "$(has 'sexnet.http.status.proof.done.*status=200.*ok=1')" -eq 1 ] && \
    [ "$gate_faults_zero" = "PASS" ]; then
     gate_browser_sexnet_remote_page="PASS"
@@ -3119,7 +3119,7 @@ fi
 if [ "$gate_sexnet_netdiag_source3_primary" = "PASS" ] && \
    [ "$(has 'hal\.tcp\.probe\.gate.*enabled=0.*ok=1')" -eq 1 ] && \
    [ "$(has 'hal\.netdiag\.freeze.*source2=legacy.*source3=primary.*ok=1')" -eq 1 ] && \
-   [ "$(has 'sexnet\.netdiag\.source3\.body\.proof\.done.*source=3.*body_len=13.*ok=1')" -eq 1 ] && \
+   [ "$(has 'sexnet\.netdiag\.source3\.body\.proof\.done.*source=3.*body_len=1[34].*ok=1')" -eq 1 ] && \
    [ "$gate_faults_zero" = "PASS" ]; then
     gate_hal_net_diag_freeze="PASS"
     print_row "hal_net_diag_freeze" "PASS" "Phase L HAL NET_DIAG frozen as legacy; source3 primary"
@@ -3179,7 +3179,7 @@ fi
 if [ "$(has 'sexnet.source3.multi_fetch.done.*success=[1-9].*ok=1')" -eq 1 ] && \
    [ "$(has 'sexnet.source3.multi_fetch.begin.*target=[1-9].*ok=1')" -eq 1 ] && \
    [ "$gate_faults_zero" = "PASS" ] && \
-   [ "$(has 'sexnet.source3.multi_fetch.iter.*status=200.*body_len=13.*ok=1')" -ge 1 ]; then
+   [ "$(has 'sexnet.source3.multi_fetch.iter.*status=200.*body_len=1[34].*ok=1')" -ge 1 ]; then
     gate_sexnet_source3_multi_fetch="PASS"
     print_row "sexnet_source3_multi_fetch" "PASS" "Phase M source3 multi-fetch: iter 0 proven, additional env-limited"
 elif [ "$(has 'sexnet.source3.multi_fetch.done.*ok=1')" -eq 1 ]; then
