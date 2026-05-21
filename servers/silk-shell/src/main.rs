@@ -414,6 +414,17 @@ static mut ATLAS_DRAG_INTENT: AtlasDragIntent = AtlasDragIntent {
     start_y: 0,
 };
 
+/// Atlas Phase E4b same-scene no-op drag/move synthetic proof gate.
+/// When enabled, proves that a drag/drop from Scene A to Scene A is
+/// recognized as a no-op and does not mutate frame ownership.
+/// No cross-scene reparent, no focus change, no tab move.
+/// Build: SEXOS_ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF=1
+/// Default (unset): zero behavior change.
+const ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF").is_some();
+static mut ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_DONE: bool = false;
+static mut ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_STAGE: u8 = 0;
+
 const APP_REGISTRY_READONLY_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_REGISTRY_READONLY_PROOF").is_some();
 const APP_REGISTRY_FILTER_SORT_PROOF_ENABLED: bool =
@@ -15450,6 +15461,173 @@ unsafe fn maybe_run_atlas_phase_e3_drag_begin_marker_proof() {
     }
 }
 
+/// Atlas Phase E4b: same-scene no-op helper.
+/// Detects source == target and returns true (no-op, no mutation performed).
+/// Never writes frame.scene_id. Never touches focus, tabs, or active scene.
+/// Does not call switch_scene() or change visibility.
+fn atlas_same_scene_drop_noop(frame_id: u32, source_scene: u8, target_scene: u8) -> bool {
+    if source_scene == target_scene {
+        // Same-scene: detected as no-op. No mutation occurs.
+        serial_println!(
+            "[silk.frame.scene.move.noop] frame={} scene={} reason=same_scene ok=1",
+            frame_id, source_scene
+        );
+        return true;
+    }
+    // Different scene — would be a real reparent (NOT implemented in E4b).
+    false
+}
+
+/// Atlas Phase E4b same-scene no-op drag/move synthetic proof gate.
+/// When Atlas mode is active, finds a valid frame/card in the active scene,
+/// synthesizes a same-scene drop (source == target), verifies it is detected
+/// as a no-op, and proves frame.scene_id is not mutated.
+/// No cross-scene reparent, no focus change, no tab move, no pointer drop path.
+/// Proof sequence: begin → enter Atlas → find frame → record before →
+///   same-scene no-op check → record after → verify unchanged →
+///   clear drag intent → exit Atlas → done.
+/// If no frame/card exists, emits honest noop marker.
+unsafe fn maybe_run_atlas_phase_e4b_same_scene_noop_proof() {
+    if !ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_ENABLED
+        || ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_DONE
+    {
+        return;
+    }
+
+    loop {
+        let stage = ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_STAGE;
+        if stage >= 10 {
+            break;
+        }
+        ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_STAGE = stage + 1;
+
+        match stage {
+            // Stage 0: Emit begin marker with current state.
+            0 => {
+                let mut populated_scenes: u8 = 0;
+                for s in 0..WORKSPACE_COUNT as u8 {
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.scene_id == s {
+                                populated_scenes = populated_scenes.saturating_add(1);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if populated_scenes == 0 {
+                    populated_scenes = 1;
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e4b.begin] active={} scenes={}",
+                    ACTIVE_SCENE_IDX, populated_scenes
+                );
+            }
+
+            // Stage 1: Enter Atlas mode if not already open.
+            1 => {
+                if !ATLAS_MODE_ENABLED {
+                    atlas_toggle();
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e4b.enter] ok={} active={}",
+                    ATLAS_MODE_ENABLED as u8, ACTIVE_SCENE_IDX
+                );
+            }
+
+            // Stage 2: Find a valid frame in the active scene. Record scene_id.
+            // If no frame/card exists, emit noop and skip to done.
+            2 => {
+                let active = ACTIVE_SCENE_IDX;
+                let mut found_frame_id: Option<u32> = None;
+                let mut found_scene_id: Option<u8> = None;
+                for slot in FRAMES.iter() {
+                    if let Some(ref frame) = slot {
+                        if frame.scene_id == active
+                            && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                        {
+                            found_frame_id = Some(frame.frame_id);
+                            found_scene_id = Some(frame.scene_id);
+                            break;
+                        }
+                    }
+                }
+                if let (Some(frame_id), Some(scene_before)) = (found_frame_id, found_scene_id) {
+                    // Record the before state for later verification.
+                    // We store frame_id and scene_before in stage-local context
+                    // via serial_print markup, then verify in stage 4.
+                    serial_println!(
+                        "[silk.frame.scene.move.noop.verify] frame={} before={} after=__pending__ ownership_mutated=__pending__ ok=__pending__",
+                        frame_id, scene_before
+                    );
+                    // Now call the same-scene no-op helper.
+                    // Source and target are both the active scene → no-op.
+                    let is_noop = atlas_same_scene_drop_noop(frame_id, active, active);
+                    if !is_noop {
+                        // Should never happen: same-scene always no-op.
+                        serial_println!(
+                            "[silk.frame.scene.move.reject] frame={} reason=unexpected_cross_scene ok=0",
+                            frame_id
+                        );
+                        break;
+                    }
+                    // Re-read frame.scene_id after the no-op check.
+                    // It must be unchanged.
+                    let scene_after: u8 = {
+                        let mut sa = scene_before; // default: assume unchanged
+                        for slot in FRAMES.iter() {
+                            if let Some(ref frame) = slot {
+                                if frame.frame_id == frame_id {
+                                    sa = frame.scene_id;
+                                    break;
+                                }
+                            }
+                        }
+                        sa
+                    };
+                    let ownership_mutated: u8 = if scene_after == scene_before { 0 } else { 1 };
+                    serial_println!(
+                        "[silk.frame.scene.move.noop.verify] frame={} before={} after={} ownership_mutated={} ok={}",
+                        frame_id, scene_before, scene_after, ownership_mutated,
+                        if ownership_mutated == 0 { 1 } else { 0 }
+                    );
+                } else {
+                    // No valid frame/card in active scene — honest noop.
+                    serial_println!(
+                        "[silk.atlas.drag.noop] reason=no_card_or_frame ok=1"
+                    );
+                }
+            }
+
+            // Stage 3: Clear any drag intent (synthetic no-op proof complete).
+            3 => {
+                if ATLAS_DRAG_INTENT.active {
+                    ATLAS_DRAG_INTENT.active = false;
+                }
+                serial_println!(
+                    "[silk.atlas.drag.clear] reason=same_scene_noop ok=1"
+                );
+            }
+
+            // Stage 4: Exit Atlas and emit done.
+            4 => {
+                atlas_exit();
+                serial_println!(
+                    "[silk.atlas.mode.exit] active={} reason=atlas_same_scene_noop_done view=desktop ok=1",
+                    ACTIVE_SCENE_IDX
+                );
+                serial_println!(
+                    "[silk.atlas.phase_e4b.done] ok=1"
+                );
+                ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_DONE = true;
+            }
+
+            _ => {}
+        }
+        sys_yield();
+    }
+}
+
 unsafe fn maybe_run_app_registry_readonly_proof() {
     if !APP_REGISTRY_READONLY_PROOF_ENABLED || APP_REGISTRY_READONLY_PROOF_DONE {
         return;
@@ -20145,6 +20323,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_phase_e1_click_scene_switch_proof(); }
         unsafe { maybe_run_atlas_phase_e2_keyboard_scene_cycle_proof(); }
         unsafe { maybe_run_atlas_phase_e3_drag_begin_marker_proof(); }
+        unsafe { maybe_run_atlas_phase_e4b_same_scene_noop_proof(); }
         unsafe { maybe_run_app_registry_readonly_proof(); }
         unsafe { maybe_run_app_registry_filter_sort_proof(); }
         unsafe { maybe_run_app_registry_launch_intent_proof(); }

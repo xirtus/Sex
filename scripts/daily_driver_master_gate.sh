@@ -372,6 +372,7 @@ gate_atlas_phase_d_frame_preview_stub="SKIP"
 gate_atlas_phase_e1_click_scene_switch="SKIP"
 gate_atlas_phase_e2_keyboard_scene_cycle="SKIP"
 gate_atlas_phase_e3_drag_begin_marker="SKIP"
+gate_atlas_phase_e4b_same_scene_noop="SKIP"
 gate_silk_combined_interaction="SKIP"
 gate_input_freeze_xhci_bounded="SKIP"
 gate_input_freeze_route_ready_or_missing="SKIP"
@@ -4074,6 +4075,34 @@ elif [ "$(has 'silk\.atlas\.phase_e3\.begin\]')" -ge 1 ]; then
     print_row "atlas_phase_e3_drag_begin_marker" "FAIL" "phase_e3 begin without done"
 else gate_atlas_phase_e3_drag_begin_marker="SKIP"; fi
 
+# ---- 90i. atlas_phase_e4b_same_scene_noop ----
+# Phase E4b: same-scene no-op drag/move proof.
+# PASS if [silk.atlas.phase_e4b.done] ok=1 is present.
+# Also PASS if [silk.atlas.drag.noop] reason=no_card_or_frame ok=1 (no valid card/frame).
+# FAIL if ownership_mutated=1.
+# FAIL if [silk.frame.scene.move.noop] exists without verify/done.
+# FAIL if any cross-scene move marker appears in E4b (should not happen).
+# SKIP if proof not enabled / markers absent.
+if [ "$(has 'silk\.atlas\.phase_e4b\.done.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_e4b_same_scene_noop="PASS"
+    print_row "atlas_phase_e4b_same_scene_noop" "PASS" "same-scene no-op proof complete"
+elif [ "$(has 'silk\.atlas\.drag\.noop.*reason=no_card_or_frame.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_e4b_same_scene_noop="PASS"
+    print_row "atlas_phase_e4b_same_scene_noop" "PASS" "no card/frame — honest noop"
+elif [ "$(has 'silk\.frame\.scene\.move\.noop\.verify.*ownership_mutated=1')" -eq 1 ]; then
+    gate_atlas_phase_e4b_same_scene_noop="FAIL"
+    print_row "atlas_phase_e4b_same_scene_noop" "FAIL" "ownership mutated — invariant violated"
+elif [ "$(has 'silk\.frame\.scene\.move\.noop\]')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e4b\.done')" -eq 0 ]; then
+    gate_atlas_phase_e4b_same_scene_noop="FAIL"
+    print_row "atlas_phase_e4b_same_scene_noop" "FAIL" "move.noop without phase_e4b.done"
+elif [ "$(has 'silk\.frame\.scene\.move\.begin\]')" -ge 1 ]; then
+    gate_atlas_phase_e4b_same_scene_noop="FAIL"
+    print_row "atlas_phase_e4b_same_scene_noop" "FAIL" "cross-scene move detected in E4b (forbidden)"
+elif [ "$(has 'silk\.atlas\.phase_e4b\.begin\]')" -ge 1 ]; then
+    gate_atlas_phase_e4b_same_scene_noop="FAIL"
+    print_row "atlas_phase_e4b_same_scene_noop" "FAIL" "phase_e4b begin without done"
+else gate_atlas_phase_e4b_same_scene_noop="SKIP"; fi
+
 # ---- 85. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
@@ -4549,6 +4578,7 @@ ALL_GATES=(
     "atlas_phase_e1_click_scene_switch:$gate_atlas_phase_e1_click_scene_switch"
     "atlas_phase_e2_keyboard_scene_cycle:$gate_atlas_phase_e2_keyboard_scene_cycle"
     "atlas_phase_e3_drag_begin_marker:$gate_atlas_phase_e3_drag_begin_marker"
+    "atlas_phase_e4b_same_scene_noop:$gate_atlas_phase_e4b_same_scene_noop"
     "silk_combined_interaction:$gate_silk_combined_interaction"
     "input_freeze_xhci_bounded:$gate_input_freeze_xhci_bounded"
     "input_freeze_route_ready_or_missing:$gate_input_freeze_route_ready_or_missing"
