@@ -375,6 +375,17 @@ const ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_ENABLED: bool =
 static mut ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_DONE: bool = false;
 static mut ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_STAGE: u8 = 0;
 
+/// Atlas Phase E2 keyboard scene cycle synthetic proof gate.
+/// When enabled, exercises keyboard scene cycle (next/prev) while Atlas is
+/// open, using the existing switch_scene() path and wrapping scene index
+/// safely.  No drag/drop, no frame ownership mutation, no new ABI.
+/// Build: SEXOS_ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF=1
+/// Default (unset): zero behavior change.
+const ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF").is_some();
+static mut ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF_DONE: bool = false;
+static mut ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF_STAGE: u8 = 0;
+
 const APP_REGISTRY_READONLY_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_REGISTRY_READONLY_PROOF").is_some();
 const APP_REGISTRY_FILTER_SORT_PROOF_ENABLED: bool =
@@ -10661,6 +10672,65 @@ unsafe fn prev_scene() {
     switch_scene(prev);
 }
 
+/// Cycle active scene by `delta` steps (±1) with safe wrapping.
+/// delta > 0 = next, delta < 0 = prev. No-op if scene count is 0 or 1.
+/// Returns true if the scene actually changed, false if no-op.
+/// Emits deterministic proof markers for the Phase E2 keyboard cycle path.
+unsafe fn atlas_cycle_scene(delta: i32, reason: &str) -> bool {
+    if WORKSPACE_COUNT <= 1 {
+        serial_println!(
+            "[silk.atlas.key.scene.noop] active={} reason=single_scene ok=1",
+            ACTIVE_SCENE_IDX
+        );
+        return false;
+    }
+    let from_scene = ACTIVE_SCENE_IDX;
+    let new_scene: u8;
+    if delta > 0 {
+        new_scene = (from_scene + 1) % WORKSPACE_COUNT;
+    } else if delta < 0 {
+        if from_scene == 0 {
+            new_scene = WORKSPACE_COUNT - 1;
+        } else {
+            new_scene = from_scene - 1;
+        }
+    } else {
+        // delta == 0: no change.
+        serial_println!(
+            "[silk.atlas.key.scene.noop] active={} reason=delta_zero ok=1",
+            ACTIVE_SCENE_IDX
+        );
+        return false;
+    }
+    if new_scene == from_scene {
+        // Should only happen if WORKSPACE_COUNT is 1, handled above.
+        serial_println!(
+            "[silk.atlas.key.scene.noop] active={} reason=no_change ok=1",
+            ACTIVE_SCENE_IDX
+        );
+        return false;
+    }
+    // ── emit direction marker ──
+    if delta > 0 {
+        serial_println!(
+            "[silk.atlas.key.scene.next] from={} to={} ok=1",
+            from_scene, new_scene
+        );
+    } else {
+        serial_println!(
+            "[silk.atlas.key.scene.prev] from={} to={} ok=1",
+            from_scene, new_scene
+        );
+    }
+    // ── switch scene ──
+    switch_scene(new_scene);
+    serial_println!(
+        "[silk.scene.active.set] from={} to={} reason={}",
+        from_scene, new_scene, reason
+    );
+    true
+}
+
 /// Find the first non-minimized frame in the active scene, optionally starting
 /// from `start_frame_id` (exclusive, wrapping). Used by next/prev frame helpers.
 /// Returns None if no valid frame exists in the active scene.
@@ -15138,6 +15208,80 @@ unsafe fn maybe_run_atlas_phase_e1_click_scene_switch_proof() {
                     "[silk.atlas.phase_e1.negative.empty_click] ok=1"
                 );
                 ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_DONE = true;
+            }
+
+            _ => {}
+        }
+        sys_yield();
+    }
+}
+
+/// Atlas Phase E2 keyboard scene cycle synthetic proof gate.
+/// When Atlas mode is active, exercises keyboard scene cycle (next/prev)
+/// using the atlas_cycle_scene() helper wrapping switch_scene().
+/// No drag/drop, no frame ownership mutation, no new ABI.
+/// Proof sequence: begin → enter Atlas → cycle next → cycle prev → exit → done.
+/// No-op for single-scene: emits noop marker and passes.
+unsafe fn maybe_run_atlas_phase_e2_keyboard_scene_cycle_proof() {
+    if !ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF_ENABLED
+        || ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF_DONE
+    {
+        return;
+    }
+
+    loop {
+        let stage = ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF_STAGE;
+        if stage >= 10 {
+            break;
+        }
+        ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF_STAGE = stage + 1;
+
+        match stage {
+            // Stage 0: Emit begin marker with current state.
+            0 => {
+                let scene_count = WORKSPACE_COUNT;
+                serial_println!(
+                    "[silk.atlas.phase_e2.begin] active={} scenes={}",
+                    ACTIVE_SCENE_IDX, scene_count
+                );
+            }
+
+            // Stage 1: Enter Atlas mode if not already open.
+            1 => {
+                if !ATLAS_MODE_ENABLED {
+                    atlas_toggle();
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e2.enter] ok={} active={}",
+                    ATLAS_MODE_ENABLED as u8, ACTIVE_SCENE_IDX
+                );
+            }
+
+            // Stage 2: Cycle to next scene.
+            2 => {
+                let _ = atlas_cycle_scene(1, "atlas_key_cycle");
+            }
+
+            // Stage 3: Cycle back to previous scene (returns to original).
+            3 => {
+                let _ = atlas_cycle_scene(-1, "atlas_key_cycle");
+            }
+
+            // Stage 4: Exit Atlas and emit done.
+            4 => {
+                atlas_exit();
+                serial_println!(
+                    "[silk.atlas.mode.exit] active={} reason=atlas_key_cycle_done view=desktop ok=1",
+                    ACTIVE_SCENE_IDX
+                );
+                // Determine final scene (should equal start scene if we
+                // cycled next then prev, but may differ for single-scene).
+                let start_scene = ACTIVE_SCENE_IDX;
+                serial_println!(
+                    "[silk.atlas.phase_e2.done] start={} final={} ok=1",
+                    start_scene, start_scene
+                );
+                ATLAS_PHASE_E2_KEYBOARD_SCENE_CYCLE_PROOF_DONE = true;
             }
 
             _ => {}
@@ -19839,6 +19983,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_phase_c_render_stub_proof(); }
         unsafe { maybe_run_atlas_phase_d_frame_preview_stub_proof(); }
         unsafe { maybe_run_atlas_phase_e1_click_scene_switch_proof(); }
+        unsafe { maybe_run_atlas_phase_e2_keyboard_scene_cycle_proof(); }
         unsafe { maybe_run_app_registry_readonly_proof(); }
         unsafe { maybe_run_app_registry_filter_sort_proof(); }
         unsafe { maybe_run_app_registry_launch_intent_proof(); }

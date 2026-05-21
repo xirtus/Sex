@@ -370,6 +370,7 @@ gate_atlas_phase_b_snapshot="SKIP"
 gate_atlas_phase_c_render_stub="SKIP"
 gate_atlas_phase_d_frame_preview_stub="SKIP"
 gate_atlas_phase_e1_click_scene_switch="SKIP"
+gate_atlas_phase_e2_keyboard_scene_cycle="SKIP"
 gate_silk_combined_interaction="SKIP"
 gate_input_freeze_xhci_bounded="SKIP"
 gate_input_freeze_route_ready_or_missing="SKIP"
@@ -4019,6 +4020,35 @@ elif [ "$(has 'silk\.atlas\.phase_e1\.begin\]')" -ge 1 ]; then
     print_row "atlas_phase_e1_click_scene_switch" "FAIL" "phase_e1 begin without done"
 else gate_atlas_phase_e1_click_scene_switch="SKIP"; fi
 
+# ---- 90g. atlas_phase_e2_keyboard_scene_cycle ----
+# Phase E2: keyboard cycle next/prev scene while Atlas is open.
+# PASS if [silk.atlas.phase_e2.done] ok=1 is present.
+# Also PASS if cycle noop marker is present (single-scene case).
+# SKIP if proof not enabled / markers absent.
+# FAIL if key cycle markers exist without done/noop.
+if [ "$(has 'silk\.atlas\.phase_e2\.done.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_e2_keyboard_scene_cycle="PASS"
+    print_row "atlas_phase_e2_keyboard_scene_cycle" "PASS" "keyboard scene cycle proof complete"
+elif [ "$(has 'silk\.atlas\.key\.scene\.noop.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_e2_keyboard_scene_cycle="PASS"
+    print_row "atlas_phase_e2_keyboard_scene_cycle" "PASS" "keyboard scene cycle noop (single scene)"
+elif [ "$(has 'silk\.atlas\.key\.scene\.next\]')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e2\.done')" -eq 0 ] && [ "$(has 'silk\.atlas\.key\.scene\.noop')" -eq 0 ]; then
+    gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
+    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "key next markers without phase_e2.done"
+elif [ "$(has 'silk\.atlas\.key\.scene\.prev\]')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e2\.done')" -eq 0 ] && [ "$(has 'silk\.atlas\.key\.scene\.noop')" -eq 0 ]; then
+    gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
+    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "key prev markers without phase_e2.done"
+elif [ "$(has 'silk\.scene\.active\.set.*reason=atlas_key_cycle')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e2\.done')" -eq 0 ]; then
+    gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
+    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "scene switch markers without phase_e2.done"
+elif [ "$(has 'silk\.atlas\.mode\.exit.*reason=atlas_key_cycle_done')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e2\.done')" -eq 0 ]; then
+    gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
+    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "mode exit markers without phase_e2.done"
+elif [ "$(has 'silk\.atlas\.phase_e2\.begin\]')" -ge 1 ]; then
+    gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
+    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "phase_e2 begin without done"
+else gate_atlas_phase_e2_keyboard_scene_cycle="SKIP"; fi
+
 # ---- 85. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
@@ -4492,6 +4522,7 @@ ALL_GATES=(
     "atlas_phase_c_render_stub:$gate_atlas_phase_c_render_stub"
     "atlas_phase_d_frame_preview_stub:$gate_atlas_phase_d_frame_preview_stub"
     "atlas_phase_e1_click_scene_switch:$gate_atlas_phase_e1_click_scene_switch"
+    "atlas_phase_e2_keyboard_scene_cycle:$gate_atlas_phase_e2_keyboard_scene_cycle"
     "silk_combined_interaction:$gate_silk_combined_interaction"
     "input_freeze_xhci_bounded:$gate_input_freeze_xhci_bounded"
     "input_freeze_route_ready_or_missing:$gate_input_freeze_route_ready_or_missing"
