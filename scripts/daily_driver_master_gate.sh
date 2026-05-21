@@ -374,6 +374,7 @@ gate_atlas_phase_e2_keyboard_scene_cycle="SKIP"
 gate_atlas_phase_e3_drag_begin_marker="SKIP"
 gate_atlas_phase_e4b_same_scene_noop="SKIP"
 gate_atlas_phase_e4c_cross_scene_reparent="SKIP"
+gate_atlas_phase_e4c2_true_cross_scene_reparent="SKIP"
 gate_silk_combined_interaction="SKIP"
 gate_input_freeze_xhci_bounded="SKIP"
 gate_input_freeze_route_ready_or_missing="SKIP"
@@ -4143,6 +4144,53 @@ elif [ "$(has 'silk\.atlas\.phase_e4c\.begin\]')" -ge 1 ]; then
     print_row "atlas_phase_e4c_cross_scene_reparent" "FAIL" "phase_e4c begin without done"
 else gate_atlas_phase_e4c_cross_scene_reparent="SKIP"; fi
 
+# ---- 90k. atlas_phase_e4c2_true_cross_scene_reparent ----
+# Phase E4c2: true cross-scene reparent synthetic proof.
+# Forces actual source->target->source reparent (unlike E4c which may noop).
+# PASS only if [silk.atlas.phase_e4c2.done] ok=1 AND verify_moved ok=1 AND verify_restored ok=1.
+# SKIP if phase_e4c2.skip ok=1 with honest reason (no_safe_frame/no_target_scene).
+# FAIL if noop appears (should never happen for E4c2).
+# FAIL if move.done missing / ownership_unique=0 / focus_valid=0 without focus_cleared=1.
+# FAIL if restore missing / verify_restored ok=0.
+# SKIP if proof not enabled / markers absent.
+if [ "$(has 'silk\.atlas\.phase_e4c2\.done.*ok=1')" -eq 1 ] \
+    && [ "$(has 'silk\.atlas\.phase_e4c2\.verify_moved.*ok=1')" -eq 1 ] \
+    && [ "$(has 'silk\.atlas\.phase_e4c2\.verify_restored.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_e4c2_true_cross_scene_reparent="PASS"
+    print_row "atlas_phase_e4c2_true_cross_scene_reparent" "PASS" "true cross-scene reparent proof complete"
+elif [ "$(has 'silk\.atlas\.phase_e4c2\.skip.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_e4c2_true_cross_scene_reparent="SKIP"
+    print_row "atlas_phase_e4c2_true_cross_scene_reparent" "SKIP" "honest skip — no safe frame or no target scene"
+elif [ "$(has 'silk\.atlas\.phase_e4c2\.verify_moved.*ok=0')" -eq 1 ]; then
+    gate_atlas_phase_e4c2_true_cross_scene_reparent="FAIL"
+    print_row "atlas_phase_e4c2_true_cross_scene_reparent" "FAIL" "verify_moved failed"
+elif [ "$(has 'silk\.atlas\.phase_e4c2\.verify_restored.*ok=0')" -eq 1 ]; then
+    gate_atlas_phase_e4c2_true_cross_scene_reparent="FAIL"
+    print_row "atlas_phase_e4c2_true_cross_scene_reparent" "FAIL" "verify_restored failed — frame scene_id drift"
+elif [ "$(has 'silk\.frame\.scene\.move\.done.*ownership_unique=0')" -eq 1 ]; then
+    gate_atlas_phase_e4c2_true_cross_scene_reparent="FAIL"
+    print_row "atlas_phase_e4c2_true_cross_scene_reparent" "FAIL" "ownership_unique=0 — invariant violated"
+elif [ "$(has 'silk\.frame\.scene\.move\.done.*focus_valid=0')" -eq 1 ] \
+    && [ "$(has 'focus_cleared=1')" -eq 0 ]; then
+    gate_atlas_phase_e4c2_true_cross_scene_reparent="FAIL"
+    print_row "atlas_phase_e4c2_true_cross_scene_reparent" "FAIL" "focus_valid=0 without focus_cleared=1"
+elif [ "$(has 'silk\.frame\.scene\.move\.begin\]')" -ge 1 ] \
+    && [ "$(has 'silk\.frame\.scene\.move\.done')" -eq 0 ]; then
+    gate_atlas_phase_e4c2_true_cross_scene_reparent="FAIL"
+    print_row "atlas_phase_e4c2_true_cross_scene_reparent" "FAIL" "move.begin without move.done"
+elif [ "$(has 'silk\.frame\.scene\.move\.done')" -ge 1 ] \
+    && [ "$(has 'silk\.frame\.scene\.move\.restore')" -eq 0 ]; then
+    gate_atlas_phase_e4c2_true_cross_scene_reparent="FAIL"
+    print_row "atlas_phase_e4c2_true_cross_scene_reparent" "FAIL" "move.done without restore marker"
+elif [ "$(has 'silk\.atlas\.phase_e4c2\.done.*ok=1')" -eq 1 ] \
+    && [ "$(has 'silk\.atlas\.phase_e4c2\.verify_restored.*ok=0')" -eq 1 ]; then
+    gate_atlas_phase_e4c2_true_cross_scene_reparent="FAIL"
+    print_row "atlas_phase_e4c2_true_cross_scene_reparent" "FAIL" "done emitted but verify_restored failed — frame scene_id drift"
+elif [ "$(has 'silk\.atlas\.phase_e4c2\.begin\]')" -ge 1 ]; then
+    gate_atlas_phase_e4c2_true_cross_scene_reparent="FAIL"
+    print_row "atlas_phase_e4c2_true_cross_scene_reparent" "FAIL" "phase_e4c2 begin without done"
+else gate_atlas_phase_e4c2_true_cross_scene_reparent="SKIP"; fi
+
 # ---- 85. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
@@ -4620,6 +4668,7 @@ ALL_GATES=(
     "atlas_phase_e3_drag_begin_marker:$gate_atlas_phase_e3_drag_begin_marker"
     "atlas_phase_e4b_same_scene_noop:$gate_atlas_phase_e4b_same_scene_noop"
     "atlas_phase_e4c_cross_scene_reparent:$gate_atlas_phase_e4c_cross_scene_reparent"
+    "atlas_phase_e4c2_true_cross_scene_reparent:$gate_atlas_phase_e4c2_true_cross_scene_reparent"
     "silk_combined_interaction:$gate_silk_combined_interaction"
     "input_freeze_xhci_bounded:$gate_input_freeze_xhci_bounded"
     "input_freeze_route_ready_or_missing:$gate_input_freeze_route_ready_or_missing"
