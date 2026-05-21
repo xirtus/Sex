@@ -367,6 +367,7 @@ gate_top_strip_hash="SKIP"
 gate_spindle_atlas="SKIP"
 gate_atlas_phase_a_state_model="SKIP"
 gate_atlas_phase_b_snapshot="SKIP"
+gate_atlas_phase_c_render_stub="SKIP"
 gate_silk_combined_interaction="SKIP"
 gate_input_freeze_xhci_bounded="SKIP"
 gate_input_freeze_route_ready_or_missing="SKIP"
@@ -3943,6 +3944,25 @@ elif [ "$(has 'silk\.atlas\.phase_b\.(begin|done)\]')" -ge 1 ]; then
     print_row "atlas_phase_b_snapshot" "PASS" "phase_b markers present (partial)"
 else gate_atlas_phase_b_snapshot="SKIP"; fi
 
+# ---- 90d. atlas_phase_c_render_stub ----
+# Phase C: card geometry render stub in sexdisplay + shell-side proof.
+# PASS if [sexdisplay.atlas.phase_c.done] with cards=N ok=1 is present.
+# SKIP if proof not enabled / done marker absent.
+# FAIL if card layout/draw markers exist without done.
+if [ "$(has 'sexdisplay\.atlas\.phase_c\.done.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_c_render_stub="PASS"
+    print_row "atlas_phase_c_render_stub" "PASS" "card geometry proof complete"
+elif [ "$(has 'sexdisplay\.atlas\.card\.layout\]')" -ge 1 ] || [ "$(has 'sexdisplay\.atlas\.card\.draw\]')" -ge 1 ]; then
+    gate_atlas_phase_c_render_stub="FAIL"
+    print_row "atlas_phase_c_render_stub" "FAIL" "card layout/draw markers without phase_c.done"
+elif [ "$(has 'sexdisplay\.atlas\.card\.skip\]')" -ge 1 ]; then
+    gate_atlas_phase_c_render_stub="FAIL"
+    print_row "atlas_phase_c_render_stub" "FAIL" "card skip markers without phase_c.done"
+elif [ "$(has 'silk\.atlas\.phase_c\.(begin|done)\]')" -ge 1 ]; then
+    gate_atlas_phase_c_render_stub="PASS"
+    print_row "atlas_phase_c_render_stub" "PASS" "shell-side phase_c markers present (partial)"
+else gate_atlas_phase_c_render_stub="SKIP"; fi
+
 # ---- 85. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
@@ -4413,6 +4433,7 @@ ALL_GATES=(
     "spindle_atlas:$gate_spindle_atlas"
     "atlas_phase_a_state_model:$gate_atlas_phase_a_state_model"
     "atlas_phase_b_snapshot:$gate_atlas_phase_b_snapshot"
+    "atlas_phase_c_render_stub:$gate_atlas_phase_c_render_stub"
     "silk_combined_interaction:$gate_silk_combined_interaction"
     "input_freeze_xhci_bounded:$gate_input_freeze_xhci_bounded"
     "input_freeze_route_ready_or_missing:$gate_input_freeze_route_ready_or_missing"

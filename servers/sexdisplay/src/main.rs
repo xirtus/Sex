@@ -30,6 +30,21 @@ const SILKBAR_PHASE3_RECEIVE_PROOF_ENABLED: bool =
 const SILKBAR_PHASE5_PIXEL_PROOF_ENABLED: bool =
     option_env!("SEXOS_SILKBAR_PHASE5_PIXEL_PROOF").is_some();
 
+/// Atlas Phase C render stub card geometry proof gate.
+/// When enabled, draws bounded card outlines around active surfaces
+/// in the below-bar area (y>=51).  Card geometry only — no thumbnails,
+/// no live capture, no drag, no animation, no alpha/blur/shadow.
+/// Default unset = zero behavior change.
+/// Build: SEXOS_ATLAS_PHASE_C_RENDER_STUB_PROOF=1
+const ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_PHASE_C_RENDER_STUB_PROOF").is_some();
+/// Card border color — visible teal-cyan outline, flat ARGB.
+const ATLAS_CARD_BORDER_COLOR: u32 = 0x0089DCE6;
+/// Card border thickness in pixels.
+const ATLAS_CARD_BORDER_PX: usize = 2;
+/// Maximum cards rendered in one pass.
+const ATLAS_CARD_MAX_CARDS: usize = 16;
+
 const BAR_BG_W_CAP: usize = 2560;
 const BAR_BG_H: usize = 50;
 
@@ -1269,6 +1284,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
             }
         }
     }
+    draw_atlas_cards_pass(fb, w, h, total_pixels);
     draw_cursor_z_top(fb, w, h, total_pixels);
     draw_launcher_panel(fb, w, h, total_pixels);
 }
@@ -1508,6 +1524,7 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
             }
         }
     }
+    draw_atlas_cards_pass(fb, w, h, total_pixels);
     draw_cursor_z_top(fb, w, h, total_pixels);
     draw_launcher_panel(fb, w, h, total_pixels);
 }
@@ -1680,6 +1697,200 @@ fn draw_launcher_panel(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
                 }
             }
             break;
+        }
+    }
+}
+
+/// Atlas Phase C card geometry pass: draws bounded 2px border outlines around
+/// active surfaces in the below-bar area (y>=51).  Each card is clamped to the
+/// framebuffer bounds via clamp_surface().  Emits budgeted proof markers.
+/// Runs on every render/redraw when SEXOS_ATLAS_PHASE_C_RENDER_STUB_PROOF=1;
+/// markers are budgeted to prevent log spam.  Card borders persist visually
+/// across redraws (same pattern as launcher panel).
+///
+/// Safety: writes only within framebuffer bounds (checked per-card via
+/// clamp_surface + px/py bounds).  Only touches rows y>=51 (below SilkBar).
+/// Card border color is flat ARGB, zero alpha/blur.
+fn draw_atlas_cards_pass(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
+    if !ATLAS_PHASE_C_RENDER_STUB_PROOF_ENABLED {
+        return;
+    }
+    // Below-bar guard: must have at least 52 rows to draw cards below the strip.
+    if h < 52 {
+        return;
+    }
+
+    let mut card_count: u32 = 0;
+
+    // Budgeted marker: proof entry (first 16 redraws).
+    unsafe {
+        static mut ATLAS_CARD_PASS_BUDGET: u32 = 16;
+        let b = &mut ATLAS_CARD_PASS_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+        }
+    }
+
+    unsafe {
+        for si in 0..MAX_SURFACES {
+            if card_count >= ATLAS_CARD_MAX_CARDS as u32 {
+                break;
+            }
+            let surf = &SURFACES[si];
+            if !surf.active {
+                continue;
+            }
+            // Skip cursor and launcher panel — those are drawn in their own passes.
+            if surf.surface_id == CURSOR_SURFACE_ID || surf.surface_id == LAUNCHER_PANEL_SURFACE_ID {
+                // Budgeted skip marker.
+                unsafe {
+                    static mut ATLAS_CARD_SKIP_BUDGET: u32 = 8;
+                    let b = &mut ATLAS_CARD_SKIP_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!(
+                            "[sexdisplay.atlas.card.skip] scene={} reason=cursor_or_launcher",
+                            si as u32
+                        );
+                    }
+                }
+                continue;
+            }
+
+            let (sx, sy, sw, sh) = clamp_surface(surf, w, h);
+            if sw == 0 || sh == 0 {
+                unsafe {
+                    static mut ATLAS_CARD_SKIP_BUDGET: u32 = 8;
+                    let b = &mut ATLAS_CARD_SKIP_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!(
+                            "[sexdisplay.atlas.card.skip] scene={} reason=zero_area_clamped",
+                            si as u32
+                        );
+                    }
+                }
+                continue;
+            }
+            // Card must be entirely below the SilkBar (y >= 51).
+            if sy < 51 {
+                unsafe {
+                    static mut ATLAS_CARD_SKIP_BUDGET: u32 = 8;
+                    let b = &mut ATLAS_CARD_SKIP_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!(
+                            "[sexdisplay.atlas.card.skip] scene={} reason=overlaps_top_strip sy={}",
+                            si as u32, sy
+                        );
+                    }
+                }
+                continue;
+            }
+
+            let active_flag: u8 = if surf.surface_id == (unsafe { FOCUSED_SURFACE_ID }) { 1 } else { 0 };
+
+            // Budgeted layout marker.
+            unsafe {
+                static mut ATLAS_CARD_LAYOUT_BUDGET: u32 = 32;
+                let b = &mut ATLAS_CARD_LAYOUT_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!(
+                        "[sexdisplay.atlas.card.layout] scene={} x={} y={} w={} h={} active={}",
+                        si as u32, sx, sy, sw, sh, active_flag
+                    );
+                }
+            }
+
+            // Draw 2px border: top edge, bottom edge, left edge, right edge.
+            // Each pixel write is individually bounds-checked against w, h, total_pixels.
+            let right = sx.saturating_add(sw).min(w);
+            let bottom = sy.saturating_add(sh).min(h);
+            if right <= sx || bottom <= sy {
+                continue;
+            }
+
+            for edge_row in 0..ATLAS_CARD_BORDER_PX {
+                // Top edge
+                let ty = sy.saturating_add(edge_row);
+                if ty < h && ty >= 51 {
+                    for px in sx..right {
+                        if px < w {
+                            let idx = ty * w + px;
+                            if idx < total_pixels {
+                                core::ptr::write_volatile(fb.add(idx), ATLAS_CARD_BORDER_COLOR);
+                            }
+                        }
+                    }
+                }
+                // Bottom edge
+                let by = bottom.saturating_sub(edge_row + 1);
+                if by < h && by >= 51 {
+                    for px in sx..right {
+                        if px < w {
+                            let idx = by * w + px;
+                            if idx < total_pixels {
+                                core::ptr::write_volatile(fb.add(idx), ATLAS_CARD_BORDER_COLOR);
+                            }
+                        }
+                    }
+                }
+            }
+            for edge_col in 0..ATLAS_CARD_BORDER_PX {
+                // Left edge
+                let lx = sx.saturating_add(edge_col);
+                if lx < w {
+                    for py in sy..bottom {
+                        if py < h && py >= 51 {
+                            let idx = py * w + lx;
+                            if idx < total_pixels {
+                                core::ptr::write_volatile(fb.add(idx), ATLAS_CARD_BORDER_COLOR);
+                            }
+                        }
+                    }
+                }
+                // Right edge
+                let rx = right.saturating_sub(edge_col + 1);
+                if rx < w {
+                    for py in sy..bottom {
+                        if py < h && py >= 51 {
+                            let idx = py * w + rx;
+                            if idx < total_pixels {
+                                core::ptr::write_volatile(fb.add(idx), ATLAS_CARD_BORDER_COLOR);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Budgeted draw marker.
+            unsafe {
+                static mut ATLAS_CARD_DRAW_BUDGET: u32 = 32;
+                let b = &mut ATLAS_CARD_DRAW_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!(
+                        "[sexdisplay.atlas.card.draw] scene={} ok=1",
+                        si as u32
+                    );
+                }
+            }
+
+            card_count = card_count.saturating_add(1);
+        }
+    }
+
+    // Budgeted done marker.
+    unsafe {
+        static mut ATLAS_CARD_DONE_BUDGET: u32 = 16;
+        let b = &mut ATLAS_CARD_DONE_BUDGET;
+        if *b > 0 {
+            *b -= 1;
+            serial_println!(
+                "[sexdisplay.atlas.phase_c.done] cards={} ok=1",
+                card_count
+            );
         }
     }
 }
