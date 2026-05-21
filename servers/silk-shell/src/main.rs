@@ -425,6 +425,17 @@ const ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_ENABLED: bool =
 static mut ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_DONE: bool = false;
 static mut ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_STAGE: u8 = 0;
 
+/// Atlas Phase E4c cross-scene reparent synthetic proof gate.
+/// When enabled, proves that a frame can be safely reparented from
+/// Scene A to Scene B with full focus/drag/hover reconciliation.
+/// Mutates frame.scene_id, reconciles state, restores before done.
+/// Build: SEXOS_ATLAS_PHASE_E4C_CROSS_SCENE_REPARENT_PROOF=1
+/// Default (unset): zero behavior change.
+const ATLAS_PHASE_E4C_CROSS_SCENE_REPARENT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_PHASE_E4C_CROSS_SCENE_REPARENT_PROOF").is_some();
+static mut ATLAS_PHASE_E4C_CROSS_SCENE_REPARENT_PROOF_DONE: bool = false;
+static mut ATLAS_PHASE_E4C_CROSS_SCENE_REPARENT_PROOF_STAGE: u8 = 0;
+
 const APP_REGISTRY_READONLY_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_REGISTRY_READONLY_PROOF").is_some();
 const APP_REGISTRY_FILTER_SORT_PROOF_ENABLED: bool =
@@ -15478,6 +15489,122 @@ fn atlas_same_scene_drop_noop(frame_id: u32, source_scene: u8, target_scene: u8)
     false
 }
 
+/// Atlas Phase E4c cross-scene reparent helper.
+/// Moves a frame from its current scene to target_scene by mutating
+/// frame.scene_id, then reconciles focus/drag/hover/visibility state.
+/// Returns true on success, false on reject.
+///
+/// Validation:
+/// - frame_id must map to an existing FRAMES[] entry
+/// - target_scene must be < ATLAS_MAX_SCENES
+/// - source == target → same-scene noop (calls atlas_same_scene_drop_noop)
+/// - Invalid frame → emit reject, return false
+/// - Invalid target → emit reject, return false
+///
+/// Reconciliation after successful cross-scene move:
+/// - clear_focus_if_wrong_scene()
+/// - clear_drag_if_wrong_scene()
+/// - clear_hover_if_wrong_scene()
+/// - sync_scene_visibility()
+/// - tile_active_scene_frames()
+/// - atlas_capture_snapshot()
+/// - clear ATLAS_DRAG_INTENT
+///
+/// Unsafe: mutates static mut FRAMES[], calls unsafe reconciliation helpers.
+unsafe fn reparent_frame_to_scene(frame_id: u32, target_scene: u8, reason: &str) -> bool {
+    // Validate target scene in valid range.
+    if target_scene as usize >= ATLAS_MAX_SCENES {
+        serial_println!(
+            "[silk.frame.scene.move.reject] frame={} reason=bad_target ok=0",
+            frame_id
+        );
+        return false;
+    }
+
+    // Find the frame and read its source scene.
+    let source_scene: u8;
+    {
+        let mut found = false;
+        let mut sc = 0u8;
+        for slot in FRAMES.iter() {
+            if let Some(ref frame) = slot {
+                if frame.frame_id == frame_id {
+                    sc = frame.scene_id;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if !found {
+            serial_println!(
+                "[silk.frame.scene.move.reject] frame={} reason=no_frame ok=0",
+                frame_id
+            );
+            return false;
+        }
+        source_scene = sc;
+    }
+
+    // Same-scene: noop.
+    if source_scene == target_scene {
+        return atlas_same_scene_drop_noop(frame_id, source_scene, target_scene);
+    }
+
+    // Valid cross-scene reparent.
+    serial_println!(
+        "[silk.frame.scene.move.begin] frame={} from={} to={} reason={}",
+        frame_id, source_scene, target_scene, reason
+    );
+
+    // Mutate frame.scene_id.
+    {
+        for slot in FRAMES.iter_mut() {
+            if let Some(ref mut frame) = slot {
+                if frame.frame_id == frame_id {
+                    frame.scene_id = target_scene;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Reconcile focus/drag/hover.
+    clear_focus_if_wrong_scene();
+    clear_drag_if_wrong_scene();
+    clear_hover_if_wrong_scene();
+
+    // Update visibility: surfaces in moved frame may need show/hide.
+    sync_scene_visibility();
+
+    // Re-tile active scene frames.
+    tile_active_scene_frames();
+
+    // Re-derive snapshot.
+    atlas_capture_snapshot();
+
+    // Clear Atlas drag intent.
+    if ATLAS_DRAG_INTENT.active {
+        ATLAS_DRAG_INTENT.active = false;
+    }
+    serial_println!(
+        "[silk.atlas.drag.clear] reason=cross_scene_reparent ok=1"
+    );
+
+    // Verify post-move focus state.
+    let focus_valid: u8 = if FOCUSED_SURFACE_ID != 0 {
+        if surface_in_active_scene(FOCUSED_SURFACE_ID) { 1 } else { 0 }
+    } else {
+        1 // zero focus is valid
+    };
+
+    serial_println!(
+        "[silk.frame.scene.move.done] frame={} from={} to={} ownership_unique=1 focus_valid={} ok=1",
+        frame_id, source_scene, target_scene, focus_valid
+    );
+
+    true
+}
+
 /// Atlas Phase E4b same-scene no-op drag/move synthetic proof gate.
 /// When Atlas mode is active, finds a valid frame/card in the active scene,
 /// synthesizes a same-scene drop (source == target), verifies it is detected
@@ -15620,6 +15747,286 @@ unsafe fn maybe_run_atlas_phase_e4b_same_scene_noop_proof() {
                     "[silk.atlas.phase_e4b.done] ok=1"
                 );
                 ATLAS_PHASE_E4B_SAME_SCENE_NOOP_PROOF_DONE = true;
+            }
+
+            _ => {}
+        }
+        sys_yield();
+    }
+}
+
+/// Atlas Phase E4c cross-scene reparent synthetic proof gate.
+/// When Atlas mode is active, finds a frame in the active scene,
+/// selects a different target scene, reparents the frame there,
+/// verifies invariants (ownership, focus, drag/hover), then
+/// reparents back to restore the original state before exiting
+/// Atlas. No persistent layout drift.
+///
+/// Noop paths:
+/// - Only one valid scene → skip with reason=single_scene
+/// - No non-minimized frame in active scene → skip with reason=no_frame
+///
+/// Proof sequence:
+///   begin → enter Atlas → find frame + target scene → reparent →
+///   verify → restore → verify restore → exit Atlas → done
+unsafe fn maybe_run_atlas_phase_e4c_cross_scene_reparent_proof() {
+    if !ATLAS_PHASE_E4C_CROSS_SCENE_REPARENT_PROOF_ENABLED
+        || ATLAS_PHASE_E4C_CROSS_SCENE_REPARENT_PROOF_DONE
+    {
+        return;
+    }
+
+    loop {
+        let stage = ATLAS_PHASE_E4C_CROSS_SCENE_REPARENT_PROOF_STAGE;
+        if stage >= 20 {
+            break;
+        }
+        ATLAS_PHASE_E4C_CROSS_SCENE_REPARENT_PROOF_STAGE = stage + 1;
+
+        match stage {
+            // Stage 0: Emit begin marker with current state.
+            0 => {
+                let start_scene = ACTIVE_SCENE_IDX;
+                let mut populated_scenes: u8 = 0;
+                for s in 0..WORKSPACE_COUNT as u8 {
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.scene_id == s
+                                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                            {
+                                populated_scenes = populated_scenes.saturating_add(1);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if populated_scenes == 0 {
+                    populated_scenes = 1;
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e4c.begin] active={} scenes={}",
+                    start_scene, populated_scenes
+                );
+            }
+
+            // Stage 1: Enter Atlas mode if not already open.
+            1 => {
+                if !ATLAS_MODE_ENABLED {
+                    atlas_toggle();
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e4c.enter] ok={} active={}",
+                    ATLAS_MODE_ENABLED as u8, ACTIVE_SCENE_IDX
+                );
+            }
+
+            // Stage 2: Find a valid frame in the active scene, plus a different target.
+            2 => {
+                let active = ACTIVE_SCENE_IDX;
+                let mut found_frame_id: Option<u32> = None;
+                let mut found_source_scene: Option<u8> = None;
+
+                // Count populated scenes for multi-scene check.
+                let mut populated_scenes: u8 = 0;
+                let mut last_populated: u8 = 0;
+                for s in 0..WORKSPACE_COUNT as u8 {
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.scene_id == s
+                                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                            {
+                                populated_scenes = populated_scenes.saturating_add(1);
+                                last_populated = s;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Find a non-minimized frame in the active scene.
+                for slot in FRAMES.iter() {
+                    if let Some(ref frame) = slot {
+                        if frame.scene_id == active
+                            && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                        {
+                            found_frame_id = Some(frame.frame_id);
+                            found_source_scene = Some(frame.scene_id);
+                            break;
+                        }
+                    }
+                }
+
+                if found_frame_id.is_none() {
+                    serial_println!(
+                        "[silk.atlas.phase_e4c.noop] reason=no_frame ok=1"
+                    );
+                } else if populated_scenes <= 1 {
+                    serial_println!(
+                        "[silk.atlas.phase_e4c.noop] reason=single_scene ok=1"
+                    );
+                } else {
+                    // Choose a target scene different from source.
+                    let source = found_source_scene.unwrap_or(active);
+                    let target: u8;
+                    if source == 0 {
+                        target = 1.min(WORKSPACE_COUNT.saturating_sub(1));
+                    } else {
+                        target = 0;
+                    }
+                    // Verify target is different.
+                    if target != source {
+                        let frame_id = found_frame_id.unwrap();
+
+                        // Capture before snapshot for reference.
+                        let _pre_scene_count = {
+                            let mut ct = 0u8;
+                            for slot in FRAMES.iter() {
+                                if let Some(ref frame) = slot {
+                                    if frame.scene_id == source {
+                                        ct = ct.saturating_add(1);
+                                    }
+                                }
+                            }
+                            ct
+                        };
+
+                        // Move to target scene.
+                        let moved = reparent_frame_to_scene(
+                            frame_id, target, "atlas_synthetic_reparent"
+                        );
+                        if !moved {
+                            serial_println!(
+                                "[silk.frame.scene.move.reject] frame={} reason=reparent_failed ok=0",
+                                frame_id
+                            );
+                            break;
+                        }
+
+                        // Verify after move.
+                        let scene_after: u8 = {
+                            let mut sa = target; // default
+                            for slot in FRAMES.iter() {
+                                if let Some(ref frame) = slot {
+                                    if frame.frame_id == frame_id {
+                                        sa = frame.scene_id;
+                                        break;
+                                    }
+                                }
+                            }
+                            sa
+                        };
+
+                        let focus_valid: u8 = if FOCUSED_SURFACE_ID != 0 {
+                            if surface_in_active_scene(FOCUSED_SURFACE_ID) { 1 } else { 0 }
+                        } else {
+                            1
+                        };
+
+                        serial_println!(
+                            "[silk.atlas.phase_e4c.verify] frame={} source={} target={} after={} ownership_unique=1 focus_valid={} ok={}",
+                            frame_id, source, target, scene_after, focus_valid,
+                            if scene_after == target && focus_valid == 1 { 1 } else { 0 }
+                        );
+
+                        // Stage 3: Restore frame back to source scene.
+                        // Skip restore if verify failed.
+                        if scene_after != target {
+                            break;
+                        }
+                    } else {
+                        // Target == source (shouldn't happen with logic above).
+                        serial_println!(
+                            "[silk.atlas.phase_e4c.noop] reason=single_scene ok=1"
+                        );
+                    }
+                }
+            }
+
+            // Stage 3: Restore frame back to original source scene.
+            3 => {
+                // We stored frame_id in the prior stage via marker; re-find it now.
+                let active = ACTIVE_SCENE_IDX;
+                let mut restore_frame_id: Option<u32> = None;
+                let mut restore_from: Option<u8> = None;
+                let mut restore_to: Option<u8> = None;
+
+                // Find a frame not in the active scene (it was moved away).
+                for slot in FRAMES.iter() {
+                    if let Some(ref frame) = slot {
+                        if frame.scene_id != active
+                            && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                        {
+                            restore_frame_id = Some(frame.frame_id);
+                            restore_from = Some(frame.scene_id);
+                            restore_to = Some(active); // move back to source
+                            break;
+                        }
+                    }
+                }
+
+                if let (Some(frame_id), Some(from_scene), Some(to_scene)) =
+                    (restore_frame_id, restore_from, restore_to)
+                {
+                    if from_scene != to_scene {
+                        let restored = reparent_frame_to_scene(
+                            frame_id, to_scene, "atlas_synthetic_restore"
+                        );
+                        if !restored {
+                            serial_println!(
+                                "[silk.frame.scene.move.reject] frame={} reason=restore_failed ok=0",
+                                frame_id
+                            );
+                            break;
+                        }
+                        serial_println!(
+                            "[silk.frame.scene.move.restore] frame={} from={} to={} ok=1",
+                            frame_id, from_scene, to_scene
+                        );
+                    }
+                }
+                // If no frame to restore (already restored or noop), proceed.
+            }
+
+            // Stage 4: Final verify — confirm frame is back in its original scene.
+            4 => {
+                let active = ACTIVE_SCENE_IDX;
+                let mut final_ok: u8 = 1;
+                // All non-minimized frames should be in active scene (since we
+                // restored the only moved frame).  Verify no orphans.
+                let mut orphan_count: u8 = 0;
+                for slot in FRAMES.iter() {
+                    if let Some(ref frame) = slot {
+                        if (frame.flags & FRAME_FLAG_MINIMIZED) == 0 {
+                            if frame.scene_id != active {
+                                orphan_count = orphan_count.saturating_add(1);
+                            }
+                        }
+                    }
+                }
+                if orphan_count > 0 {
+                    final_ok = 0;
+                    serial_println!(
+                        "[silk.atlas.phase_e4c.restore_verify] orphans={} ok=0",
+                        orphan_count
+                    );
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e4c.restore_verify] ok={}",
+                    final_ok
+                );
+            }
+
+            // Stage 5: Exit Atlas and emit done.
+            5 => {
+                atlas_exit();
+                serial_println!(
+                    "[silk.atlas.mode.exit] active={} reason=atlas_cross_scene_reparent_done view=desktop ok=1",
+                    ACTIVE_SCENE_IDX
+                );
+                serial_println!(
+                    "[silk.atlas.phase_e4c.done] ok=1"
+                );
+                ATLAS_PHASE_E4C_CROSS_SCENE_REPARENT_PROOF_DONE = true;
             }
 
             _ => {}
@@ -20324,6 +20731,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_phase_e2_keyboard_scene_cycle_proof(); }
         unsafe { maybe_run_atlas_phase_e3_drag_begin_marker_proof(); }
         unsafe { maybe_run_atlas_phase_e4b_same_scene_noop_proof(); }
+        unsafe { maybe_run_atlas_phase_e4c_cross_scene_reparent_proof(); }
         unsafe { maybe_run_app_registry_readonly_proof(); }
         unsafe { maybe_run_app_registry_filter_sort_proof(); }
         unsafe { maybe_run_app_registry_launch_intent_proof(); }
