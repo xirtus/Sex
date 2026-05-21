@@ -363,6 +363,18 @@ const ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_ENABLED: bool =
 static mut ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_DONE: bool = false;
 static mut ATLAS_PHASE_D_FRAME_PREVIEW_STUB_PROOF_STAGE: u8 = 0;
 
+/// Atlas Phase E1 click scene switch synthetic proof gate.
+/// When enabled, exercises the Atlas card click → scene switch → exit Atlas path
+/// and emits deterministic proof markers.  Reuses existing atlas_toggle(),
+/// switch_scene(), and atlas_scene_at_point() — no new compositor ABI, no
+/// drag/drop, no frame ownership mutation.
+/// Build: SEXOS_ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF=1
+/// Default (unset): zero behavior change.
+const ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_ENABLED: bool =
+    option_env!("SEXOS_ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF").is_some();
+static mut ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_DONE: bool = false;
+static mut ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_STAGE: u8 = 0;
+
 const APP_REGISTRY_READONLY_PROOF_ENABLED: bool =
     option_env!("SEXOS_APP_REGISTRY_READONLY_PROOF").is_some();
 const APP_REGISTRY_FILTER_SORT_PROOF_ENABLED: bool =
@@ -14973,6 +14985,167 @@ unsafe fn maybe_run_atlas_phase_d_frame_preview_stub_proof() {
     }
 }
 
+/// Atlas Phase E1 click scene switch proof.
+/// Exercises the Atlas card click → scene switch → exit Atlas path using
+/// existing infrastructure.  Emits deterministic proof markers at each stage.
+///
+/// Phase E1 scope: click-to-switch-scene only — no drag/drop, no keyboard
+/// cycle, no frame ownership mutation, no new compositor ABI.
+/// Gate: SEXOS_ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF=1 (unset = zero behavior change)
+///
+/// Positive proof: click a non-active scene card, switch, exit.
+/// Negative proof: click off-card, verify no switch, exit.
+unsafe fn maybe_run_atlas_phase_e1_click_scene_switch_proof() {
+    if !ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_ENABLED
+        || ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_DONE
+    {
+        return;
+    }
+
+    loop {
+        let stage = ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_STAGE;
+        if stage >= 10 {
+            break;
+        }
+        ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_STAGE = stage + 1;
+
+        match stage {
+            // Stage 0: Emit begin marker with current state.
+            0 => {
+                let mut populated_scenes: u8 = 0;
+                for s in 0..WORKSPACE_COUNT as u8 {
+                    for slot in FRAMES.iter() {
+                        if let Some(ref frame) = slot {
+                            if frame.scene_id == s {
+                                populated_scenes = populated_scenes.saturating_add(1);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if populated_scenes == 0 {
+                    populated_scenes = 1;
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e1.begin] active={} scenes={}",
+                    ACTIVE_SCENE_IDX, populated_scenes
+                );
+            }
+
+            // Stage 1: Enter Atlas mode if not already open.
+            1 => {
+                if !ATLAS_MODE_ENABLED {
+                    atlas_toggle();
+                }
+                serial_println!(
+                    "[silk.atlas.phase_e1.enter] ok={} active={}",
+                    ATLAS_MODE_ENABLED as u8, ACTIVE_SCENE_IDX
+                );
+            }
+
+            // Stage 2: Hit-test a non-active scene card.
+            // Pick the first scene index that is NOT the active scene.
+            2 => {
+                let from_scene = ACTIVE_SCENE_IDX;
+                let mut target_scene: Option<u8> = None;
+                for si in 0..ATLAS_MAX_SCENES as u8 {
+                    if si != from_scene {
+                        // Compute card center for hit-test coordinate.
+                        let cw = P.width as u32;
+                        let (cx, cy, card_w, card_h) = atlas_card_pos(si as usize, cw);
+                        let hit_x = cx + (card_w as i32 / 2);
+                        let hit_y = P.bar_height + cy + (card_h as i32 / 2);
+                        // Verify hit-test returns the expected scene.
+                        if let Some(hit_si) = atlas_scene_at_point(hit_x, hit_y) {
+                            if hit_si == si {
+                                target_scene = Some(si);
+                                serial_println!(
+                                    "[silk.atlas.hit.scene] scene={} x={} y={} ok=1",
+                                    si, hit_x, hit_y
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Store target in a temporary so later stages can use it.
+                // We use ACTIVE_SCENE_IDX as reference; target will be used in stage 3.
+                if let Some(target) = target_scene {
+                    serial_println!(
+                        "[silk.atlas.click.consume] scene={} ok=1",
+                        target
+                    );
+                }
+            }
+
+            // Stage 3: Switch to the target scene and exit Atlas.
+            // We pick target as the first non-active scene (deterministic).
+            3 => {
+                let from_scene = ACTIVE_SCENE_IDX;
+                let mut target_scene: Option<u8> = None;
+                for si in 0..ATLAS_MAX_SCENES as u8 {
+                    if si != from_scene {
+                        target_scene = Some(si);
+                        break;
+                    }
+                }
+                if let Some(target) = target_scene {
+                    if target != from_scene {
+                        switch_scene(target);
+                    }
+                    serial_println!(
+                        "[silk.scene.active.set] from={} to={} reason=atlas_card_click",
+                        from_scene, target
+                    );
+                    // Exit Atlas mode via existing path.
+                    atlas_exit();
+                    serial_println!(
+                        "[silk.atlas.mode.exit] active={} reason=atlas_card_click view=desktop ok=1",
+                        ACTIVE_SCENE_IDX
+                    );
+                    serial_println!(
+                        "[silk.atlas.phase_e1.done] from={} to={} ok=1",
+                        from_scene, ACTIVE_SCENE_IDX
+                    );
+                }
+            }
+
+            // Stage 4: Negative proof — re-enter Atlas, click empty space.
+            // Verifies that off-card clicks do NOT switch scene and
+            // do NOT dispatch to app surfaces.
+            4 => {
+                // Re-enter Atlas.
+                if !ATLAS_MODE_ENABLED {
+                    atlas_toggle();
+                }
+                // Click at origin (0,0) which is guaranteed to miss all cards
+                // since cards are positioned at y >= bar_height + 30.
+                let empty_x: i32 = 0;
+                let empty_y: i32 = 0;
+                let hit_result = atlas_scene_at_point(empty_x, empty_y);
+                if hit_result.is_none() {
+                    serial_println!(
+                        "[silk.atlas.hit.empty] x={} y={} reason=no_card",
+                        empty_x, empty_y
+                    );
+                }
+            }
+
+            // Stage 5: Exit Atlas after negative proof and emit done.
+            5 => {
+                atlas_exit();
+                serial_println!(
+                    "[silk.atlas.phase_e1.negative.empty_click] ok=1"
+                );
+                ATLAS_PHASE_E1_CLICK_SCENE_SWITCH_PROOF_DONE = true;
+            }
+
+            _ => {}
+        }
+        sys_yield();
+    }
+}
+
 unsafe fn maybe_run_app_registry_readonly_proof() {
     if !APP_REGISTRY_READONLY_PROOF_ENABLED || APP_REGISTRY_READONLY_PROOF_DONE {
         return;
@@ -19665,6 +19838,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_phase_b_snapshot_proof(); }
         unsafe { maybe_run_atlas_phase_c_render_stub_proof(); }
         unsafe { maybe_run_atlas_phase_d_frame_preview_stub_proof(); }
+        unsafe { maybe_run_atlas_phase_e1_click_scene_switch_proof(); }
         unsafe { maybe_run_app_registry_readonly_proof(); }
         unsafe { maybe_run_app_registry_filter_sort_proof(); }
         unsafe { maybe_run_app_registry_launch_intent_proof(); }

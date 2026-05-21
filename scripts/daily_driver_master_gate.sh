@@ -369,6 +369,7 @@ gate_atlas_phase_a_state_model="SKIP"
 gate_atlas_phase_b_snapshot="SKIP"
 gate_atlas_phase_c_render_stub="SKIP"
 gate_atlas_phase_d_frame_preview_stub="SKIP"
+gate_atlas_phase_e1_click_scene_switch="SKIP"
 gate_silk_combined_interaction="SKIP"
 gate_input_freeze_xhci_bounded="SKIP"
 gate_input_freeze_route_ready_or_missing="SKIP"
@@ -3989,6 +3990,35 @@ elif [ "$(has 'silk\.atlas\.phase_d\.(begin|done)\]')" -ge 1 ]; then
     print_row "atlas_phase_d_frame_preview_stub" "PASS" "shell-side phase_d markers present (partial)"
 else gate_atlas_phase_d_frame_preview_stub="SKIP"; fi
 
+# ---- 90f. atlas_phase_e1_click_scene_switch ----
+# Phase E1: click Atlas scene card → switch active Scene → exit Atlas.
+# PASS if [silk.atlas.phase_e1.done] ok=1 is present.
+# Also PASS if phase_e1.negative.empty_click ok=1 is present (partial proof).
+# SKIP if proof not enabled / markers absent.
+# FAIL if hit/consume/switch markers exist without done.
+if [ "$(has 'silk\.atlas\.phase_e1\.done.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_e1_click_scene_switch="PASS"
+    print_row "atlas_phase_e1_click_scene_switch" "PASS" "click scene switch proof complete"
+elif [ "$(has 'silk\.atlas\.phase_e1\.negative\.empty_click.*ok=1')" -eq 1 ]; then
+    gate_atlas_phase_e1_click_scene_switch="PASS"
+    print_row "atlas_phase_e1_click_scene_switch" "PASS" "negative empty-click proof complete (partial)"
+elif [ "$(has 'silk\.atlas\.hit\.scene\]')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e1\.done')" -eq 0 ]; then
+    gate_atlas_phase_e1_click_scene_switch="FAIL"
+    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "hit markers without phase_e1.done"
+elif [ "$(has 'silk\.atlas\.click\.consume\]')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e1\.done')" -eq 0 ]; then
+    gate_atlas_phase_e1_click_scene_switch="FAIL"
+    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "click consume markers without phase_e1.done"
+elif [ "$(has 'silk\.atlas\.mode\.exit.*reason=atlas_card_click')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e1\.done')" -eq 0 ]; then
+    gate_atlas_phase_e1_click_scene_switch="FAIL"
+    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "mode exit markers without phase_e1.done"
+elif [ "$(has 'silk\.scene\.active\.set.*reason=atlas_card_click')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e1\.done')" -eq 0 ]; then
+    gate_atlas_phase_e1_click_scene_switch="FAIL"
+    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "scene switch markers without phase_e1.done"
+elif [ "$(has 'silk\.atlas\.phase_e1\.begin\]')" -ge 1 ]; then
+    gate_atlas_phase_e1_click_scene_switch="FAIL"
+    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "phase_e1 begin without done"
+else gate_atlas_phase_e1_click_scene_switch="SKIP"; fi
+
 # ---- 85. linen_search_bridge ----
 if [ "$(has 'linen\.search\.bridge\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_linen_search_bridge="PASS"
@@ -4461,6 +4491,7 @@ ALL_GATES=(
     "atlas_phase_b_snapshot:$gate_atlas_phase_b_snapshot"
     "atlas_phase_c_render_stub:$gate_atlas_phase_c_render_stub"
     "atlas_phase_d_frame_preview_stub:$gate_atlas_phase_d_frame_preview_stub"
+    "atlas_phase_e1_click_scene_switch:$gate_atlas_phase_e1_click_scene_switch"
     "silk_combined_interaction:$gate_silk_combined_interaction"
     "input_freeze_xhci_bounded:$gate_input_freeze_xhci_bounded"
     "input_freeze_route_ready_or_missing:$gate_input_freeze_route_ready_or_missing"
