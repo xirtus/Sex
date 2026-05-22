@@ -86,4 +86,11 @@ export SEXOS_BUILD_SPEC="$SPEC_PATH"
 
 ./scripts/sexos_build_trace.sh "$SPEC_PATH"
 
+# 4) Build-time verification: staged linen must carry sexfiles100 audit markers
+# NOTE: grep without -q (with >/dev/null) avoids SIGPIPE on strings under pipefail
+if ! strings iso_root/servers/linen | grep "linen.sexfiles100.audit.begin" > /dev/null; then
+  fail "[SEXOS ENTRYPOINT] ERROR: staged linen missing sexfiles100 markers"
+fi
+echo "[SEXOS ENTRYPOINT] verification: staged linen markers present"
+
 echo "[SEXOS ENTRYPOINT] success"

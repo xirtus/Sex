@@ -121,7 +121,6 @@ action = "cargo_manifest"
 manifest = "servers/linen/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/linen"
 dest_artifact = "iso_root/servers/linen"
-rustflags = "--cfg linen_diskfs_slot_proof"
 
 [[stage]]
 id = "build_quil"
