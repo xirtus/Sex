@@ -85,6 +85,8 @@ const STORAGE_100_NEGATIVE_ENABLED: bool =
     option_env!("SEXOS_STORAGE_100_NEGATIVE").is_some();
 const STORAGE_100_NEG_MISMATCH_ENABLED: bool =
     option_env!("SEXOS_STORAGE_100_NEG_MISMATCH").is_some();
+const STORAGE_100_IO_READ_PROBE_ENABLED: bool =
+    option_env!("SEXOS_STORAGE_100_IO_READ_PROBE").is_some();
 const AP6_NEG_MISMATCH_LBA: u64 = 384;
 const AP6_NEG_MISMATCH_BYTES: u64 = NVME_LBA_BYTES;
 const MANIFEST_LBA: u64 = 2046;
@@ -2552,6 +2554,12 @@ fn nvme_probe_bar() {
         }
     }
 
+    // === SEXOS_STORAGE_100_IO_READ_PROBE gate ===
+    // Legacy real IO READ proof. Vestigial; runs only when explicitly requested.
+    // Default: OFF.  Must NOT run under SEXOS_STORAGE_100_PROOF or DiskFS profile
+    // because it writes io_sq_tail=1 (local tracking) which overwrites the
+    // storage proof tail (~10) and corrupts the IO SQ doorbell.
+    if STORAGE_100_IO_READ_PROBE_ENABLED {
     // One real IO READ proof (no BLOCK API wiring in this mission).
     let io_q_entries: u32 = 16;
     let mut io_sq_tail: u32 = 0;
@@ -2715,6 +2723,9 @@ fn nvme_probe_bar() {
         NVME_IO_STATE.sq_tail = io_sq_tail;
         NVME_IO_STATE.cq_head = io_cq_head;
         NVME_IO_STATE.cq_phase = io_cq_phase;
+    } // end unsafe + if STORAGE_100_IO_READ_PROBE_ENABLED
+    } else {
+        serial_println!("[sexdrive.storage100.io_read_probe.skip] reason=not_requested");
     }
 }
 
