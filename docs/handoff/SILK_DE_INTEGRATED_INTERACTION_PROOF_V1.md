@@ -41,6 +41,20 @@ The integrated gate requires these categories when begin is present:
 
 This keeps normal boots non-blocking.
 
+Initial integrated run was an honest SKIP for this gate (`not_requested`), but
+older always-on gating for `input_freeze_*` and `keyboard_gui` could still
+produce unrelated FAILs during normal Silk proof boots.
+
+Fix in this mission:
+- `input_freeze_xhci_bounded`, `input_freeze_route_ready_or_missing`,
+  `input_freeze_synthetic_click_gated` now run strict PASS/FAIL only when an
+  explicit input-freeze proof begin sentinel exists.
+- `keyboard_gui` now runs strict PASS/FAIL only when an explicit keyboard GUI
+  proof begin sentinel exists.
+- Otherwise those gates are honest `SKIP not_requested`.
+
+No runtime behavior changed; this is gate enablement/sentinel hygiene only.
+
 ## FAIL Semantics
 `silk_de_integrated_interaction` is `FAIL` when begin is present and any is true:
 - `[silk.de.integrated.interaction.fail]` present

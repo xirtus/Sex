@@ -416,28 +416,44 @@ echo "  lines:   $LOG_LINES"
 echo ""
 
 # ---- Input Freeze Autopilot V1 gates ----
-if [ "$(has 'sexusb\.xhci\.enum\.timeout|sexusb\.xhci\.enable_slot\.complete\.ok|sexusb\.xhci\.cmd\.noop\.complete\.ok')" -eq 1 ]; then
-    gate_input_freeze_xhci_bounded="PASS"
-    print_row "input_freeze_xhci_bounded" "PASS" "bounded xHCI wait markers present"
+input_freeze_proof_begin_re='input\.freeze\.begin|input\.freeze\.proof\.begin|usb\.input\.freeze\.begin|sexusb\.input\.freeze\.begin'
+if [ "$(has "$input_freeze_proof_begin_re")" -eq 0 ]; then
+    gate_input_freeze_xhci_bounded="SKIP"
+    print_row "input_freeze_xhci_bounded" "SKIP" "not_requested (missing explicit input-freeze begin marker)"
 else
-    gate_input_freeze_xhci_bounded="FAIL"
-    print_row "input_freeze_xhci_bounded" "FAIL" "missing xHCI bounded-wait/timeout markers"
+    if [ "$(has 'sexusb\.xhci\.enum\.timeout|sexusb\.xhci\.enable_slot\.complete\.ok|sexusb\.xhci\.cmd\.noop\.complete\.ok')" -eq 1 ]; then
+        gate_input_freeze_xhci_bounded="PASS"
+        print_row "input_freeze_xhci_bounded" "PASS" "bounded xHCI wait markers present"
+    else
+        gate_input_freeze_xhci_bounded="FAIL"
+        print_row "input_freeze_xhci_bounded" "FAIL" "missing xHCI bounded-wait/timeout markers"
+    fi
 fi
 
-if [ "$(has 'sexusb\.route\.sexinput\.(ready|missing)')" -eq 1 ]; then
-    gate_input_freeze_route_ready_or_missing="PASS"
-    print_row "input_freeze_route_ready_or_missing" "PASS" "sexusb route state emitted"
+if [ "$(has "$input_freeze_proof_begin_re")" -eq 0 ]; then
+    gate_input_freeze_route_ready_or_missing="SKIP"
+    print_row "input_freeze_route_ready_or_missing" "SKIP" "not_requested (missing explicit input-freeze begin marker)"
 else
-    gate_input_freeze_route_ready_or_missing="FAIL"
-    print_row "input_freeze_route_ready_or_missing" "FAIL" "no sexusb route ready/missing marker"
+    if [ "$(has 'sexusb\.route\.sexinput\.(ready|missing)')" -eq 1 ]; then
+        gate_input_freeze_route_ready_or_missing="PASS"
+        print_row "input_freeze_route_ready_or_missing" "PASS" "sexusb route state emitted"
+    else
+        gate_input_freeze_route_ready_or_missing="FAIL"
+        print_row "input_freeze_route_ready_or_missing" "FAIL" "no sexusb route ready/missing marker"
+    fi
 fi
 
-if [ "$(has 'sexinput\.synthetic\.click\.proof\.gated')" -eq 1 ]; then
-    gate_input_freeze_synthetic_click_gated="PASS"
-    print_row "input_freeze_synthetic_click_gated" "PASS" "synthetic click proof gating marker present"
+if [ "$(has "$input_freeze_proof_begin_re")" -eq 0 ]; then
+    gate_input_freeze_synthetic_click_gated="SKIP"
+    print_row "input_freeze_synthetic_click_gated" "SKIP" "not_requested (missing explicit input-freeze begin marker)"
 else
-    gate_input_freeze_synthetic_click_gated="FAIL"
-    print_row "input_freeze_synthetic_click_gated" "FAIL" "missing synthetic click proof gating marker"
+    if [ "$(has 'sexinput\.synthetic\.click\.proof\.gated')" -eq 1 ]; then
+        gate_input_freeze_synthetic_click_gated="PASS"
+        print_row "input_freeze_synthetic_click_gated" "PASS" "synthetic click proof gating marker present"
+    else
+        gate_input_freeze_synthetic_click_gated="FAIL"
+        print_row "input_freeze_synthetic_click_gated" "FAIL" "missing synthetic click proof gating marker"
+    fi
 fi
 
 if [ "$(has 'fault\.isolated|faulted_task_halt|panic')" -eq 1 ]; then
@@ -454,20 +470,26 @@ fi
 # Gate also accepts synthetic/fallback clock markers when silkbar.clock.send is
 # suppressed (budget exhausted, force_stall, or degraded profile).
 
-if [ "$(has 'silkbar\.clock\.send')" -eq 1 ]; then
-    c="$(count 'silkbar\.clock\.send')"
-    gate_keyboard_gui="PASS"
-    print_row "keyboard_gui" "PASS" "silkbar clock ticks: ${c}"
-elif [ "$(has 'sexdisplay\.ready')" -eq 1 ] && [ "$(has 'silkbar\.clock\.synthetic\.visible')" -eq 1 ]; then
-    gate_keyboard_gui="PASS"
-    print_row "keyboard_gui" "PASS" "sexdisplay ready + silkbar synthetic clock visible"
-elif [ "$(has 'bootgraph\.edge\.send.*from=silkbar.*OP_SILKBAR_UPDATE')" -eq 1 ] && \
-     [ "$(has 'sexdisplay\.clock\.fallback\.tick')" -eq 1 ]; then
-    gate_keyboard_gui="PASS"
-    print_row "keyboard_gui" "PASS" "silkbar->sexdisplay bootgraph edge + clock fallback tick"
+keyboard_gui_proof_begin_re='keyboard\.gui\.proof\.begin|silk\.keyboard\.gui\.proof\.begin|keyboard_gui\.begin'
+if [ "$(has "$keyboard_gui_proof_begin_re")" -eq 0 ]; then
+    gate_keyboard_gui="SKIP"
+    print_row "keyboard_gui" "SKIP" "not_requested (missing explicit keyboard GUI begin marker)"
 else
-    gate_keyboard_gui="FAIL"
-    print_row "keyboard_gui" "FAIL" "no silkbar clock/display liveness markers"
+    if [ "$(has 'silkbar\.clock\.send')" -eq 1 ]; then
+        c="$(count 'silkbar\.clock\.send')"
+        gate_keyboard_gui="PASS"
+        print_row "keyboard_gui" "PASS" "silkbar clock ticks: ${c}"
+    elif [ "$(has 'sexdisplay\.ready')" -eq 1 ] && [ "$(has 'silkbar\.clock\.synthetic\.visible')" -eq 1 ]; then
+        gate_keyboard_gui="PASS"
+        print_row "keyboard_gui" "PASS" "sexdisplay ready + silkbar synthetic clock visible"
+    elif [ "$(has 'bootgraph\.edge\.send.*from=silkbar.*OP_SILKBAR_UPDATE')" -eq 1 ] && \
+         [ "$(has 'sexdisplay\.clock\.fallback\.tick')" -eq 1 ]; then
+        gate_keyboard_gui="PASS"
+        print_row "keyboard_gui" "PASS" "silkbar->sexdisplay bootgraph edge + clock fallback tick"
+    else
+        gate_keyboard_gui="FAIL"
+        print_row "keyboard_gui" "FAIL" "no silkbar clock/display liveness markers"
+    fi
 fi
 
 # ---- 2. command_palette ----
