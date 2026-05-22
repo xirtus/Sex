@@ -156,6 +156,7 @@ gate_clock_visible_seconds="SKIP"
 gate_silk_de_contract_lock="SKIP"
 gate_silk_de_topstrip_deterministic="SKIP"
 gate_silk_de_renderer_conformance="SKIP"
+gate_silk_de_integrated_interaction="SKIP"
 gate_browser_network_grant="SKIP"
 gate_http_client_status="SKIP"
 gate_http_req_builder="SKIP"
@@ -4540,6 +4541,70 @@ else
         "interaction scenario not enabled (missing explicit combined sentinel)"
 fi
 
+# ---- silk_de_integrated_interaction ----
+# Explicit integrated Silk DE proof gate.
+# Strict only when explicit begin sentinel is present.
+# SKIP on normal boots and when explicitly not requested.
+gate_silk_de_integrated_interaction="SKIP"
+
+has_silk_de_integrated_begin=$(has '[[]silk\.de\.integrated\.interaction\.begin[]]')
+has_silk_de_integrated_skip=$(has '[[]silk\.de\.integrated\.interaction\.skip[]].*reason=not_requested')
+has_silk_de_integrated_fail_marker=$(has '[[]silk\.de\.integrated\.interaction\.fail[]]')
+has_silk_de_integrated_pass_marker=$(has '[[]silk\.de\.integrated\.interaction\.pass[]].*contract=1.*topstrip=1.*renderer=1.*clock=1.*pointer=1.*focus=1.*lifecycle=1.*faults=0')
+
+if [ "$has_silk_de_integrated_begin" -eq 0 ]; then
+    gate_silk_de_integrated_interaction="SKIP"
+    print_row "silk_de_integrated_interaction" "SKIP" "not_requested (missing explicit begin marker)"
+elif [ "$has_silk_de_integrated_skip" -eq 1 ]; then
+    gate_silk_de_integrated_interaction="SKIP"
+    print_row "silk_de_integrated_interaction" "SKIP" "not_requested (explicit skip marker)"
+else
+    req_contract=$([ "$gate_silk_de_contract_lock" = "PASS" ] && echo 1 || echo 0)
+    req_topstrip=$([ "$gate_silk_de_topstrip_deterministic" = "PASS" ] && echo 1 || echo 0)
+    req_renderer=$([ "$gate_silk_de_renderer_conformance" = "PASS" ] && echo 1 || echo 0)
+    req_clock=$([ "$gate_clock_visible_seconds" = "PASS" ] && echo 1 || echo 0)
+    req_faults=$([ "$gate_faults_zero" = "PASS" ] && echo 1 || echo 0)
+
+    # Interaction evidence categories: must be real markers, not ordinary render status.
+    req_pointer=$(has 'silk-shell\.pointer\.recv')
+    req_focus=$(has 'shell\.interact\.focus|shell\.focus\.set')
+    req_drag=$(has 'shell\.interact\.drag\.(begin|move|end)')
+    req_resize=$(has 'silk\.resize\.(begin|apply|end)')
+    req_snap=$(has 'silk\.snap\.(hit|apply|none)')
+    req_lifecycle=$(has 'silk\.close\.(request|allowed|tombstone)|lifecycle\.destroy\.record|tombstone\.event\.record')
+    bad_lifecycle=$(has 'focus\.reject\.tombstoned|lifecycle\.tombstone\.reject_|tombstone\.close\.reject\.dead')
+
+    missing=""
+    [ "$req_contract" -eq 0 ] && missing="${missing} contract"
+    [ "$req_topstrip" -eq 0 ] && missing="${missing} topstrip"
+    [ "$req_renderer" -eq 0 ] && missing="${missing} renderer"
+    [ "$req_clock" -eq 0 ] && missing="${missing} clock"
+    [ "$req_pointer" -eq 0 ] && missing="${missing} pointer"
+    [ "$req_focus" -eq 0 ] && missing="${missing} focus"
+    [ "$req_drag" -eq 0 ] && missing="${missing} drag"
+    [ "$req_resize" -eq 0 ] && missing="${missing} resize"
+    [ "$req_snap" -eq 0 ] && missing="${missing} snap"
+    [ "$req_lifecycle" -eq 0 ] && missing="${missing} lifecycle"
+    [ "$req_faults" -eq 0 ] && missing="${missing} faults_zero"
+
+    if [ "$has_silk_de_integrated_fail_marker" -eq 1 ]; then
+        gate_silk_de_integrated_interaction="FAIL"
+        print_row "silk_de_integrated_interaction" "FAIL" "explicit integrated fail marker present"
+    elif [ "$bad_lifecycle" -eq 1 ]; then
+        gate_silk_de_integrated_interaction="FAIL"
+        print_row "silk_de_integrated_interaction" "FAIL" "lifecycle corruption/reject markers present"
+    elif [ "$has_silk_de_integrated_pass_marker" -eq 1 ] && [ -z "$missing" ]; then
+        gate_silk_de_integrated_interaction="PASS"
+        print_row "silk_de_integrated_interaction" "PASS" "explicit pass marker + required evidence categories proven"
+    elif [ -z "$missing" ]; then
+        gate_silk_de_integrated_interaction="PASS"
+        print_row "silk_de_integrated_interaction" "PASS" "required evidence categories proven under explicit begin"
+    else
+        gate_silk_de_integrated_interaction="FAIL"
+        print_row "silk_de_integrated_interaction" "FAIL" "begin present but missing:${missing}"
+    fi
+fi
+
 # ---- SCORE ----
 echo ""
 echo "============================================"
@@ -4853,6 +4918,7 @@ ALL_GATES=(
     "silk_de_contract_lock:$gate_silk_de_contract_lock"
     "silk_de_topstrip_deterministic:$gate_silk_de_topstrip_deterministic"
     "silk_de_renderer_conformance:$gate_silk_de_renderer_conformance"
+    "silk_de_integrated_interaction:$gate_silk_de_integrated_interaction"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
