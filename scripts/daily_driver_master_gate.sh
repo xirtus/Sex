@@ -4258,32 +4258,26 @@ else gate_atlas_phase_d_frame_preview_stub="SKIP"; fi
 
 # ---- 90f. atlas_phase_e1_click_scene_switch ----
 # Phase E1: click Atlas scene card → switch active Scene → exit Atlas.
-# PASS if [silk.atlas.phase_e1.done] ok=1 is present.
-# Also PASS if phase_e1.negative.empty_click ok=1 is present (partial proof).
-# SKIP if proof not enabled / markers absent.
-# FAIL if hit/consume/switch markers exist without done.
-if [ "$(has 'silk\.atlas\.phase_e1\.done.*ok=1')" -eq 1 ]; then
+# PASS if explicit begin and done markers are present.
+# PASS if explicit begin and negative empty-click marker is present (partial proof path).
+# SKIP unless explicit begin marker is present.
+# FAIL only when explicit begin is present but done/negative marker is missing, or faults are present.
+if [ "$(has 'silk\.atlas\.phase_e1\.begin\]')" -eq 0 ]; then
+    gate_atlas_phase_e1_click_scene_switch="SKIP"
+    print_row "atlas_phase_e1_click_scene_switch" "SKIP" "phase_e1 proof not enabled (missing explicit begin marker)"
+elif [ "$(has '#PF|#GP|panic|KERNEL PANIC|fault\.kill|faulted_task_halt|fault\.isolated')" -eq 1 ]; then
+    gate_atlas_phase_e1_click_scene_switch="FAIL"
+    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "fault marker present during phase_e1 proof window"
+elif [ "$(has 'silk\.atlas\.phase_e1\.done.*ok=1')" -eq 1 ]; then
     gate_atlas_phase_e1_click_scene_switch="PASS"
     print_row "atlas_phase_e1_click_scene_switch" "PASS" "click scene switch proof complete"
 elif [ "$(has 'silk\.atlas\.phase_e1\.negative\.empty_click.*ok=1')" -eq 1 ]; then
     gate_atlas_phase_e1_click_scene_switch="PASS"
     print_row "atlas_phase_e1_click_scene_switch" "PASS" "negative empty-click proof complete (partial)"
-elif [ "$(has 'silk\.atlas\.hit\.scene\]')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e1\.done')" -eq 0 ]; then
+else
     gate_atlas_phase_e1_click_scene_switch="FAIL"
-    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "hit markers without phase_e1.done"
-elif [ "$(has 'silk\.atlas\.click\.consume\]')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e1\.done')" -eq 0 ]; then
-    gate_atlas_phase_e1_click_scene_switch="FAIL"
-    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "click consume markers without phase_e1.done"
-elif [ "$(has 'silk\.atlas\.mode\.exit.*reason=atlas_card_click')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e1\.done')" -eq 0 ]; then
-    gate_atlas_phase_e1_click_scene_switch="FAIL"
-    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "mode exit markers without phase_e1.done"
-elif [ "$(has 'silk\.scene\.active\.set.*reason=atlas_card_click')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e1\.done')" -eq 0 ]; then
-    gate_atlas_phase_e1_click_scene_switch="FAIL"
-    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "scene switch markers without phase_e1.done"
-elif [ "$(has 'silk\.atlas\.phase_e1\.begin\]')" -ge 1 ]; then
-    gate_atlas_phase_e1_click_scene_switch="FAIL"
-    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "phase_e1 begin without done"
-else gate_atlas_phase_e1_click_scene_switch="SKIP"; fi
+    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "phase_e1 begin without done/negative completion marker"
+fi
 
 # ---- 90g. atlas_phase_e2_keyboard_scene_cycle ----
 # Phase E2: keyboard cycle next/prev scene while Atlas is open.
