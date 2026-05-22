@@ -2921,6 +2921,7 @@ pub extern "C" fn _start() -> ! {
                                 let mut reject_logged = 0u32;
                                 let mut outer = 0u32;
                                 let mut synthetic_fallback_done = false;
+                                let mut icmp_unreachable_seen = false; // track ICMP dest unreachable for TCP SYN retry
                                 while outer < 1_000_000 && ipv4_frames < 2 {
                                     let mut idx = 0u32;
                                     while idx < 8 && ipv4_frames < 2 {
@@ -3342,6 +3343,9 @@ pub extern "C" fn _start() -> ! {
                                                                 "[sexnet.icmp.reject] reason=not_echo_request type={} code={} ok=1",
                                                                 icmp_type, icmp_code
                                                             );
+                                                            if icmp_type == 3 {
+                                                                icmp_unreachable_seen = true;
+                                                            }
                                                         }
                                                     } else if proto == 1 && (total_len as usize) < 28 {
                                                         serial_println!("[sexnet.icmp.reject] reason=too_short_for_icmp ok=1");
@@ -3988,6 +3992,116 @@ pub extern "C" fn _start() -> ! {
                                     ipv4_frames,
                                     ipv4_ok
                                 );
+                                // ── TCP SYN-ACK retry poll ──
+                                // If the first IPv4 RX poll caught ICMP Destination Unreachable
+                                // (SLIRP NAT warmup race) and TCP is still SYN_SENT, resend the
+                                // SYN frame and poll again for the delayed SYN-ACK.
+                                if icmp_unreachable_seen {
+                                    let tcp_st_retry = { let s = TCP_STATE.lock(); *s };
+                                    if tcp_st_retry == TcpState::SynSent {
+                                        serial_println!("[sexnet.tcp.syn.retry.begin] reason=icmp_unreachable_during_syn_sent");
+                                        // Resend SYN on desc 5 (offset 80) — same frame data still in TX buffer
+                                        let tx_de5 = unsafe { TX_PERM_DESC_VA + 80u64 };
+                                        unsafe {
+                                            core::ptr::write_volatile((tx_de5 + 12) as *mut u8, 0u8);
+                                            core::ptr::write_volatile((nic_va + 0x3818) as *mut u32, 6u32);
+                                        }
+                                        let mut syn_retry_dd = 0u32;
+                                        let mut syn_retry_poll = 0u32;
+                                        while syn_retry_poll < 1_000_000 && syn_retry_dd == 0 {
+                                            let st2 = unsafe { core::ptr::read_volatile((tx_de5 + 12) as *const u8) };
+                                            if (st2 & 1) != 0 { syn_retry_dd = 1; }
+                                            syn_retry_poll += 1;
+                                        }
+                                        serial_println!(
+                                            "[sexnet.tcp.syn.retry.tx.done] dd_set={} ok={}",
+                                            syn_retry_dd,
+                                            if syn_retry_dd == 1 { 1 } else { 0 }
+                                        );
+                                        // Second IPv4 RX poll for delayed SYN-ACK
+                                        let mut retry_frames = 0u32;
+                                        let mut retry_ok = 0u32;
+                                        let mut retry_outer = 0u32;
+                                        serial_println!("[sexnet.tcp.synack.retry.poll.begin] max_iters=1000000");
+                                        while retry_outer < 1_000_000 && retry_frames < 2 {
+                                            let mut idx = 0u32;
+                                            while idx < 8 && retry_frames < 2 {
+                                                let desc_base = unsafe { RX_PERM_DESC_VA + (idx as u64) * 16 };
+                                                let st = unsafe { core::ptr::read_volatile((desc_base + 12) as *const u8) };
+                                                if (st & 1) != 0 {
+                                                    let pkt_buf = unsafe { RX_PERM_PKT_VA[idx as usize] };
+                                                    let eth_hi = unsafe { core::ptr::read_volatile((pkt_buf + 12) as *const u8) };
+                                                    let eth_lo = unsafe { core::ptr::read_volatile((pkt_buf + 13) as *const u8) };
+                                                    let ethertype = ((eth_hi as u16) << 8) | (eth_lo as u16);
+                                                    if ethertype == 0x0800 {
+                                                        let proto = unsafe { core::ptr::read_volatile((pkt_buf + 23) as *const u8) };
+                                                        if proto == 6 {
+                                                            let total_len_hi = unsafe { core::ptr::read_volatile((pkt_buf + 16) as *const u8) } as u16;
+                                                            let total_len_lo = unsafe { core::ptr::read_volatile((pkt_buf + 17) as *const u8) } as u16;
+                                                            let total_len = ((total_len_hi << 8) | total_len_lo) as usize;
+                                                            if total_len >= 40 {
+                                                                let src_port_hi = unsafe { core::ptr::read_volatile((pkt_buf + 34) as *const u8) } as u16;
+                                                                let src_port_lo = unsafe { core::ptr::read_volatile((pkt_buf + 35) as *const u8) } as u16;
+                                                                let src_port = ((src_port_hi << 8) | src_port_lo) as u16;
+                                                                let dst_port_hi = unsafe { core::ptr::read_volatile((pkt_buf + 36) as *const u8) } as u16;
+                                                                let dst_port_lo = unsafe { core::ptr::read_volatile((pkt_buf + 37) as *const u8) } as u16;
+                                                                let dst_port = ((dst_port_hi << 8) | dst_port_lo) as u16;
+                                                                let local_port = unsafe { TCP_LOCAL_PORT };
+                                                                let remote_port = unsafe { TCP_REMOTE_PORT };
+                                                                if src_port == remote_port && dst_port == local_port {
+                                                                    let tcp_seq_0 = unsafe { core::ptr::read_volatile((pkt_buf + 38) as *const u8) } as u32;
+                                                                    let tcp_seq_1 = unsafe { core::ptr::read_volatile((pkt_buf + 39) as *const u8) } as u32;
+                                                                    let tcp_seq_2 = unsafe { core::ptr::read_volatile((pkt_buf + 40) as *const u8) } as u32;
+                                                                    let tcp_seq_3 = unsafe { core::ptr::read_volatile((pkt_buf + 41) as *const u8) } as u32;
+                                                                    let tcp_seq = (tcp_seq_0 << 24) | (tcp_seq_1 << 16) | (tcp_seq_2 << 8) | tcp_seq_3;
+                                                                    let tcp_ack_0 = unsafe { core::ptr::read_volatile((pkt_buf + 42) as *const u8) } as u32;
+                                                                    let tcp_ack_1 = unsafe { core::ptr::read_volatile((pkt_buf + 43) as *const u8) } as u32;
+                                                                    let tcp_ack_2 = unsafe { core::ptr::read_volatile((pkt_buf + 44) as *const u8) } as u32;
+                                                                    let tcp_ack_3 = unsafe { core::ptr::read_volatile((pkt_buf + 45) as *const u8) } as u32;
+                                                                    let tcp_ack = (tcp_ack_0 << 24) | (tcp_ack_1 << 16) | (tcp_ack_2 << 8) | tcp_ack_3;
+                                                                    let tcp_flags = unsafe { core::ptr::read_volatile((pkt_buf + 47) as *const u8) };
+                                                                    let flags_syn = if (tcp_flags & 0x02) != 0 { 1u32 } else { 0u32 };
+                                                                    let flags_ack = if (tcp_flags & 0x10) != 0 { 1u32 } else { 0u32 };
+                                                                    let flags_rst = if (tcp_flags & 0x04) != 0 { 1u32 } else { 0u32 };
+                                                                    if flags_syn == 1 && flags_ack == 1 && flags_rst == 0 {
+                                                                        serial_println!("[sexnet.tcp.synack.retry.rx] src_port={} dst_port={} seq={} ack={} flags=SYN|ACK ok=1", src_port, dst_port, tcp_seq, tcp_ack);
+                                                                        let mut ts = TCP_STATE.lock();
+                                                                        *ts = TcpState::Established;
+                                                                        unsafe { TCP_REMOTE_SEQ = tcp_seq; }
+                                                                        retry_frames += 1;
+                                                                        retry_ok = 1;
+                                                                    } else if flags_rst == 1 {
+                                                                        serial_println!("[sexnet.tcp.synack.retry.rst] src_port={} dst_port={} flags=RST ok=1", src_port, dst_port);
+                                                                        let mut ts = TCP_STATE.lock();
+                                                                        *ts = TcpState::FailedRst;
+                                                                        retry_frames += 1;
+                                                                    } else {
+                                                                        serial_println!("[sexnet.tcp.synack.retry.ignore] reason=not_synack_or_rst flags_syn={} flags_ack={} flags_rst={} ok=1", flags_syn, flags_ack, flags_rst);
+                                                                        retry_frames += 1;
+                                                                    }
+                                                                } else {
+                                                                    serial_println!("[sexnet.tcp.synack.retry.reject] reason=wrong_ports src={} dst={} ok=1", src_port, dst_port);
+                                                                    retry_frames += 1;
+                                                                }
+                                                            }
+                                                        } else {
+                                                            retry_frames += 1;
+                                                        }
+                                                    }
+                                                    // Recycle descriptor (match existing pattern: clear length, status, advance RDT)
+                                                    unsafe {
+                                                        core::ptr::write_volatile((desc_base + 8) as *mut u16, 0u16);
+                                                        core::ptr::write_volatile((desc_base + 12) as *mut u8, 0u8);
+                                                        core::ptr::write_volatile((nic_va + 0x2818) as *mut u32, idx);
+                                                    }
+                                                }
+                                                idx += 1;
+                                            }
+                                            retry_outer += 1;
+                                        }
+                                        serial_println!("[sexnet.tcp.synack.retry.poll.done] frames={} ok={}", retry_frames, retry_ok);
+                                    }
+                                }
                                 // --------------------------------------------------------------
                                 // Phase H: TCP payload guard
                                 // --------------------------------------------------------------
