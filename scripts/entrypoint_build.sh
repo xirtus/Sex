@@ -83,6 +83,7 @@ export SEXOS_BUILD_ROOT="$BUILD_ROOT"
 export SEXOS_CONTRACT_SNAPSHOT="$ROOT_DIR/$SNAP_DIR/contract.snapshot.toml"
 export SEXOS_ABI_SNAPSHOT="$ROOT_DIR/$SNAP_DIR/abi.snapshot.lock"
 export SEXOS_BUILD_SPEC="$SPEC_PATH"
+unset SEXOS_SEXNET_PROOF_PROFILE
 
 ./scripts/sexos_build_trace.sh "$SPEC_PATH"
 
