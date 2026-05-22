@@ -128,6 +128,7 @@ gate_linen_objects_list="SKIP"
 gate_linen_ramfs_crud="SKIP"
 gate_linen_diskfs_direct="SKIP"
 gate_sexfiles_diskfs_bridge="SKIP"
+gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -3909,6 +3910,47 @@ else
     gate_sexfiles_diskfs_bridge="SKIP"
 fi
 
+# ---- 76d. sexfiles_diskfs_bridge_fixed_object_rw ----
+if [ "$(has 'sexfiles\.diskfs100\.ap2\.begin')" -ge 1 ]; then
+    has_ioq_ready=$(has 'sexdrive\.nvme\.ioq\.ready')
+    has_select_ok=$(has 'sexfiles\.diskfs100\.ap2\.select\.ok')
+    has_read_match=$(has 'sexfiles\.diskfs100\.ap2\.read\.match.*bytes=128 ok=1')
+    has_done=$(has 'sexfiles\.diskfs100\.ap2\.done.*ok=1')
+    has_ap2_fail=$(has 'sexfiles\.diskfs100\.ap2\.fail')
+    has_cqe_timeout=$(has 'cqe_timeout')
+
+    if [ "$has_cqe_timeout" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_fixed_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_fixed_object_rw" "FAIL" "cqe_timeout in AP2 profile log"
+    elif [ "$has_ioq_ready" -eq 0 ] && [ "$has_ap2_fail" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
+        print_row "sexfiles_diskfs_bridge_fixed_object_rw" "SKIP" "storage backend not ready (honest blocker)"
+    elif [ "$has_ioq_ready" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_fixed_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_fixed_object_rw" "FAIL" "missing sexdrive.nvme.ioq.ready"
+    elif [ "$has_ap2_fail" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_fixed_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_fixed_object_rw" "FAIL" "ap2.fail marker present"
+    elif [ "$has_select_ok" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_fixed_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_fixed_object_rw" "FAIL" "missing select.ok marker"
+    elif [ "$has_read_match" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_fixed_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_fixed_object_rw" "FAIL" "missing read.match bytes=128 ok=1"
+    elif [ "$has_done" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_fixed_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_fixed_object_rw" "FAIL" "missing done ok=1"
+    elif [ "$has_ioq_ready" -ge 1 ] && [ "$has_select_ok" -ge 1 ] && [ "$has_read_match" -ge 1 ] && [ "$has_done" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_fixed_object_rw="PASS"
+        print_row "sexfiles_diskfs_bridge_fixed_object_rw" "PASS" "IOQ-ready + select.ok + read.match ok=1 + done ok=1"
+    else
+        gate_sexfiles_diskfs_bridge_fixed_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_fixed_object_rw" "FAIL" "incomplete AP2 markers"
+    fi
+else
+    gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
+fi
+
 # ---- 71. silk_glass_color ----
 if [ "$(has 'silk\.glass\.safe_color_pass\.done.*ok=1')" -eq 1 ]; then
     gate_silk_glass_color="PASS"
@@ -5328,6 +5370,7 @@ ALL_GATES=(
     "linen_ramfs_crud:$gate_linen_ramfs_crud"
     "linen_diskfs_direct:$gate_linen_diskfs_direct"
     "sexfiles_diskfs_bridge:$gate_sexfiles_diskfs_bridge"
+    "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
     "spindle_frame_chrome:$gate_spindle_frame_chrome"

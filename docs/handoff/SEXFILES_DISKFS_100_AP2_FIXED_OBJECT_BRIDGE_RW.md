@@ -1,92 +1,84 @@
 # SEXFILES_DISKFS_100_AP2_FIXED_OBJECT_BRIDGE_RW
 
 ## 1) Files changed
-- servers/sexfiles/src/vfs.rs
-- servers/sexfiles/src/trampoline.rs
-- scripts/run_daily_driver_proof.sh
-- scripts/daily_driver_master_gate.sh
+- servers/sexfiles/src/proof.rs          — Added `run_diskfs100_ap2_proof()` function
+- servers/sexfiles/src/trampoline.rs     — Wired AP2 proof gate via `cfg!(sexfiles_diskfs100_ap2_proof)`; early return isolates AP2 profile from multi-object proof
+- servers/sexfiles/build.rs              — Emits `cargo:rustc-cfg=sexfiles_diskfs100_ap2_proof` conditionally on `SEXFILES_DISKFS_100_PROOF=1`
+- scripts/run_daily_driver_proof.sh      — Exports `SEXFILES_DISKFS_100_PROOF=1`
+- scripts/daily_driver_master_gate.sh    — Added `sexfiles_diskfs_bridge_fixed_object_rw` gate
 
-## 2) Exact env vars
-- `SEXFILES_DISKFS_100_PROOF=1`
-- Runner coupling: when `SEXFILES_DISKFS_100_PROOF=1`, runner forces `SEXOS_STORAGE_100_PROOF=1`.
+## 2) Fixed prerequisite
+- Legacy real IO READ probe in `apps/sexdrive/src/main.rs` was gated behind:
+  `SEXOS_STORAGE_100_IO_READ_PROBE=1`
+- DiskFS no-probe lane now has `cqe_timeout=0`, DiskFS block replies status=0,
+  31 block replies, extent proof done.
+- CQ poison fix: commit `cfb8c8f9 fix(storage): gate legacy IO read probe`
 
 ## 3) Object identity
 - Fixed object: `sexfiles-proof-v1`
 - Path: `/disk/sexfiles-proof-v1`
 - SELECT path_id: `0`
 
-## 4) Methods used
-- `DiskFs::diskfs_write_object(path, offset, data, buf_va)`
-- `DiskFs::diskfs_read_object(path, offset, out, buf_va)`
+## 4) Payload formula
+- `byte[i] = (0xC7 ^ i ^ 0x55) & 0xFF` for i in 0..128
 
-## 5) Payload/chunking
-- Payload size: 128 bytes
-- Pattern: `byte[i] = (0xC7 ^ i ^ 0x55) & 0xFF`
-- Chunking: 16-byte writes, 16-byte reads (8 chunks each)
+## 5) Write/read chunk counts
+- 8 write chunks × 16 bytes = 128 bytes written
+- 8 read chunks × 16 bytes = 128 bytes read
+- Byte-for-byte comparison: all 128 bytes match
 
-## 6) AP2.1 blocker root cause (manifest_ensure_v2_failed code=4)
-- Status: **STOP FIRST (not fixed in this mission)**.
-- Root cause classification: **A)** manifest ensure hits real block path and receives `BLOCK_ERR_NO_DEVICE(4)` from SexDrive, not a VFS/order bug.
-- Exact call chain:
-  - `OP_DISKFS_SELECT` → `handle_diskfs_select()` calls `DiskFs::diskfs_ensure_manifest_v2(buf_va)` before select success.
-  - `diskfs_ensure_manifest_v2()` performs real `diskfs_block_read/write` on `DISKFS_MANIFEST_LBA=2046`.
-  - block status is propagated unchanged; nonzero returns from select as `[sexfiles.bridge.diskfs.select.err] reason=manifest_ensure_v2_failed code=4`.
-- Source anchors:
-  - `servers/sexfiles/src/vfs.rs`: select path manifest ensure + error return.
-  - `servers/sexfiles/src/backends/diskfs.rs`: `diskfs_ensure_manifest_v2` read/write/verify block calls and `Err(write_status|verify_status)`.
-- Runtime markers from AP2 run:
-  - `[sexfiles.disk.manifest.v2.ensure.begin]`
-  - `[sexdrive.block.read.handoff.err] reason=no_ioq_ready`
-  - `[sexfiles.disk.manifest.v2.err] reason=read_failed status=4`
-  - `[sexfiles.disk.manifest.v2.bootstrap] entries=3`
-  - `[sexdrive.nvme.write.err] reason=no_ioq_ready`
-  - `[sexfiles.disk.manifest.v2.err] reason=write_failed status=4`
+## 6) Runtime markers (AP2 isolated profile: SEXOS_STORAGE_100_PROOF=1 SEXFILES_DISKFS_100_PROOF=1, 120s probe)
+```
+[sexfiles.diskfs100.ap2.begin]          object=sexfiles-proof-v1 bytes=128
+[sexfiles.diskfs100.ap2.select.ok]      object=sexfiles-proof-v1
+[sexfiles.diskfs100.ap2.write.chunk]    off=0..112 len=16 ok=1  (×8)
+[sexfiles.diskfs100.ap2.read.chunk]     off=0..112 len=16 ok=1  (×8)
+[sexfiles.diskfs100.ap2.read.match]     bytes=128 ok=1
+[sexfiles.diskfs100.ap2.done]           ok=1
+```
+No multi-object proof markers present (profile isolation active).
+No PKU violation markers present.
 
-## 7) Marker evidence
-- `[sexfiles.diskfs100.ap2.begin] object=sexfiles-proof-v1 bytes=128`
-- `[sexfiles.diskfs100.ap2.select.ok] object=sexfiles-proof-v1`
-- `[sexfiles.diskfs100.ap2.write.chunk] off=O len=L ok=1`
-- `[sexfiles.diskfs100.ap2.read.chunk] off=O len=L ok=1`
-- `[sexfiles.diskfs100.ap2.read.match] bytes=128 ok=1`
-- `[sexfiles.diskfs100.ap2.done] ok=1`
-- Failure markers:
-  - `[sexfiles.diskfs100.ap2.fail] reason=...`
-  - `[sexfiles.diskfs100.ap2.read.match] ok=0 first_bad=I expected=E got=G`
+## 7) cqe_timeout
+- **ABSENT**: 0 occurrences in AP2 profile log.
 
 ## 8) Gate result
-- New gate: `sexfiles_diskfs_bridge_fixed_object_rw`
-- PASS only if:
-  - `sexdrive.nvme.ioq.ready` exists
-  - `sexfiles.diskfs100.ap2.select.ok` exists
-  - `sexfiles.diskfs100.ap2.read.match bytes=128 ok=1` exists
-  - `sexfiles.diskfs100.ap2.done ok=1` exists
-- FAIL if:
-  - `no_ioq_ready` exists
-  - `sexfiles.diskfs100.ap2.fail` exists
-  - any required success marker is missing
-- SKIP if AP2 begin marker is absent
+- **AP2 isolated profile**: `sexfiles_diskfs_bridge_fixed_object_rw = PASS`
+  ("IOQ-ready + select.ok + read.match ok=1 + done ok=1"), `faults_zero = PASS`,
+  FAIL gates: 0, FINAL: PASS
+- **Default profile**: `sexfiles_diskfs_bridge_fixed_object_rw = SKIP`
+  (cfg not active, no ap2.begin marker), FAIL gates: 0, FINAL: PASS
 
-## 9) AP2/default run results (this mission)
-- AP2 profile (`SEXOS_STORAGE_100_PROOF=1 SEXFILES_DISKFS_100_PROOF=1`):
-  - `sexdrive_storage_ioq_ready`: `PASS`
-  - `sexfiles_diskfs_bridge_fixed_object_rw`: `FAIL`
-  - master gate: `FAIL gates: 2`, `FINAL: FAIL`
-- Default profile (no AP2 env):
-  - `sexdrive_storage_ioq_ready`: `SKIP`
-  - `sexfiles_diskfs_bridge_fixed_object_rw`: `SKIP`
-  - master gate: `FAIL gates: 0`, `FINAL: PASS`
+## 9) Default result
+- Default profile: 0 FAIL gates, FINAL PASS.
+- AP2 cfg is conditionally set only when `SEXFILES_DISKFS_100_PROOF=1`.
+- Default build does NOT set the cfg; AP2 proof does not run.
+- Multi-object proof remains in its own profile/path (not affected by AP2 isolation).
 
-## 10) Default boot result
-- Default profile keeps this gate SKIP unless `SEXFILES_DISKFS_100_PROOF=1` is set.
+## 10) Profile isolation
+- Root cause: `build.rs` unconditionally emitted `rustc-cfg=sexfiles_diskfs100_ap2_proof`,
+  causing AP2 proof to run in all builds. In the AP2 profile, execution continued past
+  AP2 into `run_diskfs_multi_object_proofs()`, which triggered a PKU violation on Quil
+  object write — unrelated to AP2 and pre-existing.
+- Fix (build.rs): `rustc-cfg=sexfiles_diskfs100_ap2_proof` is now conditional on
+  `SEXFILES_DISKFS_100_PROOF=1`.
+- Fix (trampoline.rs): After `run_diskfs100_ap2_proof()` returns, the AP2 profile
+  exits early with `return;`, preventing multi-object proof execution.
+  The comment marker `[sexfiles.diskfs100.ap2.profile.done] isolated=1` documents
+  the isolation point.
+- Multi-object PKU violation is deferred to AP3 and no longer poisons AP2.
 
 ## 11) Non-claims
 - no Linen
 - no generic VFS path claims
 - no directory claims
-- no fsync durability claims
-- no power-loss durability claims
+- no fsync/power-loss durability claims
 
 ## 12) Updated ladder
-- AP1: bridge dispatch and honest blocker classification
-- AP2: fixed-object 128B write/read/match proof lane exists, but blocked by AP2.1 manifest ensure `code=4`
-- AP3 (next): durability semantics and persistence-cycle checks
+- AP1 reality audit: PASS
+- AP2 fixed-object bridge RW: **PASS** (128-byte write/read/match verified against NVMe; profile isolated)
+- AP3 multi-object pending (pre-existing PKU violation deferred from AP2)
+- AP4 reboot persistence pending
+- AP5 negatives pending
+- AP6 flush/fsync honest classification pending
+- AP7 closeout pending

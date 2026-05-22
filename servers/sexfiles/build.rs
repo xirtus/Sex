@@ -11,4 +11,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SEXOS_SEXFILES_EXTENT_PROOF");
     println!("cargo:rerun-if-env-changed=SEXOS_SEXFILES_CHECKPOINT_PROOF");
     println!("cargo:rerun-if-env-changed=SEXOS_SEXOBJECT_VIEW_PROOF");
+    println!("cargo:rerun-if-env-changed=SEXOS_LINEN_DISK_OBJECT_PROOF");
+    println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_100_PROOF");
+    println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs100_ap2_proof)");
+    if std::env::var("SEXFILES_DISKFS_100_PROOF").is_ok() {
+        println!("cargo:rustc-cfg=sexfiles_diskfs100_ap2_proof");
+    }
 }

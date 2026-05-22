@@ -2558,3 +2558,132 @@ pub fn run_diskfs_multi_object_proofs() {
 
     serial_println!("[sexfiles.disk.multi.summary] ok=1");
 }
+
+/// AP2: Fixed-object DiskFS bridge write/read/match proof.
+/// Object: /disk/sexfiles-proof-v1 (path_id=0).
+/// Payload: 128 bytes, byte[i] = (0xC7 ^ i ^ 0x55) & 0xFF.
+/// Writes 8×16-byte chunks, reads back 8×16-byte chunks, compares.
+/// Gate: sexfiles_diskfs_bridge_fixed_object_rw.
+pub fn run_diskfs100_ap2_proof() {
+    serial_println!("[sexfiles.diskfs100.ap2.begin] object=sexfiles-proof-v1 bytes=128");
+
+    // ── Grant buffer ──
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        serial_println!("[sexfiles.diskfs100.ap2.fail] reason=grant_failed");
+        return;
+    }
+
+    // ── Ensure V2 manifest ──
+    if let Err(e) = DiskFs::diskfs_ensure_manifest_v2(buf_va) {
+        serial_println!("[sexfiles.diskfs100.ap2.fail] reason=manifest_ensure_v2_failed code={}", e);
+        return;
+    }
+
+    // ── SELECT path_id=0 ──
+    match DiskFs::diskfs_lookup_by_path_id(0, buf_va) {
+        Ok(_entry) => {
+            serial_println!("[sexfiles.diskfs100.ap2.select.ok] object=sexfiles-proof-v1");
+        }
+        Err(e) => {
+            serial_println!("[sexfiles.diskfs100.ap2.fail] reason=select_failed code={}", e);
+            return;
+        }
+    }
+
+    // ── Build deterministic 128-byte payload ──
+    let path: &[u8] = DISKFS_MANIFEST_OBJECT_PATH; // b"/disk/sexfiles-proof-v1"
+    let mut payload = [0u8; 128];
+    {
+        let mut i = 0usize;
+        while i < 128 {
+            payload[i] = (0xC7u8 ^ (i as u8) ^ 0x55u8) & 0xFF;
+            i += 1;
+        }
+    }
+
+    // ── Phase W: Write 128 bytes in 16-byte chunks ──
+    {
+        let mut write_off: u64 = 0;
+        while write_off < 128 {
+            let chunk_len = (128 - write_off as usize).min(16);
+            let mut chunk = [0u8; 16];
+            {
+                let mut ci = 0usize;
+                while ci < chunk_len {
+                    chunk[ci] = payload[write_off as usize + ci];
+                    ci += 1;
+                }
+            }
+            match DiskFs::diskfs_write_object(path, write_off, &chunk, buf_va) {
+                Ok(n) => {
+                    serial_println!(
+                        "[sexfiles.diskfs100.ap2.write.chunk] off={} len={} ok=1",
+                        write_off, n
+                    );
+                }
+                Err(e) => {
+                    serial_println!(
+                        "[sexfiles.diskfs100.ap2.fail] reason=write_failed off={} code={}",
+                        write_off, e
+                    );
+                    return;
+                }
+            }
+            write_off += 16;
+        }
+    }
+
+    // ── Phase R: Read back 128 bytes in 16-byte chunks ──
+    let mut readback = [0u8; 128];
+    {
+        let mut read_off: u64 = 0;
+        while read_off < 128 {
+            let rlen = (128 - read_off as usize).min(16);
+            let mut rbuf = [0u8; 16];
+            match DiskFs::diskfs_read_object(path, read_off, &mut rbuf[..rlen], buf_va) {
+                Ok(n) => {
+                    {
+                        let mut ci = 0usize;
+                        while ci < n as usize {
+                            readback[read_off as usize + ci] = rbuf[ci];
+                            ci += 1;
+                        }
+                    }
+                    serial_println!(
+                        "[sexfiles.diskfs100.ap2.read.chunk] off={} len={} ok=1",
+                        read_off, n
+                    );
+                }
+                Err(e) => {
+                    serial_println!(
+                        "[sexfiles.diskfs100.ap2.fail] reason=read_failed off={} code={}",
+                        read_off, e
+                    );
+                    return;
+                }
+            }
+            read_off += 16;
+        }
+    }
+
+    // ── Phase C: Compare byte-for-byte ──
+    {
+        let mut i = 0usize;
+        while i < 128 {
+            if readback[i] != payload[i] {
+                serial_println!(
+                    "[sexfiles.diskfs100.ap2.read.match] ok=0 first_bad={} expected={:#x} got={:#x}",
+                    i, payload[i], readback[i]
+                );
+                serial_println!("[sexfiles.diskfs100.ap2.fail] reason=mismatch");
+                return;
+            }
+            i += 1;
+        }
+    }
+    serial_println!("[sexfiles.diskfs100.ap2.read.match] bytes=128 ok=1");
+
+    // ── Done ──
+    serial_println!("[sexfiles.diskfs100.ap2.done] ok=1");
+}
