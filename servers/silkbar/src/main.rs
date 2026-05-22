@@ -4,7 +4,8 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use silkbar_model::{
     SilkBarUpdate, UpdateKind, ChipKind, ChipSlot, OP_SILKBAR_UPDATE, validate_silkbar_contract,
-    SILKBAR_ABI_VERSION, SILKBAR_WORKSPACE_COUNT, SILKBAR_CHIP_COUNT,
+    contract_fingerprint, SILKBAR_ABI_VERSION, SILKBAR_WORKSPACE_COUNT, SILKBAR_CHIP_COUNT,
+    SILK_DE_BAR_ABI_V1, SILK_DE_BAR_LAYOUT_V1, SILK_DE_BAR_THEME_V1,
     SILKBAR_DEFAULT_ACTIVE_WORKSPACE_IDX, SILKBAR_WORKSPACE_IDX_MAX, DEFAULT_SILK_BAR,
 };
 use sex_pdx::{OP_BELL_LIST, OP_BELL_SUBSCRIBE, SLOT_BELL};
@@ -93,9 +94,13 @@ pub extern "C" fn _start() -> ! {
     let contract_err = validate_silkbar_contract();
     let degraded = contract_err != 0;
     if degraded {
+        sex_pdx::serial_println!("[silk.de.contract.producer.fail] reason={} abi={} layout={} theme={} fp=0x{:016x}",
+            contract_err, SILK_DE_BAR_ABI_V1, SILK_DE_BAR_LAYOUT_V1, SILK_DE_BAR_THEME_V1, contract_fingerprint());
         sex_pdx::serial_println!("[silkbar.boot.contract.fail] code={}", contract_err);
         sex_pdx::serial_println!("[bootgraph.silkbar.degraded] reason=contract_fail");
     } else {
+        sex_pdx::serial_println!("[silk.de.contract.producer.pass] abi={} layout={} theme={} fp=0x{:016x}",
+            SILK_DE_BAR_ABI_V1, SILK_DE_BAR_LAYOUT_V1, SILK_DE_BAR_THEME_V1, contract_fingerprint());
         sex_pdx::serial_println!("[silkbar.boot.contract.ok]");
         sex_pdx::serial_println!("[bootgraph.silkbar.contract_ready]");
     }

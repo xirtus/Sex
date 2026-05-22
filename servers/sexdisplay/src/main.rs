@@ -4,7 +4,8 @@
 
 use sex_pdx::serial_println;
 use silkbar_model::{SilkBar, SilkBarUpdate, UpdateKind, apply_update, DEFAULT_SILK_BAR,
-                    DEFAULT_THEME, ChipKind, ModuleSlot, validate_silkbar_contract, SILKBAR_ABI_VERSION,
+                    DEFAULT_THEME, ChipKind, ModuleSlot, validate_silkbar_contract, contract_fingerprint,
+                    SILKBAR_ABI_VERSION, SILK_DE_BAR_ABI_V1, SILK_DE_BAR_LAYOUT_V1, SILK_DE_BAR_THEME_V1,
                     APPEARANCE_TOKEN_FOCUS_SURFACE, APPEARANCE_TOKEN_FRAME_RIM,
                     APPEARANCE_TOKEN_FRAME_TOP_BAR, APPEARANCE_TOKEN_ACTIVE_TAB,
                     APPEARANCE_TOKEN_INACTIVE_TAB, APPEARANCE_TOKEN_CLOSE_LIGHT,
@@ -2134,13 +2135,30 @@ fn handle_primary_fb(ptr: u64, packed: u64) -> bool {
 
 fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> (bool, u32) {
     let kind = arg0 as u32;
+    let slot = (arg1 >> 32) as u8;
+    unsafe {
+        static mut SILK_DE_UPDATE_RECV_BUDGET: u32 = 64;
+        if SILK_DE_UPDATE_RECV_BUDGET > 0 {
+            SILK_DE_UPDATE_RECV_BUDGET -= 1;
+            serial_println!("[silk.de.update.recv] kind={} slot={}", kind, slot);
+        }
+    }
     let update = SilkBarUpdate {
         kind,
-        index: (arg1 >> 32) as u8,
+        index: slot,
         a: arg1 as u32,
         b: arg2 as u32,
     };
     let ok = apply_update(bar, update);
+    if ok {
+        unsafe {
+            static mut SILK_DE_UPDATE_APPLY_BUDGET: u32 = 64;
+            if SILK_DE_UPDATE_APPLY_BUDGET > 0 {
+                SILK_DE_UPDATE_APPLY_BUDGET -= 1;
+                serial_println!("[silk.de.update.apply.ok] kind={} slot={}", kind, slot);
+            }
+        }
+    }
     // Budgeted marker for selected-window options update.
     if ok && kind == UpdateKind::SetSelectedOptions as u32 {
         unsafe {
@@ -2194,9 +2212,13 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk.contract.validate.start]");
     let contract_err = validate_silkbar_contract();
     if contract_err != 0 {
+        serial_println!("[silk.de.contract.renderer.fail] reason={} abi={} layout={} theme={} fp=0x{:016x}",
+            contract_err, SILK_DE_BAR_ABI_V1, SILK_DE_BAR_LAYOUT_V1, SILK_DE_BAR_THEME_V1, contract_fingerprint());
         serial_println!("[silk.contract.validate.fail] reason={}", contract_err);
         loop { core::hint::spin_loop(); }
     } else {
+        serial_println!("[silk.de.contract.renderer.pass] abi={} layout={} theme={} fp=0x{:016x}",
+            SILK_DE_BAR_ABI_V1, SILK_DE_BAR_LAYOUT_V1, SILK_DE_BAR_THEME_V1, contract_fingerprint());
         serial_println!("[silk.contract.validate.ok] version={}", SILKBAR_ABI_VERSION);
     }
 

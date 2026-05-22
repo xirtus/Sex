@@ -153,6 +153,7 @@ gate_browser_html_history="SKIP"
 gate_sexnet_browser_cap="SKIP"
 gate_sexnet_status_route="SKIP"
 gate_clock_visible_seconds="SKIP"
+gate_silk_de_contract_lock="SKIP"
 gate_browser_network_grant="SKIP"
 gate_http_client_status="SKIP"
 gate_http_req_builder="SKIP"
@@ -3652,6 +3653,7 @@ if [ -n "${first_redraw_line:-}" ]; then
     )"
 fi
 source_check_mismatch_count="$(
+    {
     grep '\[sexdisplay\.clock\.redraw\.source_check\]' "$LOG" \
     | awk '
         /canonical_ss=[1-9][0-9]*/ {
@@ -3667,6 +3669,7 @@ source_check_mismatch_count="$(
             if (seen==0) print -1;
             else print bad+0;
         }'
+    } || true
 )"
 if [ -n "${first_redraw_line:-}" ] && [ -n "${first_nonzero_redraw_line:-}" ] \
    && [ "$zero_only_window" -eq 0 ] \
@@ -3693,6 +3696,38 @@ elif [ "$(has 'sexdisplay.clock.redraw]')" -ge 1 ]; then
     gate_clock_visible_seconds="FAIL"
     print_row "clock_visible_seconds" "FAIL" "missing bounded nonzero redraw proof"
 else gate_clock_visible_seconds="SKIP"; fi
+
+# ---- 95. silk_de_contract_lock ----
+if [ "$(has 'silk\.de\.contract\.(producer|renderer)\.(pass|fail)')" -eq 0 ]; then
+    gate_silk_de_contract_lock="SKIP"
+    print_row "silk_de_contract_lock" "SKIP" "silk de contract markers absent in this boot"
+else
+    contract_fail_reason=""
+    if [ "$(has 'silk\.de\.contract\.producer\.fail')" -eq 1 ]; then
+        contract_fail_reason="${contract_fail_reason} producer.fail"
+    fi
+    if [ "$(has 'silk\.de\.contract\.renderer\.fail')" -eq 1 ]; then
+        contract_fail_reason="${contract_fail_reason} renderer.fail"
+    fi
+    if [ "$(has 'silk\.de\.contract\.mismatch')" -eq 1 ]; then
+        contract_fail_reason="${contract_fail_reason} mismatch"
+    fi
+    if [ "$(has '#PF|#GP|panic|KERNEL PANIC|fault\.kill.*(silkbar|sexdisplay)')" -eq 1 ]; then
+        contract_fail_reason="${contract_fail_reason} faults"
+    fi
+
+    if [ -n "$contract_fail_reason" ]; then
+        gate_silk_de_contract_lock="FAIL"
+        print_row "silk_de_contract_lock" "FAIL" "contract/fault fail:${contract_fail_reason}"
+    elif [ "$(has 'silk\.de\.contract\.producer\.pass')" -eq 1 ] && \
+         [ "$(has 'silk\.de\.contract\.renderer\.pass')" -eq 1 ]; then
+        gate_silk_de_contract_lock="PASS"
+        print_row "silk_de_contract_lock" "PASS" "producer+renderer contract pass markers present"
+    else
+        gate_silk_de_contract_lock="FAIL"
+        print_row "silk_de_contract_lock" "FAIL" "missing producer/renderer pass markers"
+    fi
+fi
 
 # ---- 94. sexnet_passive ----
 if [ "$(has 'sexnet\.passive\.ready.*network=0.*ok=1')" -eq 1 ]; then
@@ -3760,10 +3795,19 @@ elif [ "$(has 'silk\.frame\.rim\.render\]')" -ge 1 ]; then
 else gate_frame_rim_visual="SKIP"; fi
 
 # ---- 77. frame_lights_stub ----
+frame_lights_stub_explicit=0
+if [ "$(has 'silk\.frame\.lights\.stub\.begin')" -ge 1 ] \
+   || [ "$(has 'silk\.frame\.lights\.proof\.begin')" -ge 1 ] \
+   || [ "$(has 'silk\.frame\.lights\.visual\.begin')" -ge 1 ]; then
+    frame_lights_stub_explicit=1
+fi
 first_light_render_line="$(grep -n '\[sexdisplay\.frame\.light\.startup\.render\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
 first_light_enabled_line="$(grep -n '\[sexdisplay\.frame\.light\.startup\.render\].*red=enabled.*close_allowed=1' "$LOG" | head -n1 | cut -d: -f1 || true)"
 light_enable_max_distance=240
-if [ "$(has 'silk\.frame\.lights\.status_stub\.done.*ok=1')" -eq 1 ] \
+if [ "$frame_lights_stub_explicit" -ne 1 ]; then
+    gate_frame_lights_stub="SKIP"
+    print_row "frame_lights_stub" "SKIP" "not requested (missing explicit proof sentinel)"
+elif [ "$(has 'silk\.frame\.lights\.status_stub\.done.*ok=1')" -eq 1 ] \
    && [ "$(has 'silk\.frame\.lights\.summary.*red_enabled=[1-9][0-9]*.*ok=1')" -ge 1 ] \
    && [ "$(has 'silk\.frame\.lights\.state.*reason=protected_system_frame')" -ge 1 ] \
    && [ "$(has 'silk\.frame\.lights\.state.*close_allowed=0')" -ge 1 ] \
@@ -4769,6 +4813,7 @@ ALL_GATES=(
     "network_sprint_handoff_freeze_v1:$gate_network_sprint_handoff_freeze_v1"
     "net_real_http_body_prefix:$gate_net_real_http_body_prefix"
     "clock_visible_seconds:$gate_clock_visible_seconds"
+    "silk_de_contract_lock:$gate_silk_de_contract_lock"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"

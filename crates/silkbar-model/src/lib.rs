@@ -59,6 +59,11 @@ pub const LAYOUT_COUNT: usize = 11;
 pub const ABI_VERSION: u32 = 4;
 /// Must equal `ABI_VERSION`. Checked by `validate_contract()` at startup.
 pub const SILK_DE_BAR_ABI_V1: u32 = 4;
+pub const SILK_DE_BAR_LAYOUT_V1: u32 = 11;
+pub const SILK_DE_BAR_THEME_V1: u32 = 10;
+pub const SILK_DE_REQUIRED_WORKSPACE_SLOTS: usize = WORKSPACE_COUNT;
+pub const SILK_DE_REQUIRED_CHIP_SLOTS: usize = MAX_CHIPS;
+pub const SILK_DE_CONTRACT_MAGIC: u32 = 0x5344_4241; // "SDBA"
 pub const SILK_DE_REQUIRED_MODULES: usize = LAYOUT_COUNT;
 pub const SILK_DE_REQUIRED_CHIPS: usize = MAX_CHIPS;
 pub const SILKBAR_WORKSPACE_COUNT: usize = WORKSPACE_COUNT;
@@ -667,7 +672,22 @@ pub fn validate_silkbar_contract() -> u32 {
 /// Contract gate for Silk DE top strip.
 /// Use this at producer/consumer startup to reject ABI/layout drift early.
 pub fn validate_contract() -> bool {
+    if SILK_DE_CONTRACT_MAGIC == 0 {
+        return false;
+    }
     if ABI_VERSION != SILK_DE_BAR_ABI_V1 {
+        return false;
+    }
+    if LAYOUT_COUNT as u32 != SILK_DE_BAR_LAYOUT_V1 {
+        return false;
+    }
+    if SILK_DE_BAR_THEME_V1 != 10 {
+        return false;
+    }
+    if WORKSPACE_COUNT != SILK_DE_REQUIRED_WORKSPACE_SLOTS {
+        return false;
+    }
+    if MAX_CHIPS != SILK_DE_REQUIRED_CHIP_SLOTS {
         return false;
     }
     if LAYOUT_COUNT != SILK_DE_REQUIRED_MODULES {
@@ -706,6 +726,18 @@ pub fn validate_contract() -> bool {
     if UPDATE_QUEUE_CAP != 32 {
         return false;
     }
+    if DEFAULT_THEME.bg_top == 0 || DEFAULT_THEME.bg_bottom == 0
+        || DEFAULT_THEME.panel_fill == 0 || DEFAULT_THEME.panel_glow == 0
+        || DEFAULT_THEME.text == 0 || DEFAULT_THEME.active == 0
+        || DEFAULT_THEME.urgent == 0 || DEFAULT_THEME.chip_fill == 0
+        || DEFAULT_THEME.chip_border == 0
+    {
+        return false;
+    }
+    // Keep renderer-safe top strip geometry bounded and non-zero.
+    if PANEL_W == 0 || PANEL_H == 0 || PANEL_W > 4096 || PANEL_H > 256 {
+        return false;
+    }
     // F4: ChipSlot discriminants must match CHIP_SLOTS array indices.
     // If these drift, the renderer chip_color() CHIP_SLOTS array will
     // index into wrong ModuleSlot positions. Bell is excluded — it is a
@@ -715,6 +747,18 @@ pub fn validate_contract() -> bool {
     if ChipSlot::Chip2 as usize != 2 { return false; }
     if ChipSlot::Clock as usize != 3 { return false; }
     true
+}
+
+pub fn contract_fingerprint() -> u64 {
+    let mut fp = SILK_DE_CONTRACT_MAGIC as u64;
+    fp ^= (SILK_DE_BAR_ABI_V1 as u64) << 32;
+    fp ^= (SILK_DE_BAR_LAYOUT_V1 as u64) << 24;
+    fp ^= (SILK_DE_BAR_THEME_V1 as u64) << 16;
+    fp ^= (SILK_DE_REQUIRED_WORKSPACE_SLOTS as u64) << 8;
+    fp ^= SILK_DE_REQUIRED_CHIP_SLOTS as u64;
+    fp ^= (SILKBAR_UPDATE_SIZE as u64) << 40;
+    fp ^= (UPDATE_QUEUE_CAP as u64) << 48;
+    fp
 }
 
 /// Deterministic vector validation for Silk DE top-strip model behavior.
