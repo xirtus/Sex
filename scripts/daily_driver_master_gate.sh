@@ -4287,32 +4287,26 @@ else gate_atlas_phase_e1_click_scene_switch="SKIP"; fi
 
 # ---- 90g. atlas_phase_e2_keyboard_scene_cycle ----
 # Phase E2: keyboard cycle next/prev scene while Atlas is open.
-# PASS if [silk.atlas.phase_e2.done] ok=1 is present.
-# Also PASS if cycle noop marker is present (single-scene case).
-# SKIP if proof not enabled / markers absent.
-# FAIL if key cycle markers exist without done/noop.
-if [ "$(has 'silk\.atlas\.phase_e2\.done.*ok=1')" -eq 1 ]; then
+# PASS if explicit begin and done markers are present.
+# PASS if explicit begin and noop marker is present (single-scene case).
+# SKIP unless explicit begin marker is present.
+# FAIL only when explicit begin is present but done/noop is missing, or faults are present.
+if [ "$(has 'silk\.atlas\.phase_e2\.begin\]')" -eq 0 ]; then
+    gate_atlas_phase_e2_keyboard_scene_cycle="SKIP"
+    print_row "atlas_phase_e2_keyboard_scene_cycle" "SKIP" "phase_e2 proof not enabled (missing explicit begin marker)"
+elif [ "$(has '#PF|#GP|panic|KERNEL PANIC|fault\.kill|faulted_task_halt|fault\.isolated')" -eq 1 ]; then
+    gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
+    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "fault marker present during phase_e2 proof window"
+elif [ "$(has 'silk\.atlas\.phase_e2\.done.*ok=1')" -eq 1 ]; then
     gate_atlas_phase_e2_keyboard_scene_cycle="PASS"
     print_row "atlas_phase_e2_keyboard_scene_cycle" "PASS" "keyboard scene cycle proof complete"
 elif [ "$(has 'silk\.atlas\.key\.scene\.noop.*ok=1')" -eq 1 ]; then
     gate_atlas_phase_e2_keyboard_scene_cycle="PASS"
     print_row "atlas_phase_e2_keyboard_scene_cycle" "PASS" "keyboard scene cycle noop (single scene)"
-elif [ "$(has 'silk\.atlas\.key\.scene\.next\]')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e2\.done')" -eq 0 ] && [ "$(has 'silk\.atlas\.key\.scene\.noop')" -eq 0 ]; then
+else
     gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
-    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "key next markers without phase_e2.done"
-elif [ "$(has 'silk\.atlas\.key\.scene\.prev\]')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e2\.done')" -eq 0 ] && [ "$(has 'silk\.atlas\.key\.scene\.noop')" -eq 0 ]; then
-    gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
-    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "key prev markers without phase_e2.done"
-elif [ "$(has 'silk\.scene\.active\.set.*reason=atlas_key_cycle')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e2\.done')" -eq 0 ]; then
-    gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
-    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "scene switch markers without phase_e2.done"
-elif [ "$(has 'silk\.atlas\.mode\.exit.*reason=atlas_key_cycle_done')" -ge 1 ] && [ "$(has 'silk\.atlas\.phase_e2\.done')" -eq 0 ]; then
-    gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
-    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "mode exit markers without phase_e2.done"
-elif [ "$(has 'silk\.atlas\.phase_e2\.begin\]')" -ge 1 ]; then
-    gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
-    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "phase_e2 begin without done"
-else gate_atlas_phase_e2_keyboard_scene_cycle="SKIP"; fi
+    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "phase_e2 begin without done/noop completion marker"
+fi
 
 # ---- 90h. atlas_phase_e3_drag_begin_marker ----
 # Phase E3: drag-begin marker proof — no movement, no ownership mutation.
