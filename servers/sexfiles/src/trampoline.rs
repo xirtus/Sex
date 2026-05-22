@@ -69,6 +69,14 @@ pub extern "C" fn trampoline_main() {
         return;
     }
 
+    const DISKFS_100_AP3_PROOF_ENABLED: bool =
+        cfg!(sexfiles_diskfs100_ap3_proof);
+    if DISKFS_100_AP3_PROOF_ENABLED {
+        crate::proof::run_diskfs_multi_object_proofs();
+        // [sexfiles.diskfs100.ap3.profile.done] isolated=1
+        return;
+    }
+
     const DISKFS_MULTI_OBJECT_PROOF_ENABLED: bool = cfg!(sexfiles_diskfs_multi_object_proof);
     const SEXFILES_ROUTE_AUDIT_ONLY: bool = option_env!("SEXFILES_ROUTE_AUDIT_ONLY").is_some();
     if DISKFS_MULTI_OBJECT_PROOF_ENABLED {

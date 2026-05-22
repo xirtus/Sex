@@ -2316,15 +2316,18 @@ pub fn run_sexobject_view_proof() {
 
 pub fn run_diskfs_multi_object_proofs() {
     serial_println!("[sexfiles.disk.multi.proof.begin]");
+    serial_println!("[sexfiles.diskfs100.ap3.begin] objects=3");
 
     // ── Phase 0: Ensure V2 manifest ──
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
+        serial_println!("[sexfiles.diskfs100.ap3.fail] stage=grant buf_va={}", buf_va);
         serial_println!("[sexfiles.disk.multi.proof.err] reason=grant_failed");
         return;
     }
 
     if let Err(e) = DiskFs::diskfs_ensure_manifest_v2(buf_va) {
+        serial_println!("[sexfiles.diskfs100.ap3.fail] stage=manifest_ensure_v2 code={}", e);
         serial_println!("[sexfiles.disk.multi.proof.err] reason=manifest_ensure_v2 code={}", e);
         return;
     }
@@ -2351,6 +2354,7 @@ pub fn run_diskfs_multi_object_proofs() {
     }
 
     // ── Phase 2: Write Linen object (path_id=1), read back, verify match ──
+    serial_println!("[sexfiles.diskfs100.ap3.object.begin] name=linen path_id=1 bytes=128");
     let pattern: [u8; 128] = {
         let mut p = [0u8; 128];
         let mut i = 0usize;
@@ -2381,14 +2385,17 @@ pub fn run_diskfs_multi_object_proofs() {
         for bi in 0..8 {
             data_hi |= (chunk_data[8 + bi] as u64) << (bi * 8);
         }
+        serial_println!("[sexfiles.diskfs100.ap3.object.write.begin] name=linen path_id=1 off={} len={}", write_off, chunk_len);
         match DiskFs::diskfs_write_object(linen_path, write_off, &chunk_data, buf_va) {
             Ok(n) => {
+                serial_println!("[sexfiles.diskfs100.ap3.object.write.ok] name=linen path_id=1 off={} len={}", write_off, n);
                 serial_println!(
                     "[sexfiles.disk.multi.linen.write] offset={} written={}",
                     write_off, n
                 );
             }
             Err(e) => {
+                serial_println!("[sexfiles.diskfs100.ap3.fail] stage=linen_write name=linen path_id=1 off={} len={} code={}", write_off, chunk_len, e);
                 serial_println!(
                     "[sexfiles.disk.multi.linen.write.err] offset={} code={}",
                     write_off, e
@@ -2406,8 +2413,10 @@ pub fn run_diskfs_multi_object_proofs() {
     while read_off < 128 {
         let rlen = (128 - read_off as usize).min(8);
         let mut rbuf = [0u8; 8];
+        serial_println!("[sexfiles.diskfs100.ap3.object.read.begin] name=linen path_id=1 off={} len={}", read_off, rlen);
         match DiskFs::diskfs_read_object(linen_path, read_off, &mut rbuf[..rlen], buf_va) {
             Ok(n) => {
+                serial_println!("[sexfiles.diskfs100.ap3.object.read.ok] name=linen path_id=1 off={} len={}", read_off, n);
                 let mut ci = 0usize;
                 while ci < n as usize {
                     if rbuf[ci] != pattern[read_off as usize + ci] {
@@ -2423,6 +2432,7 @@ pub fn run_diskfs_multi_object_proofs() {
                 }
             }
             Err(e) => {
+                serial_println!("[sexfiles.diskfs100.ap3.fail] stage=linen_read name=linen path_id=1 off={} code={}", read_off, e);
                 serial_println!(
                     "[sexfiles.disk.multi.linen.read.err] offset={} code={}",
                     read_off, e
@@ -2434,12 +2444,15 @@ pub fn run_diskfs_multi_object_proofs() {
     }
 
     if read_match {
+        serial_println!("[sexfiles.diskfs100.ap3.object.match] name=linen path_id=1 bytes=128 ok=1");
         serial_println!("[sexfiles.disk.multi.linen.match] ok=1");
     } else {
+        serial_println!("[sexfiles.diskfs100.ap3.object.match] name=linen path_id=1 bytes=128 ok=0");
         serial_println!("[sexfiles.disk.multi.linen.match] ok=0");
     }
 
     // ── Phase 3: Write Quil object (path_id=2), read back, verify ──
+    serial_println!("[sexfiles.diskfs100.ap3.object.begin] name=quil path_id=2 bytes=128");
     let quil_pattern: [u8; 128] = {
         let mut p = [0u8; 128];
         let mut i = 0usize;
@@ -2460,14 +2473,18 @@ pub fn run_diskfs_multi_object_proofs() {
             chunk_data[ci] = quil_pattern[write_off as usize + ci];
             ci += 1;
         }
+        serial_println!("[sexfiles.diskfs100.ap3.quil.before_write] path_id=2 off={} len={}", write_off, chunk_len);
+        serial_println!("[sexfiles.diskfs100.ap3.object.write.begin] name=quil path_id=2 off={} len={}", write_off, chunk_len);
         match DiskFs::diskfs_write_object(quil_path, write_off, &chunk_data, buf_va) {
             Ok(n) => {
+                serial_println!("[sexfiles.diskfs100.ap3.object.write.ok] name=quil path_id=2 off={} len={}", write_off, n);
                 serial_println!(
                     "[sexfiles.disk.multi.quil.write] offset={} written={}",
                     write_off, n
                 );
             }
             Err(e) => {
+                serial_println!("[sexfiles.diskfs100.ap3.fail] stage=quil_write name=quil path_id=2 off={} len={} code={}", write_off, chunk_len, e);
                 serial_println!(
                     "[sexfiles.disk.multi.quil.write.err] offset={} code={}",
                     write_off, e
@@ -2485,8 +2502,10 @@ pub fn run_diskfs_multi_object_proofs() {
     while read_off < 128 {
         let rlen = (128 - read_off as usize).min(8);
         let mut rbuf = [0u8; 8];
+        serial_println!("[sexfiles.diskfs100.ap3.object.read.begin] name=quil path_id=2 off={} len={}", read_off, rlen);
         match DiskFs::diskfs_read_object(quil_path, read_off, &mut rbuf[..rlen], buf_va) {
             Ok(n) => {
+                serial_println!("[sexfiles.diskfs100.ap3.object.read.ok] name=quil path_id=2 off={} len={}", read_off, n);
                 let mut ci = 0usize;
                 while ci < n as usize {
                     if rbuf[ci] != quil_pattern[read_off as usize + ci] {
@@ -2502,6 +2521,7 @@ pub fn run_diskfs_multi_object_proofs() {
                 }
             }
             Err(e) => {
+                serial_println!("[sexfiles.diskfs100.ap3.fail] stage=quil_read name=quil path_id=2 off={} code={}", read_off, e);
                 serial_println!(
                     "[sexfiles.disk.multi.quil.read.err] offset={} code={}",
                     read_off, e
@@ -2513,22 +2533,28 @@ pub fn run_diskfs_multi_object_proofs() {
     }
 
     if read_match {
+        serial_println!("[sexfiles.diskfs100.ap3.object.match] name=quil path_id=2 bytes=128 ok=1");
         serial_println!("[sexfiles.disk.multi.quil.match] ok=1");
     } else {
+        serial_println!("[sexfiles.diskfs100.ap3.object.match] name=quil path_id=2 bytes=128 ok=0");
         serial_println!("[sexfiles.disk.multi.quil.match] ok=0");
     }
 
     // ── Phase 4: Verify SexFiles proof object (path_id=0) still intact ──
     // Read first 8 bytes of proof object — should match existing content.
+    serial_println!("[sexfiles.diskfs100.ap3.object.begin] name=sexfiles-proof path_id=0 bytes=8");
     let mut proof_buf = [0u8; 8];
+    serial_println!("[sexfiles.diskfs100.ap3.object.read.begin] name=sexfiles-proof path_id=0 off=0 len=8");
     match DiskFs::diskfs_read_object(DISKFS_OBJECT_PATH_SEXFILES, 0, &mut proof_buf, buf_va) {
         Ok(_n) => {
+            serial_println!("[sexfiles.diskfs100.ap3.object.read.ok] name=sexfiles-proof path_id=0 off=0 len=8");
             serial_println!(
                 "[sexfiles.disk.multi.proof_intact] first_byte={:#x}",
                 proof_buf[0]
             );
         }
         Err(e) => {
+            serial_println!("[sexfiles.diskfs100.ap3.fail] stage=proof_intact_read name=sexfiles-proof path_id=0 code={}", e);
             serial_println!(
                 "[sexfiles.disk.multi.proof_intact.err] code={}",
                 e

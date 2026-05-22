@@ -14,7 +14,12 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SEXOS_LINEN_DISK_OBJECT_PROOF");
     println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_100_PROOF");
     println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs100_ap2_proof)");
-    if std::env::var("SEXFILES_DISKFS_100_PROOF").is_ok() {
+    if std::env::var("SEXFILES_DISKFS_100_PROOF").as_deref() == Ok("1") {
         println!("cargo:rustc-cfg=sexfiles_diskfs100_ap2_proof");
+    }
+    println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_100_AP3_PROOF");
+    println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs100_ap3_proof)");
+    if std::env::var("SEXFILES_DISKFS_100_AP3_PROOF").as_deref() == Ok("1") {
+        println!("cargo:rustc-cfg=sexfiles_diskfs100_ap3_proof");
     }
 }
