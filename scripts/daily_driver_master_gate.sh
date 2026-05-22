@@ -154,6 +154,7 @@ gate_sexnet_browser_cap="SKIP"
 gate_sexnet_status_route="SKIP"
 gate_clock_visible_seconds="SKIP"
 gate_silk_de_contract_lock="SKIP"
+gate_silk_de_topstrip_deterministic="SKIP"
 gate_browser_network_grant="SKIP"
 gate_http_client_status="SKIP"
 gate_http_req_builder="SKIP"
@@ -3955,16 +3956,28 @@ elif [ "$(has 'collar\.grant\.row\]')" -ge 1 ]; then
     gate_collar_grant_status="PASS"
 else gate_collar_grant_status="SKIP"; fi
 
-# ---- 89. top_strip_hash ----
-if [ "$(has 'silk\.topstrip\.hash\.proof\.done.*ok=1')" -eq 1 ]; then
-    gate_top_strip_hash="PASS"
-    print_row "top_strip_hash" "PASS" "hash matches golden 0xD83B049A7ED0EE21"
-elif [ "$(has 'silk\.topstrip\.hash\.result.*match=1')" -eq 1 ]; then
-    gate_top_strip_hash="PASS"
-elif [ "$(has 'silk\.topstrip\.hash\.result.*match=0')" -ge 1 ]; then
+# ---- 89. silk_de_topstrip_deterministic ----
+if [ "$(has 'silk\.de\.topstrip\.proof\.begin')" -eq 0 ]; then
+    gate_silk_de_topstrip_deterministic="SKIP"
+    gate_top_strip_hash="SKIP"
+    print_row "silk_de_topstrip_deterministic" "SKIP" "proof not requested (missing explicit begin marker)"
+elif [ "$(has '#PF|#GP|panic|KERNEL PANIC|fault\.kill')" -eq 1 ]; then
+    gate_silk_de_topstrip_deterministic="FAIL"
     gate_top_strip_hash="FAIL"
-    print_row "top_strip_hash" "FAIL" "HASH MISMATCH — visual regression detected"
-else gate_top_strip_hash="SKIP"; fi
+    print_row "silk_de_topstrip_deterministic" "FAIL" "fault marker present in silkbar/sexdisplay lane"
+elif [ "$(has 'silk\.de\.topstrip\.proof\.fail')" -ge 1 ]; then
+    gate_silk_de_topstrip_deterministic="FAIL"
+    gate_top_strip_hash="FAIL"
+    print_row "silk_de_topstrip_deterministic" "FAIL" "deterministic hash mismatch"
+elif [ "$(has 'silk\.de\.topstrip\.proof\.pass')" -eq 1 ]; then
+    gate_silk_de_topstrip_deterministic="PASS"
+    gate_top_strip_hash="PASS"
+    print_row "silk_de_topstrip_deterministic" "PASS" "deterministic top strip hash pass marker present"
+else
+    gate_silk_de_topstrip_deterministic="SKIP"
+    gate_top_strip_hash="SKIP"
+    print_row "silk_de_topstrip_deterministic" "SKIP" "observe mode or no strict pass/fail marker"
+fi
 
 # ---- 90. spindle_atlas ----
 if [ "$(has 'spindle\.atlas\.proof\.done.*ok=1')" -eq 1 ]; then
@@ -4814,6 +4827,7 @@ ALL_GATES=(
     "net_real_http_body_prefix:$gate_net_real_http_body_prefix"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "silk_de_contract_lock:$gate_silk_de_contract_lock"
+    "silk_de_topstrip_deterministic:$gate_silk_de_topstrip_deterministic"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"

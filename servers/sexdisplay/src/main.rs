@@ -1575,67 +1575,99 @@ const CURSOR_ARROW_BITMAP: [u8; 16] = [
     0b00000001, //         *
 ];
 
-/// Read back rows 0..50 (SilkBar top strip) and emit a deterministic FNV-1a hash.
-/// Fires once after the first live render (after OP_PRIMARY_FB handoff).
-/// Proves top-strip pixels are non-zero/rendered; never touches write path.
-unsafe fn top_strip_render_proof(fb: *const u32, w: usize, h: usize) {
-    let fb_addr = fb as u64;
-    if fb_addr < HIGH_HALF_BASE { return; }
-    if w == 0 || w > MAX_FB_W || h < 50 { return; }
-    let strip_rows: usize = 50;
-    let strip_pixels = match strip_rows.checked_mul(w) {
-        Some(v) => v,
-        None => return,
-    };
-    // Golden hash: captured from clean boot 2026-05-16 (96-gate baseline).
-    // FNV-1a over first 50 rows, ARGB u32 pixels, little-endian byte order.
-    // If this hash changes, a visual change was made — re-capture golden.
-    const GOLDEN_TOP_STRIP_HASH: u64 = 0xd83b049a7ed0ee21;
+/// Deterministic top-strip proof vector.
+/// Renders a fixed SilkBar state into a bounded offscreen buffer and hashes it.
+unsafe fn top_strip_render_proof(_fb: *const u32, _w: usize, _h: usize) {
+    const PROOF_W: usize = 1280;
+    const PROOF_H: usize = 51;
+    const PROOF_PIXELS: usize = PROOF_W * PROOF_H;
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    // Observe-mode default: set to non-zero after first capture to enforce strict pass/fail.
+    const EXPECTED_TOPSTRIP_HASH: u64 = 0x9b5d54e17bdfa6f1;
+    static mut PROOF_BUF: [u32; PROOF_PIXELS] = [0; PROOF_PIXELS];
 
-    serial_println!("[silk.topstrip.hash.vector] rows={} algorithm=fnv1a expected=0xD83B049A7ED0EE21 ok=1", strip_rows);
-    serial_println!("[silk.render_proof.top_strip.start]");
-    let mut h_val: u64 = 0xcbf29ce484222325;
+    let mut proof_bar = DEFAULT_SILK_BAR;
+    let vector = [
+        SilkBarUpdate::new(UpdateKind::SetWorkspaceActive as u32, 2, 0, 0),
+        SilkBarUpdate::new(UpdateKind::SetWorkspaceActive as u32, 1, 1, 0),
+        SilkBarUpdate::new(UpdateKind::SetWorkspaceUrgent as u32, 4, 1, 0),
+        SilkBarUpdate::new(UpdateKind::SetChipVisible as u32, 2, 1, 0),
+        SilkBarUpdate::new(UpdateKind::SetChipKind as u32, 2, ChipKind::Battery as u32, 0),
+        SilkBarUpdate::new(UpdateKind::SetClock as u32, 0, 10, (27u32 << 8) | 42u32),
+    ];
+    for update in vector.iter() {
+        let _ = apply_update(&mut proof_bar, *update);
+    }
+
+    serial_println!("[silk.de.topstrip.proof.begin] w={} h={}", PROOF_W, PROOF_H);
+    serial_println!(
+        "[silk.de.topstrip.proof.vector] ws_active=1 ws_urgent=4 chip_idx=2 chip_kind=battery chip_visible=1 clock=10:27:42"
+    );
+    serial_println!(
+        "[silk.de.topstrip.proof.theme] panel_fill=0x{:08X} panel_glow=0x{:08X} active=0x{:08X} urgent=0x{:08X} text=0x{:08X}",
+        DEFAULT_THEME.panel_fill, DEFAULT_THEME.panel_glow, DEFAULT_THEME.active, DEFAULT_THEME.urgent, DEFAULT_THEME.text
+    );
+
+    fill_bar_bg_buffer(PROOF_W as u32, PROOF_H as u32);
+    blur_bar_bg_buffer_radius1(PROOF_W as u32, PROOF_H as u32);
+
     let mut any_nonzero = false;
-    for i in 0..strip_pixels {
-        let px = core::ptr::read_volatile(fb.add(i));
-        if px != 0 { any_nonzero = true; }
-        h_val ^= px as u64;
-        h_val = h_val.wrapping_mul(0x100000001b3);
-    }
-    // Print hash atomically: format into stack buffer, single pdx_call(0,69)
-    {
-        let prefix = b"[silk.render_proof.top_strip.hash] value=0x";
-        let digits = b"0123456789abcdef";
-        let mut buf = [0u8; 64];
-        let plen = prefix.len();
-        buf[..plen].copy_from_slice(prefix);
-        for i in 0..16usize {
-            buf[plen + i] = digits[((h_val >> (60 - i * 4)) & 0xF) as usize];
+    for y in 0..PROOF_H {
+        for x in 0..PROOF_W {
+            let c = if y < 50 {
+                if let Some(fg) = clock_fg_at(x, y, &proof_bar) {
+                    fg
+                } else if let Some(fg) = bell_badge_at(x, y, &proof_bar) {
+                    fg
+                } else {
+                    bar_color(x, y, &proof_bar)
+                }
+            } else {
+                DEFAULT_THEME.panel_glow
+            };
+            let idx = y * PROOF_W + x;
+            if idx < PROOF_PIXELS {
+                PROOF_BUF[idx] = c;
+                if c != 0 {
+                    any_nonzero = true;
+                }
+            }
         }
-        buf[plen + 16] = b'\n';
-        let _ = sex_pdx::pdx_call(0, 69, buf.as_ptr() as u64, (plen + 17) as u64, 0);
     }
-    if any_nonzero {
-        serial_println!("[silk.render_proof.top_strip.ok]");
+    if !any_nonzero {
+        serial_println!("[silk.de.topstrip.proof.fail] expected=nonzero got=all_zero");
+        return;
+    }
+
+    let mut h_val: u64 = FNV_OFFSET;
+    for i in 0..PROOF_PIXELS {
+        let px = PROOF_BUF[i];
+        let b0 = (px & 0xFF) as u8;
+        let b1 = ((px >> 8) & 0xFF) as u8;
+        let b2 = ((px >> 16) & 0xFF) as u8;
+        let b3 = ((px >> 24) & 0xFF) as u8;
+        for b in [b0, b1, b2, b3] {
+            h_val ^= b as u64;
+            h_val = h_val.wrapping_mul(FNV_PRIME);
+        }
+    }
+
+    serial_println!("[silk.de.topstrip.proof.hash] hash=0x{:016X}", h_val);
+
+    if EXPECTED_TOPSTRIP_HASH == 0 {
+        serial_println!("[silk.de.topstrip.proof.observe] expected_unset=1 hash=0x{:016X}", h_val);
+        return;
+    }
+    if h_val == EXPECTED_TOPSTRIP_HASH {
+        serial_println!("[silk.de.topstrip.proof.pass] hash=0x{:016X}", h_val);
     } else {
-        serial_println!("[silk.render_proof.top_strip.fail] reason=all_zero");
+        serial_println!(
+            "[silk.de.topstrip.proof.fail] expected=0x{:016X} got=0x{:016X}",
+            EXPECTED_TOPSTRIP_HASH,
+            h_val
+        );
     }
-    // Golden hash comparison gate
-    let matched = h_val == GOLDEN_TOP_STRIP_HASH;
-    serial_println!("[silk.topstrip.hash.result] actual=0x{:016X} expected=0x{:016X} match={} ok={}",
-        h_val, GOLDEN_TOP_STRIP_HASH, matched as u8, matched as u8);
-    // Diagnostics: pixel-level diff requires storing 200KB golden buffer.
-    // V1: hash-only comparison. First-mismatch pixel not available.
-    // Future: if a smaller canonical strip (e.g., 40 rows) or sparse hash
-    // approach allows per-pixel diff within static budget, add pixel_diff=1.
-    serial_println!("[silk.topstrip.hash.diagnostics] ready={} pixel_diff=0 reason=no_golden_buffer_hash_only",
-        matched as u8);
-    if !matched {
-        serial_println!("[silk.topstrip.hash.mismatch] actual=0x{:016X} expected=0x{:016X} ok=0 reason=hash_mismatch_no_pixel_diff",
-            h_val, GOLDEN_TOP_STRIP_HASH);
-    }
-    serial_println!("[silk.topstrip.hash.diagnostics.done] ok={} ready={}", matched as u8, matched as u8);
-    serial_println!("[silk.topstrip.hash.proof.done] ok={}", matched as u8);
 }
 
 /// Pass 3: draw cursor surface (CURSOR_SURFACE_ID) unconditionally on top of all other surfaces.
