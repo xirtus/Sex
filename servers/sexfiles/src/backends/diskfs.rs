@@ -259,6 +259,14 @@ impl DiskFs {
     /// Proof markers emitted: call, reply — validated via serial_println trace.
     #[allow(dead_code)]
     pub fn diskfs_block_call(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
+        if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
+            let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
+            let lba = arg0 / BLOCK_SECTOR_SIZE;
+            serial_println!(
+                "[sexfiles.diskfs.block.call] op={} lba={} bytes={} slot={} buffer_cap={:#x} device_cap={:#x}",
+                op, lba, arg1, SLOT_BLOCK, arg2, SLOT_BLOCK
+            );
+        }
         serial_println!(
             "[sexfiles.diskfs.call] slot={} opcode={:#x} arg0={:#x} arg1={:#x} arg2={:#x}",
             SLOT_BLOCK, opcode, arg0, arg1, arg2
@@ -269,6 +277,13 @@ impl DiskFs {
         let (send_status, _) = pdx_call(SLOT_BLOCK, opcode, arg0, arg1, arg2);
         if send_status != 0 {
             serial_println!("[sexfiles.diskfs.reply] status={:#x} value=0 err=enqueue_fail", send_status);
+            if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
+                let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
+                serial_println!(
+                    "[sexfiles.diskfs.block.reply] op={} status={} bytes={}",
+                    op, send_status, arg1
+                );
+            }
             return send_status;
         }
         // Loop until we get the IPC reply (type_id=0x1) from sexdrive.
@@ -280,6 +295,13 @@ impl DiskFs {
             if msg.type_id == 0x1 {
                 let reply_val = msg.arg0;
                 serial_println!("[sexfiles.diskfs.reply] status=0x0 value={:#x}", reply_val);
+                if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
+                    let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
+                    serial_println!(
+                        "[sexfiles.diskfs.block.reply] op={} status={} bytes={}",
+                        op, reply_val, arg1
+                    );
+                }
                 return reply_val;
             }
             // Stale ring message; yield and retry
@@ -2527,6 +2549,10 @@ impl DiskFs {
     /// Writes the 3-entry V2 manifest to LBA 2046. Never touches LBA 2047.
     pub fn diskfs_ensure_manifest_v2(buf_va: u64) -> Result<(), u64> {
         serial_println!("[sexfiles.disk.manifest.v2.ensure.begin]");
+        serial_println!(
+            "[sexfiles.diskfs.manifest.ensure.begin] lba={}",
+            DISKFS_MANIFEST_LBA
+        );
 
         // ── Step 1: Read current manifest sector ──
         unsafe {
@@ -2543,6 +2569,10 @@ impl DiskFs {
         if status != 0 {
             serial_println!(
                 "[sexfiles.disk.manifest.v2.err] reason=read_failed status={}",
+                status
+            );
+            serial_println!(
+                "[sexfiles.diskfs.manifest.ensure.err] status={} reason=read_failed",
                 status
             );
         }
@@ -2595,6 +2625,10 @@ impl DiskFs {
         if write_status != 0 {
             serial_println!(
                 "[sexfiles.disk.manifest.v2.err] reason=write_failed status={}",
+                write_status
+            );
+            serial_println!(
+                "[sexfiles.diskfs.manifest.ensure.err] status={} reason=write_failed",
                 write_status
             );
             return Err(write_status);

@@ -2582,11 +2582,28 @@ pub extern "C" fn _start() -> ! {
             let offset = msg.arg0;
             let size = msg.arg1;
             let _buf_cap = msg.arg2;
+            let ready_snapshot = unsafe { if NVME_IO_STATE.ready { 1u64 } else { 0u64 } };
+            let op = match cmd {
+                BLOCK_READ => "READ",
+                BLOCK_WRITE => "WRITE",
+                _ => "OTHER",
+            };
+            let lba = if BLOCK_SECTOR_SIZE != 0 {
+                offset / BLOCK_SECTOR_SIZE
+            } else {
+                0
+            };
 
             serial_println!(
                 "[sexdrive.block.typed.recv] cmd={} offset={:#x} size={} buf_cap={:#x} caller={}",
                 cmd, offset, size, _buf_cap, msg.caller_pd
             );
+            if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
+                serial_println!(
+                    "[sexdrive.block.req] op={} ready={} lba={} bytes={} buffer_cap={:#x} device_cap={:#x}",
+                    op, ready_snapshot, lba, size, _buf_cap, SLOT_NVME_HOST
+                );
+            }
 
             // [sexblock.abi.request.decode] — dispatch on typed command
             let reply_val: u64 = match cmd {
@@ -2722,6 +2739,29 @@ pub extern "C" fn _start() -> ! {
                 "[sexdrive.block.typed.reply] cmd={} caller={} status={}",
                 cmd, msg.caller_pd, reply_val
             );
+            if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
+                if reply_val == 0 {
+                    serial_println!(
+                        "[sexdrive.block.reply] op={} status=0 bytes={} ready=1",
+                        op, size
+                    );
+                } else if reply_val == BLOCK_ERR_NO_DEVICE {
+                    let reason = if ready_snapshot == 0 {
+                        "no_ioq_ready"
+                    } else {
+                        "no_device_other"
+                    };
+                    serial_println!(
+                        "[sexdrive.block.reply] op={} status=4 reason={} ready={}",
+                        op, reason, ready_snapshot
+                    );
+                } else {
+                    serial_println!(
+                        "[sexdrive.block.reply] op={} status={} reason=other ready={}",
+                        op, reply_val, ready_snapshot
+                    );
+                }
+            }
         }
 
         frame += 1;
