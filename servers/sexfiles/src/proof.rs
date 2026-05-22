@@ -2582,6 +2582,7 @@ pub fn run_diskfs_multi_object_proofs() {
         }
     }
 
+    serial_println!("[sexfiles.diskfs100.ap3.done] ok=1");
     serial_println!("[sexfiles.disk.multi.summary] ok=1");
 }
 

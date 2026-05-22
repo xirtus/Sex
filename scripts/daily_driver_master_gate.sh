@@ -129,6 +129,7 @@ gate_linen_ramfs_crud="SKIP"
 gate_linen_diskfs_direct="SKIP"
 gate_sexfiles_diskfs_bridge="SKIP"
 gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
+gate_sexfiles_diskfs_bridge_multi_object_rw="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -3951,6 +3952,49 @@ else
     gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
 fi
 
+# ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
+if [ "$(has 'sexfiles\.diskfs100\.ap3\.begin')" -ge 1 ]; then
+    has_linen_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=linen.*ok=1')
+    has_quil_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=quil.*ok=1')
+    has_proof_read=$(has 'sexfiles\.diskfs100\.ap3\.object\.read\.ok.*name=sexfiles-proof')
+    has_done=$(has 'sexfiles\.diskfs100\.ap3\.done.*ok=1')
+    has_ap3_fail=$(has 'sexfiles\.diskfs100\.ap3\.fail')
+    has_cqe_timeout=$(has 'cqe_timeout')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+
+    if [ "$has_cqe_timeout" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_multi_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_multi_object_rw" "FAIL" "cqe_timeout in AP3 profile log"
+    elif [ "$has_fault" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_multi_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_multi_object_rw" "FAIL" "fault marker in AP3 profile log"
+    elif [ "$has_ap3_fail" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_multi_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_multi_object_rw" "FAIL" "ap3.fail marker present"
+    elif [ "$has_linen_match" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_multi_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_multi_object_rw" "FAIL" "missing linen match ok=1"
+    elif [ "$has_quil_match" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_multi_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_multi_object_rw" "FAIL" "missing quil match ok=1"
+    elif [ "$has_proof_read" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_multi_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_multi_object_rw" "FAIL" "missing sexfiles-proof intact read"
+    elif [ "$has_done" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_multi_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_multi_object_rw" "FAIL" "missing done ok=1"
+    elif [ "$has_linen_match" -ge 1 ] && [ "$has_quil_match" -ge 1 ] && [ "$has_proof_read" -ge 1 ] && [ "$has_done" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_multi_object_rw="PASS"
+        print_row "sexfiles_diskfs_bridge_multi_object_rw" "PASS" "linen+quil match ok=1 + proof intact + done ok=1"
+    else
+        gate_sexfiles_diskfs_bridge_multi_object_rw="FAIL"
+        print_row "sexfiles_diskfs_bridge_multi_object_rw" "FAIL" "incomplete AP3 markers"
+    fi
+else
+    gate_sexfiles_diskfs_bridge_multi_object_rw="SKIP"
+    print_row "sexfiles_diskfs_bridge_multi_object_rw" "SKIP" "AP3 multi-object proof not triggered"
+fi
+
 # ---- 71. silk_glass_color ----
 if [ "$(has 'silk\.glass\.safe_color_pass\.done.*ok=1')" -eq 1 ]; then
     gate_silk_glass_color="PASS"
@@ -5371,6 +5415,7 @@ ALL_GATES=(
     "linen_diskfs_direct:$gate_linen_diskfs_direct"
     "sexfiles_diskfs_bridge:$gate_sexfiles_diskfs_bridge"
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
+    "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
     "spindle_frame_chrome:$gate_spindle_frame_chrome"
