@@ -111,6 +111,7 @@ gate_sexdrive_storage_ioq_ready="SKIP"
 gate_sexdrive_storage_single_block_rw="SKIP"
 gate_sexdrive_storage_multiblock_rw="SKIP"
 gate_sexdrive_storage_reboot_persistence="SKIP"
+gate_sexdrive_storage_flush_durability="SKIP"
 gate_app_registry_lifecycle_v2="SKIP"
 gate_spindle_slot_shell="SKIP"
 gate_window_workflow_v2="SKIP"
@@ -4717,6 +4718,43 @@ else
     print_row "sexdrive_storage_reboot_persistence" "SKIP" "storage AP5a proof not requested"
 fi
 
+# ---- sexdrive_storage_flush_durability (AP5b per-log gate) ----
+if [ "${SEXOS_STORAGE_100_PROOF:-0}" = "1" ]; then
+    flush_begin="$(has '[[]sexdrive\.storage100\.flush\.begin[]] nsid=1')"
+    flush_skip="$(has '[[]sexdrive\.storage100\.flush\.skip[]] reason=')"
+    if [ "$flush_begin" -eq 0 ] && [ "$flush_skip" -eq 0 ]; then
+        gate_sexdrive_storage_flush_durability="SKIP"
+        print_row "sexdrive_storage_flush_durability" "SKIP" "AP5b flush audit not triggered in this log"
+    elif [ "$flush_skip" -ge 1 ]; then
+        gate_sexdrive_storage_flush_durability="SKIP"
+        print_row "sexdrive_storage_flush_durability" "SKIP" "flush/FUA not completed or not supported in this environment"
+    elif [ "$(has '[[]sexdrive\.storage100\.flush\.fail[]] reason=')" -ge 1 ]; then
+        gate_sexdrive_storage_flush_durability="FAIL"
+        print_row "sexdrive_storage_flush_durability" "FAIL" "flush fail marker present"
+    elif [ "$(has '[[]sexdrive\.nvme\.ioq\.ready[]] qid=1 depth=16')" -eq 0 ]; then
+        gate_sexdrive_storage_flush_durability="FAIL"
+        print_row "sexdrive_storage_flush_durability" "FAIL" "flush begin present but IOQ ready missing"
+    elif [ "$(has '[[]sexdrive\.storage100\.flush\.submit[]] opcode=0x00 nsid=1')" -eq 0 ]; then
+        gate_sexdrive_storage_flush_durability="FAIL"
+        print_row "sexdrive_storage_flush_durability" "FAIL" "flush begin present but submit marker missing"
+    elif [ "$(has '[[]sexdrive\.storage100\.flush\.complete[]] status=[1-9]')" -ge 1 ]; then
+        gate_sexdrive_storage_flush_durability="FAIL"
+        print_row "sexdrive_storage_flush_durability" "FAIL" "flush complete reported nonzero status"
+    elif [ "$(has '[[]sexdrive\.storage100\.flush\.complete[]] status=0')" -eq 0 ]; then
+        gate_sexdrive_storage_flush_durability="FAIL"
+        print_row "sexdrive_storage_flush_durability" "FAIL" "flush complete status=0 marker missing"
+    elif [ "$(has '[[]sexdrive\.storage100\.flush\.done[]] ok=1')" -eq 0 ]; then
+        gate_sexdrive_storage_flush_durability="FAIL"
+        print_row "sexdrive_storage_flush_durability" "FAIL" "flush done marker missing"
+    else
+        gate_sexdrive_storage_flush_durability="PASS"
+        print_row "sexdrive_storage_flush_durability" "PASS" "NVMe FLUSH opcode 0x00 completed with status=0"
+    fi
+else
+    gate_sexdrive_storage_flush_durability="SKIP"
+    print_row "sexdrive_storage_flush_durability" "SKIP" "storage AP5b proof not requested"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -5016,6 +5054,7 @@ ALL_GATES=(
     "sexdrive_storage_single_block_rw:$gate_sexdrive_storage_single_block_rw"
     "sexdrive_storage_multiblock_rw:$gate_sexdrive_storage_multiblock_rw"
     "sexdrive_storage_reboot_persistence:$gate_sexdrive_storage_reboot_persistence"
+    "sexdrive_storage_flush_durability:$gate_sexdrive_storage_flush_durability"
     "app_registry_lifecycle_v2:$gate_app_registry_lifecycle_v2"
     "spindle_slot_shell:$gate_spindle_slot_shell"
     "window_workflow_v2:$gate_window_workflow_v2"

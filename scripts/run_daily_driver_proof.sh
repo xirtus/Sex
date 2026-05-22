@@ -385,11 +385,15 @@ fi
 
 unset SEXOS_STORAGE_100_PERSIST_WRITE
 unset SEXOS_STORAGE_100_PERSIST_READ
+unset SEXOS_STORAGE_100_FLUSH_AUDIT
 if [ "$PERSIST_WRITE" = "1" ]; then
     export SEXOS_STORAGE_100_PERSIST_WRITE=1
 fi
 if [ "$PERSIST_READ" = "1" ]; then
     export SEXOS_STORAGE_100_PERSIST_READ=1
+fi
+if [ "$SEXOS_STORAGE_100_PROOF" = "1" ] && [ "$PERSIST_WRITE" != "1" ] && [ "$PERSIST_READ" != "1" ]; then
+    export SEXOS_STORAGE_100_FLUSH_AUDIT=1
 fi
 
 # ── Frame Chrome model proof ──
@@ -440,6 +444,7 @@ echo "  phaseN:  ${SEXNET_PHASE_N_REAL_HW_AUDIT}"
 echo "  storage_proof: ${SEXOS_STORAGE_100_PROOF}"
 echo "  storage_persist_write: ${PERSIST_WRITE}"
 echo "  storage_persist_read:  ${PERSIST_READ}"
+echo "  storage_flush_audit:   ${SEXOS_STORAGE_100_FLUSH_AUDIT:-0}"
 echo ""
 
 # ---- 1. BUILD ----

@@ -79,6 +79,8 @@ const STORAGE_100_PERSIST_WRITE_ENABLED: bool =
     option_env!("SEXOS_STORAGE_100_PERSIST_WRITE").is_some();
 const STORAGE_100_PERSIST_READ_ENABLED: bool =
     option_env!("SEXOS_STORAGE_100_PERSIST_READ").is_some();
+const STORAGE_100_FLUSH_AUDIT_ENABLED: bool =
+    option_env!("SEXOS_STORAGE_100_FLUSH_AUDIT").is_some();
 const MANIFEST_LBA: u64 = 2046;
 const PROOF_OBJECT_START_LBA: u64 = 2038;
 const PROOF_OBJECT_END_LBA: u64 = 2045;
@@ -1297,6 +1299,30 @@ fn nvme_flush() -> u64 {
     0u64
 }
 
+fn nvme_storage100_flush_audit() -> u64 {
+    serial_println!("[sexdrive.storage100.flush.begin] nsid=1");
+    let ioq_ready = unsafe { NVME_IO_STATE.ready };
+    if !ioq_ready {
+        serial_println!("[sexdrive.storage100.flush.fail] reason=no_ioq_ready");
+        return BLOCK_ERR_NO_DEVICE;
+    }
+
+    serial_println!("[sexdrive.storage100.flush.submit] opcode=0x00 nsid=1");
+    let status = nvme_flush();
+    if status == 0 {
+        serial_println!("[sexdrive.storage100.flush.complete] status=0");
+        serial_println!("[sexdrive.storage100.flush.done] ok=1");
+        return 0;
+    }
+
+    // Honest AP5b classification: QEMU/device may not complete FLUSH CQE.
+    serial_println!(
+        "[sexdrive.storage100.flush.skip] reason=flush_not_completed_or_not_supported status={}",
+        status
+    );
+    BLOCK_ERR_NO_DEVICE
+}
+
 fn nvme_probe_bar() {
     let map_va: u64;
     unsafe {
@@ -2226,6 +2252,8 @@ fn nvme_probe_bar() {
                         persist_read_status
                     );
                 }
+            } else if STORAGE_100_FLUSH_AUDIT_ENABLED {
+                let _ = nvme_storage100_flush_audit();
             }
         }
     }
