@@ -121,6 +121,8 @@ gate_linen_persist_readback="SKIP"
 gate_linen_sexfiles100_audit="SKIP"
 gate_linen_objects_list="SKIP"
 gate_linen_ramfs_crud="SKIP"
+gate_linen_diskfs_direct="SKIP"
+gate_sexfiles_diskfs_bridge="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -3799,6 +3801,109 @@ elif [ "$(has 'linen\.ramfs\.crud\.begin')" -ge 1 ]; then
     gate_linen_ramfs_crud="FAIL"
 else gate_linen_ramfs_crud="SKIP"; fi
 
+# ---- 76b. linen_diskfs_direct ----
+if [ "$(has 'linen\.diskfs\.direct\.begin')" -ge 1 ]; then
+    has_success_markers=0
+    if [ "$(has 'linen\.diskfs\.direct\.write\.ok')" -eq 1 ] && \
+       [ "$(has 'linen\.diskfs\.direct\.read\.match.*ok=1')" -eq 1 ] && \
+       [ "$(has 'linen\.diskfs\.direct\.done')" -eq 1 ] && \
+       [ "$(has 'linen\.diskfs\.direct\.fail')" -eq 0 ]; then
+        has_success_markers=1
+    fi
+
+    has_honest_blocker=0
+    if [ "$(has 'no_ioq_ready|status=4|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ] && \
+       [ "$(has 'linen\.diskfs\.direct\.fail.*reason=write_failed')" -eq 1 ] && \
+       [ "$(has 'fault\.isolated|faulted_task_halt|panic|KERNEL PANIC|general_protection|page_fault')" -eq 0 ]; then
+        has_honest_blocker=1
+    fi
+
+    # Check for direct SLOT_BLOCK or direct SexDrive violations
+    has_violation=0
+    if [ "$(has 'linen\..*(slot_block|sexdrive)')" -eq 1 ]; then
+        has_violation=1
+    fi
+
+    # Fake read.match check
+    has_fake_read_match=0
+    if [ "$(has 'linen\.diskfs\.direct\.read\.match')" -eq 1 ] && [ "$(has 'no_ioq_ready|status=4|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ]; then
+        has_fake_read_match=1
+    fi
+
+    if [ "$has_violation" -eq 1 ] || [ "$has_fake_read_match" -eq 1 ] || [ "$(has 'fault\.isolated|faulted_task_halt|panic|KERNEL PANIC|general_protection|page_fault')" -eq 1 ]; then
+        gate_linen_diskfs_direct="FAIL"
+        print_row "linen_diskfs_direct" "FAIL" "bridge execution failed or mismatch (panic/fault/violation)"
+    elif [ "$has_success_markers" -eq 1 ]; then
+        gate_linen_diskfs_direct="PASS"
+        print_row "linen_diskfs_direct" "PASS" "128B read/write roundtrip verified"
+    elif [ "$has_honest_blocker" -eq 1 ]; then
+        gate_linen_diskfs_direct="SKIP"
+        print_row "linen_diskfs_direct" "SKIP" "storage backend no_ioq_ready; bridge reached"
+    else
+        gate_linen_diskfs_direct="FAIL"
+        print_row "linen_diskfs_direct" "FAIL" "bridge execution failed or mismatch"
+    fi
+else
+    gate_linen_diskfs_direct="SKIP"
+fi
+
+# ---- 76c. sexfiles_diskfs_bridge ----
+if [ "$(has 'sexfiles\.bridge\.diskfs\.recv')" -ge 1 ]; then
+    has_buf_marker=0
+    if [ "$(has 'sexfiles\.bridge\.diskfs\.buf\.(ready|reuse)')" -eq 1 ]; then
+        has_buf_marker=1
+    fi
+
+    has_write_ok=$(has 'sexfiles\.bridge\.diskfs\.write\.ok')
+    has_read_ok=$(has 'sexfiles\.bridge\.diskfs\.read\.ok')
+    has_stat_ok=$(has 'sexfiles\.bridge\.diskfs\.stat\.ok')
+    has_manifest_hash_ok=$(has 'sexfiles\.bridge\.diskfs\.manifest_hash\.ok')
+    has_flush_ok=$(has 'sexfiles\.bridge\.diskfs\.flush\.(ok|err.*honest=)')
+
+    has_success_markers=0
+    if [ "$has_buf_marker" -eq 1 ] && \
+       [ "$has_write_ok" -eq 1 ] && \
+       [ "$has_read_ok" -eq 1 ] && \
+       [ "$has_stat_ok" -eq 1 ] && \
+       [ "$has_manifest_hash_ok" -eq 1 ] && \
+       [ "$has_flush_ok" -eq 1 ]; then
+        has_success_markers=1
+    fi
+
+    has_honest_blocker=0
+    if [ "$has_buf_marker" -eq 1 ] && \
+       [ "$has_stat_ok" -eq 1 ] && \
+       [ "$has_manifest_hash_ok" -eq 1 ] && \
+       [ "$(has 'no_ioq_ready|status=4|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ] && \
+       [ "$(has 'fault\.isolated|faulted_task_halt|panic|KERNEL PANIC|general_protection|page_fault')" -eq 0 ]; then
+        has_honest_blocker=1
+    fi
+
+    # Fake write.ok/read.ok emitted despite backend error
+    has_fake_success=0
+    if [ "$(has 'no_ioq_ready|status=4|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ]; then
+        if [ "$has_write_ok" -eq 1 ] || [ "$has_read_ok" -eq 1 ]; then
+            has_fake_success=1
+        fi
+    fi
+
+    if [ "$has_fake_success" -eq 1 ] || [ "$(has 'fault\.isolated|faulted_task_halt|panic|KERNEL PANIC|general_protection|page_fault')" -eq 1 ] || [ "$has_buf_marker" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge="FAIL"
+        print_row "sexfiles_diskfs_bridge" "FAIL" "bridge recv present but incomplete operations (fake success or fault)"
+    elif [ "$has_success_markers" -eq 1 ]; then
+        gate_sexfiles_diskfs_bridge="PASS"
+        print_row "sexfiles_diskfs_bridge" "PASS" "bridge op success markers complete"
+    elif [ "$has_honest_blocker" -eq 1 ]; then
+        gate_sexfiles_diskfs_bridge="SKIP"
+        print_row "sexfiles_diskfs_bridge" "SKIP" "storage backend no_ioq_ready; bridge reached"
+    else
+        gate_sexfiles_diskfs_bridge="FAIL"
+        print_row "sexfiles_diskfs_bridge" "FAIL" "bridge recv present but incomplete operations"
+    fi
+else
+    gate_sexfiles_diskfs_bridge="SKIP"
+fi
+
 # ---- 71. silk_glass_color ----
 if [ "$(has 'silk\.glass\.safe_color_pass\.done.*ok=1')" -eq 1 ]; then
     gate_silk_glass_color="PASS"
@@ -5027,6 +5132,8 @@ ALL_GATES=(
     "linen_sexfiles100_audit:$gate_linen_sexfiles100_audit"
     "linen_objects_list:$gate_linen_objects_list"
     "linen_ramfs_crud:$gate_linen_ramfs_crud"
+    "linen_diskfs_direct:$gate_linen_diskfs_direct"
+    "sexfiles_diskfs_bridge:$gate_sexfiles_diskfs_bridge"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
     "spindle_frame_chrome:$gate_spindle_frame_chrome"
