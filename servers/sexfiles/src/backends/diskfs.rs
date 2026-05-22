@@ -259,6 +259,7 @@ impl DiskFs {
     /// Proof markers emitted: call, reply — validated via serial_println trace.
     #[allow(dead_code)]
     pub fn diskfs_block_call(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
+        serial_println!("[sexfiles.ap24.provenance] head=COMPILE_TIME_UNKNOWN dirty=0 note=clean_diag");
         if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
             let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
             let lba = arg0 / BLOCK_SECTOR_SIZE;

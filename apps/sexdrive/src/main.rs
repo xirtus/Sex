@@ -2593,6 +2593,8 @@ pub extern "C" fn _start() -> ! {
             } else {
                 0
             };
+            let submit_cid_snapshot = unsafe { NVME_IO_STATE.next_cid as u64 };
+            let submit_tail_snapshot = unsafe { NVME_IO_STATE.sq_tail as u64 };
 
             serial_println!(
                 "[sexdrive.block.typed.recv] cmd={} offset={:#x} size={} buf_cap={:#x} caller={}",
@@ -2653,6 +2655,10 @@ pub extern "C" fn _start() -> ! {
                                 BLOCK_ERR_NO_DEVICE
                             } else {
                                 serial_println!("[sexdrive.bufcap.map.ok] fill_va={:#x}", fill_va);
+                                serial_println!(
+                                    "[sexdrive.block.nvme.submit] op={} lba={} bytes={} cid={} tail={} ready={}",
+                                    op, lba, size, submit_cid_snapshot, submit_tail_snapshot, ready_snapshot
+                                );
                                 nvme_read_into_mapped_va(offset, size, fill_va)
                             }
                         }
@@ -2674,6 +2680,10 @@ pub extern "C" fn _start() -> ! {
                         }
                         // NOTE: current typed ABI path reads into a sexdrive-owned bounce buffer;
                         // caller buffer handoff via buf_cap is not wired in this mission.
+                        serial_println!(
+                            "[sexdrive.block.nvme.submit] op={} lba={} bytes={} cid={} tail={} ready={}",
+                            op, lba, size, submit_cid_snapshot, submit_tail_snapshot, ready_snapshot
+                        );
                         nvme_read_into_bounce(offset, size)
                     }
                 }
@@ -2692,6 +2702,10 @@ pub extern "C" fn _start() -> ! {
                             BLOCK_ERR_NO_DEVICE
                         } else {
                             serial_println!("[sexdrive.bufcap.map.ok] fill_va={:#x}", fill_va);
+                            serial_println!(
+                                "[sexdrive.block.nvme.submit] op={} lba={} bytes={} cid={} tail={} ready={}",
+                                op, lba, size, submit_cid_snapshot, submit_tail_snapshot, ready_snapshot
+                            );
                             let proof_offset = WRITE_PROOF_LBA * NVME_LBA_BYTES;
                             if offset == proof_offset {
                                 nvme_write_readback_proof(offset, size, fill_va)
@@ -2742,10 +2756,18 @@ pub extern "C" fn _start() -> ! {
             if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
                 if reply_val == 0 {
                     serial_println!(
+                        "[sexdrive.block.nvme.cqe] op={} cid={} status=0",
+                        op, submit_cid_snapshot
+                    );
+                    serial_println!(
                         "[sexdrive.block.reply] op={} status=0 bytes={} ready=1",
                         op, size
                     );
                 } else if reply_val == BLOCK_ERR_NO_DEVICE {
+                    serial_println!(
+                        "[sexdrive.block.nvme.cqe.timeout] op={} cid={} polls={}",
+                        op, submit_cid_snapshot, 0u64
+                    );
                     let reason = if ready_snapshot == 0 {
                         "no_ioq_ready"
                     } else {
