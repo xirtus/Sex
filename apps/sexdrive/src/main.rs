@@ -235,20 +235,37 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
         "[sexdrive.block.read.api.nvme.submit] cid={} nsid={} slba={} nlb={} prp1={:#x} sq_tail={}",
         cid as u64, 1u64, slba, nlb, data_phys, sq_tail as u64
     );
+    serial_println!(
+        "[sexdrive.nvme.submit.detail] path=typed op=READ cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
+        cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
+    );
 
     compiler_fence(Ordering::SeqCst);
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
+    serial_println!(
+        "[sexdrive.nvme.doorbell] path=typed qid=1 tail={}",
+        sq_tail as u64
+    );
 
     let mut done = false;
     let mut dw2 = 0u32;
     let mut dw3 = 0u32;
-    for _ in 0..1_000_000u32 {
+    let max_polls = 1_000_000u32;
+    let mut polls = 0u32;
+    let mut last_dw3 = 0u32;
+    serial_println!(
+        "[sexdrive.nvme.poll.begin] path=typed cid={} cq_head={} phase={} max_polls={}",
+        cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
+    );
+    for _ in 0..max_polls {
+        polls = polls.wrapping_add(1);
         let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
         let rd_dw2 = unsafe { core::ptr::read_volatile(cqe_ptr.add(2)) };
         let rd_dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
+        last_dw3 = rd_dw3;
         let cid_now = rd_dw3 & 0xFFFF;
         let phase_now = (rd_dw3 >> 16) & 0x1;
         if cid_now == cid as u32 && phase_now == cq_phase {
@@ -262,10 +279,30 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
             break;
         }
     }
+    serial_println!(
+        "[sexdrive.nvme.poll.end] path=typed cid={} found={} status={} cq_head={} phase={} polls={}",
+        cid as u64,
+        if done { 1u64 } else { 0u64 },
+        ((dw3 >> 17) & 0x7FFF) as u64,
+        cq_head as u64,
+        cq_phase as u64,
+        polls as u64
+    );
     if !done {
         serial_println!(
             "[sexdrive.block.read.api.err] reason=cqe_timeout cid={} head={} phase={}",
             cid as u64, cq_head as u64, cq_phase as u64
+        );
+        serial_println!(
+            "[sexdrive.nvme.poll.timeout.detail] path=typed cid={} expected_cid={} seen_cid={} seen_status={} seen_phase={} cq_head={} phase={} polls={}",
+            cid as u64,
+            cid as u64,
+            (last_dw3 & 0xFFFF) as u64,
+            ((last_dw3 >> 17) & 0x7FFF) as u64,
+            ((last_dw3 >> 16) & 0x1) as u64,
+            cq_head as u64,
+            cq_phase as u64,
+            polls as u64
         );
         return BLOCK_ERR_NO_DEVICE;
     }
@@ -388,18 +425,35 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr.add(12), (nlb & 0xFFFF) as u32); // NLB (0-based)
     }
     compiler_fence(Ordering::SeqCst);
+    serial_println!(
+        "[sexdrive.nvme.submit.detail] path=typed op=READ cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
+        cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
+    );
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
+    serial_println!(
+        "[sexdrive.nvme.doorbell] path=typed qid=1 tail={}",
+        sq_tail as u64
+    );
 
     let mut done = false;
     let mut dw2 = 0u32;
     let mut dw3 = 0u32;
-    for _ in 0..1_000_000u32 {
+    let max_polls = 1_000_000u32;
+    let mut polls = 0u32;
+    let mut last_dw3 = 0u32;
+    serial_println!(
+        "[sexdrive.nvme.poll.begin] path=typed cid={} cq_head={} phase={} max_polls={}",
+        cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
+    );
+    for _ in 0..max_polls {
+        polls = polls.wrapping_add(1);
         let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
         let rd_dw2 = unsafe { core::ptr::read_volatile(cqe_ptr.add(2)) };
         let rd_dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
+        last_dw3 = rd_dw3;
         let cid_now = rd_dw3 & 0xFFFF;
         let phase_now = (rd_dw3 >> 16) & 0x1;
         if cid_now == cid as u32 && phase_now == cq_phase {
@@ -413,10 +467,30 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
             break;
         }
     }
+    serial_println!(
+        "[sexdrive.nvme.poll.end] path=typed cid={} found={} status={} cq_head={} phase={} polls={}",
+        cid as u64,
+        if done { 1u64 } else { 0u64 },
+        ((dw3 >> 17) & 0x7FFF) as u64,
+        cq_head as u64,
+        cq_phase as u64,
+        polls as u64
+    );
     if !done {
         serial_println!(
             "[sexdrive.block.read.handoff.err] reason=cqe_timeout cid={} head={} phase={}",
             cid as u64, cq_head as u64, cq_phase as u64
+        );
+        serial_println!(
+            "[sexdrive.nvme.poll.timeout.detail] path=typed cid={} expected_cid={} seen_cid={} seen_status={} seen_phase={} cq_head={} phase={} polls={}",
+            cid as u64,
+            cid as u64,
+            (last_dw3 & 0xFFFF) as u64,
+            ((last_dw3 >> 17) & 0x7FFF) as u64,
+            ((last_dw3 >> 16) & 0x1) as u64,
+            cq_head as u64,
+            cq_phase as u64,
+            polls as u64
         );
         return BLOCK_ERR_NO_DEVICE;
     }
@@ -600,19 +674,36 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         "[sexdrive.block.write.api.nvme.submit] cid={} nsid=1 slba={} nlb=0 prp1={:#x}",
         write_cid as u64, slba, write_phys
     );
+    serial_println!(
+        "[sexdrive.nvme.submit.detail] path=typed op=WRITE cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
+        write_cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
+    );
 
     compiler_fence(Ordering::SeqCst);
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
+    serial_println!(
+        "[sexdrive.nvme.doorbell] path=typed qid=1 tail={}",
+        sq_tail as u64
+    );
 
     let mut done = false;
     let mut dw3 = 0u32;
-    for _ in 0..1_000_000u32 {
+    let max_polls = 1_000_000u32;
+    let mut polls = 0u32;
+    let mut last_dw3 = 0u32;
+    serial_println!(
+        "[sexdrive.nvme.poll.begin] path=typed cid={} cq_head={} phase={} max_polls={}",
+        write_cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
+    );
+    for _ in 0..max_polls {
+        polls = polls.wrapping_add(1);
         let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
         let rd_dw2 = unsafe { core::ptr::read_volatile(cqe_ptr.add(2)) };
         let rd_dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
+        last_dw3 = rd_dw3;
         let cid_now = rd_dw3 & 0xFFFF;
         let phase_now = (rd_dw3 >> 16) & 0x1;
         if cid_now == write_cid as u32 && phase_now == cq_phase {
@@ -629,10 +720,30 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
             break;
         }
     }
+    serial_println!(
+        "[sexdrive.nvme.poll.end] path=typed cid={} found={} status={} cq_head={} phase={} polls={}",
+        write_cid as u64,
+        if done { 1u64 } else { 0u64 },
+        ((dw3 >> 17) & 0x7FFF) as u64,
+        cq_head as u64,
+        cq_phase as u64,
+        polls as u64
+    );
     if !done {
         serial_println!(
             "[sexdrive.nvme.write.err] reason=cqe_timeout cid={} head={} phase={}",
             write_cid as u64, cq_head as u64, cq_phase as u64
+        );
+        serial_println!(
+            "[sexdrive.nvme.poll.timeout.detail] path=typed cid={} expected_cid={} seen_cid={} seen_status={} seen_phase={} cq_head={} phase={} polls={}",
+            write_cid as u64,
+            write_cid as u64,
+            (last_dw3 & 0xFFFF) as u64,
+            ((last_dw3 >> 17) & 0x7FFF) as u64,
+            ((last_dw3 >> 16) & 0x1) as u64,
+            cq_head as u64,
+            cq_phase as u64,
+            polls as u64
         );
         return BLOCK_ERR_NO_DEVICE;
     }
@@ -767,20 +878,37 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         "[sexdrive.block.write.api.nvme.submit] cid={} nsid=1 slba={} nlb=0 prp1={:#x}",
         write_cid as u64, slba, write_phys
     );
+    serial_println!(
+        "[sexdrive.nvme.submit.detail] path=selftest op=WRITE cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
+        write_cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
+    );
 
     compiler_fence(Ordering::SeqCst);
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
+    serial_println!(
+        "[sexdrive.nvme.doorbell] path=selftest qid=1 tail={}",
+        sq_tail as u64
+    );
 
     let mut done = false;
     let mut dw2 = 0u32;
     let mut dw3 = 0u32;
-    for _ in 0..1_000_000u32 {
+    let max_polls = 1_000_000u32;
+    let mut polls = 0u32;
+    let mut last_dw3 = 0u32;
+    serial_println!(
+        "[sexdrive.nvme.poll.begin] path=selftest cid={} cq_head={} phase={} max_polls={}",
+        write_cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
+    );
+    for _ in 0..max_polls {
+        polls = polls.wrapping_add(1);
         let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
         let rd_dw2 = unsafe { core::ptr::read_volatile(cqe_ptr.add(2)) };
         let rd_dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
+        last_dw3 = rd_dw3;
         let cid_now = rd_dw3 & 0xFFFF;
         let phase_now = (rd_dw3 >> 16) & 0x1;
         if cid_now == write_cid as u32 && phase_now == cq_phase {
@@ -798,11 +926,31 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
             break;
         }
     }
+    serial_println!(
+        "[sexdrive.nvme.poll.end] path=selftest cid={} found={} status={} cq_head={} phase={} polls={}",
+        write_cid as u64,
+        if done { 1u64 } else { 0u64 },
+        ((dw3 >> 17) & 0x7FFF) as u64,
+        cq_head as u64,
+        cq_phase as u64,
+        polls as u64
+    );
     if !done {
         serial_println!("[sexdrive.storage100.rw.fail] reason=write_cqe_timeout");
         serial_println!(
             "[sexdrive.nvme.write.err] reason=cqe_timeout cid={} head={} phase={}",
             write_cid as u64, cq_head as u64, cq_phase as u64
+        );
+        serial_println!(
+            "[sexdrive.nvme.poll.timeout.detail] path=selftest cid={} expected_cid={} seen_cid={} seen_status={} seen_phase={} cq_head={} phase={} polls={}",
+            write_cid as u64,
+            write_cid as u64,
+            (last_dw3 & 0xFFFF) as u64,
+            ((last_dw3 >> 17) & 0x7FFF) as u64,
+            ((last_dw3 >> 16) & 0x1) as u64,
+            cq_head as u64,
+            cq_phase as u64,
+            polls as u64
         );
         return BLOCK_ERR_NO_DEVICE;
     }
@@ -864,18 +1012,35 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr2.add(12), 0u32);
     }
     compiler_fence(Ordering::SeqCst);
+    serial_println!(
+        "[sexdrive.nvme.submit.detail] path=selftest op=READ cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
+        read_cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
+    );
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
+    serial_println!(
+        "[sexdrive.nvme.doorbell] path=selftest qid=1 tail={}",
+        sq_tail as u64
+    );
 
     let mut rb_done = false;
     let mut rb_dw2 = 0u32;
     let mut rb_dw3 = 0u32;
-    for _ in 0..1_000_000u32 {
+    let max_polls = 1_000_000u32;
+    let mut polls = 0u32;
+    let mut last_dw3 = 0u32;
+    serial_println!(
+        "[sexdrive.nvme.poll.begin] path=selftest cid={} cq_head={} phase={} max_polls={}",
+        read_cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
+    );
+    for _ in 0..max_polls {
+        polls = polls.wrapping_add(1);
         let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
         let rd_dw2 = unsafe { core::ptr::read_volatile(cqe_ptr.add(2)) };
         let rd_dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
+        last_dw3 = rd_dw3;
         let cid_now = rd_dw3 & 0xFFFF;
         let phase_now = (rd_dw3 >> 16) & 0x1;
         if cid_now == read_cid as u32 && phase_now == cq_phase {
@@ -889,11 +1054,31 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
             break;
         }
     }
+    serial_println!(
+        "[sexdrive.nvme.poll.end] path=selftest cid={} found={} status={} cq_head={} phase={} polls={}",
+        read_cid as u64,
+        if rb_done { 1u64 } else { 0u64 },
+        ((rb_dw3 >> 17) & 0x7FFF) as u64,
+        cq_head as u64,
+        cq_phase as u64,
+        polls as u64
+    );
     if !rb_done {
         serial_println!("[sexdrive.storage100.rw.fail] reason=read_cqe_timeout");
         serial_println!(
             "[sexdrive.nvme.write.err] reason=readback_timeout cid={} head={} phase={}",
             read_cid as u64, cq_head as u64, cq_phase as u64
+        );
+        serial_println!(
+            "[sexdrive.nvme.poll.timeout.detail] path=selftest cid={} expected_cid={} seen_cid={} seen_status={} seen_phase={} cq_head={} phase={} polls={}",
+            read_cid as u64,
+            read_cid as u64,
+            (last_dw3 & 0xFFFF) as u64,
+            ((last_dw3 >> 17) & 0x7FFF) as u64,
+            ((last_dw3 >> 16) & 0x1) as u64,
+            cq_head as u64,
+            cq_phase as u64,
+            polls as u64
         );
         return BLOCK_ERR_NO_DEVICE;
     }
