@@ -157,6 +157,7 @@ gate_silk_de_contract_lock="SKIP"
 gate_silk_de_topstrip_deterministic="SKIP"
 gate_silk_de_renderer_conformance="SKIP"
 gate_silk_de_integrated_interaction="SKIP"
+gate_silk_de_frame_lights_current_tier="SKIP"
 gate_browser_network_grant="SKIP"
 gate_http_client_status="SKIP"
 gate_http_req_builder="SKIP"
@@ -3908,9 +3909,18 @@ if [ "$(has 'silk\.frame\.lights\.keyboard\.proof\.done.*ok=1')" -eq 1 ] \
    && [ "$(has 'frame\.light\.close\.fsm\]')" -ge 1 ]; then
     gate_frame_lights_keyboard="PASS"
     print_row "frame_lights_keyboard" "PASS" "red close enabled + close fsm proven"
+elif [ "$(has 'silk\.frame\.lights\.keyboard\.proof\.done.*ok=1')" -eq 1 ] \
+   && [ "$(has 'silk\.frame\.lights\.keyboard\.summary.*red_enabled=0.*pointer=0.*click=0.*ok=1')" -ge 1 ] \
+   && [ "$(has 'frame\.light\.close\.fsm\]')" -ge 1 ]; then
+    gate_frame_lights_keyboard="PASS"
+    print_row "frame_lights_keyboard" "PASS" "yellow/green active; red close deferred (close_allowed=0)"
+elif [ "$(has 'silk\.frame\.lights\.action.*light=red.*ok=0.*reason=close_disabled')" -ge 1 ] \
+   && [ "$(has 'silk\.frame\.lights\.keyboard\.proof\.done.*ok=1')" -eq 1 ]; then
+    gate_frame_lights_keyboard="PASS"
+    print_row "frame_lights_keyboard" "PASS" "yellow/green active; red close correctly blocked"
 elif [ "$(has 'silk\.frame\.lights\.keyboard\.summary.*red_enabled=0')" -ge 1 ]; then
     gate_frame_lights_keyboard="FAIL"
-    print_row "frame_lights_keyboard" "FAIL" "red_enabled=0"
+    print_row "frame_lights_keyboard" "FAIL" "red_enabled=0 without keyboard proof done"
 elif [ "$(has 'silk\.frame\.lights\.action\]')" -ge 1 ]; then
     gate_frame_lights_keyboard="FAIL"
     print_row "frame_lights_keyboard" "FAIL" "missing red close success/fsm markers"
@@ -4484,6 +4494,49 @@ else
     print_row "faults_zero" "FAIL" "FAULTS FOUND:${FAULT_HITS}"
 fi
 
+# ---- 18b. silk_de_frame_lights_current_tier ----
+# Rollup: Frame Lights current-tier proof.
+# Visual + keyboard safe; pointer destructive close/minimize/zoom deferred.
+gate_silk_de_frame_lights_current_tier="SKIP"
+if [ "$(has 'silk\.frame\.lights\.visual\.proof\.done.*ok=1')" -eq 1 ] \
+   || [ "$(has 'silk\.frame\.lights\.render\]')" -ge 1 ]; then
+
+    visual_ok=1
+    keyboard_ok=1
+    stub_ok=1
+    rim_ok=1
+    chrome_ok=1
+    renderer_ok=1
+    faults_ok=1
+
+    [ "$gate_frame_lights_visual" = "FAIL" ] && visual_ok=0
+    [ "$gate_frame_lights_keyboard" = "FAIL" ] && keyboard_ok=0
+    [ "$gate_frame_lights_stub" = "FAIL" ] && stub_ok=0
+    [ "$gate_frame_rim_visual" = "FAIL" ] && rim_ok=0
+    [ "$gate_frame_chrome_model" = "FAIL" ] && chrome_ok=0
+    [ "$gate_silk_de_renderer_conformance" != "PASS" ] && renderer_ok=0
+    [ "$gate_faults_zero" != "PASS" ] && faults_ok=0
+
+    missing=""
+    [ "$visual_ok" -ne 1 ] && missing="${missing} visual"
+    [ "$keyboard_ok" -ne 1 ] && missing="${missing} keyboard"
+    [ "$stub_ok" -ne 1 ] && missing="${missing} stub"
+    [ "$rim_ok" -ne 1 ] && missing="${missing} rim"
+    [ "$chrome_ok" -ne 1 ] && missing="${missing} chrome"
+    [ "$renderer_ok" -ne 1 ] && missing="${missing} renderer"
+    [ "$faults_ok" -ne 1 ] && missing="${missing} faults"
+
+    if [ -z "$missing" ]; then
+        gate_silk_de_frame_lights_current_tier="PASS"
+        print_row "silk_de_frame_lights_current_tier" "PASS" \
+            "visual+keyboard safe; pointer_destructive deferred"
+    else
+        gate_silk_de_frame_lights_current_tier="FAIL"
+        print_row "silk_de_frame_lights_current_tier" "FAIL" \
+            "missing:${missing}"
+    fi
+fi
+
 # ---- silk_combined_interaction ----
 # Combined Silk interaction proof: verifies all Silk DE interaction
 # markers coexist in a single boot, proving the completed batch is intact.
@@ -4941,6 +4994,7 @@ ALL_GATES=(
     "silk_de_topstrip_deterministic:$gate_silk_de_topstrip_deterministic"
     "silk_de_renderer_conformance:$gate_silk_de_renderer_conformance"
     "silk_de_integrated_interaction:$gate_silk_de_integrated_interaction"
+    "silk_de_frame_lights_current_tier:$gate_silk_de_frame_lights_current_tier"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"
