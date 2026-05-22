@@ -4765,6 +4765,9 @@ if [ "$has_silk_de_integrated_begin" -eq 0 ]; then
 elif [ "$has_silk_de_integrated_skip" -eq 1 ]; then
     gate_silk_de_integrated_interaction="SKIP"
     print_row "silk_de_integrated_interaction" "SKIP" "not_requested (explicit skip marker)"
+elif [ "$gate_silk_de_renderer_conformance" = "SKIP" ] || [ "$gate_silk_de_topstrip_deterministic" = "SKIP" ]; then
+    gate_silk_de_integrated_interaction="SKIP"
+    print_row "silk_de_integrated_interaction" "SKIP" "not_requested (heavy proof profile not enabled)"
 else
     req_contract=$([ "$gate_silk_de_contract_lock" = "PASS" ] && echo 1 || echo 0)
     req_topstrip=$([ "$gate_silk_de_topstrip_deterministic" = "PASS" ] && echo 1 || echo 0)
