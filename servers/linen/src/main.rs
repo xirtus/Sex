@@ -572,6 +572,7 @@ pub extern "C" fn _start() -> ! {
         (0x00FF6464u64 << 32) | (60u64 << 16) | 80u64);
     serial_println!("[linen] Fill rect 0xEF sent to sexdisplay");
     serial_println!("[linen.ready]");
+    serial_println!("[linen.hid.debug_rect.disabled] ok=1 reason=remove_neon_green_red_debug_rect_v1");
 
     // ── Object workflow/schema proofs: run FIRST before any storage-blocking proofs ──
     // V8 fix: DiskFS slot proof calls pdx_storage_sync() which blocks waiting for
@@ -736,22 +737,6 @@ fn handle_hid_event(scancode: u64, value: u64) {
                     let _ = linen_nav_delete_current_safe();
                 }
                 _ => {}
-            }
-        }
-
-        static mut LINEN_COLOR_TOGGLE: bool = false;
-        if value == 1 {
-            LINEN_COLOR_TOGGLE = !LINEN_COLOR_TOGGLE;
-            let color = if LINEN_COLOR_TOGGLE { 0x0000FF00 } else { 0x00FF6464 };
-            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
-                (20u64 << 32) | 20u64,
-                (color << 32) | (60u64 << 16) | 80u64);
-
-            static mut LINEN_VISUAL_BUDGET: u32 = 16;
-            let vb = &mut LINEN_VISUAL_BUDGET;
-            if *vb > 0 {
-                *vb -= 1;
-                serial_println!("[linen.focus.visual_update] color={:#x}", color);
             }
         }
     }
