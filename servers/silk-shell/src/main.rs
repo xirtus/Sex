@@ -21564,6 +21564,7 @@ pub extern "C" fn _start() -> ! {
     // to prevent linen_sync_reply() from dropping OP_HID_EVENT messages.
     serial_println!("[silk-shell.linen.paint.defer] reason=avoid_input_drop");
     serial_println!("[silk-shell.ui.ready] surfaces=2");
+    serial_println!("[boot.firstpaint.shell_ready] ok=1");
     serial_println!("[silk-shell.boot.layout.tiled] mode=2pane main_sid={} side_sid={} gutter={}",
         SURFACE_ID_QUIL, SURFACE_ID_LINEN, gutter);
 

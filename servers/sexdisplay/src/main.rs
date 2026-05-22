@@ -31,6 +31,14 @@ const SILKBAR_PHASE3_RECEIVE_PROOF_ENABLED: bool =
 const SILKBAR_PHASE5_PIXEL_PROOF_ENABLED: bool =
     option_env!("SEXOS_SILKBAR_PHASE5_PIXEL_PROOF").is_some();
 
+/// Heavy render proof profile gate: when unset, sexdisplay boots with
+/// minimal proof overhead. Default boot skips deterministic topstrip
+/// proof drawing, frame-rim/lights visual proof markers, and bounded
+/// live debug markers.  Set SEXOS_SILK_RENDER_PROOF_PROFILE=1 at build
+/// time to enable full visual proof suite for daily-driver gate verification.
+const SILK_RENDER_PROOF_PROFILE_ENABLED: bool =
+    option_env!("SEXOS_SILK_RENDER_PROOF_PROFILE").is_some();
+
 /// Atlas Phase C render stub card geometry proof gate.
 /// When enabled, draws bounded card outlines around active surfaces
 /// in the below-bar area (y>=51).  Card geometry only — no thumbnails,
@@ -1356,35 +1364,38 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     // which row range carries the artifact. Each row gets a compact 32-bit FNV-1a
     // hash seeded from the actual framebuffer pixel row (post-clear, pre-bar-render).
     // Only the first 64 rows are sampled to bound log output.
-    unsafe {
-        static mut LIVE_TOPSTRIP_V2_ROWS_DIAG_DONE: bool = false;
-        static mut LIVE_TOPSTRIP_V2_ROWS_SS4_DONE: bool = false;
-        let do_diag = !LIVE_TOPSTRIP_V2_ROWS_DIAG_DONE
-            || (bar.clock_ss >= 4 && !LIVE_TOPSTRIP_V2_ROWS_SS4_DONE);
-        if do_diag {
-            let sample_rows: [usize; 10] = [0, 25, 46, 47, 48, 49, 50, 51, 55, 63];
-            let max_row = sample_rows.iter().max().copied().unwrap_or(63);
-            if h > max_row {
-                for &ry in sample_rows.iter() {
-                    let row_base = ry * w;
-                    let mut h_val: u32 = 0x811c9dc5u32;
-                    for x in 0..w {
-                        let idx = row_base + x;
-                        if idx < total_pixels {
-                            let px = core::ptr::read_volatile(fb.add(idx));
-                            h_val ^= px as u32;
-                            h_val = h_val.wrapping_mul(0x01000193u32);
+    // Gated by SILK_RENDER_PROOF_PROFILE_ENABLED to keep default boot fast.
+    if SILK_RENDER_PROOF_PROFILE_ENABLED {
+        unsafe {
+            static mut LIVE_TOPSTRIP_V2_ROWS_DIAG_DONE: bool = false;
+            static mut LIVE_TOPSTRIP_V2_ROWS_SS4_DONE: bool = false;
+            let do_diag = !LIVE_TOPSTRIP_V2_ROWS_DIAG_DONE
+                || (bar.clock_ss >= 4 && !LIVE_TOPSTRIP_V2_ROWS_SS4_DONE);
+            if do_diag {
+                let sample_rows: [usize; 10] = [0, 25, 46, 47, 48, 49, 50, 51, 55, 63];
+                let max_row = sample_rows.iter().max().copied().unwrap_or(63);
+                if h > max_row {
+                    for &ry in sample_rows.iter() {
+                        let row_base = ry * w;
+                        let mut h_val: u32 = 0x811c9dc5u32;
+                        for x in 0..w {
+                            let idx = row_base + x;
+                            if idx < total_pixels {
+                                let px = core::ptr::read_volatile(fb.add(idx));
+                                h_val ^= px as u32;
+                                h_val = h_val.wrapping_mul(0x01000193u32);
+                            }
                         }
+                        serial_println!("[silk.live_topstrip.v2.rows] row={} hash=0x{:08X} ss={}",
+                            ry, h_val, bar.clock_ss);
                     }
-                    serial_println!("[silk.live_topstrip.v2.rows] row={} hash=0x{:08X} ss={}",
-                        ry, h_val, bar.clock_ss);
                 }
-            }
-            if !LIVE_TOPSTRIP_V2_ROWS_DIAG_DONE {
-                LIVE_TOPSTRIP_V2_ROWS_DIAG_DONE = true;
-            }
-            if bar.clock_ss >= 4 && !LIVE_TOPSTRIP_V2_ROWS_SS4_DONE {
-                LIVE_TOPSTRIP_V2_ROWS_SS4_DONE = true;
+                if !LIVE_TOPSTRIP_V2_ROWS_DIAG_DONE {
+                    LIVE_TOPSTRIP_V2_ROWS_DIAG_DONE = true;
+                }
+                if bar.clock_ss >= 4 && !LIVE_TOPSTRIP_V2_ROWS_SS4_DONE {
+                    LIVE_TOPSTRIP_V2_ROWS_SS4_DONE = true;
+                }
             }
         }
     }
@@ -1398,32 +1409,35 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     // Budgeted marker: top-strip redraw invoked (proof of bar render + boundedness).
     unsafe {
         // [silk.live_topstrip.audit] One-shot: confirms live top-strip redraw entered.
-        static mut LIVE_TOPSTRIP_AUDIT_DONE: bool = false;
-        if !LIVE_TOPSTRIP_AUDIT_DONE {
-            LIVE_TOPSTRIP_AUDIT_DONE = true;
-            serial_println!("[silk.live_topstrip.audit] first_live_redraw fb_w={} fb_h={} ss={}", w, h, bar.clock_ss);
-        }
-        // [silk.live_topstrip.clear] Budgeted: proves full strip cleared before redraw.
-        static mut LIVE_TOPSTRIP_CLEAR_BUDGET: u32 = 32;
-        let lcb = &mut LIVE_TOPSTRIP_CLEAR_BUDGET;
-        if *lcb > 0 {
-            *lcb -= 1;
-            serial_println!("[silk.live_topstrip.clear] y_start=0 y_end=51 w={} ss={} ok=1", w, bar.clock_ss);
-        }
-        // [silk.live_topstrip.bounds] Budgeted: proves bar confined to y<51.
-        static mut LIVE_TOPSTRIP_BOUNDS_BUDGET: u32 = 8;
-        let lbb = &mut LIVE_TOPSTRIP_BOUNDS_BUDGET;
-        if *lbb > 0 {
-            *lbb -= 1;
-            serial_println!("[silk.live_topstrip.bounds] top_strip_h=50 glow_row=50 total_rows=51 fb_h={} ok=1", h);
-        }
-        // [silk.live_topstrip.tick4] One-shot: fires first time rendered clock shows ss>=4.
-        // Proves live redraw is still running correctly past the observed glitch window.
-        static mut LIVE_TOPSTRIP_TICK4_FIRED: bool = false;
-        if !LIVE_TOPSTRIP_TICK4_FIRED && bar.clock_ss >= 4 {
-            LIVE_TOPSTRIP_TICK4_FIRED = true;
-            serial_println!("[silk.live_topstrip.tick4] ss={} mm={} hh={} fb_w={} fb_h={} ok=1 reason=live_redraw_past_tick4",
-                bar.clock_ss, bar.clock_mm, bar.clock_hh, w, h);
+        // Gated by SILK_RENDER_PROOF_PROFILE_ENABLED to keep default boot fast.
+        if SILK_RENDER_PROOF_PROFILE_ENABLED {
+            static mut LIVE_TOPSTRIP_AUDIT_DONE: bool = false;
+            if !LIVE_TOPSTRIP_AUDIT_DONE {
+                LIVE_TOPSTRIP_AUDIT_DONE = true;
+                serial_println!("[silk.live_topstrip.audit] first_live_redraw fb_w={} fb_h={} ss={}", w, h, bar.clock_ss);
+            }
+            // [silk.live_topstrip.clear] Budgeted: proves full strip cleared before redraw.
+            static mut LIVE_TOPSTRIP_CLEAR_BUDGET: u32 = 32;
+            let lcb = &mut LIVE_TOPSTRIP_CLEAR_BUDGET;
+            if *lcb > 0 {
+                *lcb -= 1;
+                serial_println!("[silk.live_topstrip.clear] y_start=0 y_end=51 w={} ss={} ok=1", w, bar.clock_ss);
+            }
+            // [silk.live_topstrip.bounds] Budgeted: proves bar confined to y<51.
+            static mut LIVE_TOPSTRIP_BOUNDS_BUDGET: u32 = 8;
+            let lbb = &mut LIVE_TOPSTRIP_BOUNDS_BUDGET;
+            if *lbb > 0 {
+                *lbb -= 1;
+                serial_println!("[silk.live_topstrip.bounds] top_strip_h=50 glow_row=50 total_rows=51 fb_h={} ok=1", h);
+            }
+            // [silk.live_topstrip.tick4] One-shot: fires first time rendered clock shows ss>=4.
+            // Proves live redraw is still running correctly past the observed glitch window.
+            static mut LIVE_TOPSTRIP_TICK4_FIRED: bool = false;
+            if !LIVE_TOPSTRIP_TICK4_FIRED && bar.clock_ss >= 4 {
+                LIVE_TOPSTRIP_TICK4_FIRED = true;
+                serial_println!("[silk.live_topstrip.tick4] ss={} mm={} hh={} fb_w={} fb_h={} ok=1 reason=live_redraw_past_tick4",
+                    bar.clock_ss, bar.clock_mm, bar.clock_hh, w, h);
+            }
         }
         static mut TOP_STRIP_REDRAW_BUDGET: u32 = 16;
         let b = &mut TOP_STRIP_REDRAW_BUDGET;
@@ -2305,6 +2319,7 @@ pub extern "C" fn _start() -> ! {
 
     // 1. Render immediately with fallback — visible before any IPC
     unsafe { render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+    serial_println!("[boot.firstpaint.display_surface] ok=1");
     // ── Silk glass safe color pass markers ──────────────────────────────
     serial_println!("[silk.glass.color] name=focus_surface argb=0x0089B4FA ok=1");
     serial_println!("[silk.glass.color] name=frame_rim argb=0x00B4BEFE ok=1");
@@ -2316,25 +2331,26 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silk.glass.safe_color_pass.done] ok=1 changed=7");
 
     // ── Frame Rim visual proof markers ───────────────────────────────────
-    // Rim already rendered via FRAME_RIM_PX=4 + FRAME_RIM_COLOR in draw loop.
-    // Markers confirm the visual proof without changing any rendering code.
+    // Gated by SILK_RENDER_PROOF_PROFILE_ENABLED to keep default boot fast.
+    if SILK_RENDER_PROOF_PROFILE_ENABLED {
     serial_println!("[silk.frame.rim.render] frame=0 sid=0 w=640 h=480 intensity=2 color=0x00B4BEFE ok=1 reason=existing_focused_rim");
     serial_println!("[silk.frame.rim.render] frame=1 sid=201 w=640 h=480 intensity=1 color=0x00B4BEFE ok=1 reason=existing_dim_rim");
     serial_println!("[silk.frame.rim.render] frame=2 sid=200 w=300 h=150 intensity=1 color=0x00B4BEFE ok=1 reason=existing_dim_rim");
     serial_println!("[silk.frame.rim.render.bounds] frame=0 x=0 y=0 w=640 h=480 fb_w=1024 fb_h=768 ok=1 reason=within_fb");
     serial_println!("[silk.frame.rim.render.summary] frames=3 rendered=3 focused=1 dim=2 ok=1");
     serial_println!("[silk.frame.rim.visual.proof.done] ok=1 rendered=3 alpha=0 blur=0 shadow=0 hover=0");
+    }
 
     // ── Frame Lights visual proof markers ─────────────────────────────────
-    // Lights already rendered in pixel-fill loop (top bar / minimal mode).
-    // Close light dimmed: close_allowed=0, non-interactive, no pointer.
-    // Markers confirm rendering state — no new draw code added.
+    // Gated by SILK_RENDER_PROOF_PROFILE_ENABLED to keep default boot fast.
+    if SILK_RENDER_PROOF_PROFILE_ENABLED {
     serial_println!("[silk.frame.lights.render] frame=0 red=disabled yellow=available green=available x=5 y=9 w=10 h=10 ok=1 reason=drawn_top_bar_chrome");
     serial_println!("[silk.frame.lights.render] frame=1 red=disabled yellow=available green=available x=5 y=9 w=10 h=10 ok=1 reason=drawn_top_bar_chrome");
     serial_println!("[silk.frame.lights.render] frame=2 red=disabled yellow=available green=available x=5 y=9 w=10 h=10 ok=1 reason=drawn_top_bar_chrome");
     serial_println!("[silk.frame.lights.render.bounds] frame=0 x=5 y=9 w=40 h=10 fb_w=1024 fb_h=768 ok=1 reason=within_top_bar");
     serial_println!("[silk.frame.lights.visual.summary] frames=3 rendered=3 red_enabled=0 close_impl=0 pointer=0 hover=0 ok=1");
     serial_println!("[silk.frame.lights.visual.proof.done] ok=1 rendered=3 alpha=0 blur=0 shadow=0 action=0");
+    }
     serial_println!("[silk.de.frame_lights.current_tier.pass] visual=1 keyboard=1 pointer_destructive=0 deferred=1");
 
     serial_println!("[sexdisplay.ready]");
@@ -2490,6 +2506,13 @@ pub extern "C" fn _start() -> ! {
                     if applied {
                         if kind == UpdateKind::SetClock as u32 {
                             silkbar_clock_seen = true;
+                            unsafe {
+                                static mut SILKBAR_CLOCK_SEND_MARKER: bool = false;
+                                if !SILKBAR_CLOCK_SEND_MARKER {
+                                    SILKBAR_CLOCK_SEND_MARKER = true;
+                                    serial_println!("[boot.firstpaint.silkbar_clock_send] ok=1");
+                                }
+                            }
                             let changed = in_hh != old_hh || in_mm != old_mm || in_ss != old_ss;
                             // Trust SilkBar while updates are fresh; stale fallback gate
                             // can reclaim ownership if messages stop/repeat too long.
@@ -2582,7 +2605,7 @@ pub extern "C" fn _start() -> ! {
                         // while the PD is still active.
                         unsafe { CLOCK_REDRAW_SOURCE = 1; } // fallback source
                         unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
-                        if !render_proof_done {
+                        if SILK_RENDER_PROOF_PROFILE_ENABLED && !render_proof_done {
                             render_proof_done = true;
                             unsafe { top_strip_render_proof(FB_PTR as *const u32, FB_W as usize, FB_H as usize); }
                         }

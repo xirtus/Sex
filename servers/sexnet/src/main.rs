@@ -11,6 +11,15 @@ const PHASE_M_RELIABILITY_ENABLED: bool =
 const DNS_SOURCE3_UDP_TX_ENABLED: bool =
     option_env!("SEXNET_DNS_SOURCE3_PROOF").is_some();
 
+/// Heavy proof profile gate: when unset, sexnet boots passive-only.
+/// Default boot skips e1000 ring proofs, DNS/TCP/HTTP suites, and
+/// bounded poll loops (50M/100M iterations).
+/// Set SEXOS_SEXNET_PROOF_PROFILE=1 at build time to enable full NIC
+/// and protocol proof suites for daily-driver gate verification.
+/// Note: Recompiled to clear stale cached environment variable triggers.
+const SEXNET_PROOF_PROFILE_ENABLED: bool =
+    option_env!("SEXOS_SEXNET_PROOF_PROFILE").is_some();
+
 // --------------------------------------------------------------------------
 // Opcodes (local — these are NOT in sex-pdx)
 // --------------------------------------------------------------------------
@@ -885,7 +894,8 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexnet.boot] ok=1 reason=passive_spawn");
     serial_println!("[sexnet.passive.ready] network=0 dns=0 tcp=0 http=0 tls=0 ok=1 reason=mock_status_only_no_nic");
     serial_println!("[sexnet.passive.spawn.done] ok=1 spawned=1 browser_network=0");
-    {
+    if SEXNET_PROOF_PROFILE_ENABLED {
+        serial_println!("[sexnet.proof.profile] enabled=1 reason=SEXOS_SEXNET_PROOF_PROFILE_set");
         let nic_va = sex_pdx::sys_map_pci_bar(sex_pdx::SLOT_NIC, 0, 0x10000);
         if nic_va != u64::MAX {
             let ral = unsafe { core::ptr::read_volatile((nic_va + 0x5400) as *const u32) };
@@ -5180,6 +5190,9 @@ pub extern "C" fn _start() -> ! {
         } else {
             serial_println!("[sexnet.nic.bar.map] va=MAX ok=0 reason=no_cap_or_map_denied");
         }
+    } else {
+        serial_println!("[boot.default.profile] proofs=light ok=1 reason=sexnet_proof_profile_not_set");
+        serial_println!("[sexnet.passive.ready.fast] network=0 dns=0 tcp=0 http=0 tls=0 ok=1");
     }
     loop {
         let req = unsafe { pdx_listen_raw(0) };
