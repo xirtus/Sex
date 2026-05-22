@@ -110,6 +110,7 @@ gate_storage_phaseb1="SKIP"
 gate_sexdrive_storage_ioq_ready="SKIP"
 gate_sexdrive_storage_single_block_rw="SKIP"
 gate_sexdrive_storage_multiblock_rw="SKIP"
+gate_sexdrive_storage_reboot_persistence="SKIP"
 gate_app_registry_lifecycle_v2="SKIP"
 gate_spindle_slot_shell="SKIP"
 gate_window_workflow_v2="SKIP"
@@ -4674,6 +4675,48 @@ else
     print_row "sexdrive_storage_multiblock_rw" "SKIP" "storage AP4 proof not requested"
 fi
 
+# ---- sexdrive_storage_reboot_persistence (AP5a per-log gate) ----
+if [ "${SEXOS_STORAGE_100_PROOF:-0}" = "1" ]; then
+    persist_write_begin="$(has '[[]sexdrive\.storage100\.persist\.write\.begin[]] base_lba=256 blocks=4 bytes_per_block=512')"
+    persist_read_begin="$(has '[[]sexdrive\.storage100\.persist\.read\.begin[]] base_lba=256 blocks=4 bytes_per_block=512')"
+    if [ "$persist_write_begin" -eq 0 ] && [ "$persist_read_begin" -eq 0 ]; then
+        gate_sexdrive_storage_reboot_persistence="SKIP"
+        print_row "sexdrive_storage_reboot_persistence" "SKIP" "AP5a persistence not triggered in this log"
+    elif [ "$persist_write_begin" -eq 1 ] && [ "$persist_read_begin" -eq 1 ]; then
+        gate_sexdrive_storage_reboot_persistence="FAIL"
+        print_row "sexdrive_storage_reboot_persistence" "FAIL" "write.begin and read.begin both present in one log"
+    elif [ "$persist_write_begin" -eq 1 ]; then
+        if [ "$(has '[[]sexdrive\.storage100\.persist\.fail[]]')" -ge 1 ] || \
+           [ "$(has 'no_ioq_ready')" -ge 1 ] || \
+           [ "$(has '[[]sexdrive\.storage100\.persist\.write\.done[]] blocks=4 ok=1')" -eq 0 ] || \
+           [ "$(count '[[]sexdrive\.storage100\.persist\.write\.block[]] idx=[0-3] lba=(256|257|258|259) status=0 bytes=512')" -lt 4 ] || \
+           [ "$(has '[[]sexdrive\.storage100\.persist\.write\.block[]].*status=[1-9]')" -ge 1 ]; then
+            gate_sexdrive_storage_reboot_persistence="FAIL"
+            print_row "sexdrive_storage_reboot_persistence" "FAIL" "write lane incomplete or failure marker present"
+        else
+            gate_sexdrive_storage_reboot_persistence="PASS"
+            print_row "sexdrive_storage_reboot_persistence" "PASS" "write boot persistence blocks recorded"
+        fi
+    else
+        if [ "$(has '[[]sexdrive\.storage100\.persist\.fail[]]')" -ge 1 ] || \
+           [ "$(has 'no_ioq_ready')" -ge 1 ] || \
+           [ "$(has '[[]sexdrive\.storage100\.persist\.read\.done[]] blocks=4 ok=1')" -eq 0 ] || \
+           [ "$(count '[[]sexdrive\.storage100\.persist\.read\.block[]] idx=[0-3] lba=(256|257|258|259) status=0 bytes=512')" -lt 4 ] || \
+           [ "$(count '[[]sexdrive\.storage100\.persist\.read\.match[]] idx=[0-3] lba=(256|257|258|259) bytes=512 ok=1')" -lt 4 ] || \
+           [ "$(has '[[]sexdrive\.storage100\.persist\.read\.block[]].*status=[1-9]')" -ge 1 ] || \
+           [ "$(has '[[]sexdrive\.storage100\.persist\.read\.match[]].*ok=0')" -ge 1 ]; then
+            gate_sexdrive_storage_reboot_persistence="FAIL"
+            print_row "sexdrive_storage_reboot_persistence" "FAIL" "read lane incomplete or mismatch/failure marker present"
+        else
+            gate_sexdrive_storage_reboot_persistence="PASS"
+            print_row "sexdrive_storage_reboot_persistence" "PASS" "read boot persistence match verified"
+        fi
+    fi
+else
+    gate_sexdrive_storage_reboot_persistence="SKIP"
+    print_row "sexdrive_storage_reboot_persistence" "SKIP" "storage AP5a proof not requested"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -4972,6 +5015,7 @@ ALL_GATES=(
     "sexdrive_storage_ioq_ready:$gate_sexdrive_storage_ioq_ready"
     "sexdrive_storage_single_block_rw:$gate_sexdrive_storage_single_block_rw"
     "sexdrive_storage_multiblock_rw:$gate_sexdrive_storage_multiblock_rw"
+    "sexdrive_storage_reboot_persistence:$gate_sexdrive_storage_reboot_persistence"
     "app_registry_lifecycle_v2:$gate_app_registry_lifecycle_v2"
     "spindle_slot_shell:$gate_spindle_slot_shell"
     "window_workflow_v2:$gate_window_workflow_v2"

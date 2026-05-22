@@ -356,6 +356,8 @@ fi
 
 # ── SexOS storage proof profile (AP2) ──
 export SEXOS_STORAGE_100_PROOF="${SEXOS_STORAGE_100_PROOF:-0}"
+PERSIST_WRITE="${SEXOS_STORAGE_100_PERSIST_WRITE:-0}"
+PERSIST_READ="${SEXOS_STORAGE_100_PERSIST_READ:-0}"
 NVME_ARGS=()
 if [ "$SEXOS_STORAGE_100_PROOF" = "1" ]; then
     NVME_DIR="${ROOT_DIR}/.gate_master"
@@ -363,13 +365,31 @@ if [ "$SEXOS_STORAGE_100_PROOF" = "1" ]; then
     if [ ! -d "$NVME_DIR" ]; then
         mkdir -p "$NVME_DIR"
     fi
-    if [ ! -f "$NVME_IMG" ]; then
+    if [ "$PERSIST_WRITE" = "1" ] && [ "$PERSIST_READ" = "1" ]; then
+        echo "[proof] FAIL: set only one of SEXOS_STORAGE_100_PERSIST_WRITE=1 or SEXOS_STORAGE_100_PERSIST_READ=1"
+        exit 1
+    fi
+    if [ "$PERSIST_READ" = "1" ]; then
+        if [ ! -f "$NVME_IMG" ]; then
+            echo "[proof] FAIL: persistence read requested but image missing: $NVME_IMG"
+            exit 1
+        fi
+    elif [ ! -f "$NVME_IMG" ]; then
         dd if=/dev/zero of="$NVME_IMG" bs=1M count=1 status=none
     fi
     NVME_ARGS=(
         -drive "if=none,id=nvm,file=${NVME_IMG},format=raw"
         -device "nvme,serial=sexos01,drive=nvm"
     )
+fi
+
+unset SEXOS_STORAGE_100_PERSIST_WRITE
+unset SEXOS_STORAGE_100_PERSIST_READ
+if [ "$PERSIST_WRITE" = "1" ]; then
+    export SEXOS_STORAGE_100_PERSIST_WRITE=1
+fi
+if [ "$PERSIST_READ" = "1" ]; then
+    export SEXOS_STORAGE_100_PERSIST_READ=1
 fi
 
 # ── Frame Chrome model proof ──
@@ -417,6 +437,9 @@ echo "  phaseL:  ${SEXNET_PHASE_L_SOURCE3_PRIMARY_PROOF}"
 echo "  phaseM:  ${SEXNET_PHASE_M_RELIABILITY_PROOF}"
 echo "  phaseN:  ${SEXNET_PHASE_N_REAL_HW_AUDIT}"
 	echo "  phaseO:  ${SEXNET_PHASE_O_FINAL_NETWORK_PROOF}"
+echo "  storage_proof: ${SEXOS_STORAGE_100_PROOF}"
+echo "  storage_persist_write: ${PERSIST_WRITE}"
+echo "  storage_persist_read:  ${PERSIST_READ}"
 echo ""
 
 # ---- 1. BUILD ----

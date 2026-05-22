@@ -72,6 +72,13 @@ const WRITE_PROOF_MAGIC: u64 = 0x3156_4554_4952_5753; // "SWRITEV1" LE
 const AP4_MULTI_BASE_LBA: u64 = 128;
 const AP4_MULTI_BLOCKS: u64 = 4;
 const AP4_MULTI_BLOCK_BYTES: u64 = NVME_LBA_BYTES;
+const AP5A_PERSIST_BASE_LBA: u64 = 256;
+const AP5A_PERSIST_BLOCKS: u64 = 4;
+const AP5A_PERSIST_BLOCK_BYTES: u64 = NVME_LBA_BYTES;
+const STORAGE_100_PERSIST_WRITE_ENABLED: bool =
+    option_env!("SEXOS_STORAGE_100_PERSIST_WRITE").is_some();
+const STORAGE_100_PERSIST_READ_ENABLED: bool =
+    option_env!("SEXOS_STORAGE_100_PERSIST_READ").is_some();
 const MANIFEST_LBA: u64 = 2046;
 const PROOF_OBJECT_START_LBA: u64 = 2038;
 const PROOF_OBJECT_END_LBA: u64 = 2045;
@@ -1057,6 +1064,124 @@ fn nvme_multiblock_write_readback_proof() -> u64 {
         b += 1;
     }
     serial_println!("[sexdrive.storage100.multi.done] blocks={} ok=1", AP4_MULTI_BLOCKS);
+    0u64
+}
+
+fn nvme_persist_write_proof() -> u64 {
+    serial_println!(
+        "[sexdrive.storage100.persist.write.begin] base_lba={} blocks={} bytes_per_block={}",
+        AP5A_PERSIST_BASE_LBA,
+        AP5A_PERSIST_BLOCKS,
+        AP5A_PERSIST_BLOCK_BYTES
+    );
+
+    let mut b = 0u64;
+    while b < AP5A_PERSIST_BLOCKS {
+        let lba = AP5A_PERSIST_BASE_LBA + b;
+        let write_phys = sys_alloc_phys(PAGE_SIZE);
+        let write_va = sys_map_phys(write_phys, PAGE_SIZE);
+        if write_phys == 0 || write_phys == u64::MAX || (write_phys % PAGE_SIZE) != 0
+            || write_va == 0 || write_va == u64::MAX
+        {
+            serial_println!("[sexdrive.storage100.persist.fail] phase=write reason=write_buf_invalid idx={} lba={}", b, lba);
+            return BLOCK_ERR_NO_DEVICE;
+        }
+
+        unsafe {
+            let mut i = 0usize;
+            while i < AP5A_PERSIST_BLOCK_BYTES as usize {
+                let val = (0x5Au8 ^ (i as u8) ^ ((b as u8).wrapping_mul(0x21u8)) ^ 0xC3u8) & 0xFFu8;
+                core::ptr::write_volatile((write_va as *mut u8).add(i), val);
+                i += 1;
+            }
+        }
+
+        let write_status = nvme_write_one_block(lba * NVME_LBA_BYTES, AP5A_PERSIST_BLOCK_BYTES, write_va);
+        if write_status != 0 {
+            serial_println!("[sexdrive.storage100.persist.fail] phase=write reason=write_status_fail idx={} lba={} status={}", b, lba, write_status);
+            return BLOCK_ERR_NO_DEVICE;
+        }
+
+        serial_println!(
+            "[sexdrive.storage100.persist.write.block] idx={} lba={} status=0 bytes={}",
+            b,
+            lba,
+            AP5A_PERSIST_BLOCK_BYTES
+        );
+        b += 1;
+    }
+
+    serial_println!("[sexdrive.storage100.persist.write.done] blocks={} ok=1", AP5A_PERSIST_BLOCKS);
+    0u64
+}
+
+fn nvme_persist_read_proof() -> u64 {
+    serial_println!(
+        "[sexdrive.storage100.persist.read.begin] base_lba={} blocks={} bytes_per_block={}",
+        AP5A_PERSIST_BASE_LBA,
+        AP5A_PERSIST_BLOCKS,
+        AP5A_PERSIST_BLOCK_BYTES
+    );
+
+    let mut b = 0u64;
+    while b < AP5A_PERSIST_BLOCKS {
+        let lba = AP5A_PERSIST_BASE_LBA + b;
+        let read_phys = sys_alloc_phys(PAGE_SIZE);
+        let read_va = sys_map_phys(read_phys, PAGE_SIZE);
+        if read_phys == 0 || read_phys == u64::MAX || (read_phys % PAGE_SIZE) != 0
+            || read_va == 0 || read_va == u64::MAX
+        {
+            serial_println!("[sexdrive.storage100.persist.fail] phase=read reason=read_buf_invalid idx={} lba={}", b, lba);
+            return BLOCK_ERR_NO_DEVICE;
+        }
+
+        let read_status = nvme_read_into_mapped_va(lba * NVME_LBA_BYTES, AP5A_PERSIST_BLOCK_BYTES, read_va);
+        if read_status != 0 {
+            serial_println!("[sexdrive.storage100.persist.fail] phase=read reason=read_status_fail idx={} lba={} status={}", b, lba, read_status);
+            return BLOCK_ERR_NO_DEVICE;
+        }
+
+        serial_println!(
+            "[sexdrive.storage100.persist.read.block] idx={} lba={} status=0 bytes={}",
+            b,
+            lba,
+            AP5A_PERSIST_BLOCK_BYTES
+        );
+
+        let mut i = 0usize;
+        while i < AP5A_PERSIST_BLOCK_BYTES as usize {
+            let expected = (0x5Au8 ^ (i as u8) ^ ((b as u8).wrapping_mul(0x21u8)) ^ 0xC3u8) & 0xFFu8;
+            let got = unsafe { core::ptr::read_volatile((read_va as *const u8).add(i)) };
+            if got != expected {
+                serial_println!(
+                    "[sexdrive.storage100.persist.read.match] idx={} lba={} ok=0 first_bad={} expected={} got={}",
+                    b,
+                    lba,
+                    i as u64,
+                    expected as u64,
+                    got as u64
+                );
+                serial_println!(
+                    "[sexdrive.storage100.persist.fail] phase=read reason=byte_mismatch idx={} lba={} first_bad={}",
+                    b,
+                    lba,
+                    i as u64
+                );
+                return BLOCK_ERR_NO_DEVICE;
+            }
+            i += 1;
+        }
+
+        serial_println!(
+            "[sexdrive.storage100.persist.read.match] idx={} lba={} bytes={} ok=1",
+            b,
+            lba,
+            AP5A_PERSIST_BLOCK_BYTES
+        );
+        b += 1;
+    }
+
+    serial_println!("[sexdrive.storage100.persist.read.done] blocks={} ok=1", AP5A_PERSIST_BLOCKS);
     0u64
 }
 
@@ -2085,6 +2210,22 @@ fn nvme_probe_bar() {
             let ap4_status = nvme_multiblock_write_readback_proof();
             if ap4_status != 0 {
                 serial_println!("[sexdrive.storage100.multi.fail] reason=ap4_selftest_status status={}", ap4_status);
+            } else if STORAGE_100_PERSIST_WRITE_ENABLED {
+                let persist_write_status = nvme_persist_write_proof();
+                if persist_write_status != 0 {
+                    serial_println!(
+                        "[sexdrive.storage100.persist.fail] phase=write reason=ap5a_selftest_status status={}",
+                        persist_write_status
+                    );
+                }
+            } else if STORAGE_100_PERSIST_READ_ENABLED {
+                let persist_read_status = nvme_persist_read_proof();
+                if persist_read_status != 0 {
+                    serial_println!(
+                        "[sexdrive.storage100.persist.fail] phase=read reason=ap5a_selftest_status status={}",
+                        persist_read_status
+                    );
+                }
             }
         }
     }
