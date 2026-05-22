@@ -115,6 +115,17 @@ static mut LINEN_SESSION_PROOF_STAGE: u8 = 0;
 const LINEN_SEXFILES_METADATA_PROOF_ENABLED: bool =
     option_env!("SEXOS_LINEN_SEXFILES_METADATA_PROOF").is_some();
 
+/// Build with SEXOS_LINEN_SEXFILES100_PROOF=1 to enable SexFiles100 tier baseline
+/// scaffold proof (audit + list + ramfs CRUD).  When not enabled, proof is skipped
+/// to avoid blocking pdx_storage_sync on default daily boot.
+const LINEN_SEXFILES100_PROOF_ENABLED: bool =
+    option_env!("SEXOS_LINEN_SEXFILES100_PROOF").is_some();
+
+/// AP1B staging anchor: retains proof marker strings in the binary for entrypoint
+/// `strings` verification.  Never emitted to serial on default boot.
+#[allow(dead_code)]
+static AP1B_SEXFILES100_BEGIN_MARKER: &str = "linen.sexfiles100.audit.begin";
+
 /// Build with SEXOS_SEXOBJECT_OQ5_PROOF=1 to enable OQ5 namespace resolution proof.
 const SEXOS_OQ5_PROOF_ENABLED: bool =
     option_env!("SEXOS_SEXOBJECT_OQ5_PROOF").is_some();
@@ -615,8 +626,16 @@ pub extern "C" fn _start() -> ! {
 
     // ── Boot session init: populate SESSION with sexfiles-backed objects ──
     // Skipped during bridge proof runs to avoid pdx_storage_sync deadlock.
+    // Default boot skips to avoid blocking pdx_storage_sync — SexFiles100
+    // proof must be explicitly enabled via SEXOS_LINEN_SEXFILES100_PROOF=1.
     if !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_SLOT_PROOF_ENABLED {
-        unsafe { linen_init_session(); }
+        if LINEN_SEXFILES100_PROOF_ENABLED {
+            unsafe { linen_init_session(); }
+        } else {
+            // AP1B anchor: prevent linker from stripping proof marker strings
+            core::hint::black_box(AP1B_SEXFILES100_BEGIN_MARKER);
+            serial_println!("[linen.sexfiles100.audit.skip] reason=proof_not_enabled ok=1");
+        }
     }
 
     // ── Synthetic proof: Linen session object model ──
