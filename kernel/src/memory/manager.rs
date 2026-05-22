@@ -33,6 +33,10 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
                 let offset = self.next.saturating_sub(frame_index) as u64;
                 let phys_addr = region.base + offset * 4096;
                 self.next += 1;
+                // AP1 diagnostic: record boot-frame allocation for overlap detection
+                crate::serial_println!("[kernel.mem.boot_frame.alloc] phys={:#x} idx={}",
+                    phys_addr, self.next);
+                crate::memory::allocator::diag_record_boot_frame(phys_addr);
                 return Some(PhysFrame::containing_address(PhysAddr::new(phys_addr)));
             }
             frame_index += frames_in_region;
@@ -101,6 +105,23 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
     let entries = memmap.entries();
     crate::serial_println!("allocator.memory_regions.count={}", entries.len());
 
+    // AP1 diagnostic: log all memory map entries
+    for entry in entries.iter() {
+        let kind = match entry.type_ {
+            0 => "usable",
+            1 => "reserved",
+            2 => "acpi_reclaimable",
+            3 => "acpi_nvs",
+            4 => "bad_memory",
+            5 => "bootloader_reclaimable",
+            6 => "kernel_and_modules",
+            7 => "framebuffer",
+            _ => "unknown",
+        };
+        crate::serial_println!("[kernel.mem.boot_frame.region] start={:#x} end={:#x} kind={}",
+            entry.base, entry.base + entry.length, kind);
+    }
+
     // Size metadata against highest *usable* physical address only.
     // Including non-usable high regions can over-allocate metadata and prevent allocator bootstrap.
     let mut max_usable_phys_addr = 0u64;
@@ -145,6 +166,8 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
         if !metadata_allocated && region_len >= metadata_pages * 4096 {
             let metadata_phys = region_base;
             let metadata_vaddr = hhdm_offset + metadata_phys;
+            crate::serial_println!("[kernel.mem.global.metadata.carve] phys={:#x} size={} pages={} totals={}",
+                metadata_phys, metadata_pages * 4096, metadata_pages, total_pages);
             unsafe {
                 crate::memory::allocator::GLOBAL_ALLOCATOR.init_metadata(metadata_vaddr, total_pages);
             }
@@ -170,6 +193,7 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
         // array. Otherwise the frame allocator would allocate a metadata page
         // as a page table page, corrupting the PageMetadata when page table
         // entries are written.
+        crate::serial_println!("[kernel.mem.boot_frame.skip_metadata] pages={}", metadata_pages);
         for _ in 0..metadata_pages {
             frame_allocator.allocate_frame();
         }

@@ -1,5 +1,29 @@
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
+// ── AP1 Overlap Diagnostic Ring Buffer ──
+// Tracks the last 64 BootInfoFrameAllocator allocations so that
+// GLOBAL_ALLOCATOR can detect duplicate physical frame handouts.
+const DIAG_RING_SIZE: usize = 64;
+static DIAG_BOOT_FRAME_RING: [AtomicU64; DIAG_RING_SIZE] =
+    [const { AtomicU64::new(0) }; DIAG_RING_SIZE];
+static DIAG_BOOT_FRAME_IDX: AtomicU64 = AtomicU64::new(0);
+
+/// Record a BootInfoFrameAllocator allocation for overlap detection.
+pub fn diag_record_boot_frame(phys: u64) {
+    let idx = DIAG_BOOT_FRAME_IDX.fetch_add(1, Ordering::Relaxed) as usize % DIAG_RING_SIZE;
+    DIAG_BOOT_FRAME_RING[idx].store(phys, Ordering::Relaxed);
+}
+
+/// Check whether `phys` was recently allocated by BootInfoFrameAllocator.
+fn diag_check_overlap(phys: u64) -> bool {
+    for entry in DIAG_BOOT_FRAME_RING.iter() {
+        if entry.load(Ordering::Relaxed) == phys {
+            return true;
+        }
+    }
+    false
+}
+
 pub const MAX_ORDER: usize = 18; // Up to 1 GiB
 pub const PAGE_SIZE: u64 = 4096;
 pub const MAX_CORES: usize = 128;
@@ -53,6 +77,8 @@ impl LockFreeBuddyAllocator {
     }
 
     pub unsafe fn add_memory_region(&self, start_phys: u64, size: u64) {
+        crate::serial_println!("[kernel.mem.global.region.add] start={:#x} end={:#x} size={}",
+            start_phys, start_phys + size, size);
         let mut current_start = start_phys;
         let mut remaining_size = size;
 
@@ -101,16 +127,28 @@ impl LockFreeBuddyAllocator {
 
     pub fn alloc(&self, order: usize) -> Option<u64> {
         let core_id = crate::core_local::CoreLocal::get().core_id as usize % MAX_CORES;
-        
+
         // 1. Try local core shard (Wait-free local path)
         if let Some(phys) = self.pop_free_local(core_id, order) {
             self.mark_allocated(phys, order);
+            let block_size = PAGE_SIZE << order;
+            crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=local",
+                phys, block_size, order);
+            if diag_check_overlap(phys) {
+                crate::serial_println!("[kernel.mem.overlap.detected] phys={:#x} source=global_vs_boot_frame path=local order={}", phys, order);
+            }
             return Some(phys);
         }
 
         // 2. Try global backup list
         if let Some(phys) = self.pop_free_global(order) {
             self.mark_allocated(phys, order);
+            let block_size = PAGE_SIZE << order;
+            crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=global",
+                phys, block_size, order);
+            if diag_check_overlap(phys) {
+                crate::serial_println!("[kernel.mem.overlap.detected] phys={:#x} source=global_vs_boot_frame path=global order={}", phys, order);
+            }
             return Some(phys);
         }
 
@@ -124,6 +162,12 @@ impl LockFreeBuddyAllocator {
                     self.push_free_global(split_order, buddy);
                 }
                 self.mark_allocated(phys, order);
+                let block_size = PAGE_SIZE << order;
+                crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=split",
+                    phys, block_size, order);
+                if diag_check_overlap(phys) {
+                    crate::serial_println!("[kernel.mem.overlap.detected] phys={:#x} source=global_vs_boot_frame path=split order={}", phys, order);
+                }
                 return Some(phys);
             }
         }
