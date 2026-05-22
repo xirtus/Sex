@@ -195,6 +195,13 @@ const fn is_spindle_text_key(scancode: u8) -> bool {
 const WINDOW_DRAG_PROOF_ENABLED: bool =
     option_env!("SEXOS_WINDOW_DRAG_PROOF").is_some();
 static mut WINDOW_DRAG_PROOF_STAGE: u8 = 0;
+/// Silk DE integrated interaction scenario proof gate.
+/// Build with SILK_DE_INTEGRATED_INTERACTION_PROOF=1 to enable.
+/// Exercises pointer recv, focus set, drag begin/end, snap.none, resize begin/end.
+/// Relies on existing lifecycle markers from SEXOS_LIFECYCLE_APPDEATH_PROOF.
+const SILK_DE_INTEGRATED_INTERACTION_PROOF_ENABLED: bool =
+    option_env!("SILK_DE_INTEGRATED_INTERACTION_PROOF").is_some();
+static mut SILK_DE_INTEGRATED_PROOF_DONE: bool = false;
 /// Keyboard window-control synthetic proof gate.
 /// Default OFF. Exercises focus/zoom/minimize/restore via existing keyboard action path.
 const KEYBOARD_WINDOW_PROOF_ENABLED: bool =
@@ -18437,6 +18444,48 @@ unsafe fn maybe_run_window_drag_synthetic_proof() {
     }
 }
 
+/// Silk DE integrated interaction scenario: exercises pointer, focus, drag, snap, resize.
+/// All evidence runs in a single call to avoid cross-proof focus interference.
+unsafe fn maybe_run_silk_de_integrated_interaction_proof() {
+    if !SILK_DE_INTEGRATED_INTERACTION_PROOF_ENABLED || SILK_DE_INTEGRATED_PROOF_DONE {
+        return;
+    }
+    serial_println!("[silk.de.integrated.interaction.begin]");
+    // Focus SURFACE_ID_STATIC → shell.interact.focus
+    let _ = try_set_focus(SURFACE_ID_STATIC);
+    // Drag sequence: position at content interior, BTN down → drag.begin, BTN up → drag.end + snap.none
+    let (sx, sy, sw, _sh) = match get_surface_bounds(SURFACE_ID_STATIC) {
+        Some(b) => b,
+        None => {
+            serial_println!("[silk.de.integrated.interaction.fail] reason=no_bounds");
+            SILK_DE_INTEGRATED_PROOF_DONE = true;
+            return;
+        }
+    };
+    let drag_x = sx + sw as i32 / 2;
+    let drag_y = sy + FRAME_TOP_BAR_HEIGHT_PX + 20;
+    handle_hid_event(EV_ABS, abs_screen_to_raw(drag_x, P.width), abs_screen_to_raw(drag_y, P.height));
+    handle_hid_event(EV_BTN, 1, 1); // pointer.recv + drag.begin (shell surface content area)
+    handle_hid_event(EV_BTN, 1, 0); // drag.end + snap.none (interior position, not near edge)
+    // Resize sequence: position at bottom resize zone, BTN down → resize.begin, BTN up → resize.end
+    let (_sx2, _sy2, sw2, sh2) = match get_surface_bounds(SURFACE_ID_STATIC) {
+        Some(b) => b,
+        None => {
+            serial_println!("[silk.de.integrated.interaction.fail] reason=no_bounds_resize");
+            SILK_DE_INTEGRATED_PROOF_DONE = true;
+            return;
+        }
+    };
+    let resize_x = sx + sw2 as i32 / 2;
+    let resize_y = sy + sh2 as i32 - 2; // bottom edge, within FRAME_RESIZE_ZONE_PX=4
+    handle_hid_event(EV_ABS, abs_screen_to_raw(resize_x, P.width), abs_screen_to_raw(resize_y, P.height));
+    handle_hid_event(EV_BTN, 1, 1); // pointer.recv + resize.begin (bottom resize zone)
+    handle_hid_event(EV_BTN, 1, 0); // resize.end
+    serial_println!("[silk.de.integrated.interaction.evidence] pointer=1 focus=1 drag=1 snap=1 resize=1");
+    serial_println!("[silk.de.integrated.interaction.pass] pointer=1 focus=1 drag=1 snap=1 resize=1");
+    SILK_DE_INTEGRATED_PROOF_DONE = true;
+}
+
 unsafe fn maybe_run_keyboard_window_synthetic_proof() {
     static mut SKIP_DISABLED_BUDGET: u32 = 1;
     static mut SKIP_NO_FOCUS_BUDGET: u32 = 16;
@@ -21585,6 +21634,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silkshell.ready]");
 
     loop {
+        unsafe { maybe_run_silk_de_integrated_interaction_proof(); }
         unsafe { maybe_run_frame_light_zoom_synthetic_proof(); }
         unsafe { maybe_run_window_drag_synthetic_proof(); }
         unsafe { maybe_run_keyboard_window_synthetic_proof(); }

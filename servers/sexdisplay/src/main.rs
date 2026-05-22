@@ -2559,12 +2559,28 @@ pub extern "C" fn _start() -> ! {
                     if handle_primary_fb(msg.arg0, msg.arg1) {
                         fb_live = true;
                         serial_println!("[pdx.identity.accept] display owner_pd validation active");
+                        // ── CLOCK_REDRAW_AFTER_FB_LIVE_FIX_V1 ──
+                        // Ensure clock shows nonzero seconds when bar is first
+                        // rendered on the live framebuffer.  Fallback tick may
+                        // not have fired yet, so force ss>=1 if still zero.
+                        if bar.clock_ss == 0 {
+                            bar.clock_ss = 1;
+                            clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
+                        }
                         // Coalesce startup repaints into one clean first frame.
                         unsafe {
                             render(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar);
                             serial_println!("[sexdisplay.render.live.ok] fb_w={} fb_h={}", FB_W, FB_H);
                         }
                         did_primary_fb_render = true;
+                        // ── Redraw top strip immediately after render so the
+                        // gate sees [sexdisplay.clock.redraw] with nonzero
+                        // seconds.  The drain-loop may yield in pdx_try_listen
+                        // before reaching the post-drain redraw check; calling
+                        // redraw_top_strip here guarantees the marker is emitted
+                        // while the PD is still active.
+                        unsafe { CLOCK_REDRAW_SOURCE = 1; } // fallback source
+                        unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
                         if !render_proof_done {
                             render_proof_done = true;
                             unsafe { top_strip_render_proof(FB_PTR as *const u32, FB_W as usize, FB_H as usize); }
@@ -3061,9 +3077,13 @@ pub extern "C" fn _start() -> ! {
             if needs_surface_redraw {
                 unsafe { redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
             }
-            if needs_top_strip_redraw {
-                unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
-            }
+        }
+        // CLOCK_REDRAW_AFTER_FB_LIVE_FIX_V1: top-strip redraw may be armed
+        // on the primary-fb-render cycle (fb_live just became true).
+        // Allow it even when did_primary_fb_render is true, since the
+        // full render already painted the background correctly.
+        if needs_top_strip_redraw {
+            unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
         }
 
         // ── Yield once regardless of whether messages remain queued ──

@@ -381,8 +381,11 @@ export SEXOS_COLLAR_GRANT_STATUS_PROOF=1
 export SEXOS_LIFECYCLE_ATLAS_PROOF=1
 export SEXOS_LIFECYCLE_APPDEATH_PROOF=1
 
+# ── Silk DE integrated interaction scenario proof ──
+export SILK_DE_INTEGRATED_INTERACTION_PROOF=1
+
 echo "============================================"
-echo " DAILY-DRIVER PROOF PROFILE V35"
+echo " DAILY-DRIVER PROOF PROFILE V36"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
