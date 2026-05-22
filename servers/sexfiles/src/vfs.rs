@@ -30,9 +30,17 @@ static DISKFS_SELECTED_PATH_ID: AtomicU64 = AtomicU64::new(0);
 /// Whether a SELECT has been issued at least once since boot.
 static DISKFS_SELECT_USED: AtomicU64 = AtomicU64::new(0);
 
-fn diskfs_bridge_get_buf_va() -> u64 {
+static DISKFS_BRIDGE_REUSE_PRINTED: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn diskfs_bridge_get_buf_va() -> u64 {
     let va = DISKFS_BRIDGE_BUF_VA.load(Ordering::Relaxed);
     if va != 0 && va != u64::MAX {
+        if DISKFS_BRIDGE_REUSE_PRINTED.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.buf.reuse] va={:#x}",
+                va
+            );
+        }
         return va;
     }
     let new_va = sex_pdx::sys_grant_mem_lend(
@@ -207,8 +215,8 @@ fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64) -> u64 {
 
 fn handle_diskfs_read(byte_offset: u64, max_len: u64, caller_pd: u32) -> u64 {
     crate::pdx::serial_println!(
-        "[sexfiles.bridge.diskfs.read.recv] caller={} off={} len={}",
-        caller_pd, byte_offset, max_len
+        "[sexfiles.bridge.diskfs.recv] op=0x39 offset={}",
+        byte_offset
     );
 
     if max_len == 0 || max_len > messages::DISKFS_MAX_READ as u64 {
@@ -280,6 +288,10 @@ fn handle_diskfs_read(byte_offset: u64, max_len: u64, caller_pd: u32) -> u64 {
                 i += 1;
             }
             crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.read.ok] offset={} read={}",
+                byte_offset, n
+            );
+            crate::pdx::serial_println!(
                 "[sexfiles.bridge.diskfs.read.reply] caller={} value={:#x} off={} read={}",
                 caller_pd, reply, byte_offset, n
             );
@@ -297,7 +309,7 @@ fn handle_diskfs_read(byte_offset: u64, max_len: u64, caller_pd: u32) -> u64 {
 
 fn handle_diskfs_flush() -> u64 {
     crate::pdx::serial_println!(
-        "[sexfiles.bridge.diskfs.recv] op=0x3A flush"
+        "[sexfiles.bridge.diskfs.recv] op=0x3A"
     );
     let status = DiskFs::diskfs_fsync();
     if status == 0 {
@@ -313,7 +325,7 @@ fn handle_diskfs_flush() -> u64 {
 
 fn handle_diskfs_stat() -> u64 {
     crate::pdx::serial_println!(
-        "[sexfiles.bridge.diskfs.recv] op=0x3B stat"
+        "[sexfiles.bridge.diskfs.recv] op=0x3B"
     );
     let path_id = DISKFS_SELECTED_PATH_ID.load(Ordering::Relaxed);
     let path = match DiskFs::diskfs_path_for_id(path_id) {
@@ -336,7 +348,7 @@ fn handle_diskfs_stat() -> u64 {
 
 fn handle_diskfs_manifest_hash() -> u64 {
     crate::pdx::serial_println!(
-        "[sexfiles.bridge.diskfs.recv] op=0x3C manifest_hash"
+        "[sexfiles.bridge.diskfs.recv] op=0x3C"
     );
     let path_id = DISKFS_SELECTED_PATH_ID.load(Ordering::Relaxed);
     let path = match DiskFs::diskfs_path_for_id(path_id) {

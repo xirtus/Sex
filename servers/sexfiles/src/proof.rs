@@ -528,9 +528,7 @@ pub fn run_linen_disk_object_proof() {
     serial_println!("[linen.disk.object.proof.begin]");
 
     // ── Pre-grant single buffer for the entire proof ──
-    let buf_va = sex_pdx::sys_grant_mem_lend(
-        crate::pdx::SLOT_BLOCK, 4096, sex_pdx::SLOT_BUF_LEND,
-    );
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
         serial_println!("[linen.disk.object.proof] buf_grant_failed va={:#x}", buf_va);
         return;
@@ -1254,7 +1252,7 @@ pub fn run_sexfiles_real_block_proofs() {
     // Minimal fixed disk manifest proof (single object mapping).
     serial_println!("[sexfiles.disk.manifest.write.begin] lba={}", DISKFS_MANIFEST_LBA);
     let manifest_sector = DiskFs::proof_manifest_build_single_entry_sector();
-    let manifest_buf_va = sex_pdx::sys_grant_mem_lend(crate::pdx::SLOT_BLOCK, 4096, sex_pdx::SLOT_BUF_LEND);
+    let manifest_buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     let mut manifest_write_ok = false;
     let mut manifest_read_ok = false;
     let mut manifest_readback = [0u8; 512];
@@ -1544,9 +1542,7 @@ fn run_sexfiles_disk_file_ops_proofs() {
     serial_println!("[sexfiles.disk.file.ops.proof.start]");
 
     // ── Pre-grant single buffer for the entire proof ──
-    let buf_va = sex_pdx::sys_grant_mem_lend(
-        crate::pdx::SLOT_BLOCK, 4096, sex_pdx::SLOT_BUF_LEND,
-    );
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
         serial_println!("[sexfiles.disk.file.ops.proof.done] buf_grant_failed");
         return;
@@ -2322,7 +2318,7 @@ pub fn run_diskfs_multi_object_proofs() {
     serial_println!("[sexfiles.disk.multi.proof.begin]");
 
     // ── Phase 0: Ensure V2 manifest ──
-    let buf_va = sex_pdx::sys_grant_mem_lend(sex_pdx::SLOT_BLOCK, 4096, sex_pdx::SLOT_BUF_LEND);
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
         serial_println!("[sexfiles.disk.multi.proof.err] reason=grant_failed");
         return;
