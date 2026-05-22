@@ -118,6 +118,9 @@ gate_browser_localdoc_stub="SKIP"
 gate_browser_placeholder_surface_visual="SKIP"
 gate_webstub_localdoc_text="SKIP"
 gate_linen_persist_readback="SKIP"
+gate_linen_sexfiles100_audit="SKIP"
+gate_linen_objects_list="SKIP"
+gate_linen_ramfs_crud="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -3772,6 +3775,30 @@ elif [ "$(has 'linen\.persist\.truth\]')" -ge 1 ]; then
     gate_linen_persist_readback="PASS"
 else gate_linen_persist_readback="SKIP"; fi
 
+# ---- 74. linen_sexfiles100_audit ----
+if [ "$(has 'linen\.sexfiles100\.audit\.done.*ok=1')" -eq 1 ]; then
+    gate_linen_sexfiles100_audit="PASS"
+    print_row "linen_sexfiles100_audit" "PASS" "sexfiles100 tier baseline scaffold"
+elif [ "$(has 'linen\.sexfiles100\.audit\.begin')" -ge 1 ]; then
+    gate_linen_sexfiles100_audit="FAIL"
+else gate_linen_sexfiles100_audit="SKIP"; fi
+
+# ---- 75. linen_objects_list ----
+if [ "$(has 'linen\.objects\.seeds?')" -ge 1 ] && [ "$(has 'linen\.objects\.list\.done')" -ge 1 ]; then
+    gate_linen_objects_list="PASS"
+    print_row "linen_objects_list" "PASS" "object list markers complete"
+elif [ "$(has 'linen\.objects\.list\.begin')" -ge 1 ]; then
+    gate_linen_objects_list="FAIL"
+else gate_linen_objects_list="SKIP"; fi
+
+# ---- 76. linen_ramfs_crud ----
+if [ "$(has 'linen\.ramfs\.crud\.done')" -ge 1 ] && [ "$(has 'linen\.ramfs\.read\.match.*ok=1')" -eq 1 ]; then
+    gate_linen_ramfs_crud="PASS"
+    print_row "linen_ramfs_crud" "PASS" "ramfs readback verify matches"
+elif [ "$(has 'linen\.ramfs\.crud\.begin')" -ge 1 ]; then
+    gate_linen_ramfs_crud="FAIL"
+else gate_linen_ramfs_crud="SKIP"; fi
+
 # ---- 71. silk_glass_color ----
 if [ "$(has 'silk\.glass\.safe_color_pass\.done.*ok=1')" -eq 1 ]; then
     gate_silk_glass_color="PASS"
@@ -4997,6 +5024,9 @@ ALL_GATES=(
     "silk_de_frame_lights_current_tier:$gate_silk_de_frame_lights_current_tier"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"
+    "linen_sexfiles100_audit:$gate_linen_sexfiles100_audit"
+    "linen_objects_list:$gate_linen_objects_list"
+    "linen_ramfs_crud:$gate_linen_ramfs_crud"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
     "spindle_frame_chrome:$gate_spindle_frame_chrome"

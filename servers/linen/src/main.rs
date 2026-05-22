@@ -1219,7 +1219,9 @@ unsafe fn linen_persist_object(
 /// Objects are owned by Linen PD (LINEN_OWN_PD). Falls back to local-only on persist error.
 /// Called unconditionally at boot before the event loop.
 unsafe fn linen_init_session() {
+    serial_println!("[linen.sexfiles100.audit.begin]");
     serial_println!("[linen.sexfiles.list.begin]");
+    serial_println!("[linen.objects.list.begin]");
 
     let entries: [(&[u8], session::ObjectKind); 5] = [
         (b"SexOS Kernel",  session::ObjectKind::Document),
@@ -1228,8 +1230,10 @@ unsafe fn linen_init_session() {
         (b"Sessions",      session::ObjectKind::Session),
         (b"SexFiles Root", session::ObjectKind::Document),
     ];
+    serial_println!("[linen.objects.seed] count=5");
 
     let mut count: u8 = 0;
+    let mut first_persisted: bool = false;
     for (name_bytes, kind) in &entries {
         let name_len = name_bytes.len().min(LINEN_MAX_NAME);
         match SESSION.create(*kind, &name_bytes[..name_len], LINEN_OWN_PD) {
@@ -1241,8 +1245,15 @@ unsafe fn linen_init_session() {
                     Ok((handle, sfid)) => {
                         let _ = SESSION.set_persisted(id, handle);
                         let _ = SESSION.set_sexfiles_object_id(id, sfid);
+                        serial_println!("[linen.objects.list.item] id={} kind={}",
+                            id, *kind as u8);
                         serial_println!("[linen.sexfiles.init.object] id={} kind={} handle={} sfid={}",
                             id, *kind as u8, handle, sfid);
+                        if !first_persisted {
+                            serial_println!("[linen.objects.select.ok] id={} sfid={} kind={}",
+                                id, sfid, *kind as u8);
+                            first_persisted = true;
+                        }
                         serial_println!("[linen.sexfiles.readback.begin] id={}", id);
                         linen_readback_verify(id);
                     }
@@ -1264,12 +1275,15 @@ unsafe fn linen_init_session() {
     } else {
         serial_println!("[linen.sexfiles.list.fallback] reason=session_full");
     }
+    serial_println!("[linen.objects.list.done] count={}", count);
+    serial_println!("[linen.sexfiles100.audit.done] ok=1 count={}", count);
 }
 
 /// Reopen Linen meta-file by name and verify filename bytes via OP_RAMFS_READNAME.
 /// Reopens because linen_persist_object closes the handle on return.
 /// Meta filename: "lo.{object_id:016x}" (19 bytes). Reads in 8-byte chunks.
 unsafe fn linen_readback_verify(object_id: u64) {
+    serial_println!("[linen.ramfs.crud.begin] id={}", object_id);
     const META_LEN: usize = 19; // "lo." + 16 hex chars
     let meta = make_linen_meta_name(object_id);
     let (n0, n1) = pack_name(&meta);
@@ -1282,6 +1296,8 @@ unsafe fn linen_readback_verify(object_id: u64) {
         Ok(h) => h,
         Err(e) => {
             serial_println!("[linen.sexfiles.readback.err] id={} err={} stage=open", object_id, e);
+            serial_println!("[linen.ramfs.read.match] id={} ok=0 reason=open_failed", object_id);
+            serial_println!("[linen.ramfs.crud.done] id={}", object_id);
             return;
         }
     };
@@ -1310,13 +1326,20 @@ unsafe fn linen_readback_verify(object_id: u64) {
         chunk += 1;
     }
     let _ = pdx_storage_sync(OP_RAMFS_CLOSE, handle, 0, 0);
-    if bad { return; }
+    if bad {
+        serial_println!("[linen.ramfs.read.match] id={} ok=0 reason=name_read_error", object_id);
+        serial_println!("[linen.ramfs.crud.done] id={}", object_id);
+        return;
+    }
     if &buf[..META_LEN] == &meta[..META_LEN] {
         serial_println!("[linen.sexfiles.readback.ok] id={} len={}", object_id, META_LEN);
+        serial_println!("[linen.ramfs.read.match] id={} len={} ok=1", object_id, META_LEN);
     } else {
         serial_println!("[linen.sexfiles.readback.err] id={} err=name_mismatch stage=compare",
             object_id);
+        serial_println!("[linen.ramfs.read.match] id={} ok=0 reason=name_mismatch", object_id);
     }
+    serial_println!("[linen.ramfs.crud.done] id={}", object_id);
 }
 
 // ── Synthetic Proof ─────────────────────────────────────────────────────────
