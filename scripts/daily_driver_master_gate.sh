@@ -4041,7 +4041,7 @@ else
 fi
 
 # ---- 89b. silk_de_renderer_conformance ----
-if [ "$(has 'silk\.de\.renderer\.conformance\.begin')" -eq 0 ]; then
+if [ "$(has 'silk\.de\.renderer\.conformance\.begin')" -eq 0 ] || [ "$(has 'silk\.de\.topstrip\.proof\.begin')" -eq 0 ]; then
     gate_silk_de_renderer_conformance="SKIP"
     print_row "silk_de_renderer_conformance" "SKIP" "conformance not requested (missing explicit begin marker)"
 elif [ "$(has 'silk\.de\.renderer\.conformance\.fail')" -ge 1 ]; then
