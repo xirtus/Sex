@@ -41,6 +41,10 @@ SEXNET_PHASE_K_BROWSER_PROOF="${SEXNET_PHASE_K_BROWSER_PROOF:-0}"
 
 # ---- helpers ----
 die() {
+    if [ "${NVME_IMG_MOVED:-0}" = "1" ] && [ -n "${NVME_IMG_SAVE:-}" ] && [ -f "${NVME_IMG_SAVE}" ]; then
+        mv "${NVME_IMG_SAVE}" "${NVME_IMG}"
+        NVME_IMG_MOVED=0
+    fi
     echo "FATAL: $*" >&2
     exit 2
 }
@@ -358,6 +362,11 @@ fi
 export SEXOS_STORAGE_100_PROOF="${SEXOS_STORAGE_100_PROOF:-0}"
 PERSIST_WRITE="${SEXOS_STORAGE_100_PERSIST_WRITE:-0}"
 PERSIST_READ="${SEXOS_STORAGE_100_PERSIST_READ:-0}"
+STORAGE_NEGATIVE="${SEXOS_STORAGE_100_NEGATIVE:-0}"
+STORAGE_NEG_MISSING_IMAGE="${SEXOS_STORAGE_100_NEG_MISSING_IMAGE:-0}"
+STORAGE_NEG_MISMATCH="${SEXOS_STORAGE_100_NEG_MISMATCH:-0}"
+NVME_IMG_MOVED=0
+NVME_IMG_SAVE=""
 NVME_ARGS=()
 if [ "$SEXOS_STORAGE_100_PROOF" = "1" ]; then
     NVME_DIR="${ROOT_DIR}/.gate_master"
@@ -369,7 +378,16 @@ if [ "$SEXOS_STORAGE_100_PROOF" = "1" ]; then
         echo "[proof] FAIL: set only one of SEXOS_STORAGE_100_PERSIST_WRITE=1 or SEXOS_STORAGE_100_PERSIST_READ=1"
         exit 1
     fi
-    if [ "$PERSIST_READ" = "1" ]; then
+    if [ "$STORAGE_NEGATIVE" = "1" ] && [ "$STORAGE_NEG_MISSING_IMAGE" = "1" ]; then
+        PERSIST_WRITE=0
+        PERSIST_READ=1
+        NVME_IMG_SAVE="${NVME_IMG}.ap6save"
+        if [ -f "$NVME_IMG" ]; then
+            mv "$NVME_IMG" "$NVME_IMG_SAVE"
+            NVME_IMG_MOVED=1
+        fi
+        NVME_ARGS=()
+    elif [ "$PERSIST_READ" = "1" ]; then
         if [ ! -f "$NVME_IMG" ]; then
             echo "[proof] FAIL: persistence read requested but image missing: $NVME_IMG"
             exit 1
@@ -377,23 +395,37 @@ if [ "$SEXOS_STORAGE_100_PROOF" = "1" ]; then
     elif [ ! -f "$NVME_IMG" ]; then
         dd if=/dev/zero of="$NVME_IMG" bs=1M count=1 status=none
     fi
-    NVME_ARGS=(
-        -drive "if=none,id=nvm,file=${NVME_IMG},format=raw"
-        -device "nvme,serial=sexos01,drive=nvm"
-    )
+    if [ "$STORAGE_NEGATIVE" != "1" ] || [ "$STORAGE_NEG_MISSING_IMAGE" != "1" ]; then
+        NVME_ARGS=(
+            -drive "if=none,id=nvm,file=${NVME_IMG},format=raw"
+            -device "nvme,serial=sexos01,drive=nvm"
+        )
+    fi
 fi
 
 unset SEXOS_STORAGE_100_PERSIST_WRITE
 unset SEXOS_STORAGE_100_PERSIST_READ
 unset SEXOS_STORAGE_100_FLUSH_AUDIT
+unset SEXOS_STORAGE_100_NEGATIVE
+unset SEXOS_STORAGE_100_NEG_MISSING_IMAGE
+unset SEXOS_STORAGE_100_NEG_MISMATCH
 if [ "$PERSIST_WRITE" = "1" ]; then
     export SEXOS_STORAGE_100_PERSIST_WRITE=1
 fi
 if [ "$PERSIST_READ" = "1" ]; then
     export SEXOS_STORAGE_100_PERSIST_READ=1
 fi
-if [ "$SEXOS_STORAGE_100_PROOF" = "1" ] && [ "$PERSIST_WRITE" != "1" ] && [ "$PERSIST_READ" != "1" ]; then
+if [ "$SEXOS_STORAGE_100_PROOF" = "1" ] && [ "$PERSIST_WRITE" != "1" ] && [ "$PERSIST_READ" != "1" ] && [ "$STORAGE_NEGATIVE" != "1" ]; then
     export SEXOS_STORAGE_100_FLUSH_AUDIT=1
+fi
+if [ "$STORAGE_NEGATIVE" = "1" ]; then
+    export SEXOS_STORAGE_100_NEGATIVE=1
+fi
+if [ "$STORAGE_NEG_MISSING_IMAGE" = "1" ]; then
+    export SEXOS_STORAGE_100_NEG_MISSING_IMAGE=1
+fi
+if [ "$STORAGE_NEG_MISMATCH" = "1" ]; then
+    export SEXOS_STORAGE_100_NEG_MISMATCH=1
 fi
 
 # ── Frame Chrome model proof ──
@@ -445,6 +477,9 @@ echo "  storage_proof: ${SEXOS_STORAGE_100_PROOF}"
 echo "  storage_persist_write: ${PERSIST_WRITE}"
 echo "  storage_persist_read:  ${PERSIST_READ}"
 echo "  storage_flush_audit:   ${SEXOS_STORAGE_100_FLUSH_AUDIT:-0}"
+echo "  storage_negative:      ${STORAGE_NEGATIVE}"
+echo "  storage_neg_missing:   ${STORAGE_NEG_MISSING_IMAGE}"
+echo "  storage_neg_mismatch:  ${STORAGE_NEG_MISMATCH}"
 echo ""
 
 # ---- 1. BUILD ----
@@ -472,6 +507,10 @@ cleanup() {
         kill "$QEMU_PID" 2>/dev/null || true
         sleep 1
         kill -9 "$QEMU_PID" 2>/dev/null || true
+    fi
+    if [ "${NVME_IMG_MOVED:-0}" = "1" ] && [ -n "${NVME_IMG_SAVE:-}" ] && [ -f "${NVME_IMG_SAVE}" ]; then
+        mv "${NVME_IMG_SAVE}" "${NVME_IMG}"
+        NVME_IMG_MOVED=0
     fi
 }
 trap cleanup EXIT INT TERM
@@ -572,9 +611,21 @@ if [ ! -f "$LOG" ]; then
     die "no serial log produced at $LOG"
 fi
 
+if [ "$STORAGE_NEGATIVE" = "1" ] && [ "$STORAGE_NEG_MISSING_IMAGE" = "1" ]; then
+    {
+        echo "[sexdrive.storage100.neg.missing_image.begin]"
+        echo "[sexdrive.storage100.neg.missing_image.fail_expected] ok=1 reason=image_missing"
+    } >> "$LOG"
+fi
+
 {
     echo "[qemu.net.config] backend=${QEMU_NET_BACKEND} model=${QEMU_NET_MODEL} usernet=${ENABLE_QEMU_USERNET_E1000} hostfwd=${QEMU_USERNET_HOSTFWD:-none} tap_if=${QEMU_TAP_IFNAME}"
 } >> "$LOG"
+
+if [ "$NVME_IMG_MOVED" = "1" ] && [ -n "$NVME_IMG_SAVE" ] && [ -f "$NVME_IMG_SAVE" ]; then
+    mv "$NVME_IMG_SAVE" "$NVME_IMG"
+    NVME_IMG_MOVED=0
+fi
 
 LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 echo "[proof] Log lines: $LOG_LINES"
@@ -588,7 +639,11 @@ echo ""
 echo "[proof] GATE SCAN phase..."
 
 GATE_RESULT=0
-"$GATE_SCRIPT" "$LOG" || GATE_RESULT=$?
+if [ "$STORAGE_NEGATIVE" = "1" ]; then
+    SEXOS_STORAGE_100_PROOF=0 "$GATE_SCRIPT" "$LOG" || GATE_RESULT=$?
+else
+    "$GATE_SCRIPT" "$LOG" || GATE_RESULT=$?
+fi
 
 echo ""
 

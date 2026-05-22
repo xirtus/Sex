@@ -81,6 +81,12 @@ const STORAGE_100_PERSIST_READ_ENABLED: bool =
     option_env!("SEXOS_STORAGE_100_PERSIST_READ").is_some();
 const STORAGE_100_FLUSH_AUDIT_ENABLED: bool =
     option_env!("SEXOS_STORAGE_100_FLUSH_AUDIT").is_some();
+const STORAGE_100_NEGATIVE_ENABLED: bool =
+    option_env!("SEXOS_STORAGE_100_NEGATIVE").is_some();
+const STORAGE_100_NEG_MISMATCH_ENABLED: bool =
+    option_env!("SEXOS_STORAGE_100_NEG_MISMATCH").is_some();
+const AP6_NEG_MISMATCH_LBA: u64 = 384;
+const AP6_NEG_MISMATCH_BYTES: u64 = NVME_LBA_BYTES;
 const MANIFEST_LBA: u64 = 2046;
 const PROOF_OBJECT_START_LBA: u64 = 2038;
 const PROOF_OBJECT_END_LBA: u64 = 2045;
@@ -1323,6 +1329,71 @@ fn nvme_storage100_flush_audit() -> u64 {
     BLOCK_ERR_NO_DEVICE
 }
 
+fn nvme_storage100_negative_mismatch() -> u64 {
+    let lba = AP6_NEG_MISMATCH_LBA;
+    let size = AP6_NEG_MISMATCH_BYTES;
+    let write_phys = sys_alloc_phys(PAGE_SIZE);
+    let write_va = sys_map_phys(write_phys, PAGE_SIZE);
+    let read_phys = sys_alloc_phys(PAGE_SIZE);
+    let read_va = sys_map_phys(read_phys, PAGE_SIZE);
+    if write_phys == 0 || write_phys == u64::MAX || (write_phys % PAGE_SIZE) != 0
+        || write_va == 0 || write_va == u64::MAX
+        || read_phys == 0 || read_phys == u64::MAX || (read_phys % PAGE_SIZE) != 0
+        || read_va == 0 || read_va == u64::MAX
+    {
+        serial_println!("[sexdrive.storage100.neg.mismatch.fail] reason=buf_alloc_invalid");
+        return BLOCK_ERR_NO_DEVICE;
+    }
+
+    serial_println!(
+        "[sexdrive.storage100.neg.mismatch.begin] lba={} bytes={}",
+        lba, size
+    );
+
+    unsafe {
+        for i in 0..(size as usize) {
+            let b = (0x5Au8 ^ (i as u8) ^ 0xC3u8) & 0xFFu8;
+            core::ptr::write_volatile((write_va as *mut u8).add(i), b);
+            core::ptr::write_volatile((read_va as *mut u8).add(i), 0u8);
+        }
+    }
+
+    let write_status = nvme_write_one_block(lba * NVME_LBA_BYTES, size, write_va);
+    if write_status != 0 {
+        serial_println!(
+            "[sexdrive.storage100.neg.mismatch.fail] reason=write_status status={}",
+            write_status
+        );
+        return write_status;
+    }
+    let read_status = nvme_read_into_mapped_va(lba * NVME_LBA_BYTES, size, read_va);
+    if read_status != 0 {
+        serial_println!(
+            "[sexdrive.storage100.neg.mismatch.fail] reason=read_status status={}",
+            read_status
+        );
+        return read_status;
+    }
+
+    unsafe {
+        let read_ptr = read_va as *const u8;
+        let mut expected = core::ptr::read_volatile(write_va as *const u8);
+        expected ^= 0x01;
+        let got = core::ptr::read_volatile(read_ptr);
+        if expected != got {
+            serial_println!(
+                "[sexdrive.storage100.neg.mismatch.detected] ok=1 first_bad=0 expected={} got={}",
+                expected as u64,
+                got as u64
+            );
+            return 0;
+        }
+    }
+
+    serial_println!("[sexdrive.storage100.neg.mismatch.fail] reason=unexpected_match");
+    BLOCK_ERR_BAD_LEN
+}
+
 fn nvme_probe_bar() {
     let map_va: u64;
     unsafe {
@@ -2254,6 +2325,14 @@ fn nvme_probe_bar() {
                 }
             } else if STORAGE_100_FLUSH_AUDIT_ENABLED {
                 let _ = nvme_storage100_flush_audit();
+            } else if STORAGE_100_NEGATIVE_ENABLED && STORAGE_100_NEG_MISMATCH_ENABLED {
+                let neg_status = nvme_storage100_negative_mismatch();
+                if neg_status != 0 {
+                    serial_println!(
+                        "[sexdrive.storage100.neg.mismatch.fail] reason=ap6_negative_status status={}",
+                        neg_status
+                    );
+                }
             }
         }
     }

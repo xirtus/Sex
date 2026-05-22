@@ -4756,6 +4756,30 @@ else
     print_row "sexdrive_storage_flush_durability" "SKIP" "storage AP5b proof not requested"
 fi
 
+# ---- sexdrive_storage_negatives (AP6) ----
+neg_begin_missing="$(has '[[]sexdrive\.storage100\.neg\.missing_image\.begin[]]')"
+neg_begin_mismatch="$(has '[[]sexdrive\.storage100\.neg\.mismatch\.begin[]]')"
+neg_begin=$((neg_begin_missing + neg_begin_mismatch))
+if [ "$neg_begin" -eq 0 ]; then
+    gate_sexdrive_storage_negatives="SKIP"
+    print_row "sexdrive_storage_negatives" "SKIP" "AP6 negative proofs not triggered"
+elif [ "$(has '#PF|#GP|panic|KERNEL PANIC|PAGE FAULT|GENERAL PROTECTION')" -ge 1 ]; then
+    gate_sexdrive_storage_negatives="FAIL"
+    print_row "sexdrive_storage_negatives" "FAIL" "fault/panic marker present during AP6"
+elif [ "$neg_begin_missing" -ge 1 ] && [ "$(has '[[]sexdrive\.storage100\.neg\.missing_image\.fail_expected[]] ok=1 reason=image_missing')" -eq 0 ]; then
+    gate_sexdrive_storage_negatives="FAIL"
+    print_row "sexdrive_storage_negatives" "FAIL" "missing-image negative started without expected fail marker"
+elif [ "$neg_begin_mismatch" -ge 1 ] && [ "$(has '[[]sexdrive\.storage100\.neg\.mismatch\.detected[]] ok=1 first_bad=[0-9]+ expected=[0-9]+ got=[0-9]+')" -eq 0 ]; then
+    gate_sexdrive_storage_negatives="FAIL"
+    print_row "sexdrive_storage_negatives" "FAIL" "mismatch negative started without detected marker"
+elif [ "$neg_begin_missing" -ge 1 ] && [ "$(has '[[]sexdrive\.storage100\.persist\.read\.done[]] blocks=4 ok=1')" -ge 1 ]; then
+    gate_sexdrive_storage_negatives="FAIL"
+    print_row "sexdrive_storage_negatives" "FAIL" "missing-image negative requested but persistence read unexpectedly passed"
+else
+    gate_sexdrive_storage_negatives="PASS"
+    print_row "sexdrive_storage_negatives" "PASS" "negative storage path detected and classified"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -5056,6 +5080,7 @@ ALL_GATES=(
     "sexdrive_storage_multiblock_rw:$gate_sexdrive_storage_multiblock_rw"
     "sexdrive_storage_reboot_persistence:$gate_sexdrive_storage_reboot_persistence"
     "sexdrive_storage_flush_durability:$gate_sexdrive_storage_flush_durability"
+    "sexdrive_storage_negatives:$gate_sexdrive_storage_negatives"
     "app_registry_lifecycle_v2:$gate_app_registry_lifecycle_v2"
     "spindle_slot_shell:$gate_spindle_slot_shell"
     "window_workflow_v2:$gate_window_workflow_v2"
