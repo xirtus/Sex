@@ -155,6 +155,7 @@ gate_sexnet_status_route="SKIP"
 gate_clock_visible_seconds="SKIP"
 gate_silk_de_contract_lock="SKIP"
 gate_silk_de_topstrip_deterministic="SKIP"
+gate_silk_de_renderer_conformance="SKIP"
 gate_browser_network_grant="SKIP"
 gate_http_client_status="SKIP"
 gate_http_req_builder="SKIP"
@@ -3979,6 +3980,29 @@ else
     print_row "silk_de_topstrip_deterministic" "SKIP" "observe mode or no strict pass/fail marker"
 fi
 
+# ---- 89b. silk_de_renderer_conformance ----
+if [ "$(has 'silk\.de\.renderer\.conformance\.begin')" -eq 0 ]; then
+    gate_silk_de_renderer_conformance="SKIP"
+    print_row "silk_de_renderer_conformance" "SKIP" "conformance not requested (missing explicit begin marker)"
+elif [ "$(has 'silk\.de\.renderer\.conformance\.fail')" -ge 1 ]; then
+    gate_silk_de_renderer_conformance="FAIL"
+    print_row "silk_de_renderer_conformance" "FAIL" "renderer conformance self-check fail marker present"
+elif [ "$(has 'silk\.de\.contract\.renderer\.fail|silk\.de\.topstrip\.proof\.fail')" -ge 1 ]; then
+    gate_silk_de_renderer_conformance="FAIL"
+    print_row "silk_de_renderer_conformance" "FAIL" "contract/topstrip fail marker present"
+elif [ "$(has '#PF|#GP|panic|KERNEL PANIC|fault\.kill.*(silkbar|sexdisplay)')" -eq 1 ]; then
+    gate_silk_de_renderer_conformance="FAIL"
+    print_row "silk_de_renderer_conformance" "FAIL" "fault marker present in silkbar/sexdisplay lane"
+elif [ "$(has 'silk\.de\.renderer\.conformance\.pass.*model=1.*renderer_only=1.*bounds=1.*policy=0.*drift=0')" -eq 1 ] && \
+     [ "$(has 'silk\.de\.contract\.renderer\.pass')" -eq 1 ] && \
+     [ "$(has 'silk\.de\.topstrip\.proof\.pass')" -eq 1 ]; then
+    gate_silk_de_renderer_conformance="PASS"
+    print_row "silk_de_renderer_conformance" "PASS" "renderer-only conformance + contract + deterministic topstrip proven"
+else
+    gate_silk_de_renderer_conformance="FAIL"
+    print_row "silk_de_renderer_conformance" "FAIL" "missing required pass markers"
+fi
+
 # ---- 90. spindle_atlas ----
 if [ "$(has 'spindle\.atlas\.proof\.done.*ok=1')" -eq 1 ]; then
     gate_spindle_atlas="PASS"
@@ -4828,6 +4852,7 @@ ALL_GATES=(
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "silk_de_contract_lock:$gate_silk_de_contract_lock"
     "silk_de_topstrip_deterministic:$gate_silk_de_topstrip_deterministic"
+    "silk_de_renderer_conformance:$gate_silk_de_renderer_conformance"
     "sexnet_passive:$gate_sexnet_passive"
     "linen_persist_readback:$gate_linen_persist_readback"
     "silk_glass_color:$gate_silk_glass_color"

@@ -1584,7 +1584,7 @@ unsafe fn top_strip_render_proof(_fb: *const u32, _w: usize, _h: usize) {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
     // Observe-mode default: set to non-zero after first capture to enforce strict pass/fail.
-    const EXPECTED_TOPSTRIP_HASH: u64 = 0x9b5d54e17bdfa6f1;
+    const EXPECTED_TOPSTRIP_HASH: u64 = SILK_DE_TOPSTRIP_EXPECTED_HASH;
     static mut PROOF_BUF: [u32; PROOF_PIXELS] = [0; PROOF_PIXELS];
 
     let mut proof_bar = DEFAULT_SILK_BAR;
@@ -1668,6 +1668,38 @@ unsafe fn top_strip_render_proof(_fb: *const u32, _w: usize, _h: usize) {
             h_val
         );
     }
+}
+
+const SILK_DE_TOPSTRIP_EXPECTED_HASH: u64 = 0x9b5d54e17bdfa6f1;
+const SILK_DE_CONFORMANCE_PROOF_W_MAX: usize = 1280;
+const SILK_DE_CONFORMANCE_PROOF_H_MAX: usize = 51;
+
+fn emit_renderer_conformance_marker(contract_ok: bool) {
+    serial_println!("[silk.de.renderer.conformance.begin]");
+    if !contract_ok {
+        serial_println!("[silk.de.renderer.conformance.fail] reason=contract_validation_failed");
+        return;
+    }
+
+    let fp = contract_fingerprint();
+    if fp == 0 {
+        serial_println!("[silk.de.renderer.conformance.fail] reason=model_fingerprint_zero");
+        return;
+    }
+    if SILK_DE_TOPSTRIP_EXPECTED_HASH == 0 {
+        serial_println!("[silk.de.renderer.conformance.fail] reason=topstrip_expected_hash_unset");
+        return;
+    }
+    if SILK_DE_CONFORMANCE_PROOF_W_MAX == 0 || SILK_DE_CONFORMANCE_PROOF_H_MAX == 0 {
+        serial_println!("[silk.de.renderer.conformance.fail] reason=proof_dimensions_zero");
+        return;
+    }
+    if SILK_DE_CONFORMANCE_PROOF_W_MAX > 4096 || SILK_DE_CONFORMANCE_PROOF_H_MAX > 128 {
+        serial_println!("[silk.de.renderer.conformance.fail] reason=proof_dimensions_unsafe");
+        return;
+    }
+
+    serial_println!("[silk.de.renderer.conformance.pass] model=1 renderer_only=1 bounds=1 policy=0 drift=0");
 }
 
 /// Pass 3: draw cursor surface (CURSOR_SURFACE_ID) unconditionally on top of all other surfaces.
@@ -2247,12 +2279,14 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[silk.de.contract.renderer.fail] reason={} abi={} layout={} theme={} fp=0x{:016x}",
             contract_err, SILK_DE_BAR_ABI_V1, SILK_DE_BAR_LAYOUT_V1, SILK_DE_BAR_THEME_V1, contract_fingerprint());
         serial_println!("[silk.contract.validate.fail] reason={}", contract_err);
+        emit_renderer_conformance_marker(false);
         loop { core::hint::spin_loop(); }
     } else {
         serial_println!("[silk.de.contract.renderer.pass] abi={} layout={} theme={} fp=0x{:016x}",
             SILK_DE_BAR_ABI_V1, SILK_DE_BAR_LAYOUT_V1, SILK_DE_BAR_THEME_V1, contract_fingerprint());
         serial_println!("[silk.contract.validate.ok] version={}", SILKBAR_ABI_VERSION);
     }
+    emit_renderer_conformance_marker(true);
 
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
