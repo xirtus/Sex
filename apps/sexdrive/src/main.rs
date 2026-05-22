@@ -646,6 +646,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
 
 fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     if size != WRITE_PROOF_LEN || src_va == 0 || src_va == u64::MAX {
+        serial_println!("[sexdrive.storage100.rw.fail] reason=bad_args");
         serial_println!(
             "[sexdrive.nvme.write.err] reason=bad_args offset={:#x} size={} src_va={:#x}",
             offset, size, src_va
@@ -654,6 +655,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     }
     let expected_offset = WRITE_PROOF_LBA * NVME_LBA_BYTES;
     if offset != expected_offset {
+        serial_println!("[sexdrive.storage100.rw.fail] reason=guard_offset_mismatch");
         serial_println!(
             "[sexdrive.nvme.write.err] reason=guard_offset_mismatch offset={:#x} expected={:#x}",
             offset, expected_offset
@@ -661,6 +663,8 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         return BLOCK_ERR_BAD_LEN;
     }
 
+    let lba = offset / NVME_LBA_BYTES;
+    serial_println!("[sexdrive.storage100.rw.begin] lba={} bytes={}", lba, size);
     serial_println!("[sexdrive.nvme.write.begin] offset={:#x} size={}", offset, size);
     serial_println!("[sexdrive.block.write.api.nvme.submit] begin=1 offset={:#x} size={}", offset, size);
 
@@ -698,6 +702,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     if write_phys == 0 || write_phys == u64::MAX || (write_phys % PAGE_SIZE) != 0
         || write_va == 0 || write_va == u64::MAX
     {
+        serial_println!("[sexdrive.storage100.rw.fail] reason=write_buf_invalid");
         serial_println!(
             "[sexdrive.nvme.write.err] reason=write_buf_invalid phys={:#x} va={:#x}",
             write_phys, write_va
@@ -710,18 +715,13 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         }
         let mut i = 0usize;
         while i < WRITE_PROOF_LEN as usize {
-            let b = core::ptr::read_volatile((src_va as *const u8).add(i));
+            let b = (0xA5u8 ^ (i as u8) ^ 0x3Cu8) & 0xFFu8;
             core::ptr::write_volatile((write_va as *mut u8).add(i), b);
             i += 1;
         }
     }
-    // Overwrite leading bytes with deterministic write marker.
-    unsafe {
-        core::ptr::write_volatile(write_va as *mut u64, WRITE_PROOF_MAGIC);
-        core::ptr::write_volatile((write_va + 8) as *mut u64, WRITE_PROOF_LBA);
-    }
 
-    let slba = offset / NVME_LBA_BYTES;
+    let slba = lba;
     let nlb = 0u32;
     let sqe_ptr = (io_sq_va as *mut u8).wrapping_add((sq_tail as usize) * 64) as *mut u32;
     unsafe {
@@ -736,6 +736,11 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr.add(11), (slba >> 32) as u32); // SLBA high
         core::ptr::write_volatile(sqe_ptr.add(12), nlb); // NLB=0 (one block)
     }
+    serial_println!(
+        "[sexdrive.storage100.write.submit] lba={} bytes={}",
+        slba,
+        size
+    );
     serial_println!(
         "[sexdrive.nvme.write.submit] cid={} nsid=1 slba={} nlb=0 prp1={:#x} sq_tail={}",
         write_cid as u64, slba, write_phys, sq_tail as u64
@@ -776,6 +781,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         }
     }
     if !done {
+        serial_println!("[sexdrive.storage100.rw.fail] reason=write_cqe_timeout");
         serial_println!(
             "[sexdrive.nvme.write.err] reason=cqe_timeout cid={} head={} phase={}",
             write_cid as u64, cq_head as u64, cq_phase as u64
@@ -786,6 +792,8 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     let sc = sf & 0xFF;
     let sct = (sf >> 8) & 0x7;
     if sc != 0 || sct != 0 {
+        serial_println!("[sexdrive.storage100.write.complete] status=1 bytes={}", size);
+        serial_println!("[sexdrive.storage100.rw.fail] reason=write_status_fail");
         serial_println!(
             "[sexdrive.nvme.write.err] reason=status_fail cid={} sc={} sct={} dw3={:#x}",
             write_cid as u64, sc as u64, sct as u64, dw3 as u64
@@ -801,14 +809,17 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     }
     serial_println!("[sexdrive.nvme.write.ok] cid={} slba={}", write_cid as u64, slba);
     serial_println!("[sexdrive.block.write.api.ok] cid={} slba={}", write_cid as u64, slba);
+    serial_println!("[sexdrive.storage100.write.complete] status=0 bytes={}", size);
 
     // Readback verify from same LBA
+    serial_println!("[sexdrive.storage100.read.submit] lba={} bytes={}", slba, size);
     serial_println!("[sexdrive.nvme.write.readback.begin] slba={}", slba);
     let read_phys = sys_alloc_phys(PAGE_SIZE);
     let read_va = sys_map_phys(read_phys, PAGE_SIZE);
     if read_phys == 0 || read_phys == u64::MAX || (read_phys % PAGE_SIZE) != 0
         || read_va == 0 || read_va == u64::MAX
     {
+        serial_println!("[sexdrive.storage100.rw.fail] reason=readback_buf_invalid");
         serial_println!(
             "[sexdrive.nvme.write.err] reason=readback_buf_invalid phys={:#x} va={:#x}",
             read_phys, read_va
@@ -861,6 +872,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         }
     }
     if !rb_done {
+        serial_println!("[sexdrive.storage100.rw.fail] reason=read_cqe_timeout");
         serial_println!(
             "[sexdrive.nvme.write.err] reason=readback_timeout cid={} head={} phase={}",
             read_cid as u64, cq_head as u64, cq_phase as u64
@@ -871,6 +883,8 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     let rb_sc = rb_sf & 0xFF;
     let rb_sct = (rb_sf >> 8) & 0x7;
     if rb_sc != 0 || rb_sct != 0 {
+        serial_println!("[sexdrive.storage100.read.complete] status=1 bytes={}", size);
+        serial_println!("[sexdrive.storage100.rw.fail] reason=read_status_fail");
         serial_println!(
             "[sexdrive.nvme.write.err] reason=readback_status_fail cid={} sc={} sct={} dw3={:#x}",
             read_cid as u64, rb_sc as u64, rb_sct as u64, rb_dw3 as u64
@@ -887,20 +901,27 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         NVME_IO_STATE.cq_head = cq_head;
         NVME_IO_STATE.cq_phase = cq_phase;
     }
+    serial_println!("[sexdrive.storage100.read.complete] status=0 bytes={}", size);
 
-    let rb_magic = unsafe { core::ptr::read_volatile(read_va as *const u64) };
-    if rb_magic == WRITE_PROOF_MAGIC {
-        serial_println!(
-            "[sexdrive.nvme.write.readback.match] magic={:#x} slba={}",
-            rb_magic, slba
-        );
-        0u64
-    } else {
-        serial_println!(
-            "[sexdrive.nvme.write.readback.mismatch] got={:#x} expect={:#x} slba={}",
-            rb_magic, WRITE_PROOF_MAGIC, slba
-        );
+    let mut mismatch = false;
+    let mut i = 0usize;
+    while i < WRITE_PROOF_LEN as usize {
+        let expect = (0xA5u8 ^ (i as u8) ^ 0x3Cu8) & 0xFFu8;
+        let got = unsafe { core::ptr::read_volatile((read_va as *const u8).add(i)) };
+        if got != expect {
+            mismatch = true;
+            break;
+        }
+        i += 1;
+    }
+    if mismatch {
+        serial_println!("[sexdrive.storage100.rw.fail] reason=byte_mismatch");
+        serial_println!("[sexdrive.storage100.read.match] lba={} bytes={} ok=0", slba, size);
         BLOCK_ERR_NO_DEVICE
+    } else {
+        serial_println!("[sexdrive.storage100.read.match] lba={} bytes={} ok=1", slba, size);
+        serial_println!("[sexdrive.storage100.rw.done] ok=1");
+        0u64
     }
 }
 
@@ -1911,6 +1932,21 @@ fn nvme_probe_bar() {
         NVME_IO_STATE.sq_tail = 0;
         NVME_IO_STATE.cq_head = 0;
         NVME_IO_STATE.cq_phase = 1;
+    }
+
+    // AP3: deterministic single-block write/read/match self-test on real NVMe IOQ.
+    // This only executes when NVMe BAR resolve + IOQ creation succeeded.
+    let ap3_buf_phys = sys_alloc_phys(PAGE_SIZE);
+    let ap3_buf_va = sys_map_phys(ap3_buf_phys, PAGE_SIZE);
+    if ap3_buf_phys == 0 || ap3_buf_phys == u64::MAX || (ap3_buf_phys % PAGE_SIZE) != 0
+        || ap3_buf_va == 0 || ap3_buf_va == u64::MAX
+    {
+        serial_println!("[sexdrive.storage100.rw.fail] reason=ap3_buf_alloc_invalid");
+    } else {
+        let ap3_status = nvme_write_readback_proof(WRITE_PROOF_LBA * NVME_LBA_BYTES, WRITE_PROOF_LEN, ap3_buf_va);
+        if ap3_status != 0 {
+            serial_println!("[sexdrive.storage100.rw.fail] reason=ap3_selftest_status status={}", ap3_status);
+        }
     }
 
     // One real IO READ proof (no BLOCK API wiring in this mission).

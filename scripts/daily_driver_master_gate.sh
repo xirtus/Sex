@@ -108,6 +108,7 @@ gate_linen_search_bridge="SKIP"
 gate_storage_phasea="SKIP"
 gate_storage_phaseb1="SKIP"
 gate_sexdrive_storage_ioq_ready="SKIP"
+gate_sexdrive_storage_single_block_rw="SKIP"
 gate_app_registry_lifecycle_v2="SKIP"
 gate_spindle_slot_shell="SKIP"
 gate_window_workflow_v2="SKIP"
@@ -4599,6 +4600,41 @@ else
     print_row "sexdrive_storage_ioq_ready" "SKIP" "storage AP2 proof not requested or begin marker missing"
 fi
 
+# ---- sexdrive_storage_single_block_rw (AP3) ----
+if [ "${SEXOS_STORAGE_100_PROOF:-0}" = "1" ]; then
+    if [ "$(has '[[]sexdrive\.storage100\.rw\.begin[]]')" -eq 0 ]; then
+        gate_sexdrive_storage_single_block_rw="SKIP"
+        print_row "sexdrive_storage_single_block_rw" "SKIP" "AP3 proof not triggered"
+    else
+        if [ "$(has '[[]sexdrive\.nvme\.ioq\.ready[]] qid=1 depth=16')" -eq 0 ]; then
+            gate_sexdrive_storage_single_block_rw="FAIL"
+            print_row "sexdrive_storage_single_block_rw" "FAIL" "rw.begin present but IOQ ready missing"
+        elif [ "$(has 'no_ioq_ready')" -ge 1 ]; then
+            gate_sexdrive_storage_single_block_rw="FAIL"
+            print_row "sexdrive_storage_single_block_rw" "FAIL" "no_ioq_ready observed during AP3 lane"
+        elif [ "$(has '[[]sexdrive\.storage100\.rw\.fail[]]')" -ge 1 ]; then
+            gate_sexdrive_storage_single_block_rw="FAIL"
+            print_row "sexdrive_storage_single_block_rw" "FAIL" "rw.fail marker present"
+        elif [ "$(has '[[]sexdrive\.storage100\.write\.complete[]] status=0 bytes=[0-9]+')" -eq 0 ] || \
+             [ "$(has '[[]sexdrive\.storage100\.read\.complete[]] status=0 bytes=[0-9]+')" -eq 0 ] || \
+             [ "$(has '[[]sexdrive\.storage100\.read\.match[]] lba=[0-9]+ bytes=[0-9]+ ok=1')" -eq 0 ] || \
+             [ "$(has '[[]sexdrive\.storage100\.rw\.done[]] ok=1')" -eq 0 ]; then
+            gate_sexdrive_storage_single_block_rw="FAIL"
+            print_row "sexdrive_storage_single_block_rw" "FAIL" "missing AP3 completion/match markers"
+        elif [ "$(has '[[]sexdrive\.storage100\.write\.complete[]] status=[1-9]')" -ge 1 ] || \
+             [ "$(has '[[]sexdrive\.storage100\.read\.complete[]] status=[1-9]')" -ge 1 ]; then
+            gate_sexdrive_storage_single_block_rw="FAIL"
+            print_row "sexdrive_storage_single_block_rw" "FAIL" "nonzero write/read completion status"
+        else
+            gate_sexdrive_storage_single_block_rw="PASS"
+            print_row "sexdrive_storage_single_block_rw" "PASS" "single-block write/read/match verified"
+        fi
+    fi
+else
+    gate_sexdrive_storage_single_block_rw="SKIP"
+    print_row "sexdrive_storage_single_block_rw" "SKIP" "storage AP3 proof not requested"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -4895,6 +4931,7 @@ ALL_GATES=(
     "storage_phasea:$gate_storage_phasea"
     "storage_phaseb1:$gate_storage_phaseb1"
     "sexdrive_storage_ioq_ready:$gate_sexdrive_storage_ioq_ready"
+    "sexdrive_storage_single_block_rw:$gate_sexdrive_storage_single_block_rw"
     "app_registry_lifecycle_v2:$gate_app_registry_lifecycle_v2"
     "spindle_slot_shell:$gate_spindle_slot_shell"
     "window_workflow_v2:$gate_window_workflow_v2"
