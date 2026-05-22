@@ -107,6 +107,7 @@ gate_spindle_editor_finish="SKIP"
 gate_linen_search_bridge="SKIP"
 gate_storage_phasea="SKIP"
 gate_storage_phaseb1="SKIP"
+gate_sexdrive_storage_ioq_ready="SKIP"
 gate_app_registry_lifecycle_v2="SKIP"
 gate_spindle_slot_shell="SKIP"
 gate_window_workflow_v2="SKIP"
@@ -4595,6 +4596,21 @@ for gate in "quil_paste:quil\.clipboard\.paste\.proof\.done.*ok=1" \
   fi
 done
 
+# ---- sexdrive_storage_ioq_ready (AP2) ----
+if [ "${SEXOS_STORAGE_100_PROOF:-0}" = "1" ] && [ "$(has '[[]sexdrive\.nvme\.bar\.resolve\.begin[]]')" -eq 1 ]; then
+    if [ "$(has '[[]sexdrive\.nvme\.ioq\.ready[]] qid=1 depth=16')" -eq 1 ] && \
+       [ "$(has '[[]kernel\.pci\.nvme\.absent[]]|[[]sexdrive\.device\.no_nvme_cap[]]|no_ioq_ready')" -eq 0 ]; then
+        gate_sexdrive_storage_ioq_ready="PASS"
+        print_row "sexdrive_storage_ioq_ready" "PASS" "NVMe IOQ ready marker present (qid=1 depth=16)"
+    else
+        gate_sexdrive_storage_ioq_ready="FAIL"
+        print_row "sexdrive_storage_ioq_ready" "FAIL" "missing IOQ ready marker or failure marker present"
+    fi
+else
+    gate_sexdrive_storage_ioq_ready="SKIP"
+    print_row "sexdrive_storage_ioq_ready" "SKIP" "storage AP2 proof not requested or begin marker missing"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -4890,6 +4906,7 @@ ALL_GATES=(
     "spindle_editor_finish:$gate_spindle_editor_finish"
     "storage_phasea:$gate_storage_phasea"
     "storage_phaseb1:$gate_storage_phaseb1"
+    "sexdrive_storage_ioq_ready:$gate_sexdrive_storage_ioq_ready"
     "app_registry_lifecycle_v2:$gate_app_registry_lifecycle_v2"
     "spindle_slot_shell:$gate_spindle_slot_shell"
     "window_workflow_v2:$gate_window_workflow_v2"

@@ -354,6 +354,24 @@ fi
 	    fi
 	fi
 
+# ── SexOS storage proof profile (AP2) ──
+export SEXOS_STORAGE_100_PROOF="${SEXOS_STORAGE_100_PROOF:-0}"
+NVME_ARGS=()
+if [ "$SEXOS_STORAGE_100_PROOF" = "1" ]; then
+    NVME_DIR="${ROOT_DIR}/.gate_master"
+    NVME_IMG="${NVME_DIR}/nvme.img"
+    if [ ! -d "$NVME_DIR" ]; then
+        mkdir -p "$NVME_DIR"
+    fi
+    if [ ! -f "$NVME_IMG" ]; then
+        dd if=/dev/zero of="$NVME_IMG" bs=1M count=1 status=none
+    fi
+    NVME_ARGS=(
+        -drive "if=none,id=nvm,file=${NVME_IMG},format=raw"
+        -device "nvme,serial=sexos01,drive=nvm"
+    )
+fi
+
 # ── Frame Chrome model proof ──
 export SEXOS_FRAME_CHROME_MODEL_PROOF=1
 export SEXOS_SPINDLE_FRAME_CHROME_PROOF=1
@@ -502,6 +520,7 @@ fi
     -device nec-usb-xhci,id=xhci \
     -device usb-kbd,bus=xhci.0 \
     "${QEMU_NET_ARGS[@]}" \
+    "${NVME_ARGS[@]}" \
     -serial "file:$LOG" \
     -display none \
     -no-reboot \
