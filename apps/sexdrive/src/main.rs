@@ -411,6 +411,13 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
 
     let slba = offset / NVME_LBA_BYTES;
     let nlb = (size / NVME_LBA_BYTES).saturating_sub(1);
+    let max_lba = WRITE_PROOF_LBA;
+    let last_lba = slba.saturating_add(nlb);
+    let range_ok = if slba > max_lba { 0u64 } else if nlb > (max_lba - slba) { 0u64 } else { 1u64 };
+    serial_println!(
+        "[sexdrive.nvme.cmd.range] path=typed slba={} nlb={} max_lba={} ok={}",
+        slba, nlb, max_lba, range_ok
+    );
     let sqe_ptr = (io_sq_va as *mut u8).wrapping_add((sq_tail as usize) * 64) as *mut u32;
     unsafe {
         for i in 0..16usize {
@@ -424,6 +431,10 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr.add(11), (slba >> 32) as u32); // SLBA high
         core::ptr::write_volatile(sqe_ptr.add(12), (nlb & 0xFFFF) as u32); // NLB (0-based)
     }
+    serial_println!(
+        "[sexdrive.nvme.cmd.shape] path=typed op=READ cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_cap={:#x} buffer_kind=memlend last_lba={}",
+        cid as u64, 1u64, slba, nlb, size, data_phys, 0u64, dst_va, data_phys, SLOT_BUF_LEND, last_lba
+    );
     compiler_fence(Ordering::SeqCst);
     serial_println!(
         "[sexdrive.nvme.submit.detail] path=typed op=READ cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
@@ -653,6 +664,13 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
 
     let slba = offset / NVME_LBA_BYTES;
     let nlb = 0u32;
+    let max_lba = WRITE_PROOF_LBA;
+    let last_lba = slba;
+    let range_ok = if slba <= max_lba { 1u64 } else { 0u64 };
+    serial_println!(
+        "[sexdrive.nvme.cmd.range] path=typed slba={} nlb={} max_lba={} ok={}",
+        slba, nlb as u64, max_lba, range_ok
+    );
     let sqe_ptr = (io_sq_va as *mut u8).wrapping_add((sq_tail as usize) * 64) as *mut u32;
     unsafe {
         for i in 0..16usize {
@@ -673,6 +691,10 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     serial_println!(
         "[sexdrive.block.write.api.nvme.submit] cid={} nsid=1 slba={} nlb=0 prp1={:#x}",
         write_cid as u64, slba, write_phys
+    );
+    serial_println!(
+        "[sexdrive.nvme.cmd.shape] path=typed op=WRITE cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_cap={:#x} buffer_kind=memlend last_lba={}",
+        write_cid as u64, 1u64, slba, nlb as u64, size, write_phys, 0u64, src_va, write_phys, SLOT_BUF_LEND, last_lba
     );
     serial_println!(
         "[sexdrive.nvme.submit.detail] path=typed op=WRITE cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
@@ -879,6 +901,10 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         write_cid as u64, slba, write_phys
     );
     serial_println!(
+        "[sexdrive.nvme.cmd.shape] path=selftest op=WRITE cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_kind=internal",
+        write_cid as u64, 1u64, slba, nlb as u64, size, write_phys, 0u64, write_va, write_phys
+    );
+    serial_println!(
         "[sexdrive.nvme.submit.detail] path=selftest op=WRITE cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
         write_cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
     );
@@ -1011,6 +1037,10 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr2.add(11), (slba >> 32) as u32);
         core::ptr::write_volatile(sqe_ptr2.add(12), 0u32);
     }
+    serial_println!(
+        "[sexdrive.nvme.cmd.shape] path=selftest op=READ cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_kind=internal",
+        read_cid as u64, 1u64, slba, 0u64, size, read_phys, 0u64, read_va, read_phys
+    );
     compiler_fence(Ordering::SeqCst);
     serial_println!(
         "[sexdrive.nvme.submit.detail] path=selftest op=READ cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
@@ -2837,6 +2867,10 @@ pub extern "C" fn _start() -> ! {
                                     "[sexdrive.block.read.handoff.err] reason=map_failed va={:#x}",
                                     fill_va
                                 );
+                                serial_println!(
+                                    "[sexdrive.nvme.cmd.shape.err] path=typed reason=memlend_map_failed buffer_cap={:#x}",
+                                    SLOT_BUF_LEND
+                                );
                                 BLOCK_ERR_NO_DEVICE
                             } else {
                                 serial_println!("[sexdrive.bufcap.map.ok] fill_va={:#x}", fill_va);
@@ -2883,6 +2917,10 @@ pub extern "C" fn _start() -> ! {
                             serial_println!(
                                 "[sexdrive.nvme.write.err] reason=map_failed va={:#x}",
                                 fill_va
+                            );
+                            serial_println!(
+                                "[sexdrive.nvme.cmd.shape.err] path=typed reason=memlend_map_failed buffer_cap={:#x}",
+                                SLOT_BUF_LEND
                             );
                             BLOCK_ERR_NO_DEVICE
                         } else {
