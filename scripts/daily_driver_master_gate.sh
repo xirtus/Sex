@@ -4262,14 +4262,15 @@ else gate_atlas_phase_d_frame_preview_stub="SKIP"; fi
 
 # ---- 90f. atlas_phase_e1_click_scene_switch ----
 # Phase E1: click Atlas scene card → switch active Scene → exit Atlas.
-# PASS if explicit begin and done markers are present.
-# PASS if explicit begin and negative empty-click marker is present (partial proof path).
-# SKIP unless explicit begin marker is present.
-# FAIL only when explicit begin is present but done/negative marker is missing, or faults are present.
-if [ "$(has 'silk\.atlas\.phase_e1\.begin\]')" -eq 0 ]; then
+# Gate hygiene:
+# silk.atlas.phase_e1.begin can appear in normal/default Atlas runtime.
+# It is NOT proof enablement. Require an explicit proof-profile sentinel.
+if [ "$(has 'silk\.atlas\.phase_e1\.proof\.begin\]')" -eq 0 ] && \
+   [ "$(has 'silk\.atlas\.phase_e1\.click_scene_switch\.proof\.begin\]')" -eq 0 ] && \
+   [ "$(has 'atlas\.phase_e1\.proof\.begin\]')" -eq 0 ]; then
     gate_atlas_phase_e1_click_scene_switch="SKIP"
-    print_row "atlas_phase_e1_click_scene_switch" "SKIP" "phase_e1 proof not enabled (missing explicit begin marker)"
-elif [ "$(has '#PF|#GP|panic|KERNEL PANIC|fault\.kill|faulted_task_halt|fault\.isolated')" -eq 1 ]; then
+    print_row "atlas_phase_e1_click_scene_switch" "SKIP" "phase_e1 proof not enabled (missing explicit proof begin marker)"
+elif [ "$(has_faults)" -eq 1 ]; then
     gate_atlas_phase_e1_click_scene_switch="FAIL"
     print_row "atlas_phase_e1_click_scene_switch" "FAIL" "fault marker present during phase_e1 proof window"
 elif [ "$(has 'silk\.atlas\.phase_e1\.done.*ok=1')" -eq 1 ]; then
@@ -4280,7 +4281,7 @@ elif [ "$(has 'silk\.atlas\.phase_e1\.negative\.empty_click.*ok=1')" -eq 1 ]; th
     print_row "atlas_phase_e1_click_scene_switch" "PASS" "negative empty-click proof complete (partial)"
 else
     gate_atlas_phase_e1_click_scene_switch="FAIL"
-    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "phase_e1 begin without done/negative completion marker"
+    print_row "atlas_phase_e1_click_scene_switch" "FAIL" "phase_e1 proof begin without done/negative completion marker"
 fi
 
 # ---- 90g. atlas_phase_e2_keyboard_scene_cycle ----
