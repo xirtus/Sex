@@ -69,6 +69,9 @@ const NVME_LBA_BYTES: u64 = 512;
 const WRITE_PROOF_LBA: u64 = 2047; // Final LBA in gate nvme.img (2048 sectors)
 const WRITE_PROOF_LEN: u64 = 512;
 const WRITE_PROOF_MAGIC: u64 = 0x3156_4554_4952_5753; // "SWRITEV1" LE
+const AP4_MULTI_BASE_LBA: u64 = 128;
+const AP4_MULTI_BLOCKS: u64 = 4;
+const AP4_MULTI_BLOCK_BYTES: u64 = NVME_LBA_BYTES;
 const MANIFEST_LBA: u64 = 2046;
 const PROOF_OBJECT_START_LBA: u64 = 2038;
 const PROOF_OBJECT_END_LBA: u64 = 2045;
@@ -923,6 +926,138 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         serial_println!("[sexdrive.storage100.rw.done] ok=1");
         0u64
     }
+}
+
+fn nvme_multiblock_write_readback_proof() -> u64 {
+    serial_println!(
+        "[sexdrive.storage100.multi.begin] base_lba={} blocks={} bytes_per_block={}",
+        AP4_MULTI_BASE_LBA,
+        AP4_MULTI_BLOCKS,
+        AP4_MULTI_BLOCK_BYTES
+    );
+    let mut b = 0u64;
+    while b < AP4_MULTI_BLOCKS {
+        let lba = AP4_MULTI_BASE_LBA + b;
+        serial_println!(
+            "[sexdrive.storage100.multi.block.begin] idx={} lba={} bytes={}",
+            b,
+            lba,
+            AP4_MULTI_BLOCK_BYTES
+        );
+
+        let write_phys = sys_alloc_phys(PAGE_SIZE);
+        let write_va = sys_map_phys(write_phys, PAGE_SIZE);
+        if write_phys == 0 || write_phys == u64::MAX || (write_phys % PAGE_SIZE) != 0
+            || write_va == 0 || write_va == u64::MAX
+        {
+            serial_println!("[sexdrive.storage100.multi.fail] reason=write_buf_invalid idx={} lba={}", b, lba);
+            return BLOCK_ERR_NO_DEVICE;
+        }
+        unsafe {
+            let mut i = 0usize;
+            while i < AP4_MULTI_BLOCK_BYTES as usize {
+                let val = (0xA5u8 ^ (i as u8) ^ ((b as u8).wrapping_mul(0x33u8)) ^ 0x3Cu8) & 0xFFu8;
+                core::ptr::write_volatile((write_va as *mut u8).add(i), val);
+                i += 1;
+            }
+        }
+
+        serial_println!(
+            "[sexdrive.storage100.multi.write.submit] idx={} lba={} bytes={}",
+            b,
+            lba,
+            AP4_MULTI_BLOCK_BYTES
+        );
+        let write_status = nvme_write_one_block(lba * NVME_LBA_BYTES, AP4_MULTI_BLOCK_BYTES, write_va);
+        if write_status != 0 {
+            serial_println!(
+                "[sexdrive.storage100.multi.write.complete] idx={} lba={} status=1 bytes={}",
+                b,
+                lba,
+                AP4_MULTI_BLOCK_BYTES
+            );
+            serial_println!("[sexdrive.storage100.multi.fail] reason=write_status_fail idx={} lba={}", b, lba);
+            return BLOCK_ERR_NO_DEVICE;
+        }
+        serial_println!(
+            "[sexdrive.storage100.multi.write.complete] idx={} lba={} status=0 bytes={}",
+            b,
+            lba,
+            AP4_MULTI_BLOCK_BYTES
+        );
+
+        let read_phys = sys_alloc_phys(PAGE_SIZE);
+        let read_va = sys_map_phys(read_phys, PAGE_SIZE);
+        if read_phys == 0 || read_phys == u64::MAX || (read_phys % PAGE_SIZE) != 0
+            || read_va == 0 || read_va == u64::MAX
+        {
+            serial_println!("[sexdrive.storage100.multi.fail] reason=read_buf_invalid idx={} lba={}", b, lba);
+            return BLOCK_ERR_NO_DEVICE;
+        }
+
+        serial_println!(
+            "[sexdrive.storage100.multi.read.submit] idx={} lba={} bytes={}",
+            b,
+            lba,
+            AP4_MULTI_BLOCK_BYTES
+        );
+        let read_status = nvme_read_into_mapped_va(lba * NVME_LBA_BYTES, AP4_MULTI_BLOCK_BYTES, read_va);
+        if read_status != 0 {
+            serial_println!(
+                "[sexdrive.storage100.multi.read.complete] idx={} lba={} status=1 bytes={}",
+                b,
+                lba,
+                AP4_MULTI_BLOCK_BYTES
+            );
+            serial_println!("[sexdrive.storage100.multi.fail] reason=read_status_fail idx={} lba={}", b, lba);
+            return BLOCK_ERR_NO_DEVICE;
+        }
+        serial_println!(
+            "[sexdrive.storage100.multi.read.complete] idx={} lba={} status=0 bytes={}",
+            b,
+            lba,
+            AP4_MULTI_BLOCK_BYTES
+        );
+
+        let mut i = 0usize;
+        let mut mismatch = false;
+        while i < AP4_MULTI_BLOCK_BYTES as usize {
+            let expected = (0xA5u8 ^ (i as u8) ^ ((b as u8).wrapping_mul(0x33u8)) ^ 0x3Cu8) & 0xFFu8;
+            let got = unsafe { core::ptr::read_volatile((read_va as *const u8).add(i)) };
+            if got != expected {
+                mismatch = true;
+                serial_println!(
+                    "[sexdrive.storage100.multi.read.match] idx={} lba={} ok=0 first_bad={} expected={} got={}",
+                    b,
+                    lba,
+                    i as u64,
+                    expected as u64,
+                    got as u64
+                );
+                serial_println!(
+                    "[sexdrive.storage100.multi.fail] reason=byte_mismatch idx={} lba={} first_bad={}",
+                    b,
+                    lba,
+                    i as u64
+                );
+                break;
+            }
+            i += 1;
+        }
+        if mismatch {
+            return BLOCK_ERR_NO_DEVICE;
+        }
+        serial_println!(
+            "[sexdrive.storage100.multi.read.match] idx={} lba={} bytes={} ok=1",
+            b,
+            lba,
+            AP4_MULTI_BLOCK_BYTES
+        );
+        serial_println!("[sexdrive.storage100.multi.block.done] idx={} lba={} ok=1", b, lba);
+        b += 1;
+    }
+    serial_println!("[sexdrive.storage100.multi.done] blocks={} ok=1", AP4_MULTI_BLOCKS);
+    0u64
 }
 
 /// [sexdrive.nvme.flush] — Issue NVMe FLUSH command (opcode 0x00) on IO queue 1.
@@ -1946,6 +2081,11 @@ fn nvme_probe_bar() {
         let ap3_status = nvme_write_readback_proof(WRITE_PROOF_LBA * NVME_LBA_BYTES, WRITE_PROOF_LEN, ap3_buf_va);
         if ap3_status != 0 {
             serial_println!("[sexdrive.storage100.rw.fail] reason=ap3_selftest_status status={}", ap3_status);
+        } else {
+            let ap4_status = nvme_multiblock_write_readback_proof();
+            if ap4_status != 0 {
+                serial_println!("[sexdrive.storage100.multi.fail] reason=ap4_selftest_status status={}", ap4_status);
+            }
         }
     }
 

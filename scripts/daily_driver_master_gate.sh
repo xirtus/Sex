@@ -109,6 +109,7 @@ gate_storage_phasea="SKIP"
 gate_storage_phaseb1="SKIP"
 gate_sexdrive_storage_ioq_ready="SKIP"
 gate_sexdrive_storage_single_block_rw="SKIP"
+gate_sexdrive_storage_multiblock_rw="SKIP"
 gate_app_registry_lifecycle_v2="SKIP"
 gate_spindle_slot_shell="SKIP"
 gate_window_workflow_v2="SKIP"
@@ -4281,15 +4282,15 @@ else
 fi
 
 # ---- 90g. atlas_phase_e2_keyboard_scene_cycle ----
-# Phase E2: keyboard cycle next/prev scene while Atlas is open.
-# PASS if explicit begin and done markers are present.
-# PASS if explicit begin and noop marker is present (single-scene case).
-# SKIP unless explicit begin marker is present.
-# FAIL only when explicit begin is present but done/noop is missing, or faults are present.
-if [ "$(has 'silk\.atlas\.phase_e2\.begin\]')" -eq 0 ]; then
+# Gate hygiene:
+# silk.atlas.phase_e2.begin is emitted during normal/default Atlas runtime.
+# It is NOT proof enablement. Require an explicit proof-profile sentinel.
+if [ "$(has 'silk\.atlas\.phase_e2\.proof\.begin\]')" -eq 0 ] && \
+   [ "$(has 'silk\.atlas\.phase_e2\.keyboard_scene_cycle\.proof\.begin\]')" -eq 0 ] && \
+   [ "$(has 'atlas\.phase_e2\.proof\.begin\]')" -eq 0 ]; then
     gate_atlas_phase_e2_keyboard_scene_cycle="SKIP"
-    print_row "atlas_phase_e2_keyboard_scene_cycle" "SKIP" "phase_e2 proof not enabled (missing explicit begin marker)"
-elif [ "$(has '#PF|#GP|panic|KERNEL PANIC|fault\.kill|faulted_task_halt|fault\.isolated')" -eq 1 ]; then
+    print_row "atlas_phase_e2_keyboard_scene_cycle" "SKIP" "phase_e2 proof not enabled (missing explicit proof begin marker)"
+elif [ "$(has_faults)" -eq 1 ]; then
     gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
     print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "fault marker present during phase_e2 proof window"
 elif [ "$(has 'silk\.atlas\.phase_e2\.done.*ok=1')" -eq 1 ]; then
@@ -4300,7 +4301,7 @@ elif [ "$(has 'silk\.atlas\.key\.scene\.noop.*ok=1')" -eq 1 ]; then
     print_row "atlas_phase_e2_keyboard_scene_cycle" "PASS" "keyboard scene cycle noop (single scene)"
 else
     gate_atlas_phase_e2_keyboard_scene_cycle="FAIL"
-    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "phase_e2 begin without done/noop completion marker"
+    print_row "atlas_phase_e2_keyboard_scene_cycle" "FAIL" "phase_e2 proof begin without done/noop completion marker"
 fi
 
 # ---- 90h. atlas_phase_e3_drag_begin_marker ----
@@ -4635,6 +4636,44 @@ else
     print_row "sexdrive_storage_single_block_rw" "SKIP" "storage AP3 proof not requested"
 fi
 
+# ---- sexdrive_storage_multiblock_rw (AP4) ----
+if [ "${SEXOS_STORAGE_100_PROOF:-0}" = "1" ]; then
+    if [ "$(has '[[]sexdrive\.storage100\.multi\.begin[]] base_lba=128 blocks=4 bytes_per_block=512')" -eq 0 ]; then
+        gate_sexdrive_storage_multiblock_rw="SKIP"
+        print_row "sexdrive_storage_multiblock_rw" "SKIP" "AP4 proof not triggered"
+    else
+        if [ "$(has '[[]sexdrive\.nvme\.ioq\.ready[]] qid=1 depth=16')" -eq 0 ]; then
+            gate_sexdrive_storage_multiblock_rw="FAIL"
+            print_row "sexdrive_storage_multiblock_rw" "FAIL" "multi.begin present but IOQ ready missing"
+        elif [ "$(has 'no_ioq_ready')" -ge 1 ]; then
+            gate_sexdrive_storage_multiblock_rw="FAIL"
+            print_row "sexdrive_storage_multiblock_rw" "FAIL" "no_ioq_ready observed during AP4 lane"
+        elif [ "$(has '[[]sexdrive\.storage100\.multi\.fail[]]')" -ge 1 ]; then
+            gate_sexdrive_storage_multiblock_rw="FAIL"
+            print_row "sexdrive_storage_multiblock_rw" "FAIL" "multi.fail marker present"
+        elif [ "$(has '[[]sexdrive\.storage100\.multi\.done[]] blocks=4 ok=1')" -eq 0 ]; then
+            gate_sexdrive_storage_multiblock_rw="FAIL"
+            print_row "sexdrive_storage_multiblock_rw" "FAIL" "missing multi.done success marker"
+        elif [ "$(count '[[]sexdrive\.storage100\.multi\.write\.complete[]] idx=[0-3] lba=(12[8-9]|13[0-1]) status=0 bytes=512')" -lt 4 ] || \
+             [ "$(count '[[]sexdrive\.storage100\.multi\.read\.complete[]] idx=[0-3] lba=(12[8-9]|13[0-1]) status=0 bytes=512')" -lt 4 ] || \
+             [ "$(count '[[]sexdrive\.storage100\.multi\.read\.match[]] idx=[0-3] lba=(12[8-9]|13[0-1]) bytes=512 ok=1')" -lt 4 ]; then
+            gate_sexdrive_storage_multiblock_rw="FAIL"
+            print_row "sexdrive_storage_multiblock_rw" "FAIL" "missing one or more AP4 block completion/match markers"
+        elif [ "$(has '[[]sexdrive\.storage100\.multi\.write\.complete[]].*status=[1-9]')" -ge 1 ] || \
+             [ "$(has '[[]sexdrive\.storage100\.multi\.read\.complete[]].*status=[1-9]')" -ge 1 ] || \
+             [ "$(has '[[]sexdrive\.storage100\.multi\.read\.match[]].*ok=0')" -ge 1 ]; then
+            gate_sexdrive_storage_multiblock_rw="FAIL"
+            print_row "sexdrive_storage_multiblock_rw" "FAIL" "nonzero status or read mismatch in AP4 lane"
+        else
+            gate_sexdrive_storage_multiblock_rw="PASS"
+            print_row "sexdrive_storage_multiblock_rw" "PASS" "bounded multi-block write/read/match verified"
+        fi
+    fi
+else
+    gate_sexdrive_storage_multiblock_rw="SKIP"
+    print_row "sexdrive_storage_multiblock_rw" "SKIP" "storage AP4 proof not requested"
+fi
+
 # ---- 18. faults_zero ----
 # These must NEVER be present.  Even one match = FAIL.
 
@@ -4932,6 +4971,7 @@ ALL_GATES=(
     "storage_phaseb1:$gate_storage_phaseb1"
     "sexdrive_storage_ioq_ready:$gate_sexdrive_storage_ioq_ready"
     "sexdrive_storage_single_block_rw:$gate_sexdrive_storage_single_block_rw"
+    "sexdrive_storage_multiblock_rw:$gate_sexdrive_storage_multiblock_rw"
     "app_registry_lifecycle_v2:$gate_app_registry_lifecycle_v2"
     "spindle_slot_shell:$gate_spindle_slot_shell"
     "window_workflow_v2:$gate_window_workflow_v2"
