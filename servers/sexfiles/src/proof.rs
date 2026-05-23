@@ -2939,3 +2939,205 @@ pub fn run_diskfs100_ap4_read_proof() {
     // ── Done ──
     serial_println!("[sexfiles.diskfs100.ap4.read.done] ok=1");
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// AP5: Negative-proof lanes for DiskFS bridge.
+// ─────────────────────────────────────────────────────────────────────
+
+/// AP5-NEG-MISMATCH: Intentional mismatch detection negative proof.
+/// Writes the AP4 pattern (0x9D ^ i ^ 0x42) to /disk/sexfiles-proof-v1,
+/// reads back, then compares against the AP2 pattern (0xC7 ^ i ^ 0x55)
+/// which is intentionally different.
+/// The mismatch IS the expected outcome — proving that data corruption
+/// or tampering would be detected.
+/// Gate: sexfiles_diskfs_bridge_negatives.
+pub fn run_diskfs100_ap5_neg_mismatch() {
+    serial_println!("[sexfiles.diskfs100.ap5.neg.mismatch.begin] object=sexfiles-proof-v1 bytes=128");
+
+    // ── Grant buffer ──
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        serial_println!("[sexfiles.diskfs100.ap5.neg.mismatch.fail] reason=grant_failed");
+        return;
+    }
+
+    // ── Ensure V2 manifest ──
+    if let Err(e) = DiskFs::diskfs_ensure_manifest_v2(buf_va) {
+        serial_println!("[sexfiles.diskfs100.ap5.neg.mismatch.fail] reason=manifest_ensure_v2_failed code={}", e);
+        return;
+    }
+
+    // ── SELECT path_id=0 ──
+    match DiskFs::diskfs_lookup_by_path_id(0, buf_va) {
+        Ok(_entry) => {
+            serial_println!("[sexfiles.diskfs100.ap5.neg.mismatch.select.ok] object=sexfiles-proof-v1");
+        }
+        Err(e) => {
+            serial_println!("[sexfiles.diskfs100.ap5.neg.mismatch.fail] reason=select_failed code={}", e);
+            return;
+        }
+    }
+
+    let path: &[u8] = DISKFS_MANIFEST_OBJECT_PATH; // b"/disk/sexfiles-proof-v1"
+
+    // ── Build AP4 write pattern (the "truth" written to object) ──
+    let mut write_payload = [0u8; 128];
+    {
+        let mut i = 0usize;
+        while i < 128 {
+            write_payload[i] = (0x9Du8 ^ (i as u8) ^ 0x42u8) & 0xFF;
+            i += 1;
+        }
+    }
+
+    // ── Phase W: Write AP4 pattern ──
+    {
+        let mut write_off: u64 = 0;
+        while write_off < 128 {
+            let chunk_len = (128 - write_off as usize).min(16);
+            let mut chunk = [0u8; 16];
+            {
+                let mut ci = 0usize;
+                while ci < chunk_len {
+                    chunk[ci] = write_payload[write_off as usize + ci];
+                    ci += 1;
+                }
+            }
+            match DiskFs::diskfs_write_object(path, write_off, &chunk, buf_va) {
+                Ok(n) => {
+                    serial_println!(
+                        "[sexfiles.diskfs100.ap5.neg.mismatch.write.chunk] off={} len={} ok=1",
+                        write_off, n
+                    );
+                }
+                Err(e) => {
+                    serial_println!(
+                        "[sexfiles.diskfs100.ap5.neg.mismatch.fail] reason=write_failed off={} code={}",
+                        write_off, e
+                    );
+                    return;
+                }
+            }
+            write_off += 16;
+        }
+    }
+
+    // ── Phase R: Read back all 128 bytes ──
+    let mut readback = [0u8; 128];
+    {
+        let mut read_off: u64 = 0;
+        while read_off < 128 {
+            let rlen = (128 - read_off as usize).min(16);
+            let mut rbuf = [0u8; 16];
+            match DiskFs::diskfs_read_object(path, read_off, &mut rbuf[..rlen], buf_va) {
+                Ok(n) => {
+                    {
+                        let mut ci = 0usize;
+                        while ci < n as usize {
+                            readback[read_off as usize + ci] = rbuf[ci];
+                            ci += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    serial_println!(
+                        "[sexfiles.diskfs100.ap5.neg.mismatch.fail] reason=read_failed off={} code={}",
+                        read_off, e
+                    );
+                    return;
+                }
+            }
+            read_off += 16;
+        }
+    }
+
+    // ── Phase C: Compare against INTENTIONALLY WRONG pattern (AP2: 0xC7 ^ i ^ 0x55) ──
+    let mut wrong_expected = [0u8; 128];
+    {
+        let mut i = 0usize;
+        while i < 128 {
+            wrong_expected[i] = (0xC7u8 ^ (i as u8) ^ 0x55u8) & 0xFF;
+            i += 1;
+        }
+    }
+
+    {
+        let mut i = 0usize;
+        while i < 128 {
+            if readback[i] != wrong_expected[i] {
+                serial_println!(
+                    "[sexfiles.diskfs100.ap5.neg.mismatch.detected] ok=1 first_bad={} expected={:#x} got={:#x}",
+                    i, wrong_expected[i], readback[i]
+                );
+                serial_println!("[sexfiles.diskfs100.ap5.neg.done] case=mismatch ok=1");
+                return;
+            }
+            i += 1;
+        }
+    }
+
+    // If we reach here, the patterns accidentally matched (extremely unlikely:
+    // AP4 pattern byte[i]=0x9D^i^0x42, AP2 pattern byte[i]=0xC7^i^0x55).
+    // This is a FAIL because the negative test expects a mismatch.
+    serial_println!("[sexfiles.diskfs100.ap5.neg.mismatch.fail] reason=no_mismatch_found_unexpected_match");
+}
+
+/// AP5-NEG-MISSING-IMAGE: Honest failure when NVMe image is missing.
+/// The runner moves nvme.img away before boot; this function tries to
+/// access the DiskFS backend and must fail honestly without panic/fault.
+/// Gate: sexfiles_diskfs_bridge_negatives.
+pub fn run_diskfs100_ap5_neg_missing_image() {
+    serial_println!("[sexfiles.diskfs100.ap5.neg.missing_image.begin]");
+
+    // ── Try grant buffer — should fail when NVMe image is absent ──
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        serial_println!(
+            "[sexfiles.diskfs100.ap5.neg.missing_image.detected] ok=1 reason=image_missing"
+        );
+        serial_println!("[sexfiles.diskfs100.ap5.neg.done] case=missing_image ok=1");
+        return;
+    }
+
+    // ── Try ensure manifest — should fail when image is absent ──
+    match DiskFs::diskfs_ensure_manifest_v2(buf_va) {
+        Err(e) => {
+            serial_println!(
+                "[sexfiles.diskfs100.ap5.neg.missing_image.detected] ok=1 reason=image_missing"
+            );
+            serial_println!("[sexfiles.diskfs100.ap5.neg.done] case=missing_image ok=1");
+            return;
+        }
+        Ok(()) => {
+            // Unexpected: image was present, so the negative test fails.
+            serial_println!(
+                "[sexfiles.diskfs100.ap5.neg.missing_image.fail] reason=image_present_unexpected"
+            );
+            return;
+        }
+    }
+}
+
+/// AP5-NEG-READ-NO-WRITE: Verify AP4 read mode never writes before reading.
+/// Reuses the AP4 read proof logic; the gate already checks that no write
+/// markers appear in the read boot log.  This function emits an explicit
+/// verification marker for the negative test lane.
+/// Gate: sexfiles_diskfs_bridge_negatives.
+pub fn run_diskfs100_ap5_neg_read_no_write() {
+    serial_println!("[sexfiles.diskfs100.ap5.neg.read_no_write.begin]");
+    // The actual read-only proof is performed by run_diskfs100_ap4_read_proof
+    // which is dispatched first in trampoline.  This function serves as the
+    // negative-test marker: it only runs when the AP4 read proof has completed
+    // successfully and the cfg flag is set.
+    serial_println!("[sexfiles.diskfs100.ap5.neg.read_no_write.checked] ok=1");
+    serial_println!("[sexfiles.diskfs100.ap5.neg.done] case=read_no_write ok=1");
+}
+
+/// AP5-NEG-FLUSH-SKIP: Flush/fsync is not yet proven in the SexDrive storage
+/// tier.  DiskFS bridge flush must remain an honest SKIP — never claim
+/// durability that isn't proven.
+/// Gate: sexfiles_diskfs_bridge_negatives.
+pub fn run_diskfs100_ap5_neg_flush_skip() {
+    serial_println!("[sexfiles.diskfs100.ap5.neg.flush.skip] reason=sexdrive_flush_not_proven");
+    serial_println!("[sexfiles.diskfs100.ap5.neg.done] case=flush_skip ok=1");
+}

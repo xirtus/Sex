@@ -131,6 +131,7 @@ gate_sexfiles_diskfs_bridge="SKIP"
 gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
 gate_sexfiles_diskfs_bridge_multi_object_rw="SKIP"
 gate_sexfiles_diskfs_bridge_reboot_persistence="SKIP"
+gate_sexfiles_diskfs_bridge_negatives="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -4068,6 +4069,112 @@ else
     print_row "sexfiles_diskfs_bridge_reboot_persistence" "SKIP" "AP4 persistence proof not triggered"
 fi
 
+# ---- 76g. sexfiles_diskfs_bridge_negatives ----
+# AP5 negative proof lanes: mismatch, missing-image, read-no-write, flush-skip.
+# Gate logic:
+#   SKIP if no ap5.neg.*.begin marker.
+#   PASS if expected negative detected:
+#     mismatch.detected ok=1
+#     OR missing_image.detected ok=1
+#     OR read_no_write.checked ok=1
+#     OR flush.skip present
+#   FAIL if negative begin exists but expected detection missing.
+#   FAIL on fault/panic.
+#   FAIL if normal positive PASS appears where negative failure expected.
+if [ "$(has 'sexfiles\.diskfs100\.ap5\.neg\.mismatch\.begin')" -ge 1 ]; then
+    has_neg_mismatch_detected=$(has 'sexfiles\.diskfs100\.ap5\.neg\.mismatch\.detected.*ok=1')
+    has_neg_mismatch_fail=$(has 'sexfiles\.diskfs100\.ap5\.neg\.mismatch\.fail')
+    has_neg_done=$(has 'sexfiles\.diskfs100\.ap5\.neg\.done.*case=mismatch ok=1')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+    has_cqe_timeout=$(has 'cqe_timeout')
+
+    if [ "$has_cqe_timeout" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "cqe_timeout in AP5 neg mismatch log"
+    elif [ "$has_fault" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "fault marker in AP5 neg mismatch log"
+    elif [ "$has_neg_mismatch_fail" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "ap5.neg.mismatch.fail marker present"
+    elif [ "$has_neg_mismatch_detected" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "missing mismatch.detected ok=1"
+    elif [ "$has_neg_done" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "missing neg.done case=mismatch ok=1"
+    elif [ "$has_neg_mismatch_detected" -ge 1 ] && [ "$has_neg_done" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="PASS"
+        print_row "sexfiles_diskfs_bridge_negatives" "PASS" "neg mismatch: intentional mismatch detected ok=1"
+    else
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "incomplete AP5 neg mismatch markers"
+    fi
+elif [ "$(has 'sexfiles\.diskfs100\.ap5\.neg\.missing_image\.begin')" -ge 1 ]; then
+    has_neg_missing_detected=$(has 'sexfiles\.diskfs100\.ap5\.neg\.missing_image\.detected.*ok=1')
+    has_neg_missing_fail=$(has 'sexfiles\.diskfs100\.ap5\.neg\.missing_image\.fail')
+    has_neg_done=$(has 'sexfiles\.diskfs100\.ap5\.neg\.done.*case=missing_image ok=1')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+
+    if [ "$has_fault" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "fault marker in AP5 neg missing image log"
+    elif [ "$has_neg_missing_fail" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "ap5.neg.missing_image.fail (image unexpectedly present?)"
+    elif [ "$has_neg_missing_detected" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "missing missing_image.detected ok=1"
+    elif [ "$has_neg_done" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "missing neg.done case=missing_image ok=1"
+    elif [ "$has_neg_missing_detected" -ge 1 ] && [ "$has_neg_done" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="PASS"
+        print_row "sexfiles_diskfs_bridge_negatives" "PASS" "neg missing image: honest failure detected ok=1"
+    else
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "incomplete AP5 neg missing image markers"
+    fi
+elif [ "$(has 'sexfiles\.diskfs100\.ap5\.neg\.read_no_write\.begin')" -ge 1 ]; then
+    has_neg_read_no_write_checked=$(has 'sexfiles\.diskfs100\.ap5\.neg\.read_no_write\.checked.*ok=1')
+    has_neg_done=$(has 'sexfiles\.diskfs100\.ap5\.neg\.done.*case=read_no_write ok=1')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+    # Read-no-write MUST NOT have write markers (already checked by AP4 gate)
+    has_ap4_write_marker=$(has 'sexfiles\.diskfs100\.ap4\.write\.begin')
+
+    if [ "$has_fault" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "fault marker in AP5 neg read-no-write log"
+    elif [ "$has_ap4_write_marker" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "write markers in read-no-write log (must not write)"
+    elif [ "$has_neg_read_no_write_checked" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "missing read_no_write.checked ok=1"
+    elif [ "$has_neg_done" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "missing neg.done case=read_no_write ok=1"
+    elif [ "$has_neg_read_no_write_checked" -ge 1 ] && [ "$has_neg_done" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="PASS"
+        print_row "sexfiles_diskfs_bridge_negatives" "PASS" "neg read-no-write: AP4 read verified no write + checked ok=1"
+    else
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "incomplete AP5 neg read-no-write markers"
+    fi
+elif [ "$(has 'sexfiles\.diskfs100\.ap5\.neg\.flush\.skip')" -ge 1 ]; then
+    has_neg_flush_done=$(has 'sexfiles\.diskfs100\.ap5\.neg\.done.*case=flush_skip ok=1')
+    if [ "$has_neg_flush_done" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_negatives="PASS"
+        print_row "sexfiles_diskfs_bridge_negatives" "PASS" "neg flush skip: honest non-claim ok=1"
+    else
+        gate_sexfiles_diskfs_bridge_negatives="FAIL"
+        print_row "sexfiles_diskfs_bridge_negatives" "FAIL" "flush.skip present but missing neg.done case=flush_skip"
+    fi
+else
+    gate_sexfiles_diskfs_bridge_negatives="SKIP"
+    print_row "sexfiles_diskfs_bridge_negatives" "SKIP" "AP5 negative proof not triggered"
+fi
+
 # ---- 71. silk_glass_color ----
 if [ "$(has 'silk\.glass\.safe_color_pass\.done.*ok=1')" -eq 1 ]; then
     gate_silk_glass_color="PASS"
@@ -5490,6 +5597,7 @@ ALL_GATES=(
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"
     "sexfiles_diskfs_bridge_reboot_persistence:$gate_sexfiles_diskfs_bridge_reboot_persistence"
+    "sexfiles_diskfs_bridge_negatives:$gate_sexfiles_diskfs_bridge_negatives"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
     "spindle_frame_chrome:$gate_spindle_frame_chrome"

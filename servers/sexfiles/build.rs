@@ -34,4 +34,30 @@ fn main() {
     if std::env::var("SEXFILES_DISKFS_100_AP4_READ").as_deref() == Ok("1") {
         println!("cargo:rustc-cfg=sexfiles_diskfs100_ap4_read");
     }
+    // AP5 negative test lanes
+    println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_100_AP5_NEGATIVE");
+    println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_100_AP5_NEG_MISMATCH");
+    println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_100_AP5_NEG_MISSING_IMAGE");
+    println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_100_AP5_NEG_READ_NO_WRITE");
+    println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_100_AP5_NEG_FLUSH_SKIP");
+    println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs100_ap5_neg_mismatch)");
+    println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs100_ap5_neg_missing_image)");
+    println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs100_ap5_neg_read_no_write)");
+    println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs100_ap5_neg_flush_skip)");
+    if std::env::var("SEXFILES_DISKFS_100_AP5_NEGATIVE").as_deref() == Ok("1") {
+        if std::env::var("SEXFILES_DISKFS_100_AP5_NEG_MISMATCH").as_deref() == Ok("1") {
+            println!("cargo:rustc-cfg=sexfiles_diskfs100_ap5_neg_mismatch");
+        }
+        if std::env::var("SEXFILES_DISKFS_100_AP5_NEG_MISSING_IMAGE").as_deref() == Ok("1") {
+            println!("cargo:rustc-cfg=sexfiles_diskfs100_ap5_neg_missing_image");
+        }
+        if std::env::var("SEXFILES_DISKFS_100_AP5_NEG_READ_NO_WRITE").as_deref() == Ok("1") {
+            println!("cargo:rustc-cfg=sexfiles_diskfs100_ap5_neg_read_no_write");
+            // read-no-write reuses the AP4 read path: set both cfgs
+            println!("cargo:rustc-cfg=sexfiles_diskfs100_ap4_read");
+        }
+    }
+    if std::env::var("SEXFILES_DISKFS_100_AP5_NEG_FLUSH_SKIP").as_deref() == Ok("1") {
+        println!("cargo:rustc-cfg=sexfiles_diskfs100_ap5_neg_flush_skip");
+    }
 }

@@ -71,9 +71,37 @@ pub extern "C" fn trampoline_main() {
 
     const DISKFS_100_AP4_READ_PROOF_ENABLED: bool =
         cfg!(sexfiles_diskfs100_ap4_read);
+    const DISKFS_100_AP5_NEG_READ_NO_WRITE_ENABLED: bool =
+        cfg!(sexfiles_diskfs100_ap5_neg_read_no_write);
     if DISKFS_100_AP4_READ_PROOF_ENABLED {
         crate::proof::run_diskfs100_ap4_read_proof();
         // [sexfiles.diskfs100.ap4.read.profile.done] isolated=1
+        if DISKFS_100_AP5_NEG_READ_NO_WRITE_ENABLED {
+            crate::proof::run_diskfs100_ap5_neg_read_no_write();
+        }
+        return;
+    }
+
+    const DISKFS_100_AP5_NEG_MISMATCH_ENABLED: bool =
+        cfg!(sexfiles_diskfs100_ap5_neg_mismatch);
+    if DISKFS_100_AP5_NEG_MISMATCH_ENABLED {
+        crate::proof::run_diskfs100_ap5_neg_mismatch();
+        // [sexfiles.diskfs100.ap5.neg.profile.done] case=mismatch
+        return;
+    }
+
+    const DISKFS_100_AP5_NEG_MISSING_IMAGE_ENABLED: bool =
+        cfg!(sexfiles_diskfs100_ap5_neg_missing_image);
+    if DISKFS_100_AP5_NEG_MISSING_IMAGE_ENABLED {
+        crate::proof::run_diskfs100_ap5_neg_missing_image();
+        // [sexfiles.diskfs100.ap5.neg.profile.done] case=missing_image
+        return;
+    }
+
+    const DISKFS_100_AP5_NEG_FLUSH_SKIP_ENABLED: bool =
+        cfg!(sexfiles_diskfs100_ap5_neg_flush_skip);
+    if DISKFS_100_AP5_NEG_FLUSH_SKIP_ENABLED {
+        crate::proof::run_diskfs100_ap5_neg_flush_skip();
         return;
     }
 

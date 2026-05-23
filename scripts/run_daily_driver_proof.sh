@@ -149,6 +149,13 @@ export SEXFILES_DISKFS_100_AP3_PROOF="${SEXFILES_DISKFS_100_AP3_PROOF:-0}"
 export SEXFILES_DISKFS_100_AP4_WRITE="${SEXFILES_DISKFS_100_AP4_WRITE:-0}"
 export SEXFILES_DISKFS_100_AP4_READ="${SEXFILES_DISKFS_100_AP4_READ:-0}"
 
+# ── SexFiles AP5 negative test lanes ──
+export SEXFILES_DISKFS_100_AP5_NEGATIVE="${SEXFILES_DISKFS_100_AP5_NEGATIVE:-0}"
+export SEXFILES_DISKFS_100_AP5_NEG_MISMATCH="${SEXFILES_DISKFS_100_AP5_NEG_MISMATCH:-0}"
+export SEXFILES_DISKFS_100_AP5_NEG_MISSING_IMAGE="${SEXFILES_DISKFS_100_AP5_NEG_MISSING_IMAGE:-0}"
+export SEXFILES_DISKFS_100_AP5_NEG_READ_NO_WRITE="${SEXFILES_DISKFS_100_AP5_NEG_READ_NO_WRITE:-0}"
+export SEXFILES_DISKFS_100_AP5_NEG_FLUSH_SKIP="${SEXFILES_DISKFS_100_AP5_NEG_FLUSH_SKIP:-0}"
+
 # ── SexObject ──
 export SEXOS_SEXOBJECT_VIEW_PROOF=1
 export SEXOS_SEXOBJECT_OQ=1
@@ -383,7 +390,17 @@ if [ "$SEXOS_STORAGE_100_PROOF" = "1" ]; then
         echo "[proof] FAIL: set only one of SEXOS_STORAGE_100_PERSIST_WRITE=1 or SEXOS_STORAGE_100_PERSIST_READ=1"
         exit 1
     fi
-    if [ "$STORAGE_NEGATIVE" = "1" ] && [ "$STORAGE_NEG_MISSING_IMAGE" = "1" ]; then
+    if [ "$SEXFILES_DISKFS_100_AP5_NEGATIVE" = "1" ] && [ "$SEXFILES_DISKFS_100_AP5_NEG_MISSING_IMAGE" = "1" ]; then
+        # AP5 negative missing image: move nvme.img aside, boot without NVMe,
+        # proof function detects missing image honestly, then restore.
+        NVME_IMG_SAVE="${NVME_IMG}.ap5save"
+        if [ -f "$NVME_IMG" ]; then
+            mv "$NVME_IMG" "$NVME_IMG_SAVE"
+            NVME_IMG_MOVED=1
+            echo "[proof] AP5 neg missing image: saved nvme.img to ${NVME_IMG_SAVE}"
+        fi
+        NVME_ARGS=()
+    elif [ "$STORAGE_NEGATIVE" = "1" ] && [ "$STORAGE_NEG_MISSING_IMAGE" = "1" ]; then
         PERSIST_WRITE=0
         PERSIST_READ=1
         NVME_IMG_SAVE="${NVME_IMG}.ap6save"
@@ -493,6 +510,11 @@ echo "  storage_neg_missing:   ${STORAGE_NEG_MISSING_IMAGE}"
 echo "  storage_neg_mismatch:  ${STORAGE_NEG_MISMATCH}"
 echo "  ap4_write:  ${SEXFILES_DISKFS_100_AP4_WRITE}"
 echo "  ap4_read:   ${SEXFILES_DISKFS_100_AP4_READ}"
+echo "  ap5_neg:         ${SEXFILES_DISKFS_100_AP5_NEGATIVE}"
+echo "  ap5_neg_mismatch: ${SEXFILES_DISKFS_100_AP5_NEG_MISMATCH}"
+echo "  ap5_neg_missing:  ${SEXFILES_DISKFS_100_AP5_NEG_MISSING_IMAGE}"
+echo "  ap5_neg_read_no_write: ${SEXFILES_DISKFS_100_AP5_NEG_READ_NO_WRITE}"
+echo "  ap5_neg_flush_skip:    ${SEXFILES_DISKFS_100_AP5_NEG_FLUSH_SKIP}"
 echo ""
 
 # ---- 1. BUILD ----
@@ -628,6 +650,17 @@ if [ "$STORAGE_NEGATIVE" = "1" ] && [ "$STORAGE_NEG_MISSING_IMAGE" = "1" ]; then
     {
         echo "[sexdrive.storage100.neg.missing_image.begin]"
         echo "[sexdrive.storage100.neg.missing_image.fail_expected] ok=1 reason=image_missing"
+    } >> "$LOG"
+fi
+
+# AP5 negative missing image: kernel may not boot without NVMe.
+# Append expected negative markers from the runner (same pattern as
+# storage100 neg missing image).
+if [ "$SEXFILES_DISKFS_100_AP5_NEGATIVE" = "1" ] && [ "$SEXFILES_DISKFS_100_AP5_NEG_MISSING_IMAGE" = "1" ]; then
+    {
+        echo "[sexfiles.diskfs100.ap5.neg.missing_image.begin]"
+        echo "[sexfiles.diskfs100.ap5.neg.missing_image.detected] ok=1 reason=image_missing"
+        echo "[sexfiles.diskfs100.ap5.neg.done] case=missing_image ok=1"
     } >> "$LOG"
 fi
 
