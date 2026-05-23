@@ -184,6 +184,61 @@ impl LockFreeBuddyAllocator {
         }
     }
 
+    /// Reserve a single physical frame: mark metadata as allocated so buddy
+    /// alloc/free operations skip it.  The frame is lazily removed from any
+    /// free list by pop_free_local/global when they encounter state!=0.
+    ///
+    /// Idempotent — safe to call on already-reserved frames.
+    /// No-op if metadata has not been initialised yet.
+    pub unsafe fn reserve_frame(&self, phys: u64) {
+        if self.metadata_base.load(Ordering::Acquire) == 0 {
+            return;
+        }
+        let meta = self.get_metadata(phys);
+        if meta.is_null() {
+            return;
+        }
+        // Only mark if currently free, otherwise it's already protected.
+        if (*meta).state.load(Ordering::Acquire) == 0 {
+            (*meta).state.store(1, Ordering::Release);
+            (*meta).order.store(0, Ordering::Release);
+        }
+    }
+
+    /// Reserve a range of page indices [start_page, end_page).
+    /// Suitable for boot-time operation before concurrent alloc/free.
+    pub unsafe fn reserve_page_range(&self, start_page: u64, end_page: u64) {
+        if start_page >= end_page {
+            return;
+        }
+        let total_pages = self.total_pages.load(Ordering::Acquire);
+        let end = if end_page > total_pages { total_pages } else { end_page };
+        crate::serial_println!(
+            "[kernel.mem.global.reserve.boot_frames.begin] start={:#x} end={:#x} pages={}",
+            start_page * PAGE_SIZE,
+            end * PAGE_SIZE,
+            end.saturating_sub(start_page),
+        );
+        let mut reserved: u64 = 0;
+        for idx in start_page..end {
+            let phys = idx * PAGE_SIZE;
+            let meta = self.get_metadata(phys);
+            if meta.is_null() {
+                continue;
+            }
+            if (*meta).state.load(Ordering::Acquire) == 0 {
+                (*meta).state.store(1, Ordering::Release);
+                (*meta).order.store(0, Ordering::Release);
+                reserved += 1;
+            }
+        }
+        crate::serial_println!(
+            "[kernel.mem.global.reserve.boot_frames.done] reserved={}",
+            reserved,
+        );
+        crate::serial_println!("[kernel.mem.overlap.fix.active] ok=1");
+    }
+
     pub fn free(&self, phys: u64, order: usize) {
         let core_id = crate::core_local::CoreLocal::get().core_id as usize % MAX_CORES;
         
@@ -243,6 +298,16 @@ impl LockFreeBuddyAllocator {
             let meta = self.get_metadata(head);
             if meta.is_null() { return None; }
             let next = unsafe { (*meta).next.load(Ordering::Relaxed) };
+            // Lazy skip of reserved/allocated entries still in free list.
+            // reserve_frame sets state=1; entries with state!=0 belong to
+            // BootInfoFrameAllocator and must never be reissued.
+            if unsafe { (*meta).state.load(Ordering::Acquire) } != 0 {
+                // Try to unlink stale entry; retry on failure.
+                if self.shards[core].local_free_lists[order].compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                    continue;
+                }
+                continue;
+            }
             if self.shards[core].local_free_lists[order].compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
                 return Some(head);
             }
@@ -268,6 +333,13 @@ impl LockFreeBuddyAllocator {
             let meta = self.get_metadata(head);
             if meta.is_null() { return None; }
             let next = unsafe { (*meta).next.load(Ordering::Relaxed) };
+            // Lazy skip of reserved/allocated entries still in free list.
+            if unsafe { (*meta).state.load(Ordering::Acquire) } != 0 {
+                if self.global_free_lists[order].compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                    continue;
+                }
+                continue;
+            }
             if self.global_free_lists[order].compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
                 return Some(head);
             }

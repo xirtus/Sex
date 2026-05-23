@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 
 pub struct BootInfoFrameAllocator {
     memory_map: &'static limine::request::MemmapResponse,
-    next: usize,
+    pub(crate) next: usize,
 }
 
 impl BootInfoFrameAllocator {
@@ -37,6 +37,9 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
                 crate::serial_println!("[kernel.mem.boot_frame.alloc] phys={:#x} idx={}",
                     phys_addr, self.next);
                 crate::memory::allocator::diag_record_boot_frame(phys_addr);
+                // AP2 fix: reserve this frame in GLOBAL_ALLOCATOR metadata so the
+                // buddy allocator cannot reissue page-table frames as data/DMA buffers.
+                unsafe { crate::memory::allocator::GLOBAL_ALLOCATOR.reserve_frame(phys_addr); }
                 return Some(PhysFrame::containing_address(PhysAddr::new(phys_addr)));
             }
             frame_index += frames_in_region;
@@ -136,10 +139,13 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
     let metadata_pages = (metadata_bytes + 4095) / 4096;
 
     // Seed GLOBAL_ALLOCATOR (LockFreeBuddyAllocator) with remaining usable physical regions.
-    // The bump allocator consumed heap_pages frames sequentially from usable regions.
-    // Track how many frames were consumed and skip them when feeding the buddy allocator
-    // so physical frames used for the heap aren't double-allocated.
-    let heap_pages = (crate::HEAP_SIZE as u64) / 4096;
+    // Use the actual BootInfoFrameAllocator cursor (frame_allocator.next), not a
+    // HEAP_SIZE estimate, because init_heap may have allocated page-table frames via
+    // mapper.map_to() that heap_pages didn't account for.  Using the accurate cursor
+    // prevents GLOBAL_ALLOCATOR from receiving physical frames already handed out by
+    // the boot frame allocator.
+    let consumed_by_init = frame_allocator.next as u64;
+    crate::serial_println!("[kernel.mem.global.skip.consumed_by_init] frames={}", consumed_by_init);
     let mut consumed = 0u64;
     let mut metadata_allocated = false;
 
@@ -148,17 +154,17 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
         let mut region_base = entry.base;
         let mut region_len = entry.length;
 
-        if consumed < heap_pages {
-            if consumed + region_pages <= heap_pages {
-                // Entire region consumed by heap mapping.
+        if consumed < consumed_by_init {
+            if consumed + region_pages <= consumed_by_init {
+                // Entire region consumed by boot mappings.
                 consumed += region_pages;
                 continue;
             } else {
                 // Partial overlap: skip the consumed portion.
-                let skip_pages = heap_pages - consumed;
+                let skip_pages = consumed_by_init - consumed;
                 region_base += skip_pages * 4096;
                 region_len -= skip_pages * 4096;
-                consumed = heap_pages; // saturate
+                consumed = consumed_by_init; // saturate
             }
         }
 
@@ -198,6 +204,14 @@ pub fn init(memmap: &'static limine::request::MemmapResponse, hhdm_offset: u64) 
             frame_allocator.allocate_frame();
         }
     }
+    // AP2 safety net: reserve every frame BootInfoFrameAllocator has consumed so far
+    // in GLOBAL_ALLOCATOR metadata.  The buddy allocator pop functions lazily skip
+    // entries with state!=0, so this prevents reissue of page-table and heap frames.
+    let consumed_total = frame_allocator.next as u64;
+    unsafe {
+        crate::memory::allocator::GLOBAL_ALLOCATOR.reserve_page_range(0, consumed_total);
+    }
+
     let usable_frames_total = crate::memory::allocator::debug_global_free_frames();
     crate::serial_println!("allocator.usable_frames.total={}", usable_frames_total);
     crate::serial_println!("allocator.init.done");
