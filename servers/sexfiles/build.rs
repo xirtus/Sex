@@ -60,4 +60,10 @@ fn main() {
     if std::env::var("SEXFILES_DISKFS_100_AP5_NEG_FLUSH_SKIP").as_deref() == Ok("1") {
         println!("cargo:rustc-cfg=sexfiles_diskfs100_ap5_neg_flush_skip");
     }
+    // AP6: honest classification of flush/fsync
+    println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_100_AP6_FLUSH_FSYNC");
+    println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs100_ap6_flush_fsync)");
+    if std::env::var("SEXFILES_DISKFS_100_AP6_FLUSH_FSYNC").as_deref() == Ok("1") {
+        println!("cargo:rustc-cfg=sexfiles_diskfs100_ap6_flush_fsync");
+    }
 }

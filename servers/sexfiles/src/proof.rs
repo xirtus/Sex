@@ -3141,3 +3141,54 @@ pub fn run_diskfs100_ap5_neg_flush_skip() {
     serial_println!("[sexfiles.diskfs100.ap5.neg.flush.skip] reason=sexdrive_flush_not_proven");
     serial_println!("[sexfiles.diskfs100.ap5.neg.done] case=flush_skip ok=1");
 }
+
+/// AP6-FLUSH-FSYNC-HONEST: Exercise the DiskFS flush/fsync code path
+/// and prove DiskFS does NOT falsely claim durability.  Calls
+/// diskfs_block_sync() which sends BLOCK_SYNC to sexdrive; sexdrive
+/// returns BLOCK_ERR_NO_DEVICE because NVMe FLUSH is not emulated by
+/// QEMU.  The proof verifies the return is honest and classifies flush
+/// as unsupported/not-proven and fsync as not-claimed.
+///
+/// Gate: sexfiles_diskfs_bridge_flush_fsync_honest.
+pub fn run_diskfs100_ap6_flush_fsync() {
+    serial_println!("[sexfiles.diskfs100.ap6.flush.begin] object=sexfiles-proof-v1");
+
+    // Exercise the block sync path: send BLOCK_SYNC to sexdrive.
+    // nvme_flush() is commented out in sexdrive because QEMU NVMe
+    // does not post a CQE for FLUSH opcode 0x00.  SexDrive returns
+    // BLOCK_ERR_NO_DEVICE.  DiskFS must NOT claim success.
+    let flush_status = DiskFs::diskfs_block_sync();
+
+    // Honest non-support: sexdrive returns BLOCK_ERR_NO_DEVICE.
+    if flush_status == crate::pdx::BLOCK_ERR_NO_DEVICE {
+        serial_println!(
+            "[sexfiles.diskfs100.ap6.flush.unsupported] ok=1 status=BLOCK_ERR_NO_DEVICE"
+        );
+        serial_println!(
+            "[sexfiles.diskfs100.ap6.flush.skip] reason=sexdrive_flush_not_proven"
+        );
+    } else if flush_status == 0 {
+        // Would indicate DiskFS claimed flush success without proof.
+        serial_println!(
+            "[sexfiles.diskfs100.ap6.fail] reason=flush_claimed_success_without_sexdrive_proof"
+        );
+        return;
+    } else {
+        // Unexpected non-zero status (not BLOCK_ERR_NO_DEVICE).
+        serial_println!(
+            "[sexfiles.diskfs100.ap6.flush.skip] reason=sexdrive_flush_not_proven status={}",
+            flush_status
+        );
+    }
+
+    // Fsync: POSIX fsync semantics are explicitly not claimed.
+    // DiskFS diskfs_fsync() wraps diskfs_block_sync() — same honest
+    // BLOCK_ERR_NO_DEVICE return.  No POSIX durability guarantees.
+    serial_println!(
+        "[sexfiles.diskfs100.ap6.fsync.skip] reason=posix_fsync_not_claimed"
+    );
+
+    serial_println!(
+        "[sexfiles.diskfs100.ap6.done] ok=1 classification=honest_skip"
+    );
+}

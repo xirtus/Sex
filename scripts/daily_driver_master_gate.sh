@@ -132,6 +132,7 @@ gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
 gate_sexfiles_diskfs_bridge_multi_object_rw="SKIP"
 gate_sexfiles_diskfs_bridge_reboot_persistence="SKIP"
 gate_sexfiles_diskfs_bridge_negatives="SKIP"
+gate_sexfiles_diskfs_bridge_flush_fsync_honest="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -4175,6 +4176,40 @@ else
     print_row "sexfiles_diskfs_bridge_negatives" "SKIP" "AP5 negative proof not triggered"
 fi
 
+# ---- 76h. sexfiles_diskfs_bridge_flush_fsync_honest ----
+has_ap6_flush_begin=$(has 'sexfiles\.diskfs100\.ap6\.flush\.begin')
+has_ap6_fail=$(has 'sexfiles\.diskfs100\.ap6\.fail')
+has_power_loss_durable=$(has 'power_loss_durable=1')
+has_flush_success_no_proof=$(has 'flush\.success.*without.*sexdrive.*proof')
+has_ap6_flush_skip=$(has 'sexfiles\.diskfs100\.ap6\.flush\.skip.*reason=sexdrive_flush_not_proven')
+has_ap6_fsync_skip=$(has 'sexfiles\.diskfs100\.ap6\.fsync\.skip.*reason=posix_fsync_not_claimed')
+has_ap6_done=$(has 'sexfiles\.diskfs100\.ap6\.done.*ok=1.*classification=honest_skip')
+has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+if [ "$has_ap6_flush_begin" -ge 1 ]; then
+    if [ "$has_fault" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_flush_fsync_honest="FAIL"
+        print_row "sexfiles_diskfs_bridge_flush_fsync_honest" "FAIL" "fault marker in AP6 flush fsync log"
+    elif [ "$has_ap6_fail" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_flush_fsync_honest="FAIL"
+        print_row "sexfiles_diskfs_bridge_flush_fsync_honest" "FAIL" "ap6.fail marker present"
+    elif [ "$has_power_loss_durable" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_flush_fsync_honest="FAIL"
+        print_row "sexfiles_diskfs_bridge_flush_fsync_honest" "FAIL" "power_loss_durable=1 claimed without proof"
+    elif [ "$has_flush_success_no_proof" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_flush_fsync_honest="FAIL"
+        print_row "sexfiles_diskfs_bridge_flush_fsync_honest" "FAIL" "flush success claimed without sexdrive proof"
+    elif [ "$has_ap6_flush_skip" -ge 1 ] && [ "$has_ap6_fsync_skip" -ge 1 ] && [ "$has_ap6_done" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_flush_fsync_honest="PASS"
+        print_row "sexfiles_diskfs_bridge_flush_fsync_honest" "PASS" "flush fsync honest classification: skip/unsupported ok=1"
+    else
+        gate_sexfiles_diskfs_bridge_flush_fsync_honest="FAIL"
+        print_row "sexfiles_diskfs_bridge_flush_fsync_honest" "FAIL" "incomplete AP6 flush fsync markers"
+    fi
+else
+    gate_sexfiles_diskfs_bridge_flush_fsync_honest="SKIP"
+    print_row "sexfiles_diskfs_bridge_flush_fsync_honest" "SKIP" "AP6 flush fsync proof not triggered"
+fi
+
 # ---- 71. silk_glass_color ----
 if [ "$(has 'silk\.glass\.safe_color_pass\.done.*ok=1')" -eq 1 ]; then
     gate_silk_glass_color="PASS"
@@ -5598,6 +5633,7 @@ ALL_GATES=(
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"
     "sexfiles_diskfs_bridge_reboot_persistence:$gate_sexfiles_diskfs_bridge_reboot_persistence"
     "sexfiles_diskfs_bridge_negatives:$gate_sexfiles_diskfs_bridge_negatives"
+    "sexfiles_diskfs_bridge_flush_fsync_honest:$gate_sexfiles_diskfs_bridge_flush_fsync_honest"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
     "spindle_frame_chrome:$gate_spindle_frame_chrome"

@@ -105,6 +105,13 @@ pub extern "C" fn trampoline_main() {
         return;
     }
 
+    const DISKFS_100_AP6_FLUSH_FSYNC_ENABLED: bool =
+        cfg!(sexfiles_diskfs100_ap6_flush_fsync);
+    if DISKFS_100_AP6_FLUSH_FSYNC_ENABLED {
+        crate::proof::run_diskfs100_ap6_flush_fsync();
+        return;
+    }
+
     const DISKFS_100_AP2_PROOF_ENABLED: bool =
         cfg!(sexfiles_diskfs100_ap2_proof);
     if DISKFS_100_AP2_PROOF_ENABLED {
