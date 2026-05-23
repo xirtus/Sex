@@ -24,4 +24,14 @@ fn main() {
         println!("cargo:rustc-cfg=sexfiles_diskfs100_ap3_proof");
         println!("cargo:rustc-cfg=sexfiles_diskfs_multi_object_proof");
     }
+    println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_100_AP4_WRITE");
+    println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_100_AP4_READ");
+    println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs100_ap4_write)");
+    println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs100_ap4_read)");
+    if std::env::var("SEXFILES_DISKFS_100_AP4_WRITE").as_deref() == Ok("1") {
+        println!("cargo:rustc-cfg=sexfiles_diskfs100_ap4_write");
+    }
+    if std::env::var("SEXFILES_DISKFS_100_AP4_READ").as_deref() == Ok("1") {
+        println!("cargo:rustc-cfg=sexfiles_diskfs100_ap4_read");
+    }
 }

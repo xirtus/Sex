@@ -130,6 +130,7 @@ gate_linen_diskfs_direct="SKIP"
 gate_sexfiles_diskfs_bridge="SKIP"
 gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
 gate_sexfiles_diskfs_bridge_multi_object_rw="SKIP"
+gate_sexfiles_diskfs_bridge_reboot_persistence="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -3995,6 +3996,78 @@ else
     print_row "sexfiles_diskfs_bridge_multi_object_rw" "SKIP" "AP3 multi-object proof not triggered"
 fi
 
+# ---- 76f. sexfiles_diskfs_bridge_reboot_persistence ----
+# AP4 proves data written in boot 1 is readable in boot 2 using same NVMe image.
+# Single-log gate: checks either write-phase or read-phase markers.
+# Full acceptance requires both write-log PASS and read-log PASS.
+if [ "$(has 'sexfiles\.diskfs100\.ap4\.write\.begin')" -ge 1 ]; then
+    has_ap4_write_done=$(has 'sexfiles\.diskfs100\.ap4\.write\.done.*bytes=128 ok=1')
+    has_ap4_write_match=$(has 'sexfiles\.diskfs100\.ap4\.write\.match.*bytes=128 ok=1')
+    has_ap4_fail=$(has 'sexfiles\.diskfs100\.ap4\.fail')
+    has_cqe_timeout=$(has 'cqe_timeout')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+
+    if [ "$has_cqe_timeout" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "cqe_timeout in AP4 write log"
+    elif [ "$has_fault" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "fault marker in AP4 write log"
+    elif [ "$has_ap4_fail" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "ap4.fail marker in write log"
+    elif [ "$has_ap4_write_match" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "missing write.match bytes=128 ok=1"
+    elif [ "$has_ap4_write_done" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "missing write.done bytes=128 ok=1"
+    elif [ "$has_ap4_write_done" -ge 1 ] && [ "$has_ap4_write_match" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="PASS"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "PASS" "AP4 write boot: chunks written + readback match + done ok=1"
+    else
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "incomplete AP4 write markers"
+    fi
+elif [ "$(has 'sexfiles\.diskfs100\.ap4\.read\.begin')" -ge 1 ]; then
+    has_ap4_read_match=$(has 'sexfiles\.diskfs100\.ap4\.read\.match.*bytes=128 ok=1')
+    has_ap4_read_done=$(has 'sexfiles\.diskfs100\.ap4\.read\.done.*ok=1')
+    has_ap4_fail=$(has 'sexfiles\.diskfs100\.ap4\.fail')
+    has_cqe_timeout=$(has 'cqe_timeout')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+    # Read boot MUST NOT write — check for write markers in read log
+    has_ap4_write_marker=$(has 'sexfiles\.diskfs100\.ap4\.write\.begin')
+
+    if [ "$has_cqe_timeout" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "cqe_timeout in AP4 read log"
+    elif [ "$has_fault" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "fault marker in AP4 read log"
+    elif [ "$has_ap4_write_marker" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "write markers in read log (read boot must not write)"
+    elif [ "$has_ap4_fail" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "ap4.fail marker in read log"
+    elif [ "$has_ap4_read_match" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "missing read.match bytes=128 ok=1"
+    elif [ "$has_ap4_read_done" -eq 0 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "missing read.done ok=1"
+    elif [ "$has_ap4_read_match" -ge 1 ] && [ "$has_ap4_read_done" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_reboot_persistence="PASS"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "PASS" "AP4 read boot: chunks read + byte match + done ok=1"
+    else
+        gate_sexfiles_diskfs_bridge_reboot_persistence="FAIL"
+        print_row "sexfiles_diskfs_bridge_reboot_persistence" "FAIL" "incomplete AP4 read markers"
+    fi
+else
+    gate_sexfiles_diskfs_bridge_reboot_persistence="SKIP"
+    print_row "sexfiles_diskfs_bridge_reboot_persistence" "SKIP" "AP4 persistence proof not triggered"
+fi
+
 # ---- 71. silk_glass_color ----
 if [ "$(has 'silk\.glass\.safe_color_pass\.done.*ok=1')" -eq 1 ]; then
     gate_silk_glass_color="PASS"
@@ -5416,6 +5489,7 @@ ALL_GATES=(
     "sexfiles_diskfs_bridge:$gate_sexfiles_diskfs_bridge"
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"
+    "sexfiles_diskfs_bridge_reboot_persistence:$gate_sexfiles_diskfs_bridge_reboot_persistence"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
     "spindle_frame_chrome:$gate_spindle_frame_chrome"

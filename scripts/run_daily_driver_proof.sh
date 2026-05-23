@@ -146,6 +146,8 @@ export SEXOS_SEXFILES_CAP_RECORD_PROOF=1
 export SEXOS_SEXFILES_EXTENT_PROOF=1
 export SEXFILES_DISKFS_100_PROOF="${SEXFILES_DISKFS_100_PROOF:-0}"
 export SEXFILES_DISKFS_100_AP3_PROOF="${SEXFILES_DISKFS_100_AP3_PROOF:-0}"
+export SEXFILES_DISKFS_100_AP4_WRITE="${SEXFILES_DISKFS_100_AP4_WRITE:-0}"
+export SEXFILES_DISKFS_100_AP4_READ="${SEXFILES_DISKFS_100_AP4_READ:-0}"
 
 # ── SexObject ──
 export SEXOS_SEXOBJECT_VIEW_PROOF=1
@@ -395,6 +397,12 @@ if [ "$SEXOS_STORAGE_100_PROOF" = "1" ]; then
             echo "[proof] FAIL: persistence read requested but image missing: $NVME_IMG"
             exit 1
         fi
+    elif [ "$SEXFILES_DISKFS_100_AP4_READ" = "1" ]; then
+        if [ ! -f "$NVME_IMG" ]; then
+            echo "[proof] FAIL: AP4 read boot requested but nvme.img missing (run write boot first): $NVME_IMG"
+            exit 1
+        fi
+        echo "[proof] AP4 read boot: preserving existing nvme.img (no recreation)"
     elif [ ! -f "$NVME_IMG" ]; then
         dd if=/dev/zero of="$NVME_IMG" bs=1M count=1 status=none
     fi
@@ -483,6 +491,8 @@ echo "  storage_flush_audit:   ${SEXOS_STORAGE_100_FLUSH_AUDIT:-0}"
 echo "  storage_negative:      ${STORAGE_NEGATIVE}"
 echo "  storage_neg_missing:   ${STORAGE_NEG_MISSING_IMAGE}"
 echo "  storage_neg_mismatch:  ${STORAGE_NEG_MISMATCH}"
+echo "  ap4_write:  ${SEXFILES_DISKFS_100_AP4_WRITE}"
+echo "  ap4_read:   ${SEXFILES_DISKFS_100_AP4_READ}"
 echo ""
 
 # ---- 1. BUILD ----

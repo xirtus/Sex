@@ -61,6 +61,22 @@ pub extern "C" fn trampoline_main() {
     if SEXFILES_CHECKPOINT_PROOF_ENABLED {
         crate::proof::run_sexfiles_checkpoint_proofs();
     }
+    const DISKFS_100_AP4_WRITE_PROOF_ENABLED: bool =
+        cfg!(sexfiles_diskfs100_ap4_write);
+    if DISKFS_100_AP4_WRITE_PROOF_ENABLED {
+        crate::proof::run_diskfs100_ap4_write_proof();
+        // [sexfiles.diskfs100.ap4.write.profile.done] isolated=1
+        return;
+    }
+
+    const DISKFS_100_AP4_READ_PROOF_ENABLED: bool =
+        cfg!(sexfiles_diskfs100_ap4_read);
+    if DISKFS_100_AP4_READ_PROOF_ENABLED {
+        crate::proof::run_diskfs100_ap4_read_proof();
+        // [sexfiles.diskfs100.ap4.read.profile.done] isolated=1
+        return;
+    }
+
     const DISKFS_100_AP2_PROOF_ENABLED: bool =
         cfg!(sexfiles_diskfs100_ap2_proof);
     if DISKFS_100_AP2_PROOF_ENABLED {
