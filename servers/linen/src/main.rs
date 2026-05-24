@@ -157,6 +157,12 @@ const LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED: bool =
 /// boot: reads same object from DiskFS (no writes), verifies byte-for-byte match.
 const LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED: bool =
     option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_READ").is_some();
+const LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE").is_some();
+const LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ").is_some();
+const LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT").is_some();
 
 const LINEN_KEYBOARD_NAV_PROOF_ENABLED: bool =
     option_env!("SEXOS_LINEN_KEYBOARD_NAV_PROOF").is_some();
@@ -648,6 +654,15 @@ pub extern "C" fn _start() -> ! {
     if LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED {
         unsafe { run_linen_diskfs_ap3_read_proof(); }
     }
+    if (LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
+        || LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
+        || LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED)
+        && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED
+    {
+        unsafe { run_linen_diskfs_ap4_metadata_audit(); }
+    }
 
     // AP1B anchor: always reference the sexfiles100 audit marker to prevent
     // linker stripping when AP2 (or other DiskFS proofs) exclude the normal
@@ -656,12 +671,27 @@ pub extern "C" fn _start() -> ! {
 
     // ── Linen direct DiskFS bridge proof: save/load through DiskFS opcodes ──
     // NOTE: may block on pdx_storage_sync.  Workflow proofs already completed above.
-    if LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
+    if LINEN_DISKFS_DIRECT_PROOF_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+    {
         unsafe { run_linen_diskfs_direct_proof(); }
     }
 
     // ── Linen V2 slot proof: SELECT path_id=1, write/read through DiskFS ──
-    if LINEN_DISKFS_SLOT_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
+    if LINEN_DISKFS_SLOT_PROOF_ENABLED
+        && !LINEN_DISKFS_DIRECT_PROOF_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+    {
         unsafe { run_linen_diskfs_slot_proof(); }
     }
 
@@ -669,7 +699,15 @@ pub extern "C" fn _start() -> ! {
     // Skipped during bridge proof runs to avoid pdx_storage_sync deadlock.
     // Default boot skips to avoid blocking pdx_storage_sync — SexFiles100
     // proof must be explicitly enabled via SEXOS_LINEN_SEXFILES100_PROOF=1.
-    if !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_SLOT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
+    if !LINEN_DISKFS_DIRECT_PROOF_ENABLED
+        && !LINEN_DISKFS_SLOT_PROOF_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+    {
         if LINEN_SEXFILES100_PROOF_ENABLED {
             unsafe { linen_init_session(); }
         } else {
@@ -681,22 +719,54 @@ pub extern "C" fn _start() -> ! {
 
     // ── Synthetic proof: Linen session object model ──
     // NOTE: runs after workflow proofs.  Fills remaining table slots.
-    if LINEN_SESSION_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
+    if LINEN_SESSION_PROOF_ENABLED
+        && !LINEN_DISKFS_DIRECT_PROOF_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+    {
         unsafe { run_session_proof(); }
     }
 
     // ── Metadata bridge proof: Linen↔SexFiles persistence ──
-    if LINEN_SEXFILES_METADATA_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
+    if LINEN_SEXFILES_METADATA_PROOF_ENABLED
+        && !LINEN_DISKFS_DIRECT_PROOF_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+    {
         unsafe { run_metadata_bridge_proof(); }
     }
 
     // ── OQ5 proof: SexObject ID namespace resolution ──
-    if SEXOS_OQ5_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
+    if SEXOS_OQ5_PROOF_ENABLED
+        && !LINEN_DISKFS_DIRECT_PROOF_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+    {
         unsafe { run_oq5_proof(); }
     }
 
     // ── Linen disk object proof: save/load through SexFiles RamFS ──
-    if LINEN_DISK_OBJECT_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
+    if LINEN_DISK_OBJECT_PROOF_ENABLED
+        && !LINEN_DISKFS_DIRECT_PROOF_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+    {
         unsafe { run_linen_disk_object_proof(); }
     }
 
@@ -2770,4 +2840,21 @@ unsafe fn run_linen_diskfs_ap3_read_proof() {
     }
 
     serial_println!("[linen.diskfs100.ap3.read.done] ok=1");
+}
+
+/// Linen DiskFS AP4 metadata persistence classification lane.
+///
+/// Activated by one of:
+/// - SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE=1
+/// - SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ=1
+/// - SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT=1
+///
+/// Current source reality: Linen metadata persistence uses RamFS object records
+/// (`OP_RAMFS_CREATE_OWNER` + `OP_RAMFS_WRITE`) and is not DiskFS-backed in the
+/// AP2/AP3 DiskFS path. This lane emits honest classification markers only.
+unsafe fn run_linen_diskfs_ap4_metadata_audit() {
+    serial_println!("[linen.diskfs100.ap4.meta.audit.begin]");
+    serial_println!("[linen.diskfs100.ap4.meta.classification] status=ramfs_only_or_session_only ok=1");
+    serial_println!("[linen.diskfs100.ap4.meta.skip] reason=metadata_not_diskfs_backed");
+    serial_println!("[linen.diskfs100.ap4.meta.done] ok=1 classification=honest_skip");
 }

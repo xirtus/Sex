@@ -3969,6 +3969,38 @@ else
     print_row "linen_diskfs_reboot_restore" "SKIP" "AP3 reboot restore proof not triggered"
 fi
 
+# ---- 76b4. linen_diskfs_metadata_persistence ----
+# AP4 metadata persistence lane.
+# PASS (real): metadata readback match from DiskFS is proven.
+# PASS (honest skip): source reality says metadata is RamFS/session-only.
+if [ "$(has 'linen\.diskfs100\.ap4\.meta\.(audit|write|read)\.begin')" -ge 1 ]; then
+    if [ "$(has 'linen\.diskfs100\.ap4\.meta\.fail')" -ge 1 ]; then
+        gate_linen_diskfs_metadata_persistence="FAIL"
+        print_row "linen_diskfs_metadata_persistence" "FAIL" "ap4 metadata fail marker present"
+    elif [ "$(has 'cqe_timeout')" -ge 1 ]; then
+        gate_linen_diskfs_metadata_persistence="FAIL"
+        print_row "linen_diskfs_metadata_persistence" "FAIL" "cqe_timeout in AP4 metadata lane"
+    elif [ "$(has 'fault\.kill|#PF|#GP|PKU LOCK|panic|KERNEL PANIC')" -ge 1 ]; then
+        gate_linen_diskfs_metadata_persistence="FAIL"
+        print_row "linen_diskfs_metadata_persistence" "FAIL" "fault/panic in AP4 metadata lane"
+    elif [ "$(has 'linen\.diskfs100\.ap4\.meta\.match.*bytes=[0-9]+.*ok=1')" -eq 1 ] && \
+         [ "$(has 'linen\.diskfs100\.ap4\.meta\.read\.done.*ok=1')" -eq 1 ]; then
+        gate_linen_diskfs_metadata_persistence="PASS"
+        print_row "linen_diskfs_metadata_persistence" "PASS" "real DiskFS metadata persistence proven (match + read.done)"
+    elif [ "$(has 'linen\.diskfs100\.ap4\.meta\.classification.*status=ramfs_only_or_session_only.*ok=1')" -eq 1 ] && \
+         [ "$(has 'linen\.diskfs100\.ap4\.meta\.skip.*reason=metadata_not_diskfs_backed')" -eq 1 ] && \
+         [ "$(has 'linen\.diskfs100\.ap4\.meta\.done.*ok=1.*classification=honest_skip')" -eq 1 ]; then
+        gate_linen_diskfs_metadata_persistence="PASS"
+        print_row "linen_diskfs_metadata_persistence" "PASS" "honest skip: metadata is RamFS/session-only, not DiskFS-backed"
+    else
+        gate_linen_diskfs_metadata_persistence="FAIL"
+        print_row "linen_diskfs_metadata_persistence" "FAIL" "incomplete AP4 metadata markers"
+    fi
+else
+    gate_linen_diskfs_metadata_persistence="SKIP"
+    print_row "linen_diskfs_metadata_persistence" "SKIP" "AP4 metadata persistence proof not triggered"
+fi
+
 # ---- 76c. sexfiles_diskfs_bridge ----
 if [ "$(has 'sexfiles\.bridge\.diskfs\.recv')" -ge 1 ]; then
     has_buf_marker=0
