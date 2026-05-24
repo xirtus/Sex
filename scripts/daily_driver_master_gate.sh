@@ -4063,11 +4063,19 @@ if [ "$(has 'sexfiles\.bridge\.diskfs\.recv')" -ge 1 ]; then
     has_flush_ok=$(has 'sexfiles\.bridge\.diskfs\.flush\.(ok|err.*honest=)')
 
     # Only require success for operations actually exercised through the bridge.
+    has_write_recv=$(has 'sexfiles\.bridge\.diskfs\.recv.*op=0x38')
+    has_flush_recv=$(has 'sexfiles\.bridge\.diskfs\.recv.*op=0x3A')
     has_stat_recv=$(has 'sexfiles\.bridge\.diskfs\.recv.*op=0x3B')
     has_manifest_hash_recv=$(has 'sexfiles\.bridge\.diskfs\.recv.*op=0x3C')
+    need_write=1; [ "$has_write_recv" -eq 1 ] || need_write=0
+    need_flush=1; [ "$has_flush_recv" -eq 1 ] || need_flush=0
     need_stat=1; [ "$has_stat_recv" -eq 1 ] || need_stat=0
     need_manifest=1; [ "$has_manifest_hash_recv" -eq 1 ] || need_manifest=0
 
+    write_ok_effective=1
+    if [ "$need_write" -eq 1 ] && [ "$has_write_ok" -eq 0 ]; then write_ok_effective=0; fi
+    flush_ok_effective=1
+    if [ "$need_flush" -eq 1 ] && [ "$has_flush_ok" -eq 0 ]; then flush_ok_effective=0; fi
     stat_ok_effective=1
     if [ "$need_stat" -eq 1 ] && [ "$has_stat_ok" -eq 0 ]; then stat_ok_effective=0; fi
     manifest_ok_effective=1
@@ -4075,11 +4083,11 @@ if [ "$(has 'sexfiles\.bridge\.diskfs\.recv')" -ge 1 ]; then
 
     has_success_markers=0
     if [ "$has_buf_marker" -eq 1 ] && \
-       [ "$has_write_ok" -eq 1 ] && \
+       [ "$write_ok_effective" -eq 1 ] && \
        [ "$has_read_ok" -eq 1 ] && \
        [ "$stat_ok_effective" -eq 1 ] && \
        [ "$manifest_ok_effective" -eq 1 ] && \
-       [ "$has_flush_ok" -eq 1 ]; then
+       [ "$flush_ok_effective" -eq 1 ]; then
         has_success_markers=1
     fi
 
