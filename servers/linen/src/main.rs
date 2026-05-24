@@ -147,6 +147,17 @@ const LINEN_DISKFS_SLOT_PROOF_ENABLED: bool =
 const LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED: bool =
     option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP2").is_some();
 
+/// Build with SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE=1 to enable AP3 write
+/// boot: writes fixed-object content through DiskFS for cross-boot persistence proof.
+/// Pattern: byte[i] = (0xB6 ^ i ^ 0x2D) & 0xFF = (0x9B ^ i) & 0xFF.
+const LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE").is_some();
+
+/// Build with SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_READ=1 to enable AP3 read
+/// boot: reads same object from DiskFS (no writes), verifies byte-for-byte match.
+const LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_READ").is_some();
+
 const LINEN_KEYBOARD_NAV_PROOF_ENABLED: bool =
     option_env!("SEXOS_LINEN_KEYBOARD_NAV_PROOF").is_some();
 static mut LINEN_NAV_SELECTED_SLOT: u8 = 0;
@@ -628,6 +639,16 @@ pub extern "C" fn _start() -> ! {
         unsafe { run_linen_diskfs_ap2_proof(); }
     }
 
+    // ── Linen DiskFS AP3 reboot restore proof (two-boot) ──
+    // AP3_WRITE and AP3_READ are mutually exclusive; each build only has one.
+    // Must run before other DiskFS proofs when enabled.
+    if LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED {
+        unsafe { run_linen_diskfs_ap3_write_proof(); }
+    }
+    if LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED {
+        unsafe { run_linen_diskfs_ap3_read_proof(); }
+    }
+
     // AP1B anchor: always reference the sexfiles100 audit marker to prevent
     // linker stripping when AP2 (or other DiskFS proofs) exclude the normal
     // reference path. Does not emit serial output.
@@ -635,12 +656,12 @@ pub extern "C" fn _start() -> ! {
 
     // ── Linen direct DiskFS bridge proof: save/load through DiskFS opcodes ──
     // NOTE: may block on pdx_storage_sync.  Workflow proofs already completed above.
-    if LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED {
+    if LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
         unsafe { run_linen_diskfs_direct_proof(); }
     }
 
     // ── Linen V2 slot proof: SELECT path_id=1, write/read through DiskFS ──
-    if LINEN_DISKFS_SLOT_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED {
+    if LINEN_DISKFS_SLOT_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
         unsafe { run_linen_diskfs_slot_proof(); }
     }
 
@@ -648,7 +669,7 @@ pub extern "C" fn _start() -> ! {
     // Skipped during bridge proof runs to avoid pdx_storage_sync deadlock.
     // Default boot skips to avoid blocking pdx_storage_sync — SexFiles100
     // proof must be explicitly enabled via SEXOS_LINEN_SEXFILES100_PROOF=1.
-    if !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_SLOT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED {
+    if !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_SLOT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
         if LINEN_SEXFILES100_PROOF_ENABLED {
             unsafe { linen_init_session(); }
         } else {
@@ -660,22 +681,22 @@ pub extern "C" fn _start() -> ! {
 
     // ── Synthetic proof: Linen session object model ──
     // NOTE: runs after workflow proofs.  Fills remaining table slots.
-    if LINEN_SESSION_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED {
+    if LINEN_SESSION_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
         unsafe { run_session_proof(); }
     }
 
     // ── Metadata bridge proof: Linen↔SexFiles persistence ──
-    if LINEN_SEXFILES_METADATA_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED {
+    if LINEN_SEXFILES_METADATA_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
         unsafe { run_metadata_bridge_proof(); }
     }
 
     // ── OQ5 proof: SexObject ID namespace resolution ──
-    if SEXOS_OQ5_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED {
+    if SEXOS_OQ5_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
         unsafe { run_oq5_proof(); }
     }
 
     // ── Linen disk object proof: save/load through SexFiles RamFS ──
-    if LINEN_DISK_OBJECT_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED {
+    if LINEN_DISK_OBJECT_PROOF_ENABLED && !LINEN_DISKFS_DIRECT_PROOF_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED {
         unsafe { run_linen_disk_object_proof(); }
     }
 
@@ -2411,4 +2432,342 @@ unsafe fn run_linen_diskfs_ap2_proof() {
     }
 
     serial_println!("[linen.diskfs100.ap2.done] ok=1");
+}
+
+/// Linen DiskFS AP3 write boot proof — writes content for cross-boot persistence.
+///
+/// Activated by SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE=1.
+///
+/// Object: object_id=1, path_id=1 (/disk/linen-object-v1).
+/// Payload: 128 bytes, byte[i] = (0xB6 ^ i ^ 0x2D) & 0xFF = (0x9B ^ i) & 0xFF.
+///
+/// Route: Linen → SLOT_STORAGE → SexFiles → DiskFS → SLOT_BLOCK → SexDrive → NVMe
+///
+/// Write: 8 calls × 16 bytes via OP_DISKFS_WRITE (0x38)
+/// Readback: 16 calls × 8 bytes via OP_DISKFS_READ (0x39) — optional immediate verify
+/// Flush: OP_DISKFS_FLUSH (0x3A), honest ERR_NO_DEVICE on QEMU
+/// Stat:  OP_DISKFS_STAT (0x3B)
+///
+/// This boot writes; the read boot (AP3_READ) verifies persistence across reboot.
+unsafe fn run_linen_diskfs_ap3_write_proof() {
+    serial_println!("[linen.diskfs100.ap3.write.begin] object_id=1 bytes=128");
+
+    // ── Metadata classification: Linen metadata is RamFS-backed, not DiskFS ──
+    serial_println!("[linen.diskfs100.ap3.metadata.skip] reason=metadata_not_diskfs_backed");
+
+    // Helper: drain non-reply messages then block for reply.
+    fn storage_sync_reply() -> i64 {
+        loop {
+            let msg = pdx_listen_raw(0);
+            if msg.type_id == 0x1 {
+                return msg.arg0 as i64;
+            }
+            if msg.type_id == OP_HID_EVENT {
+                handle_hid_event(msg.arg0, msg.arg1);
+            }
+        }
+    }
+
+    // Bounded readiness wait: cooperative yield.
+    for _ in 0..64 { sched_yield(); }
+
+    // ── SELECT path_id=1 (linen-object-v1) ──
+    {
+        if pdx_call(SLOT_STORAGE, OP_DISKFS_SELECT, LINEN_DISKFS_PATH_ID, 0, 0).0 != 0 {
+            serial_println!("[linen.diskfs100.ap3.fail] phase=write reason=select_enq_fail");
+            return;
+        }
+        let r = storage_sync_reply();
+        if r < 0 {
+            serial_println!("[linen.diskfs100.ap3.fail] phase=write reason=select_err_{}", r);
+            return;
+        }
+        serial_println!("[linen.diskfs100.ap3.write.select.ok] path_id={}", LINEN_DISKFS_PATH_ID);
+    }
+
+    // ── STAT to verify object is alive ──
+    {
+        if pdx_call(SLOT_STORAGE, OP_DISKFS_STAT, 0, 0, 0).0 != 0 {
+            serial_println!("[linen.diskfs100.ap3.fail] phase=write reason=stat_enq_fail");
+            return;
+        }
+        let r = storage_sync_reply();
+        if r < 0 {
+            serial_println!("[linen.diskfs100.ap3.fail] phase=write reason=stat_err_{}", r);
+            return;
+        }
+        serial_println!("[linen.diskfs100.ap3.write.stat.ok] size={} flags={:#x}",
+            LINEN_DISKFS_EXPECT_SIZE, LINEN_DISKFS_EXPECT_FLAGS);
+    }
+
+    // ── Build deterministic AP3 128-byte payload ──
+    // formula: byte[i] = (0xB6 ^ (i as u8) ^ 0x2D) & 0xFF
+    // simplified: (0xB6 ^ 0x2D) = 0x9B, so byte[i] = (0x9B ^ (i as u8)) & 0xFF
+    let mut payload = [0u8; 128];
+    {
+        let mut i: usize = 0;
+        while i < 128 {
+            payload[i] = ((0xB6u8 ^ (i as u8) ^ 0x2Du8) & 0xFFu8);
+            i += 1;
+        }
+    }
+
+    // ── Write: 128 bytes as 8 chunks of 16 bytes each ──
+    {
+        let mut chunk: u64 = 0;
+        let mut ok = true;
+        while chunk < 8 {
+            let offset = chunk * 16;
+            // Pack 16 bytes into data_lo (bytes 0-7) and data_hi (bytes 8-15).
+            let mut data_lo: u64 = 0;
+            let mut data_hi: u64 = 0;
+            {
+                let mut i: usize = 0;
+                while i < 8 {
+                    data_lo |= (payload[(offset as usize) + i] as u64) << (i * 8);
+                    i += 1;
+                }
+                while i < 16 {
+                    data_hi |= (payload[(offset as usize) + i] as u64) << ((i - 8) * 8);
+                    i += 1;
+                }
+            }
+            if pdx_call(SLOT_STORAGE, OP_DISKFS_WRITE, offset, data_lo, data_hi).0 != 0 {
+                serial_println!("[linen.diskfs100.ap3.fail] phase=write reason=write_enq_fail_chunk_{}", chunk);
+                ok = false;
+                break;
+            }
+            let r = storage_sync_reply();
+            if r != 16 {
+                serial_println!("[linen.diskfs100.ap3.fail] phase=write reason=write_failed_chunk_{}_off={}_err={}",
+                    chunk, offset, r);
+                ok = false;
+                break;
+            }
+            serial_println!("[linen.diskfs100.ap3.write.chunk] off={} len=16 ok=1", offset);
+            chunk += 1;
+        }
+        if !ok {
+            return;
+        }
+    }
+    serial_println!("[linen.diskfs100.ap3.write.done] bytes=128 ok=1");
+
+    // ── Flush (honest ERR_NO_DEVICE on QEMU) ──
+    {
+        if pdx_call(SLOT_STORAGE, OP_DISKFS_FLUSH, 0, 0, 0).0 != 0 {
+            serial_println!("[linen.diskfs100.ap3.fail] phase=write reason=flush_enq_fail");
+            return;
+        }
+        let r = storage_sync_reply();
+        if r < 0 {
+            serial_println!("[linen.diskfs100.ap3.flush.honest] status={} honest=expected_on_qemu", r);
+        } else {
+            serial_println!("[linen.diskfs100.ap3.flush.ok]");
+        }
+    }
+
+    // ── Immediate readback: verify from same boot (optional, honest) ──
+    serial_println!("[linen.diskfs100.ap3.write.readback.request] object_id=1 size=128");
+    let mut readback = [0u8; 128];
+    {
+        let mut chunk: u64 = 0;
+        let mut ok = true;
+        while chunk < 16 {
+            let offset = chunk * 8;
+            if pdx_call(SLOT_STORAGE, OP_DISKFS_READ, offset, 8, 0).0 != 0 {
+                serial_println!("[linen.diskfs100.ap3.fail] phase=write reason=readback_enq_fail_chunk_{}", chunk);
+                ok = false;
+                break;
+            }
+            let r_i64 = storage_sync_reply();
+            let r = r_i64 as u64;
+            if r <= 255 {
+                serial_println!("[linen.diskfs100.ap3.fail] phase=write reason=readback_failed_chunk_{}_off={}_status={}",
+                    chunk, offset, r);
+                ok = false;
+                break;
+            }
+            let bytes = r.to_le_bytes();
+            let mut i = 0;
+            while i < 8 {
+                readback[(offset as usize) + i] = bytes[i];
+                i += 1;
+            }
+            serial_println!("[linen.diskfs100.ap3.write.readback.chunk] off={} len=8 ok=1", offset);
+            chunk += 1;
+        }
+        if !ok {
+            return;
+        }
+    }
+    serial_println!("[linen.diskfs100.ap3.write.readback] read=128");
+
+    // ── Verify readback match ──
+    {
+        let mut match_ok = true;
+        let mut mismatch_at: usize = 0;
+        {
+            let mut i: usize = 0;
+            while i < 128 {
+                if readback[i] != payload[i] {
+                    match_ok = false;
+                    mismatch_at = i;
+                    break;
+                }
+                i += 1;
+            }
+        }
+        if match_ok {
+            serial_println!("[linen.diskfs100.ap3.write.readback.match] bytes=128 ok=1");
+        } else {
+            serial_println!(
+                "[linen.diskfs100.ap3.fail] phase=write reason=readback_mismatch_at_{} expected={:#x} got={:#x}",
+                mismatch_at,
+                payload[mismatch_at],
+                readback[mismatch_at]
+            );
+            return;
+        }
+    }
+
+    serial_println!("[linen.diskfs100.ap3.write.all_done] ok=1");
+}
+
+/// Linen DiskFS AP3 read boot proof — reads content previously written in AP3 write boot.
+///
+/// Activated by SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_READ=1.
+///
+/// This boot MUST NOT write before reading.  It reads object_id=1, path_id=1
+/// through the same proven DiskFS path and verifies byte-for-byte match against
+/// the AP3 pattern: byte[i] = (0xB6 ^ i ^ 0x2D) & 0xFF.
+///
+/// No SELECT, STAT, or READ calls perform writes — the proof function body
+/// contains no OP_DISKFS_WRITE or OP_DISKFS_FLUSH calls.
+unsafe fn run_linen_diskfs_ap3_read_proof() {
+    serial_println!("[linen.diskfs100.ap3.read.begin] object_id=1 bytes=128");
+
+    // ── Metadata classification: Linen metadata is RamFS-backed, not DiskFS ──
+    serial_println!("[linen.diskfs100.ap3.metadata.skip] reason=metadata_not_diskfs_backed");
+
+    // Helper: drain non-reply messages then block for reply.
+    fn storage_sync_reply() -> i64 {
+        loop {
+            let msg = pdx_listen_raw(0);
+            if msg.type_id == 0x1 {
+                return msg.arg0 as i64;
+            }
+            if msg.type_id == OP_HID_EVENT {
+                handle_hid_event(msg.arg0, msg.arg1);
+            }
+        }
+    }
+
+    // Bounded readiness wait: cooperative yield.
+    for _ in 0..64 { sched_yield(); }
+
+    // ── SELECT path_id=1 (linen-object-v1) ──
+    {
+        if pdx_call(SLOT_STORAGE, OP_DISKFS_SELECT, LINEN_DISKFS_PATH_ID, 0, 0).0 != 0 {
+            serial_println!("[linen.diskfs100.ap3.fail] phase=read reason=select_enq_fail");
+            return;
+        }
+        let r = storage_sync_reply();
+        if r < 0 {
+            serial_println!("[linen.diskfs100.ap3.fail] phase=read reason=select_err_{}", r);
+            return;
+        }
+        serial_println!("[linen.diskfs100.ap3.read.select.ok] path_id={}", LINEN_DISKFS_PATH_ID);
+    }
+
+    // ── STAT to verify object is alive ──
+    {
+        if pdx_call(SLOT_STORAGE, OP_DISKFS_STAT, 0, 0, 0).0 != 0 {
+            serial_println!("[linen.diskfs100.ap3.fail] phase=read reason=stat_enq_fail");
+            return;
+        }
+        let r = storage_sync_reply();
+        if r < 0 {
+            serial_println!("[linen.diskfs100.ap3.fail] phase=read reason=stat_err_{}", r);
+            return;
+        }
+        serial_println!("[linen.diskfs100.ap3.read.stat.ok] size={} flags={:#x}",
+            LINEN_DISKFS_EXPECT_SIZE, LINEN_DISKFS_EXPECT_FLAGS);
+    }
+
+    // ── Reconstruct expected AP3 pattern ──
+    // byte[i] = (0xB6 ^ (i as u8) ^ 0x2D) & 0xFF
+    let mut expected = [0u8; 128];
+    {
+        let mut i: usize = 0;
+        while i < 128 {
+            expected[i] = ((0xB6u8 ^ (i as u8) ^ 0x2Du8) & 0xFFu8);
+            i += 1;
+        }
+    }
+
+    // ── Read: 128 bytes as 16 chunks of 8 bytes each ──
+    let mut readback = [0u8; 128];
+    {
+        let mut chunk: u64 = 0;
+        let mut ok = true;
+        while chunk < 16 {
+            let offset = chunk * 8;
+            if pdx_call(SLOT_STORAGE, OP_DISKFS_READ, offset, 8, 0).0 != 0 {
+                serial_println!("[linen.diskfs100.ap3.fail] phase=read reason=read_enq_fail_chunk_{}", chunk);
+                ok = false;
+                break;
+            }
+            let r_i64 = storage_sync_reply();
+            let r = r_i64 as u64;
+            if r <= 255 {
+                serial_println!("[linen.diskfs100.ap3.fail] phase=read reason=read_failed_chunk_{}_off={}_status={}",
+                    chunk, offset, r);
+                ok = false;
+                break;
+            }
+            let bytes = r.to_le_bytes();
+            let mut i = 0;
+            while i < 8 {
+                readback[(offset as usize) + i] = bytes[i];
+                i += 1;
+            }
+            serial_println!("[linen.diskfs100.ap3.read.chunk] off={} len=8 ok=1", offset);
+            chunk += 1;
+        }
+        if !ok {
+            return;
+        }
+    }
+    serial_println!("[linen.diskfs100.ap3.read.read] read=128");
+
+    // ── Verify exact byte-for-byte match ──
+    {
+        let mut match_ok = true;
+        let mut mismatch_at: usize = 0;
+        {
+            let mut i: usize = 0;
+            while i < 128 {
+                if readback[i] != expected[i] {
+                    match_ok = false;
+                    mismatch_at = i;
+                    break;
+                }
+                i += 1;
+            }
+        }
+        if match_ok {
+            serial_println!("[linen.diskfs100.ap3.read.match] bytes=128 ok=1");
+        } else {
+            serial_println!(
+                "[linen.diskfs100.ap3.fail] phase=read reason=mismatch_at_{} expected={:#x} got={:#x}",
+                mismatch_at,
+                expected[mismatch_at],
+                readback[mismatch_at]
+            );
+            return;
+        }
+    }
+
+    serial_println!("[linen.diskfs100.ap3.read.done] ok=1");
 }

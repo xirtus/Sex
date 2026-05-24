@@ -128,6 +128,7 @@ gate_linen_objects_list="SKIP"
 gate_linen_ramfs_crud="SKIP"
 gate_linen_diskfs_direct="SKIP"
 gate_linen_diskfs_fixed_object_save_load="SKIP"
+gate_linen_diskfs_reboot_restore="SKIP"
 gate_sexfiles_diskfs_bridge="SKIP"
 gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
 gate_sexfiles_diskfs_bridge_multi_object_rw="SKIP"
@@ -3894,6 +3895,80 @@ else
     print_row "linen_diskfs_fixed_object_save_load" "SKIP" "AP2 fixed-object save/load proof not triggered"
 fi
 
+# ---- 76b3. linen_diskfs_reboot_restore ----
+# AP3 proves Linen fixed-object content persists across two proof boots
+# through SexFiles DiskFS with preserved NVMe image.
+# Two-boot gate: checks either ap3.write.* or ap3.read.* markers.
+# Full acceptance requires both write-log PASS and read-log PASS.
+if [ "$(has 'linen\.diskfs100\.ap3\.write\.begin')" -ge 1 ]; then
+    has_ap3_write_done=$(has 'linen\.diskfs100\.ap3\.write\.done.*bytes=128 ok=1')
+    has_ap3_write_readback_match=$(has 'linen\.diskfs100\.ap3\.write\.readback\.match.*bytes=128 ok=1')
+    has_ap3_write_all_done=$(has 'linen\.diskfs100\.ap3\.write\.all_done.*ok=1')
+    has_ap3_fail=$(has 'linen\.diskfs100\.ap3\.fail')
+    has_cqe_timeout=$(has 'cqe_timeout')
+    has_fault=$(has 'fault\.kill|#PF|#GP|PKU LOCK|panic|KERNEL PANIC')
+
+    if [ "$has_cqe_timeout" -ge 1 ]; then
+        gate_linen_diskfs_reboot_restore="FAIL"
+        print_row "linen_diskfs_reboot_restore" "FAIL" "cqe_timeout in AP3 write log"
+    elif [ "$has_fault" -ge 1 ]; then
+        gate_linen_diskfs_reboot_restore="FAIL"
+        print_row "linen_diskfs_reboot_restore" "FAIL" "fault/panic in AP3 write log"
+    elif [ "$has_ap3_fail" -ge 1 ]; then
+        gate_linen_diskfs_reboot_restore="FAIL"
+        print_row "linen_diskfs_reboot_restore" "FAIL" "ap3.fail marker in write log"
+    elif [ "$has_ap3_write_done" -eq 0 ] || [ "$has_ap3_write_all_done" -eq 0 ]; then
+        gate_linen_diskfs_reboot_restore="FAIL"
+        print_row "linen_diskfs_reboot_restore" "FAIL" "missing write.done or all_done markers"
+    elif [ "$has_ap3_write_done" -ge 1 ] && [ "$has_ap3_write_all_done" -ge 1 ] && [ "$has_ap3_write_readback_match" -ge 1 ]; then
+        gate_linen_diskfs_reboot_restore="PASS"
+        print_row "linen_diskfs_reboot_restore" "PASS" "AP3 write boot: chunks written + readback match + all_done ok=1"
+    elif [ "$has_ap3_write_done" -ge 1 ] && [ "$has_ap3_write_all_done" -ge 1 ]; then
+        gate_linen_diskfs_reboot_restore="PASS"
+        print_row "linen_diskfs_reboot_restore" "PASS" "AP3 write boot: write.done + all_done ok=1"
+    else
+        gate_linen_diskfs_reboot_restore="FAIL"
+        print_row "linen_diskfs_reboot_restore" "FAIL" "incomplete AP3 write markers"
+    fi
+elif [ "$(has 'linen\.diskfs100\.ap3\.read\.begin')" -ge 1 ]; then
+    has_ap3_read_match=$(has 'linen\.diskfs100\.ap3\.read\.match.*bytes=128 ok=1')
+    has_ap3_read_done=$(has 'linen\.diskfs100\.ap3\.read\.done.*ok=1')
+    has_ap3_fail=$(has 'linen\.diskfs100\.ap3\.fail')
+    has_cqe_timeout=$(has 'cqe_timeout')
+    has_fault=$(has 'fault\.kill|#PF|#GP|PKU LOCK|panic|KERNEL PANIC')
+    # Read boot MUST NOT write — check for write markers in read log
+    has_ap3_write_marker=$(has 'linen\.diskfs100\.ap3\.write\.begin')
+
+    if [ "$has_cqe_timeout" -ge 1 ]; then
+        gate_linen_diskfs_reboot_restore="FAIL"
+        print_row "linen_diskfs_reboot_restore" "FAIL" "cqe_timeout in AP3 read log"
+    elif [ "$has_fault" -ge 1 ]; then
+        gate_linen_diskfs_reboot_restore="FAIL"
+        print_row "linen_diskfs_reboot_restore" "FAIL" "fault/panic in AP3 read log"
+    elif [ "$has_ap3_write_marker" -ge 1 ]; then
+        gate_linen_diskfs_reboot_restore="FAIL"
+        print_row "linen_diskfs_reboot_restore" "FAIL" "write markers in read log (read boot must not write)"
+    elif [ "$has_ap3_fail" -ge 1 ]; then
+        gate_linen_diskfs_reboot_restore="FAIL"
+        print_row "linen_diskfs_reboot_restore" "FAIL" "ap3.fail marker in read log"
+    elif [ "$has_ap3_read_match" -eq 0 ]; then
+        gate_linen_diskfs_reboot_restore="FAIL"
+        print_row "linen_diskfs_reboot_restore" "FAIL" "missing read.match bytes=128 ok=1"
+    elif [ "$has_ap3_read_done" -eq 0 ]; then
+        gate_linen_diskfs_reboot_restore="FAIL"
+        print_row "linen_diskfs_reboot_restore" "FAIL" "missing read.done ok=1"
+    elif [ "$has_ap3_read_match" -ge 1 ] && [ "$has_ap3_read_done" -ge 1 ]; then
+        gate_linen_diskfs_reboot_restore="PASS"
+        print_row "linen_diskfs_reboot_restore" "PASS" "AP3 read boot: chunks read + byte match + done ok=1"
+    else
+        gate_linen_diskfs_reboot_restore="FAIL"
+        print_row "linen_diskfs_reboot_restore" "FAIL" "incomplete AP3 read markers"
+    fi
+else
+    gate_linen_diskfs_reboot_restore="SKIP"
+    print_row "linen_diskfs_reboot_restore" "SKIP" "AP3 reboot restore proof not triggered"
+fi
+
 # ---- 76c. sexfiles_diskfs_bridge ----
 if [ "$(has 'sexfiles\.bridge\.diskfs\.recv')" -ge 1 ]; then
     has_buf_marker=0
@@ -5677,6 +5752,7 @@ ALL_GATES=(
     "linen_ramfs_crud:$gate_linen_ramfs_crud"
     "linen_diskfs_direct:$gate_linen_diskfs_direct"
     "linen_diskfs_fixed_object_save_load:$gate_linen_diskfs_fixed_object_save_load"
+    "linen_diskfs_reboot_restore:$gate_linen_diskfs_reboot_restore"
     "sexfiles_diskfs_bridge:$gate_sexfiles_diskfs_bridge"
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"

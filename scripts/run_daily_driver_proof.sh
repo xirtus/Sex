@@ -149,6 +149,17 @@ export SEXFILES_DISKFS_100_AP3_PROOF="${SEXFILES_DISKFS_100_AP3_PROOF:-0}"
 export SEXFILES_DISKFS_100_AP4_WRITE="${SEXFILES_DISKFS_100_AP4_WRITE:-0}"
 export SEXFILES_DISKFS_100_AP4_READ="${SEXFILES_DISKFS_100_AP4_READ:-0}"
 
+# ── Linen DiskFS AP3 reboot restore (two-boot) ──
+# Only export if explicitly set — contrasts with AP4 pattern where binary
+# uses cfg!() from build.rs (exact match). Linen uses option_env!().is_some()
+# so exporting "0" would falsely activate the proof.
+if [ -n "${SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE-}" ]; then
+    export SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE
+fi
+if [ -n "${SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_READ-}" ]; then
+    export SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_READ
+fi
+
 # ── SexFiles AP5 negative test lanes ──
 export SEXFILES_DISKFS_100_AP5_NEGATIVE="${SEXFILES_DISKFS_100_AP5_NEGATIVE:-0}"
 export SEXFILES_DISKFS_100_AP5_NEG_MISMATCH="${SEXFILES_DISKFS_100_AP5_NEG_MISMATCH:-0}"
@@ -421,6 +432,12 @@ if [ "$SEXOS_STORAGE_100_PROOF" = "1" ]; then
             exit 1
         fi
         echo "[proof] AP4 read boot: preserving existing nvme.img (no recreation)"
+    elif [ "${SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_READ:-0}" = "1" ]; then
+        if [ ! -f "$NVME_IMG" ]; then
+            echo "[proof] FAIL: AP3 read boot requested but nvme.img missing (run write boot first): $NVME_IMG"
+            exit 1
+        fi
+        echo "[proof] AP3 read boot: preserving existing nvme.img (no recreation)"
     elif [ ! -f "$NVME_IMG" ]; then
         dd if=/dev/zero of="$NVME_IMG" bs=1M count=1 status=none
     fi
@@ -511,6 +528,8 @@ echo "  storage_neg_missing:   ${STORAGE_NEG_MISSING_IMAGE}"
 echo "  storage_neg_mismatch:  ${STORAGE_NEG_MISMATCH}"
 echo "  ap4_write:  ${SEXFILES_DISKFS_100_AP4_WRITE}"
 echo "  ap4_read:   ${SEXFILES_DISKFS_100_AP4_READ}"
+echo "  ap3_write:  ${SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE:-0}"
+echo "  ap3_read:   ${SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_READ:-0}"
 echo "  ap5_neg:         ${SEXFILES_DISKFS_100_AP5_NEGATIVE}"
 echo "  ap5_neg_mismatch: ${SEXFILES_DISKFS_100_AP5_NEG_MISMATCH}"
 echo "  ap5_neg_missing:  ${SEXFILES_DISKFS_100_AP5_NEG_MISSING_IMAGE}"
