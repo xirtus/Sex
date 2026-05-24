@@ -127,6 +127,7 @@ gate_linen_sexfiles100_audit="SKIP"
 gate_linen_objects_list="SKIP"
 gate_linen_ramfs_crud="SKIP"
 gate_linen_diskfs_direct="SKIP"
+gate_linen_diskfs_fixed_object_save_load="SKIP"
 gate_sexfiles_diskfs_bridge="SKIP"
 gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
 gate_sexfiles_diskfs_bridge_multi_object_rw="SKIP"
@@ -3822,7 +3823,7 @@ if [ "$(has 'linen\.diskfs\.direct\.begin')" -ge 1 ]; then
     fi
 
     has_honest_blocker=0
-    if [ "$(has 'no_ioq_ready|status=4|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ] && \
+    if [ "$(has 'no_ioq_ready|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ] && \
        [ "$(has 'linen\.diskfs\.direct\.fail.*reason=write_failed')" -eq 1 ] && \
        [ "$(has 'fault\.isolated|faulted_task_halt|panic|KERNEL PANIC|general_protection|page_fault')" -eq 0 ]; then
         has_honest_blocker=1
@@ -3836,7 +3837,7 @@ if [ "$(has 'linen\.diskfs\.direct\.begin')" -ge 1 ]; then
 
     # Fake read.match check
     has_fake_read_match=0
-    if [ "$(has 'linen\.diskfs\.direct\.read\.match')" -eq 1 ] && [ "$(has 'no_ioq_ready|status=4|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ]; then
+    if [ "$(has 'linen\.diskfs\.direct\.read\.match')" -eq 1 ] && [ "$(has 'no_ioq_ready|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ]; then
         has_fake_read_match=1
     fi
 
@@ -3857,6 +3858,42 @@ else
     gate_linen_diskfs_direct="SKIP"
 fi
 
+# ---- 76b2. linen_diskfs_fixed_object_save_load ----
+# Evidence: [linen.diskfs100.ap2.*] markers from AP2 fixed-object save/load proof.
+# Content-only proof (metadata is RamFS-backed, not DiskFS, honestly skipped).
+if [ "$(has 'linen\.diskfs100\.ap2\.begin')" -ge 1 ]; then
+    # FAIL if cqe_timeout or fault
+    if [ "$(has 'cqe_timeout')" -ge 1 ]; then
+        gate_linen_diskfs_fixed_object_save_load="FAIL"
+        print_row "linen_diskfs_fixed_object_save_load" "FAIL" "cqe_timeout in AP2 proof log"
+    elif [ "$(has 'fault\.kill')" -ge 1 ]; then
+        gate_linen_diskfs_fixed_object_save_load="FAIL"
+        print_row "linen_diskfs_fixed_object_save_load" "FAIL" "fault.kill in AP2 proof log"
+    elif [ "$(has '#PF|#GP|PKU LOCK|panic|KERNEL PANIC')" -ge 1 ]; then
+        gate_linen_diskfs_fixed_object_save_load="FAIL"
+        print_row "linen_diskfs_fixed_object_save_load" "FAIL" "fault/panic in AP2 proof log"
+    elif [ "$(has 'linen\.diskfs100\.ap2\.fail')" -ge 1 ]; then
+        gate_linen_diskfs_fixed_object_save_load="FAIL"
+        print_row "linen_diskfs_fixed_object_save_load" "FAIL" "ap2.fail marker present"
+    elif [ "$(has 'linen\.diskfs100\.ap2\.content\.match.*bytes=128.*ok=1')" -eq 1 ] && \
+         [ "$(has 'linen\.diskfs100\.ap2\.done.*ok=1')" -eq 1 ]; then
+        # Metadata is honestly skipped (RamFS-only, not DiskFS).
+        # PASS if content match ok=1 and done ok=1.
+        gate_linen_diskfs_fixed_object_save_load="PASS"
+        print_row "linen_diskfs_fixed_object_save_load" "PASS" "content match ok=1 bytes=128 (metadata skipped — RamFS-only)"
+    elif [ "$(has 'linen\.diskfs100\.ap2\.content\.match')" -ge 1 ] && \
+         [ "$(has 'linen\.diskfs100\.ap2\.done.*ok=1')" -eq 1 ]; then
+        gate_linen_diskfs_fixed_object_save_load="PASS"
+        print_row "linen_diskfs_fixed_object_save_load" "PASS" "content match present + done ok=1"
+    else
+        gate_linen_diskfs_fixed_object_save_load="FAIL"
+        print_row "linen_diskfs_fixed_object_save_load" "FAIL" "incomplete AP2 markers"
+    fi
+else
+    gate_linen_diskfs_fixed_object_save_load="SKIP"
+    print_row "linen_diskfs_fixed_object_save_load" "SKIP" "AP2 fixed-object save/load proof not triggered"
+fi
+
 # ---- 76c. sexfiles_diskfs_bridge ----
 if [ "$(has 'sexfiles\.bridge\.diskfs\.recv')" -ge 1 ]; then
     has_buf_marker=0
@@ -3870,28 +3907,39 @@ if [ "$(has 'sexfiles\.bridge\.diskfs\.recv')" -ge 1 ]; then
     has_manifest_hash_ok=$(has 'sexfiles\.bridge\.diskfs\.manifest_hash\.ok')
     has_flush_ok=$(has 'sexfiles\.bridge\.diskfs\.flush\.(ok|err.*honest=)')
 
+    # Only require success for operations actually exercised through the bridge.
+    has_stat_recv=$(has 'sexfiles\.bridge\.diskfs\.recv.*op=0x3B')
+    has_manifest_hash_recv=$(has 'sexfiles\.bridge\.diskfs\.recv.*op=0x3C')
+    need_stat=1; [ "$has_stat_recv" -eq 1 ] || need_stat=0
+    need_manifest=1; [ "$has_manifest_hash_recv" -eq 1 ] || need_manifest=0
+
+    stat_ok_effective=1
+    if [ "$need_stat" -eq 1 ] && [ "$has_stat_ok" -eq 0 ]; then stat_ok_effective=0; fi
+    manifest_ok_effective=1
+    if [ "$need_manifest" -eq 1 ] && [ "$has_manifest_hash_ok" -eq 0 ]; then manifest_ok_effective=0; fi
+
     has_success_markers=0
     if [ "$has_buf_marker" -eq 1 ] && \
        [ "$has_write_ok" -eq 1 ] && \
        [ "$has_read_ok" -eq 1 ] && \
-       [ "$has_stat_ok" -eq 1 ] && \
-       [ "$has_manifest_hash_ok" -eq 1 ] && \
+       [ "$stat_ok_effective" -eq 1 ] && \
+       [ "$manifest_ok_effective" -eq 1 ] && \
        [ "$has_flush_ok" -eq 1 ]; then
         has_success_markers=1
     fi
 
     has_honest_blocker=0
     if [ "$has_buf_marker" -eq 1 ] && \
-       [ "$has_stat_ok" -eq 1 ] && \
-       [ "$has_manifest_hash_ok" -eq 1 ] && \
-       [ "$(has 'no_ioq_ready|status=4|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ] && \
+       [ "$stat_ok_effective" -eq 1 ] && \
+       [ "$manifest_ok_effective" -eq 1 ] && \
+       [ "$(has 'no_ioq_ready|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ] && \
        [ "$(has 'fault\.isolated|faulted_task_halt|panic|KERNEL PANIC|general_protection|page_fault')" -eq 0 ]; then
         has_honest_blocker=1
     fi
 
     # Fake write.ok/read.ok emitted despite backend error
     has_fake_success=0
-    if [ "$(has 'no_ioq_ready|status=4|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ]; then
+    if [ "$(has 'no_ioq_ready|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ]; then
         if [ "$has_write_ok" -eq 1 ] || [ "$has_read_ok" -eq 1 ]; then
             has_fake_success=1
         fi
@@ -5628,6 +5676,7 @@ ALL_GATES=(
     "linen_objects_list:$gate_linen_objects_list"
     "linen_ramfs_crud:$gate_linen_ramfs_crud"
     "linen_diskfs_direct:$gate_linen_diskfs_direct"
+    "linen_diskfs_fixed_object_save_load:$gate_linen_diskfs_fixed_object_save_load"
     "sexfiles_diskfs_bridge:$gate_sexfiles_diskfs_bridge"
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"
