@@ -129,6 +129,7 @@ gate_linen_ramfs_crud="SKIP"
 gate_linen_diskfs_direct="SKIP"
 gate_linen_diskfs_fixed_object_save_load="SKIP"
 gate_linen_diskfs_reboot_restore="SKIP"
+gate_linen_diskfs_negative_classifications="SKIP"
 gate_sexfiles_diskfs_bridge="SKIP"
 gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
 gate_sexfiles_diskfs_bridge_multi_object_rw="SKIP"
@@ -4001,6 +4002,53 @@ else
     print_row "linen_diskfs_metadata_persistence" "SKIP" "AP4 metadata persistence proof not triggered"
 fi
 
+# ---- 76b5. linen_diskfs_negative_classifications ----
+if [ "$(has 'linen\.diskfs100\.ap5\.neg\..*\.begin')" -ge 1 ]; then
+    if [ "$(has 'linen\.diskfs100\.ap5\.neg\.fail')" -ge 1 ]; then
+        gate_linen_diskfs_negative_classifications="FAIL"
+        print_row "linen_diskfs_negative_classifications" "FAIL" "ap5.neg.fail marker present"
+    elif [ "$(has 'cqe_timeout')" -ge 1 ]; then
+        gate_linen_diskfs_negative_classifications="FAIL"
+        print_row "linen_diskfs_negative_classifications" "FAIL" "cqe_timeout in AP5 negative lane"
+    elif [ "$(has 'fault\.kill|#PF|#GP|PKU LOCK|panic|KERNEL PANIC')" -ge 1 ]; then
+        gate_linen_diskfs_negative_classifications="FAIL"
+        print_row "linen_diskfs_negative_classifications" "FAIL" "fault/panic in AP5 negative lane"
+    else
+        has_mismatch_begin="$(has 'linen\.diskfs100\.ap5\.neg\.mismatch\.begin')"
+        has_mismatch_ok="$(has 'linen\.diskfs100\.ap5\.neg\.mismatch\.detected.*ok=1')"
+        has_missing_begin="$(has 'linen\.diskfs100\.ap5\.neg\.missing\.begin')"
+        has_missing_ok="$(has 'linen\.diskfs100\.ap5\.neg\.missing\.detected.*ok=1')"
+        has_read_nowrite_begin="$(has 'linen\.diskfs100\.ap5\.neg\.read_no_write\.begin')"
+        has_read_nowrite_ok="$(has 'linen\.diskfs100\.ap5\.neg\.read_no_write\.checked.*ok=1')"
+        has_meta_begin="$(has 'linen\.diskfs100\.ap5\.neg\.metadata_false_claim\.begin')"
+        has_meta_ok="$(has 'linen\.diskfs100\.ap5\.neg\.metadata_false_claim\.checked.*ok=1')"
+        has_flush_begin="$(has 'linen\.diskfs100\.ap5\.neg\.flush_skip\.begin')"
+        has_flush_ok="$(has 'linen\.diskfs100\.ap5\.neg\.flush_skip\.detected.*ok=1')"
+
+        if { [ "$has_mismatch_begin" -eq 1 ] && [ "$has_mismatch_ok" -eq 0 ]; } || \
+           { [ "$has_missing_begin" -eq 1 ] && [ "$has_missing_ok" -eq 0 ]; } || \
+           { [ "$has_read_nowrite_begin" -eq 1 ] && [ "$has_read_nowrite_ok" -eq 0 ]; } || \
+           { [ "$has_meta_begin" -eq 1 ] && [ "$has_meta_ok" -eq 0 ]; } || \
+           { [ "$has_flush_begin" -eq 1 ] && [ "$has_flush_ok" -eq 0 ]; }; then
+            gate_linen_diskfs_negative_classifications="FAIL"
+            print_row "linen_diskfs_negative_classifications" "FAIL" "AP5 begin marker without expected detected/checked ok=1"
+        elif [ "$has_mismatch_ok" -eq 1 ] || \
+             [ "$has_missing_ok" -eq 1 ] || \
+             [ "$has_read_nowrite_ok" -eq 1 ] || \
+             [ "$has_meta_ok" -eq 1 ] || \
+             [ "$has_flush_ok" -eq 1 ]; then
+            gate_linen_diskfs_negative_classifications="PASS"
+            print_row "linen_diskfs_negative_classifications" "PASS" "negative detection/guard marker(s) present"
+        else
+            gate_linen_diskfs_negative_classifications="FAIL"
+            print_row "linen_diskfs_negative_classifications" "FAIL" "no AP5 negative detected/checked marker"
+        fi
+    fi
+else
+    gate_linen_diskfs_negative_classifications="SKIP"
+    print_row "linen_diskfs_negative_classifications" "SKIP" "AP5 negative classifications not triggered"
+fi
+
 # ---- 76c. sexfiles_diskfs_bridge ----
 if [ "$(has 'sexfiles\.bridge\.diskfs\.recv')" -ge 1 ]; then
     has_buf_marker=0
@@ -5814,6 +5862,7 @@ ALL_GATES=(
     "linen_diskfs_direct:$gate_linen_diskfs_direct"
     "linen_diskfs_fixed_object_save_load:$gate_linen_diskfs_fixed_object_save_load"
     "linen_diskfs_reboot_restore:$gate_linen_diskfs_reboot_restore"
+    "linen_diskfs_negative_classifications:$gate_linen_diskfs_negative_classifications"
     "sexfiles_diskfs_bridge:$gate_sexfiles_diskfs_bridge"
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"

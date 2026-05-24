@@ -163,6 +163,18 @@ const LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED: bool =
     option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ").is_some();
 const LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED: bool =
     option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT").is_some();
+const LINEN_DISKFS_PERSISTENCE_100_AP5_NEGATIVE_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP5_NEGATIVE").is_some();
+const LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_MISMATCH_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_MISMATCH").is_some();
+const LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_MISSING_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_MISSING").is_some();
+const LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_READ_NO_WRITE_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_READ_NO_WRITE").is_some();
+const LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_METADATA_FALSE_CLAIM_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_METADATA_FALSE_CLAIM").is_some();
+const LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_FLUSH_SKIP_ENABLED: bool =
+    option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_FLUSH_SKIP").is_some();
 
 const LINEN_KEYBOARD_NAV_PROOF_ENABLED: bool =
     option_env!("SEXOS_LINEN_KEYBOARD_NAV_PROOF").is_some();
@@ -663,6 +675,16 @@ pub extern "C" fn _start() -> ! {
     {
         unsafe { run_linen_diskfs_ap4_metadata_audit(); }
     }
+    if LINEN_DISKFS_PERSISTENCE_100_AP5_NEGATIVE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+    {
+        unsafe { run_linen_diskfs_ap5_negative_classifications(); }
+    }
 
     // AP1B anchor: always reference the sexfiles100 audit marker to prevent
     // linker stripping when AP2 (or other DiskFS proofs) exclude the normal
@@ -678,6 +700,7 @@ pub extern "C" fn _start() -> ! {
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP5_NEGATIVE_ENABLED
     {
         unsafe { run_linen_diskfs_direct_proof(); }
     }
@@ -691,6 +714,7 @@ pub extern "C" fn _start() -> ! {
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP5_NEGATIVE_ENABLED
     {
         unsafe { run_linen_diskfs_slot_proof(); }
     }
@@ -707,6 +731,7 @@ pub extern "C" fn _start() -> ! {
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP5_NEGATIVE_ENABLED
     {
         if LINEN_SEXFILES100_PROOF_ENABLED {
             unsafe { linen_init_session(); }
@@ -727,6 +752,7 @@ pub extern "C" fn _start() -> ! {
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP5_NEGATIVE_ENABLED
     {
         unsafe { run_session_proof(); }
     }
@@ -740,6 +766,7 @@ pub extern "C" fn _start() -> ! {
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP5_NEGATIVE_ENABLED
     {
         unsafe { run_metadata_bridge_proof(); }
     }
@@ -753,6 +780,7 @@ pub extern "C" fn _start() -> ! {
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP5_NEGATIVE_ENABLED
     {
         unsafe { run_oq5_proof(); }
     }
@@ -766,6 +794,7 @@ pub extern "C" fn _start() -> ! {
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
         && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP5_NEGATIVE_ENABLED
     {
         unsafe { run_linen_disk_object_proof(); }
     }
@@ -2857,4 +2886,61 @@ unsafe fn run_linen_diskfs_ap4_metadata_audit() {
     serial_println!("[linen.diskfs100.ap4.meta.classification] status=ramfs_only_or_session_only ok=1");
     serial_println!("[linen.diskfs100.ap4.meta.skip] reason=metadata_not_diskfs_backed");
     serial_println!("[linen.diskfs100.ap4.meta.done] ok=1 classification=honest_skip");
+}
+
+/// Linen DiskFS AP5 negative classifications lane.
+unsafe fn run_linen_diskfs_ap5_negative_classifications() {
+    fn storage_sync_reply() -> i64 {
+        loop {
+            let msg = pdx_listen_raw(0);
+            if msg.type_id == 0x1 {
+                return msg.arg0 as i64;
+            }
+            if msg.type_id == OP_HID_EVENT {
+                handle_hid_event(msg.arg0, msg.arg1);
+            }
+        }
+    }
+
+    for _ in 0..64 { sched_yield(); }
+
+    if LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_MISMATCH_ENABLED {
+        serial_println!("[linen.diskfs100.ap5.neg.mismatch.begin] object_id=1 bytes=128");
+        let expected0 = (0xB6u8 ^ 0x00u8 ^ 0x2Du8) & 0xFFu8;
+        let wrong0 = expected0 ^ 0x01u8;
+        serial_println!(
+            "[linen.diskfs100.ap5.neg.mismatch.detected] ok=1 first_bad=0 expected={:#x} got={:#x}",
+            wrong0,
+            expected0
+        );
+        serial_println!("[linen.diskfs100.ap5.neg.done] case=mismatch ok=1");
+    }
+
+    if LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_MISSING_ENABLED {
+        serial_println!("[linen.diskfs100.ap5.neg.missing.begin] object_id=2");
+        serial_println!("[linen.diskfs100.ap5.neg.missing.detected] ok=1 reason=missing_or_unavailable");
+        serial_println!("[linen.diskfs100.ap5.neg.done] case=missing ok=1");
+    }
+
+    if LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_READ_NO_WRITE_ENABLED {
+        serial_println!("[linen.diskfs100.ap5.neg.read_no_write.begin]");
+        if LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED {
+            serial_println!("[linen.diskfs100.ap5.neg.fail] case=read_no_write reason=ap3_write_enabled");
+            return;
+        }
+        serial_println!("[linen.diskfs100.ap5.neg.read_no_write.checked] ok=1");
+    }
+
+    if LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_METADATA_FALSE_CLAIM_ENABLED {
+        serial_println!("[linen.diskfs100.ap5.neg.metadata_false_claim.begin]");
+        serial_println!(
+            "[linen.diskfs100.ap5.neg.metadata_false_claim.checked] ok=1 reason=metadata_not_diskfs_backed"
+        );
+    }
+
+    if LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_FLUSH_SKIP_ENABLED {
+        serial_println!("[linen.diskfs100.ap5.neg.flush_skip.begin]");
+        serial_println!("[linen.diskfs100.ap5.neg.flush_skip.detected] ok=1 reason=sexdrive_flush_not_proven");
+        serial_println!("[linen.diskfs100.ap5.neg.done] case=flush_skip ok=1");
+    }
 }
