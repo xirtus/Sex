@@ -4987,7 +4987,35 @@ else gate_atlas_phase_e4d_real_pointer_drop="SKIP"; fi
 #   pointer.event.consume kind=up ok=1
 # SKIP if final closeout proof not enabled / final marker absent.
 # FAIL if final.done emitted but any required subphase marker missing.
-if [ "$(has 'silk\.atlas\.overview\.final\.done.*ok=1')" -eq 1 ]; then
+atlas_overview_final_closeout_explicit_begin=0
+if [ "$(has '\[atlas\.overview\.final\.begin\]')" -ge 1 ] \
+    || [ "$(has '\[atlas\.final\.closeout\.begin\]')" -ge 1 ]; then
+    atlas_overview_final_closeout_explicit_begin=1
+fi
+
+atlas_overview_final_closeout_silk_begin=0
+if [ "$(has 'silk\.atlas\.overview\.final\.begin')" -ge 1 ]; then
+    atlas_overview_final_closeout_silk_begin=1
+fi
+
+# Hygiene guard:
+# In Linen AP4 metadata audit runs, silk.atlas.overview.final.* can appear as incidental callpath output.
+# Do not treat that as explicit Atlas final closeout proof request unless a dedicated Atlas final begin marker exists.
+atlas_overview_final_closeout_silk_begin_allowed=1
+if [ "$atlas_overview_final_closeout_silk_begin" -eq 1 ] \
+    && [ "$atlas_overview_final_closeout_explicit_begin" -eq 0 ] \
+    && [ "$(has 'linen\.diskfs100\.ap4\.meta\.audit\.begin')" -ge 1 ]; then
+    atlas_overview_final_closeout_silk_begin_allowed=0
+fi
+
+atlas_overview_final_closeout_requested=0
+if [ "$atlas_overview_final_closeout_explicit_begin" -eq 1 ] \
+    || [ "$atlas_overview_final_closeout_silk_begin_allowed" -eq 1 ]; then
+    atlas_overview_final_closeout_requested=1
+fi
+
+if [ "$atlas_overview_final_closeout_requested" -eq 1 ] \
+    && [ "$(has 'silk\.atlas\.overview\.final\.done.*ok=1')" -eq 1 ]; then
     # Check all required subphase markers exist.
     MISSING_SUBPHASES=""
     [ "$(has 'silk\.atlas\.phase_a\.done.*ok=1')" -eq 1 ] || MISSING_SUBPHASES="${MISSING_SUBPHASES} A"
@@ -5013,7 +5041,8 @@ if [ "$(has 'silk\.atlas\.overview\.final\.done.*ok=1')" -eq 1 ]; then
         gate_atlas_overview_final_closeout="FAIL"
         print_row "atlas_overview_final_closeout" "FAIL" "final.done emitted but subphase markers missing:${MISSING_SUBPHASES}"
     fi
-elif [ "$(has 'silk\.atlas\.overview\.final\.begin')" -ge 1 ]; then
+elif [ "$atlas_overview_final_closeout_requested" -eq 1 ] \
+    && [ "$(has 'silk\.atlas\.overview\.final\.begin')" -ge 1 ]; then
     gate_atlas_overview_final_closeout="FAIL"
     print_row "atlas_overview_final_closeout" "FAIL" "final.begin without final.done"
 else
