@@ -138,6 +138,7 @@ gate_sexfiles_diskfs_bridge_reboot_persistence="SKIP"
 gate_sexfiles_diskfs_bridge_negatives="SKIP"
 gate_sexfiles_diskfs_bridge_flush_fsync_honest="SKIP"
 gate_sexfiles_diskfs_bridge_strict="SKIP"
+gate_sexfiles_diskfs_negative_bounds_auth="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -4246,6 +4247,61 @@ if [ "$(has 'sexfiles\.bridge\.diskfs\.strict\.begin')" -ge 1 ]; then
     fi
 else
     gate_sexfiles_diskfs_bridge_strict="SKIP"
+fi
+
+# ---- 76d3. sexfiles_diskfs_negative_bounds_auth ----
+# Negative bounds and auth rejection proof for the DiskFS fixed-object tier.
+# Proves that bad opcodes, bad path_ids, offset/length bounds violations,
+# and select-less operations are properly rejected.
+if [ "$(has 'sexfiles\.neg\.bounds_auth\.proof\.begin')" -ge 1 ]; then
+    has_bad_opcode=$(has 'sexfiles\.neg\.bounds_auth\.bad_opcode.*ok=1')
+    has_bad_path_id=$(has 'sexfiles\.neg\.bounds_auth\.bad_path_id.*ok=1')
+    has_default_path=$(has 'sexfiles\.neg\.bounds_auth\.default_path.*ok=1')
+    has_write_bounds=$(has 'sexfiles\.neg\.bounds_auth\.write_bounds.*ok=1')
+    has_read_bounds=$(has 'sexfiles\.neg\.bounds_auth\.read_bounds.*ok=1')
+    has_read_before_write=$(has 'sexfiles\.neg\.bounds_auth\.read_before_write.*ok=1')
+    has_done=$(has 'sexfiles\.neg\.bounds_auth\.proof\.done.*ok=1')
+    has_fail=$(has 'sexfiles\.neg\.bounds_auth\.fail')
+    has_cqe_timeout=$(has 'cqe_timeout')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+
+    if [ "$has_cqe_timeout" -ge 1 ]; then
+        gate_sexfiles_diskfs_negative_bounds_auth="FAIL"
+        print_row "sexfiles_diskfs_negative_bounds_auth" "FAIL" "cqe_timeout in negative bounds auth log"
+    elif [ "$has_fault" -ge 1 ]; then
+        gate_sexfiles_diskfs_negative_bounds_auth="FAIL"
+        print_row "sexfiles_diskfs_negative_bounds_auth" "FAIL" "fault/panic in negative bounds auth log"
+    elif [ "$has_fail" -ge 1 ]; then
+        gate_sexfiles_diskfs_negative_bounds_auth="FAIL"
+        print_row "sexfiles_diskfs_negative_bounds_auth" "FAIL" "neg.bounds_auth.fail marker present"
+    elif [ "$has_bad_opcode" -eq 0 ]; then
+        gate_sexfiles_diskfs_negative_bounds_auth="FAIL"
+        print_row "sexfiles_diskfs_negative_bounds_auth" "FAIL" "bad_opcode rejection missing or failed"
+    elif [ "$has_bad_path_id" -eq 0 ]; then
+        gate_sexfiles_diskfs_negative_bounds_auth="FAIL"
+        print_row "sexfiles_diskfs_negative_bounds_auth" "FAIL" "bad_path_id rejection missing or failed"
+    elif [ "$has_default_path" -eq 0 ]; then
+        gate_sexfiles_diskfs_negative_bounds_auth="FAIL"
+        print_row "sexfiles_diskfs_negative_bounds_auth" "FAIL" "default_path check missing or failed"
+    elif [ "$has_write_bounds" -eq 0 ]; then
+        gate_sexfiles_diskfs_negative_bounds_auth="FAIL"
+        print_row "sexfiles_diskfs_negative_bounds_auth" "FAIL" "write_bounds rejection missing or failed"
+    elif [ "$has_read_bounds" -eq 0 ]; then
+        gate_sexfiles_diskfs_negative_bounds_auth="FAIL"
+        print_row "sexfiles_diskfs_negative_bounds_auth" "FAIL" "read_bounds rejection missing or failed"
+    elif [ "$has_read_before_write" -eq 0 ]; then
+        gate_sexfiles_diskfs_negative_bounds_auth="FAIL"
+        print_row "sexfiles_diskfs_negative_bounds_auth" "FAIL" "read_before_write missing or failed"
+    elif [ "$has_done" -eq 0 ]; then
+        gate_sexfiles_diskfs_negative_bounds_auth="FAIL"
+        print_row "sexfiles_diskfs_negative_bounds_auth" "FAIL" "missing proof.done ok=1"
+    else
+        gate_sexfiles_diskfs_negative_bounds_auth="PASS"
+        print_row "sexfiles_diskfs_negative_bounds_auth" "PASS" "negative bounds + auth: all rejection cases proven"
+    fi
+else
+    gate_sexfiles_diskfs_negative_bounds_auth="SKIP"
+    print_row "sexfiles_diskfs_negative_bounds_auth" "SKIP" "negative bounds auth proof not triggered"
 fi
 
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----

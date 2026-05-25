@@ -71,4 +71,9 @@ fn main() {
     if std::env::var("SEXFILES_DISKFS_BRIDGE_STRICT_PROOF").as_deref() == Ok("1") {
         println!("cargo:rustc-cfg=sexfiles_diskfs_bridge_strict_proof");
     }
+    println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_NEGATIVE_BOUNDS_AUTH_PROOF");
+    println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs_negative_bounds_auth_proof)");
+    if std::env::var("SEXFILES_DISKFS_NEGATIVE_BOUNDS_AUTH_PROOF").as_deref() == Ok("1") {
+        println!("cargo:rustc-cfg=sexfiles_diskfs_negative_bounds_auth_proof");
+    }
 }

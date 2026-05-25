@@ -111,6 +111,13 @@ pub extern "C" fn trampoline_main() {
         crate::proof::run_diskfs100_ap6_flush_fsync();
         return;
     }
+    const DISKFS_NEGATIVE_BOUNDS_AUTH_PROOF_ENABLED: bool =
+        cfg!(sexfiles_diskfs_negative_bounds_auth_proof);
+    if DISKFS_NEGATIVE_BOUNDS_AUTH_PROOF_ENABLED {
+        crate::proof::run_diskfs_negative_bounds_auth_proof();
+        return;
+    }
+
     const DISKFS_BRIDGE_STRICT_PROOF_ENABLED: bool =
         cfg!(sexfiles_diskfs_bridge_strict_proof);
     if DISKFS_BRIDGE_STRICT_PROOF_ENABLED {
