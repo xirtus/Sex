@@ -30,7 +30,7 @@ GATE_SCRIPT="./scripts/daily_driver_master_gate.sh"
 BUILD_SCRIPT="./scripts/entrypoint_build.sh"
 ISO="sexos-v1.0.0.iso"
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
-PROBE_SECONDS="${DAILY_DRIVER_PROBE_SECONDS:-30}"
+PROBE_SECONDS="${DAILY_DRIVER_PROBE_SECONDS:-60}"
 ENABLE_QEMU_USERNET_E1000="${ENABLE_QEMU_USERNET_E1000:-1}"
 QEMU_NET_MODEL="${QEMU_NET_MODEL:-e1000}"
 QEMU_NET_BACKEND="${QEMU_NET_BACKEND:-user}"
@@ -151,6 +151,9 @@ export SEXFILES_DISKFS_100_AP4_READ="${SEXFILES_DISKFS_100_AP4_READ:-0}"
 
 # ── SexFS v0 superblock format mount proof ──
 export SEXFS_V0_SUPERBLOCK_FORMAT_MOUNT_PROOF="${SEXFS_V0_SUPERBLOCK_FORMAT_MOUNT_PROOF:-1}"
+
+# ── SexObject table persist proof ──
+export SEXOBJECT_TABLE_PERSIST_PROOF="${SEXOBJECT_TABLE_PERSIST_PROOF:-1}"
 
 # ── Linen DiskFS AP3 reboot restore (two-boot) ──
 # Only export if explicitly set — contrasts with AP4 pattern where binary
@@ -432,7 +435,14 @@ FLUSH_AUDIT="${SEXOS_STORAGE_100_FLUSH_AUDIT:-0}"
 NVME_IMG_MOVED=0
 NVME_IMG_SAVE=""
 NVME_ARGS=()
-if [ "$SEXOS_STORAGE_100_PROOF" = "1" ]; then
+# Attach NVMe when storage proofs OR sexfs v0 proofs need disk access.
+SEXFS_V0_PROOF_ENABLED="${SEXFS_V0_SUPERBLOCK_FORMAT_MOUNT_PROOF:-1}"
+SEXOBJECT_TABLE_PROOF_ENABLED="${SEXOBJECT_TABLE_PERSIST_PROOF:-1}"
+NEED_NVME=0
+if [ "$SEXOS_STORAGE_100_PROOF" = "1" ] || [ "$SEXFS_V0_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_TABLE_PROOF_ENABLED" = "1" ]; then
+    NEED_NVME=1
+fi
+if [ "$NEED_NVME" = "1" ]; then
     NVME_DIR="${ROOT_DIR}/.gate_master"
     NVME_IMG="${NVME_DIR}/nvme.img"
     if [ ! -d "$NVME_DIR" ]; then

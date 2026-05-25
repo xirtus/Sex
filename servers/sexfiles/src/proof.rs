@@ -3629,3 +3629,28 @@ pub fn run_sexfs_v0_superblock_format_mount_proofs() {
 
     serial_println!("[sexfs.v0.superblock_format_mount.gate] done");
 }
+
+/// Run SexObject table persist proof checks.
+/// Activated by `SEXOBJECT_TABLE_PERSIST_PROOF=1`.
+///
+/// Proves that a SexObject table entry can be created, written to disk
+/// (LBAs 2-5), read back, and validated byte-for-byte against the
+/// SEXFS_V0_ONDISK_CONTRACT_SPEC_V1 layout. Includes negative tests
+/// for bad entry checksum and invalid object_id+IN_USE combination.
+pub fn run_sexobject_table_persist_proofs() {
+    serial_println!("[sexobject.table.persist.gate] begin");
+
+    match crate::backends::diskfs::proof_sexobject_table_persist() {
+        Ok(()) => {
+            serial_println!("[sexobject.table.persist.gate] ok=1");
+        }
+        Err(e) => {
+            serial_println!(
+                "[sexobject.table.persist.gate] ok=0 err={}",
+                e
+            );
+        }
+    }
+
+    serial_println!("[sexobject.table.persist.gate] done");
+}

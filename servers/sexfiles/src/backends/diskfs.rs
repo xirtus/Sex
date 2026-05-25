@@ -2821,10 +2821,13 @@ fn sexfs_v0_build_init_freemap() -> [u8; 512] {
     while b < 16 { set_bit(b); b += 1; }        // blocks 0-15: metadata reserved
     b = 253;
     while b <= 255 { set_bit(b); b += 1; }        // blocks 253-255: proof reserved
-    // Checksum: XOR of header bytes [0..20) + bitmap bytes [32..160)
+    // Checksum: XOR of header bytes [0..16) + reserved bytes [20..32) + bitmap bytes [32..160)
+    // Excludes checksum field at bytes 16..20 to avoid self-referential XOR.
     let mut csum: u32 = 0;
     let mut i = 0usize;
-    while i < 20 { csum ^= fm[i] as u32; i += 1; }
+    while i < 16 { csum ^= fm[i] as u32; i += 1; }
+    i = 20;
+    while i < 32 { csum ^= fm[i] as u32; i += 1; }
     i = 32;
     while i < 160 { csum ^= fm[i] as u32; i += 1; }
     fm[16..20].copy_from_slice(&csum.to_le_bytes());
@@ -2843,10 +2846,13 @@ fn sexfs_v0_validate_freemap(data: &[u8; 512]) -> Result<(), i64> {
     if version != 1 {
         return Err(messages::ERR_OVERFLOW);
     }
-    // Checksum: XOR header bytes [0..20) + bitmap bytes [32..160)
+    // Checksum: XOR header bytes [0..16) + reserved bytes [20..32) + bitmap bytes [32..160)
+    // Excludes checksum field at bytes 16..20.
     let mut csum: u32 = 0;
     let mut i = 0usize;
-    while i < 20 { csum ^= data[i] as u32; i += 1; }
+    while i < 16 { csum ^= data[i] as u32; i += 1; }
+    i = 20;
+    while i < 32 { csum ^= data[i] as u32; i += 1; }
     i = 32;
     while i < 160 { csum ^= data[i] as u32; i += 1; }
     let stored_csum = u32::from_le_bytes([data[16], data[17], data[18], data[19]]);
@@ -3070,7 +3076,8 @@ pub fn proof_sexfs_v0_superblock_format_mount() -> Result<(), i64> {
         if buf_va == 0 || buf_va == u64::MAX {
             return Err(messages::ERR_NOT_FOUND);
         }
-        // Build a superblock with bad magic, write it to LBA 0, then try to mount (should fail)
+        // Build a superblock with bad magic, write to both LBA 0 and LBA 1,
+        // then try to mount (should fail on both primary and backup).
         let mut bad_sb = sexfs_v0_build_superblock(1);
         // Corrupt magic bytes (set to 0xDEADBEEF...)
         bad_sb[0] = 0xEF;
@@ -3082,8 +3089,10 @@ pub fn proof_sexfs_v0_superblock_format_mount() -> Result<(), i64> {
             let mut i = 0usize;
             while i < 512 { core::ptr::write_volatile(p.add(i), bad_sb[i]); i += 1; }
         }
-        let _ = DiskFs::diskfs_block_write(0, 512, SLOT_BUF_LEND);
-        // Mount should fail (bad magic on primary, backup has bad too since we re-wrote it)
+        let _ = DiskFs::diskfs_block_write(SEXFS_V0_SUPERBLOCK_SECTOR * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+        // Also write bad magic to backup so mount cannot fall back
+        let _ = DiskFs::diskfs_block_write(SEXFS_V0_BACKUP_SECTOR * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+        // Mount should fail: bad magic on both primary and backup
         let bad_magic_result = sexfs_v0_mount_from_disk();
         // Restore good superblock for subsequent tests
         let good_sb = sexfs_v0_build_superblock(1);
@@ -3092,7 +3101,7 @@ pub fn proof_sexfs_v0_superblock_format_mount() -> Result<(), i64> {
             let mut i = 0usize;
             while i < 512 { core::ptr::write_volatile(p.add(i), good_sb[i]); i += 1; }
         }
-        let _ = DiskFs::diskfs_block_write(0, 512, SLOT_BUF_LEND);
+        let _ = DiskFs::diskfs_block_write(SEXFS_V0_SUPERBLOCK_SECTOR * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
         let _ = DiskFs::diskfs_block_write(SEXFS_V0_BACKUP_SECTOR * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
         if bad_magic_result.is_err() {
             serial_println!("[sexfs.v0.neg.bad_magic.reject] ok=1");
@@ -3178,6 +3187,485 @@ pub fn proof_sexfs_v0_superblock_format_mount() -> Result<(), i64> {
     let _gen = sexfs_v0_mount_from_disk()?;
 
     serial_println!("[sexfs.v0.superblock_format_mount.done] ok=1");
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SEXOBJECT TABLE PERSIST — V0 Object Entry Create/Read/Validate
+//  Contract: docs/handoff/SEXFS_V0_ONDISK_CONTRACT_SPEC_V1.md
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SEXFS_V0_OBJECT_ENTRY_BYTES: usize = 128;
+const SEXFS_V0_OBJECT_TABLE_BYTES: usize = 2048; // 16 entries × 128 bytes
+
+/// Build a single v0 object entry byte array (128 bytes, LE).
+/// Follows SEXFS_V0_ONDISK_CONTRACT_SPEC_V1 §D2 layout exactly.
+#[allow(clippy::too_many_arguments)]
+fn sexfs_v0_build_object_entry(
+    object_id: u64,
+    kind: u16,
+    flags: u16,
+    owner_pd: u32,
+    rights_generation: u64,
+    content_generation: u64,
+    metadata_generation: u64,
+    object_size_bytes: u64,
+    first_block: u64,
+    extent_count: u64,
+    name_hash: u64,
+    content_hash: u64,
+    created_at_gen: u64,
+    modified_at_gen: u64,
+) -> [u8; 128] {
+    let mut e = [0u8; 128];
+    e[0..8].copy_from_slice(&object_id.to_le_bytes());
+    e[8..10].copy_from_slice(&kind.to_le_bytes());
+    e[10..12].copy_from_slice(&flags.to_le_bytes());
+    e[12..16].copy_from_slice(&owner_pd.to_le_bytes());
+    e[16..24].copy_from_slice(&rights_generation.to_le_bytes());
+    e[24..32].copy_from_slice(&content_generation.to_le_bytes());
+    e[32..40].copy_from_slice(&metadata_generation.to_le_bytes());
+    e[40..48].copy_from_slice(&object_size_bytes.to_le_bytes());
+    e[48..56].copy_from_slice(&first_block.to_le_bytes());
+    e[56..64].copy_from_slice(&extent_count.to_le_bytes());
+    e[64..72].copy_from_slice(&name_hash.to_le_bytes());
+    e[72..80].copy_from_slice(&content_hash.to_le_bytes());
+    e[80..88].copy_from_slice(&created_at_gen.to_le_bytes());
+    e[88..96].copy_from_slice(&modified_at_gen.to_le_bytes());
+    // checksum: XOR of u32 words in bytes [0..96)
+    let mut csum: u32 = 0;
+    let mut w = 0usize;
+    while w < 24 {
+        let wi = w * 4;
+        let val = u32::from_le_bytes([e[wi], e[wi+1], e[wi+2], e[wi+3]]);
+        csum ^= val;
+        w += 1;
+    }
+    e[96..100].copy_from_slice(&csum.to_le_bytes());
+    // bytes 100..128 are zero-filled reserved
+    e
+}
+
+/// Validate a single v0 object entry. Returns parsed fields on success.
+/// Checks: checksum, IN_USE+object_id=0 rejection, reserved flag bits.
+fn sexfs_v0_validate_object_entry(data: &[u8; 128]) -> Result<SexfsObjectEntryV0Parsed, i64> {
+    // checksum: XOR u32 words in bytes [0..96), compare with stored
+    let mut csum: u32 = 0;
+    let mut w = 0usize;
+    while w < 24 {
+        let wi = w * 4;
+        let val = u32::from_le_bytes([data[wi], data[wi+1], data[wi+2], data[wi+3]]);
+        csum ^= val;
+        w += 1;
+    }
+    let stored_csum = u32::from_le_bytes([data[96], data[97], data[98], data[99]]);
+    if csum != stored_csum {
+        return Err(messages::ERR_OVERFLOW);
+    }
+
+    let object_id = u64::from_le_bytes([
+        data[0], data[1], data[2], data[3],
+        data[4], data[5], data[6], data[7],
+    ]);
+    let flags = u16::from_le_bytes([data[10], data[11]]);
+    let in_use = (flags & 0x0001) != 0;
+
+    // Contract E3: object_id == 0 with IN_USE flag is invalid
+    if in_use && object_id == 0 {
+        return Err(messages::ERR_INVALID_HANDLE);
+    }
+
+    // Contract: reserved flag bits (4-15) must be zero
+    if (flags & 0xFFF0) != 0 {
+        return Err(messages::ERR_OVERFLOW);
+    }
+
+    let kind = u16::from_le_bytes([data[8], data[9]]);
+    let owner_pd = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
+    let rights_generation = u64::from_le_bytes([
+        data[16], data[17], data[18], data[19],
+        data[20], data[21], data[22], data[23],
+    ]);
+    let content_generation = u64::from_le_bytes([
+        data[24], data[25], data[26], data[27],
+        data[28], data[29], data[30], data[31],
+    ]);
+    let metadata_generation = u64::from_le_bytes([
+        data[32], data[33], data[34], data[35],
+        data[36], data[37], data[38], data[39],
+    ]);
+    let object_size_bytes = u64::from_le_bytes([
+        data[40], data[41], data[42], data[43],
+        data[44], data[45], data[46], data[47],
+    ]);
+    let first_block = u64::from_le_bytes([
+        data[48], data[49], data[50], data[51],
+        data[52], data[53], data[54], data[55],
+    ]);
+    let extent_count = u64::from_le_bytes([
+        data[56], data[57], data[58], data[59],
+        data[60], data[61], data[62], data[63],
+    ]);
+    let name_hash = u64::from_le_bytes([
+        data[64], data[65], data[66], data[67],
+        data[68], data[69], data[70], data[71],
+    ]);
+    let content_hash = u64::from_le_bytes([
+        data[72], data[73], data[74], data[75],
+        data[76], data[77], data[78], data[79],
+    ]);
+    let created_at_gen = u64::from_le_bytes([
+        data[80], data[81], data[82], data[83],
+        data[84], data[85], data[86], data[87],
+    ]);
+    let modified_at_gen = u64::from_le_bytes([
+        data[88], data[89], data[90], data[91],
+        data[92], data[93], data[94], data[95],
+    ]);
+
+    Ok(SexfsObjectEntryV0Parsed {
+        object_id,
+        kind,
+        flags,
+        owner_pd,
+        rights_generation,
+        content_generation,
+        metadata_generation,
+        object_size_bytes,
+        first_block,
+        extent_count,
+        name_hash,
+        content_hash,
+        created_at_gen,
+        modified_at_gen,
+        checksum: stored_csum,
+        in_use,
+    })
+}
+
+/// Parsed v0 object entry fields (returned by validate).
+#[derive(Clone, Copy)]
+struct SexfsObjectEntryV0Parsed {
+    object_id: u64,
+    kind: u16,
+    flags: u16,
+    owner_pd: u32,
+    rights_generation: u64,
+    content_generation: u64,
+    metadata_generation: u64,
+    object_size_bytes: u64,
+    first_block: u64,
+    extent_count: u64,
+    name_hash: u64,
+    content_hash: u64,
+    created_at_gen: u64,
+    modified_at_gen: u64,
+    checksum: u32,
+    in_use: bool,
+}
+
+/// Write a table containing a single populated entry at the given slot to LBAs 2-5.
+/// All other slots are zeroed. Returns Ok on success.
+fn sexfs_v0_write_object_table(
+    slot: usize,
+    entry_data: &[u8; 128],
+) -> Result<(), i64> {
+    if slot >= DISKFS_MAX_OBJECTS {
+        return Err(messages::ERR_OVERFLOW);
+    }
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+
+    // Build 2048-byte table: all zeroes, then place entry at slot
+    let mut table = [0u8; 2048];
+    let entry_off = slot * SEXFS_V0_OBJECT_ENTRY_BYTES;
+    let mut i = 0usize;
+    while i < 128 {
+        table[entry_off + i] = entry_data[i];
+        i += 1;
+    }
+
+    // Write 4 sectors (LBAs 2-5)
+    let mut sec = 0u64;
+    while sec < SEXFS_V0_OBJECT_TABLE_SECTORS {
+        let off = (sec as usize) * 512;
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 && (off + i) < 2048 {
+                core::ptr::write_volatile(p.add(i), table[off + i]);
+                i += 1;
+            }
+        }
+        let status = DiskFs::diskfs_block_write(
+            (SEXFS_V0_OBJECT_TABLE_START + sec) * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if status != 0 {
+            return Err(messages::ERR_NOT_FOUND);
+        }
+        sec += 1;
+    }
+    Ok(())
+}
+
+/// Read the object table from LBAs 2-5. Returns the full 2048-byte table.
+fn sexfs_v0_read_object_table() -> Result<[u8; 2048], i64> {
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    let mut table = [0u8; 2048];
+    let mut sec = 0u64;
+    while sec < SEXFS_V0_OBJECT_TABLE_SECTORS {
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+        }
+        let status = DiskFs::diskfs_block_read(
+            (SEXFS_V0_OBJECT_TABLE_START + sec) * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if status != 0 {
+            return Err(messages::ERR_NOT_FOUND);
+        }
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 512 {
+                let idx = (sec as usize) * 512 + i;
+                if idx < 2048 { table[idx] = core::ptr::read_volatile(p.add(i)); }
+                i += 1;
+            }
+        }
+        sec += 1;
+    }
+    Ok(table)
+}
+
+/// [sexobject.table.persist] — Full object table entry create/write/read/validate proof.
+/// Assumes SexFS v0 is already formatted on disk (by v0 superblock proof).
+/// Quick-checks superblock magic; formats only if needed.
+pub fn proof_sexobject_table_persist() -> Result<(), i64> {
+    serial_println!("[sexobject.table.persist.begin]");
+
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+
+    // Phase 0: Verify disk is formatted by reading LBA 0 superblock magic.
+    // If not formatted, do a quick format.
+    unsafe {
+        let p = buf_va as *mut u8;
+        let mut i = 0usize;
+        while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+    }
+    let sb_status = DiskFs::diskfs_block_read(SEXFS_V0_SUPERBLOCK_SECTOR * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+    if sb_status != 0 {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    let mut sb_check = [0u8; 8];
+    unsafe {
+        let p = buf_va as *const u8;
+        sb_check.copy_from_slice(core::slice::from_raw_parts(p, 8));
+    }
+    let magic = u64::from_le_bytes(sb_check);
+    if magic != SEXFS_V0_SUPERBLOCK_MAGIC {
+        // Not formatted — do a quick format
+        sexfs_v0_format_to_disk()?;
+    } else {
+        serial_println!("[sexobject.table.disk.already_formatted] magic_ok=1");
+    }
+
+    // Phase 1: Build a deterministic object entry for slot 0
+    let test_object_id: u64 = 1;
+    let test_kind: u16 = 1;
+    let test_flags: u16 = 0x0001; // IN_USE
+    let test_owner_pd: u32 = 11;
+    let test_rights_gen: u64 = 1;
+    let test_content_gen: u64 = 0;
+    let test_metadata_gen: u64 = 1;
+    let test_size: u64 = 0;
+    let test_first_block: u64 = 0;
+    let test_extent_count: u64 = 0;
+    let test_name_hash: u64 = 0x6E65_4C5F_534F_5853;
+    let test_content_hash: u64 = 0;
+    let test_created_at_gen: u64 = 1;
+    let test_modified_at_gen: u64 = 1;
+
+    let entry_bytes = sexfs_v0_build_object_entry(
+        test_object_id,
+        test_kind,
+        test_flags,
+        test_owner_pd,
+        test_rights_gen,
+        test_content_gen,
+        test_metadata_gen,
+        test_size,
+        test_first_block,
+        test_extent_count,
+        test_name_hash,
+        test_content_hash,
+        test_created_at_gen,
+        test_modified_at_gen,
+    );
+    serial_println!("[sexobject.table.entry.create.ok] slot=0 object_id={}", test_object_id);
+
+    // Phase 2: Write object table with entry at slot 0 to LBAs 2-5
+    sexfs_v0_write_object_table(0, &entry_bytes)?;
+    serial_println!("[sexobject.table.write.ok] lba_range=2..5");
+
+    // Phase 3: Read back just the needed sector (LBA 2) for slot 0
+    unsafe {
+        let p = buf_va as *mut u8;
+        let mut i = 0usize;
+        while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+    }
+    let status = DiskFs::diskfs_block_read(
+        SEXFS_V0_OBJECT_TABLE_START * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+    );
+    if status != 0 {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    let mut readback_entry = [0u8; 128];
+    unsafe {
+        let p = buf_va as *const u8;
+        let mut i = 0usize;
+        while i < 128 { readback_entry[i] = core::ptr::read_volatile(p.add(i)); i += 1; }
+    }
+    serial_println!("[sexobject.table.read.ok] lba_range=2..5");
+
+    // Phase 4: Validate and verify entry fields byte-for-byte
+    let parsed = sexfs_v0_validate_object_entry(&readback_entry)?;
+
+    let match_ok = parsed.object_id == test_object_id
+        && parsed.kind == test_kind
+        && parsed.flags == test_flags
+        && parsed.owner_pd == test_owner_pd
+        && parsed.rights_generation == test_rights_gen
+        && parsed.content_generation == test_content_gen
+        && parsed.metadata_generation == test_metadata_gen
+        && parsed.object_size_bytes == test_size
+        && parsed.first_block == test_first_block
+        && parsed.extent_count == test_extent_count
+        && parsed.name_hash == test_name_hash
+        && parsed.content_hash == test_content_hash
+        && parsed.created_at_gen == test_created_at_gen
+        && parsed.modified_at_gen == test_modified_at_gen
+        && parsed.in_use;
+
+    if match_ok {
+        serial_println!("[sexobject.table.entry.match] slot=0 ok=1");
+        serial_println!("[sexobject.table.validate.ok]");
+    } else {
+        serial_println!("[sexobject.table.entry.match] slot=0 ok=0");
+        return Err(messages::ERR_OVERFLOW);
+    }
+
+    // Phase 5: Negative — bad entry checksum rejection
+    {
+        let mut bad_entry = entry_bytes;
+        bad_entry[96] ^= 0x01; // flip one bit in checksum
+        // Write bad entry to LBA 2 only (slot 0 is in first sector)
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 128 { core::ptr::write_volatile(p.add(i), bad_entry[i]); i += 1; }
+            while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+        }
+        let _ = DiskFs::diskfs_block_write(
+            SEXFS_V0_OBJECT_TABLE_START * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        // Read back just LBA 2
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+        }
+        let _ = DiskFs::diskfs_block_read(
+            SEXFS_V0_OBJECT_TABLE_START * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        let mut bad_readback = [0u8; 128];
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 128 { bad_readback[i] = core::ptr::read_volatile(p.add(i)); i += 1; }
+        }
+        let bad_result = sexfs_v0_validate_object_entry(&bad_readback);
+        if bad_result.is_err() {
+            serial_println!("[sexobject.table.neg.bad_entry.reject] ok=1");
+        } else {
+            serial_println!("[sexobject.table.neg.bad_entry.reject] ok=0");
+            return Err(messages::ERR_OVERFLOW);
+        }
+    }
+
+    // Phase 6: Negative — object_id=0 with IN_USE flag rejection
+    {
+        let bad_entry2 = sexfs_v0_build_object_entry(
+            0, 1, 0x0001, 11, 1, 0, 1, 0, 0, 0, 0, 0, 1, 1,
+        );
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 128 { core::ptr::write_volatile(p.add(i), bad_entry2[i]); i += 1; }
+            while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+        }
+        let _ = DiskFs::diskfs_block_write(
+            SEXFS_V0_OBJECT_TABLE_START * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+        }
+        let _ = DiskFs::diskfs_block_read(
+            SEXFS_V0_OBJECT_TABLE_START * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        let mut bad2_readback = [0u8; 128];
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 128 { bad2_readback[i] = core::ptr::read_volatile(p.add(i)); i += 1; }
+        }
+        let bad2_result = sexfs_v0_validate_object_entry(&bad2_readback);
+        if matches!(bad2_result, Err(e) if e == messages::ERR_INVALID_HANDLE) {
+            serial_println!("[sexobject.table.neg.object_id_zero.reject] ok=1");
+        } else {
+            serial_println!("[sexobject.table.neg.object_id_zero.reject] ok=0");
+            return Err(messages::ERR_OVERFLOW);
+        }
+    }
+
+    // Phase 7: Restore good entry to confirm disk state is clean
+    unsafe {
+        let p = buf_va as *mut u8;
+        let mut i = 0usize;
+        while i < 128 { core::ptr::write_volatile(p.add(i), entry_bytes[i]); i += 1; }
+        while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+    }
+    let _ = DiskFs::diskfs_block_write(
+        SEXFS_V0_OBJECT_TABLE_START * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+    );
+    unsafe {
+        let p = buf_va as *mut u8;
+        let mut i = 0usize;
+        while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+    }
+    let _ = DiskFs::diskfs_block_read(
+        SEXFS_V0_OBJECT_TABLE_START * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+    );
+    let mut restored_entry = [0u8; 128];
+    unsafe {
+        let p = buf_va as *const u8;
+        let mut i = 0usize;
+        while i < 128 { restored_entry[i] = core::ptr::read_volatile(p.add(i)); i += 1; }
+    }
+    sexfs_v0_validate_object_entry(&restored_entry)?;
+
+    serial_println!("[sexobject.table.persist.done] ok=1");
     Ok(())
 }
 

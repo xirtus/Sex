@@ -171,6 +171,13 @@ pub extern "C" fn trampoline_main() {
         // Does not return — VFS loop starts after proof.
     }
 
+    const SEXOBJECT_TABLE_PERSIST_PROOF_ENABLED: bool =
+        option_env!("SEXOBJECT_TABLE_PERSIST_PROOF").is_some();
+    if SEXOBJECT_TABLE_PERSIST_PROOF_ENABLED {
+        crate::proof::run_sexobject_table_persist_proofs();
+        // [sexobject.table.persist.profile.done] non_isolated=1
+    }
+
     serial_println!("[sexfiles.ready]");
 
     loop {

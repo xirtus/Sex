@@ -142,6 +142,7 @@ gate_sexfiles_diskfs_bridge_flush_fsync_honest="SKIP"
 gate_sexfiles_diskfs_bridge_strict="SKIP"
 gate_sexfiles_diskfs_negative_bounds_auth="SKIP"
 gate_sexfs_v0_superblock_format_mount="SKIP"
+gate_sexobject_table_persist="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -4407,6 +4408,30 @@ else
     print_row "sexfs_v0_superblock_format_mount" "SKIP" "sexfs v0 superblock format mount proof not triggered"
 fi
 
+# ---- sexobject_table_persist ----
+if [ "$(has 'sexobject\.table\.persist\.done.*ok=1')" -eq 1 ]; then
+    gate_sexobject_table_persist="PASS"
+    print_row "sexobject_table_persist" "PASS" "table entry create/write/read/validate all ok"
+elif grep -q 'sexobject\.table\.persist\.gate' "$LOG"; then
+    gate_sexobject_table_persist="FAIL"
+    if ! grep -q 'sexobject\.table\.entry\.create\.ok' "$LOG"; then
+        print_row "sexobject_table_persist" "FAIL" "entry create missing or failed"
+    elif ! grep -q 'sexobject\.table\.write\.ok.*lba_range=2\.\.5' "$LOG"; then
+        print_row "sexobject_table_persist" "FAIL" "table write missing or failed"
+    elif ! grep -q 'sexobject\.table\.read\.ok.*lba_range=2\.\.5' "$LOG"; then
+        print_row "sexobject_table_persist" "FAIL" "table read missing or failed"
+    elif ! grep -q 'sexobject\.table\.entry\.match.*ok=1' "$LOG"; then
+        print_row "sexobject_table_persist" "FAIL" "entry field match missing or failed"
+    elif ! grep -q 'sexobject\.table\.neg\.bad_entry\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_table_persist" "FAIL" "bad entry checksum rejection missing or failed"
+    else
+        print_row "sexobject_table_persist" "FAIL" "missing proof.done ok=1"
+    fi
+else
+    gate_sexobject_table_persist="SKIP"
+    print_row "sexobject_table_persist" "SKIP" "sexobject table persist proof not triggered"
+fi
+
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
 if [ "$(has 'sexfiles\.diskfs100\.ap3\.begin')" -ge 1 ]; then
     has_linen_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=linen.*ok=1')
@@ -6118,6 +6143,7 @@ ALL_GATES=(
     "sexfiles_diskfs_bridge:$gate_sexfiles_diskfs_bridge"
     "sexfiles_diskfs_negative_bounds_auth:$gate_sexfiles_diskfs_negative_bounds_auth"
     "sexfs_v0_superblock_format_mount:$gate_sexfs_v0_superblock_format_mount"
+    "sexobject_table_persist:$gate_sexobject_table_persist"
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"
     "sexfiles_diskfs_bridge_reboot_persistence:$gate_sexfiles_diskfs_bridge_reboot_persistence"
