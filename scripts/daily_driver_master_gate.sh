@@ -131,6 +131,7 @@ gate_linen_diskfs_fixed_object_save_load="SKIP"
 gate_linen_diskfs_reboot_restore="SKIP"
 gate_linen_reboot_restore_current_tier="SKIP"
 gate_linen_object_ux_current_tier="SKIP"
+gate_linen_sexfiles_100_current_tier_release="SKIP"
 gate_linen_diskfs_negative_classifications="SKIP"
 gate_sexfiles_diskfs_bridge="SKIP"
 gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
@@ -4130,6 +4131,35 @@ else
     print_row "linen_object_ux_current_tier" "SKIP" "object UX current tier proof not triggered"
 fi
 
+# ---- 76b8. linen_sexfiles_100_current_tier_release ----
+# Release gate: verifies the complete Linen/SexFiles current-tier proof
+# chain is closed with all markers present and all denials honest.
+# This is a composite check that requires the object UX current tier
+# proof to have run (it emits the summary classification markers).
+if [ "$(has 'linen\.object_ux\.current_tier\.done.*ok=1')" -ge 1 ]; then
+    has_truth=$(has 'linen\.object_ux\.truth.*honest_bounded_fixed_object_ux.*overclaims=0.*ok=1')
+    has_proven=$(has 'linen\.object_ux\.proven.*save_load=1.*bounds_auth=1.*ok=1')
+    has_limited=$(has 'linen\.object_ux\.limited.*filesystem=0.*posix=0.*directories=0.*rename=0.*delete=0.*ok=1')
+    has_deferred=$(has 'linen\.object_ux\.deferred.*reboot_restore=1.*durable=0.*powerloss=0.*journal=0.*ok=1')
+    has_contract=$(has 'linen\.object_ux\.contract.*fixed_object=/disk/sexfiles-proof-v1.*object_size=4096')
+    has_no_overclaim=$(has 'linen\.object_ux\.truth.*proves=save_load\+bounds_auth.*defers=reboot_restore.*denies=posix\+filesystem\+durability')
+    has_route=$(has 'linen\.object_ux\.route.*slot=1.*uses_slot_block=0.*direct_sexdrive=0')
+
+    if [ "$has_truth" -ge 1 ] && [ "$has_proven" -ge 1 ] && \
+       [ "$has_limited" -ge 1 ] && [ "$has_deferred" -ge 1 ] && \
+       [ "$has_contract" -ge 1 ] && [ "$has_no_overclaim" -ge 1 ] && \
+       [ "$has_route" -ge 1 ]; then
+        gate_linen_sexfiles_100_current_tier_release="PASS"
+        print_row "linen_sexfiles_100_current_tier_release" "PASS" "current-tier release: all markers present, honest denials verified, 0 overclaims"
+    else
+        gate_linen_sexfiles_100_current_tier_release="FAIL"
+        print_row "linen_sexfiles_100_current_tier_release" "FAIL" "release markers incomplete"
+    fi
+else
+    gate_linen_sexfiles_100_current_tier_release="SKIP"
+    print_row "linen_sexfiles_100_current_tier_release" "SKIP" "current-tier release proof not triggered"
+fi
+
 # ---- 76c. sexfiles_diskfs_bridge ----
 if [ "$(has 'sexfiles\.bridge\.diskfs\.strict\.begin')" -ge 1 ]; then
     gate_sexfiles_diskfs_bridge="SKIP"
@@ -6056,8 +6086,12 @@ ALL_GATES=(
     "linen_diskfs_direct:$gate_linen_diskfs_direct"
     "linen_diskfs_fixed_object_save_load:$gate_linen_diskfs_fixed_object_save_load"
     "linen_diskfs_reboot_restore:$gate_linen_diskfs_reboot_restore"
+    "linen_reboot_restore_current_tier:$gate_linen_reboot_restore_current_tier"
+    "linen_object_ux_current_tier:$gate_linen_object_ux_current_tier"
+    "linen_sexfiles_100_current_tier_release:$gate_linen_sexfiles_100_current_tier_release"
     "linen_diskfs_negative_classifications:$gate_linen_diskfs_negative_classifications"
     "sexfiles_diskfs_bridge:$gate_sexfiles_diskfs_bridge"
+    "sexfiles_diskfs_negative_bounds_auth:$gate_sexfiles_diskfs_negative_bounds_auth"
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"
     "sexfiles_diskfs_bridge_reboot_persistence:$gate_sexfiles_diskfs_bridge_reboot_persistence"
