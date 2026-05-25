@@ -17,7 +17,7 @@ const FALLBACK_H: u32 = 800;
 const HIGH_HALF_BASE: u64 = 0xffff_8000_0000_0000;
 const MAX_FB_W: usize = 8192;
 const MAX_FB_H: usize = 4320;
-const DRAIN_MAX: usize = 8;
+const DRAIN_MAX: usize = 16;
 
 /// Phase 3: receive+render proof for new SilkBar ABI v4 variants (8/9/10).
 /// When enabled, emits [sexdisplay.silkbar.phase3.recv/state] markers.
@@ -2432,7 +2432,7 @@ pub extern "C" fn _start() -> ! {
         } else if !clock_from_silkbar {
             // Raw ticks may stall under emulation; keep fallback visibly alive
             // using bounded loop-progress cadence while preserving monotonic time.
-            const FALLBACK_SYNTH_TICK_LOOPS_STARTUP: u16 = 1;
+            const FALLBACK_SYNTH_TICK_LOOPS_STARTUP: u16 = 30;
             const FALLBACK_SYNTH_TICK_LOOPS_STEADY: u16 = 64;
             let synth_tick_loops = if silkbar_clock_seen {
                 FALLBACK_SYNTH_TICK_LOOPS_STEADY
@@ -2503,6 +2503,7 @@ pub extern "C" fn _start() -> ! {
                         };
 
                     let (applied, kind) = handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
+                    let mut should_redraw_top_strip = kind != UpdateKind::SetClock as u32;
                     if applied {
                         if kind == UpdateKind::SetClock as u32 {
                             silkbar_clock_seen = true;
@@ -2571,8 +2572,9 @@ pub extern "C" fn _start() -> ! {
                                         if changed { "changed" } else { "same" });
                                 }
                             }
+                            should_redraw_top_strip = changed;
                         }
-                        if fb_live {
+                        if fb_live && should_redraw_top_strip {
                             needs_top_strip_redraw = true;
                         }
                     } else {
@@ -2597,14 +2599,9 @@ pub extern "C" fn _start() -> ! {
                             serial_println!("[sexdisplay.render.live.ok] fb_w={} fb_h={}", FB_W, FB_H);
                         }
                         did_primary_fb_render = true;
-                        // ── Redraw top strip immediately after render so the
-                        // gate sees [sexdisplay.clock.redraw] with nonzero
-                        // seconds.  The drain-loop may yield in pdx_try_listen
-                        // before reaching the post-drain redraw check; calling
-                        // redraw_top_strip here guarantees the marker is emitted
-                        // while the PD is still active.
+                        // Keep strip repaint batched in post-drain redraws.
                         unsafe { CLOCK_REDRAW_SOURCE = 1; } // fallback source
-                        unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+                        needs_top_strip_redraw = true;
                         if SILK_RENDER_PROOF_PROFILE_ENABLED && !render_proof_done {
                             render_proof_done = true;
                             unsafe { top_strip_render_proof(FB_PTR as *const u32, FB_W as usize, FB_H as usize); }
