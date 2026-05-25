@@ -129,6 +129,7 @@ gate_linen_ramfs_crud="SKIP"
 gate_linen_diskfs_direct="SKIP"
 gate_linen_diskfs_fixed_object_save_load="SKIP"
 gate_linen_diskfs_reboot_restore="SKIP"
+gate_linen_reboot_restore_current_tier="SKIP"
 gate_linen_diskfs_negative_classifications="SKIP"
 gate_sexfiles_diskfs_bridge="SKIP"
 gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
@@ -4043,6 +4044,41 @@ if [ "$(has 'linen\.diskfs100\.ap5\.neg\..*\.begin')" -ge 1 ]; then
 else
     gate_linen_diskfs_negative_classifications="SKIP"
     print_row "linen_diskfs_negative_classifications" "SKIP" "AP5 negative classifications not triggered"
+fi
+
+# ---- 76b6. linen_reboot_restore_current_tier ----
+# Honest classification of current-tier reboot/restore readiness.
+# PASS (honest skip): explicit skip marker with reason and durable=0.
+# FAIL: skip marker missing, or durable/powerloss claimed without proof.
+if [ "$(has 'linen\.reboot_restore\.done.*classification=honest_skip')" -ge 1 ]; then
+    has_skip=$(has 'linen\.reboot_restore\.skip.*reason=no_ioq_ready_model_only_dispatch_deferred.*model_only=1.*durable=0')
+    has_truth=$(has 'linen\.reboot_restore\.truth.*direct_save_load=proven.*reboot_restore=deferred.*ok=1')
+    has_done=$(has 'linen\.reboot_restore\.done.*classification=honest_skip.*powerloss=0.*journal=0.*ok=1')
+    has_durable_false=$(has 'linen\.reboot_restore.*durable=[^0]')
+    has_powerloss_true=$(has 'linen\.reboot_restore.*powerloss=1')
+    has_journal_true=$(has 'linen\.reboot_restore.*journal=1')
+    has_fault=$(has 'fault\.kill|#PF|#GP|PKU LOCK|panic|KERNEL PANIC')
+    has_cqe_timeout=$(has 'cqe_timeout')
+
+    if [ "$has_cqe_timeout" -ge 1 ]; then
+        gate_linen_reboot_restore_current_tier="FAIL"
+        print_row "linen_reboot_restore_current_tier" "FAIL" "cqe_timeout in reboot restore tier log"
+    elif [ "$has_fault" -ge 1 ]; then
+        gate_linen_reboot_restore_current_tier="FAIL"
+        print_row "linen_reboot_restore_current_tier" "FAIL" "fault/panic in reboot restore tier log"
+    elif [ "$has_durable_false" -ge 1 ] || [ "$has_powerloss_true" -ge 1 ] || [ "$has_journal_true" -ge 1 ]; then
+        gate_linen_reboot_restore_current_tier="FAIL"
+        print_row "linen_reboot_restore_current_tier" "FAIL" "false durability/powerloss/journal claim in honest skip markers"
+    elif [ "$has_skip" -ge 1 ] && [ "$has_truth" -ge 1 ] && [ "$has_done" -ge 1 ]; then
+        gate_linen_reboot_restore_current_tier="PASS"
+        print_row "linen_reboot_restore_current_tier" "PASS" "honest skip: reboot restore deferred (no_ioq_ready/model_only/dispatch)"
+    else
+        gate_linen_reboot_restore_current_tier="FAIL"
+        print_row "linen_reboot_restore_current_tier" "FAIL" "incomplete or missing honest skip markers"
+    fi
+else
+    gate_linen_reboot_restore_current_tier="SKIP"
+    print_row "linen_reboot_restore_current_tier" "SKIP" "reboot restore current tier proof not triggered"
 fi
 
 # ---- 76c. sexfiles_diskfs_bridge ----

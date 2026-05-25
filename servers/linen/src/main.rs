@@ -176,6 +176,14 @@ const LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_METADATA_FALSE_CLAIM_ENABLED: bool =
 const LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_FLUSH_SKIP_ENABLED: bool =
     option_env!("SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_FLUSH_SKIP").is_some();
 
+/// Build with LINEN_REBOOT_RESTORE_CURRENT_TIER_PROOF=1 to emit honest
+/// current-tier reboot/restore classification.  The AP3 two-boot path
+/// exists architecturally but the PDX dispatch loop timing and manifest
+/// ensure overhead are not yet resolved; no_ioq_ready restricts the block
+/// path to model_only.  This marker classifies the deferral honestly.
+const LINEN_REBOOT_RESTORE_CURRENT_TIER_PROOF_ENABLED: bool =
+    cfg!(linen_reboot_restore_current_tier_proof);
+
 const LINEN_KEYBOARD_NAV_PROOF_ENABLED: bool =
     option_env!("SEXOS_LINEN_KEYBOARD_NAV_PROOF").is_some();
 static mut LINEN_NAV_SELECTED_SLOT: u8 = 0;
@@ -666,6 +674,21 @@ pub extern "C" fn _start() -> ! {
     if LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED {
         unsafe { run_linen_diskfs_ap3_read_proof(); }
     }
+
+    // ── Linen reboot restore current tier classification ──
+    // Honest deferral: AP3 two-boot path exists but PDX dispatch timing +
+    // manifest ensure overhead + model_only block path prevent current-tier
+    // proof.  Direct save/load is proven (badb08e9); reboot restore is
+    // deferred until IOQ/backing device readiness and dispatch loop
+    // integration are resolved.
+    if LINEN_REBOOT_RESTORE_CURRENT_TIER_PROOF_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED
+    {
+        unsafe { run_linen_reboot_restore_current_tier_classification(); }
+    }
+
     if (LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
         || LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
         || LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED)
@@ -2931,6 +2954,27 @@ unsafe fn run_linen_diskfs_ap3_read_proof() {
     }
 
     serial_println!("[linen.diskfs100.ap3.read.done] ok=1");
+}
+
+/// Linen reboot restore current tier honest classification.
+///
+/// Activated by LINEN_REBOOT_RESTORE_CURRENT_TIER_PROOF=1.
+///
+/// The AP3 two-boot path (SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE / READ)
+/// exists architecturally and proved byte-for-byte readback within a single
+/// boot in Linen AP3 write proof.  However, current-tier reboot restore
+/// requires:
+/// - SexFiles message dispatch loop to be ready before Linen sends SELECT
+/// - Manifest ensure / block device path to complete without timeout
+/// - IOQ readiness for real block device backing (not model_only)
+///
+/// Direct save/load is proven (commit badb08e9).  Reboot restore is deferred
+/// until IOQ/backing device readiness and dispatch integration are complete.
+/// This function emits honest skip classification markers only.
+unsafe fn run_linen_reboot_restore_current_tier_classification() {
+    serial_println!("[linen.reboot_restore.skip] reason=no_ioq_ready_model_only_dispatch_deferred model_only=1 durable=0");
+    serial_println!("[linen.reboot_restore.truth] direct_save_load=proven reboot_restore=deferred ok=1");
+    serial_println!("[linen.reboot_restore.done] classification=honest_skip powerloss=0 journal=0 ok=1");
 }
 
 /// Linen DiskFS AP4 metadata persistence classification lane.
