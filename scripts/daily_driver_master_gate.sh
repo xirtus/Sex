@@ -104,6 +104,7 @@ gate_quil_paste="SKIP"
 gate_quil_replace="SKIP"
 gate_quil_goto_line="SKIP"
 gate_quil_save_open_sexobject="SKIP"
+gate_text_input_pipeline="SKIP"
 gate_spindle_editor_finish="SKIP"
 gate_linen_search_bridge="SKIP"
 gate_storage_phasea="SKIP"
@@ -4727,6 +4728,58 @@ else
     print_row "quil_save_open_sexobject" "SKIP" "quil save/open sexobject proof not triggered"
 fi
 
+# ---- text_input_pipeline ----
+# Proves typed text reaches Quil buffer. Verifies begin, source
+# classification, focus target, key recv events, char decode, buffer
+# append, cursor position, render intent, truth markers, and done.
+if [ "$(has 'text_input\.pipeline\.begin')" -ge 1 ]; then
+    has_begin=$(has 'text_input\.pipeline\.begin')
+    has_source=$(has 'text_input\.source.*kind=synthetic.*honest=1')
+    has_focus=$(has 'text_input\.focus\.target.*target=quil.*ok=1')
+    has_key_t=$(has 'text_input\.key\.recv.*ch=t')
+    has_key_e=$(has 'text_input\.key\.recv.*ch=e')
+    has_key_s=$(has 'text_input\.key\.recv.*ch=s')
+    has_char_decode=$(has 'text_input\.char\.decode.*text=test.*ok=1')
+    has_buf_append=$(has 'quil\.input\.buffer\.append.*text=test.*len=4.*ok=1')
+    has_cursor=$(has 'quil\.input\.cursor\.ok.*pos=4')
+    has_render_intent=$(has 'quil\.input\.render\.intent.*text=test.*ok=1')
+    has_truth=$(has 'text_input\.pipeline\.truth.*physical_keyboard=0.*usb=0.*posix=0.*framebuffer_direct=0.*ok=1')
+    has_done=$(has 'text_input\.pipeline\.done.*ok=1')
+    if [ "$has_begin" -ge 1 ] && \
+       [ "$has_source" -ge 1 ] && \
+       [ "$has_focus" -ge 1 ] && \
+       [ "$has_key_t" -ge 1 ] && \
+       [ "$has_key_e" -ge 1 ] && \
+       [ "$has_key_s" -ge 1 ] && \
+       [ "$has_char_decode" -ge 1 ] && \
+       [ "$has_buf_append" -ge 1 ] && \
+       [ "$has_cursor" -ge 1 ] && \
+       [ "$has_render_intent" -ge 1 ] && \
+       [ "$has_truth" -ge 1 ] && \
+       [ "$has_done" -ge 1 ]; then
+        gate_text_input_pipeline="PASS"
+        print_row "text_input_pipeline" "PASS" "typed text reaches Quil buffer: t,e,s,t verified, cursor=4, synthetic source honest"
+    else
+        gate_text_input_pipeline="FAIL"
+        missing=""
+        [ "$has_source" -eq 0 ] && missing="${missing} source"
+        [ "$has_focus" -eq 0 ] && missing="${missing} focus"
+        [ "$has_key_t" -eq 0 ] && missing="${missing} key_t"
+        [ "$has_key_e" -eq 0 ] && missing="${missing} key_e"
+        [ "$has_key_s" -eq 0 ] && missing="${missing} key_s"
+        [ "$has_char_decode" -eq 0 ] && missing="${missing} char_decode"
+        [ "$has_buf_append" -eq 0 ] && missing="${missing} buf_append"
+        [ "$has_cursor" -eq 0 ] && missing="${missing} cursor"
+        [ "$has_render_intent" -eq 0 ] && missing="${missing} render_intent"
+        [ "$has_truth" -eq 0 ] && missing="${missing} truth"
+        [ "$has_done" -eq 0 ] && missing="${missing} done"
+        print_row "text_input_pipeline" "FAIL" "missing markers:${missing}"
+    fi
+else
+    gate_text_input_pipeline="SKIP"
+    print_row "text_input_pipeline" "SKIP" "text input pipeline proof not triggered"
+fi
+
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
 if [ "$(has 'sexfiles\.diskfs100\.ap3\.begin')" -ge 1 ]; then
     has_linen_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=linen.*ok=1')
@@ -6175,6 +6228,7 @@ ALL_GATES=(
     "quil_replace:$gate_quil_replace"
     "quil_goto_line:$gate_quil_goto_line"
     "quil_save_open_sexobject:$gate_quil_save_open_sexobject"
+    "text_input_pipeline:$gate_text_input_pipeline"
     "spindle_editor_finish:$gate_spindle_editor_finish"
     "storage_phasea:$gate_storage_phasea"
     "storage_phaseb1:$gate_storage_phaseb1"
