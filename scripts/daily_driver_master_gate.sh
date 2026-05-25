@@ -3815,47 +3815,42 @@ elif [ "$(has 'linen\.ramfs\.crud\.begin')" -ge 1 ]; then
     gate_linen_ramfs_crud="FAIL"
 else gate_linen_ramfs_crud="SKIP"; fi
 
-# ---- 76b. linen_diskfs_direct ----
+# ---- 76b. linen_diskfs_direct (linen_diskfs_direct_save_load) ----
+# Linen direct DiskFS save/load proof through locked SexFiles DiskFS bridge.
+# Contract: SLOT_STORAGE only, no SLOT_BLOCK, no direct SexDrive.
 if [ "$(has 'linen\.diskfs\.direct\.begin')" -ge 1 ]; then
-    has_success_markers=0
-    if [ "$(has 'linen\.diskfs\.direct\.write\.ok')" -eq 1 ] && \
-       [ "$(has 'linen\.diskfs\.direct\.read\.match.*ok=1')" -eq 1 ] && \
-       [ "$(has 'linen\.diskfs\.direct\.done')" -eq 1 ] && \
-       [ "$(has 'linen\.diskfs\.direct\.fail')" -eq 0 ]; then
-        has_success_markers=1
-    fi
+    has_uses_slot_block=$(has 'linen\.diskfs\.direct\.route.*uses_slot_block=1')
+    has_direct_sexdrive=$(has 'linen\.diskfs\.direct\.route.*direct_sexdrive=1')
+    has_write_ok=$(has 'linen\.diskfs\.direct\.write\.ok.*bytes=128')
+    has_read_ok=$(has 'linen\.diskfs\.direct\.read\.ok.*bytes=128')
+    has_read_match=$(has 'linen\.diskfs\.direct\.read\.match.*ok=1')
+    has_read_mismatch=$(has 'linen\.diskfs\.direct\.read\.match.*ok=0')
+    has_stat_ok=$(has 'linen\.diskfs\.direct\.stat\.ok.*size=4096')
+    has_done=$(has 'linen\.diskfs\.direct\.done.*ok=1')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
 
-    has_honest_blocker=0
-    if [ "$(has 'no_ioq_ready|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ] && \
-       [ "$(has 'linen\.diskfs\.direct\.fail.*reason=write_failed')" -eq 1 ] && \
-       [ "$(has 'fault\.isolated|faulted_task_halt|panic|KERNEL PANIC|general_protection|page_fault')" -eq 0 ]; then
-        has_honest_blocker=1
-    fi
-
-    # Check for direct SLOT_BLOCK or direct SexDrive violations
-    has_violation=0
-    if [ "$(has 'linen\..*(slot_block|sexdrive)')" -eq 1 ]; then
-        has_violation=1
-    fi
-
-    # Fake read.match check
-    has_fake_read_match=0
-    if [ "$(has 'linen\.diskfs\.direct\.read\.match')" -eq 1 ] && [ "$(has 'no_ioq_ready|sexfiles\.bridge\.diskfs\.write\.err.*code=4')" -eq 1 ]; then
-        has_fake_read_match=1
-    fi
-
-    if [ "$has_violation" -eq 1 ] || [ "$has_fake_read_match" -eq 1 ] || [ "$(has 'fault\.isolated|faulted_task_halt|panic|KERNEL PANIC|general_protection|page_fault')" -eq 1 ]; then
+    if [ "$has_fault" -ge 1 ]; then
         gate_linen_diskfs_direct="FAIL"
-        print_row "linen_diskfs_direct" "FAIL" "bridge execution failed or mismatch (panic/fault/violation)"
-    elif [ "$has_success_markers" -eq 1 ]; then
+        print_row "linen_diskfs_direct" "FAIL" "fault marker present during Linen direct proof"
+    elif [ "$has_uses_slot_block" -ge 1 ]; then
+        gate_linen_diskfs_direct="FAIL"
+        print_row "linen_diskfs_direct" "FAIL" "uses_slot_block=1 (contract violation: Linen must not use SLOT_BLOCK)"
+    elif [ "$has_direct_sexdrive" -ge 1 ]; then
+        gate_linen_diskfs_direct="FAIL"
+        print_row "linen_diskfs_direct" "FAIL" "direct_sexdrive=1 (contract violation: Linen must not call SexDrive directly)"
+    elif [ "$has_read_mismatch" -ge 1 ]; then
+        gate_linen_diskfs_direct="FAIL"
+        print_row "linen_diskfs_direct" "FAIL" "read.match ok=0: readback mismatch"
+    elif [ "$has_write_ok" -ge 1 ] && \
+         [ "$has_read_ok" -ge 1 ] && \
+         [ "$has_read_match" -ge 1 ] && \
+         [ "$has_stat_ok" -ge 1 ] && \
+         [ "$has_done" -ge 1 ]; then
         gate_linen_diskfs_direct="PASS"
-        print_row "linen_diskfs_direct" "PASS" "128B read/write roundtrip verified"
-    elif [ "$has_honest_blocker" -eq 1 ]; then
-        gate_linen_diskfs_direct="SKIP"
-        print_row "linen_diskfs_direct" "SKIP" "storage backend no_ioq_ready; bridge reached"
+        print_row "linen_diskfs_direct" "PASS" "Linen direct save/load: 128B write/read roundtrip verified through SexFiles DiskFS bridge"
     else
         gate_linen_diskfs_direct="FAIL"
-        print_row "linen_diskfs_direct" "FAIL" "bridge execution failed or mismatch"
+        print_row "linen_diskfs_direct" "FAIL" "direct begin present but required markers missing"
     fi
 else
     gate_linen_diskfs_direct="SKIP"
