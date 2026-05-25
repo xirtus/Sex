@@ -178,6 +178,13 @@ pub extern "C" fn trampoline_main() {
         // [sexobject.table.persist.profile.done] non_isolated=1
     }
 
+    const SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF_ENABLED: bool =
+        option_env!("SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF").is_some();
+    if SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF_ENABLED {
+        crate::proof::run_sexobject_table_extent_alloc_proofs();
+        // [sexobject.extent_alloc.profile.done] non_isolated=1
+    }
+
     serial_println!("[sexfiles.ready]");
 
     loop {

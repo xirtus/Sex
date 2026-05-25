@@ -155,6 +155,9 @@ export SEXFS_V0_SUPERBLOCK_FORMAT_MOUNT_PROOF="${SEXFS_V0_SUPERBLOCK_FORMAT_MOUN
 # ── SexObject table persist proof ──
 export SEXOBJECT_TABLE_PERSIST_PROOF="${SEXOBJECT_TABLE_PERSIST_PROOF:-1}"
 
+# ── SexObject table extent alloc proof ──
+export SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF="${SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF:-1}"
+
 # ── Linen DiskFS AP3 reboot restore (two-boot) ──
 # Only export if explicitly set — contrasts with AP4 pattern where binary
 # uses cfg!() from build.rs (exact match). Linen uses option_env!().is_some()
@@ -438,8 +441,9 @@ NVME_ARGS=()
 # Attach NVMe when storage proofs OR sexfs v0 proofs need disk access.
 SEXFS_V0_PROOF_ENABLED="${SEXFS_V0_SUPERBLOCK_FORMAT_MOUNT_PROOF:-1}"
 SEXOBJECT_TABLE_PROOF_ENABLED="${SEXOBJECT_TABLE_PERSIST_PROOF:-1}"
+SEXOBJECT_EXTENT_ALLOC_PROOF_ENABLED="${SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF:-1}"
 NEED_NVME=0
-if [ "$SEXOS_STORAGE_100_PROOF" = "1" ] || [ "$SEXFS_V0_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_TABLE_PROOF_ENABLED" = "1" ]; then
+if [ "$SEXOS_STORAGE_100_PROOF" = "1" ] || [ "$SEXFS_V0_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_TABLE_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_EXTENT_ALLOC_PROOF_ENABLED" = "1" ]; then
     NEED_NVME=1
 fi
 if [ "$NEED_NVME" = "1" ]; then

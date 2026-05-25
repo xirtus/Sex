@@ -3669,6 +3669,405 @@ pub fn proof_sexobject_table_persist() -> Result<(), i64> {
     Ok(())
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  SEXOBJECT TABLE EXTENT ALLOC — Freemap allocation + data readback proof
+//  Contract: docs/handoff/SEXOBJECT_TABLE_EXTENT_ALLOC_V1.md
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// First freemap block number in the object data region (= LBA 128, sector).
+const SEXFS_V0_DATA_REGION_MIN_BLOCK: usize = 16;
+/// Last freemap block number in the object data region (= LBA 2016 start sector).
+const SEXFS_V0_DATA_REGION_MAX_BLOCK: usize = 252;
+/// Minimum sector LBA for object data writes.
+const SEXFS_V0_DATA_LBA_MIN: u64 = 128;
+/// Maximum sector LBA for object data writes (inclusive).
+const SEXFS_V0_DATA_LBA_MAX: u64 = 2019;
+
+/// Recompute freemap checksum in-place.
+/// XOR bytes [0..16) + [20..32) + [32..160), store at [16..20).
+fn sexfs_v0_recompute_freemap_checksum(fm: &mut [u8; 512]) {
+    let mut csum: u32 = 0;
+    let mut i = 0usize;
+    while i < 16 { csum ^= fm[i] as u32; i += 1; }
+    i = 20;
+    while i < 32 { csum ^= fm[i] as u32; i += 1; }
+    i = 32;
+    while i < 160 { csum ^= fm[i] as u32; i += 1; }
+    fm[16..20].copy_from_slice(&csum.to_le_bytes());
+}
+
+/// Read freemap sector from LBA 6.
+fn sexfs_v0_read_freemap_sector() -> Result<[u8; 512], i64> {
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    unsafe {
+        let p = buf_va as *mut u8;
+        let mut i = 0usize;
+        while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+    }
+    let status = DiskFs::diskfs_block_read(
+        SEXFS_V0_FREEMAP_SECTOR * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+    );
+    if status != 0 {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    let mut fm = [0u8; 512];
+    unsafe {
+        let p = buf_va as *const u8;
+        let mut i = 0usize;
+        while i < 512 { fm[i] = core::ptr::read_volatile(p.add(i)); i += 1; }
+    }
+    Ok(fm)
+}
+
+/// Write freemap sector to LBA 6.
+fn sexfs_v0_write_freemap_sector(fm: &[u8; 512]) -> Result<(), i64> {
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    unsafe {
+        let p = buf_va as *mut u8;
+        let mut i = 0usize;
+        while i < 512 { core::ptr::write_volatile(p.add(i), fm[i]); i += 1; }
+    }
+    let status = DiskFs::diskfs_block_write(
+        SEXFS_V0_FREEMAP_SECTOR * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+    );
+    if status != 0 {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    Ok(())
+}
+
+/// Allocate first free block in [min_block, max_block_inclusive] from freemap.
+/// Marks block used, recomputes checksum. Returns block number on success.
+fn sexfs_v0_freemap_alloc_block_in_range(
+    fm: &mut [u8; 512],
+    min_block: usize,
+    max_block_inclusive: usize,
+) -> Result<u64, i64> {
+    let bitmap_off = 32usize;
+    let mut b = min_block;
+    while b <= max_block_inclusive {
+        let word_idx = b / 64;
+        let bit = b % 64;
+        let bo = bitmap_off + word_idx * 8;
+        let val = u64::from_le_bytes([
+            fm[bo], fm[bo+1], fm[bo+2], fm[bo+3],
+            fm[bo+4], fm[bo+5], fm[bo+6], fm[bo+7],
+        ]);
+        if val & (1u64 << bit) == 0 {
+            let new_val = val | (1u64 << bit);
+            fm[bo..bo+8].copy_from_slice(&new_val.to_le_bytes());
+            sexfs_v0_recompute_freemap_checksum(fm);
+            return Ok(b as u64);
+        }
+        b += 1;
+    }
+    Err(messages::ERR_OVERFLOW)
+}
+
+/// Try to mark a specific block as used. Returns ERR_OVERFLOW if already used.
+fn sexfs_v0_freemap_alloc_specific(
+    fm: &mut [u8; 512],
+    block: usize,
+) -> Result<(), i64> {
+    let bitmap_off = 32usize;
+    let word_idx = block / 64;
+    let bit = block % 64;
+    let bo = bitmap_off + word_idx * 8;
+    let val = u64::from_le_bytes([
+        fm[bo], fm[bo+1], fm[bo+2], fm[bo+3],
+        fm[bo+4], fm[bo+5], fm[bo+6], fm[bo+7],
+    ]);
+    if val & (1u64 << bit) != 0 {
+        return Err(messages::ERR_OVERFLOW);
+    }
+    let new_val = val | (1u64 << bit);
+    fm[bo..bo+8].copy_from_slice(&new_val.to_le_bytes());
+    sexfs_v0_recompute_freemap_checksum(fm);
+    Ok(())
+}
+
+/// Check if a specific block is marked used in the freemap bitmap.
+fn sexfs_v0_freemap_is_block_used(fm: &[u8; 512], block: usize) -> bool {
+    let bitmap_off = 32usize;
+    let word_idx = block / 64;
+    let bit = block % 64;
+    let bo = bitmap_off + word_idx * 8;
+    let val = u64::from_le_bytes([
+        fm[bo], fm[bo+1], fm[bo+2], fm[bo+3],
+        fm[bo+4], fm[bo+5], fm[bo+6], fm[bo+7],
+    ]);
+    val & (1u64 << bit) != 0
+}
+
+/// Write 512-byte data sector to given sector LBA.
+fn sexfs_v0_write_data_sector(lba: u64, data: &[u8; 512]) -> Result<(), i64> {
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    unsafe {
+        let p = buf_va as *mut u8;
+        let mut i = 0usize;
+        while i < 512 { core::ptr::write_volatile(p.add(i), data[i]); i += 1; }
+    }
+    let status = DiskFs::diskfs_block_write(lba * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+    if status != 0 {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    Ok(())
+}
+
+/// Read 512-byte data sector from given sector LBA.
+fn sexfs_v0_read_data_sector(lba: u64, out: &mut [u8; 512]) -> Result<(), i64> {
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    unsafe {
+        let p = buf_va as *mut u8;
+        let mut i = 0usize;
+        while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+    }
+    let status = DiskFs::diskfs_block_read(lba * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND);
+    if status != 0 {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    unsafe {
+        let p = buf_va as *const u8;
+        let mut i = 0usize;
+        while i < 512 { out[i] = core::ptr::read_volatile(p.add(i)); i += 1; }
+    }
+    Ok(())
+}
+
+/// FNV-1a 64-bit hash of a byte slice.
+fn sexfs_v0_fnv1a(data: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    let mut i = 0usize;
+    while i < data.len() {
+        hash ^= data[i] as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+        i += 1;
+    }
+    hash
+}
+
+/// Validate extent consistency of a parsed v0 object entry.
+/// Rejects:
+/// 1. IN_USE && size > 0 && extent_count == 0
+/// 2. IN_USE && extent_count > 0 && first_block (sector LBA) outside [128, 2019]
+fn sexfs_v0_validate_extent_bounds(p: &SexfsObjectEntryV0Parsed) -> Result<(), i64> {
+    if p.in_use && p.object_size_bytes > 0 && p.extent_count == 0 {
+        return Err(messages::ERR_OVERFLOW);
+    }
+    if p.in_use && p.extent_count > 0 {
+        if p.first_block < SEXFS_V0_DATA_LBA_MIN || p.first_block > SEXFS_V0_DATA_LBA_MAX {
+            return Err(messages::ERR_OVERFLOW);
+        }
+    }
+    Ok(())
+}
+
+/// [sexobject.extent_alloc] — Freemap block allocation, data write/read, entry update proof.
+///
+/// Steps:
+/// 1. Clean format → fresh freemap
+/// 2. Read freemap from LBA 6
+/// 3. Alloc first free block in data region (blocks 16-252 = LBAs 128-2019)
+/// 4. Persist updated freemap to LBA 6
+/// 5. Build object entry with extent fields, write object table to LBAs 2-5
+/// 6. Write 38-byte deterministic payload to allocated data sector (LBA)
+/// 7. Read payload back, verify match
+/// 8. Remount: re-read table + freemap, verify entry fields and block still used
+/// 9. Negative tests: double-alloc, bad LBA, zero-extent-nonzero-size
+pub fn proof_sexobject_table_extent_alloc() -> Result<(), i64> {
+    serial_println!("[sexobject.extent_alloc.begin]");
+
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+
+    // Phase 1: Clean format
+    sexfs_v0_format_to_disk()?;
+
+    // Phase 2: Read freemap from LBA 6
+    let mut fm = sexfs_v0_read_freemap_sector()?;
+    sexfs_v0_validate_freemap(&fm)?;
+    serial_println!("[sexobject.freemap.read.ok] lba=6");
+
+    // Phase 3: Allocate first free block in data region (blocks 16-252)
+    let alloc_block = sexfs_v0_freemap_alloc_block_in_range(
+        &mut fm,
+        SEXFS_V0_DATA_REGION_MIN_BLOCK,
+        SEXFS_V0_DATA_REGION_MAX_BLOCK,
+    )?;
+    // Block N = sector LBA N*8 (each 4KiB block = 8 sectors)
+    let alloc_lba = alloc_block * 8;
+    serial_println!("[sexobject.extent.alloc.ok] lba={}", alloc_lba);
+
+    // Phase 4: Persist updated freemap to LBA 6
+    sexfs_v0_write_freemap_sector(&fm)?;
+    serial_println!("[sexobject.freemap.persist.ok] lba=6");
+
+    // Build deterministic payload: 34-byte main + 4-byte continuity tag = 38 bytes
+    const PAYLOAD_LEN: usize = 38;
+    let mut payload_sector = [0u8; 512];
+    // "sexobject extent alloc proof: test" (34 bytes) + "test" (4-byte continuity tag)
+    let payload_bytes = b"sexobject extent alloc proof: testtest";
+    let mut pi = 0usize;
+    while pi < PAYLOAD_LEN { payload_sector[pi] = payload_bytes[pi]; pi += 1; }
+    let content_hash = sexfs_v0_fnv1a(&payload_sector[0..PAYLOAD_LEN]);
+
+    // Phase 5: Build object entry with extent fields, write object table
+    let entry_bytes = sexfs_v0_build_object_entry(
+        1,                           // object_id
+        1,                           // kind
+        0x0001,                      // flags: IN_USE
+        11,                          // owner_pd
+        1,                           // rights_generation
+        1,                           // content_generation (incremented)
+        2,                           // metadata_generation (updated)
+        PAYLOAD_LEN as u64,          // object_size_bytes
+        alloc_lba,                   // first_block = first sector LBA of extent
+        1,                           // extent_count
+        0x6E65_4C5F_534F_5853u64,    // name_hash (SexOS_LeN LE)
+        content_hash,                // content_hash = FNV-1a of payload
+        1,                           // created_at_gen
+        2,                           // modified_at_gen
+    );
+    serial_println!(
+        "[sexobject.entry.extent.update.ok] slot=0 lba={} extent_count=1",
+        alloc_lba
+    );
+    sexfs_v0_write_object_table(0, &entry_bytes)?;
+    serial_println!("[sexobject.table.write.ok] lba_range=2..5");
+
+    // Phase 6: Write payload to allocated data sector
+    sexfs_v0_write_data_sector(alloc_lba, &payload_sector)?;
+    serial_println!("[sexobject.data.write.ok] lba={} len={}", alloc_lba, PAYLOAD_LEN);
+
+    // Phase 7: Read payload back
+    let mut readback = [0u8; 512];
+    sexfs_v0_read_data_sector(alloc_lba, &mut readback)?;
+    serial_println!("[sexobject.data.read.ok] lba={} len={}", alloc_lba, PAYLOAD_LEN);
+
+    // Verify data match
+    let mut data_match = true;
+    let mut di = 0usize;
+    while di < PAYLOAD_LEN {
+        if readback[di] != payload_sector[di] { data_match = false; break; }
+        di += 1;
+    }
+    if data_match {
+        serial_println!("[sexobject.data.match] ok=1");
+    } else {
+        serial_println!("[sexobject.data.match] ok=0");
+        return Err(messages::ERR_OVERFLOW);
+    }
+
+    // Phase 8: Remount — re-read object table and freemap, verify
+    let table = sexfs_v0_read_object_table()?;
+    let mut slot_data = [0u8; 128];
+    let mut si = 0usize;
+    while si < 128 { slot_data[si] = table[si]; si += 1; } // slot 0 at offset 0
+    let reparsed = sexfs_v0_validate_object_entry(&slot_data)?;
+
+    let entry_match = reparsed.object_id == 1
+        && reparsed.extent_count == 1
+        && reparsed.first_block == alloc_lba
+        && reparsed.object_size_bytes == PAYLOAD_LEN as u64
+        && reparsed.content_hash == content_hash
+        && reparsed.in_use;
+
+    if entry_match {
+        serial_println!("[sexobject.remount.entry.match] ok=1");
+    } else {
+        serial_println!("[sexobject.remount.entry.match] ok=0");
+        return Err(messages::ERR_OVERFLOW);
+    }
+
+    // Verify freemap still shows allocated block as used
+    let fm2 = sexfs_v0_read_freemap_sector()?;
+    sexfs_v0_validate_freemap(&fm2)?;
+    let still_used = sexfs_v0_freemap_is_block_used(&fm2, alloc_block as usize);
+    if still_used {
+        serial_println!("[sexobject.remount.freemap.used.ok] lba={}", alloc_lba);
+    } else {
+        serial_println!("[sexobject.remount.freemap.used.ok] lba={} ok=0", alloc_lba);
+        return Err(messages::ERR_OVERFLOW);
+    }
+
+    // Phase 9a: Negative — double alloc reject
+    {
+        let mut fm_neg = fm2;
+        let double_result = sexfs_v0_freemap_alloc_specific(&mut fm_neg, alloc_block as usize);
+        if double_result.is_err() {
+            serial_println!("[sexobject.neg.double_alloc.reject] ok=1");
+        } else {
+            serial_println!("[sexobject.neg.double_alloc.reject] ok=0");
+            return Err(messages::ERR_OVERFLOW);
+        }
+    }
+
+    // Phase 9b: Negative — bad extent LBA reject (first_block=2, in object table region)
+    {
+        let bad_entry = sexfs_v0_build_object_entry(
+            2, 1, 0x0001, 11, 1, 1, 1, 10, 2, 1, 0, 0, 1, 1,
+        );
+        let mut bad_slot = [0u8; 128];
+        let mut bi = 0usize;
+        while bi < 128 { bad_slot[bi] = bad_entry[bi]; bi += 1; }
+        match sexfs_v0_validate_object_entry(&bad_slot) {
+            Ok(bad_parsed) => {
+                if sexfs_v0_validate_extent_bounds(&bad_parsed).is_err() {
+                    serial_println!("[sexobject.neg.bad_extent_lba.reject] ok=1");
+                } else {
+                    serial_println!("[sexobject.neg.bad_extent_lba.reject] ok=0");
+                    return Err(messages::ERR_OVERFLOW);
+                }
+            }
+            Err(_) => {
+                serial_println!("[sexobject.neg.bad_extent_lba.reject] ok=0 reason=entry_invalid");
+                return Err(messages::ERR_OVERFLOW);
+            }
+        }
+    }
+
+    // Phase 9c: Negative — extent_count=0 with IN_USE+size>0 reject
+    {
+        let bad_entry2 = sexfs_v0_build_object_entry(
+            3, 1, 0x0001, 11, 1, 1, 1, 38, 0, 0, 0, 0, 1, 1,
+        );
+        let mut bad_slot2 = [0u8; 128];
+        let mut bi = 0usize;
+        while bi < 128 { bad_slot2[bi] = bad_entry2[bi]; bi += 1; }
+        match sexfs_v0_validate_object_entry(&bad_slot2) {
+            Ok(bad_parsed2) => {
+                if sexfs_v0_validate_extent_bounds(&bad_parsed2).is_err() {
+                    serial_println!("[sexobject.neg.zero_extent_nonzero_size.reject] ok=1");
+                } else {
+                    serial_println!("[sexobject.neg.zero_extent_nonzero_size.reject] ok=0");
+                    return Err(messages::ERR_OVERFLOW);
+                }
+            }
+            Err(_) => {
+                serial_println!("[sexobject.neg.zero_extent_nonzero_size.reject] ok=0 reason=entry_invalid");
+                return Err(messages::ERR_OVERFLOW);
+            }
+        }
+    }
+
+    serial_println!("[sexobject.extent_alloc.done] ok=1");
+    Ok(())
+}
+
 impl FsBackend for DiskFs {
     fn open(&self, _name: &[u8], _flags: u32, _mode: u32, _caller_pd: u32) -> Result<u64, i64> {
         Err(messages::ERR_NOT_FOUND)

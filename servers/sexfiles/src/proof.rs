@@ -3630,6 +3630,30 @@ pub fn run_sexfs_v0_superblock_format_mount_proofs() {
     serial_println!("[sexfs.v0.superblock_format_mount.gate] done");
 }
 
+/// Run SexObject table extent alloc proof.
+/// Activated by `SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF=1`.
+///
+/// Proves freemap-backed block allocation for a SexObject table entry,
+/// data content write/read through real SexDrive/NVMe, and all required
+/// negative tests (double-alloc, bad LBA, zero-extent-nonzero-size).
+pub fn run_sexobject_table_extent_alloc_proofs() {
+    serial_println!("[sexobject.extent_alloc.gate] begin");
+
+    match crate::backends::diskfs::proof_sexobject_table_extent_alloc() {
+        Ok(()) => {
+            serial_println!("[sexobject.extent_alloc.gate] ok=1");
+        }
+        Err(e) => {
+            serial_println!(
+                "[sexobject.extent_alloc.gate] ok=0 err={}",
+                e
+            );
+        }
+    }
+
+    serial_println!("[sexobject.extent_alloc.gate] done");
+}
+
 /// Run SexObject table persist proof checks.
 /// Activated by `SEXOBJECT_TABLE_PERSIST_PROOF=1`.
 ///
