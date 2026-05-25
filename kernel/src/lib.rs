@@ -128,6 +128,9 @@ pub fn kernel_init() {
     init::init();
 
     // 5. Start Scheduler (Phase 21: Preemptive Multi-tasking)
+    // APIC calibration leaves interrupts enabled; disable here so the LAPIC timer
+    // cannot fire before init_first_core sets INITIALIZED=true.
+    x86_64::instructions::interrupts::disable();
     serial_println!("scheduler.bind.before");
     let bind_id = unsafe { crate::init::SEXDISPLAY_PD_ID };
     serial_println!("scheduler.bind.target_pd_id={}", bind_id);
