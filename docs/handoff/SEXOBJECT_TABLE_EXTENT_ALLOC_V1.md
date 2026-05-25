@@ -2,14 +2,17 @@
 
 **Date**: 2026-05-25
 **Mission**: Implement freemap-backed extent allocation for a SexObject table entry and prove object data content write/read through real SexDrive/NVMe.
-**Status**: IMPLEMENTED — pending proof run
+**Status**: PASS
 
 ---
 
 ## A) Outcome
 
-Implementation complete. Gate `sexobject_table_extent_alloc` added.
-Proof run required to confirm PASS/FAIL on real NVMe.
+All required proof markers present. Gate `sexobject_table_extent_alloc` = PASS.
+Gate `sexfs_v0_superblock_format_mount` = PASS (pre-existing, unchanged).
+Gate `sexobject_table_persist` = PASS (pre-existing, unchanged).
+Gate `linen_sexfiles_100_current_tier_release` = SKIP (not triggered, unchanged).
+Pre-existing `linen_diskfs_direct` FAIL is unrelated and unchanged.
 
 ---
 
@@ -126,7 +129,7 @@ Build entry with `extent_count=0`, `object_size_bytes=38`, IN_USE. `sexfs_v0_val
 
 | Gate | Status |
 |------|--------|
-| `sexobject_table_extent_alloc` | PENDING (run required) |
+| `sexobject_table_extent_alloc` | PASS |
 | `sexfs_v0_superblock_format_mount` | PASS (pre-existing, unchanged) |
 | `sexobject_table_persist` | PASS (pre-existing, unchanged) |
 | `linen_sexfiles_100_current_tier_release` | SKIP (not triggered, unchanged) |
@@ -143,7 +146,7 @@ Expected: zero faults. All `fault_containment` or `faults=0` markers are proof m
 
 ## H) Commit Hash
 
-Pre-implementation base: `8fcaf81d` (sexfiles: prove DiskFS fixed object bridge)
+`dc58b0b0` — sexfs: prove SexObject extent allocation and data readback
 
 ---
 
