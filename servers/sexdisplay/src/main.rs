@@ -250,8 +250,8 @@ static ANIM_PROOF_LOGGED: core::sync::atomic::AtomicBool =
 static R6_GLASS_PROOF_LOGGED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 /// Clock source for redraw marker: 0=silkbar, 1=fallback
-/// Single-owner policy: visible clock is silkbar-owned.
-static mut CLOCK_REDRAW_SOURCE: u8 = 0;
+/// Start in fallback until first valid SetClock apply.
+static mut CLOCK_REDRAW_SOURCE: u8 = 1;
 /// Canonical clock state for visible redraw path.
 static mut CLOCK_CANON_HH: u8 = 10;
 static mut CLOCK_CANON_MM: u8 = 42;
@@ -2305,7 +2305,13 @@ pub extern "C" fn _start() -> ! {
     // Local SilkBar model — initialized from DEFAULT_SILK_BAR, mutated by OP_SILKBAR_UPDATE
     let mut bar = DEFAULT_SILK_BAR;
     clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
+    let mut last_clock_tick = sex_pdx::get_ticks();
+    let mut clock_from_silkbar = false;
     let mut display_loop_counter: u64 = 0;
+    let mut last_silkbar_msg_loop: u64 = 0;
+    let mut last_silkbar_second: u8 = bar.clock_ss;
+    let mut repeated_silkbar_second_msgs: u32 = 0;
+    let mut fallback_idle_loops: u16 = 0;
     let mut silkbar_clock_seen = false;
     let mut fb_live = false;
     let mut render_proof_done = false;
@@ -2367,10 +2373,85 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        let sec_now: u64 = 0;
+        let raw_ticks = sex_pdx::get_ticks();
+        let sec_now = raw_ticks / 62;
+        const SILKBAR_STALE_NO_MSG_LOOPS: u64 = 1200;
+        const SILKBAR_STALE_REPEAT_MSGS: u32 = 120;
+        let stale_no_msg = display_loop_counter.saturating_sub(last_silkbar_msg_loop) > SILKBAR_STALE_NO_MSG_LOOPS;
+        let stale_repeats = repeated_silkbar_second_msgs > SILKBAR_STALE_REPEAT_MSGS;
+        if clock_from_silkbar && (stale_no_msg || stale_repeats) {
+            clock_from_silkbar = false;
+            repeated_silkbar_second_msgs = 0;
+            unsafe {
+                static mut CLOCK_FALLBACK_RESUME_BUDGET: u32 = 8;
+                let remaining = &mut CLOCK_FALLBACK_RESUME_BUDGET;
+                if *remaining > 0 {
+                    *remaining -= 1;
+                    sex_pdx::serial_println!(
+                        "[sexdisplay.clock.source.fallback.rearm] reason=stale_silkbar loop={} last_ss={}",
+                        display_loop_counter, bar.clock_ss
+                    );
+                }
+            }
+        }
+        if !clock_from_silkbar && raw_ticks > last_clock_tick {
+            last_clock_tick = raw_ticks;
+            fallback_idle_loops = 0;
+            bar.clock_ss = bar.clock_ss.wrapping_add(1);
+            if bar.clock_ss >= 60 { bar.clock_ss = 0; bar.clock_mm = bar.clock_mm.wrapping_add(1); }
+            if bar.clock_mm >= 60 { bar.clock_mm = 0; bar.clock_hh = bar.clock_hh.wrapping_add(1); }
+            if bar.clock_hh >= 24 { bar.clock_hh = 0; }
+            clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
+            if fb_live {
+                needs_top_strip_redraw = true;
+                unsafe { CLOCK_REDRAW_SOURCE = 1; }
+            }
+            unsafe {
+                static mut CLOCK_SOURCE_FALLBACK_TICK_BUDGET: u32 = 64;
+                let b = &mut CLOCK_SOURCE_FALLBACK_TICK_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    serial_println!(
+                        "[sexdisplay.clock.source.fallback.tick] hh={} mm={} ss={}",
+                        bar.clock_hh, bar.clock_mm, bar.clock_ss
+                    );
+                }
+            }
+        } else if !clock_from_silkbar {
+            const FALLBACK_SYNTH_TICK_LOOPS_STARTUP: u16 = 1;
+            const FALLBACK_SYNTH_TICK_LOOPS_STEADY: u16 = 64;
+            let synth_tick_loops = if silkbar_clock_seen {
+                FALLBACK_SYNTH_TICK_LOOPS_STEADY
+            } else {
+                FALLBACK_SYNTH_TICK_LOOPS_STARTUP
+            };
+            fallback_idle_loops = fallback_idle_loops.wrapping_add(1);
+            if fallback_idle_loops >= synth_tick_loops {
+                fallback_idle_loops = 0;
+                bar.clock_ss = bar.clock_ss.wrapping_add(1);
+                if bar.clock_ss >= 60 { bar.clock_ss = 0; bar.clock_mm = bar.clock_mm.wrapping_add(1); }
+                if bar.clock_mm >= 60 { bar.clock_mm = 0; bar.clock_hh = bar.clock_hh.wrapping_add(1); }
+                if bar.clock_hh >= 24 { bar.clock_hh = 0; }
+                clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
+                if fb_live {
+                    needs_top_strip_redraw = true;
+                    unsafe { CLOCK_REDRAW_SOURCE = 1; }
+                }
+                unsafe {
+                    static mut CLOCK_SOURCE_FALLBACK_TICK_SYNTH_BUDGET: u32 = 64;
+                    let b = &mut CLOCK_SOURCE_FALLBACK_TICK_SYNTH_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!(
+                            "[sexdisplay.clock.source.fallback.tick] hh={} mm={} ss={}",
+                            bar.clock_hh, bar.clock_mm, bar.clock_ss
+                        );
+                    }
+                }
+            }
+        }
 
         // ── Bounded drain: process up to DRAIN_MAX messages ──
-        let mut setclock_applied_this_drain = false;
         for _drain_i in 0..DRAIN_MAX {
             let Some(msg) = sex_pdx::pdx_try_listen_raw(0) else {
                 break;
@@ -2383,9 +2464,6 @@ pub extern "C" fn _start() -> ! {
                     // BEFORE apply_update mutates bar. This gives accurate
                     // old vs incoming comparison in markers.
                     let update_kind = msg.arg0 as u32;
-                    if update_kind == UpdateKind::SetClock as u32 && setclock_applied_this_drain {
-                        continue;
-                    }
                     let (old_hh, old_mm, old_ss, in_hh, in_mm, in_ss) =
                         if update_kind == UpdateKind::SetClock as u32 {
                             let ih = (msg.arg1 as u32).min(23);
@@ -2397,31 +2475,7 @@ pub extern "C" fn _start() -> ! {
                             (0, 0, 0, 0, 0, 0)
                         };
 
-                    let mut apply_arg1 = msg.arg1;
-                    let mut apply_arg2 = msg.arg2;
-                    if update_kind == UpdateKind::SetClock as u32 {
-                        let mut next_h = old_hh as u8;
-                        let mut next_m = old_mm as u8;
-                        let mut next_s = old_ss as u8;
-                        next_s = next_s.wrapping_add(1);
-                        if next_s >= 60 {
-                            next_s = 0;
-                            next_m = next_m.wrapping_add(1);
-                            if next_m >= 60 {
-                                next_m = 0;
-                                next_h = next_h.wrapping_add(1);
-                                if next_h >= 24 {
-                                    next_h = 0;
-                                }
-                            }
-                        }
-                        let is_next = in_hh == next_h as u32 && in_mm == next_m as u32 && in_ss == next_s as u32;
-                        if !is_next {
-                            apply_arg1 = next_h as u64;
-                            apply_arg2 = ((next_m as u64) << 8) | (next_s as u64);
-                        }
-                    }
-                    let (applied, kind) = handle_silkbar_update(&mut bar, msg.arg0, apply_arg1, apply_arg2);
+                    let (applied, kind) = handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
                     let mut should_redraw_top_strip = kind != UpdateKind::SetClock as u32;
                     if applied {
                         if kind == UpdateKind::SetClock as u32 {
@@ -2435,7 +2489,26 @@ pub extern "C" fn _start() -> ! {
                             }
                             let changed = in_hh != old_hh || in_mm != old_mm || in_ss != old_ss;
                             if changed {
-                                setclock_applied_this_drain = true;
+                                clock_from_silkbar = true;
+                                last_silkbar_msg_loop = display_loop_counter;
+                                if (in_ss as u8) == last_silkbar_second {
+                                    repeated_silkbar_second_msgs = repeated_silkbar_second_msgs.saturating_add(1);
+                                    unsafe {
+                                        static mut CLOCK_SOURCE_REPEAT_BUDGET: u32 = 32;
+                                        let b = &mut CLOCK_SOURCE_REPEAT_BUDGET;
+                                        if *b > 0 {
+                                            *b -= 1;
+                                            serial_println!(
+                                                "[sexdisplay.clock.source.silkbar.repeat] ss={} count={}",
+                                                in_ss, repeated_silkbar_second_msgs
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    repeated_silkbar_second_msgs = 0;
+                                    last_silkbar_second = in_ss as u8;
+                                }
+                                fallback_idle_loops = 0;
                                 clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
                                 unsafe { CLOCK_REDRAW_SOURCE = 0; } // silkbar source
                             }
@@ -2501,7 +2574,7 @@ pub extern "C" fn _start() -> ! {
                         }
                         did_primary_fb_render = true;
                         // Keep strip repaint batched in post-drain redraws.
-                        unsafe { CLOCK_REDRAW_SOURCE = 0; } // silkbar source
+                        unsafe { CLOCK_REDRAW_SOURCE = if clock_from_silkbar { 0 } else { 1 }; }
                         needs_top_strip_redraw = true;
                         if SILK_RENDER_PROOF_PROFILE_ENABLED && !render_proof_done {
                             render_proof_done = true;

@@ -189,6 +189,7 @@ gate_browser_html_history="SKIP"
 gate_sexnet_browser_cap="SKIP"
 gate_sexnet_status_route="SKIP"
 gate_clock_visible_seconds="SKIP"
+gate_clock_cadence_bound="SKIP"
 gate_silk_de_contract_lock="SKIP"
 gate_silk_de_topstrip_deterministic="SKIP"
 gate_silk_de_renderer_conformance="SKIP"
@@ -3733,14 +3734,60 @@ source_check_mismatch_count="$(
         }'
     } || true
 )"
+rapid_tick_fail=0
+rapid_tick_advances=0
+rapid_tick_line_span=0
+rapid_tick_min_line_delta=0
+rapid_tick_stats="$(
+    { grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" || true; } \
+    | head -n 64 \
+    | awk -F: '
+        {
+            ln=$1+0;
+            s=-1;
+            for (i=1; i<=NF; i++) {
+                if ($i ~ / s=[0-9]+ /) {
+                    match($i, /s=[0-9]+/);
+                    if (RSTART > 0) { s=substr($i, RSTART+2, RLENGTH-2)+0; }
+                }
+            }
+            if (s >= 0) {
+                if (seen == 0) { prev_s=s; seen=1; }
+                else if (s != prev_s) {
+                    changes++;
+                    if (first_change_ln == 0) first_change_ln = ln;
+                    if (last_change_ln > 0) {
+                        delta = ln - last_change_ln;
+                        if (min_delta == 0 || delta < min_delta) min_delta = delta;
+                    }
+                    last_change_ln = ln;
+                    prev_s = s;
+                }
+            }
+        }
+        END {
+            span = 0;
+            if (first_change_ln > 0 && last_change_ln >= first_change_ln) span = last_change_ln - first_change_ln;
+            printf "%d %d %d\n", changes+0, span+0, min_delta+0;
+        }'
+)"
+rapid_tick_advances="$(echo "$rapid_tick_stats" | awk '{print $1}')"
+rapid_tick_line_span="$(echo "$rapid_tick_stats" | awk '{print $2}')"
+rapid_tick_min_line_delta="$(echo "$rapid_tick_stats" | awk '{print $3}')"
+# Synthetic cadence is allowed to be faster than real-time, but must not run away.
+# Fail if too many second advances happen in too small a redraw window.
+if [ "${rapid_tick_advances:-0}" -ge 8 ] && [ "${rapid_tick_line_span:-0}" -le 120 ]; then
+    rapid_tick_fail=1
+fi
 if [ -n "${first_redraw_line:-}" ] && [ -n "${first_nonzero_redraw_line:-}" ] \
    && [ "$zero_only_window" -eq 0 ] \
-   && [ "$source_check_mismatch_count" -eq 0 ]; then
+   && [ "$source_check_mismatch_count" -eq 0 ] \
+   && [ "$rapid_tick_fail" -eq 0 ]; then
     redraw_distance=$(( first_nonzero_redraw_line - first_redraw_line ))
     if [ "$redraw_distance" -le "$redraw_nonzero_max_distance" ]; then
         gate_clock_visible_seconds="PASS"
         print_row "clock_visible_seconds" "PASS" \
-            "first=${first_redraw_line} first_nonzero=${first_nonzero_redraw_line} distance=${redraw_distance} source_check=equal"
+            "first=${first_redraw_line} first_nonzero=${first_nonzero_redraw_line} distance=${redraw_distance} source_check=equal rapid_tick_advances=${rapid_tick_advances} line_span=${rapid_tick_line_span} min_delta=${rapid_tick_min_line_delta}"
     else
         gate_clock_visible_seconds="FAIL"
         print_row "clock_visible_seconds" "FAIL" \
@@ -3754,12 +3801,41 @@ elif [ "$source_check_mismatch_count" -gt 0 ]; then
     gate_clock_visible_seconds="FAIL"
     print_row "clock_visible_seconds" "FAIL" \
         "source_check mismatch count=${source_check_mismatch_count}"
+elif [ "$rapid_tick_fail" -eq 1 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" \
+        "rapid_tick advances=${rapid_tick_advances} line_span=${rapid_tick_line_span} min_delta=${rapid_tick_min_line_delta}"
 elif [ "$(has 'sexdisplay.clock.redraw]')" -ge 1 ]; then
     gate_clock_visible_seconds="FAIL"
     print_row "clock_visible_seconds" "FAIL" "missing bounded nonzero redraw proof"
 else gate_clock_visible_seconds="SKIP"; fi
 
-# ---- 95. silk_de_contract_lock ----
+# ---- 95. clock_cadence_bound ----
+cadence_first_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | cut -d: -f1 || true)"
+cadence_last_line="$(grep -n '\[sexdisplay\.clock\.redraw\]' "$LOG" | tail -n1 | cut -d: -f1 || true)"
+cadence_first_s="$(grep '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | sed -n 's/.* s=\([0-9][0-9]*\) .*/\1/p')"
+cadence_last_s="$(grep '\[sexdisplay\.clock\.redraw\]' "$LOG" | tail -n1 | sed -n 's/.* s=\([0-9][0-9]*\) .*/\1/p')"
+if [ -n "${cadence_first_line:-}" ] && [ -n "${cadence_last_line:-}" ] && [ -n "${cadence_first_s:-}" ] && [ -n "${cadence_last_s:-}" ]; then
+    redraw_line_delta=$(( cadence_last_line - cadence_first_line ))
+    second_delta=$(( cadence_last_s - cadence_first_s ))
+    if [ "$second_delta" -lt 0 ]; then second_delta=0; fi
+    cadence_min_lines_per_second=2
+    allowed_second_delta=$(( redraw_line_delta / cadence_min_lines_per_second + 1 ))
+    if [ "$second_delta" -le "$allowed_second_delta" ]; then
+        gate_clock_cadence_bound="PASS"
+        print_row "clock_cadence_bound" "PASS" \
+            "redraw_delta=${redraw_line_delta} second_delta=${second_delta} limit=${allowed_second_delta}"
+    else
+        gate_clock_cadence_bound="FAIL"
+        print_row "clock_cadence_bound" "FAIL" \
+            "rapid_tick redraw_delta=${redraw_line_delta} second_delta=${second_delta} limit=${allowed_second_delta}"
+    fi
+else
+    gate_clock_cadence_bound="SKIP"
+    print_row "clock_cadence_bound" "SKIP" "missing redraw cadence markers"
+fi
+
+# ---- 96. silk_de_contract_lock ----
 if [ "$(has 'silk\.de\.contract\.(producer|renderer)\.(pass|fail)')" -eq 0 ]; then
     gate_silk_de_contract_lock="SKIP"
     print_row "silk_de_contract_lock" "SKIP" "silk de contract markers absent in this boot"
@@ -6274,6 +6350,7 @@ if [ "$has_interaction" -eq 1 ]; then
 
     dep_fail=""
     [ "$gate_clock_visible_seconds" = "FAIL" ] && dep_fail="${dep_fail} clock_visible_seconds(FAIL)"
+    [ "$gate_clock_cadence_bound" = "FAIL" ] && dep_fail="${dep_fail} clock_cadence_bound(FAIL)"
     [ "$gate_top_strip_hash" = "FAIL" ] && dep_fail="${dep_fail} top_strip_hash(FAIL)"
     [ "$gate_frame_rim_visual" = "FAIL" ] && dep_fail="${dep_fail} frame_rim_visual(FAIL)"
     [ "$gate_frame_lights_visual" = "FAIL" ] && dep_fail="${dep_fail} frame_lights_visual(FAIL)"
@@ -6326,7 +6403,7 @@ else
     req_contract=$([ "$gate_silk_de_contract_lock" = "PASS" ] && echo 1 || echo 0)
     req_topstrip=$([ "$gate_silk_de_topstrip_deterministic" = "PASS" ] && echo 1 || echo 0)
     req_renderer=$([ "$gate_silk_de_renderer_conformance" = "PASS" ] && echo 1 || echo 0)
-    req_clock=$([ "$gate_clock_visible_seconds" = "PASS" ] && echo 1 || echo 0)
+    req_clock=$([ "$gate_clock_visible_seconds" = "PASS" ] && [ "$gate_clock_cadence_bound" != "FAIL" ] && echo 1 || echo 0)
     req_faults=$([ "$gate_faults_zero" = "PASS" ] && echo 1 || echo 0)
 
     # Interaction evidence categories: must be real markers, not ordinary render status.
@@ -6690,6 +6767,7 @@ ALL_GATES=(
     "network_sprint_handoff_freeze_v1:$gate_network_sprint_handoff_freeze_v1"
     "net_real_http_body_prefix:$gate_net_real_http_body_prefix"
     "clock_visible_seconds:$gate_clock_visible_seconds"
+    "clock_cadence_bound:$gate_clock_cadence_bound"
     "silk_de_contract_lock:$gate_silk_de_contract_lock"
     "silk_de_topstrip_deterministic:$gate_silk_de_topstrip_deterministic"
     "silk_de_renderer_conformance:$gate_silk_de_renderer_conformance"

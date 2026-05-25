@@ -31,6 +31,8 @@ BUILD_SCRIPT="./scripts/entrypoint_build.sh"
 ISO="sexos-v1.0.0.iso"
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 PROBE_SECONDS="${DAILY_DRIVER_PROBE_SECONDS:-60}"
+QMP_ENABLED="${SEXOS_PROOF_QMP:-1}"
+QMP_SOCK="${SEXOS_QMP_SOCK:-/tmp/sexos_qmp.sock}"
 ENABLE_QEMU_USERNET_E1000="${ENABLE_QEMU_USERNET_E1000:-1}"
 QEMU_NET_MODEL="${QEMU_NET_MODEL:-e1000}"
 QEMU_NET_BACKEND="${QEMU_NET_BACKEND:-user}"
@@ -756,6 +758,15 @@ if [ "$ENABLE_QEMU_USERNET_E1000" = "1" ]; then
     esac
 fi
 
+if [ "$QMP_ENABLED" = "1" ]; then
+    rm -f "$QMP_SOCK" 2>/dev/null || true
+fi
+
+QMP_ARGS=()
+if [ "$QMP_ENABLED" = "1" ]; then
+    QMP_ARGS=(-qmp "unix:${QMP_SOCK},server,nowait")
+fi
+
 "$QEMU_BIN" \
     -M q35 \
     -m 512M \
@@ -766,7 +777,7 @@ fi
     "${QEMU_NET_ARGS[@]}" \
     "${NVME_ARGS[@]}" \
     -serial "file:$LOG" \
-    -qmp unix:/tmp/sexos_qmp.sock,server,nowait \
+    "${QMP_ARGS[@]}" \
     -display none \
     -no-reboot \
     -no-shutdown &
@@ -782,12 +793,13 @@ echo "[proof] QEMU PID: $QEMU_PID"
 # Wait for the QMP socket, then inject "sendkey t", "sendkey e",
 # "sendkey s", "sendkey t" via the HMP passthrough.  These flow through
 # PS/2 IRQ1 → kernel INPUT_RING → sexinput → silk-shell → Quil PD.
-QMP_SOCK="/tmp/sexos_qmp.sock"
 QMP_INJECT_DELAY="${QMP_INJECT_DELAY:-45}"
 QMP_INJECT_ATTEMPTS=30
 QMP_INJECT_DONE=0
 
-if [ "$QMP_INJECT_DELAY" -lt "$PROBE_SECONDS" ]; then
+if [ "$QMP_ENABLED" != "1" ]; then
+    echo "[proof] QMP disabled (SEXOS_PROOF_QMP=$QMP_ENABLED) — serial-only proof lane"
+elif [ "$QMP_INJECT_DELAY" -lt "$PROBE_SECONDS" ]; then
     # Wait for QMP socket to appear (QEMU creates it on startup).
     for i in $(seq 1 $QMP_INJECT_ATTEMPTS); do
         if [ -S "$QMP_SOCK" ]; then
@@ -875,7 +887,9 @@ if kill -0 "$QEMU_PID" 2>/dev/null; then
 fi
 
 # Cleanup QMP socket
-rm -f "$QMP_SOCK" 2>/dev/null || true
+if [ "$QMP_ENABLED" = "1" ]; then
+    rm -f "$QMP_SOCK" 2>/dev/null || true
+fi
 
 if [ ! -f "$LOG" ]; then
     die "no serial log produced at $LOG"
