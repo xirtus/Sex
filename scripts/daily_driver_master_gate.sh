@@ -145,6 +145,7 @@ gate_sexfs_v0_superblock_format_mount="SKIP"
 gate_sexobject_table_persist="SKIP"
 gate_sexobject_table_extent_alloc="SKIP"
 gate_sexobject_extent_write_full_block="SKIP"
+gate_sexobject_write_read_persist="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -4508,6 +4509,48 @@ else
     print_row "sexobject_extent_write_full_block" "SKIP" "full block proof not triggered"
 fi
 
+# ---- sexobject_write_read_persist ----
+if [ "$(has 'sexobject\.write_read\.done.*ok=1')" -eq 1 ]; then
+    gate_sexobject_write_read_persist="PASS"
+    print_row "sexobject_write_read_persist" "PASS" "native create/write/read/remount/negative all ok"
+elif grep -q 'sexobject\.write_read\.gate' "$LOG"; then
+    gate_sexobject_write_read_persist="FAIL"
+    if ! grep -q 'sexobject\.create\.ok.*object_id=1' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "object create missing or failed"
+    elif ! grep -q 'sexobject\.write\.ok.*len=4.*text=test' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "write ok marker missing or failed"
+    elif ! grep -q 'sexobject\.write\.persist\.ok.*object_id=1' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "write persist marker missing or failed"
+    elif ! grep -q 'sexobject\.remount\.ok' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "remount marker missing"
+    elif ! grep -q 'sexobject\.read\.ok.*object_id=1.*len=4' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "read ok marker missing or failed"
+    elif ! grep -q 'sexobject\.read\.match.*text=test.*ok=1' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "read match missing or failed"
+    elif ! grep -q 'sexobject\.stat\.ok.*object_id=1.*size=4.*extent_count=1' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "stat marker missing or failed"
+    elif ! grep -q 'sexobject\.hash\.match.*ok=1' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "hash match missing or failed"
+    elif ! grep -q 'sexobject\.freemap\.used\.ok.*object_id=1' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "freemap used check missing or failed"
+    elif ! grep -q 'sexobject\.neg\.missing_object\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "missing object rejection missing or failed"
+    elif ! grep -q 'sexobject\.neg\.zero_len_write\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "zero-len write rejection missing or failed"
+    elif ! grep -q 'sexobject\.neg\.oversize_write\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "oversize write rejection missing or failed"
+    elif ! grep -q 'sexobject\.neg\.bad_extent\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "bad extent rejection missing or failed"
+    elif ! grep -q 'sexobject\.neg\.hash_mismatch\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_write_read_persist" "FAIL" "hash mismatch rejection missing or failed"
+    else
+        print_row "sexobject_write_read_persist" "FAIL" "missing proof.done ok=1"
+    fi
+else
+    gate_sexobject_write_read_persist="SKIP"
+    print_row "sexobject_write_read_persist" "SKIP" "write/read persist proof not triggered"
+fi
+
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
 if [ "$(has 'sexfiles\.diskfs100\.ap3\.begin')" -ge 1 ]; then
     has_linen_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=linen.*ok=1')
@@ -6222,6 +6265,7 @@ ALL_GATES=(
     "sexobject_table_persist:$gate_sexobject_table_persist"
     "sexobject_table_extent_alloc:$gate_sexobject_table_extent_alloc"
     "sexobject_extent_write_full_block:$gate_sexobject_extent_write_full_block"
+    "sexobject_write_read_persist:$gate_sexobject_write_read_persist"
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"
     "sexfiles_diskfs_bridge_reboot_persistence:$gate_sexfiles_diskfs_bridge_reboot_persistence"

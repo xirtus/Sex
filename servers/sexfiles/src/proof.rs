@@ -3702,3 +3702,26 @@ pub fn run_sexobject_table_persist_proofs() {
 
     serial_println!("[sexobject.table.persist.gate] done");
 }
+
+/// Run SexObject write/read persistence proof.
+/// Activated by `SEXOBJECT_WRITE_READ_PERSIST_PROOF=1`.
+///
+/// Proves native SexObject create/write/read/remount cycle on SexFS v0:
+/// create, write "test", remount, read back, verify bytes + hash + freemap.
+pub fn run_sexobject_write_read_persist_proofs() {
+    serial_println!("[sexobject.write_read.gate] begin");
+
+    match crate::backends::diskfs::proof_sexobject_write_read_persist() {
+        Ok(()) => {
+            serial_println!("[sexobject.write_read.gate] ok=1");
+        }
+        Err(e) => {
+            serial_println!(
+                "[sexobject.write_read.gate] ok=0 err={}",
+                e
+            );
+        }
+    }
+
+    serial_println!("[sexobject.write_read.gate] done");
+}

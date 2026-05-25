@@ -192,6 +192,13 @@ pub extern "C" fn trampoline_main() {
         // [sexobject.full_block.profile.done] non_isolated=1
     }
 
+    const SEXOBJECT_WRITE_READ_PERSIST_PROOF_ENABLED: bool =
+        option_env!("SEXOBJECT_WRITE_READ_PERSIST_PROOF").is_some();
+    if SEXOBJECT_WRITE_READ_PERSIST_PROOF_ENABLED {
+        crate::proof::run_sexobject_write_read_persist_proofs();
+        // [sexobject.write_read.profile.done] non_isolated=1
+    }
+
     serial_println!("[sexfiles.ready]");
 
     loop {

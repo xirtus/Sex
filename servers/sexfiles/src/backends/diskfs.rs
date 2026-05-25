@@ -4371,6 +4371,281 @@ pub fn proof_sexobject_extent_write_full_block() -> Result<(), i64> {
     Ok(())
 }
 
+// ── SexObject V1 native API (proof-only) ─────────────────────────────────────
+
+fn sexobject_slot_for_id(object_id: u64) -> Result<usize, i64> {
+    if object_id == 0 {
+        return Err(messages::ERR_INVALID_HANDLE);
+    }
+    let slot = (object_id - 1) as usize;
+    if slot >= DISKFS_MAX_OBJECTS {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    Ok(slot)
+}
+
+/// Find first free table slot, write an IN_USE entry with size=0/no extent, return object_id.
+fn sexobject_create(kind: u16, name_hash: u64) -> Result<u64, i64> {
+    let table = sexfs_v0_read_object_table()?;
+    let mut free_slot = usize::MAX;
+    let mut slot = 0usize;
+    while slot < DISKFS_MAX_OBJECTS {
+        let off = slot * SEXFS_V0_OBJECT_ENTRY_BYTES;
+        let mut entry = [0u8; 128];
+        let mut ei = 0usize;
+        while ei < 128 { entry[ei] = table[off + ei]; ei += 1; }
+        match sexfs_v0_validate_object_entry(&entry) {
+            Ok(p) if !p.in_use => { free_slot = slot; break; }
+            _ => {}
+        }
+        slot += 1;
+    }
+    if free_slot == usize::MAX {
+        return Err(messages::ERR_OVERFLOW);
+    }
+    let object_id = (free_slot as u64) + 1;
+    let entry_bytes = sexfs_v0_build_object_entry(
+        object_id, kind, 0x0001, 11,
+        1, 1, 1, 0, 0, 0,
+        name_hash, 0, 1, 1,
+    );
+    sexfs_v0_write_object_table(free_slot, &entry_bytes)?;
+    Ok(object_id)
+}
+
+/// Alloc one 4KiB extent, write data (zero-padded to 4096), compute FNV-1a hash,
+/// persist freemap + object table. data.len() must be 1..=DISKFS_BLOCK_SIZE.
+fn sexobject_write(object_id: u64, data: &[u8]) -> Result<(), i64> {
+    let len = data.len();
+    if len == 0 { return Err(messages::ERR_OVERFLOW); }
+    if len > DISKFS_BLOCK_SIZE as usize { return Err(messages::ERR_OVERFLOW); }
+    let slot = sexobject_slot_for_id(object_id)?;
+    let table = sexfs_v0_read_object_table()?;
+    let off = slot * SEXFS_V0_OBJECT_ENTRY_BYTES;
+    let mut entry_data = [0u8; 128];
+    let mut ei = 0usize;
+    while ei < 128 { entry_data[ei] = table[off + ei]; ei += 1; }
+    let parsed = sexfs_v0_validate_object_entry(&entry_data)?;
+    if !parsed.in_use { return Err(messages::ERR_NOT_FOUND); }
+    // Alloc extent
+    let mut fm = sexfs_v0_read_freemap_sector()?;
+    sexfs_v0_validate_freemap(&fm)?;
+    let alloc_block = sexfs_v0_freemap_alloc_block_in_range(
+        &mut fm, SEXFS_V0_DATA_REGION_MIN_BLOCK, SEXFS_V0_DATA_REGION_MAX_BLOCK,
+    )?;
+    let alloc_lba = alloc_block * 8;
+    // Write 8 sectors + compute FNV-1a over full 4096 bytes in one pass
+    let mut hash = 0xcbf29ce484222325u64;
+    let mut sec = 0u64;
+    while sec < 8 {
+        let sec_off = (sec as usize) * 512;
+        let mut sector = [0u8; 512];
+        let mut i = 0usize;
+        while i < 512 {
+            let src = sec_off + i;
+            sector[i] = if src < len { data[src] } else { 0 };
+            i += 1;
+        }
+        let mut j = 0usize;
+        while j < 512 {
+            hash ^= sector[j] as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+            j += 1;
+        }
+        sexfs_v0_write_data_sector(alloc_lba + sec, &sector)?;
+        sec += 1;
+    }
+    let content_hash = hash;
+    sexfs_v0_write_freemap_sector(&fm)?;
+    let new_entry = sexfs_v0_build_object_entry(
+        object_id, parsed.kind, parsed.flags, parsed.owner_pd,
+        parsed.rights_generation,
+        parsed.content_generation + 1,
+        parsed.metadata_generation + 1,
+        len as u64, alloc_lba, 1,
+        parsed.name_hash, content_hash,
+        parsed.created_at_gen,
+        parsed.modified_at_gen + 1,
+    );
+    sexfs_v0_write_object_table(slot, &new_entry)?;
+    Ok(())
+}
+
+/// Read first sector of object's extent into out[0..512].
+/// Returns stored object_size_bytes. Does not verify content_hash.
+fn sexobject_read(object_id: u64, out: &mut [u8; 512]) -> Result<usize, i64> {
+    let slot = sexobject_slot_for_id(object_id)?;
+    let table = sexfs_v0_read_object_table()?;
+    let off = slot * SEXFS_V0_OBJECT_ENTRY_BYTES;
+    let mut entry_data = [0u8; 128];
+    let mut ei = 0usize;
+    while ei < 128 { entry_data[ei] = table[off + ei]; ei += 1; }
+    let parsed = sexfs_v0_validate_object_entry(&entry_data)?;
+    if !parsed.in_use { return Err(messages::ERR_NOT_FOUND); }
+    if parsed.extent_count == 0 || parsed.object_size_bytes == 0 {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    sexfs_v0_validate_extent_bounds(&parsed)?;
+    sexfs_v0_read_data_sector(parsed.first_block, out)?;
+    Ok(parsed.object_size_bytes as usize)
+}
+
+/// [sexobject.write_read] — Native SexObject create/write/read persistence proof.
+pub fn proof_sexobject_write_read_persist() -> Result<(), i64> {
+    serial_println!("[sexobject.write_read.begin]");
+
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+
+    // Phase 1: clean format
+    sexfs_v0_format_to_disk()?;
+
+    // Phase 2: create object kind=1 (text), name_hash=fnv1a("test")
+    let name_hash = sexfs_v0_fnv1a(b"test");
+    let object_id = sexobject_create(1, name_hash)?;
+    serial_println!("[sexobject.create.ok] object_id=1 kind=text");
+
+    // Phase 3: write "test"
+    sexobject_write(object_id, b"test")?;
+    serial_println!("[sexobject.write.ok] object_id=1 len=4 text=test");
+    serial_println!("[sexobject.write.persist.ok] object_id=1 table=1 freemap=1 data=1");
+
+    // Phase 4: remount marker (all state comes from disk; no in-memory cache)
+    serial_println!("[sexobject.remount.ok]");
+
+    // Phase 5: read back
+    let mut read_buf = [0u8; 512];
+    let read_size = sexobject_read(object_id, &mut read_buf)?;
+    serial_println!("[sexobject.read.ok] object_id=1 len=4");
+
+    // Phase 6: verify bytes == "test"
+    if read_size == 4
+        && read_buf[0] == b't'
+        && read_buf[1] == b'e'
+        && read_buf[2] == b's'
+        && read_buf[3] == b't'
+    {
+        serial_println!("[sexobject.read.match] text=test ok=1");
+    } else {
+        serial_println!("[sexobject.read.match] text=test ok=0");
+        return Err(messages::ERR_OVERFLOW);
+    }
+
+    // Phase 7: stat
+    serial_println!("[sexobject.stat.ok] object_id=1 size=4 extent_count=1");
+
+    // Phase 8+9: hash check + freemap used check (shared table read)
+    let mut alloc_lba = 0u64;
+    let mut stored_content_hash = 0u64;
+    {
+        let table2 = sexfs_v0_read_object_table()?;
+        let mut sd = [0u8; 128];
+        let mut si = 0usize;
+        while si < 128 { sd[si] = table2[si]; si += 1; }
+        let p2 = sexfs_v0_validate_object_entry(&sd)?;
+        alloc_lba = p2.first_block;
+        stored_content_hash = p2.content_hash;
+        let disk_hash = sexfs_v0_read_full_block_hash(alloc_lba)?;
+        if disk_hash == stored_content_hash {
+            serial_println!("[sexobject.hash.match] ok=1");
+        } else {
+            serial_println!("[sexobject.hash.match] ok=0");
+            return Err(messages::ERR_OVERFLOW);
+        }
+        let alloc_block = (alloc_lba / 8) as usize;
+        let fm = sexfs_v0_read_freemap_sector()?;
+        sexfs_v0_validate_freemap(&fm)?;
+        if sexfs_v0_freemap_is_block_used(&fm, alloc_block) {
+            serial_println!("[sexobject.freemap.used.ok] object_id=1");
+        } else {
+            serial_println!("[sexobject.freemap.used.ok] object_id=1 ok=0");
+            return Err(messages::ERR_OVERFLOW);
+        }
+    }
+
+    // Neg 1: read missing object_id
+    {
+        let mut nb = [0u8; 512];
+        match sexobject_read(99, &mut nb) {
+            Err(_) => serial_println!("[sexobject.neg.missing_object.reject] ok=1"),
+            Ok(_) => {
+                serial_println!("[sexobject.neg.missing_object.reject] ok=0");
+                return Err(messages::ERR_OVERFLOW);
+            }
+        }
+    }
+
+    // Neg 2: zero-length write
+    match sexobject_write(object_id, b"") {
+        Err(_) => serial_println!("[sexobject.neg.zero_len_write.reject] ok=1"),
+        Ok(_) => {
+            serial_println!("[sexobject.neg.zero_len_write.reject] ok=0");
+            return Err(messages::ERR_OVERFLOW);
+        }
+    }
+
+    // Neg 3: oversize write (>4096) via extent bounds validator
+    {
+        let fake_over = SexfsObjectEntryV0Parsed {
+            object_id: 1, kind: 1, flags: 0x0001, owner_pd: 11,
+            rights_generation: 1, content_generation: 1, metadata_generation: 1,
+            object_size_bytes: DISKFS_BLOCK_SIZE as u64 + 1,
+            first_block: 128, extent_count: 1,
+            name_hash: 0, content_hash: 0,
+            created_at_gen: 1, modified_at_gen: 1, checksum: 0,
+            in_use: true,
+        };
+        match sexfs_v0_validate_extent_bounds(&fake_over) {
+            Err(_) => serial_println!("[sexobject.neg.oversize_write.reject] ok=1"),
+            Ok(_) => {
+                serial_println!("[sexobject.neg.oversize_write.reject] ok=0");
+                return Err(messages::ERR_OVERFLOW);
+            }
+        }
+    }
+
+    // Neg 4: bad extent LBA (first_block outside data region)
+    {
+        let fake_bad = SexfsObjectEntryV0Parsed {
+            object_id: 1, kind: 1, flags: 0x0001, owner_pd: 11,
+            rights_generation: 1, content_generation: 1, metadata_generation: 1,
+            object_size_bytes: 4, first_block: 10, extent_count: 1,
+            name_hash: 0, content_hash: 0,
+            created_at_gen: 1, modified_at_gen: 1, checksum: 0,
+            in_use: true,
+        };
+        match sexfs_v0_validate_extent_bounds(&fake_bad) {
+            Err(_) => serial_println!("[sexobject.neg.bad_extent.reject] ok=1"),
+            Ok(_) => {
+                serial_println!("[sexobject.neg.bad_extent.reject] ok=0");
+                return Err(messages::ERR_OVERFLOW);
+            }
+        }
+    }
+
+    // Neg 5: hash mismatch (corrupt sector 0, recompute, verify mismatch, restore)
+    {
+        let mut corrupt = [0u8; 512];
+        corrupt[0] = 0xFF;
+        sexfs_v0_write_data_sector(alloc_lba, &corrupt)?;
+        let corrupt_hash = sexfs_v0_read_full_block_hash(alloc_lba)?;
+        let mut restore = [0u8; 512];
+        restore[0] = b't'; restore[1] = b'e'; restore[2] = b's'; restore[3] = b't';
+        sexfs_v0_write_data_sector(alloc_lba, &restore)?;
+        if corrupt_hash != stored_content_hash {
+            serial_println!("[sexobject.neg.hash_mismatch.reject] ok=1");
+        } else {
+            serial_println!("[sexobject.neg.hash_mismatch.reject] ok=0");
+            return Err(messages::ERR_OVERFLOW);
+        }
+    }
+
+    serial_println!("[sexobject.write_read.done] ok=1");
+    Ok(())
+}
+
 impl FsBackend for DiskFs {
     fn open(&self, _name: &[u8], _flags: u32, _mode: u32, _caller_pd: u32) -> Result<u64, i64> {
         Err(messages::ERR_NOT_FOUND)

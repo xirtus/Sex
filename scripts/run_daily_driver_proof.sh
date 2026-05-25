@@ -161,6 +161,9 @@ export SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF="${SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF:
 # ── SexObject full block extent write/read proof ──
 export SEXOBJECT_EXTENT_WRITE_FULL_BLOCK_PROOF="${SEXOBJECT_EXTENT_WRITE_FULL_BLOCK_PROOF:-1}"
 
+# ── SexObject native write/read persistence proof ──
+export SEXOBJECT_WRITE_READ_PERSIST_PROOF="${SEXOBJECT_WRITE_READ_PERSIST_PROOF:-1}"
+
 # ── Linen DiskFS AP3 reboot restore (two-boot) ──
 # Only export if explicitly set — contrasts with AP4 pattern where binary
 # uses cfg!() from build.rs (exact match). Linen uses option_env!().is_some()
@@ -446,14 +449,21 @@ SEXFS_V0_PROOF_ENABLED="${SEXFS_V0_SUPERBLOCK_FORMAT_MOUNT_PROOF:-1}"
 SEXOBJECT_TABLE_PROOF_ENABLED="${SEXOBJECT_TABLE_PERSIST_PROOF:-1}"
 SEXOBJECT_EXTENT_ALLOC_PROOF_ENABLED="${SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF:-1}"
 SEXOBJECT_FULL_BLOCK_PROOF_ENABLED="${SEXOBJECT_EXTENT_WRITE_FULL_BLOCK_PROOF:-1}"
+SEXOBJECT_WRITE_READ_PERSIST_PROOF_ENABLED="${SEXOBJECT_WRITE_READ_PERSIST_PROOF:-1}"
 # Full-block proof runs 4th in NVMe sequence; cumulative I/O needs extra time.
 if [ "$SEXOBJECT_FULL_BLOCK_PROOF_ENABLED" = "1" ]; then
     if [ "$PROBE_SECONDS" -lt 120 ]; then
         PROBE_SECONDS=120
     fi
 fi
+# Write-read-persist proof runs 5th; bump window further for cumulative I/O.
+if [ "$SEXOBJECT_WRITE_READ_PERSIST_PROOF_ENABLED" = "1" ]; then
+    if [ "$PROBE_SECONDS" -lt 150 ]; then
+        PROBE_SECONDS=150
+    fi
+fi
 NEED_NVME=0
-if [ "$SEXOS_STORAGE_100_PROOF" = "1" ] || [ "$SEXFS_V0_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_TABLE_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_EXTENT_ALLOC_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_FULL_BLOCK_PROOF_ENABLED" = "1" ]; then
+if [ "$SEXOS_STORAGE_100_PROOF" = "1" ] || [ "$SEXFS_V0_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_TABLE_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_EXTENT_ALLOC_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_FULL_BLOCK_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_WRITE_READ_PERSIST_PROOF_ENABLED" = "1" ]; then
     NEED_NVME=1
 fi
 if [ "$NEED_NVME" = "1" ]; then
