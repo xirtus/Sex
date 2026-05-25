@@ -3599,3 +3599,33 @@ pub fn run_diskfs100_ap6_flush_fsync() {
         "[sexfiles.diskfs100.ap6.done] ok=1 classification=honest_skip"
     );
 }
+
+/// SexFS v0 superblock format and mount proof.
+///
+/// Activated by SEXOS_SEXFS_V0_SUPERBLOCK_FORMAT_MOUNT_PROOF=1.
+///
+/// Phase 1 of SEXFS_V0_ONDISK_CONTRACT_SPEC_V1:
+/// - Writes primary + backup superblock, zeroed object table,
+///   initialized freemap to disk via SLOT_BLOCK → SexDrive → NVMe.
+/// - Reads superblock back, validates magic/version/checksum.
+/// - Falls back to backup if primary invalid.
+/// - Reads object table and freemap, validates freemap magic/checksum.
+/// - Negative tests: bad magic, bad version, bad checksum rejection.
+/// - Restores clean state after each negative test.
+pub fn run_sexfs_v0_superblock_format_mount_proofs() {
+    serial_println!("[sexfs.v0.superblock_format_mount.gate] begin");
+
+    match crate::backends::diskfs::proof_sexfs_v0_superblock_format_mount() {
+        Ok(()) => {
+            serial_println!("[sexfs.v0.superblock_format_mount.gate] ok=1");
+        }
+        Err(e) => {
+            serial_println!(
+                "[sexfs.v0.superblock_format_mount.gate] ok=0 err={}",
+                e
+            );
+        }
+    }
+
+    serial_println!("[sexfs.v0.superblock_format_mount.gate] done");
+}

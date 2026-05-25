@@ -141,6 +141,7 @@ gate_sexfiles_diskfs_bridge_negatives="SKIP"
 gate_sexfiles_diskfs_bridge_flush_fsync_honest="SKIP"
 gate_sexfiles_diskfs_bridge_strict="SKIP"
 gate_sexfiles_diskfs_negative_bounds_auth="SKIP"
+gate_sexfs_v0_superblock_format_mount="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -4382,6 +4383,30 @@ else
     print_row "sexfiles_diskfs_negative_bounds_auth" "SKIP" "negative bounds auth proof not triggered"
 fi
 
+# ---- sexfs_v0_superblock_format_mount ----
+if [ "$(has 'sexfs\.v0\.superblock_format_mount\.done.*ok=1')" -eq 1 ]; then
+    gate_sexfs_v0_superblock_format_mount="PASS"
+    print_row "sexfs_v0_superblock_format_mount" "PASS" "format+mount+negative all ok"
+elif grep -q 'sexfs\.v0\.superblock_format_mount\.gate' "$LOG"; then
+    gate_sexfs_v0_superblock_format_mount="FAIL"
+    if ! grep -q 'sexfs\.v0\.format\.done.*ok=1' "$LOG"; then
+        print_row "sexfs_v0_superblock_format_mount" "FAIL" "format missing or failed"
+    elif ! grep -q 'sexfs\.v0\.mount\.done.*ok=1' "$LOG"; then
+        print_row "sexfs_v0_superblock_format_mount" "FAIL" "mount missing or failed"
+    elif ! grep -q 'sexfs\.v0\.neg\.bad_magic\.reject.*ok=1' "$LOG"; then
+        print_row "sexfs_v0_superblock_format_mount" "FAIL" "bad_magic rejection missing or failed"
+    elif ! grep -q 'sexfs\.v0\.neg\.bad_version\.reject.*ok=1' "$LOG"; then
+        print_row "sexfs_v0_superblock_format_mount" "FAIL" "bad_version rejection missing or failed"
+    elif ! grep -q 'sexfs\.v0\.neg\.bad_checksum\.reject.*ok=1' "$LOG"; then
+        print_row "sexfs_v0_superblock_format_mount" "FAIL" "bad_checksum rejection missing or failed"
+    else
+        print_row "sexfs_v0_superblock_format_mount" "FAIL" "missing proof.done ok=1"
+    fi
+else
+    gate_sexfs_v0_superblock_format_mount="SKIP"
+    print_row "sexfs_v0_superblock_format_mount" "SKIP" "sexfs v0 superblock format mount proof not triggered"
+fi
+
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
 if [ "$(has 'sexfiles\.diskfs100\.ap3\.begin')" -ge 1 ]; then
     has_linen_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=linen.*ok=1')
@@ -6092,6 +6117,7 @@ ALL_GATES=(
     "linen_diskfs_negative_classifications:$gate_linen_diskfs_negative_classifications"
     "sexfiles_diskfs_bridge:$gate_sexfiles_diskfs_bridge"
     "sexfiles_diskfs_negative_bounds_auth:$gate_sexfiles_diskfs_negative_bounds_auth"
+    "sexfs_v0_superblock_format_mount:$gate_sexfs_v0_superblock_format_mount"
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"
     "sexfiles_diskfs_bridge_reboot_persistence:$gate_sexfiles_diskfs_bridge_reboot_persistence"

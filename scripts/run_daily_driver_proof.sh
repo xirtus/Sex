@@ -149,6 +149,9 @@ export SEXFILES_DISKFS_100_AP3_PROOF="${SEXFILES_DISKFS_100_AP3_PROOF:-0}"
 export SEXFILES_DISKFS_100_AP4_WRITE="${SEXFILES_DISKFS_100_AP4_WRITE:-0}"
 export SEXFILES_DISKFS_100_AP4_READ="${SEXFILES_DISKFS_100_AP4_READ:-0}"
 
+# ── SexFS v0 superblock format mount proof ──
+export SEXFS_V0_SUPERBLOCK_FORMAT_MOUNT_PROOF="${SEXFS_V0_SUPERBLOCK_FORMAT_MOUNT_PROOF:-1}"
+
 # ── Linen DiskFS AP3 reboot restore (two-boot) ──
 # Only export if explicitly set — contrasts with AP4 pattern where binary
 # uses cfg!() from build.rs (exact match). Linen uses option_env!().is_some()

@@ -163,6 +163,14 @@ pub extern "C" fn trampoline_main() {
         crate::proof::run_linen_disk_object_proof();
     }
 
+    const SEXFS_V0_SUPERBLOCK_FORMAT_MOUNT_PROOF_ENABLED: bool =
+        option_env!("SEXFS_V0_SUPERBLOCK_FORMAT_MOUNT_PROOF").is_some();
+    if SEXFS_V0_SUPERBLOCK_FORMAT_MOUNT_PROOF_ENABLED {
+        crate::proof::run_sexfs_v0_superblock_format_mount_proofs();
+        // [sexfs.v0.superblock_format_mount.profile.done] non_isolated=1
+        // Does not return — VFS loop starts after proof.
+    }
+
     serial_println!("[sexfiles.ready]");
 
     loop {

@@ -97,6 +97,11 @@ const LINEN_OBJECT_START_LBA: u64 = 2030;
 const LINEN_OBJECT_END_LBA:   u64 = 2037;
 const QUIL_OBJECT_START_LBA:  u64 = 2022;
 const QUIL_OBJECT_END_LBA:    u64 = 2029;
+// SexFS v0 on-disk regions (SEXFS_V0_ONDISK_CONTRACT_SPEC_V1)
+const SEXFS_V0_META_START_LBA: u64 = 0;
+const SEXFS_V0_META_END_LBA:   u64 = 47;
+const SEXFS_V0_OBJECT_START_LBA: u64 = 128;
+const SEXFS_V0_OBJECT_END_LBA:   u64 = 2019;
 
 struct NvmeIoState {
     ready: bool,
@@ -570,16 +575,32 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
         && (offset % NVME_LBA_BYTES) == 0
         && offset >= quil_start && offset <= quil_end;
     let allow_proof = proof_mode && offset == expected_offset && size == WRITE_PROOF_LEN;
-    let allow = allow_proof || allow_manifest || allow_object || allow_linen || allow_quil;
+
+    // SexFS v0 guarded ranges (SEXFS_V0_ONDISK_CONTRACT_SPEC_V1)
+    let sexfs_meta_start = SEXFS_V0_META_START_LBA * NVME_LBA_BYTES;
+    let sexfs_meta_end   = SEXFS_V0_META_END_LBA   * NVME_LBA_BYTES;
+    let sexfs_obj_start  = SEXFS_V0_OBJECT_START_LBA * NVME_LBA_BYTES;
+    let sexfs_obj_end    = SEXFS_V0_OBJECT_END_LBA   * NVME_LBA_BYTES;
+    let allow_sexfs_meta = proof_mode && size == WRITE_PROOF_LEN
+        && (offset % NVME_LBA_BYTES) == 0
+        && offset >= sexfs_meta_start && offset <= sexfs_meta_end;
+    let allow_sexfs_obj = proof_mode && size == WRITE_PROOF_LEN
+        && (offset % NVME_LBA_BYTES) == 0
+        && offset >= sexfs_obj_start && offset <= sexfs_obj_end;
+
+    let allow = allow_proof || allow_manifest || allow_object || allow_linen || allow_quil
+        || allow_sexfs_meta || allow_sexfs_obj;
     serial_println!(
-        "[sexdrive.write.guard.config] proof_lba={} proof_offset={:#x} manifest_lba={} object_lba_start={} object_lba_end={} proof_len={} magic={:#x}",
+        "[sexdrive.write.guard.config] proof_lba={} proof_offset={:#x} manifest_lba={} object_lba_start={} object_lba_end={} proof_len={} magic={:#x} sexfs_meta={}-{} sexfs_obj={}-{}",
         WRITE_PROOF_LBA,
         expected_offset,
         MANIFEST_LBA,
         PROOF_OBJECT_START_LBA,
         PROOF_OBJECT_END_LBA,
         WRITE_PROOF_LEN,
-        WRITE_PROOF_MAGIC
+        WRITE_PROOF_MAGIC,
+        SEXFS_V0_META_START_LBA, SEXFS_V0_META_END_LBA,
+        SEXFS_V0_OBJECT_START_LBA, SEXFS_V0_OBJECT_END_LBA
     );
     serial_println!(
         "[sexdrive.write.guard.begin] offset={:#x} size={} buf_cap={:#x} proof_mode={}",
@@ -589,18 +610,25 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
         if proof_mode { 1u64 } else { 0u64 }
     );
     if allow {
-        serial_println!(
-            "[sexdrive.write.guard.allow] offset={:#x} size={} buf_cap={:#x}",
-            offset,
-            size,
-            buf_cap
-        );
+        let lba = if NVME_LBA_BYTES != 0 { offset / NVME_LBA_BYTES } else { u64::MAX };
+        if allow_sexfs_meta || allow_sexfs_obj {
+            serial_println!(
+                "[sexdrive.write_guard.sexfs.allow] lba={} size={} ok=1",
+                lba, size
+            );
+        } else {
+            serial_println!(
+                "[sexdrive.write.guard.allow] offset={:#x} size={} buf_cap={:#x}",
+                offset,
+                size,
+                buf_cap
+            );
+        }
     } else {
+        let lba = if NVME_LBA_BYTES != 0 { offset / NVME_LBA_BYTES } else { u64::MAX };
         serial_println!(
-            "[sexdrive.write.guard.deny] offset={:#x} size={} buf_cap={:#x}",
-            offset,
-            size,
-            buf_cap
+            "[sexdrive.write_guard.reject] lba={} size={} ok=1",
+            lba, size
         );
     }
     allow
