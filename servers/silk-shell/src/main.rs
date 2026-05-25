@@ -107,6 +107,13 @@ const ATLAS_THEME_PRESETS_PROOF_ENABLED: bool =
     option_env!("SEXOS_ATLAS_THEME_PRESETS_PROOF").is_some();
 const SILKBAR_KEYBOARD_STATUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_SILKBAR_KEYBOARD_STATUS_PROOF").is_some();
+/// Physical keyboard → Quil focus proof gate.
+/// Build with SEXOS_PHYSICAL_KEYBOARD_TO_QUIL_PROOF=1 to enable.
+/// Focuses Quil so that incoming QEMU keyboard events route to Quil's
+/// OP_HID_EVENT dispatch path via the real input pipeline.
+const PHYSICAL_KEYBOARD_TO_QUIL_PROOF_ENABLED: bool =
+    option_env!("SEXOS_PHYSICAL_KEYBOARD_TO_QUIL_PROOF").is_some();
+static mut PHYSICAL_KEYBOARD_TO_QUIL_PROOF_DONE: bool = false;
 const BELL_SYSTEM_EVENTS_PROOF_ENABLED: bool =
     option_env!("SEXOS_BELL_SYSTEM_EVENTS_PROOF").is_some();
 const LINEN_OBJECT_DETAIL_PROOF_ENABLED: bool =
@@ -1025,6 +1032,29 @@ unsafe fn maybe_run_silkbar_keyboard_status_proof() {
     let all_ok = spindle_ok && spindle_focus && bell_ok && mesh_ok && linen_ok;
     serial_println!("[silkbar.keyboard.status.proof.done] ok={}", all_ok as u8);
     SILKBAR_KEYBOARD_STATUS_PROOF_DONE = true;
+}
+
+/// Physical keyboard → Quil focus proof.
+/// Focuses Quil via the existing focus_or_open_quil() path so that incoming
+/// QEMU keyboard events route through handle_hid_event → Quil OP_HID_EVENT.
+/// The Quil PD handles buffer verification independently in its main loop.
+unsafe fn maybe_run_physical_keyboard_to_quil_focus_proof() {
+    if !PHYSICAL_KEYBOARD_TO_QUIL_PROOF_ENABLED || PHYSICAL_KEYBOARD_TO_QUIL_PROOF_DONE {
+        return;
+    }
+    serial_println!("[physical_keyboard.quil.focus.proof] stage=0 action=begin ok=1");
+
+    // Focus Quil — must be open and visible in the active scene.
+    // If Quil is not open, open it first.
+    let quil_focused = focus_or_open_quil();
+    serial_println!(
+        "[physical_keyboard.quil.focus.proof] stage=1 action=focus_quil ok={} reason={}",
+        quil_focused as u8,
+        if quil_focused { "ok" } else { "focus_or_open_fail" }
+    );
+
+    serial_println!("[physical_keyboard.quil.focus.proof.done] ok={}", quil_focused as u8);
+    PHYSICAL_KEYBOARD_TO_QUIL_PROOF_DONE = true;
 }
 
 /// SilkBar palette status proof: verifies that silk-shell emits
@@ -21650,6 +21680,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_atlas_theme_visual_proof(); }
         unsafe { maybe_run_atlas_theme_presets_proof(); }
         unsafe { maybe_run_silkbar_keyboard_status_proof(); }
+        unsafe { maybe_run_physical_keyboard_to_quil_focus_proof(); }
         unsafe { maybe_run_silkbar_palette_status_proof(); }
         unsafe { maybe_run_silkbar_phase2_shell_proof(); }
         unsafe { maybe_run_bell_system_events_proof(); }

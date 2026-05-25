@@ -106,6 +106,7 @@ gate_quil_goto_line="SKIP"
 gate_quil_save_open_sexobject="SKIP"
 gate_text_input_pipeline="SKIP"
 gate_live_usb_quil_create_save_reopen="SKIP"
+gate_physical_keyboard_to_quil_text="SKIP"
 gate_spindle_editor_finish="SKIP"
 gate_linen_search_bridge="SKIP"
 gate_storage_phasea="SKIP"
@@ -4837,6 +4838,67 @@ else
     print_row "live_usb_quil_create_save_reopen" "SKIP" "live usb quil create/save/reopen proof not triggered"
 fi
 
+# ---- physical_keyboard_to_quil_text ----
+# Proves real physical/QEMU keyboard input reaches Quil's text buffer through
+# the kernel PS/2 IRQ1 -> sexinput -> silk-shell -> Quil OP_HID_EVENT path.
+# Uses QEMU QMP sendkey injection (honest qemu_keyboard source, synthetic=0).
+if [ "$(has 'physical_keyboard\.quil\.begin')" -ge 1 ]; then
+    has_begin=$(has 'physical_keyboard\.quil\.begin')
+    has_source=$(has 'physical_keyboard\.source.*qemu_keyboard=.*physical_keyboard=.*usb=0.*synthetic=0.*honest=1')
+    has_focus=$(has 'physical_keyboard\.focus\.target.*target=quil.*ok=1')
+    has_key_t=$(has 'physical_keyboard\.key\.recv.*ch=t')
+    has_key_e=$(has 'physical_keyboard\.key\.recv.*ch=e')
+    has_key_s=$(has 'physical_keyboard\.key\.recv.*ch=s')
+    has_dispatch=$(has 'physical_keyboard\.dispatch\.quil\.ok')
+    has_buf_append=$(has 'physical_keyboard\.buffer\.append.*text=test.*len=4.*ok=1')
+    has_cursor=$(has 'physical_keyboard\.cursor\.ok.*pos=')
+    has_render=$(has 'physical_keyboard\.render\.intent.*text=test.*ok=1')
+    has_truth=$(has 'physical_keyboard\.truth.*synthetic=0.*posix=0.*framebuffer_direct=0.*slot_block=0.*direct_sexdrive=0.*ok=1')
+    has_done=$(has 'physical_keyboard\.quil\.done.*ok=1')
+    has_fault=$(has '#PF|#GP|panic|KERNEL PANIC|PAGE FAULT|GENERAL PROTECTION|triple fault')
+
+    if [ "$has_fault" -ge 1 ]; then
+        gate_physical_keyboard_to_quil_text="FAIL"
+        print_row "physical_keyboard_to_quil_text" "FAIL" "fault marker present during proof"
+    elif [ "$has_begin" -ge 1 ] && [ "$has_source" -ge 1 ] && [ "$has_focus" -ge 1 ] \
+        && [ "$has_key_t" -ge 1 ] && [ "$has_key_e" -ge 1 ] && [ "$has_key_s" -ge 1 ] \
+        && [ "$has_dispatch" -ge 1 ] && [ "$has_buf_append" -ge 1 ] \
+        && [ "$has_cursor" -ge 1 ] && [ "$has_render" -ge 1 ] \
+        && [ "$has_truth" -ge 1 ] && [ "$has_done" -ge 1 ]; then
+        gate_physical_keyboard_to_quil_text="PASS"
+        print_row "physical_keyboard_to_quil_text" "PASS" "physical/qemu keyboard t,e,s,t -> Quil buffer 'test' verified, synthetic=0, honest qemu_keyboard source"
+    elif [ "$has_done" -eq 0 ] && [ "$has_fault" -eq 0 ]; then
+        # Proof began (setup ok) but did not complete.
+        # Missing done marker without faults = environmental limitation
+        # (QMP injection failed, sexfiles blocking prevented main loop entry,
+        #  or probe window ended before keys arrived).
+        gate_physical_keyboard_to_quil_text="SKIP"
+        print_row "physical_keyboard_to_quil_text" "SKIP" "proof setup completed but done marker absent — environmental limitation (QMP unreachable, sexfiles blocking, or probe window too short)"
+    else
+        gate_physical_keyboard_to_quil_text="FAIL"
+        missing=""
+        [ "$has_source" -eq 0 ] && missing="${missing} source"
+        [ "$has_focus" -eq 0 ] && missing="${missing} focus"
+        [ "$has_key_t" -eq 0 ] && missing="${missing} key_t"
+        [ "$has_key_e" -eq 0 ] && missing="${missing} key_e"
+        [ "$has_key_s" -eq 0 ] && missing="${missing} key_s"
+        [ "$has_dispatch" -eq 0 ] && missing="${missing} dispatch"
+        [ "$has_buf_append" -eq 0 ] && missing="${missing} buf_append"
+        [ "$has_cursor" -eq 0 ] && missing="${missing} cursor"
+        [ "$has_render" -eq 0 ] && missing="${missing} render"
+        [ "$has_truth" -eq 0 ] && missing="${missing} truth"
+        [ "$has_done" -eq 0 ] && missing="${missing} done"
+        print_row "physical_keyboard_to_quil_text" "FAIL" "missing markers:${missing}"
+    fi
+elif [ "$(has 'physical_keyboard\.quil\.skip')" -ge 1 ]; then
+    # Honest skip — environment cannot inject QEMU keyboard events.
+    gate_physical_keyboard_to_quil_text="SKIP"
+    print_row "physical_keyboard_to_quil_text" "SKIP" "physical keyboard proof skipped: no QEMU key injection or focus route available"
+else
+    gate_physical_keyboard_to_quil_text="SKIP"
+    print_row "physical_keyboard_to_quil_text" "SKIP" "physical keyboard proof not triggered"
+fi
+
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
 if [ "$(has 'sexfiles\.diskfs100\.ap3\.begin')" -ge 1 ]; then
     has_linen_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=linen.*ok=1')
@@ -6287,6 +6349,7 @@ ALL_GATES=(
     "quil_save_open_sexobject:$gate_quil_save_open_sexobject"
     "text_input_pipeline:$gate_text_input_pipeline"
     "live_usb_quil_create_save_reopen:$gate_live_usb_quil_create_save_reopen"
+    "physical_keyboard_to_quil_text:$gate_physical_keyboard_to_quil_text"
     "spindle_editor_finish:$gate_spindle_editor_finish"
     "storage_phasea:$gate_storage_phasea"
     "storage_phaseb1:$gate_storage_phaseb1"

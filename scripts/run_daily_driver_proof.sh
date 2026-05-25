@@ -314,6 +314,13 @@ export SEXOS_QUIL_TEXT_INPUT_PIPELINE_PROOF=1
 # ── Quil live USB create/save/reopen proof ──
 export SEXOS_QUIL_LIVE_USB_CREATE_SAVE_REOPEN_PROOF=1
 
+# ── Physical keyboard → Quil text proof ──
+# Builds the QuilPD with the physical keyboard proof gate enabled and has
+# silk-shell focus Quil.  The host injects QEMU HMP sendkey events after
+# boot to exercise the PS/2 → sexinput → shell → Quil dispatch path.
+export SEXOS_QUIL_PHYSICAL_KEYBOARD_PROOF=1
+export SEXOS_PHYSICAL_KEYBOARD_TO_QUIL_PROOF=1
+
 # ── App registry lifecycle V2 proof ──
 export SEXOS_APP_REGISTRY_LIFECYCLE_V2_PROOF=1
 
@@ -759,6 +766,7 @@ fi
     "${QEMU_NET_ARGS[@]}" \
     "${NVME_ARGS[@]}" \
     -serial "file:$LOG" \
+    -qmp unix:/tmp/sexos_qmp.sock,server,nowait \
     -display none \
     -no-reboot \
     -no-shutdown &
@@ -769,13 +777,91 @@ if ! kill -0 "$QEMU_PID" 2>/dev/null; then
 fi
 
 echo "[proof] QEMU PID: $QEMU_PID"
-sleep "$PROBE_SECONDS"
+
+# ── QEMU QMP keyboard injection for physical keyboard proof ─────────────────
+# Wait for the QMP socket, then inject "sendkey t", "sendkey e",
+# "sendkey s", "sendkey t" via the HMP passthrough.  These flow through
+# PS/2 IRQ1 → kernel INPUT_RING → sexinput → silk-shell → Quil PD.
+QMP_SOCK="/tmp/sexos_qmp.sock"
+QMP_INJECT_DELAY="${QMP_INJECT_DELAY:-45}"
+QMP_INJECT_ATTEMPTS=30
+QMP_INJECT_DONE=0
+
+if [ "$QMP_INJECT_DELAY" -lt "$PROBE_SECONDS" ]; then
+    # Wait for QMP socket to appear (QEMU creates it on startup).
+    for i in $(seq 1 $QMP_INJECT_ATTEMPTS); do
+        if [ -S "$QMP_SOCK" ]; then
+            echo "[proof] QMP socket ready after ${i}s"
+            break
+        fi
+        if [ "$i" -ge "$QMP_INJECT_ATTEMPTS" ]; then
+            echo "[proof] QMP socket timeout after ${QMP_INJECT_ATTEMPTS}s — skipping key injection"
+            QMP_INJECT_DELAY="$PROBE_SECONDS"
+        fi
+        sleep 1
+    done
+
+    if [ "$QMP_INJECT_DELAY" -lt "$PROBE_SECONDS" ] && [ -S "$QMP_SOCK" ]; then
+        # Wait for system boot + Quil PD to reach main loop.
+        echo "[proof] QMP: waiting ${QMP_INJECT_DELAY}s for boot before key injection..."
+        sleep "$QMP_INJECT_DELAY"
+
+        echo "[proof] QMP: injecting sendkey t,e,s,t..."
+        python3 -c "
+import socket, json, time, sys
+
+QMP = '$QMP_SOCK'
+KEYS = ['t', 'e', 's', 't']
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(5)
+    sock.connect(QMP)
+
+    # Read QMP greeting
+    greeting = sock.recv(4096)
+    print(f'[proof] QMP greeting: {greeting.decode().strip()}')
+
+    # Negotiate capabilities
+    sock.sendall(b'{\"execute\":\"qmp_capabilities\"}\n')
+    resp = sock.recv(4096)
+    print(f'[proof] QMP capabilities: {resp.decode().strip()}')
+
+    # Inject each key via HMP passthrough
+    for key in KEYS:
+        cmd = f'{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"sendkey {key}\"}}}}\n'
+        sock.sendall(cmd.encode())
+        time.sleep(0.3)
+        resp = sock.recv(4096)
+        print(f'[proof] QMP sendkey {key}: {resp.decode().strip()}')
+
+    sock.close()
+    print('[proof] QMP: key injection complete')
+except Exception as e:
+    print(f'[proof] QMP: injection failed: {e}', file=sys.stderr)
+" 2>&1 | while IFS= read -r line; do echo "[proof] $line"; done
+        QMP_INJECT_DONE=1
+        echo "[proof] QMP key injection finished"
+    fi
+else
+    echo "[proof] QMP inject delay (${QMP_INJECT_DELAY}s) >= probe (${PROBE_SECONDS}s) — skipping key injection"
+fi
+
+# Remainder of probe window after key injection.
+REMAINING=$((PROBE_SECONDS - QMP_INJECT_DELAY))
+if [ "$REMAINING" -gt 0 ]; then
+    echo "[proof] waiting remaining ${REMAINING}s for Quil to process keys..."
+    sleep "$REMAINING"
+fi
 
 # Stop QEMU
 if kill -0 "$QEMU_PID" 2>/dev/null; then
     kill "$QEMU_PID" 2>/dev/null || true
     sleep 1
 fi
+
+# Cleanup QMP socket
+rm -f "$QMP_SOCK" 2>/dev/null || true
 
 if [ ! -f "$LOG" ]; then
     die "no serial log produced at $LOG"
