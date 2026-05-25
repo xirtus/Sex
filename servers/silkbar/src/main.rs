@@ -134,16 +134,19 @@ pub extern "C" fn _start() -> ! {
     // can be tuned independently.
     const STALE_REAL_TICK_FALLBACK_THRESHOLD: u16 = 4;
     const BOOT_CLOCK_SENDS_TARGET: u8 = 2;
-    const BOOT_CLOCK_THRESHOLD: u16 = 8;
     const STEADY_CLOCK_THRESHOLD: u16 = 100;
+    const REAL_TICK_VISIBLE_CLOCK_THRESHOLD: u16 = STEADY_CLOCK_THRESHOLD;
     // Synthetic visible threshold: used when get_ticks()==0 (QEMU TCG) so the
     // displayed clock advances at a proof-usable rate (~1 sec per loop yield).
     // Not wall-clock; removed once real LAPIC ticks are available.
-    const SYNTHETIC_VISIBLE_CLOCK_THRESHOLD: u16 = 2;
-    // Synthetic liveness cadence: used for displayed clock until real timer/tick source exists.
-    // Do NOT switch to STEADY_CLOCK_THRESHOLD=100 for the displayed clock — synthetic yields
-    // have no wall-clock correlation; 100 yields makes ss appear frozen.
-    const LIVE_CLOCK_THRESHOLD: u16 = BOOT_CLOCK_THRESHOLD;
+    // VALUE 16: reduces update-storm risk. At ~30 loops/sec this yields ~2
+    // clock advances per second — fast enough for visible proof without
+    // triggering a silkbar→sexdisplay redraw storm that accelerates the
+    // synthetic yield cadence in a positive-feedback loop.
+    const SYNTHETIC_VISIBLE_CLOCK_THRESHOLD: u16 = 16;
+    // Real-tick visible cadence: intentionally conservative to avoid racing
+    // when get_ticks() advances quickly under virtualization.
+    const LIVE_CLOCK_THRESHOLD: u16 = REAL_TICK_VISIBLE_CLOCK_THRESHOLD;
     let mut boot_clock_sends: u8 = 0;
     let mut force_stall_seeded = false;
     let mut force_stall_ss: u8 = 0;
@@ -402,15 +405,20 @@ pub extern "C" fn _start() -> ! {
         }
 
         if !degraded && init_deferred_next < init_deferred_count {
-            let idx = init_deferred_next;
-            let update = init_deferred[idx];
-            let remaining = init_deferred_count - idx - 1;
-            send_update(update);
-            init_deferred_next += 1;
-            sex_pdx::serial_println!("[silkbar.boot.init.flush] idx={} remaining={}", idx, remaining);
-            if init_deferred_next == init_deferred_count {
-                sex_pdx::serial_println!("[silkbar.boot.init.flush.done]");
+            // BURST: send ALL pending boot deferred updates in one iteration.
+            // Pre-2026-05-25 each update was sent in a separate loop iteration
+            // separated by sys_yield(), causing sexdisplay to drain+redraw on
+            // every individual update — producing a visible top-strip redraw
+            // storm (9 redraws for 9 deferred updates).  Bursting keeps all
+            // messages in sexdisplay's queue for a single drain+redraw cycle
+            // and avoids clock-cadence accumulation across the flush.
+            let count = init_deferred_count;
+            while init_deferred_next < init_deferred_count {
+                let update = init_deferred[init_deferred_next];
+                send_update(update);
+                init_deferred_next += 1;
             }
+            sex_pdx::serial_println!("[silkbar.boot.init.flush.burst.done] count={}", count);
         }
 
         // Tick-watch cadence: prefer real monotonic ticks when get_ticks()>0,
