@@ -123,8 +123,14 @@ pub extern "C" fn syscall_stub_before_dispatch() {
 pub unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
         "swapgs",
-        "mov gs:[24], rsp", // Save User RSP
+        "mov gs:[24], rsp", // Scratch: temporarily save user RSP
         "mov rsp, gs:[16]",  // Load Kernel RSP
+        // Push user RSP onto the per-task kernel stack immediately.
+        // gs:[24] is a shared per-core slot; if the timer preempts this task
+        // mid-syscall and another task runs its own syscall, gs:[24] gets
+        // overwritten. Saving user RSP on the kernel stack (per-task) prevents
+        // that race. yield_and_switch reads user RSP from base+128, not gs:[24].
+        "push qword ptr gs:[24]", // Save user RSP on per-task kernel stack
 
         // 1. SAVE ALL STATE BEFORE CLOBBERING
         "push r11",         // Save User RFLAGS
@@ -174,6 +180,7 @@ pub unsafe extern "C" fn syscall_entry() {
         // [rbp+104]: rax (8)
         // [rbp+112]: rcx (8) - RIP
         // [rbp+120]: r11 (8) - RFLAGS
+        // [rbp+128]: user RSP (8) - pushed first, popped last via `pop rsp`
 
         "push qword ptr [rbp + 120]", // r11
         "push qword ptr [rbp + 112]", // rcx
@@ -225,7 +232,7 @@ pub unsafe extern "C" fn syscall_entry() {
         "pop rcx",          // RIP
         "pop r11",          // RFLAGS
 
-        "mov rsp, gs:[24]", // Restore User RSP
+        "pop rsp",          // Restore user RSP from per-task kernel stack (pushed at entry)
         "swapgs",
         "sysretq",
         pku_enabled = sym crate::pku::PKU_ENABLED,
@@ -408,6 +415,15 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
     }
     let core_id = crate::core_local::CoreLocal::get().core_id;
     let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
+
+    // Timer fired in kernel mode (CS.RPL=0) means a task is mid-syscall on the shared
+    // CoreLocal kernel stack. Saving context there is unsafe: other tasks' syscalls reuse
+    // the same stack and will corrupt the saved frame before this task is rescheduled.
+    // Skip the context switch; the task finishes its syscall and yields cooperatively.
+    if stack_frame.code_segment.0 as u64 & 3 == 0 {
+        unsafe { send_eoi(); }
+        return;
+    }
 
     let result = sched.tick();
     if result.is_none() {

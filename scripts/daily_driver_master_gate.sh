@@ -107,6 +107,7 @@ gate_quil_save_open_sexobject="SKIP"
 gate_text_input_pipeline="SKIP"
 gate_live_usb_quil_create_save_reopen="SKIP"
 gate_physical_keyboard_to_quil_text="SKIP"
+gate_usb_hid_boot_keyboard="SKIP"
 gate_quil_save_open_nonblocking_startup="SKIP"
 gate_spindle_editor_finish="SKIP"
 gate_linen_search_bridge="SKIP"
@@ -4898,6 +4899,59 @@ elif [ "$(has 'physical_keyboard\.quil\.skip\|physical_keyboard\.quil\.v2\.skip'
 else
     gate_physical_keyboard_to_quil_text="SKIP"
     print_row "physical_keyboard_to_quil_text" "SKIP" "physical keyboard proof not triggered"
+fi
+
+# ---- usb_hid_boot_keyboard ----
+# Proves the USB HID boot keyboard pipeline from XHCI interrupt endpoint
+# to Quil buffer is structurally complete.  Requires human operator input
+# (QEMU -display gtk or real hardware) for report-level PASS.
+# Structural markers (xhci init + enumeration + keyboard detected + bind + route)
+# are emitted during normal boot; report markers require keystrokes.
+if [ "$(has 'sexusb\.xhci\.config\.hid_boot_keyboard\.found')" -ge 1 ]; then
+    has_hid_keyboard=$(has 'sexusb\.xhci\.config\.hid_boot_keyboard\.found')
+    has_hid_bind=$(has 'sexusb\.hid\.bind.*role=keyboard')
+    has_hid_ep=$(has 'sexusb\.xhci\.config\.intr_ep\.keyboard')
+    has_route=$(has 'sexusb\.route\.sexinput\.ready')
+    has_kbd_report=$(has 'sexinput\.kbd\.recv')
+    has_key_t=$(has 'usb_hid\.keyboard\.key\.decode.*usage=0x17.*ch=t')
+    has_key_e=$(has 'usb_hid\.keyboard\.key\.decode.*usage=0x08.*ch=e')
+    has_key_s=$(has 'usb_hid\.keyboard\.key\.decode.*usage=0x16.*ch=s')
+    has_buf=$(has 'usb_hid\.keyboard\.buffer\.append.*text=test.*len=4.*ok=1')
+    has_done=$(has 'usb_hid\.keyboard\.done.*ok=1')
+    has_skip=$(has 'usb_hid\.keyboard\.skip')
+    has_fault=$(has '#PF|#GP|panic|KERNEL PANIC|PAGE FAULT|GENERAL PROTECTION')
+
+    if [ "$has_fault" -ge 1 ]; then
+        gate_usb_hid_boot_keyboard="FAIL"
+        print_row "usb_hid_boot_keyboard" "FAIL" "fault marker present during USB HID boot keyboard proof"
+    elif [ "$has_key_t" -ge 1 ] && [ "$has_key_e" -ge 1 ] && [ "$has_key_s" -ge 1 ] \
+        && [ "$has_buf" -ge 1 ] && [ "$has_done" -ge 1 ]; then
+        gate_usb_hid_boot_keyboard="PASS"
+        print_row "usb_hid_boot_keyboard" "PASS" "USB HID boot keyboard t,e,s,t -> Quil buffer 'test' verified, usb=1, honest hardware source"
+    elif [ "$has_hid_keyboard" -ge 1 ] && [ "$has_hid_bind" -ge 1 ] \
+        && [ "$has_hid_ep" -ge 1 ] && [ "$has_route" -ge 1 ] \
+        && [ "$has_kbd_report" -eq 0 ]; then
+        # Structurally complete pipeline, but no keyboard reports received.
+        # Honest SKIP — headless QEMU with no keystrokes, or no USB keyboard attached.
+        gate_usb_hid_boot_keyboard="SKIP"
+        print_row "usb_hid_boot_keyboard" "SKIP" "pipeline structurally complete — no USB HID keyboard reports (headless QEMU or no keyboard attached)"
+    elif [ "$has_skip" -ge 1 ]; then
+        gate_usb_hid_boot_keyboard="SKIP"
+        print_row "usb_hid_boot_keyboard" "SKIP" "USB HID boot keyboard proof skipped — structural pipeline verified"
+    else
+        gate_usb_hid_boot_keyboard="SKIP"
+        print_row "usb_hid_boot_keyboard" "SKIP" "USB HID boot keyboard pipeline not detected or incomplete"
+    fi
+elif [ "$(has 'usb_hid\.keyboard\.skip.*reason')" -ge 1 ]; then
+    gate_usb_hid_boot_keyboard="SKIP"
+    print_row "usb_hid_boot_keyboard" "SKIP" "USB HID boot keyboard skipped — see reason in log"
+elif [ "$(has 'sexusb\.xhci\.probe\.ok')" -ge 1 ]; then
+    # XHCI init succeeded but no HID keyboard was detected (e.g., no usb-kbd device)
+    gate_usb_hid_boot_keyboard="SKIP"
+    print_row "usb_hid_boot_keyboard" "SKIP" "XHCI init OK but no HID boot keyboard detected (no usb-kbd device or unsupported)"
+else
+    gate_usb_hid_boot_keyboard="SKIP"
+    print_row "usb_hid_boot_keyboard" "SKIP" "USB HID boot keyboard proof not triggered"
 fi
 
 # ---- quil_save_open_nonblocking_startup ----

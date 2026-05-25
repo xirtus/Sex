@@ -102,6 +102,9 @@ run_stage() {
         --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label \
         iso_root -o sexos-v1.0.0.iso
       ;;
+    limine_bios_install)
+      ./limine/limine bios-install sexos-v1.0.0.iso
+      ;;
     *)
       echo "[FAIL] undeclared/unsupported action in spec: $action"
       exit 1

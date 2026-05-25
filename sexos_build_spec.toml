@@ -183,3 +183,8 @@ artifacts = ["iso_root/limine.cfg"]
 id = "package_iso"
 action = "package_iso"
 artifacts = ["sexos-v1.0.0.iso"]
+
+[[stage]]
+id = "limine_bios_install"
+action = "limine_bios_install"
+artifacts = ["sexos-v1.0.0.iso"]

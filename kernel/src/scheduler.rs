@@ -519,8 +519,10 @@ pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) 
         let user_rip    = *(base.wrapping_add(112) as *const u64);
         let user_rflags = *(base.wrapping_add(120) as *const u64);
 
-        let user_rsp: u64;
-        core::arch::asm!("mov {}, gs:[24]", out(reg) user_rsp);
+        // User RSP is at base+128: pushed onto the per-task kernel stack at syscall_entry
+        // before any other registers, so it survives timer-triggered context switches
+        // that would clobber the shared gs:[24] scratch slot.
+        let user_rsp = *(base.wrapping_add(128) as *const u64);
         // User SS is always 0x23 (GDT index 4, RPL 3: user data segment).
         let user_ss: u64 = 0x23u64;
 
