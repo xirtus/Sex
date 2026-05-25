@@ -164,6 +164,9 @@ export SEXOBJECT_EXTENT_WRITE_FULL_BLOCK_PROOF="${SEXOBJECT_EXTENT_WRITE_FULL_BL
 # ── SexObject native write/read persistence proof ──
 export SEXOBJECT_WRITE_READ_PERSIST_PROOF="${SEXOBJECT_WRITE_READ_PERSIST_PROOF:-1}"
 
+# ── SexObject multi-object persistence proof ──
+export SEXOBJECT_MULTI_OBJECT_PROOF="${SEXOBJECT_MULTI_OBJECT_PROOF:-1}"
+
 # ── Linen DiskFS AP3 reboot restore (two-boot) ──
 # Only export if explicitly set — contrasts with AP4 pattern where binary
 # uses cfg!() from build.rs (exact match). Linen uses option_env!().is_some()
@@ -450,6 +453,7 @@ SEXOBJECT_TABLE_PROOF_ENABLED="${SEXOBJECT_TABLE_PERSIST_PROOF:-1}"
 SEXOBJECT_EXTENT_ALLOC_PROOF_ENABLED="${SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF:-1}"
 SEXOBJECT_FULL_BLOCK_PROOF_ENABLED="${SEXOBJECT_EXTENT_WRITE_FULL_BLOCK_PROOF:-1}"
 SEXOBJECT_WRITE_READ_PERSIST_PROOF_ENABLED="${SEXOBJECT_WRITE_READ_PERSIST_PROOF:-1}"
+SEXOBJECT_MULTI_OBJECT_PROOF_ENABLED="${SEXOBJECT_MULTI_OBJECT_PROOF:-1}"
 # Full-block proof runs 4th in NVMe sequence; cumulative I/O needs extra time.
 if [ "$SEXOBJECT_FULL_BLOCK_PROOF_ENABLED" = "1" ]; then
     if [ "$PROBE_SECONDS" -lt 120 ]; then
@@ -462,8 +466,14 @@ if [ "$SEXOBJECT_WRITE_READ_PERSIST_PROOF_ENABLED" = "1" ]; then
         PROBE_SECONDS=150
     fi
 fi
+# Multi-object proof runs 6th; bump window further for cumulative I/O.
+if [ "$SEXOBJECT_MULTI_OBJECT_PROOF_ENABLED" = "1" ]; then
+    if [ "$PROBE_SECONDS" -lt 180 ]; then
+        PROBE_SECONDS=180
+    fi
+fi
 NEED_NVME=0
-if [ "$SEXOS_STORAGE_100_PROOF" = "1" ] || [ "$SEXFS_V0_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_TABLE_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_EXTENT_ALLOC_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_FULL_BLOCK_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_WRITE_READ_PERSIST_PROOF_ENABLED" = "1" ]; then
+if [ "$SEXOS_STORAGE_100_PROOF" = "1" ] || [ "$SEXFS_V0_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_TABLE_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_EXTENT_ALLOC_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_FULL_BLOCK_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_WRITE_READ_PERSIST_PROOF_ENABLED" = "1" ] || [ "$SEXOBJECT_MULTI_OBJECT_PROOF_ENABLED" = "1" ]; then
     NEED_NVME=1
 fi
 if [ "$NEED_NVME" = "1" ]; then

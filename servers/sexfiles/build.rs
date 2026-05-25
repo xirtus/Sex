@@ -17,6 +17,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF");
     println!("cargo:rerun-if-env-changed=SEXOBJECT_EXTENT_WRITE_FULL_BLOCK_PROOF");
     println!("cargo:rerun-if-env-changed=SEXOBJECT_WRITE_READ_PERSIST_PROOF");
+    println!("cargo:rerun-if-env-changed=SEXOBJECT_MULTI_OBJECT_PROOF");
     println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_100_PROOF");
     println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs100_ap2_proof)");
     if std::env::var("SEXFILES_DISKFS_100_PROOF").as_deref() == Ok("1") {

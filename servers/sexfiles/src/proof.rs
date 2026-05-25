@@ -3725,3 +3725,27 @@ pub fn run_sexobject_write_read_persist_proofs() {
 
     serial_println!("[sexobject.write_read.gate] done");
 }
+
+/// Run SexObject multi-object persistence proof.
+/// Activated by `SEXOBJECT_MULTI_OBJECT_PROOF=1`.
+///
+/// Proves SexFS v0 can persist at least two independent SexObjects with
+/// distinct object_ids, table slots, extents, hashes, sizes, and readback
+/// contents.
+pub fn run_sexobject_multi_object_proofs() {
+    serial_println!("[sexobject.multi.gate] begin");
+
+    match crate::backends::diskfs::proof_sexobject_multi_object() {
+        Ok(()) => {
+            serial_println!("[sexobject.multi.gate] ok=1");
+        }
+        Err(e) => {
+            serial_println!(
+                "[sexobject.multi.gate] ok=0 err={}",
+                e
+            );
+        }
+    }
+
+    serial_println!("[sexobject.multi.gate] done");
+}

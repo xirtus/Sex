@@ -146,6 +146,7 @@ gate_sexobject_table_persist="SKIP"
 gate_sexobject_table_extent_alloc="SKIP"
 gate_sexobject_extent_write_full_block="SKIP"
 gate_sexobject_write_read_persist="SKIP"
+gate_sexobject_multi_object="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -4551,6 +4552,56 @@ else
     print_row "sexobject_write_read_persist" "SKIP" "write/read persist proof not triggered"
 fi
 
+# ---- sexobject_multi_object ----
+if [ "$(has 'sexobject\.multi\.done.*ok=1')" -eq 1 ]; then
+    gate_sexobject_multi_object="PASS"
+    print_row "sexobject_multi_object" "PASS" "multi-object create/write/read/remount/negatives all ok"
+elif grep -q 'sexobject\.multi\.gate' "$LOG"; then
+    gate_sexobject_multi_object="FAIL"
+    if ! grep -q 'sexobject\.multi\.create\.ok.*object_id=1.*slot=0' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "object A create missing or failed"
+    elif ! grep -q 'sexobject\.multi\.create\.ok.*object_id=2.*slot=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "object B create missing or failed"
+    elif ! grep -q 'sexobject\.multi\.write\.ok.*object_id=1.*len=4' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "object A write ok marker missing or failed"
+    elif ! grep -q 'sexobject\.multi\.write\.ok.*object_id=2.*len=13' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "object B write ok marker missing or failed"
+    elif ! grep -q 'sexobject\.multi\.extents\.distinct.*ok=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "distinct extents check missing or failed"
+    elif ! grep -q 'sexobject\.multi\.freemap\.used\.ok.*object_id=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "object A freemap used check missing or failed"
+    elif ! grep -q 'sexobject\.multi\.freemap\.used\.ok.*object_id=2' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "object B freemap used check missing or failed"
+    elif ! grep -q 'sexobject\.multi\.remount\.ok' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "remount marker missing"
+    elif ! grep -q 'sexobject\.multi\.read\.match.*object_id=1.*text=test.*ok=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "object A read match missing or failed"
+    elif ! grep -q 'sexobject\.multi\.read\.match.*object_id=2.*text=second_object.*ok=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "object B read match missing or failed"
+    elif ! grep -q 'sexobject\.multi\.hash\.match.*object_id=1.*ok=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "object A hash match missing or failed"
+    elif ! grep -q 'sexobject\.multi\.hash\.match.*object_id=2.*ok=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "object B hash match missing or failed"
+    elif ! grep -q 'sexobject\.multi\.cross_read\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "cross read rejection missing or failed"
+    elif ! grep -q 'sexobject\.multi\.neg\.duplicate_id\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "duplicate id rejection missing or failed"
+    elif ! grep -q 'sexobject\.multi\.neg\.shared_extent\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "shared extent rejection missing or failed"
+    elif ! grep -q 'sexobject\.multi\.neg\.zero_len_write\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "zero-len write rejection missing or failed"
+    elif ! grep -q 'sexobject\.multi\.neg\.oversize_write\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "oversize write rejection missing or failed"
+    elif ! grep -q 'sexobject\.multi\.neg\.bad_extent\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_multi_object" "FAIL" "bad extent rejection missing or failed"
+    else
+        print_row "sexobject_multi_object" "FAIL" "missing proof.done ok=1"
+    fi
+else
+    gate_sexobject_multi_object="SKIP"
+    print_row "sexobject_multi_object" "SKIP" "multi-object proof not triggered"
+fi
+
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
 if [ "$(has 'sexfiles\.diskfs100\.ap3\.begin')" -ge 1 ]; then
     has_linen_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=linen.*ok=1')
@@ -6266,6 +6317,7 @@ ALL_GATES=(
     "sexobject_table_extent_alloc:$gate_sexobject_table_extent_alloc"
     "sexobject_extent_write_full_block:$gate_sexobject_extent_write_full_block"
     "sexobject_write_read_persist:$gate_sexobject_write_read_persist"
+    "sexobject_multi_object:$gate_sexobject_multi_object"
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"
     "sexfiles_diskfs_bridge_reboot_persistence:$gate_sexfiles_diskfs_bridge_reboot_persistence"

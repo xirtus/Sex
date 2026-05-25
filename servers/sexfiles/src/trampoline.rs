@@ -199,6 +199,13 @@ pub extern "C" fn trampoline_main() {
         // [sexobject.write_read.profile.done] non_isolated=1
     }
 
+    const SEXOBJECT_MULTI_OBJECT_PROOF_ENABLED: bool =
+        option_env!("SEXOBJECT_MULTI_OBJECT_PROOF").is_some();
+    if SEXOBJECT_MULTI_OBJECT_PROOF_ENABLED {
+        crate::proof::run_sexobject_multi_object_proofs();
+        // [sexobject.multi.profile.done] non_isolated=1
+    }
+
     serial_println!("[sexfiles.ready]");
 
     loop {
