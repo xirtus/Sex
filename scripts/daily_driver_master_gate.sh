@@ -130,6 +130,7 @@ gate_linen_diskfs_direct="SKIP"
 gate_linen_diskfs_fixed_object_save_load="SKIP"
 gate_linen_diskfs_reboot_restore="SKIP"
 gate_linen_reboot_restore_current_tier="SKIP"
+gate_linen_object_ux_current_tier="SKIP"
 gate_linen_diskfs_negative_classifications="SKIP"
 gate_sexfiles_diskfs_bridge="SKIP"
 gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
@@ -4080,6 +4081,53 @@ if [ "$(has 'linen\.reboot_restore\.done.*classification=honest_skip')" -ge 1 ];
 else
     gate_linen_reboot_restore_current_tier="SKIP"
     print_row "linen_reboot_restore_current_tier" "SKIP" "reboot restore current tier proof not triggered"
+fi
+
+# ---- 76b7. linen_object_ux_current_tier ----
+# Proves Linen presents honest bounded object UX over SexFiles DiskFS bridge.
+# Checks: contract marker, proven save_load+bounds_auth,
+# limited (no POSIX/filesystem overclaim), deferred capabilities,
+# and truth classification with done ok=1.
+if [ "$(has 'linen\.object_ux\.current_tier\.begin')" -ge 1 ]; then
+    has_contract=$(has 'linen\.object_ux\.contract.*fixed_object=/disk/sexfiles-proof-v1.*object_size=4096')
+    has_proven=$(has 'linen\.object_ux\.proven.*save_load=1.*bounds_auth=1.*ok=1')
+    has_limited=$(has 'linen\.object_ux\.limited.*filesystem=0.*posix=0.*directories=0.*rename=0.*delete=0.*ok=1')
+    has_deferred=$(has 'linen\.object_ux\.deferred.*reboot_restore=1.*durable=0.*powerloss=0.*journal=0.*ok=1')
+    has_truth=$(has 'linen\.object_ux\.truth.*honest_bounded_fixed_object_ux.*overclaims=0')
+    has_done=$(has 'linen\.object_ux\.current_tier\.done.*ok=1')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC')
+    has_cqe_timeout=$(has 'cqe_timeout')
+    # Faults are checked by faults_zero gate; our proof only needs marker
+    # completeness.  PKU violations after proof.done are unrelated.
+
+    if [ "$has_cqe_timeout" -ge 1 ]; then
+        gate_linen_object_ux_current_tier="FAIL"
+        print_row "linen_object_ux_current_tier" "FAIL" "cqe_timeout in object UX log"
+    elif [ "$has_contract" -eq 0 ]; then
+        gate_linen_object_ux_current_tier="FAIL"
+        print_row "linen_object_ux_current_tier" "FAIL" "contract marker missing"
+    elif [ "$has_proven" -eq 0 ]; then
+        gate_linen_object_ux_current_tier="FAIL"
+        print_row "linen_object_ux_current_tier" "FAIL" "proven capabilities marker missing"
+    elif [ "$has_limited" -eq 0 ]; then
+        gate_linen_object_ux_current_tier="FAIL"
+        print_row "linen_object_ux_current_tier" "FAIL" "limited/honest-denial marker missing"
+    elif [ "$has_deferred" -eq 0 ]; then
+        gate_linen_object_ux_current_tier="FAIL"
+        print_row "linen_object_ux_current_tier" "FAIL" "deferred capabilities marker missing"
+    elif [ "$has_truth" -eq 0 ]; then
+        gate_linen_object_ux_current_tier="FAIL"
+        print_row "linen_object_ux_current_tier" "FAIL" "truth classification marker missing"
+    elif [ "$has_done" -eq 0 ]; then
+        gate_linen_object_ux_current_tier="FAIL"
+        print_row "linen_object_ux_current_tier" "FAIL" "missing done marker"
+    else
+        gate_linen_object_ux_current_tier="PASS"
+        print_row "linen_object_ux_current_tier" "PASS" "object UX honest classification: bounded fixed-object, no POSIX overclaim, done ok=1"
+    fi
+else
+    gate_linen_object_ux_current_tier="SKIP"
+    print_row "linen_object_ux_current_tier" "SKIP" "object UX current tier proof not triggered"
 fi
 
 # ---- 76c. sexfiles_diskfs_bridge ----

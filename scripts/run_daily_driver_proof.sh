@@ -189,6 +189,7 @@ fi
 
 # ── Linen reboot restore current tier classification ──
 export LINEN_REBOOT_RESTORE_CURRENT_TIER_PROOF="${LINEN_REBOOT_RESTORE_CURRENT_TIER_PROOF:-0}"
+export LINEN_OBJECT_UX_CURRENT_TIER_PROOF="${LINEN_OBJECT_UX_CURRENT_TIER_PROOF:-0}"
 
 # ── SexFiles AP5 negative test lanes ──
 export SEXFILES_DISKFS_100_AP5_NEGATIVE="${SEXFILES_DISKFS_100_AP5_NEGATIVE:-0}"
@@ -576,6 +577,7 @@ echo "  ap5_neg_read_no_write: ${SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_READ
 echo "  ap5_neg_metadata_false_claim: ${SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_METADATA_FALSE_CLAIM:-0}"
 echo "  ap5_neg_flush_skip:    ${SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP5_NEG_FLUSH_SKIP:-0}"
 echo "  reboot_restore_tier: ${LINEN_REBOOT_RESTORE_CURRENT_TIER_PROOF}"
+echo "  object_ux_tier:  ${LINEN_OBJECT_UX_CURRENT_TIER_PROOF}"
 echo "  sexfiles_strict_bridge: ${SEXFILES_DISKFS_BRIDGE_STRICT_PROOF}"
 echo "  sexfiles_neg_bounds_auth: ${SEXFILES_DISKFS_NEGATIVE_BOUNDS_AUTH_PROOF}"
 echo "  linen_direct_diskfs:  ${SEXOS_LINEN_DISKFS_DIRECT_PROOF}"

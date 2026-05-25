@@ -9,4 +9,9 @@ fn main() {
     if std::env::var("LINEN_REBOOT_RESTORE_CURRENT_TIER_PROOF").as_deref() == Ok("1") {
         println!("cargo:rustc-cfg=linen_reboot_restore_current_tier_proof");
     }
+    println!("cargo:rerun-if-env-changed=LINEN_OBJECT_UX_CURRENT_TIER_PROOF");
+    println!("cargo:rustc-check-cfg=cfg(linen_object_ux_current_tier_proof)");
+    if std::env::var("LINEN_OBJECT_UX_CURRENT_TIER_PROOF").as_deref() == Ok("1") {
+        println!("cargo:rustc-cfg=linen_object_ux_current_tier_proof");
+    }
 }
