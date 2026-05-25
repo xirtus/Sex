@@ -151,7 +151,10 @@ pub fn kernel_init() {
         if let Some((_old_ctx_ptr, next_ctx_ptr)) = sched.tick() {
             unsafe {
                 let kstack_top = (*next_ctx_ptr).kstack_top;
-                crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top));
+                // TaskContext.kstack_top points at saved-frame base (rax slot),
+                // not empty kernel stack top. RSP0 must use empty top to avoid
+                // clobbering saved IRET/GPR frame on first user->kernel entry.
+                crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
                 crate::scheduler::log_first_scheduled_pd((*next_ctx_ptr).pd_id);
                 serial_println!(
                     "context_switch.before_switch_to rip={:#x} rsp={:#x} rflags={:#x} cs={:#x} ss={:#x} pd_id={}",
