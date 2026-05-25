@@ -105,6 +105,7 @@ gate_quil_replace="SKIP"
 gate_quil_goto_line="SKIP"
 gate_quil_save_open_sexobject="SKIP"
 gate_text_input_pipeline="SKIP"
+gate_live_usb_quil_create_save_reopen="SKIP"
 gate_spindle_editor_finish="SKIP"
 gate_linen_search_bridge="SKIP"
 gate_storage_phasea="SKIP"
@@ -4780,6 +4781,62 @@ else
     print_row "text_input_pipeline" "SKIP" "text input pipeline proof not triggered"
 fi
 
+# ---- live_usb_quil_create_save_reopen ----
+# Proves complete pre-live-USB create/save/reopen flow using synthetic input:
+#   text-input pipeline seeds "test" → verify buffer → save via SexObject 0x40
+#   → reopen via 0x41 → verify reopened bytes == "test".
+if [ "$(has 'live_usb\.quil_create_save_reopen\.begin')" -ge 1 ]; then
+    has_begin=$(has 'live_usb\.quil_create_save_reopen\.begin')
+    has_source=$(has 'live_usb\.input\.source.*kind=synthetic.*honest=1')
+    has_buf_match=$(has 'live_usb\.input\.buffer\.match.*text=test.*ok=1')
+    has_save_send=$(has 'live_usb\.quil\.save\.send.*label=test.*len=4')
+    has_persist_ok=$(has 'live_usb\.sexobject\.persist\.ok.*len=4')
+    has_open_send=$(has 'live_usb\.quil\.open\.send.*label=test')
+    has_open_match=$(has 'live_usb\.quil\.open\.match.*text=test.*ok=1')
+    has_route_truth=$(has 'live_usb\.route\.truth.*quil_direct_sexdrive=0.*slot_block=0.*slot_storage=1.*ok=1')
+    has_truth=$(has 'live_usb\.truth.*physical_keyboard=0.*usb=0.*posix=0.*framebuffer_direct=0.*durable=0.*powerloss=0.*journal=0.*ok=1')
+    has_done=$(has 'live_usb\.quil_create_save_reopen\.done.*ok=1')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+
+    if [ "$has_fault" -ge 1 ]; then
+        gate_live_usb_quil_create_save_reopen="FAIL"
+        print_row "live_usb_quil_create_save_reopen" "FAIL" "fault marker present during proof"
+    elif [ "$has_source" -eq 0 ]; then
+        gate_live_usb_quil_create_save_reopen="FAIL"
+        print_row "live_usb_quil_create_save_reopen" "FAIL" "source marker missing"
+    elif [ "$has_buf_match" -eq 0 ]; then
+        gate_live_usb_quil_create_save_reopen="FAIL"
+        print_row "live_usb_quil_create_save_reopen" "FAIL" "buffer.match marker missing or failed"
+    elif [ "$has_save_send" -eq 0 ]; then
+        gate_live_usb_quil_create_save_reopen="FAIL"
+        print_row "live_usb_quil_create_save_reopen" "FAIL" "save.send marker missing"
+    elif [ "$has_persist_ok" -eq 0 ]; then
+        gate_live_usb_quil_create_save_reopen="FAIL"
+        print_row "live_usb_quil_create_save_reopen" "FAIL" "sexobject.persist.ok marker missing"
+    elif [ "$has_open_send" -eq 0 ]; then
+        gate_live_usb_quil_create_save_reopen="FAIL"
+        print_row "live_usb_quil_create_save_reopen" "FAIL" "open.send marker missing"
+    elif [ "$has_open_match" -eq 0 ]; then
+        gate_live_usb_quil_create_save_reopen="FAIL"
+        print_row "live_usb_quil_create_save_reopen" "FAIL" "open.match marker missing or failed"
+    elif [ "$has_route_truth" -eq 0 ]; then
+        gate_live_usb_quil_create_save_reopen="FAIL"
+        print_row "live_usb_quil_create_save_reopen" "FAIL" "route.truth marker missing"
+    elif [ "$has_truth" -eq 0 ]; then
+        gate_live_usb_quil_create_save_reopen="FAIL"
+        print_row "live_usb_quil_create_save_reopen" "FAIL" "truth/non-claims marker missing"
+    elif [ "$has_done" -ge 1 ]; then
+        gate_live_usb_quil_create_save_reopen="PASS"
+        print_row "live_usb_quil_create_save_reopen" "PASS" "complete pre-live-USB create/save/reopen: synthetic input pipeline + SexObject save/open roundtrip verified"
+    else
+        gate_live_usb_quil_create_save_reopen="FAIL"
+        print_row "live_usb_quil_create_save_reopen" "FAIL" "begin marker present but proof incomplete: done ok=1 missing"
+    fi
+else
+    gate_live_usb_quil_create_save_reopen="SKIP"
+    print_row "live_usb_quil_create_save_reopen" "SKIP" "live usb quil create/save/reopen proof not triggered"
+fi
+
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
 if [ "$(has 'sexfiles\.diskfs100\.ap3\.begin')" -ge 1 ]; then
     has_linen_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=linen.*ok=1')
@@ -6229,6 +6286,7 @@ ALL_GATES=(
     "quil_goto_line:$gate_quil_goto_line"
     "quil_save_open_sexobject:$gate_quil_save_open_sexobject"
     "text_input_pipeline:$gate_text_input_pipeline"
+    "live_usb_quil_create_save_reopen:$gate_live_usb_quil_create_save_reopen"
     "spindle_editor_finish:$gate_spindle_editor_finish"
     "storage_phasea:$gate_storage_phasea"
     "storage_phaseb1:$gate_storage_phaseb1"

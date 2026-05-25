@@ -311,6 +311,9 @@ export SEXOS_QUIL_SAVE_OPEN_SEXOBJECT_PROOF=1
 # ── Quil text input pipeline proof ──
 export SEXOS_QUIL_TEXT_INPUT_PIPELINE_PROOF=1
 
+# ── Quil live USB create/save/reopen proof ──
+export SEXOS_QUIL_LIVE_USB_CREATE_SAVE_REOPEN_PROOF=1
+
 # ── App registry lifecycle V2 proof ──
 export SEXOS_APP_REGISTRY_LIFECYCLE_V2_PROOF=1
 
