@@ -3828,7 +3828,15 @@ else gate_linen_ramfs_crud="SKIP"; fi
 # ---- 76b. linen_diskfs_direct (linen_diskfs_direct_save_load) ----
 # Linen direct DiskFS save/load proof through locked SexFiles DiskFS bridge.
 # Contract: SLOT_STORAGE only, no SLOT_BLOCK, no direct SexDrive.
-if [ "$(has 'linen\.diskfs\.direct\.begin')" -ge 1 ]; then
+#
+# V36: Legacy path retired. The fixed-object DiskFS bridge has been superseded
+# by the SexObject native persistence chain (sexobject_write_read_persist +
+# sexobject_multi_object) and the linen_sexfiles_100_current_tier_release.
+# Honest closeout: SKIP with explicit legacy.superseded marker.
+if [ "$(has 'linen\.diskfs\.direct\.legacy\.superseded.*ok=1')" -ge 1 ]; then
+    gate_linen_diskfs_direct="SKIP"
+    print_row "linen_diskfs_direct" "SKIP" "legacy fixed-object bridge retired: superseded by SexObject native persistence"
+elif [ "$(has 'linen\.diskfs\.direct\.begin')" -ge 1 ]; then
     has_uses_slot_block=$(has 'linen\.diskfs\.direct\.route.*uses_slot_block=1')
     has_direct_sexdrive=$(has 'linen\.diskfs\.direct\.route.*direct_sexdrive=1')
     has_write_ok=$(has 'linen\.diskfs\.direct\.write\.ok.*bytes=128')
@@ -3858,6 +3866,9 @@ if [ "$(has 'linen\.diskfs\.direct\.begin')" -ge 1 ]; then
          [ "$has_done" -ge 1 ]; then
         gate_linen_diskfs_direct="PASS"
         print_row "linen_diskfs_direct" "PASS" "Linen direct save/load: 128B write/read roundtrip verified through SexFiles DiskFS bridge"
+    elif [ "$has_write_ok" -ge 1 ] || [ "$has_read_ok" -ge 1 ] || [ "$has_read_match" -ge 1 ] || [ "$has_stat_ok" -ge 1 ]; then
+        gate_linen_diskfs_direct="FAIL"
+        print_row "linen_diskfs_direct" "FAIL" "some markers present but proof incomplete"
     else
         gate_linen_diskfs_direct="FAIL"
         print_row "linen_diskfs_direct" "FAIL" "direct begin present but required markers missing"
