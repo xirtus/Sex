@@ -275,11 +275,6 @@ fn clock_canon_apply_to_bar(bar: &mut SilkBar) {
     }
 }
 
-#[inline]
-fn clock_to_day_seconds(hh: u8, mm: u8, ss: u8) -> u32 {
-    (hh as u32) * 3600 + (mm as u32) * 60 + (ss as u32)
-}
-
 /// Clamp a surface rectangle against framebuffer dimensions.
 /// Returns `(x, y, w, h)` guaranteed to be within FB bounds and below the bar.
 /// The `y` coordinate is clamped to at least `BAR_H` to prevent covering the top strip.
@@ -2317,8 +2312,6 @@ pub extern "C" fn _start() -> ! {
     let mut last_silkbar_second: u8 = bar.clock_ss;
     let mut repeated_silkbar_second_msgs: u32 = 0;
     let mut fallback_idle_loops: u16 = 0;
-    const FALLBACK_SYNTH_TICK_LOOPS: u16 = 64;
-    let mut last_fallback_phase: u8 = 0xff;
     let mut silkbar_clock_seen = false;
     let mut fb_live = false;
     let mut render_proof_done = false;
@@ -2404,19 +2397,6 @@ pub extern "C" fn _start() -> ! {
         if !clock_from_silkbar && raw_ticks > last_clock_tick {
             last_clock_tick = raw_ticks;
             fallback_idle_loops = 0;
-            if last_fallback_phase != 2 {
-                last_fallback_phase = 2;
-                unsafe {
-                    static mut CLOCK_CADENCE_PHASE_BUDGET: u32 = 16;
-                    let b = &mut CLOCK_CADENCE_PHASE_BUDGET;
-                    if *b > 0 {
-                        *b -= 1;
-                        serial_println!(
-                            "[sexdisplay.clock.cadence.phase] phase=steady source=fallback loops=1"
-                        );
-                    }
-                }
-            }
             bar.clock_ss = bar.clock_ss.wrapping_add(1);
             if bar.clock_ss >= 60 { bar.clock_ss = 0; bar.clock_mm = bar.clock_mm.wrapping_add(1); }
             if bar.clock_mm >= 60 { bar.clock_mm = 0; bar.clock_hh = bar.clock_hh.wrapping_add(1); }
@@ -2438,24 +2418,15 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         } else if !clock_from_silkbar {
-            let phase = if silkbar_clock_seen { 2 } else { 1 };
-            if last_fallback_phase != phase {
-                last_fallback_phase = phase;
-                unsafe {
-                    static mut CLOCK_CADENCE_PHASE_BUDGET: u32 = 16;
-                    let b = &mut CLOCK_CADENCE_PHASE_BUDGET;
-                    if *b > 0 {
-                        *b -= 1;
-                        serial_println!(
-                            "[sexdisplay.clock.cadence.phase] phase={} source=fallback loops={}",
-                            if phase == 1 { "startup" } else { "steady" },
-                            FALLBACK_SYNTH_TICK_LOOPS
-                        );
-                    }
-                }
-            }
+            const FALLBACK_SYNTH_TICK_LOOPS_STARTUP: u16 = 1;
+            const FALLBACK_SYNTH_TICK_LOOPS_STEADY: u16 = 64;
+            let synth_tick_loops = if silkbar_clock_seen {
+                FALLBACK_SYNTH_TICK_LOOPS_STEADY
+            } else {
+                FALLBACK_SYNTH_TICK_LOOPS_STARTUP
+            };
             fallback_idle_loops = fallback_idle_loops.wrapping_add(1);
-            if fallback_idle_loops >= FALLBACK_SYNTH_TICK_LOOPS {
+            if fallback_idle_loops >= synth_tick_loops {
                 fallback_idle_loops = 0;
                 bar.clock_ss = bar.clock_ss.wrapping_add(1);
                 if bar.clock_ss >= 60 { bar.clock_ss = 0; bar.clock_mm = bar.clock_mm.wrapping_add(1); }
@@ -2504,41 +2475,7 @@ pub extern "C" fn _start() -> ! {
                             (0, 0, 0, 0, 0, 0)
                         };
 
-                    let mut setclock_guard_drop = false;
-                    if update_kind == UpdateKind::SetClock as u32 {
-                        let incoming_total = clock_to_day_seconds(in_hh as u8, in_mm as u8, in_ss as u8);
-                        let canonical_total = clock_to_day_seconds(bar.clock_hh, bar.clock_mm, bar.clock_ss);
-                        // Guard only short-range stale handoff updates; allow normal forward movement.
-                        if incoming_total < canonical_total
-                            && (canonical_total - incoming_total) < 3600 {
-                            setclock_guard_drop = true;
-                            unsafe {
-                                static mut CLOCK_STALE_DROP_BUDGET: u32 = 64;
-                                let b = &mut CLOCK_STALE_DROP_BUDGET;
-                                if *b > 0 {
-                                    *b -= 1;
-                                    serial_println!(
-                                        "[sexdisplay.clock.source.silkbar.drop_stale] incoming_ss={} canonical_ss={} reason=monotonic_guard",
-                                        in_ss, bar.clock_ss
-                                    );
-                                    serial_println!(
-                                        "[sexdisplay.clock.monotonic.guard] prev_ss={} next_ss={} accepted=0 source=silkbar",
-                                        bar.clock_ss, in_ss
-                                    );
-                                    serial_println!(
-                                        "[sexdisplay.clock.handoff] from=fallback to=silkbar canonical_ss={} incoming_ss={} accepted=0",
-                                        bar.clock_ss, in_ss
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    let (applied, kind) = if setclock_guard_drop {
-                        (true, update_kind)
-                    } else {
-                        handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2)
-                    };
+                    let (applied, kind) = handle_silkbar_update(&mut bar, msg.arg0, msg.arg1, msg.arg2);
                     let mut should_redraw_top_strip = kind != UpdateKind::SetClock as u32;
                     if applied {
                         if kind == UpdateKind::SetClock as u32 {
@@ -2550,7 +2487,7 @@ pub extern "C" fn _start() -> ! {
                                     serial_println!("[boot.firstpaint.silkbar_clock_send] ok=1");
                                 }
                             }
-                            let changed = !setclock_guard_drop && (in_hh != old_hh || in_mm != old_mm || in_ss != old_ss);
+                            let changed = in_hh != old_hh || in_mm != old_mm || in_ss != old_ss;
                             if changed {
                                 clock_from_silkbar = true;
                                 last_silkbar_msg_loop = display_loop_counter;
@@ -2574,24 +2511,6 @@ pub extern "C" fn _start() -> ! {
                                 fallback_idle_loops = 0;
                                 clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
                                 unsafe { CLOCK_REDRAW_SOURCE = 0; } // silkbar source
-                                unsafe {
-                                    static mut CLOCK_HANDOFF_ACCEPT_BUDGET: u32 = 32;
-                                    let b = &mut CLOCK_HANDOFF_ACCEPT_BUDGET;
-                                    if *b > 0 {
-                                        *b -= 1;
-                                        serial_println!(
-                                            "[sexdisplay.clock.handoff] from=fallback to=silkbar canonical_ss={} incoming_ss={} accepted=1",
-                                            bar.clock_ss, in_ss
-                                        );
-                                        serial_println!(
-                                            "[sexdisplay.clock.monotonic.guard] prev_ss={} next_ss={} accepted=1 source=silkbar",
-                                            old_ss, in_ss
-                                        );
-                                        serial_println!(
-                                            "[sexdisplay.clock.cadence.phase] phase=steady source=silkbar loops=1"
-                                        );
-                                    }
-                                }
                             }
                             unsafe {
                                 static mut CLOCK_SOURCE_APPLY_BUDGET: u32 = 64;

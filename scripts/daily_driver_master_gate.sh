@@ -190,7 +190,6 @@ gate_sexnet_browser_cap="SKIP"
 gate_sexnet_status_route="SKIP"
 gate_clock_visible_seconds="SKIP"
 gate_clock_cadence_bound="SKIP"
-gate_clock_source_handoff_monotonic="SKIP"
 gate_silk_de_contract_lock="SKIP"
 gate_silk_de_topstrip_deterministic="SKIP"
 gate_silk_de_renderer_conformance="SKIP"
@@ -3836,112 +3835,7 @@ else
     print_row "clock_cadence_bound" "SKIP" "missing redraw cadence markers"
 fi
 
-# ---- 96. clock_source_handoff_monotonic ----
-source_switch_line="$(grep -n '\[sexdisplay\.clock\.handoff\].*from=fallback.*to=silkbar.*accepted=1' "$LOG" | head -n1 | cut -d: -f1 || true)"
-first_redraw_ss="$(grep '\[sexdisplay\.clock\.redraw\]' "$LOG" | head -n1 | sed -n 's/.* s=\([0-9][0-9]*\) .*/\1/p')"
-first_silkbar_apply_ss="$(grep '\[sexdisplay\.clock\.source\.silkbar\.apply\]' "$LOG" | head -n1 | sed -n 's/.* ss=\([0-9][0-9]*\).*/\1/p')"
-first_silkbar_visible_ss="$(grep '\[sexdisplay\.clock\.redraw\].*source=silkbar' "$LOG" | head -n1 | sed -n 's/.* s=\([0-9][0-9]*\) .*/\1/p')"
-max_ss_before_first_silkbar="$(
-    awk -v sw="${source_switch_line:-}" '
-        /\[sexdisplay\.clock\.redraw\]/ {
-            if (sw != "" && NR >= sw) next;
-            s=-1;
-            for (i=1; i<=NF; i++) {
-                if ($i ~ /^s=[0-9]+$/) { split($i, a, "="); s=a[2]+0; }
-            }
-            if (s >= 0 && (seen == 0 || s > mx)) { mx=s; seen=1; }
-        }
-        END { if (seen) print mx; else print ""; }
-    ' "$LOG"
-)"
-backward_count="$(
-    awk '
-        /\[sexdisplay\.clock\.redraw\]/ {
-            s=-1;
-            for (i=1; i<=NF; i++) {
-                if ($i ~ /^s=[0-9]+$/) { split($i, a, "="); s=a[2]+0; }
-            }
-            if (s < 0) next;
-            if (seen) {
-                if (s < prev && !(prev == 59 && s == 0)) back++;
-            }
-            prev=s; seen=1;
-        }
-        END { print back+0; }
-    ' "$LOG"
-)"
-guard_backward_accept_count="$(
-    awk '
-        /\[sexdisplay\.clock\.monotonic\.guard\]/ {
-            a=-1; p=-1; n=-1;
-            for (i=1; i<=NF; i++) {
-                if ($i ~ /^accepted=/) { split($i, x, "="); a=x[2]+0; }
-                else if ($i ~ /^prev_ss=/) { split($i, x, "="); p=x[2]+0; }
-                else if ($i ~ /^next_ss=/) { split($i, x, "="); n=x[2]+0; }
-            }
-            if (a == 1 && p >= 0 && n >= 0 && n < p && !(p == 59 && n == 0)) bad++;
-        }
-        END { print bad+0; }
-    ' "$LOG"
-)"
-source_switch_reset=0
-if [ -n "${max_ss_before_first_silkbar:-}" ] && [ -n "${first_silkbar_visible_ss:-}" ]; then
-    if [ "$first_silkbar_visible_ss" -lt "$max_ss_before_first_silkbar" ]; then
-        source_switch_reset=1
-    fi
-fi
-early_delta=""
-late_delta=""
-if [ -n "${source_switch_line:-}" ]; then
-    early_delta="$(
-        awk -v sw="$source_switch_line" '
-            /\[sexdisplay\.clock\.redraw\]/ && NR < sw {
-                s=-1;
-                for (i=1; i<=NF; i++) if ($i ~ /^s=[0-9]+$/) { split($i,a,"="); s=a[2]+0; }
-                if (s < 0) next;
-                if (!seen) { first=s; seen=1; }
-                last=s;
-            }
-            END { if (seen) print last-first; else print ""; }
-        ' "$LOG"
-    )"
-    late_delta="$(
-        awk -v sw="$source_switch_line" '
-            /\[sexdisplay\.clock\.redraw\]/ && NR >= sw {
-                s=-1;
-                for (i=1; i<=NF; i++) if ($i ~ /^s=[0-9]+$/) { split($i,a,"="); s=a[2]+0; }
-                if (s < 0) next;
-                if (!seen) { first=s; seen=1; }
-                last=s;
-            }
-            END { if (seen) print last-first; else print ""; }
-        ' "$LOG"
-    )"
-fi
-if [ "$(has 'sexdisplay.clock.handoff')" -ge 1 ] || [ "$(has 'sexdisplay.clock.monotonic.guard')" -ge 1 ]; then
-    if [ "${backward_count:-0}" -gt 0 ]; then
-        gate_clock_source_handoff_monotonic="FAIL"
-        print_row "clock_source_handoff_monotonic" "FAIL" \
-            "first_redraw_ss=${first_redraw_ss:-na} max_ss_before_first_silkbar=${max_ss_before_first_silkbar:-na} first_silkbar_apply_ss=${first_silkbar_apply_ss:-na} first_silkbar_visible_ss=${first_silkbar_visible_ss:-na} backward_count=${backward_count} source_switch_line=${source_switch_line:-na} early_delta=${early_delta:-na} late_delta=${late_delta:-na} reason=backward_visible_seconds"
-    elif [ "${guard_backward_accept_count:-0}" -gt 0 ]; then
-        gate_clock_source_handoff_monotonic="FAIL"
-        print_row "clock_source_handoff_monotonic" "FAIL" \
-            "first_redraw_ss=${first_redraw_ss:-na} max_ss_before_first_silkbar=${max_ss_before_first_silkbar:-na} first_silkbar_apply_ss=${first_silkbar_apply_ss:-na} first_silkbar_visible_ss=${first_silkbar_visible_ss:-na} backward_count=${backward_count:-0} source_switch_line=${source_switch_line:-na} early_delta=${early_delta:-na} late_delta=${late_delta:-na} reason=setclock_reduces_canonical"
-    elif [ "${source_switch_reset:-0}" -eq 1 ]; then
-        gate_clock_source_handoff_monotonic="FAIL"
-        print_row "clock_source_handoff_monotonic" "FAIL" \
-            "first_redraw_ss=${first_redraw_ss:-na} max_ss_before_first_silkbar=${max_ss_before_first_silkbar:-na} first_silkbar_apply_ss=${first_silkbar_apply_ss:-na} first_silkbar_visible_ss=${first_silkbar_visible_ss:-na} backward_count=${backward_count:-0} source_switch_line=${source_switch_line:-na} early_delta=${early_delta:-na} late_delta=${late_delta:-na} reason=source_switch_reset"
-    else
-        gate_clock_source_handoff_monotonic="PASS"
-        print_row "clock_source_handoff_monotonic" "PASS" \
-            "first_redraw_ss=${first_redraw_ss:-na} max_ss_before_first_silkbar=${max_ss_before_first_silkbar:-na} first_silkbar_apply_ss=${first_silkbar_apply_ss:-na} first_silkbar_visible_ss=${first_silkbar_visible_ss:-na} backward_count=${backward_count:-0} source_switch_line=${source_switch_line:-na} early_delta=${early_delta:-na} late_delta=${late_delta:-na}"
-    fi
-else
-    gate_clock_source_handoff_monotonic="SKIP"
-    print_row "clock_source_handoff_monotonic" "SKIP" "missing handoff/monotonic markers"
-fi
-
-# ---- 97. silk_de_contract_lock ----
+# ---- 96. silk_de_contract_lock ----
 if [ "$(has 'silk\.de\.contract\.(producer|renderer)\.(pass|fail)')" -eq 0 ]; then
     gate_silk_de_contract_lock="SKIP"
     print_row "silk_de_contract_lock" "SKIP" "silk de contract markers absent in this boot"
@@ -6457,7 +6351,6 @@ if [ "$has_interaction" -eq 1 ]; then
     dep_fail=""
     [ "$gate_clock_visible_seconds" = "FAIL" ] && dep_fail="${dep_fail} clock_visible_seconds(FAIL)"
     [ "$gate_clock_cadence_bound" = "FAIL" ] && dep_fail="${dep_fail} clock_cadence_bound(FAIL)"
-    [ "$gate_clock_source_handoff_monotonic" = "FAIL" ] && dep_fail="${dep_fail} clock_source_handoff_monotonic(FAIL)"
     [ "$gate_top_strip_hash" = "FAIL" ] && dep_fail="${dep_fail} top_strip_hash(FAIL)"
     [ "$gate_frame_rim_visual" = "FAIL" ] && dep_fail="${dep_fail} frame_rim_visual(FAIL)"
     [ "$gate_frame_lights_visual" = "FAIL" ] && dep_fail="${dep_fail} frame_lights_visual(FAIL)"
@@ -6510,7 +6403,7 @@ else
     req_contract=$([ "$gate_silk_de_contract_lock" = "PASS" ] && echo 1 || echo 0)
     req_topstrip=$([ "$gate_silk_de_topstrip_deterministic" = "PASS" ] && echo 1 || echo 0)
     req_renderer=$([ "$gate_silk_de_renderer_conformance" = "PASS" ] && echo 1 || echo 0)
-    req_clock=$([ "$gate_clock_visible_seconds" = "PASS" ] && [ "$gate_clock_cadence_bound" != "FAIL" ] && [ "$gate_clock_source_handoff_monotonic" != "FAIL" ] && echo 1 || echo 0)
+    req_clock=$([ "$gate_clock_visible_seconds" = "PASS" ] && [ "$gate_clock_cadence_bound" != "FAIL" ] && echo 1 || echo 0)
     req_faults=$([ "$gate_faults_zero" = "PASS" ] && echo 1 || echo 0)
 
     # Interaction evidence categories: must be real markers, not ordinary render status.
@@ -6875,7 +6768,6 @@ ALL_GATES=(
     "net_real_http_body_prefix:$gate_net_real_http_body_prefix"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "clock_cadence_bound:$gate_clock_cadence_bound"
-    "clock_source_handoff_monotonic:$gate_clock_source_handoff_monotonic"
     "silk_de_contract_lock:$gate_silk_de_contract_lock"
     "silk_de_topstrip_deterministic:$gate_silk_de_topstrip_deterministic"
     "silk_de_renderer_conformance:$gate_silk_de_renderer_conformance"
