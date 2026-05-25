@@ -3630,6 +3630,30 @@ pub fn run_sexfs_v0_superblock_format_mount_proofs() {
     serial_println!("[sexfs.v0.superblock_format_mount.gate] done");
 }
 
+/// Run SexObject full block extent write/read proof.
+/// Activated by `SEXOBJECT_EXTENT_WRITE_FULL_BLOCK_PROOF=1`.
+///
+/// Proves that a SexObject can write/read a full 4KiB extent (8 sectors)
+/// through real SexDrive/NVMe. Includes negative tests for hash mismatch
+/// and oversize single-extent rejection.
+pub fn run_sexobject_extent_write_full_block_proofs() {
+    serial_println!("[sexobject.full_block.gate] begin");
+
+    match crate::backends::diskfs::proof_sexobject_extent_write_full_block() {
+        Ok(()) => {
+            serial_println!("[sexobject.full_block.gate] ok=1");
+        }
+        Err(e) => {
+            serial_println!(
+                "[sexobject.full_block.gate] ok=0 err={}",
+                e
+            );
+        }
+    }
+
+    serial_println!("[sexobject.full_block.gate] done");
+}
+
 /// Run SexObject table extent alloc proof.
 /// Activated by `SEXOBJECT_TABLE_EXTENT_ALLOC_PROOF=1`.
 ///

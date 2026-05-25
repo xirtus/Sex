@@ -3862,6 +3862,7 @@ fn sexfs_v0_fnv1a(data: &[u8]) -> u64 {
 /// Rejects:
 /// 1. IN_USE && size > 0 && extent_count == 0
 /// 2. IN_USE && extent_count > 0 && first_block (sector LBA) outside [128, 2019]
+/// 3. IN_USE && extent_count == 1 && size > DISKFS_BLOCK_SIZE (single-extent overflow)
 fn sexfs_v0_validate_extent_bounds(p: &SexfsObjectEntryV0Parsed) -> Result<(), i64> {
     if p.in_use && p.object_size_bytes > 0 && p.extent_count == 0 {
         return Err(messages::ERR_OVERFLOW);
@@ -3870,6 +3871,9 @@ fn sexfs_v0_validate_extent_bounds(p: &SexfsObjectEntryV0Parsed) -> Result<(), i
         if p.first_block < SEXFS_V0_DATA_LBA_MIN || p.first_block > SEXFS_V0_DATA_LBA_MAX {
             return Err(messages::ERR_OVERFLOW);
         }
+    }
+    if p.in_use && p.extent_count == 1 && p.object_size_bytes > DISKFS_BLOCK_SIZE as u64 {
+        return Err(messages::ERR_OVERFLOW);
     }
     Ok(())
 }
@@ -4065,6 +4069,305 @@ pub fn proof_sexobject_table_extent_alloc() -> Result<(), i64> {
     }
 
     serial_println!("[sexobject.extent_alloc.done] ok=1");
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SEXOBJECT EXTENT WRITE FULL BLOCK — 4KiB extent write/read/verify proof
+//  Contract: docs/handoff/SEXOBJECT_EXTENT_WRITE_FULL_BLOCK_V1.md
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Return the deterministic payload byte at absolute offset i within a 4KiB block.
+/// - bytes 0-3: b"test" header
+/// - bytes 4-4091: sequential pattern (i*7 + i>>8)
+/// - bytes 4092-4095: b"tail" sentinel
+fn sexfs_v0_full_block_payload_byte(i: usize) -> u8 {
+    if i < 4 {
+        b"test"[i]
+    } else if i >= 4092 {
+        b"tail"[i - 4092]
+    } else {
+        ((i as u8).wrapping_mul(7)).wrapping_add((i >> 8) as u8)
+    }
+}
+
+/// Compute FNV-1a 64-bit hash of the deterministic 4KiB payload.
+fn sexfs_v0_full_block_payload_hash() -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    let mut i = 0usize;
+    while i < 4096 {
+        hash ^= sexfs_v0_full_block_payload_byte(i) as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+        i += 1;
+    }
+    hash
+}
+
+/// Write the deterministic 4KiB payload to the 8 sectors starting at alloc_lba.
+/// Builds each 512-byte sector on the stack and writes via BLOCK_WRITE.
+fn sexfs_v0_write_full_block(alloc_lba: u64) -> Result<(), i64> {
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    let mut sec = 0u64;
+    while sec < 8 {
+        let base = (sec as usize) * 512;
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 {
+                core::ptr::write_volatile(p.add(i), sexfs_v0_full_block_payload_byte(base + i));
+                i += 1;
+            }
+        }
+        let status = DiskFs::diskfs_block_write(
+            (alloc_lba + sec) * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if status != 0 {
+            return Err(messages::ERR_NOT_FOUND);
+        }
+        sec += 1;
+    }
+    Ok(())
+}
+
+/// Read back 8 sectors starting at alloc_lba and compare byte-for-byte to the
+/// deterministic payload. Returns Ok(true) on full match.
+fn sexfs_v0_read_full_block_match(alloc_lba: u64) -> Result<bool, i64> {
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    let mut sec = 0u64;
+    while sec < 8 {
+        let base = (sec as usize) * 512;
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+        }
+        let status = DiskFs::diskfs_block_read(
+            (alloc_lba + sec) * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if status != 0 {
+            return Err(messages::ERR_NOT_FOUND);
+        }
+        let mut mismatch = false;
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 512 {
+                if core::ptr::read_volatile(p.add(i)) != sexfs_v0_full_block_payload_byte(base + i) {
+                    mismatch = true;
+                    break;
+                }
+                i += 1;
+            }
+        }
+        if mismatch { return Ok(false); }
+        sec += 1;
+    }
+    Ok(true)
+}
+
+/// Read back 8 sectors at alloc_lba and compute their FNV-1a 64-bit hash.
+fn sexfs_v0_read_full_block_hash(alloc_lba: u64) -> Result<u64, i64> {
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+    let mut hash = 0xcbf29ce484222325u64;
+    let mut sec = 0u64;
+    while sec < 8 {
+        unsafe {
+            let p = buf_va as *mut u8;
+            let mut i = 0usize;
+            while i < 512 { core::ptr::write_volatile(p.add(i), 0u8); i += 1; }
+        }
+        let status = DiskFs::diskfs_block_read(
+            (alloc_lba + sec) * BLOCK_SECTOR_SIZE, 512, SLOT_BUF_LEND,
+        );
+        if status != 0 {
+            return Err(messages::ERR_NOT_FOUND);
+        }
+        unsafe {
+            let p = buf_va as *const u8;
+            let mut i = 0usize;
+            while i < 512 {
+                hash ^= core::ptr::read_volatile(p.add(i)) as u64;
+                hash = hash.wrapping_mul(0x100000001b3);
+                i += 1;
+            }
+        }
+        sec += 1;
+    }
+    Ok(hash)
+}
+
+/// [sexobject.full_block] — Full 4KiB extent write/read/verify proof.
+///
+/// Steps:
+/// 1. Clean format
+/// 2. Alloc block from freemap, persist freemap
+/// 3. Write deterministic 4KiB payload (8 × 512-byte sectors)
+/// 4. Read back and verify byte-for-byte
+/// 5. Persist object entry (size=4096, extent_count=1, content_hash)
+/// 6. Remount: re-read table + freemap + content hash
+/// 7. Negative: corrupt one sector → hash mismatch, then restore
+/// 8. Negative: oversize single extent (size>4096, extent_count=1) → reject
+pub fn proof_sexobject_extent_write_full_block() -> Result<(), i64> {
+    serial_println!("[sexobject.full_block.begin]");
+
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+
+    // Phase 1: Clean format
+    sexfs_v0_format_to_disk()?;
+
+    // Phase 2: Alloc block and persist freemap
+    let mut fm = sexfs_v0_read_freemap_sector()?;
+    sexfs_v0_validate_freemap(&fm)?;
+    let alloc_block = sexfs_v0_freemap_alloc_block_in_range(
+        &mut fm,
+        SEXFS_V0_DATA_REGION_MIN_BLOCK,
+        SEXFS_V0_DATA_REGION_MAX_BLOCK,
+    )?;
+    let alloc_lba = alloc_block * 8;
+    sexfs_v0_write_freemap_sector(&fm)?;
+    serial_println!("[sexobject.extent.alloc.ok] lba={}", alloc_lba);
+
+    // Phase 3: Compute payload hash and emit ready marker
+    let content_hash = sexfs_v0_full_block_payload_hash();
+    serial_println!("[sexobject.full_block.payload.ready] len=4096 has_test=1");
+
+    // Phase 4: Write 8 sectors to disk
+    sexfs_v0_write_full_block(alloc_lba)?;
+    serial_println!("[sexobject.full_block.write.ok] lba={} sectors=8 len=4096", alloc_lba);
+
+    // Phase 5: Read back and verify byte-for-byte
+    let match_ok = sexfs_v0_read_full_block_match(alloc_lba)?;
+    serial_println!("[sexobject.full_block.read.ok] lba={} sectors=8 len=4096", alloc_lba);
+    if match_ok {
+        serial_println!("[sexobject.full_block.match] ok=1");
+    } else {
+        serial_println!("[sexobject.full_block.match] ok=0");
+        return Err(messages::ERR_OVERFLOW);
+    }
+
+    // Phase 6: Persist object entry with size=4096, extent_count=1, content_hash
+    let entry_bytes = sexfs_v0_build_object_entry(
+        1,                           // object_id
+        1,                           // kind
+        0x0001,                      // flags: IN_USE
+        11,                          // owner_pd
+        1,                           // rights_generation
+        1,                           // content_generation
+        1,                           // metadata_generation
+        4096,                        // object_size_bytes = full block
+        alloc_lba,                   // first_block = first sector LBA
+        1,                           // extent_count
+        0x6E65_4C5F_534F_5853u64,    // name_hash
+        content_hash,                // content_hash = FNV-1a of 4KiB payload
+        1,                           // created_at_gen
+        1,                           // modified_at_gen
+    );
+    sexfs_v0_write_object_table(0, &entry_bytes)?;
+    serial_println!(
+        "[sexobject.full_block.entry.persist.ok] slot=0 size=4096 extent_count=1"
+    );
+
+    // Phase 7: Remount — re-read table, freemap, and content hash
+
+    // 7a: Table entry match
+    let table = sexfs_v0_read_object_table()?;
+    let mut slot_data = [0u8; 128];
+    let mut si = 0usize;
+    while si < 128 { slot_data[si] = table[si]; si += 1; }
+    let reparsed = sexfs_v0_validate_object_entry(&slot_data)?;
+    let entry_match = reparsed.object_id == 1
+        && reparsed.extent_count == 1
+        && reparsed.first_block == alloc_lba
+        && reparsed.object_size_bytes == 4096
+        && reparsed.content_hash == content_hash
+        && reparsed.in_use;
+    if entry_match {
+        serial_println!("[sexobject.full_block.remount.entry.match] ok=1");
+    } else {
+        serial_println!("[sexobject.full_block.remount.entry.match] ok=0");
+        return Err(messages::ERR_OVERFLOW);
+    }
+
+    // 7b: Freemap block still used
+    let fm2 = sexfs_v0_read_freemap_sector()?;
+    sexfs_v0_validate_freemap(&fm2)?;
+    if sexfs_v0_freemap_is_block_used(&fm2, alloc_block as usize) {
+        serial_println!("[sexobject.full_block.remount.freemap.used.ok] lba={}", alloc_lba);
+    } else {
+        serial_println!("[sexobject.full_block.remount.freemap.used.ok] lba={} ok=0", alloc_lba);
+        return Err(messages::ERR_OVERFLOW);
+    }
+
+    // 7c: Content hash match via full re-read
+    let remount_hash = sexfs_v0_read_full_block_hash(alloc_lba)?;
+    if remount_hash == content_hash {
+        serial_println!("[sexobject.full_block.remount.content.match] ok=1");
+    } else {
+        serial_println!("[sexobject.full_block.remount.content.match] ok=0");
+        return Err(messages::ERR_OVERFLOW);
+    }
+
+    // Phase 8a: Negative — corrupt sector 3 → hash mismatch
+    {
+        // Corrupt first byte of sector 3 (LBA alloc_lba+3)
+        let mut corrupt = [0u8; 512];
+        let mut ci = 0usize;
+        while ci < 512 {
+            corrupt[ci] = sexfs_v0_full_block_payload_byte(1536 + ci) ^ if ci == 0 { 0xFF } else { 0 };
+            ci += 1;
+        }
+        sexfs_v0_write_data_sector(alloc_lba + 3, &corrupt)?;
+        let corrupt_hash = sexfs_v0_read_full_block_hash(alloc_lba)?;
+        // Restore sector 3
+        let mut restore = [0u8; 512];
+        let mut ri = 0usize;
+        while ri < 512 { restore[ri] = sexfs_v0_full_block_payload_byte(1536 + ri); ri += 1; }
+        sexfs_v0_write_data_sector(alloc_lba + 3, &restore)?;
+        if corrupt_hash != content_hash {
+            serial_println!("[sexobject.full_block.neg.hash_mismatch.reject] ok=1");
+        } else {
+            serial_println!("[sexobject.full_block.neg.hash_mismatch.reject] ok=0");
+            return Err(messages::ERR_OVERFLOW);
+        }
+    }
+
+    // Phase 8b: Negative — oversize single extent (size=4097, extent_count=1) → reject
+    {
+        let bad_entry = sexfs_v0_build_object_entry(
+            2, 1, 0x0001, 11, 1, 1, 1, 4097, alloc_lba, 1, 0, 0, 1, 1,
+        );
+        let mut bad_slot = [0u8; 128];
+        let mut bi = 0usize;
+        while bi < 128 { bad_slot[bi] = bad_entry[bi]; bi += 1; }
+        match sexfs_v0_validate_object_entry(&bad_slot) {
+            Ok(bad_parsed) => {
+                if sexfs_v0_validate_extent_bounds(&bad_parsed).is_err() {
+                    serial_println!("[sexobject.full_block.neg.oversize_single_extent.reject] ok=1");
+                } else {
+                    serial_println!("[sexobject.full_block.neg.oversize_single_extent.reject] ok=0");
+                    return Err(messages::ERR_OVERFLOW);
+                }
+            }
+            Err(_) => {
+                serial_println!("[sexobject.full_block.neg.oversize_single_extent.reject] ok=0 reason=entry_invalid");
+                return Err(messages::ERR_OVERFLOW);
+            }
+        }
+    }
+
+    serial_println!("[sexobject.full_block.done] ok=1");
     Ok(())
 }
 

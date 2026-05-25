@@ -185,6 +185,13 @@ pub extern "C" fn trampoline_main() {
         // [sexobject.extent_alloc.profile.done] non_isolated=1
     }
 
+    const SEXOBJECT_EXTENT_WRITE_FULL_BLOCK_PROOF_ENABLED: bool =
+        option_env!("SEXOBJECT_EXTENT_WRITE_FULL_BLOCK_PROOF").is_some();
+    if SEXOBJECT_EXTENT_WRITE_FULL_BLOCK_PROOF_ENABLED {
+        crate::proof::run_sexobject_extent_write_full_block_proofs();
+        // [sexobject.full_block.profile.done] non_isolated=1
+    }
+
     serial_println!("[sexfiles.ready]");
 
     loop {

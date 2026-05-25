@@ -144,6 +144,7 @@ gate_sexfiles_diskfs_negative_bounds_auth="SKIP"
 gate_sexfs_v0_superblock_format_mount="SKIP"
 gate_sexobject_table_persist="SKIP"
 gate_sexobject_table_extent_alloc="SKIP"
+gate_sexobject_extent_write_full_block="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -4473,6 +4474,40 @@ else
     print_row "sexobject_table_extent_alloc" "SKIP" "sexobject table extent alloc proof not triggered"
 fi
 
+# ---- sexobject_extent_write_full_block ----
+if [ "$(has 'sexobject\.full_block\.done.*ok=1')" -eq 1 ]; then
+    gate_sexobject_extent_write_full_block="PASS"
+    print_row "sexobject_extent_write_full_block" "PASS" "full 4KiB write/read/negative all ok"
+elif grep -q 'sexobject\.full_block\.gate' "$LOG"; then
+    gate_sexobject_extent_write_full_block="FAIL"
+    if ! grep -q 'sexobject\.full_block\.payload\.ready.*len=4096' "$LOG"; then
+        print_row "sexobject_extent_write_full_block" "FAIL" "payload ready missing or failed"
+    elif ! grep -q 'sexobject\.full_block\.write\.ok.*sectors=8.*len=4096' "$LOG"; then
+        print_row "sexobject_extent_write_full_block" "FAIL" "full block write missing or failed"
+    elif ! grep -q 'sexobject\.full_block\.read\.ok.*sectors=8.*len=4096' "$LOG"; then
+        print_row "sexobject_extent_write_full_block" "FAIL" "full block read missing or failed"
+    elif ! grep -q 'sexobject\.full_block\.match.*ok=1' "$LOG"; then
+        print_row "sexobject_extent_write_full_block" "FAIL" "full block match missing or failed"
+    elif ! grep -q 'sexobject\.full_block\.entry\.persist\.ok' "$LOG"; then
+        print_row "sexobject_extent_write_full_block" "FAIL" "entry persist missing or failed"
+    elif ! grep -q 'sexobject\.full_block\.remount\.entry\.match.*ok=1' "$LOG"; then
+        print_row "sexobject_extent_write_full_block" "FAIL" "remount entry match missing or failed"
+    elif ! grep -q 'sexobject\.full_block\.remount\.freemap\.used\.ok' "$LOG"; then
+        print_row "sexobject_extent_write_full_block" "FAIL" "remount freemap used check missing"
+    elif ! grep -q 'sexobject\.full_block\.remount\.content\.match.*ok=1' "$LOG"; then
+        print_row "sexobject_extent_write_full_block" "FAIL" "remount content hash match missing or failed"
+    elif ! grep -q 'sexobject\.full_block\.neg\.hash_mismatch\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_extent_write_full_block" "FAIL" "hash mismatch rejection missing or failed"
+    elif ! grep -q 'sexobject\.full_block\.neg\.oversize_single_extent\.reject.*ok=1' "$LOG"; then
+        print_row "sexobject_extent_write_full_block" "FAIL" "oversize extent rejection missing or failed"
+    else
+        print_row "sexobject_extent_write_full_block" "FAIL" "missing proof.done ok=1"
+    fi
+else
+    gate_sexobject_extent_write_full_block="SKIP"
+    print_row "sexobject_extent_write_full_block" "SKIP" "full block proof not triggered"
+fi
+
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
 if [ "$(has 'sexfiles\.diskfs100\.ap3\.begin')" -ge 1 ]; then
     has_linen_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=linen.*ok=1')
@@ -6186,6 +6221,7 @@ ALL_GATES=(
     "sexfs_v0_superblock_format_mount:$gate_sexfs_v0_superblock_format_mount"
     "sexobject_table_persist:$gate_sexobject_table_persist"
     "sexobject_table_extent_alloc:$gate_sexobject_table_extent_alloc"
+    "sexobject_extent_write_full_block:$gate_sexobject_extent_write_full_block"
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"
     "sexfiles_diskfs_bridge_reboot_persistence:$gate_sexfiles_diskfs_bridge_reboot_persistence"
