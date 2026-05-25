@@ -108,3 +108,8 @@ Baseline commit: `f284eec2a5160fcc90c1f5900520b19318071d22` (`f284eec2`)
 ## Files changed
 - `docs/handoff/LINEN_SEXFILES_BASELINE_RESCAN_V1.md` (created)
 - No code changes in this mission.
+
+## Contract lock follow-up (2026-05-25)
+- Locked contract doc: `docs/handoff/SEXFILES_DISKFS_FIXED_OBJECT_CONTRACT_LOCK_V1.md`
+- Status: `SEXFILES_DISKFS_FIXED_OBJECT_CONTRACT_LOCK_V1` complete (docs lock, no runtime behavior change).
+- Next autopilot: `SEXFILES_DISKFS_BRIDGE_STRICT_PROOF_V1`.
