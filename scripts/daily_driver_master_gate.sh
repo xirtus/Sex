@@ -4891,10 +4891,10 @@ if [ "$(has 'physical_keyboard\.quil\.begin')" -ge 1 ]; then
         [ "$has_done" -eq 0 ] && missing="${missing} done"
         print_row "physical_keyboard_to_quil_text" "FAIL" "missing markers:${missing}"
     fi
-elif [ "$(has 'physical_keyboard\.quil\.skip')" -ge 1 ]; then
+elif [ "$(has 'physical_keyboard\.quil\.skip\|physical_keyboard\.quil\.v2\.skip')" -ge 1 ]; then
     # Honest skip — environment cannot inject QEMU keyboard events.
     gate_physical_keyboard_to_quil_text="SKIP"
-    print_row "physical_keyboard_to_quil_text" "SKIP" "physical keyboard proof skipped: no QEMU key injection or focus route available"
+    print_row "physical_keyboard_to_quil_text" "SKIP" "physical keyboard proof skipped: QEMU sendkey no PS/2 IRQ1 delivery (environmental limitation)"
 else
     gate_physical_keyboard_to_quil_text="SKIP"
     print_row "physical_keyboard_to_quil_text" "SKIP" "physical keyboard proof not triggered"

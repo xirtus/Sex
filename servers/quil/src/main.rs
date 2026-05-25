@@ -3226,6 +3226,15 @@ pub extern "C" fn _start() -> ! {
             if !QUIL_TEXT_INPUT_PIPELINE_PROOF_DONE {
                 run_text_input_pipeline_proof(&mut palette_active, &mut selected_row);
                 QUIL_TEXT_INPUT_PIPELINE_PROOF_DONE = true;
+                // Clear buffer after text proof so physical keyboard proof
+                // starts from a clean slate.  The text proof has already
+                // verified its result; any remaining buffer content would
+                // falsely satisfy the physical keyboard buffer check.
+                if PHYSICAL_KEYBOARD_PROOF_ACTIVE {
+                    QUIL_BUFFER_LEN = 0;
+                    QUIL_CURSOR_POS = 0;
+                    serial_println!("[physical_keyboard.buffer.cleared] reason=after_text_pipeline_proof");
+                }
             }
         }
     }
@@ -3262,6 +3271,14 @@ pub extern "C" fn _start() -> ! {
                 run_quil_save_open_sexobject_proof(4);
                 QUIL_SAVE_OPEN_SEXOBJECT_PROOF_DONE = true;
                 serial_println!("[quil.nonblocking_startup.deferred_save_open.done] ok=1");
+                // Clear buffer before replay: the save proof writes "test" to
+                // the buffer for its own verification; physical keyboard proof
+                // must start from a clean slate to avoid false positives.
+                if PHYSICAL_KEYBOARD_PROOF_ACTIVE {
+                    QUIL_BUFFER_LEN = 0;
+                    QUIL_CURSOR_POS = 0;
+                    serial_println!("[physical_keyboard.buffer.cleared] reason=after_deferred_save_open");
+                }
                 // Replay any HID events stashed during proof spin-waits.
                 let stash_count = HID_STASH_COUNT;
                 if stash_count > 0 {
@@ -3286,6 +3303,14 @@ pub extern "C" fn _start() -> ! {
                 QUIL_LIVE_USB_DEFERRED_PENDING = false;
                 run_live_usb_quil_create_save_reopen_proof(&mut palette_active, &mut selected_row);
                 QUIL_LIVE_USB_CREATE_SAVE_REOPEN_PROOF_DONE = true;
+                // Clear buffer before replay: the live_usb proof writes "test"
+                // to the buffer for its own verification; physical keyboard proof
+                // must start from a clean slate to avoid false positives.
+                if PHYSICAL_KEYBOARD_PROOF_ACTIVE {
+                    QUIL_BUFFER_LEN = 0;
+                    QUIL_CURSOR_POS = 0;
+                    serial_println!("[physical_keyboard.buffer.cleared] reason=after_deferred_live_usb");
+                }
                 // Replay any HID events stashed during proof spin-waits.
                 let stash_count = HID_STASH_COUNT;
                 if stash_count > 0 {
