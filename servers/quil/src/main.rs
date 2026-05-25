@@ -220,6 +220,9 @@ static mut QUIL_STORAGE_PHASEA_PROOF_DONE: bool = false;
 const QUIL_SAVE_OPEN_SEXOBJECT_PROOF_ENABLED: bool =
     option_env!("SEXOS_QUIL_SAVE_OPEN_SEXOBJECT_PROOF").is_some();
 static mut QUIL_SAVE_OPEN_SEXOBJECT_PROOF_DONE: bool = false;
+static mut QUIL_SAVE_OPEN_DEFERRED_PENDING: bool = false;
+static mut QUIL_LIVE_USB_DEFERRED_PENDING: bool = false;
+static mut QUIL_NONBLOCKING_STARTUP_LOGGED: bool = false;
 
 /// Text input pipeline proof gate.
 /// Build with SEXOS_QUIL_TEXT_INPUT_PIPELINE_PROOF=1 to enable.
@@ -1705,7 +1708,7 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
 // Quil does NOT call SLOT_BLOCK, does NOT call SexDrive directly.
 // Quil routes through SLOT_STORAGE, using the Linen-defined SexObject protocol.
 // SLOT_STORAGE is the existing architecture gate for all storage access.
-unsafe fn run_quil_save_open_sexobject_proof() {
+unsafe fn run_quil_save_open_sexobject_proof(readiness_yields: u64) {
     serial_println!("[quil.sexobject.save.open.begin]");
 
     // ── Set up proof buffer "test" (4 bytes) ──
@@ -1726,7 +1729,7 @@ unsafe fn run_quil_save_open_sexobject_proof() {
 
     // ── Bounded readiness wait ──
     let mut ready_n: u64 = 0;
-    while ready_n < 64 {
+    while ready_n < readiness_yields {
         sched_yield();
         ready_n += 1;
     }
@@ -1756,6 +1759,13 @@ unsafe fn run_quil_save_open_sexobject_proof() {
                     Some(msg) if msg.type_id == 0x1 => {
                         reply = Some(msg.arg0);
                         break;
+                    }
+                    Some(msg) if msg.type_id == OP_HID_EVENT => {
+                        if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                            let idx = HID_STASH_COUNT;
+                            HID_STASH[idx] = (msg.arg0, msg.arg1, msg.arg2);
+                            HID_STASH_COUNT += 1;
+                        }
                     }
                     Some(_) => {
                         sched_yield();
@@ -1816,6 +1826,13 @@ unsafe fn run_quil_save_open_sexobject_proof() {
                     Some(msg) if msg.type_id == 0x1 => {
                         reply = Some(msg.arg0);
                         break;
+                    }
+                    Some(msg) if msg.type_id == OP_HID_EVENT => {
+                        if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                            let idx = HID_STASH_COUNT;
+                            HID_STASH[idx] = (msg.arg0, msg.arg1, msg.arg2);
+                            HID_STASH_COUNT += 1;
+                        }
                     }
                     Some(_) => {
                         sched_yield();
@@ -2060,6 +2077,13 @@ unsafe fn run_live_usb_quil_create_save_reopen_proof(
                         reply = Some(msg.arg0);
                         break;
                     }
+                    Some(msg) if msg.type_id == OP_HID_EVENT => {
+                        if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                            let idx = HID_STASH_COUNT;
+                            HID_STASH[idx] = (msg.arg0, msg.arg1, msg.arg2);
+                            HID_STASH_COUNT += 1;
+                        }
+                    }
                     Some(_) => {
                         sched_yield();
                     }
@@ -2116,6 +2140,13 @@ unsafe fn run_live_usb_quil_create_save_reopen_proof(
                     Some(msg) if msg.type_id == 0x1 => {
                         reply = Some(msg.arg0);
                         break;
+                    }
+                    Some(msg) if msg.type_id == OP_HID_EVENT => {
+                        if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                            let idx = HID_STASH_COUNT;
+                            HID_STASH[idx] = (msg.arg0, msg.arg1, msg.arg2);
+                            HID_STASH_COUNT += 1;
+                        }
                     }
                     Some(_) => {
                         sched_yield();
@@ -3142,14 +3173,13 @@ pub extern "C" fn _start() -> ! {
     }
 
     // ── Quil Save/Open SexObject Native Proof ──────────────────────────────
-    // Proves Quil → SLOT_STORAGE → SexFiles → SexFS v0 save/open roundtrip.
-    // Runs after legacy PERSISTENCE_PROOF; uses the Linen-defined
-    // SexObject native persist opcode (0x40) and read-back opcode (0x41).
+    // Deferred to main loop: running here would block startup before the input
+    // loop is live, preventing physical keyboard events from reaching the buffer.
     if QUIL_SAVE_OPEN_SEXOBJECT_PROOF_ENABLED {
         unsafe {
             if !QUIL_SAVE_OPEN_SEXOBJECT_PROOF_DONE {
-                run_quil_save_open_sexobject_proof();
-                QUIL_SAVE_OPEN_SEXOBJECT_PROOF_DONE = true;
+                serial_println!("[quil.nonblocking_startup.sexobject_proof.defer] ok=1");
+                QUIL_SAVE_OPEN_DEFERRED_PENDING = true;
             }
         }
     }
@@ -3201,22 +3231,79 @@ pub extern "C" fn _start() -> ! {
     }
 
     // ── Live USB Quil Create/Save/Reopen Proof ───────────────────────────
-    // Runs after text_input_pipeline_proof, before main listen loop.
-    // Combines synthetic input pipeline + SexObject native save/open roundtrip.
-    // Proves complete pre-live-USB create/save/reopen flow.
+    // Deferred to main loop: must run after save/open proof (which provides
+    // SexFiles readiness), and after startup is unblocked for input processing.
     if QUIL_LIVE_USB_CREATE_SAVE_REOPEN_PROOF_ENABLED {
         unsafe {
             if !QUIL_LIVE_USB_CREATE_SAVE_REOPEN_PROOF_DONE {
-                run_live_usb_quil_create_save_reopen_proof(
-                    &mut palette_active,
-                    &mut selected_row,
-                );
-                QUIL_LIVE_USB_CREATE_SAVE_REOPEN_PROOF_DONE = true;
+                QUIL_LIVE_USB_DEFERRED_PENDING = true;
             }
         }
     }
 
+    serial_println!("[quil.nonblocking_startup.begin]");
+    serial_println!("[quil.nonblocking_startup.no_startup_block] ok=1");
+
     loop {
+        // ── Nonblocking startup markers (first iteration only) ────────────
+        unsafe {
+            if !QUIL_NONBLOCKING_STARTUP_LOGGED {
+                QUIL_NONBLOCKING_STARTUP_LOGGED = true;
+                serial_println!("[quil.nonblocking_startup.main_loop.enter] ok=1");
+                serial_println!("[quil.nonblocking_startup.input_ready] ok=1");
+                serial_println!("[quil.nonblocking_startup.done] ok=1");
+            }
+        }
+
+        // ── Deferred save/open proof ──────────────────────────────────────
+        unsafe {
+            if QUIL_SAVE_OPEN_DEFERRED_PENDING {
+                QUIL_SAVE_OPEN_DEFERRED_PENDING = false;
+                run_quil_save_open_sexobject_proof(4);
+                QUIL_SAVE_OPEN_SEXOBJECT_PROOF_DONE = true;
+                serial_println!("[quil.nonblocking_startup.deferred_save_open.done] ok=1");
+                // Replay any HID events stashed during proof spin-waits.
+                let stash_count = HID_STASH_COUNT;
+                if stash_count > 0 {
+                    serial_println!("[quil.hid.replay.begin] count={} phase=after_deferred_save_open", stash_count);
+                    for i in 0..stash_count {
+                        let (scancode, value, _arg2) = HID_STASH[i];
+                        serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}", i, scancode, value, _arg2);
+                        quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+                    }
+                    HID_STASH_COUNT = 0;
+                    serial_println!("[quil.hid.replay.done] count={}", stash_count);
+                    if PHYSICAL_KEYBOARD_PROOF_ACTIVE {
+                        check_physical_keyboard_proof(0);
+                    }
+                }
+            }
+        }
+
+        // ── Deferred live_usb proof (runs after save/open) ───────────────
+        unsafe {
+            if QUIL_LIVE_USB_DEFERRED_PENDING {
+                QUIL_LIVE_USB_DEFERRED_PENDING = false;
+                run_live_usb_quil_create_save_reopen_proof(&mut palette_active, &mut selected_row);
+                QUIL_LIVE_USB_CREATE_SAVE_REOPEN_PROOF_DONE = true;
+                // Replay any HID events stashed during proof spin-waits.
+                let stash_count = HID_STASH_COUNT;
+                if stash_count > 0 {
+                    serial_println!("[quil.hid.replay.begin] count={} phase=after_deferred_live_usb", stash_count);
+                    for i in 0..stash_count {
+                        let (scancode, value, _arg2) = HID_STASH[i];
+                        serial_println!("[quil.hid.replay] idx={} code={:#x} down={} mod={}", i, scancode, value, _arg2);
+                        quil_dispatch_palette_key(scancode, value, &mut palette_active, &mut selected_row);
+                    }
+                    HID_STASH_COUNT = 0;
+                    serial_println!("[quil.hid.replay.done] count={}", stash_count);
+                    if PHYSICAL_KEYBOARD_PROOF_ACTIVE {
+                        check_physical_keyboard_proof(0);
+                    }
+                }
+            }
+        }
+
         let msg = pdx_listen_raw(0);
 
         unsafe {

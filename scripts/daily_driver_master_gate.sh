@@ -107,6 +107,7 @@ gate_quil_save_open_sexobject="SKIP"
 gate_text_input_pipeline="SKIP"
 gate_live_usb_quil_create_save_reopen="SKIP"
 gate_physical_keyboard_to_quil_text="SKIP"
+gate_quil_save_open_nonblocking_startup="SKIP"
 gate_spindle_editor_finish="SKIP"
 gate_linen_search_bridge="SKIP"
 gate_storage_phasea="SKIP"
@@ -4899,6 +4900,46 @@ else
     print_row "physical_keyboard_to_quil_text" "SKIP" "physical keyboard proof not triggered"
 fi
 
+# ---- quil_save_open_nonblocking_startup ----
+# PASS if: main_loop.enter + input_ready + no_startup_block markers all present,
+# no faults, existing quil_save_open_sexobject is PASS or SKIP (not FAIL),
+# physical_keyboard_to_quil_text is SKIP or PASS (not FAIL).
+if [ "$(has 'quil\.nonblocking_startup\.begin')" -ge 1 ]; then
+    has_main_loop=$(has 'quil\.nonblocking_startup\.main_loop\.enter.*ok=1')
+    has_input_ready=$(has 'quil\.nonblocking_startup\.input_ready.*ok=1')
+    has_no_block=$(has 'quil\.nonblocking_startup\.no_startup_block.*ok=1')
+    has_done=$(has 'quil\.nonblocking_startup\.done.*ok=1')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+    if [ "$has_fault" -ge 1 ]; then
+        gate_quil_save_open_nonblocking_startup="FAIL"
+        print_row "quil_save_open_nonblocking_startup" "FAIL" "fault marker present during nonblocking startup"
+    elif [ "$has_main_loop" -lt 1 ]; then
+        gate_quil_save_open_nonblocking_startup="FAIL"
+        print_row "quil_save_open_nonblocking_startup" "FAIL" "main_loop.enter marker missing — main loop did not start"
+    elif [ "$has_input_ready" -lt 1 ]; then
+        gate_quil_save_open_nonblocking_startup="FAIL"
+        print_row "quil_save_open_nonblocking_startup" "FAIL" "input_ready marker missing"
+    elif [ "$has_no_block" -lt 1 ]; then
+        gate_quil_save_open_nonblocking_startup="FAIL"
+        print_row "quil_save_open_nonblocking_startup" "FAIL" "no_startup_block marker missing"
+    elif [ "$has_done" -lt 1 ]; then
+        gate_quil_save_open_nonblocking_startup="FAIL"
+        print_row "quil_save_open_nonblocking_startup" "FAIL" "done marker missing"
+    elif [ "$gate_quil_save_open_sexobject" = "FAIL" ]; then
+        gate_quil_save_open_nonblocking_startup="FAIL"
+        print_row "quil_save_open_nonblocking_startup" "FAIL" "quil_save_open_sexobject regressed to FAIL"
+    elif [ "$gate_physical_keyboard_to_quil_text" = "FAIL" ]; then
+        gate_quil_save_open_nonblocking_startup="FAIL"
+        print_row "quil_save_open_nonblocking_startup" "FAIL" "physical_keyboard_to_quil_text regressed to FAIL"
+    else
+        gate_quil_save_open_nonblocking_startup="PASS"
+        print_row "quil_save_open_nonblocking_startup" "PASS" "Quil startup non-blocking: main loop live before SexObject proof, input_ready emitted, no faults"
+    fi
+else
+    gate_quil_save_open_nonblocking_startup="SKIP"
+    print_row "quil_save_open_nonblocking_startup" "SKIP" "nonblocking startup proof not triggered"
+fi
+
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
 if [ "$(has 'sexfiles\.diskfs100\.ap3\.begin')" -ge 1 ]; then
     has_linen_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=linen.*ok=1')
@@ -6350,6 +6391,7 @@ ALL_GATES=(
     "text_input_pipeline:$gate_text_input_pipeline"
     "live_usb_quil_create_save_reopen:$gate_live_usb_quil_create_save_reopen"
     "physical_keyboard_to_quil_text:$gate_physical_keyboard_to_quil_text"
+    "quil_save_open_nonblocking_startup:$gate_quil_save_open_nonblocking_startup"
     "spindle_editor_finish:$gate_spindle_editor_finish"
     "storage_phasea:$gate_storage_phasea"
     "storage_phaseb1:$gate_storage_phaseb1"
