@@ -147,6 +147,7 @@ gate_sexobject_table_extent_alloc="SKIP"
 gate_sexobject_extent_write_full_block="SKIP"
 gate_sexobject_write_read_persist="SKIP"
 gate_sexobject_multi_object="SKIP"
+gate_linen_sexobject_native_persist="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -4613,6 +4614,58 @@ else
     print_row "sexobject_multi_object" "SKIP" "multi-object proof not triggered"
 fi
 
+# ---- linen_sexobject_native_persist ----
+if [ "$(has '\[linen\.sexobject\.native\.begin\]')" -ge 1 ]; then
+    has_route=$(has 'linen\.sexobject\.native\.route.*uses_slot_storage=1.*uses_slot_block=0.*direct_sexdrive=0')
+    has_save=$(has 'linen\.sexobject\.native\.save\.send.*label=test.*len=4.*kind=text')
+    has_create=$(has 'sexfiles\.sexobject\.native\.create\.ok.*object_id=')
+    has_write=$(has 'sexfiles\.sexobject\.native\.write\.ok.*object_id=.*len=4')
+    has_persist=$(has 'sexfiles\.sexobject\.native\.persist\.ok.*object_id=.*table=1.*freemap=1.*data=1')
+    has_read=$(has 'sexfiles\.sexobject\.native\.read\.ok.*object_id=.*len=')
+    has_match=$(has 'linen\.sexobject\.native\.read\.match.*label=test.*text=test.*ok=1')
+    has_truth=$(has 'linen\.sexobject\.native\.truth.*filesystem=0.*posix=0.*directories=0.*ok=1')
+    has_done=$(has 'linen\.sexobject\.native\.done.*ok=1')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+
+    if [ "$has_fault" -ge 1 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "fault marker present during native persist proof"
+    elif [ "$has_route" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "route marker missing or uses_slot_storage!=1"
+    elif [ "$has_save" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "save.send marker missing"
+    elif [ "$has_create" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "sexfiles create.ok marker missing"
+    elif [ "$has_write" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "sexfiles write.ok marker missing"
+    elif [ "$has_persist" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "sexfiles persist.ok marker missing"
+    elif [ "$has_read" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "sexfiles read.ok marker missing"
+    elif [ "$has_match" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "linen read.match ok=0 or missing"
+    elif [ "$has_truth" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "truth/non-claims marker missing"
+    elif [ "$has_done" -ge 1 ]; then
+        gate_linen_sexobject_native_persist="PASS"
+        print_row "linen_sexobject_native_persist" "PASS" "Linen UX through native SexObject store: create/write/persist/read verified via SLOT_STORAGE"
+    else
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "begin marker present but proof incomplete: done ok=1 missing"
+    fi
+else
+    gate_linen_sexobject_native_persist="SKIP"
+    print_row "linen_sexobject_native_persist" "SKIP" "linen sexobject native persist proof not triggered"
+fi
+
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
 if [ "$(has 'sexfiles\.diskfs100\.ap3\.begin')" -ge 1 ]; then
     has_linen_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=linen.*ok=1')
@@ -6329,6 +6382,7 @@ ALL_GATES=(
     "sexobject_extent_write_full_block:$gate_sexobject_extent_write_full_block"
     "sexobject_write_read_persist:$gate_sexobject_write_read_persist"
     "sexobject_multi_object:$gate_sexobject_multi_object"
+    "linen_sexobject_native_persist:$gate_linen_sexobject_native_persist"
     "sexfiles_diskfs_bridge_fixed_object_rw:$gate_sexfiles_diskfs_bridge_fixed_object_rw"
     "sexfiles_diskfs_bridge_multi_object_rw:$gate_sexfiles_diskfs_bridge_multi_object_rw"
     "sexfiles_diskfs_bridge_reboot_persistence:$gate_sexfiles_diskfs_bridge_reboot_persistence"

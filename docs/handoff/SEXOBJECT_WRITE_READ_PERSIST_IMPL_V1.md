@@ -85,7 +85,7 @@ No new faults introduced.
 
 ## H) Commit Hash
 
-TBD (see git log after commit)
+`ef0677c8`
 
 ---
 

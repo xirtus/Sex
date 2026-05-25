@@ -124,6 +124,12 @@ pub const DISKFS_OBJECT_SIZE: u64 = 4096;
 /// Correlation=0 (no tx_id), durable=0 (RamFS only, not DiskFS).
 pub const OP_RAMFS_STATUS: u64 = 0x3F;
 
+/// Opcode: Run native SexObject persist proof triggered by Linen via SLOT_STORAGE.
+/// arg0 = 0 (reserved), arg1 = 0, arg2 = 0
+/// Returns: object_id (≥1) on success, error code (negative) on failure.
+/// Route: Linen → SLOT_STORAGE → SexFiles → SexFS v0 → NVMe
+pub const OP_SEXOBJECT_NATIVE_PERSIST_PROOF: u64 = 0x40;
+
 // ── Error constants ──
 pub const ERR_INVALID_HANDLE: i64 = -1;
 pub const ERR_NAME_TOO_LONG: i64 = -2;

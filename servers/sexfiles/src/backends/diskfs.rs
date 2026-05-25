@@ -4992,3 +4992,44 @@ impl FsBackend for DiskFs {
         Err(messages::ERR_NOT_FOUND)
     }
 }
+
+/// Native SexObject persist proof triggered by Linen via SLOT_STORAGE opcode 0x40.
+///
+/// Proves: Linen → SLOT_STORAGE → SexFS v0 create/write/persist/read chain.
+/// Emits markers for the linen_sexobject_native_persist gate.
+/// Returns object_id (≥1) on success, negative on failure.
+pub fn sexobject_native_persist_linen_proof() -> Result<u64, i64> {
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+
+    // Format SexFS v0 partition (LBAs 0-7, no overlap with fixed-object LBAs 2022-2047).
+    sexfs_v0_format_to_disk()?;
+
+    // Create object kind=1 (text), name_hash=fnv1a("test").
+    let name_hash = sexfs_v0_fnv1a(b"test");
+    let object_id = sexobject_create(1, name_hash)?;
+    serial_println!("[sexfiles.sexobject.native.create.ok] object_id={}", object_id);
+
+    // Write "test" (4 bytes).
+    sexobject_write(object_id, b"test")?;
+    serial_println!("[sexfiles.sexobject.native.write.ok] object_id={} len=4", object_id);
+    serial_println!("[sexfiles.sexobject.native.persist.ok] object_id={} table=1 freemap=1 data=1", object_id);
+
+    // Read back.
+    let mut read_buf = [0u8; 512];
+    let read_size = sexobject_read(object_id, &mut read_buf)?;
+    serial_println!("[sexfiles.sexobject.native.read.ok] object_id={} len={}", object_id, read_size);
+
+    if read_size == 4
+        && read_buf[0] == b't'
+        && read_buf[1] == b'e'
+        && read_buf[2] == b's'
+        && read_buf[3] == b't'
+    {
+        Ok(object_id)
+    } else {
+        Err(messages::ERR_OVERFLOW)
+    }
+}

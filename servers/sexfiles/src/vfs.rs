@@ -559,6 +559,29 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
             reply
         }
 
+        messages::OP_SEXOBJECT_NATIVE_PERSIST_PROOF => {
+            crate::pdx::serial_println!(
+                "[sexfiles.route.dispatch] op=0x40 name=sexobject_native_persist caller={}",
+                caller_pd
+            );
+            match crate::backends::diskfs::sexobject_native_persist_linen_proof() {
+                Ok(object_id) => {
+                    crate::pdx::serial_println!(
+                        "[sexfiles.route.reply] op=0x40 caller={} object_id={}",
+                        caller_pd, object_id
+                    );
+                    object_id
+                }
+                Err(e) => {
+                    crate::pdx::serial_println!(
+                        "[sexfiles.route.reply] op=0x40 caller={} err={}",
+                        caller_pd, e
+                    );
+                    e as u64
+                }
+            }
+        }
+
         messages::OP_RAMFS_STATUS => {
             // Phase B1: object status query by object_id
             // arg0 = object_id, arg1/arg2 = 0

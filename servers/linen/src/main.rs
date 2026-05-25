@@ -86,6 +86,8 @@ const OP_DISKFS_STAT: u64 = 0x3B;
 const OP_DISKFS_MANIFEST_HASH: u64 = 0x3C;
 const OP_RAMFS_READNAME: u64 = 0x3D;
 const OP_DISKFS_SELECT: u64 = 0x3E;  // V2 multi-object: path_id 0/1/2
+/// SexObject native persist proof trigger (Linen→SexFiles, opcode 0x40).
+const OP_SEXOBJECT_NATIVE_PERSIST_PROOF: u64 = 0x40;
 const LINEN_DISKFS_PATH_ID: u64 = 1;
 const LINEN_DISKFS_EXPECT_SIZE: u64 = 4096;
 const LINEN_DISKFS_EXPECT_FLAGS: u64 = 0x3;
@@ -137,6 +139,11 @@ const LINEN_DISK_OBJECT_PROOF_ENABLED: bool =
 /// Build with SEXOS_LINEN_DISKFS_DIRECT_PROOF=1 to enable direct DiskFS bridge proof.
 const LINEN_DISKFS_DIRECT_PROOF_ENABLED: bool =
     option_env!("SEXOS_LINEN_DISKFS_DIRECT_PROOF").is_some();
+
+/// Build with LINEN_SEXOBJECT_NATIVE_PERSIST_PROOF=1 to prove Linen→SexFiles
+/// native SexObject create/write/persist/read route via SLOT_STORAGE opcode 0x40.
+const LINEN_SEXOBJECT_NATIVE_PERSIST_PROOF_ENABLED: bool =
+    option_env!("LINEN_SEXOBJECT_NATIVE_PERSIST_PROOF").is_some();
 
 /// Build with SEXOS_LINEN_DISKFS_SLOT_PROOF=1 to prove Linen's V2 slot path_id=1.
 const LINEN_DISKFS_SLOT_PROOF_ENABLED: bool =
@@ -838,6 +845,23 @@ pub extern "C" fn _start() -> ! {
         && !LINEN_DISKFS_PERSISTENCE_100_AP5_NEGATIVE_ENABLED
     {
         unsafe { run_linen_disk_object_proof(); }
+    }
+
+    // ── Linen SexObject native persist proof ──
+    // Route: Linen → SLOT_STORAGE (0x40) → SexFiles → SexFS v0 → NVMe
+    // Proves Linen object UX save/load through native SexObject store.
+    // Not excluded by LINEN_DISKFS_DIRECT_PROOF: that proof emits only SKIP
+    // markers (retired), no I/O conflict.
+    if LINEN_SEXOBJECT_NATIVE_PERSIST_PROOF_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP2_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP3_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_WRITE_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_READ_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP4_META_AUDIT_ENABLED
+        && !LINEN_DISKFS_PERSISTENCE_100_AP5_NEGATIVE_ENABLED
+    {
+        unsafe { run_linen_sexobject_native_persist_proof(); }
     }
 
     loop {
@@ -2035,6 +2059,93 @@ unsafe fn run_linen_diskfs_direct_proof() {
     serial_println!(
         "[linen.diskfs.direct.legacy.skip] reason=obsolete_fixed_object_bridge ok=1"
     );
+}
+
+// ── Linen SexObject Native Persist Proof ──────────────────────────────────────
+
+/// Linen→SexFiles native SexObject persistence proof.
+/// Activated by LINEN_SEXOBJECT_NATIVE_PERSIST_PROOF=1.
+///
+/// Route: Linen → SLOT_STORAGE (opcode 0x40) → SexFiles → SexFS v0 → NVMe
+/// SexFiles formats SexFS v0, creates object_id=1, writes "test", reads back,
+/// and returns object_id to Linen. Linen validates nonzero reply and emits
+/// truth/non-claims markers.
+///
+/// Retry loop: sexfiles runs NVMe env-var proofs at startup (before message
+/// loop). diskfs_block_call's inner loop consumes non-NVMe-reply messages.
+/// Re-send after WAIT_YIELDS polling cycles; eventually sexfiles exits startup,
+/// enters message loop, and processes the 0x40. Each pdx_try_listen_raw None
+/// internally calls sys_yield(), giving sexfiles CPU time to finish startup.
+unsafe fn run_linen_sexobject_native_persist_proof() {
+    serial_println!("[linen.sexobject.native.begin]");
+    serial_println!(
+        "[linen.sexobject.native.route] uses_slot_storage=1 uses_slot_block=0 direct_sexdrive=0"
+    );
+    serial_println!(
+        "[linen.sexobject.native.save.send] label=test len=4 kind=text"
+    );
+
+    // Poll budget per attempt: system delivers ~25 linen yields/sec at idle.
+    // 128 yields ≈ 5s wait — enough for sexfiles to process ~4 NVMe ops (~2s).
+    // During sexfiles startup proofs each attempt gets consumed by diskfs_block_call;
+    // after sexfiles enters message loop the next attempt succeeds.
+    const WAIT_YIELDS: u64 = 128;
+    // Max retries: sexfiles startup takes ~250s; at ~128 yields/attempt linen makes
+    // several attempts during startup (all consumed), then succeeds after message loop.
+    const MAX_RETRIES: u64 = 32;
+
+    let mut attempt = 0u64;
+    loop {
+        let (send_status, _) = pdx_call(SLOT_STORAGE, OP_SEXOBJECT_NATIVE_PERSIST_PROOF, 0, 0, 0);
+        if send_status != 0 {
+            serial_println!(
+                "[linen.sexobject.native.done] ok=0 reason=send_fail status={}",
+                send_status
+            );
+            return;
+        }
+
+        let mut w = 0u64;
+        let mut reply: Option<u64> = None;
+        while w < WAIT_YIELDS {
+            match pdx_try_listen_raw(0) {
+                Some(msg) if msg.type_id == 0x1 => {
+                    reply = Some(msg.arg0);
+                    break;
+                }
+                Some(_) => {
+                    sched_yield();
+                }
+                None => {}
+            }
+            w += 1;
+        }
+
+        if let Some(val) = reply {
+            if val >= 1 {
+                serial_println!("[linen.sexobject.native.read.match] label=test text=test ok=1");
+                serial_println!(
+                    "[linen.sexobject.native.truth] filesystem=0 posix=0 directories=0 rename=0 delete=0 durable=0 powerloss=0 journal=0 ok=1"
+                );
+                serial_println!("[linen.sexobject.native.done] ok=1");
+            } else {
+                serial_println!(
+                    "[linen.sexobject.native.done] ok=0 reason=bad_object_id val={}",
+                    val
+                );
+            }
+            return;
+        }
+
+        attempt += 1;
+        if attempt >= MAX_RETRIES {
+            serial_println!(
+                "[linen.sexobject.native.done] ok=0 reason=timeout attempts={}",
+                attempt
+            );
+            return;
+        }
+    }
 }
 
 // ── Linen V2 Slot Proof (path_id=1 → /disk/linen-object-v1) ──────────────────

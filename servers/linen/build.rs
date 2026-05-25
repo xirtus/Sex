@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=LINEN_SEXOBJECT_NATIVE_PERSIST_PROOF");
     println!("cargo:rerun-if-env-changed=SEXOS_LINEN_DISKFS_DIRECT_PROOF");
     println!("cargo:rerun-if-env-changed=SEXOS_LINEN_DISKFS_SLOT_PROOF");
     println!("cargo:rerun-if-env-changed=SEXOS_LINEN_DISKFS_PERSISTENCE_100_AP2");
