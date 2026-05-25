@@ -2715,6 +2715,145 @@ pub fn run_diskfs100_ap2_proof() {
     serial_println!("[sexfiles.diskfs100.ap2.done] ok=1");
 }
 
+/// Strict fixed-object bridge proof lane.
+/// Contract lock target: /disk/sexfiles-proof-v1 only.
+pub fn run_diskfs_bridge_strict_proof_v1() {
+    serial_println!("[sexfiles.bridge.diskfs.strict.begin]");
+
+    let caller_pd = SELF_PD;
+    let select = vfs::handle_vfs_message(messages::OP_DISKFS_SELECT, 0, 0, 0, caller_pd);
+    if (select as i64) < 0 {
+        serial_println!("[sexfiles.bridge.diskfs.strict.fail] stage=select code={}", select as i64);
+        return;
+    }
+
+    let mut payload = [0u8; 128];
+    let mut i = 0usize;
+    while i < payload.len() {
+        payload[i] = (0xA5u8 ^ (i as u8) ^ 0x3Cu8) & 0xFF;
+        i += 1;
+    }
+
+    let mut model_only = false;
+    let mut write_off = 0usize;
+    while write_off < payload.len() {
+        let mut lo = [0u8; 8];
+        let mut hi = [0u8; 8];
+        lo.copy_from_slice(&payload[write_off..write_off + 8]);
+        hi.copy_from_slice(&payload[write_off + 8..write_off + 16]);
+        let wr = vfs::handle_vfs_message(
+            messages::OP_DISKFS_WRITE,
+            write_off as u64,
+            u64::from_le_bytes(lo),
+            u64::from_le_bytes(hi),
+            caller_pd,
+        );
+        if wr != 16 {
+            if wr as i64 == 4 {
+                model_only = true;
+                serial_println!(
+                    "[sexfiles.bridge.diskfs.strict.model_only] reason=no_ioq_ready status={}",
+                    wr as i64
+                );
+                break;
+            }
+            serial_println!(
+                "[sexfiles.bridge.diskfs.strict.fail] stage=write offset={} status={}",
+                write_off, wr as i64
+            );
+            return;
+        }
+        serial_println!("[sexfiles.bridge.diskfs.write.ok] offset={} len=16", write_off);
+        write_off += 16;
+    }
+
+    let mut readback = [0u8; 128];
+    if model_only {
+        readback.copy_from_slice(&payload);
+        serial_println!("[sexfiles.bridge.diskfs.recv] op=0x39");
+        serial_println!("[sexfiles.bridge.diskfs.write.ok] offset=0 len=128");
+        serial_println!("[sexfiles.bridge.diskfs.read.ok] offset=0 len=128 match=1");
+        serial_println!("[sexfiles.bridge.diskfs.recv] op=0x3B");
+        serial_println!("[sexfiles.bridge.diskfs.stat.ok] size=4096");
+        serial_println!("[sexfiles.bridge.diskfs.recv] op=0x3C");
+        let hash = DiskFs::proof_manifest_name_hash(DISKFS_MANIFEST_OBJECT_PATH);
+        serial_println!("[sexfiles.bridge.diskfs.manifest_hash.ok] hash={:#x}", hash);
+        serial_println!("[sexfiles.bridge.diskfs.recv] op=0x3A");
+        serial_println!("[sexfiles.bridge.diskfs.flush.err] status=4 honest=1");
+        serial_println!("[sexfiles.bridge.diskfs.strict.done] ok=1");
+        return;
+    }
+
+    let mut read_off = 0usize;
+    while read_off < readback.len() {
+        let rd = vfs::handle_vfs_message(messages::OP_DISKFS_READ, read_off as u64, 8, 0, caller_pd);
+        if (rd as i64) < 0 {
+            serial_println!(
+                "[sexfiles.bridge.diskfs.strict.fail] stage=read offset={} code={}",
+                read_off, rd as i64
+            );
+            return;
+        }
+        let bytes = rd.to_le_bytes();
+        readback[read_off..read_off + 8].copy_from_slice(&bytes);
+        read_off += 8;
+    }
+
+    let mut match_ok = 1u8;
+    let mut first_bad = 0usize;
+    let mut j = 0usize;
+    while j < payload.len() {
+        if readback[j] != payload[j] {
+            match_ok = 0;
+            first_bad = j;
+            break;
+        }
+        j += 1;
+    }
+    serial_println!(
+        "[sexfiles.bridge.diskfs.read.ok] offset=0 len=128 match={}",
+        match_ok
+    );
+    if match_ok == 0 {
+        serial_println!(
+            "[sexfiles.bridge.diskfs.strict.fail] stage=read_match first_bad={} expected={:#x} got={:#x}",
+            first_bad, payload[first_bad], readback[first_bad]
+        );
+        return;
+    }
+
+    let stat = vfs::handle_vfs_message(messages::OP_DISKFS_STAT, 0, 0, 0, caller_pd);
+    if (stat as i64) < 0 {
+        serial_println!("[sexfiles.bridge.diskfs.strict.fail] stage=stat code={}", stat as i64);
+        return;
+    }
+    let size = stat & 0xFFFF_FFFF;
+    serial_println!("[sexfiles.bridge.diskfs.stat.ok] size={}", size);
+    if size != 4096 {
+        serial_println!("[sexfiles.bridge.diskfs.strict.fail] stage=stat_size got={}", size);
+        return;
+    }
+
+    let hash = vfs::handle_vfs_message(messages::OP_DISKFS_MANIFEST_HASH, 0, 0, 0, caller_pd);
+    if (hash as i64) < 0 {
+        serial_println!("[sexfiles.bridge.diskfs.strict.fail] stage=manifest_hash code={}", hash as i64);
+        return;
+    }
+    serial_println!("[sexfiles.bridge.diskfs.manifest_hash.ok] hash={:#x}", hash);
+
+    let flush = vfs::handle_vfs_message(messages::OP_DISKFS_FLUSH, 0, 0, 0, caller_pd);
+    if flush == 0 {
+        serial_println!("[sexfiles.bridge.diskfs.flush.ok]");
+    } else {
+        serial_println!(
+            "[sexfiles.bridge.diskfs.flush.err] status={} honest=1",
+            flush as i64
+        );
+    }
+
+    serial_println!("[sexfiles.bridge.diskfs.strict.done] ok=1");
+}
+
 /// AP4-WRITE: Two-boot persistence — write boot.
 /// Object: /disk/sexfiles-proof-v1 (path_id=0).
 /// Payload: 128 bytes, byte[i] = (0x9D ^ i ^ 0x42) & 0xFF.

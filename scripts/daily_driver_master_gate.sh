@@ -136,6 +136,7 @@ gate_sexfiles_diskfs_bridge_multi_object_rw="SKIP"
 gate_sexfiles_diskfs_bridge_reboot_persistence="SKIP"
 gate_sexfiles_diskfs_bridge_negatives="SKIP"
 gate_sexfiles_diskfs_bridge_flush_fsync_honest="SKIP"
+gate_sexfiles_diskfs_bridge_strict="SKIP"
 gate_silk_glass_color="SKIP"
 gate_frame_chrome_model="SKIP"
 gate_spindle_frame_chrome="SKIP"
@@ -4050,7 +4051,10 @@ else
 fi
 
 # ---- 76c. sexfiles_diskfs_bridge ----
-if [ "$(has 'sexfiles\.bridge\.diskfs\.recv')" -ge 1 ]; then
+if [ "$(has 'sexfiles\.bridge\.diskfs\.strict\.begin')" -ge 1 ]; then
+    gate_sexfiles_diskfs_bridge="SKIP"
+    print_row "sexfiles_diskfs_bridge" "SKIP" "strict bridge profile active; legacy bridge gate bypassed"
+elif [ "$(has 'sexfiles\.bridge\.diskfs\.recv')" -ge 1 ]; then
     has_buf_marker=0
     if [ "$(has 'sexfiles\.bridge\.diskfs\.buf\.(ready|reuse)')" -eq 1 ]; then
         has_buf_marker=1
@@ -4164,6 +4168,53 @@ if [ "$(has 'sexfiles\.diskfs100\.ap2\.begin')" -ge 1 ]; then
     fi
 else
     gate_sexfiles_diskfs_bridge_fixed_object_rw="SKIP"
+fi
+
+# ---- 76d2. sexfiles_diskfs_bridge_strict ----
+if [ "$(has 'sexfiles\.bridge\.diskfs\.strict\.begin')" -ge 1 ]; then
+    has_strict_recv_write=$(has 'sexfiles\.bridge\.diskfs\.recv.*op=0x38')
+    has_strict_recv_read=$(has 'sexfiles\.bridge\.diskfs\.recv.*op=0x39')
+    has_strict_recv_flush=$(has 'sexfiles\.bridge\.diskfs\.recv.*op=0x3A')
+    has_strict_recv_stat=$(has 'sexfiles\.bridge\.diskfs\.recv.*op=0x3B')
+    has_strict_recv_hash=$(has 'sexfiles\.bridge\.diskfs\.recv.*op=0x3C')
+    has_strict_write_ok=$(has 'sexfiles\.bridge\.diskfs\.write\.ok.*offset=.*len=')
+    has_strict_read_match=$(has 'sexfiles\.bridge\.diskfs\.read\.ok.*match=1')
+    has_strict_stat_size=$(has 'sexfiles\.bridge\.diskfs\.stat\.ok.*size=4096')
+    has_strict_manifest_hash=$(has 'sexfiles\.bridge\.diskfs\.manifest_hash\.ok')
+    has_strict_flush=$(has 'sexfiles\.bridge\.diskfs\.flush\.(ok|err.*honest=1)')
+    has_strict_done=$(has 'sexfiles\.bridge\.diskfs\.strict\.done.*ok=1')
+    has_strict_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+    has_strict_read_mismatch=$(has 'sexfiles\.bridge\.diskfs\.read\.ok.*match=0')
+    has_strict_bad_3d=$(has 'sexfiles\.bridge\.diskfs\.recv.*op=0x3D')
+
+    if [ "$has_strict_fault" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_strict="FAIL"
+        print_row "sexfiles_diskfs_bridge_strict" "FAIL" "fault marker present during strict proof"
+    elif [ "$has_strict_bad_3d" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_strict="FAIL"
+        print_row "sexfiles_diskfs_bridge_strict" "FAIL" "op 0x3D observed in DiskFS bridge lane"
+    elif [ "$has_strict_read_mismatch" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_strict="FAIL"
+        print_row "sexfiles_diskfs_bridge_strict" "FAIL" "strict readback reported match=0"
+    elif [ "$has_strict_recv_write" -ge 1 ] && \
+         [ "$has_strict_recv_read" -ge 1 ] && \
+         [ "$has_strict_recv_flush" -ge 1 ] && \
+         [ "$has_strict_recv_stat" -ge 1 ] && \
+         [ "$has_strict_recv_hash" -ge 1 ] && \
+         [ "$has_strict_write_ok" -ge 1 ] && \
+         [ "$has_strict_read_match" -ge 1 ] && \
+         [ "$has_strict_stat_size" -ge 1 ] && \
+         [ "$has_strict_manifest_hash" -ge 1 ] && \
+         [ "$has_strict_flush" -ge 1 ] && \
+         [ "$has_strict_done" -ge 1 ]; then
+        gate_sexfiles_diskfs_bridge_strict="PASS"
+        print_row "sexfiles_diskfs_bridge_strict" "PASS" "strict bridge markers complete"
+    else
+        gate_sexfiles_diskfs_bridge_strict="FAIL"
+        print_row "sexfiles_diskfs_bridge_strict" "FAIL" "strict begin present but required markers missing"
+    fi
+else
+    gate_sexfiles_diskfs_bridge_strict="SKIP"
 fi
 
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
@@ -5877,6 +5928,7 @@ ALL_GATES=(
     "sexfiles_diskfs_bridge_reboot_persistence:$gate_sexfiles_diskfs_bridge_reboot_persistence"
     "sexfiles_diskfs_bridge_negatives:$gate_sexfiles_diskfs_bridge_negatives"
     "sexfiles_diskfs_bridge_flush_fsync_honest:$gate_sexfiles_diskfs_bridge_flush_fsync_honest"
+    "sexfiles_diskfs_bridge_strict:$gate_sexfiles_diskfs_bridge_strict"
     "silk_glass_color:$gate_silk_glass_color"
     "frame_chrome_model:$gate_frame_chrome_model"
     "spindle_frame_chrome:$gate_spindle_frame_chrome"

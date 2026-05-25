@@ -66,4 +66,9 @@ fn main() {
     if std::env::var("SEXFILES_DISKFS_100_AP6_FLUSH_FSYNC").as_deref() == Ok("1") {
         println!("cargo:rustc-cfg=sexfiles_diskfs100_ap6_flush_fsync");
     }
+    println!("cargo:rerun-if-env-changed=SEXFILES_DISKFS_BRIDGE_STRICT_PROOF");
+    println!("cargo:rustc-check-cfg=cfg(sexfiles_diskfs_bridge_strict_proof)");
+    if std::env::var("SEXFILES_DISKFS_BRIDGE_STRICT_PROOF").as_deref() == Ok("1") {
+        println!("cargo:rustc-cfg=sexfiles_diskfs_bridge_strict_proof");
+    }
 }

@@ -111,6 +111,12 @@ pub extern "C" fn trampoline_main() {
         crate::proof::run_diskfs100_ap6_flush_fsync();
         return;
     }
+    const DISKFS_BRIDGE_STRICT_PROOF_ENABLED: bool =
+        cfg!(sexfiles_diskfs_bridge_strict_proof);
+    if DISKFS_BRIDGE_STRICT_PROOF_ENABLED {
+        crate::proof::run_diskfs_bridge_strict_proof_v1();
+        return;
+    }
 
     const DISKFS_100_AP2_PROOF_ENABLED: bool =
         cfg!(sexfiles_diskfs100_ap2_proof);
