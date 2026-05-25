@@ -582,6 +582,31 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
             }
         }
 
+        messages::OP_SEXOBJECT_READ_BACK => {
+            // arg0 = object_id, arg1/arg2 = 0 (reserved)
+            crate::pdx::serial_println!(
+                "[sexfiles.route.dispatch] op=0x41 name=sexobject_read_back caller={}",
+                caller_pd
+            );
+            match crate::backends::diskfs::sexobject_read_back_for_quil(arg0) {
+                Ok(len) => {
+                    crate::pdx::serial_println!(
+                        "[sexfiles.route.reply] op=0x41 caller={} len={} ok=1",
+                        caller_pd, len
+                    );
+                    // Return len as positive value for the caller to verify
+                    len as u64
+                }
+                Err(e) => {
+                    crate::pdx::serial_println!(
+                        "[sexfiles.route.reply] op=0x41 caller={} err={}",
+                        caller_pd, e
+                    );
+                    e as u64
+                }
+            }
+        }
+
         messages::OP_RAMFS_STATUS => {
             // Phase B1: object status query by object_id
             // arg0 = object_id, arg1/arg2 = 0

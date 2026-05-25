@@ -305,6 +305,9 @@ export SEXOS_SPINDLE_EDITOR_FINISH_PROOF=1
 # ── Storage Phase A markers proof ──
 export SEXOS_QUIL_STORAGE_PHASEA_PROOF=1
 
+# ── Quil save/open SexObject native proof ──
+export SEXOS_QUIL_SAVE_OPEN_SEXOBJECT_PROOF=1
+
 # ── App registry lifecycle V2 proof ──
 export SEXOS_APP_REGISTRY_LIFECYCLE_V2_PROOF=1
 

@@ -5033,3 +5033,37 @@ pub fn sexobject_native_persist_linen_proof() -> Result<u64, i64> {
         Err(messages::ERR_OVERFLOW)
     }
 }
+
+/// Quil read-back proof opcode 0x41 handler.
+///
+/// Reads existing SexObject content by object_id without formatting.
+/// Verifies content is "test" (4 bytes) and returns length on match.
+/// Used by Quil's save/open proof to demonstrate independent open/read
+/// after the 0x40 save/create/write proof completes.
+///
+/// Returns data length (4) on success, negative error on failure.
+pub fn sexobject_read_back_for_quil(object_id: u64) -> Result<usize, i64> {
+    if object_id < 1 {
+        return Err(messages::ERR_INVALID_HANDLE);
+    }
+
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return Err(messages::ERR_NOT_FOUND);
+    }
+
+    let mut read_buf = [0u8; 512];
+    let read_size = sexobject_read(object_id, &mut read_buf)?;
+    serial_println!("[sexfiles.sexobject.read_back.ok] object_id={} len={}", object_id, read_size);
+
+    if read_size == 4
+        && read_buf[0] == b't'
+        && read_buf[1] == b'e'
+        && read_buf[2] == b's'
+        && read_buf[3] == b't'
+    {
+        Ok(read_size)
+    } else {
+        Err(messages::ERR_OVERFLOW)
+    }
+}

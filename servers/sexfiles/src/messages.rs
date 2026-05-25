@@ -130,6 +130,12 @@ pub const OP_RAMFS_STATUS: u64 = 0x3F;
 /// Route: Linen → SLOT_STORAGE → SexFiles → SexFS v0 → NVMe
 pub const OP_SEXOBJECT_NATIVE_PERSIST_PROOF: u64 = 0x40;
 
+/// Opcode: Read back existing SexObject content (no format, no write).
+/// arg0 = object_id (≥1), arg1/arg2 = 0 (reserved)
+/// Returns: data length (≥1) on success, error code (negative) on failure.
+/// Route: Quil/Linen → SLOT_STORAGE → SexFiles → SexFS v0 → NVMe
+pub const OP_SEXOBJECT_READ_BACK: u64 = 0x41;
+
 // ── Error constants ──
 pub const ERR_INVALID_HANDLE: i64 = -1;
 pub const ERR_NAME_TOO_LONG: i64 = -2;

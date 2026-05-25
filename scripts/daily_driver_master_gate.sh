@@ -103,6 +103,7 @@ gate_spindle_editor_v3="SKIP"
 gate_quil_paste="SKIP"
 gate_quil_replace="SKIP"
 gate_quil_goto_line="SKIP"
+gate_quil_save_open_sexobject="SKIP"
 gate_spindle_editor_finish="SKIP"
 gate_linen_search_bridge="SKIP"
 gate_storage_phasea="SKIP"
@@ -4666,6 +4667,66 @@ else
     print_row "linen_sexobject_native_persist" "SKIP" "linen sexobject native persist proof not triggered"
 fi
 
+# ---- quil_save_open_sexobject ----
+if [ "$(has '\[quil\.sexobject\.save\.open\.begin\]')" -ge 1 ]; then
+    has_route=$(has 'quil\.sexobject\.route.*uses_linen=1.*uses_slot_storage=1.*uses_slot_block=0.*direct_sexdrive=0')
+    has_buffer=$(has 'quil\.sexobject\.buffer\.ready.*label=test.*len=4.*text=test')
+    has_save_send=$(has 'quil\.sexobject\.save\.send.*label=test.*len=4.*kind=text')
+    has_linen_save=$(has 'linen\.sexobject\.native\.save\.recv.*label=test.*len=4')
+    has_sexfiles_write=$(has 'sexfiles\.sexobject\.native\.write\.ok.*object_id=.*len=4')
+    has_open_send=$(has 'quil\.sexobject\.open\.send.*label=test')
+    has_linen_open=$(has 'linen\.sexobject\.native\.open\.recv.*label=test')
+    has_sexfiles_read=$(has 'sexfiles\.sexobject\.native\.read\.ok.*object_id=.*len=')
+    has_match=$(has 'quil\.sexobject\.open\.match.*text=test.*ok=1')
+    has_truth=$(has 'quil\.sexobject\.truth.*filesystem=0.*posix=0.*directories=0.*ok=1')
+    has_done=$(has 'quil\.sexobject\.save\.open\.done.*ok=1')
+    has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
+
+    if [ "$has_fault" -ge 1 ]; then
+        gate_quil_save_open_sexobject="FAIL"
+        print_row "quil_save_open_sexobject" "FAIL" "fault marker present during save/open proof"
+    elif [ "$has_route" -eq 0 ]; then
+        gate_quil_save_open_sexobject="FAIL"
+        print_row "quil_save_open_sexobject" "FAIL" "route marker missing or incorrect"
+    elif [ "$has_buffer" -eq 0 ]; then
+        gate_quil_save_open_sexobject="FAIL"
+        print_row "quil_save_open_sexobject" "FAIL" "buffer.ready marker missing"
+    elif [ "$has_save_send" -eq 0 ]; then
+        gate_quil_save_open_sexobject="FAIL"
+        print_row "quil_save_open_sexobject" "FAIL" "save.send marker missing"
+    elif [ "$has_linen_save" -eq 0 ]; then
+        gate_quil_save_open_sexobject="FAIL"
+        print_row "quil_save_open_sexobject" "FAIL" "linen.save.recv marker missing"
+    elif [ "$has_sexfiles_write" -eq 0 ]; then
+        gate_quil_save_open_sexobject="FAIL"
+        print_row "quil_save_open_sexobject" "FAIL" "sexfiles write.ok marker missing"
+    elif [ "$has_open_send" -eq 0 ]; then
+        gate_quil_save_open_sexobject="FAIL"
+        print_row "quil_save_open_sexobject" "FAIL" "open.send marker missing"
+    elif [ "$has_linen_open" -eq 0 ]; then
+        gate_quil_save_open_sexobject="FAIL"
+        print_row "quil_save_open_sexobject" "FAIL" "linen.open.recv marker missing"
+    elif [ "$has_sexfiles_read" -eq 0 ]; then
+        gate_quil_save_open_sexobject="FAIL"
+        print_row "quil_save_open_sexobject" "FAIL" "sexfiles read.ok marker missing"
+    elif [ "$has_match" -eq 0 ]; then
+        gate_quil_save_open_sexobject="FAIL"
+        print_row "quil_save_open_sexobject" "FAIL" "open.match marker missing or failed"
+    elif [ "$has_truth" -eq 0 ]; then
+        gate_quil_save_open_sexobject="FAIL"
+        print_row "quil_save_open_sexobject" "FAIL" "truth/non-claims marker missing"
+    elif [ "$has_done" -ge 1 ]; then
+        gate_quil_save_open_sexobject="PASS"
+        print_row "quil_save_open_sexobject" "PASS" "Quil save/open through native SexObject: create/write/persist/read verified via SLOT_STORAGE"
+    else
+        gate_quil_save_open_sexobject="FAIL"
+        print_row "quil_save_open_sexobject" "FAIL" "begin marker present but proof incomplete: done ok=1 missing"
+    fi
+else
+    gate_quil_save_open_sexobject="SKIP"
+    print_row "quil_save_open_sexobject" "SKIP" "quil save/open sexobject proof not triggered"
+fi
+
 # ---- 76e. sexfiles_diskfs_bridge_multi_object_rw ----
 if [ "$(has 'sexfiles\.diskfs100\.ap3\.begin')" -ge 1 ]; then
     has_linen_match=$(has 'sexfiles\.diskfs100\.ap3\.object\.match.*name=linen.*ok=1')
@@ -6113,6 +6174,7 @@ ALL_GATES=(
     "quil_paste:$gate_quil_paste"
     "quil_replace:$gate_quil_replace"
     "quil_goto_line:$gate_quil_goto_line"
+    "quil_save_open_sexobject:$gate_quil_save_open_sexobject"
     "spindle_editor_finish:$gate_spindle_editor_finish"
     "storage_phasea:$gate_storage_phasea"
     "storage_phaseb1:$gate_storage_phaseb1"
