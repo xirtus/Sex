@@ -467,7 +467,12 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
             old_ctx.kstack_top = (base as u64) - 128;
             // Read PKRU from the PD's stored mask (rdpkru would return 0
             // in God Mode inside this handler).
-            old_ctx.pkru = (*old_ctx.pd_ptr).current_pkru_mask.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            // pp-2026-05-25: guard null pd_ptr to prevent cascading #PF on broken tasks
+            old_ctx.pkru = if old_ctx.pd_ptr.is_null() {
+                0xFFFF_FFFFu64  // deny-all PKRU (all keys disabled) for broken task
+            } else {
+                (*old_ctx.pd_ptr).current_pkru_mask.load(core::sync::atomic::Ordering::Relaxed) as u64
+            };
         }
 
         let kstack_top = (*next_ctx_ptr).kstack_top;
@@ -528,8 +533,22 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
                fault_addr);
     }
 
-    serial_println!("EXCEPTION: PAGE FAULT at {:#x} (RIP: {:#x}, RSP: {:#x}, ERR: {:#x})", 
+    serial_println!("EXCEPTION: PAGE FAULT at {:#x} (RIP: {:#x}, RSP: {:#x}, ERR: {:#x})",
         fault_addr, fault_rip, fault_rsp, error_code);
+
+    // Kernel-mode page faults must not reach forward_page_fault: that path
+    // calls current_pd_ref() which requires a valid current PD. During
+    // scheduler transitions (yield_and_switch clears current_pd_ptr before
+    // calling tick()) the ptr is transiently null, causing "KERNEL PD MISSING".
+    // Kernel memory is always mapped; a kernel-mode #PF is always a bug —
+    // halt this core cleanly with diagnostics instead of forwarding to userspace.
+    if fault_cs_rpl == 0 {
+        serial_println!(
+            "KERNEL PAGE FAULT HALT: addr={:#x} rip={:#x} rsp={:#x} err={:#x} pd={}",
+            fault_addr, fault_rip, fault_rsp, error_code, cur_pd
+        );
+        loop { x86_64::instructions::hlt(); }
+    }
 
     let core_id = crate::core_local::CoreLocal::get().core_id;
     let sched = &crate::scheduler::SCHEDULERS[core_id as usize];
@@ -634,7 +653,11 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
             old_ctx.rbx = *base.offset(-15);
             old_ctx.rax = *base.offset(-16);
             old_ctx.kstack_top = (base as u64) - 128;
-            old_ctx.pkru = (*old_ctx.pd_ptr).current_pkru_mask.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            old_ctx.pkru = if old_ctx.pd_ptr.is_null() {
+                0xFFFF_FFFFu64  // deny-all PKRU (all keys disabled) for broken task
+            } else {
+                (*old_ctx.pd_ptr).current_pkru_mask.load(core::sync::atomic::Ordering::Relaxed) as u64
+            };
         }
 
         let kstack_top = (*next_ctx_ptr).kstack_top;
