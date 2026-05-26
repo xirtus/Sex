@@ -134,12 +134,16 @@ static mut FOCUSED_SURFACE_ID: u64 = 0;
 const FOCUS_SURFACE_COLOR: u32 = 0x0089B4FA;
 
 // ── Frame Chrome Rim (focused surface, matches shell FRAME_RIM_PX) ──
-const FRAME_RIM_PX: usize = 4;
+// Minimal mode button/rim size.  Surfaces start in minimal mode (chrome_flags=0)
+// until OP_SURFACE_TAB_INFO arrives with SURFACE_CHROME_TOP_BAR set.  The initial
+// render() call and any clock-tick redraws before the first chrome message must
+// show clickable buttons, so keep these sizes usable (not 4×4 spec minimum).
+const FRAME_RIM_PX: usize = 8;
 const FRAME_RIM_COLOR: u32 = 0x00B4BEFE;
 
 // ── Frame Light Colors (top-left rim band, matches shell FRAME_LIGHTS_HIT_TARGET_V1) ──
-const FRAME_LIGHT_SIZE_PX: usize = 10;
-const FRAME_LIGHT_GAP_PX: usize = 4;
+const FRAME_LIGHT_SIZE_PX: usize = 8;
+const FRAME_LIGHT_GAP_PX: usize = 3;
 const FRAME_LIGHT_CLOSE_COLOR: u32 = 0x00FF4444;
 const FRAME_LIGHT_MINIMIZE_COLOR: u32 = 0x00FFCC44;
 const FRAME_LIGHT_ZOOM_COLOR: u32 = 0x0044FF44;
@@ -148,7 +152,7 @@ const FRAME_LIGHT_ZOOM_COLOR: u32 = 0x0044FF44;
 /// V1: close is disabled for all frames; red renders at reduced alpha to
 /// signal the action is unavailable. Yellow/green remain at normal brightness.
 /// When close_allowed becomes 1 in a future phase, this changes to 224.
-const FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA: u8 = 48;
+const FRAME_LIGHT_CLOSE_DISABLED_BASE_ALPHA: u8 = 160;
 
 // ── Tab Strip Constants (matches shell FRAME_TAB_LIGHT_EXCLUSION_PX and TAB_*) ──
 const TAB_STRIP_LIGHT_EXCLUSION_PX: usize = 20;
@@ -2664,6 +2668,10 @@ pub extern "C" fn _start() -> ! {
                         // Keep strip repaint batched in post-drain redraws.
                         unsafe { CLOCK_REDRAW_SOURCE = if clock_from_silkbar { 0 } else { 1 }; }
                         needs_top_strip_redraw = true;
+                        // Ensure surface area (including window chrome) is redrawn
+                        // on the next cycle so that OP_SURFACE_TAB_INFO chrome flags
+                        // applied during this drain take effect on screen.
+                        needs_surface_redraw = true;
                         if SILK_RENDER_PROOF_PROFILE_ENABLED && !render_proof_done {
                             render_proof_done = true;
                             unsafe { top_strip_render_proof(FB_PTR as *const u32, FB_W as usize, FB_H as usize); }
@@ -3155,16 +3163,15 @@ pub extern "C" fn _start() -> ! {
         }
 
         // ── Post-drain redraws ──
-        if !did_primary_fb_render {
+        // Surface area: always redraw when needed, regardless of did_primary_fb_render.
+        // did_primary_fb_render becomes true on the OP_PRIMARY_FB cycle (which calls
+        // render() during drain), but needs_surface_redraw may be set by chrome flag
+        // updates draining in the same cycle. Without this, chrome updates are lost.
+        if needs_surface_redraw {
             clock_canon_apply_to_bar(&mut bar);
-            if needs_surface_redraw {
-                unsafe { redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
-            }
+            unsafe { redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
         }
-        // CLOCK_REDRAW_AFTER_FB_LIVE_FIX_V1: top-strip redraw may be armed
-        // on the primary-fb-render cycle (fb_live just became true).
-        // Allow it even when did_primary_fb_render is true, since the
-        // full render already painted the background correctly.
+        // Top strip: redraw when needed (clock tick, silkbar update).
         if needs_top_strip_redraw {
             clock_canon_apply_to_bar(&mut bar);
             unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
