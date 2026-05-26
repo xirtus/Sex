@@ -3736,17 +3736,67 @@ source_check_mismatch_count="$(
 )"
 source_check_ok1_count="$(grep -cE '\[sexdisplay\.clock\.redraw\.source_check\].*ok=1' "$LOG" 2>/dev/null || true)"
 source_check_ok0_count="$(grep -cE '\[sexdisplay\.clock\.redraw\.source_check\].*ok=0' "$LOG" 2>/dev/null || true)"
+monotonic_visible_ok1_count="$(grep -cE '\[sexdisplay\.clock\.monotonic\.visible\].*ok=1' "$LOG" 2>/dev/null || true)"
+monotonic_visible_ok0_count="$(grep -cE '\[sexdisplay\.clock\.monotonic\.visible\].*ok=0' "$LOG" 2>/dev/null || true)"
 stale_drop_reject_count="$(grep -cE '\[sexdisplay\.clock\.stale_drop\].*accepted=0' "$LOG" 2>/dev/null || true)"
 fallback_continue_after_drop_count="$(grep -cE '\[sexdisplay\.clock\.fallback\.continue_after_drop\]' "$LOG" 2>/dev/null || true)"
+handoff_reject_count="$(grep -cE '\[sexdisplay\.clock\.handoff\.reject\].*accepted=0' "$LOG" 2>/dev/null || true)"
+fallback_continue_after_handoff_reject_count="$(grep -cE '\[sexdisplay\.clock\.fallback\.continue_after_handoff_reject\]' "$LOG" 2>/dev/null || true)"
+source_handoff_backward_count="$(
+    {
+    grep '\[sexdisplay\.clock\.redraw\.source_check\]' "$LOG" \
+    | awk '
+        {
+            src="";
+            cs=-1;
+            for (i=1; i<=NF; i++) {
+                if ($i ~ /^source=/) { split($i, a, "="); src=a[2]; }
+                else if ($i ~ /^canonical_ss=/) { split($i, b, "="); cs=b[2]+0; }
+            }
+            if (src=="fallback" && cs >= 0) {
+                if (cs > fallback_max) fallback_max = cs;
+            } else if (src=="silkbar" && cs >= 0 && fallback_max > cs) {
+                bad++;
+            }
+        }
+        END { print bad+0; }'
+    } || true
+)"
+source_handoff_backward_after10_count="$(
+    {
+    grep '\[sexdisplay\.clock\.redraw\.source_check\]' "$LOG" \
+    | awk '
+        {
+            src="";
+            cs=-1;
+            for (i=1; i<=NF; i++) {
+                if ($i ~ /^source=/) { split($i, a, "="); src=a[2]; }
+                else if ($i ~ /^canonical_ss=/) { split($i, b, "="); cs=b[2]+0; }
+            }
+            if (src=="fallback" && cs >= 10) {
+                if (cs > fallback_max10) fallback_max10 = cs;
+            } else if (src=="silkbar" && cs >= 0 && fallback_max10 >= 10 && fallback_max10 > cs) {
+                bad10++;
+            }
+        }
+        END { print bad10+0; }'
+    } || true
+)"
 source_check_ok1_count="${source_check_ok1_count:-0}"
 source_check_ok0_count="${source_check_ok0_count:-0}"
+monotonic_visible_ok1_count="${monotonic_visible_ok1_count:-0}"
+monotonic_visible_ok0_count="${monotonic_visible_ok0_count:-0}"
 stale_drop_reject_count="${stale_drop_reject_count:-0}"
 fallback_continue_after_drop_count="${fallback_continue_after_drop_count:-0}"
+handoff_reject_count="${handoff_reject_count:-0}"
+fallback_continue_after_handoff_reject_count="${fallback_continue_after_handoff_reject_count:-0}"
+source_handoff_backward_count="${source_handoff_backward_count:-0}"
+source_handoff_backward_after10_count="${source_handoff_backward_after10_count:-0}"
 source_check_bad_count="${source_check_ok0_count:-0}"
 source_check_ok_count="${source_check_ok1_count:-0}"
 stale_drop_count="${stale_drop_reject_count:-0}"
 continue_after_drop_count="${fallback_continue_after_drop_count:-0}"
-clock_diag_counts="source_check_ok_count=${source_check_ok_count} source_check_bad_count=${source_check_bad_count} stale_drop_count=${stale_drop_count} continue_after_drop_count=${continue_after_drop_count}"
+clock_diag_counts="source_check_ok_count=${source_check_ok_count} source_check_bad_count=${source_check_bad_count} stale_drop_count=${stale_drop_count} continue_after_drop_count=${continue_after_drop_count} monotonic_visible_ok0_count=${monotonic_visible_ok0_count} handoff_backward_count=${source_handoff_backward_count} handoff_reject_count=${handoff_reject_count}"
 rapid_tick_fail=0
 rapid_tick_advances=0
 rapid_tick_line_span=0
@@ -3797,7 +3847,10 @@ if [ -n "${first_redraw_line:-}" ] && [ -n "${first_nonzero_redraw_line:-}" ] \
    && [ "$source_check_mismatch_count" -eq 0 ] \
    && [ "${source_check_ok1_count:-0}" -ge 1 ] \
    && [ "${source_check_ok0_count:-0}" -eq 0 ] \
+   && [ "${monotonic_visible_ok0_count:-0}" -eq 0 ] \
+   && [ "${source_handoff_backward_count:-0}" -eq 0 ] \
    && { [ "${stale_drop_reject_count:-0}" -eq 0 ] || [ "${fallback_continue_after_drop_count:-0}" -ge 1 ]; } \
+   && { [ "${source_handoff_backward_after10_count:-0}" -eq 0 ] || [ "${handoff_reject_count:-0}" -ge 1 ]; } \
    && [ "$rapid_tick_fail" -eq 0 ]; then
     redraw_distance=$(( first_nonzero_redraw_line - first_redraw_line ))
     if [ "$redraw_distance" -le "$redraw_nonzero_max_distance" ]; then
@@ -3823,6 +3876,18 @@ elif [ "${source_check_ok1_count:-0}" -lt 1 ]; then
 elif [ "${source_check_ok0_count:-0}" -gt 0 ]; then
     gate_clock_visible_seconds="FAIL"
     print_row "clock_visible_seconds" "FAIL" "source_check has ok=0 count=${source_check_ok0_count} ${clock_diag_counts}"
+elif [ "${monotonic_visible_ok0_count:-0}" -gt 0 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" "monotonic.visible has ok=0 count=${monotonic_visible_ok0_count} ${clock_diag_counts}"
+elif [ "${source_handoff_backward_count:-0}" -gt 0 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" "backward fallback->silkbar source_check transition count=${source_handoff_backward_count} ${clock_diag_counts}"
+elif [ "${source_handoff_backward_after10_count:-0}" -gt 0 ] && [ "${handoff_reject_count:-0}" -lt 1 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" "missing handoff.reject marker after fallback>=10 backward handoff evidence ${clock_diag_counts}"
+elif [ "${handoff_reject_count:-0}" -gt 0 ] && [ "${fallback_continue_after_handoff_reject_count:-0}" -lt 1 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" "missing fallback.continue_after_handoff_reject marker after handoff.reject ${clock_diag_counts}"
 elif [ "${stale_drop_reject_count:-0}" -gt 0 ] && [ "${fallback_continue_after_drop_count:-0}" -lt 1 ]; then
     gate_clock_visible_seconds="FAIL"
     print_row "clock_visible_seconds" "FAIL" "missing fallback.continue_after_drop marker after stale_drop ${clock_diag_counts}"

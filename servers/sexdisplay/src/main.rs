@@ -267,6 +267,17 @@ fn clock_canon_store(hh: u8, mm: u8, ss: u8) {
 }
 
 #[inline(always)]
+fn clock_total_seconds(hh: u8, mm: u8, ss: u8) -> u32 {
+    (hh as u32) * 3600 + (mm as u32) * 60 + (ss as u32)
+}
+
+#[inline(always)]
+fn clock_visible_monotonic_ok(prev: u32, curr: u32) -> bool {
+    // Allow same/increasing values, and single day rollover at midnight.
+    curr >= prev || (prev >= 86_300 && curr <= 60)
+}
+
+#[inline(always)]
 fn clock_canon_apply_to_bar(bar: &mut SilkBar) {
     unsafe {
         bar.clock_hh = CLOCK_CANON_HH;
@@ -1460,6 +1471,26 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                     "[sexdisplay.clock.redraw.source_check] redraw_ss={} canonical_ss={} source={} ok={}",
                     bar.clock_ss, CLOCK_CANON_SS, src, source_ok
                 );
+                static mut CLOCK_VISIBLE_MONO_INIT: bool = false;
+                static mut CLOCK_VISIBLE_PREV_TOTAL: u32 = 0;
+                let redraw_total = clock_total_seconds(bar.clock_hh, bar.clock_mm, bar.clock_ss);
+                let (prev_ss, mono_ok) = if !CLOCK_VISIBLE_MONO_INIT {
+                    CLOCK_VISIBLE_MONO_INIT = true;
+                    CLOCK_VISIBLE_PREV_TOTAL = redraw_total;
+                    (bar.clock_ss, 1u8)
+                } else {
+                    let prev_total = CLOCK_VISIBLE_PREV_TOTAL;
+                    let ok = if clock_visible_monotonic_ok(prev_total, redraw_total) { 1u8 } else { 0u8 };
+                    let prev_ss_v = (prev_total % 60) as u8;
+                    if ok == 1 {
+                        CLOCK_VISIBLE_PREV_TOTAL = redraw_total;
+                    }
+                    (prev_ss_v, ok)
+                };
+                serial_println!(
+                    "[sexdisplay.clock.monotonic.visible] prev_ss={} redraw_ss={} ok={}",
+                    prev_ss, bar.clock_ss, mono_ok
+                );
                 // Visible seconds proof: confirms the exact seconds value that
                 // will be drawn in the subsequent pixel loop (clock_fg_at).
                 serial_println!("[clock.visible.seconds] h={} m={} s={} drawn=1 ok=1 reason=pixel_loop_follows",
@@ -2544,7 +2575,44 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             let changed = in_hh != old_hh || in_mm != old_mm || in_ss != old_ss;
-                            if changed {
+                            let mut handoff_rejected = false;
+                            if !clock_from_silkbar {
+                                let (canon_hh, canon_mm, canon_ss) = unsafe { (CLOCK_CANON_HH, CLOCK_CANON_MM, CLOCK_CANON_SS) };
+                                let incoming_total = clock_total_seconds(in_hh as u8, in_mm as u8, in_ss as u8);
+                                let canonical_total = clock_total_seconds(canon_hh, canon_mm, canon_ss);
+                                if incoming_total < canonical_total {
+                                    handoff_rejected = true;
+                                    clock_canon_apply_to_bar(&mut bar);
+                                    unsafe {
+                                        static mut CLOCK_HANDOFF_REJECT_BUDGET: u32 = 64;
+                                        let b = &mut CLOCK_HANDOFF_REJECT_BUDGET;
+                                        if *b > 0 {
+                                            *b -= 1;
+                                            serial_println!(
+                                                "[sexdisplay.clock.handoff.reject] from=fallback to=silkbar incoming_ss={} canonical_ss={} reason=backward accepted=0",
+                                                in_ss, canon_ss
+                                            );
+                                            serial_println!(
+                                                "[sexdisplay.clock.fallback.continue_after_handoff_reject] ss={} source=fallback",
+                                                canon_ss
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    unsafe {
+                                        static mut CLOCK_HANDOFF_ACCEPT_BUDGET: u32 = 64;
+                                        let b = &mut CLOCK_HANDOFF_ACCEPT_BUDGET;
+                                        if *b > 0 {
+                                            *b -= 1;
+                                            serial_println!(
+                                                "[sexdisplay.clock.handoff.accept] from=fallback to=silkbar incoming_ss={} canonical_ss={} accepted=1",
+                                                in_ss, canon_ss
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            if changed && !handoff_rejected {
                                 clock_from_silkbar = true;
                                 last_silkbar_msg_loop = display_loop_counter;
                                 if (in_ss as u8) == last_silkbar_second {
@@ -2567,6 +2635,10 @@ pub extern "C" fn _start() -> ! {
                                 fallback_idle_loops = 0;
                                 clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
                                 unsafe { CLOCK_REDRAW_SOURCE = 0; } // silkbar source
+                            } else if handoff_rejected {
+                                clock_from_silkbar = false;
+                                fallback_idle_loops = 0;
+                                unsafe { CLOCK_REDRAW_SOURCE = 1; }
                             }
                             unsafe {
                                 static mut CLOCK_SOURCE_APPLY_BUDGET: u32 = 64;
@@ -2597,12 +2669,13 @@ pub extern "C" fn _start() -> ! {
                                 if *b > 0 {
                                     *b -= 1;
                                     serial_println!(
-                                        "[sexdisplay.clock.apply] source=silkbar h={} m={} s={} accepted=1 reason={}",
+                                        "[sexdisplay.clock.apply] source=silkbar h={} m={} s={} accepted={} reason={}",
                                         bar.clock_hh, bar.clock_mm, bar.clock_ss,
-                                        if changed { "changed" } else { "same" });
+                                        if handoff_rejected { 0 } else { 1 },
+                                        if handoff_rejected { "handoff_backward" } else if changed { "changed" } else { "same" });
                                 }
                             }
-                            should_redraw_top_strip = changed;
+                            should_redraw_top_strip = changed && !handoff_rejected;
                         }
                         if fb_live && should_redraw_top_strip {
                             needs_top_strip_redraw = true;
