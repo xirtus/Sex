@@ -3742,6 +3742,33 @@ stale_drop_reject_count="$(grep -cE '\[sexdisplay\.clock\.stale_drop\].*accepted
 fallback_continue_after_drop_count="$(grep -cE '\[sexdisplay\.clock\.fallback\.continue_after_drop\]' "$LOG" 2>/dev/null || true)"
 handoff_reject_count="$(grep -cE '\[sexdisplay\.clock\.handoff\.reject\].*accepted=0' "$LOG" 2>/dev/null || true)"
 fallback_continue_after_handoff_reject_count="$(grep -cE '\[sexdisplay\.clock\.fallback\.continue_after_handoff_reject\]' "$LOG" 2>/dev/null || true)"
+fallback_live_after_reject_ok1_count="$(grep -cE '\[sexdisplay\.clock\.fallback\.live_after_reject\].*ok=1' "$LOG" 2>/dev/null || true)"
+# V5: detect if handoff.reject existed at some ss=R but canonical_ss never advanced past R (freeze proof)
+fallback_reject_freeze_detected="$(
+    {
+    grep -E '\[sexdisplay\.clock\.handoff\.reject\].*accepted=0|\[sexdisplay\.clock\.redraw\.source_check\]' "$LOG" || true;
+    } | awk '
+    BEGIN { reject_ss=-1; max_canon=-1; frozen=0; }
+    /sexdisplay\.clock\.handoff\.reject/ {
+        for (i=1; i<=NF; i++) {
+            if ($i ~ /^canonical_ss=/) { split($i, a, "="); cs=a[2]+0;
+                if (cs > reject_ss) reject_ss=cs;
+            }
+        }
+    }
+    /sexdisplay\.clock\.redraw\.source_check/ {
+        for (i=1; i<=NF; i++) {
+            if ($i ~ /^canonical_ss=/) { split($i, a, "="); cs=a[2]+0;
+                if (cs > max_canon) max_canon=cs;
+            }
+        }
+    }
+    END {
+        if (reject_ss >= 0 && max_canon >= 0 && max_canon <= reject_ss) frozen=1;
+        print frozen;
+    }
+' 2>/dev/null || echo 0
+)"
 source_handoff_backward_count="$(
     {
     grep '\[sexdisplay\.clock\.redraw\.source_check\]' "$LOG" \
@@ -3790,13 +3817,15 @@ stale_drop_reject_count="${stale_drop_reject_count:-0}"
 fallback_continue_after_drop_count="${fallback_continue_after_drop_count:-0}"
 handoff_reject_count="${handoff_reject_count:-0}"
 fallback_continue_after_handoff_reject_count="${fallback_continue_after_handoff_reject_count:-0}"
+fallback_live_after_reject_ok1_count="${fallback_live_after_reject_ok1_count:-0}"
+fallback_reject_freeze_detected="${fallback_reject_freeze_detected:-0}"
 source_handoff_backward_count="${source_handoff_backward_count:-0}"
 source_handoff_backward_after10_count="${source_handoff_backward_after10_count:-0}"
 source_check_bad_count="${source_check_ok0_count:-0}"
 source_check_ok_count="${source_check_ok1_count:-0}"
 stale_drop_count="${stale_drop_reject_count:-0}"
 continue_after_drop_count="${fallback_continue_after_drop_count:-0}"
-clock_diag_counts="source_check_ok_count=${source_check_ok_count} source_check_bad_count=${source_check_bad_count} stale_drop_count=${stale_drop_count} continue_after_drop_count=${continue_after_drop_count} monotonic_visible_ok0_count=${monotonic_visible_ok0_count} handoff_backward_count=${source_handoff_backward_count} handoff_reject_count=${handoff_reject_count}"
+clock_diag_counts="source_check_ok_count=${source_check_ok_count} source_check_bad_count=${source_check_bad_count} stale_drop_count=${stale_drop_count} continue_after_drop_count=${continue_after_drop_count} monotonic_visible_ok0_count=${monotonic_visible_ok0_count} handoff_backward_count=${source_handoff_backward_count} handoff_reject_count=${handoff_reject_count} live_after_reject_ok1=${fallback_live_after_reject_ok1_count} reject_freeze=${fallback_reject_freeze_detected}"
 rapid_tick_fail=0
 rapid_tick_advances=0
 rapid_tick_line_span=0
@@ -3851,6 +3880,8 @@ if [ -n "${first_redraw_line:-}" ] && [ -n "${first_nonzero_redraw_line:-}" ] \
    && [ "${source_handoff_backward_count:-0}" -eq 0 ] \
    && { [ "${stale_drop_reject_count:-0}" -eq 0 ] || [ "${fallback_continue_after_drop_count:-0}" -ge 1 ]; } \
    && { [ "${source_handoff_backward_after10_count:-0}" -eq 0 ] || [ "${handoff_reject_count:-0}" -ge 1 ]; } \
+   && [ "${fallback_reject_freeze_detected:-0}" -eq 0 ] \
+   && { [ "${handoff_reject_count:-0}" -eq 0 ] || [ "${fallback_live_after_reject_ok1_count:-0}" -ge 1 ]; } \
    && [ "$rapid_tick_fail" -eq 0 ]; then
     redraw_distance=$(( first_nonzero_redraw_line - first_redraw_line ))
     if [ "$redraw_distance" -le "$redraw_nonzero_max_distance" ]; then
@@ -3888,6 +3919,12 @@ elif [ "${source_handoff_backward_after10_count:-0}" -gt 0 ] && [ "${handoff_rej
 elif [ "${handoff_reject_count:-0}" -gt 0 ] && [ "${fallback_continue_after_handoff_reject_count:-0}" -lt 1 ]; then
     gate_clock_visible_seconds="FAIL"
     print_row "clock_visible_seconds" "FAIL" "missing fallback.continue_after_handoff_reject marker after handoff.reject ${clock_diag_counts}"
+elif [ "${fallback_reject_freeze_detected:-0}" -gt 0 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" "V5: fallback tick frozen after handoff.reject — canonical_ss never advanced past reject_ss ${clock_diag_counts}"
+elif [ "${handoff_reject_count:-0}" -gt 0 ] && [ "${fallback_live_after_reject_ok1_count:-0}" -lt 1 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" "V5: handoff.reject seen but fallback.live_after_reject ok=1 missing ${clock_diag_counts}"
 elif [ "${stale_drop_reject_count:-0}" -gt 0 ] && [ "${fallback_continue_after_drop_count:-0}" -lt 1 ]; then
     gate_clock_visible_seconds="FAIL"
     print_row "clock_visible_seconds" "FAIL" "missing fallback.continue_after_drop marker after stale_drop ${clock_diag_counts}"

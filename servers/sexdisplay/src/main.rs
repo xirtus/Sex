@@ -2347,6 +2347,8 @@ pub extern "C" fn _start() -> ! {
     let mut silkbar_clock_seen = false;
     let mut fallback_after_drop_pending = false;
     let mut fallback_after_drop_pending_proof = false;
+    let mut has_pending_reject = false;
+    let mut pending_reject_ss: u8 = 0;
     let mut stale_probe_done = false;
     let mut fb_live = false;
     let mut render_proof_done = false;
@@ -2458,6 +2460,21 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             }
+            if has_pending_reject && bar.clock_ss != pending_reject_ss {
+                let r = pending_reject_ss;
+                has_pending_reject = false;
+                unsafe {
+                    static mut CLOCK_LIVE_AFTER_REJECT_BUDGET: u32 = 64;
+                    let b = &mut CLOCK_LIVE_AFTER_REJECT_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!(
+                            "[sexdisplay.clock.fallback.live_after_reject] reject_ss={} now_ss={} source=fallback ok=1",
+                            r, bar.clock_ss
+                        );
+                    }
+                }
+            }
             unsafe {
                 static mut CLOCK_SOURCE_FALLBACK_TICK_BUDGET: u32 = 64;
                 let b = &mut CLOCK_SOURCE_FALLBACK_TICK_BUDGET;
@@ -2502,6 +2519,21 @@ pub extern "C" fn _start() -> ! {
                                 "[sexdisplay.clock.fallback.continue_after_drop] ss={} source=fallback proof={}",
                                 bar.clock_ss,
                                 if continue_is_proof { 1 } else { 0 }
+                            );
+                        }
+                    }
+                }
+                if has_pending_reject && bar.clock_ss != pending_reject_ss {
+                    let r = pending_reject_ss;
+                    has_pending_reject = false;
+                    unsafe {
+                        static mut CLOCK_LIVE_AFTER_REJECT_SYNTH_BUDGET: u32 = 64;
+                        let b = &mut CLOCK_LIVE_AFTER_REJECT_SYNTH_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!(
+                                "[sexdisplay.clock.fallback.live_after_reject] reject_ss={} now_ss={} source=fallback ok=1",
+                                r, bar.clock_ss
                             );
                         }
                     }
@@ -2637,7 +2669,12 @@ pub extern "C" fn _start() -> ! {
                                 unsafe { CLOCK_REDRAW_SOURCE = 0; } // silkbar source
                             } else if handoff_rejected {
                                 clock_from_silkbar = false;
-                                fallback_idle_loops = 0;
+                                // Do NOT reset fallback_idle_loops — preserves synth tick accumulator liveness.
+                                // Resetting here starves the synth path when SilkBar sends rapid backward updates.
+                                let (canon_hh, canon_mm, canon_ss_r) = unsafe { (CLOCK_CANON_HH, CLOCK_CANON_MM, CLOCK_CANON_SS) };
+                                let _ = (canon_hh, canon_mm);
+                                has_pending_reject = true;
+                                pending_reject_ss = canon_ss_r;
                                 unsafe { CLOCK_REDRAW_SOURCE = 1; }
                             }
                             unsafe {
