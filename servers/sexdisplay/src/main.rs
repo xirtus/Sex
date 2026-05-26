@@ -260,6 +260,10 @@ static mut CLOCK_REDRAW_SOURCE: u8 = 1;
 static mut CLOCK_CANON_HH: u8 = 10;
 static mut CLOCK_CANON_MM: u8 = 42;
 static mut CLOCK_CANON_SS: u8 = 0;
+	/// Last canonical ss that was actually drawn to screen.
+	/// Used to suppress same-second redraw spam (clock-only redraws
+	/// that don't change the visible second).
+	static mut LAST_REDRAWN_CLOCK_CANON_SS: u8 = 0xFF;
 
 #[inline(always)]
 fn clock_canon_store(hh: u8, mm: u8, ss: u8) {
@@ -2344,6 +2348,9 @@ pub extern "C" fn _start() -> ! {
     let mut last_silkbar_second: u8 = bar.clock_ss;
     let mut repeated_silkbar_second_msgs: u32 = 0;
     let mut fallback_idle_loops: u16 = 0;
+    /// Counts loop iterations since last fallback clock advance.
+    /// Used for cadence sample markers; reset on every advance.
+    let mut fallback_loops_since_advance: u16 = 0;
     let mut silkbar_clock_seen = false;
     let mut fallback_after_drop_pending = false;
     let mut fallback_after_drop_pending_proof = false;
@@ -2355,6 +2362,7 @@ pub extern "C" fn _start() -> ! {
     /// Counts consecutive loops where raw_ticks>0 but raw_ticks==last_fallback_raw_tick.
     /// After threshold, falls back to synthetic cadence (fixes freeze on constant non-zero ticks).
     let mut fallback_stale_real_ticks: u16 = 0;
+    let mut synthetic_visual_mode = false;
     let mut handoff_reject_ss: u8 = 0;
     let mut handoff_reject_streak: u8 = 0;
 
@@ -2447,14 +2455,22 @@ pub extern "C" fn _start() -> ! {
         // On TCG (raw_ticks==0): synthetic cadence matching silkbar's threshold=16.
         // Cadence is NOT reset on handoff reject — post-reject independent cadence V8.
         if !clock_from_silkbar {
+            fallback_loops_since_advance = fallback_loops_since_advance.wrapping_add(1);
             let mut advance_fallback = false;
+            /// Tracks whether this advance is synthetic (true) or real-tick-gated (false).
+            /// Used for cadence sample markers.
+            let mut advance_synthetic = false;
+            /// Tick delta for real-tick advances; used in cadence sample raw_delta.
+            let mut advance_tick_delta: u64 = 0;
+            let mut synthetic_visual_exit_delta: u64 = 0;
             const FALLBACK_TICKS_PER_SEC: u64 = 62;
-            const FALLBACK_SYNTHETIC_THRESHOLD: u16 = 16;
+            /// Explicit synthetic visual mode cadence (proof visibility, not wall time).
+            const SYNTHETIC_VISUAL_THRESHOLD: u16 = 2;
             /// Loops of constant non-zero raw_ticks before synthetic fallback kicks in.
-            /// Matches silkbars STALE_REAL_TICK_FALLBACK_LOOPS=16 so both servers
-            /// converge on synthetic cadence at roughly the same time on stalled-tick
-            /// platforms (KVM with one-shot LAPIC, native with uncalibrated timer).
-            const FALLBACK_STALE_REAL_THRESHOLD: u16 = 16;
+            /// V10: increased from 16 to 256 to prevent false-positive stall detection
+            /// on fast loops (1000+ Hz) where ~16 iterations is normal between PIT ticks.
+            /// True stall (KVM one-shot LAPIC) still triggers after ~0.25s at 1 kHz loop.
+            const FALLBACK_STALE_REAL_THRESHOLD: u16 = 256;
 
             // ── Determine cadence source ──
             // use_synthetic is true when: raw_ticks==0 (TCG), or raw_ticks is a
@@ -2468,6 +2484,14 @@ pub extern "C" fn _start() -> ! {
                     last_fallback_raw_tick = raw_ticks;
                 } else if raw_ticks > last_fallback_raw_tick {
                     // Real tick advancing: reset stale counter, use tick-gated cadence.
+                    if synthetic_visual_mode {
+                        synthetic_visual_exit_delta = raw_ticks.wrapping_sub(last_fallback_raw_tick);
+                        synthetic_visual_mode = false;
+                        sex_pdx::serial_println!(
+                            "[sexdisplay.clock.synthetic_visual.exit] raw_delta={} ok=1",
+                            synthetic_visual_exit_delta
+                        );
+                    }
                     fallback_stale_real_ticks = 0;
                     let tick_delta = raw_ticks.wrapping_sub(last_fallback_raw_tick);
                     let secs = (tick_delta / FALLBACK_TICKS_PER_SEC).min(60) as u8;
@@ -2480,6 +2504,8 @@ pub extern "C" fn _start() -> ! {
                             if bar.clock_mm >= 60 { bar.clock_mm = 0; bar.clock_hh = bar.clock_hh.wrapping_add(1); }
                             if bar.clock_hh >= 24 { bar.clock_hh = 0; }
                         }
+                        advance_synthetic = false;
+                        advance_tick_delta = tick_delta;
                         advance_fallback = true;
                     }
                 } else {
@@ -2497,21 +2523,79 @@ pub extern "C" fn _start() -> ! {
 
             // ── Synthetic cadence (TCG or stalled real ticks) ──
             if use_synthetic {
+                if !synthetic_visual_mode {
+                    synthetic_visual_mode = true;
+                    sex_pdx::serial_println!(
+                        "[sexdisplay.clock.synthetic_visual.enter] raw_ticks={} reason=zero_or_stalled ok=1",
+                        raw_ticks
+                    );
+                }
                 fallback_idle_loops = fallback_idle_loops.wrapping_add(1);
-                if fallback_idle_loops >= FALLBACK_SYNTHETIC_THRESHOLD {
+                if fallback_idle_loops >= SYNTHETIC_VISUAL_THRESHOLD {
                     fallback_idle_loops = 0;
+                    let old_ss = bar.clock_ss;
                     bar.clock_ss = bar.clock_ss.wrapping_add(1);
                     if bar.clock_ss >= 60 { bar.clock_ss = 0; bar.clock_mm = bar.clock_mm.wrapping_add(1); }
                     if bar.clock_mm >= 60 { bar.clock_mm = 0; bar.clock_hh = bar.clock_hh.wrapping_add(1); }
                     if bar.clock_hh >= 24 { bar.clock_hh = 0; }
+                    advance_synthetic = true;
                     advance_fallback = true;
+                    sex_pdx::serial_println!(
+                        "[sexdisplay.clock.synthetic_visual.tick] old_ss={} new_ss={} threshold={} ok=1",
+                        old_ss, bar.clock_ss, SYNTHETIC_VISUAL_THRESHOLD
+                    );
                 }
             }
             if advance_fallback {
                 clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
+                let now_canon_ss = unsafe { CLOCK_CANON_SS };
+                // ── Cadence sample marker (budgeted) ──
+                unsafe {
+                    static mut CADENCE_SAMPLE_BUDGET: u32 = 32;
+                    let b = &mut CADENCE_SAMPLE_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        let synth: u8 = if advance_synthetic { 1 } else { 0 };
+                        let thr: u16 = if advance_synthetic { SYNTHETIC_VISUAL_THRESHOLD } else { FALLBACK_TICKS_PER_SEC as u16 };
+                        let source = if advance_synthetic { "fallback_synthetic_visual" } else { "fallback" };
+                        serial_println!(
+                            "[sexdisplay.clock.cadence.sample] ss={} loops={} raw_delta={} synthetic={} threshold={} source={} ok=1",
+                            now_canon_ss, fallback_loops_since_advance, advance_tick_delta, synth, thr, source
+                        );
+                    }
+                }
+                // ── Parity marker (one-shot): prove fallback and post-reject use same threshold ──
+                unsafe {
+                    static mut CADENCE_PARITY_EMITTED: bool = false;
+                    if !CADENCE_PARITY_EMITTED {
+                        CADENCE_PARITY_EMITTED = true;
+                        serial_println!(
+                            "[sexdisplay.clock.cadence.parity] fallback_threshold={} post_reject_threshold={} ok=1",
+                            SYNTHETIC_VISUAL_THRESHOLD, SYNTHETIC_VISUAL_THRESHOLD
+                        );
+                    }
+                }
+                fallback_loops_since_advance = 0;
+                // ── Same-second redraw guard: skip clock-only redraw if canonical_ss unchanged ──
+                let last_drawn = unsafe { LAST_REDRAWN_CLOCK_CANON_SS };
                 if fb_live {
-                    needs_top_strip_redraw = true;
-                    unsafe { CLOCK_REDRAW_SOURCE = 1; }
+                    if last_drawn != now_canon_ss || last_drawn == 0xFF {
+                        needs_top_strip_redraw = true;
+                        unsafe { CLOCK_REDRAW_SOURCE = 1; }
+                    } else {
+                        // Clock second unchanged — skip redraw unless other dirty state.
+                        unsafe {
+                            static mut SKIP_SAME_SECOND_BUDGET: u32 = 8;
+                            let b = &mut SKIP_SAME_SECOND_BUDGET;
+                            if *b > 0 {
+                                *b -= 1;
+                                serial_println!(
+                                    "[sexdisplay.clock.redraw.skip_same_second] ss={} reason=no_clock_delta ok=1",
+                                    now_canon_ss
+                                );
+                            }
+                        }
+                    }
                 }
             }
             // ── Post-reject liveness proof: fallback must advance past reject point ──
@@ -2527,6 +2611,18 @@ pub extern "C" fn _start() -> ! {
                         serial_println!(
                             "[sexdisplay.clock.fallback.live_after_reject] reject_ss={} now_ss={} source=fallback ok=1",
                             reject_ss, now_ss
+                        );
+                    }
+                }
+                // ── Post-reject cadence sample (budgeted) ──
+                unsafe {
+                    static mut POST_REJECT_CADENCE_BUDGET: u32 = 16;
+                    let b = &mut POST_REJECT_CADENCE_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!(
+                            "[sexdisplay.clock.post_reject.cadence.sample] ss={} loops={} threshold={} ok=1",
+                            now_ss, fallback_loops_since_advance, SYNTHETIC_VISUAL_THRESHOLD
                         );
                     }
                 }
@@ -2755,11 +2851,28 @@ pub extern "C" fn _start() -> ! {
                             }
                             clock_from_silkbar = false;
                             fallback_idle_loops = 0;
+                            fallback_loops_since_advance = 0;
                             fallback_after_drop_pending = true;
                             fallback_after_drop_pending_proof = false;
                             if fb_live {
-                                needs_top_strip_redraw = true;
-                                unsafe { CLOCK_REDRAW_SOURCE = 1; }
+                                let last_drawn = unsafe { LAST_REDRAWN_CLOCK_CANON_SS };
+                                let now_ss = canonical_ss;
+                                if last_drawn != now_ss || last_drawn == 0xFF {
+                                    needs_top_strip_redraw = true;
+                                    unsafe { CLOCK_REDRAW_SOURCE = 1; }
+                                } else {
+                                    unsafe {
+                                        static mut SKIP_SAME_SECOND_STALE_BUDGET: u32 = 4;
+                                        let b = &mut SKIP_SAME_SECOND_STALE_BUDGET;
+                                        if *b > 0 {
+                                            *b -= 1;
+                                            serial_println!(
+                                                "[sexdisplay.clock.redraw.skip_same_second] ss={} reason=no_clock_delta_stale_drop ok=1",
+                                                now_ss
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             serial_println!("[silkde.m2.assert.bad] apply_update=false kind={}", kind);
@@ -3294,6 +3407,8 @@ pub extern "C" fn _start() -> ! {
         if needs_top_strip_redraw {
             clock_canon_apply_to_bar(&mut bar);
             unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
+            // Track last drawn canonical second for same-second redraw suppression.
+            unsafe { LAST_REDRAWN_CLOCK_CANON_SS = CLOCK_CANON_SS; }
         }
 
         // ── Yield once regardless of whether messages remain queued ──

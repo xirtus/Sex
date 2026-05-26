@@ -134,16 +134,17 @@ pub extern "C" fn _start() -> ! {
     // can be tuned independently.
     const STALE_REAL_TICK_FALLBACK_THRESHOLD: u16 = 4;
     const BOOT_CLOCK_SENDS_TARGET: u8 = 2;
-    const STEADY_CLOCK_THRESHOLD: u16 = 100;
+    /// V10 cadence calibration: reduced from 100 to 62 to match PIT tick rate.
+    /// At 62 ticks/sec (PIT), threshold=62 yields ~1 Hz visible clock cadence.
+    /// Previous threshold=100 gave ~0.62 Hz — too slow for GTK visual proof.
+    const STEADY_CLOCK_THRESHOLD: u16 = 62;
     const REAL_TICK_VISIBLE_CLOCK_THRESHOLD: u16 = STEADY_CLOCK_THRESHOLD;
     // Synthetic visible threshold: used when get_ticks()==0 (QEMU TCG) so the
     // displayed clock advances at a proof-usable rate (~1 sec per loop yield).
-    // Not wall-clock; removed once real LAPIC ticks are available.
-    // VALUE 16: reduces update-storm risk. At ~30 loops/sec this yields ~2
-    // clock advances per second — fast enough for visible proof without
-    // triggering a silkbar→sexdisplay redraw storm that accelerates the
-    // synthetic yield cadence in a positive-feedback loop.
-    const SYNTHETIC_VISIBLE_CLOCK_THRESHOLD: u16 = 16;
+    // V10 cadence calibration: reduced from 16 to 8 to match sexdisplay fallback
+    // threshold.  Ensures both servers advance at same rate on TCG, preventing
+    // the fallback from racing ahead and causing permanent handoff rejection.
+    const SYNTHETIC_VISIBLE_CLOCK_THRESHOLD: u16 = 8;
     // Real-tick visible cadence: intentionally conservative to avoid racing
     // when get_ticks() advances quickly under virtualization.
     const LIVE_CLOCK_THRESHOLD: u16 = REAL_TICK_VISIBLE_CLOCK_THRESHOLD;
@@ -720,6 +721,20 @@ pub extern "C" fn _start() -> ! {
                 UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
             ))
         };
+        // ── Cadence sample marker (budgeted) — outside if/else to avoid type mismatch ──
+        if clock_sent {
+            unsafe {
+                static mut SILKBAR_CADENCE_SAMPLE_BUDGET: u32 = 32;
+                let b = &mut SILKBAR_CADENCE_SAMPLE_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    sex_pdx::serial_println!(
+                        "[silkbar.clock.cadence.sample] ss={} yields={} threshold={} sent=1 ok=1",
+                        ss, cadence_yields, cadence_threshold
+                    );
+                }
+            }
+        }
         if !degraded {
             if clock_sent {
                 boot_clock_sends = boot_clock_sends.wrapping_add(1);

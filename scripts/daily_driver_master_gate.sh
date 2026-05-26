@@ -190,6 +190,7 @@ gate_sexnet_browser_cap="SKIP"
 gate_sexnet_status_route="SKIP"
 gate_clock_visible_seconds="SKIP"
 gate_clock_cadence_bound="SKIP"
+gate_clock_cadence_parity="SKIP"
 gate_silk_de_contract_lock="SKIP"
 gate_silk_de_topstrip_deterministic="SKIP"
 gate_silk_de_renderer_conformance="SKIP"
@@ -3743,32 +3744,102 @@ fallback_continue_after_drop_count="$(grep -cE '\[sexdisplay\.clock\.fallback\.c
 handoff_reject_count="$(grep -cE '\[sexdisplay\.clock\.handoff\.reject\].*accepted=0' "$LOG" 2>/dev/null || true)"
 fallback_continue_after_handoff_reject_count="$(grep -cE '\[sexdisplay\.clock\.fallback\.continue_after_handoff_reject\]' "$LOG" 2>/dev/null || true)"
 fallback_live_after_reject_ok1_count="$(grep -cE '\[sexdisplay\.clock\.fallback\.live_after_reject\].*ok=1' "$LOG" 2>/dev/null || true)"
-# V5: detect if handoff.reject existed at some ss=R but canonical_ss never advanced past R (freeze proof)
-fallback_reject_freeze_detected="$(
-    {
-    grep -E '\[sexdisplay\.clock\.handoff\.reject\].*accepted=0|\[sexdisplay\.clock\.redraw\.source_check\]' "$LOG" || true;
-    } | awk '
-    BEGIN { reject_ss=-1; max_canon=-1; frozen=0; }
-    /sexdisplay\.clock\.handoff\.reject/ {
+synthetic_visual_enter_count="$(grep -cE '\[sexdisplay\.clock\.synthetic_visual\.enter\].*ok=1' "$LOG" 2>/dev/null || true)"
+synthetic_visual_tick_count="$(grep -cE '\[sexdisplay\.clock\.synthetic_visual\.tick\].*ok=1' "$LOG" 2>/dev/null || true)"
+synthetic_visual_exit_count="$(grep -cE '\[sexdisplay\.clock\.synthetic_visual\.exit\].*ok=1' "$LOG" 2>/dev/null || true)"
+cadence_raw_delta_zero_count="$(grep -cE '\[sexdisplay\.clock\.cadence\.sample\].*raw_delta=0.*synthetic=1' "$LOG" 2>/dev/null || true)"
+cadence_raw_delta_nonzero_count="$(grep -cE '\[sexdisplay\.clock\.cadence\.sample\].*raw_delta=[1-9][0-9]*' "$LOG" 2>/dev/null || true)"
+synthetic_visual_dominant=0
+if [ "${cadence_raw_delta_zero_count:-0}" -gt "${cadence_raw_delta_nonzero_count:-0}" ]; then
+    synthetic_visual_dominant=1
+fi
+# V11/V5 reject-freeze detector:
+# Fail only when handoff.reject canonical_ss=R has enough later clock evidence but no marker ever exceeds R.
+reject_freeze_stats="$(
+    awk '
+    BEGIN {
+        min_later_markers = 3;
+        reject_count = 0;
+        event_count = 0;
+        live_progress_count = 0;
+    }
+    function field_num(key,   i, a) {
         for (i=1; i<=NF; i++) {
-            if ($i ~ /^canonical_ss=/) { split($i, a, "="); cs=a[2]+0;
-                if (cs > reject_ss) reject_ss=cs;
-            }
+            if ($i ~ ("^" key "=")) { split($i, a, "="); return a[2]+0; }
+        }
+        return -1;
+    }
+    /\[sexdisplay\.clock\.handoff\.reject\]/ && /accepted=0/ {
+        r = field_num("canonical_ss");
+        if (r >= 0) {
+            reject_count++;
+            reject_ss[reject_count] = r;
+            reject_ln[reject_count] = NR;
         }
     }
-    /sexdisplay\.clock\.redraw\.source_check/ {
-        for (i=1; i<=NF; i++) {
-            if ($i ~ /^canonical_ss=/) { split($i, a, "="); cs=a[2]+0;
-                if (cs > max_canon) max_canon=cs;
-            }
+    /\[sexdisplay\.clock\.fallback\.live_after_reject\]/ {
+        reject_ss_field = field_num("reject_ss");
+        now_ss = field_num("now_ss");
+        if (reject_ss_field >= 0 && now_ss > reject_ss_field) live_progress_count++;
+        if (now_ss >= 0) {
+            event_count++;
+            event_ln[event_count] = NR;
+            event_ss[event_count] = now_ss;
+        }
+    }
+    /\[sexdisplay\.clock\.synthetic_visual\.tick\]/ {
+        ns = field_num("new_ss");
+        if (ns >= 0) {
+            event_count++;
+            event_ln[event_count] = NR;
+            event_ss[event_count] = ns;
+        }
+    }
+    /\[sexdisplay\.clock\.redraw\.source_check\]/ {
+        cs = field_num("canonical_ss");
+        if (cs >= 0) {
+            event_count++;
+            event_ln[event_count] = NR;
+            event_ss[event_count] = cs;
+        }
+    }
+    /\[sexdisplay\.clock\.cadence\.sample\]/ && /source=fallback_synthetic_visual/ {
+        ss = field_num("ss");
+        if (ss >= 0) {
+            event_count++;
+            event_ln[event_count] = NR;
+            event_ss[event_count] = ss;
         }
     }
     END {
-        if (reject_ss >= 0 && max_canon >= 0 && max_canon <= reject_ss) frozen=1;
-        print frozen;
+        freeze = 0;
+        reject_progress_count = 0;
+        stall_count = 0;
+        evaluable_reject_count = 0;
+        for (i=1; i<=reject_count; i++) {
+            progressed = 0;
+            later = 0;
+            for (j=1; j<=event_count; j++) {
+                if (event_ln[j] > reject_ln[i]) {
+                    later++;
+                    if (event_ss[j] > reject_ss[i]) progressed = 1;
+                }
+            }
+            if (progressed) reject_progress_count++;
+            if (later >= min_later_markers) {
+                evaluable_reject_count++;
+                if (!progressed) stall_count++;
+            }
+        }
+        if (evaluable_reject_count > 0 && reject_progress_count == 0 && stall_count > 0) freeze = 1;
+        printf "%d %d %d %d\n", freeze+0, reject_progress_count+0, live_progress_count+0, stall_count+0;
     }
-' 2>/dev/null || echo 0
+    ' "$LOG" 2>/dev/null || echo "0 0 0 0"
 )"
+fallback_reject_freeze_detected="$(echo "$reject_freeze_stats" | awk '{print $1}')"
+reject_progress_count="$(echo "$reject_freeze_stats" | awk '{print $2}')"
+live_after_reject_progress_count="$(echo "$reject_freeze_stats" | awk '{print $3}')"
+reject_stall_count="$(echo "$reject_freeze_stats" | awk '{print $4}')"
 source_handoff_backward_count="$(
     {
     grep '\[sexdisplay\.clock\.redraw\.source_check\]' "$LOG" \
@@ -3818,14 +3889,23 @@ fallback_continue_after_drop_count="${fallback_continue_after_drop_count:-0}"
 handoff_reject_count="${handoff_reject_count:-0}"
 fallback_continue_after_handoff_reject_count="${fallback_continue_after_handoff_reject_count:-0}"
 fallback_live_after_reject_ok1_count="${fallback_live_after_reject_ok1_count:-0}"
+synthetic_visual_enter_count="${synthetic_visual_enter_count:-0}"
+synthetic_visual_tick_count="${synthetic_visual_tick_count:-0}"
+synthetic_visual_exit_count="${synthetic_visual_exit_count:-0}"
+cadence_raw_delta_zero_count="${cadence_raw_delta_zero_count:-0}"
+cadence_raw_delta_nonzero_count="${cadence_raw_delta_nonzero_count:-0}"
+synthetic_visual_dominant="${synthetic_visual_dominant:-0}"
 fallback_reject_freeze_detected="${fallback_reject_freeze_detected:-0}"
+reject_progress_count="${reject_progress_count:-0}"
+live_after_reject_progress_count="${live_after_reject_progress_count:-0}"
+reject_stall_count="${reject_stall_count:-0}"
 source_handoff_backward_count="${source_handoff_backward_count:-0}"
 source_handoff_backward_after10_count="${source_handoff_backward_after10_count:-0}"
 source_check_bad_count="${source_check_ok0_count:-0}"
 source_check_ok_count="${source_check_ok1_count:-0}"
 stale_drop_count="${stale_drop_reject_count:-0}"
 continue_after_drop_count="${fallback_continue_after_drop_count:-0}"
-clock_diag_counts="source_check_ok_count=${source_check_ok_count} source_check_bad_count=${source_check_bad_count} stale_drop_count=${stale_drop_count} continue_after_drop_count=${continue_after_drop_count} monotonic_visible_ok0_count=${monotonic_visible_ok0_count} handoff_backward_count=${source_handoff_backward_count} handoff_reject_count=${handoff_reject_count} live_after_reject_ok1=${fallback_live_after_reject_ok1_count} reject_freeze=${fallback_reject_freeze_detected}"
+clock_diag_counts="source_check_ok_count=${source_check_ok_count} source_check_bad_count=${source_check_bad_count} stale_drop_count=${stale_drop_count} continue_after_drop_count=${continue_after_drop_count} monotonic_visible_ok0_count=${monotonic_visible_ok0_count} handoff_backward_count=${source_handoff_backward_count} handoff_reject_count=${handoff_reject_count} live_after_reject_ok1=${fallback_live_after_reject_ok1_count} reject_freeze=${fallback_reject_freeze_detected} reject_progress_count=${reject_progress_count} synthetic_visual_tick_count=${synthetic_visual_tick_count} live_after_reject_progress_count=${live_after_reject_progress_count} reject_stall_count=${reject_stall_count} synthetic_visual_enter=${synthetic_visual_enter_count} synthetic_visual_tick=${synthetic_visual_tick_count} synthetic_visual_exit=${synthetic_visual_exit_count} synthetic_dominant=${synthetic_visual_dominant} raw0=${cadence_raw_delta_zero_count} rawN=${cadence_raw_delta_nonzero_count}"
 rapid_tick_fail=0
 rapid_tick_advances=0
 rapid_tick_line_span=0
@@ -3925,6 +4005,12 @@ elif [ "${fallback_reject_freeze_detected:-0}" -gt 0 ]; then
 elif [ "${handoff_reject_count:-0}" -gt 0 ] && [ "${fallback_live_after_reject_ok1_count:-0}" -lt 1 ]; then
     gate_clock_visible_seconds="FAIL"
     print_row "clock_visible_seconds" "FAIL" "V5: handoff.reject seen but fallback.live_after_reject ok=1 missing ${clock_diag_counts}"
+elif [ "${synthetic_visual_dominant:-0}" -eq 1 ] && [ "${synthetic_visual_enter_count:-0}" -lt 1 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" "missing synthetic_visual.enter while raw_delta=0 synthetic cadence dominates ${clock_diag_counts}"
+elif [ "${synthetic_visual_dominant:-0}" -eq 1 ] && [ "${synthetic_visual_tick_count:-0}" -lt 1 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" "missing synthetic_visual.tick ok=1 while raw_delta=0 synthetic cadence dominates ${clock_diag_counts}"
 elif [ "${stale_drop_reject_count:-0}" -gt 0 ] && [ "${fallback_continue_after_drop_count:-0}" -lt 1 ]; then
     gate_clock_visible_seconds="FAIL"
     print_row "clock_visible_seconds" "FAIL" "missing fallback.continue_after_drop marker after stale_drop ${clock_diag_counts}"
@@ -3960,6 +4046,25 @@ if [ -n "${cadence_first_line:-}" ] && [ -n "${cadence_last_line:-}" ] && [ -n "
 else
     gate_clock_cadence_bound="SKIP"
     print_row "clock_cadence_bound" "SKIP" "missing redraw cadence markers"
+fi
+
+# ---- 95b. clock_cadence_parity ----
+# V10 cadence calibration: fallback and post-reject thresholds must be equal.
+cadence_parity_ok="$(grep -cE '\[sexdisplay\.clock\.cadence\.parity\].*ok=1' "$LOG" 2>/dev/null || true)"
+cadence_parity_ok="${cadence_parity_ok:-0}"
+cadence_parity_bad="$(grep -cE '\[sexdisplay\.clock\.cadence\.parity\].*ok=0' "$LOG" 2>/dev/null || true)"
+cadence_parity_bad="${cadence_parity_bad:-0}"
+if [ "${cadence_parity_ok:-0}" -ge 1 ] && [ "${cadence_parity_bad:-0}" -eq 0 ]; then
+    gate_clock_cadence_parity="PASS"
+    parity_fb_thr="$(grep '\[sexdisplay\.clock\.cadence\.parity\]' "$LOG" | head -n1 | sed -n 's/.*fallback_threshold=\([0-9][0-9]*\).*/\1/p')"
+    parity_pr_thr="$(grep '\[sexdisplay\.clock\.cadence\.parity\]' "$LOG" | head -n1 | sed -n 's/.*post_reject_threshold=\([0-9][0-9]*\).*/\1/p')"
+    print_row "clock_cadence_parity" "PASS" "fallback=${parity_fb_thr} post_reject=${parity_pr_thr}"
+elif [ "${cadence_parity_ok:-0}" -ge 1 ] && [ "${cadence_parity_bad:-0}" -gt 0 ]; then
+    gate_clock_cadence_parity="FAIL"
+    print_row "clock_cadence_parity" "FAIL" "ok=1 count=${cadence_parity_ok} ok=0 count=${cadence_parity_bad}"
+else
+    gate_clock_cadence_parity="SKIP"
+    print_row "clock_cadence_parity" "SKIP" "missing cadence.parity marker"
 fi
 
 # ---- 96. silk_de_contract_lock ----
@@ -6478,6 +6583,7 @@ if [ "$has_interaction" -eq 1 ]; then
     dep_fail=""
     [ "$gate_clock_visible_seconds" = "FAIL" ] && dep_fail="${dep_fail} clock_visible_seconds(FAIL)"
     [ "$gate_clock_cadence_bound" = "FAIL" ] && dep_fail="${dep_fail} clock_cadence_bound(FAIL)"
+    [ "$gate_clock_cadence_parity" = "FAIL" ] && dep_fail="${dep_fail} clock_cadence_parity(FAIL)"
     [ "$gate_top_strip_hash" = "FAIL" ] && dep_fail="${dep_fail} top_strip_hash(FAIL)"
     [ "$gate_frame_rim_visual" = "FAIL" ] && dep_fail="${dep_fail} frame_rim_visual(FAIL)"
     [ "$gate_frame_lights_visual" = "FAIL" ] && dep_fail="${dep_fail} frame_lights_visual(FAIL)"
@@ -6530,7 +6636,7 @@ else
     req_contract=$([ "$gate_silk_de_contract_lock" = "PASS" ] && echo 1 || echo 0)
     req_topstrip=$([ "$gate_silk_de_topstrip_deterministic" = "PASS" ] && echo 1 || echo 0)
     req_renderer=$([ "$gate_silk_de_renderer_conformance" = "PASS" ] && echo 1 || echo 0)
-    req_clock=$([ "$gate_clock_visible_seconds" = "PASS" ] && [ "$gate_clock_cadence_bound" != "FAIL" ] && echo 1 || echo 0)
+    req_clock=$([ "$gate_clock_visible_seconds" = "PASS" ] && [ "$gate_clock_cadence_bound" != "FAIL" ] && [ "$gate_clock_cadence_parity" != "FAIL" ] && echo 1 || echo 0)
     req_faults=$([ "$gate_faults_zero" = "PASS" ] && echo 1 || echo 0)
 
     # Interaction evidence categories: must be real markers, not ordinary render status.
@@ -6895,6 +7001,7 @@ ALL_GATES=(
     "net_real_http_body_prefix:$gate_net_real_http_body_prefix"
     "clock_visible_seconds:$gate_clock_visible_seconds"
     "clock_cadence_bound:$gate_clock_cadence_bound"
+    "clock_cadence_parity:$gate_clock_cadence_parity"
     "silk_de_contract_lock:$gate_silk_de_contract_lock"
     "silk_de_topstrip_deterministic:$gate_silk_de_topstrip_deterministic"
     "silk_de_renderer_conformance:$gate_silk_de_renderer_conformance"
