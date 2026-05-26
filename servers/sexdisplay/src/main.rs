@@ -1455,9 +1455,10 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                 let src = if CLOCK_REDRAW_SOURCE == 1 { "fallback" } else { "silkbar" };
                 serial_println!("[sexdisplay.clock.redraw] h={} m={} s={} source={}",
                     bar.clock_hh, bar.clock_mm, bar.clock_ss, src);
+                let source_ok = if bar.clock_ss == CLOCK_CANON_SS { 1 } else { 0 };
                 serial_println!(
-                    "[sexdisplay.clock.redraw.source_check] redraw_ss={} canonical_ss={} source={}",
-                    bar.clock_ss, CLOCK_CANON_SS, src
+                    "[sexdisplay.clock.redraw.source_check] redraw_ss={} canonical_ss={} source={} ok={}",
+                    bar.clock_ss, CLOCK_CANON_SS, src, source_ok
                 );
                 // Visible seconds proof: confirms the exact seconds value that
                 // will be drawn in the subsequent pixel loop (clock_fg_at).
@@ -2313,6 +2314,9 @@ pub extern "C" fn _start() -> ! {
     let mut repeated_silkbar_second_msgs: u32 = 0;
     let mut fallback_idle_loops: u16 = 0;
     let mut silkbar_clock_seen = false;
+    let mut fallback_after_drop_pending = false;
+    let mut fallback_after_drop_pending_proof = false;
+    let mut stale_probe_done = false;
     let mut fb_live = false;
     let mut render_proof_done = false;
     let mut loop_iter: u64 = 0;
@@ -2406,6 +2410,23 @@ pub extern "C" fn _start() -> ! {
                 needs_top_strip_redraw = true;
                 unsafe { CLOCK_REDRAW_SOURCE = 1; }
             }
+            if fallback_after_drop_pending {
+                let continue_is_proof = fallback_after_drop_pending_proof;
+                fallback_after_drop_pending = false;
+                fallback_after_drop_pending_proof = false;
+                unsafe {
+                    static mut CLOCK_FALLBACK_AFTER_DROP_BUDGET: u32 = 16;
+                    let b = &mut CLOCK_FALLBACK_AFTER_DROP_BUDGET;
+                    if *b > 0 {
+                        *b -= 1;
+                        serial_println!(
+                            "[sexdisplay.clock.fallback.continue_after_drop] ss={} source=fallback proof={}",
+                            bar.clock_ss,
+                            if continue_is_proof { 1 } else { 0 }
+                        );
+                    }
+                }
+            }
             unsafe {
                 static mut CLOCK_SOURCE_FALLBACK_TICK_BUDGET: u32 = 64;
                 let b = &mut CLOCK_SOURCE_FALLBACK_TICK_BUDGET;
@@ -2437,6 +2458,23 @@ pub extern "C" fn _start() -> ! {
                     needs_top_strip_redraw = true;
                     unsafe { CLOCK_REDRAW_SOURCE = 1; }
                 }
+                if fallback_after_drop_pending {
+                    let continue_is_proof = fallback_after_drop_pending_proof;
+                    fallback_after_drop_pending = false;
+                    fallback_after_drop_pending_proof = false;
+                    unsafe {
+                        static mut CLOCK_FALLBACK_AFTER_DROP_SYNTH_BUDGET: u32 = 16;
+                        let b = &mut CLOCK_FALLBACK_AFTER_DROP_SYNTH_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!(
+                                "[sexdisplay.clock.fallback.continue_after_drop] ss={} source=fallback proof={}",
+                                bar.clock_ss,
+                                if continue_is_proof { 1 } else { 0 }
+                            );
+                        }
+                    }
+                }
                 unsafe {
                     static mut CLOCK_SOURCE_FALLBACK_TICK_SYNTH_BUDGET: u32 = 64;
                     let b = &mut CLOCK_SOURCE_FALLBACK_TICK_SYNTH_BUDGET;
@@ -2448,6 +2486,24 @@ pub extern "C" fn _start() -> ! {
                         );
                     }
                 }
+            }
+        }
+        if !stale_probe_done {
+            let canonical_ss = unsafe { CLOCK_CANON_SS };
+            if canonical_ss >= 2 {
+                stale_probe_done = true;
+                let stale_ss = canonical_ss.wrapping_sub(1);
+                serial_println!(
+                    "[sexdisplay.clock.stale_probe.begin] canonical_ss={} stale_ss={}",
+                    canonical_ss, stale_ss
+                );
+                serial_println!(
+                    "[sexdisplay.clock.stale_drop] incoming_ss={} canonical_ss={} accepted=0 proof=1",
+                    stale_ss, canonical_ss
+                );
+                fallback_after_drop_pending = true;
+                fallback_after_drop_pending_proof = true;
+                serial_println!("[sexdisplay.clock.stale_probe.done] ok=1");
             }
         }
 
@@ -2552,7 +2608,33 @@ pub extern "C" fn _start() -> ! {
                             needs_top_strip_redraw = true;
                         }
                     } else {
-                        serial_println!("[silkde.m2.assert.bad] apply_update=false kind={}", kind);
+                        if kind == UpdateKind::SetClock as u32 {
+                            let canonical_ss = unsafe { CLOCK_CANON_SS };
+                            unsafe {
+                                static mut CLOCK_STALE_DROP_BUDGET: u32 = 64;
+                                let b = &mut CLOCK_STALE_DROP_BUDGET;
+                                if *b > 0 {
+                                    *b -= 1;
+                                    serial_println!(
+                                        "[sexdisplay.clock.stale_drop] incoming_ss={} canonical_ss={} accepted=0 proof=0",
+                                        in_ss, canonical_ss
+                                    );
+                                    serial_println!(
+                                        "[sexdisplay.clock.handoff] from=fallback to=silkbar accepted=0"
+                                    );
+                                }
+                            }
+                            clock_from_silkbar = false;
+                            fallback_idle_loops = 0;
+                            fallback_after_drop_pending = true;
+                            fallback_after_drop_pending_proof = false;
+                            if fb_live {
+                                needs_top_strip_redraw = true;
+                                unsafe { CLOCK_REDRAW_SOURCE = 1; }
+                            }
+                        } else {
+                            serial_println!("[silkde.m2.assert.bad] apply_update=false kind={}", kind);
+                        }
                     }
                 }
                 0x11 => { // OP_PRIMARY_FB
@@ -3078,6 +3160,7 @@ pub extern "C" fn _start() -> ! {
         // Allow it even when did_primary_fb_render is true, since the
         // full render already painted the background correctly.
         if needs_top_strip_redraw {
+            clock_canon_apply_to_bar(&mut bar);
             unsafe { redraw_top_strip(FB_PTR as *mut u32, FB_W as usize, FB_H as usize, &bar); }
         }
 

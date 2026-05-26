@@ -3734,6 +3734,19 @@ source_check_mismatch_count="$(
         }'
     } || true
 )"
+source_check_ok1_count="$(grep -cE '\[sexdisplay\.clock\.redraw\.source_check\].*ok=1' "$LOG" 2>/dev/null || true)"
+source_check_ok0_count="$(grep -cE '\[sexdisplay\.clock\.redraw\.source_check\].*ok=0' "$LOG" 2>/dev/null || true)"
+stale_drop_reject_count="$(grep -cE '\[sexdisplay\.clock\.stale_drop\].*accepted=0' "$LOG" 2>/dev/null || true)"
+fallback_continue_after_drop_count="$(grep -cE '\[sexdisplay\.clock\.fallback\.continue_after_drop\]' "$LOG" 2>/dev/null || true)"
+source_check_ok1_count="${source_check_ok1_count:-0}"
+source_check_ok0_count="${source_check_ok0_count:-0}"
+stale_drop_reject_count="${stale_drop_reject_count:-0}"
+fallback_continue_after_drop_count="${fallback_continue_after_drop_count:-0}"
+source_check_bad_count="${source_check_ok0_count:-0}"
+source_check_ok_count="${source_check_ok1_count:-0}"
+stale_drop_count="${stale_drop_reject_count:-0}"
+continue_after_drop_count="${fallback_continue_after_drop_count:-0}"
+clock_diag_counts="source_check_ok_count=${source_check_ok_count} source_check_bad_count=${source_check_bad_count} stale_drop_count=${stale_drop_count} continue_after_drop_count=${continue_after_drop_count}"
 rapid_tick_fail=0
 rapid_tick_advances=0
 rapid_tick_line_span=0
@@ -3782,32 +3795,44 @@ fi
 if [ -n "${first_redraw_line:-}" ] && [ -n "${first_nonzero_redraw_line:-}" ] \
    && [ "$zero_only_window" -eq 0 ] \
    && [ "$source_check_mismatch_count" -eq 0 ] \
+   && [ "${source_check_ok1_count:-0}" -ge 1 ] \
+   && [ "${source_check_ok0_count:-0}" -eq 0 ] \
+   && { [ "${stale_drop_reject_count:-0}" -eq 0 ] || [ "${fallback_continue_after_drop_count:-0}" -ge 1 ]; } \
    && [ "$rapid_tick_fail" -eq 0 ]; then
     redraw_distance=$(( first_nonzero_redraw_line - first_redraw_line ))
     if [ "$redraw_distance" -le "$redraw_nonzero_max_distance" ]; then
         gate_clock_visible_seconds="PASS"
         print_row "clock_visible_seconds" "PASS" \
-            "first=${first_redraw_line} first_nonzero=${first_nonzero_redraw_line} distance=${redraw_distance} source_check=equal rapid_tick_advances=${rapid_tick_advances} line_span=${rapid_tick_line_span} min_delta=${rapid_tick_min_line_delta}"
+            "first=${first_redraw_line} first_nonzero=${first_nonzero_redraw_line} distance=${redraw_distance} source_check=equal rapid_tick_advances=${rapid_tick_advances} line_span=${rapid_tick_line_span} min_delta=${rapid_tick_min_line_delta} ${clock_diag_counts}"
     else
         gate_clock_visible_seconds="FAIL"
         print_row "clock_visible_seconds" "FAIL" \
-            "nonzero redraw too late first=${first_redraw_line} first_nonzero=${first_nonzero_redraw_line} distance=${redraw_distance}>${redraw_nonzero_max_distance}"
+            "nonzero redraw too late first=${first_redraw_line} first_nonzero=${first_nonzero_redraw_line} distance=${redraw_distance}>${redraw_nonzero_max_distance} ${clock_diag_counts}"
     fi
 elif [ "$zero_only_window" -eq 1 ]; then
     gate_clock_visible_seconds="FAIL"
     print_row "clock_visible_seconds" "FAIL" \
-        "first ${redraw_sample_window} redraw markers all s=0"
+        "first ${redraw_sample_window} redraw markers all s=0 ${clock_diag_counts}"
 elif [ "$source_check_mismatch_count" -gt 0 ]; then
     gate_clock_visible_seconds="FAIL"
     print_row "clock_visible_seconds" "FAIL" \
-        "source_check mismatch count=${source_check_mismatch_count}"
+        "source_check mismatch count=${source_check_mismatch_count} ${clock_diag_counts}"
+elif [ "${source_check_ok1_count:-0}" -lt 1 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" "missing source_check ok=1 ${clock_diag_counts}"
+elif [ "${source_check_ok0_count:-0}" -gt 0 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" "source_check has ok=0 count=${source_check_ok0_count} ${clock_diag_counts}"
+elif [ "${stale_drop_reject_count:-0}" -gt 0 ] && [ "${fallback_continue_after_drop_count:-0}" -lt 1 ]; then
+    gate_clock_visible_seconds="FAIL"
+    print_row "clock_visible_seconds" "FAIL" "missing fallback.continue_after_drop marker after stale_drop ${clock_diag_counts}"
 elif [ "$rapid_tick_fail" -eq 1 ]; then
     gate_clock_visible_seconds="FAIL"
     print_row "clock_visible_seconds" "FAIL" \
-        "rapid_tick advances=${rapid_tick_advances} line_span=${rapid_tick_line_span} min_delta=${rapid_tick_min_line_delta}"
+        "rapid_tick advances=${rapid_tick_advances} line_span=${rapid_tick_line_span} min_delta=${rapid_tick_min_line_delta} ${clock_diag_counts}"
 elif [ "$(has 'sexdisplay.clock.redraw]')" -ge 1 ]; then
     gate_clock_visible_seconds="FAIL"
-    print_row "clock_visible_seconds" "FAIL" "missing bounded nonzero redraw proof"
+    print_row "clock_visible_seconds" "FAIL" "missing bounded nonzero redraw proof ${clock_diag_counts}"
 else gate_clock_visible_seconds="SKIP"; fi
 
 # ---- 95. clock_cadence_bound ----
