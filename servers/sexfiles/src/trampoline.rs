@@ -4,6 +4,9 @@ use crate::vfs;
 
 #[no_mangle]
 pub extern "C" fn trampoline_main() {
+    serial_println!("[sexfiles.trampoline.enter] ok=1");
+    // SLOT_STORAGE is statically assigned; no dynamic registration call is used here.
+    serial_println!("[sexfiles.trampoline.before_register] slot=1 ok=1");
     // Optional RamFS proof run (compile-time flag).
     // Matches the silk-shell SCENE_SETTINGS_PROTOCOL_PROOF pattern.
     const RAMFS_PROOF_ENABLED: bool =
@@ -207,6 +210,8 @@ pub extern "C" fn trampoline_main() {
     }
 
     serial_println!("[sexfiles.ready]");
+    serial_println!("[sexfiles.init.ready] slot=1 ok=1");
+    serial_println!("[sexfiles.trampoline.loop.enter] ok=1");
 
     loop {
         static mut SEXFILES_TRAMP_LISTEN_BUDGET: u32 = 8;

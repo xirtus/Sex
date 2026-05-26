@@ -17,12 +17,14 @@ use crate::trampoline::trampoline_main;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    crate::pdx::serial_println!("[sexfiles.init.start]");
+    crate::pdx::serial_println!("[sexfiles.init.start] ok=1");
     // sexfiles: RamFS Contract Lock V1
     // Bounded RAM-backed filesystem with no POSIX semantics.
     sex_rt::heap_init();
     crate::pdx::serial_println!("[sexfiles.ready]");
+    crate::pdx::serial_println!("[sexfiles.init.before_trampoline] ok=1");
     trampoline_main();
+    crate::pdx::serial_println!("[sexfiles.trampoline.return.unexpected] ok=0");
 
     // Fallback: trampoline_main should never return
     loop {

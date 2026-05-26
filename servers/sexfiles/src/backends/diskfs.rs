@@ -5011,10 +5011,12 @@ pub fn sexobject_native_persist_linen_proof() -> Result<u64, i64> {
     let name_hash = sexfs_v0_fnv1a(b"test");
     let object_id = sexobject_create(1, name_hash)?;
     serial_println!("[sexfiles.sexobject.native.create.ok] object_id={}", object_id);
+    serial_println!("[sexfiles.sexobject.create.ok] object={}", object_id);
 
     // Write "test" (4 bytes).
     sexobject_write(object_id, b"test")?;
     serial_println!("[sexfiles.sexobject.native.write.ok] object_id={} len=4", object_id);
+    serial_println!("[sexfiles.sexobject.write.ok] object={} bytes=4 ok=1", object_id);
     serial_println!("[sexfiles.sexobject.native.persist.ok] object_id={} table=1 freemap=1 data=1", object_id);
 
     // Read back.
@@ -5028,8 +5030,12 @@ pub fn sexobject_native_persist_linen_proof() -> Result<u64, i64> {
         && read_buf[2] == b's'
         && read_buf[3] == b't'
     {
+        serial_println!("[sexfiles.sexobject.read.match] object={} bytes=4 ok=1", object_id);
+        serial_println!("[sexfiles.sexobject.persist.done] ok=1");
         Ok(object_id)
     } else {
+        serial_println!("[sexfiles.sexobject.read.match] object={} bytes={} ok=0", object_id, read_size);
+        serial_println!("[sexfiles.sexobject.persist.done] ok=0");
         Err(messages::ERR_OVERFLOW)
     }
 }

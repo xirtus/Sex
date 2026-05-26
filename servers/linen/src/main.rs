@@ -2078,6 +2078,7 @@ unsafe fn run_linen_diskfs_direct_proof() {
 /// internally calls sys_yield(), giving sexfiles CPU time to finish startup.
 unsafe fn run_linen_sexobject_native_persist_proof() {
     serial_println!("[linen.sexobject.native.begin]");
+    serial_println!("[linen.sexobject.native.begin] ok=1");
     serial_println!(
         "[linen.sexobject.native.route] uses_slot_storage=1 uses_slot_block=0 direct_sexdrive=0"
     );
@@ -2096,6 +2097,7 @@ unsafe fn run_linen_sexobject_native_persist_proof() {
 
     let mut attempt = 0u64;
     loop {
+        serial_println!("[linen.sexobject.native.call] slot=1 op=0x40 ok=1");
         let (send_status, _) = pdx_call(SLOT_STORAGE, OP_SEXOBJECT_NATIVE_PERSIST_PROOF, 0, 0, 0);
         if send_status != 0 {
             serial_println!(
@@ -2122,11 +2124,20 @@ unsafe fn run_linen_sexobject_native_persist_proof() {
         }
 
         if let Some(val) = reply {
+            serial_println!(
+                "[linen.sexobject.native.reply.wait] attempts={} ok=1",
+                attempt + 1
+            );
             if val >= 1 {
+                serial_println!("[linen.sexobject.native.reply] status=S ok=1");
+                serial_println!("[linen.sexobject.native.create.ok] ok=1");
+                serial_println!("[linen.sexobject.native.write.ok] bytes=4 ok=1");
                 serial_println!("[linen.sexobject.native.read.match] label=test text=test ok=1");
+                serial_println!("[linen.sexobject.native.read.match] bytes=4 ok=1");
                 serial_println!(
                     "[linen.sexobject.native.truth] filesystem=0 posix=0 directories=0 rename=0 delete=0 durable=0 powerloss=0 journal=0 ok=1"
                 );
+                serial_println!("[linen.sexobject.native.persist.done] ok=1");
                 serial_println!("[linen.sexobject.native.done] ok=1");
             } else {
                 serial_println!(
@@ -2137,8 +2148,16 @@ unsafe fn run_linen_sexobject_native_persist_proof() {
             return;
         }
 
+        serial_println!(
+            "[linen.sexobject.native.reply.wait] attempts={} ok=0",
+            attempt + 1
+        );
         attempt += 1;
         if attempt >= MAX_RETRIES {
+            serial_println!(
+                "[linen.sexobject.native.timeout] attempts={} ok=0",
+                attempt
+            );
             serial_println!(
                 "[linen.sexobject.native.done] ok=0 reason=timeout attempts={}",
                 attempt

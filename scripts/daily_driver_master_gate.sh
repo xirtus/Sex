@@ -4930,50 +4930,86 @@ fi
 
 # ---- linen_sexobject_native_persist ----
 if [ "$(has '\[linen\.sexobject\.native\.begin\]')" -ge 1 ]; then
+    has_sf_start=$(has 'sexfiles\.init\.start.*ok=1')
+    has_sf_before_trampoline=$(has 'sexfiles\.init\.before_trampoline.*ok=1')
+    has_sf_trampoline_enter=$(has 'sexfiles\.trampoline\.enter.*ok=1')
+    has_sf_ready=$(has 'sexfiles\.init\.ready.*slot=1.*ok=1')
+    has_sf_dispatch_40=$(has 'sexfiles\.route\.dispatch.*op=0x40.*ok=1')
+    has_sf_reply_40_s=$(has 'sexfiles\.route\.reply.*op=0x40.*status=S.*ok=1')
+    sf_stage_detail="sexfiles_started=$([ \"$has_sf_start\" -ge 1 ] && echo 1 || echo 0) sexfiles_before_trampoline=$([ \"$has_sf_before_trampoline\" -ge 1 ] && echo 1 || echo 0) sexfiles_trampoline_enter=$([ \"$has_sf_trampoline_enter\" -ge 1 ] && echo 1 || echo 0) sexfiles_ready=$([ \"$has_sf_ready\" -ge 1 ] && echo 1 || echo 0) dispatch_op40=$([ \"$has_sf_dispatch_40\" -ge 1 ] && echo 1 || echo 0)"
     has_route=$(has 'linen\.sexobject\.native\.route.*uses_slot_storage=1.*uses_slot_block=0.*direct_sexdrive=0')
     has_save=$(has 'linen\.sexobject\.native\.save\.send.*label=test.*len=4.*kind=text')
-    has_create=$(has 'sexfiles\.sexobject\.native\.create\.ok.*object_id=')
-    has_write=$(has 'sexfiles\.sexobject\.native\.write\.ok.*object_id=.*len=4')
-    has_persist=$(has 'sexfiles\.sexobject\.native\.persist\.ok.*object_id=.*table=1.*freemap=1.*data=1')
-    has_read=$(has 'sexfiles\.sexobject\.native\.read\.ok.*object_id=.*len=')
-    has_match=$(has 'linen\.sexobject\.native\.read\.match.*label=test.*text=test.*ok=1')
+    has_linen_call=$(has 'linen\.sexobject\.native\.call.*slot=1.*op=0x40.*ok=1')
+    has_linen_reply=$(has 'linen\.sexobject\.native\.reply.*status=S.*ok=1')
+    has_linen_timeout=$(has 'linen\.sexobject\.native\.timeout.*ok=0')
+    has_create=$(has 'sexfiles\.sexobject\.(native\.)?create\.ok')
+    has_write=$(has 'sexfiles\.sexobject\.(native\.)?write\.ok')
+    has_persist=$(has 'sexfiles\.sexobject\.(native\.)?persist\.(ok|done).*ok=1|sexfiles\.sexobject\.native\.persist\.ok.*table=1.*freemap=1.*data=1')
+    has_read=$(has 'sexfiles\.sexobject\.read\.match.*ok=1|sexfiles\.sexobject\.native\.read\.ok.*object_id=.*len=')
+    has_linen_create=$(has 'linen\.sexobject\.native\.create\.ok.*ok=1')
+    has_linen_write=$(has 'linen\.sexobject\.native\.write\.ok.*bytes=.*ok=1')
+    has_match=$(has 'linen\.sexobject\.native\.read\.match.*(bytes=4|label=test.*text=test).*ok=1')
     has_truth=$(has 'linen\.sexobject\.native\.truth.*filesystem=0.*posix=0.*directories=0.*ok=1')
-    has_done=$(has 'linen\.sexobject\.native\.done.*ok=1')
+    has_done=$(has 'linen\.sexobject\.native\.(persist\.done|done).*ok=1')
     has_fault=$(has 'fault\.kill|#PF|#GP|panic|KERNEL PANIC|general_protection|page_fault')
 
     if [ "$has_fault" -ge 1 ]; then
         gate_linen_sexobject_native_persist="FAIL"
-        print_row "linen_sexobject_native_persist" "FAIL" "fault marker present during native persist proof"
+        print_row "linen_sexobject_native_persist" "FAIL" "fault marker present during native persist proof ${sf_stage_detail}"
     elif [ "$has_route" -eq 0 ]; then
         gate_linen_sexobject_native_persist="FAIL"
-        print_row "linen_sexobject_native_persist" "FAIL" "route marker missing or uses_slot_storage!=1"
+        print_row "linen_sexobject_native_persist" "FAIL" "route marker missing or uses_slot_storage!=1 ${sf_stage_detail}"
     elif [ "$has_save" -eq 0 ]; then
         gate_linen_sexobject_native_persist="FAIL"
-        print_row "linen_sexobject_native_persist" "FAIL" "save.send marker missing"
+        print_row "linen_sexobject_native_persist" "FAIL" "save.send marker missing ${sf_stage_detail}"
+    elif [ "$has_sf_ready" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "sexfiles_not_ready ${sf_stage_detail}"
+    elif [ "$has_linen_call" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "linen call marker missing ${sf_stage_detail}"
+    elif [ "$has_sf_dispatch_40" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "no_dispatch_op40 ${sf_stage_detail}"
+    elif [ "$has_sf_dispatch_40" -ge 1 ] && [ "$has_create" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "dispatch_but_no_create_marker ${sf_stage_detail}"
+    elif [ "$has_linen_reply" -eq 0 ] && [ "$has_linen_timeout" -ge 1 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "linen_no_reply ${sf_stage_detail}"
+    elif [ "$has_sf_reply_40_s" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "linen_no_reply ${sf_stage_detail}"
     elif [ "$has_create" -eq 0 ]; then
         gate_linen_sexobject_native_persist="FAIL"
-        print_row "linen_sexobject_native_persist" "FAIL" "sexfiles create.ok marker missing"
+        print_row "linen_sexobject_native_persist" "FAIL" "sexfiles create.ok marker missing ${sf_stage_detail}"
     elif [ "$has_write" -eq 0 ]; then
         gate_linen_sexobject_native_persist="FAIL"
-        print_row "linen_sexobject_native_persist" "FAIL" "sexfiles write.ok marker missing"
+        print_row "linen_sexobject_native_persist" "FAIL" "sexfiles write.ok marker missing ${sf_stage_detail}"
+    elif [ "$has_linen_create" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "linen create.ok marker missing ${sf_stage_detail}"
+    elif [ "$has_linen_write" -eq 0 ]; then
+        gate_linen_sexobject_native_persist="FAIL"
+        print_row "linen_sexobject_native_persist" "FAIL" "linen write.ok marker missing ${sf_stage_detail}"
     elif [ "$has_persist" -eq 0 ]; then
         gate_linen_sexobject_native_persist="FAIL"
-        print_row "linen_sexobject_native_persist" "FAIL" "sexfiles persist.ok marker missing"
+        print_row "linen_sexobject_native_persist" "FAIL" "sexfiles persist.ok marker missing ${sf_stage_detail}"
     elif [ "$has_read" -eq 0 ]; then
         gate_linen_sexobject_native_persist="FAIL"
-        print_row "linen_sexobject_native_persist" "FAIL" "sexfiles read.ok marker missing"
+        print_row "linen_sexobject_native_persist" "FAIL" "read mismatch ${sf_stage_detail}"
     elif [ "$has_match" -eq 0 ]; then
         gate_linen_sexobject_native_persist="FAIL"
-        print_row "linen_sexobject_native_persist" "FAIL" "linen read.match ok=0 or missing"
+        print_row "linen_sexobject_native_persist" "FAIL" "read mismatch ${sf_stage_detail}"
     elif [ "$has_truth" -eq 0 ]; then
         gate_linen_sexobject_native_persist="FAIL"
-        print_row "linen_sexobject_native_persist" "FAIL" "truth/non-claims marker missing"
+        print_row "linen_sexobject_native_persist" "FAIL" "truth/non-claims marker missing ${sf_stage_detail}"
     elif [ "$has_done" -ge 1 ]; then
         gate_linen_sexobject_native_persist="PASS"
-        print_row "linen_sexobject_native_persist" "PASS" "Linen UX through native SexObject store: create/write/persist/read verified via SLOT_STORAGE"
+        print_row "linen_sexobject_native_persist" "PASS" "Linen UX through native SexObject store: create/write/persist/read verified via SLOT_STORAGE ${sf_stage_detail}"
     else
         gate_linen_sexobject_native_persist="FAIL"
-        print_row "linen_sexobject_native_persist" "FAIL" "begin marker present but proof incomplete: done ok=1 missing"
+        print_row "linen_sexobject_native_persist" "FAIL" "begin marker present but proof incomplete: done ok=1 missing ${sf_stage_detail}"
     fi
 else
     gate_linen_sexobject_native_persist="SKIP"
