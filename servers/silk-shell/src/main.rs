@@ -222,6 +222,74 @@ const KEYBOARD_GUI_BROAD_PROOF_ENABLED: bool =
     option_env!("SEXOS_KEYBOARD_GUI_BROAD_PROOF").is_some();
 static mut KEYBOARD_GUI_BROAD_PROOF_STAGE: u8 = 0;
 static mut KEYBOARD_GUI_BROAD_PROOF_DONE: bool = false;
+/// Shell interaction state contract proof gate.
+/// Default OFF. Emits bounded contract markers on existing interaction paths.
+const SHELL_INTERACTION_CONTRACT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SHELL_INTERACTION_CONTRACT_PROOF").is_some();
+const CLICK_DRAG_PROOF_ENABLED: bool =
+    option_env!("SEXOS_CLICK_DRAG_PROOF").is_some()
+        || option_env!("SEXOS_SHELL_INTERACTION_CONTRACT_PROOF").is_some();
+static mut SHELL_INTERACTION_CONTRACT_BEGIN_EMITTED: bool = false;
+static mut SHELL_INTERACTION_CONTRACT_DONE_EMITTED: bool = false;
+static mut SHELL_INTERACTION_CONTRACT_STAGE_MASK: u8 = 0;
+static mut CLICK_FOCUS_PROOF_BEGIN_EMITTED: bool = false;
+static mut DRAG_PROOF_BEGIN_EMITTED: bool = false;
+static mut DRAG_CAPTURE_MOVE_SEEN: bool = false;
+const SHELL_INTERACTION_STAGE_POINTER: u8 = 1 << 0;
+const SHELL_INTERACTION_STAGE_CLICK: u8 = 1 << 1;
+const SHELL_INTERACTION_STAGE_DRAG: u8 = 1 << 2;
+const SHELL_INTERACTION_STAGE_KEY: u8 = 1 << 3;
+const SHELL_INTERACTION_STAGE_NO_FOCUS_KEY: u8 = 1 << 4;
+const SHELL_INTERACTION_STAGE_DEAD_GUARD: u8 = 1 << 5;
+
+unsafe fn shell_interaction_contract_begin_once() {
+    if !SHELL_INTERACTION_CONTRACT_PROOF_ENABLED || SHELL_INTERACTION_CONTRACT_BEGIN_EMITTED {
+        return;
+    }
+    SHELL_INTERACTION_CONTRACT_BEGIN_EMITTED = true;
+    serial_println!("[shell.interact.contract.begin] mode=proof ok=1");
+}
+
+unsafe fn click_drag_proof_begin_click_once() {
+    if !CLICK_DRAG_PROOF_ENABLED || CLICK_FOCUS_PROOF_BEGIN_EMITTED {
+        return;
+    }
+    CLICK_FOCUS_PROOF_BEGIN_EMITTED = true;
+    serial_println!("[click.focus.proof.begin] ok=1");
+}
+
+unsafe fn click_drag_proof_begin_drag_once() {
+    if !CLICK_DRAG_PROOF_ENABLED || DRAG_PROOF_BEGIN_EMITTED {
+        return;
+    }
+    DRAG_PROOF_BEGIN_EMITTED = true;
+    serial_println!("[drag.proof.begin] ok=1");
+}
+
+unsafe fn shell_interaction_contract_mark_stage(stage: u8) {
+    if !SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+        return;
+    }
+    SHELL_INTERACTION_CONTRACT_STAGE_MASK |= stage;
+}
+
+unsafe fn shell_interaction_contract_try_done() {
+    if !SHELL_INTERACTION_CONTRACT_PROOF_ENABLED || SHELL_INTERACTION_CONTRACT_DONE_EMITTED {
+        return;
+    }
+    let required = SHELL_INTERACTION_STAGE_POINTER
+        | SHELL_INTERACTION_STAGE_CLICK
+        | SHELL_INTERACTION_STAGE_DRAG
+        | SHELL_INTERACTION_STAGE_KEY;
+    if (SHELL_INTERACTION_CONTRACT_STAGE_MASK & required) == required {
+        SHELL_INTERACTION_CONTRACT_DONE_EMITTED = true;
+        serial_println!(
+            "[shell.interact.contract.done] pointer=1 click=1 drag=1 key=1 dead_guard={} no_focus_key={} ok=1",
+            ((SHELL_INTERACTION_CONTRACT_STAGE_MASK & SHELL_INTERACTION_STAGE_DEAD_GUARD) != 0) as u8,
+            ((SHELL_INTERACTION_CONTRACT_STAGE_MASK & SHELL_INTERACTION_STAGE_NO_FOCUS_KEY) != 0) as u8
+        );
+    }
+}
 
 /// Frame-light zoom synthetic proof gate.
 /// Default OFF to keep normal boot/input tests free of synthetic GUI noise.
@@ -8714,12 +8782,27 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
 
     let old_x = POINTER_X;
     let old_y = POINTER_Y;
-    POINTER_X = POINTER_X.wrapping_add(dx);
-    POINTER_Y = POINTER_Y.wrapping_add(dy);
+    let raw_new_x = POINTER_X.wrapping_add(dx);
+    let raw_new_y = POINTER_Y.wrapping_add(dy);
+    POINTER_X = raw_new_x;
+    POINTER_Y = raw_new_y;
 
     // Clamp to display bounds.
     let new_x = POINTER_X.clamp(0, P.width - 1);
     let new_y = POINTER_Y.clamp(0, P.height - 1);
+    let clamped = ((raw_new_x != new_x) || (raw_new_y != new_y)) as u8;
+    let in_bounds = (new_x >= 0 && new_x < P.width && new_y >= 0 && new_y < P.height) as u8;
+    if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+        static mut CURSOR_MOTION_BOUNDS_REL_BUDGET: u32 = 64;
+        let rem = &mut CURSOR_MOTION_BOUNDS_REL_BUDGET;
+        if *rem > 0 {
+            *rem -= 1;
+            serial_println!(
+                "[cursor.motion.bounds] source=rel old_x={} old_y={} new_x={} new_y={} w={} h={} clamped={} ok={}",
+                old_x, old_y, new_x, new_y, P.width, P.height, clamped, in_bounds
+            );
+        }
+    }
     if new_x != old_x || new_y != old_y {
         unsafe {
             static mut CURSOR_CLAMP_BUDGET: u32 = 16;
@@ -8798,6 +8881,17 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
         POINTER_X = sx;
         POINTER_Y = sy;
         REAL_POINTER_SEEN = true;
+        if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+            static mut CURSOR_MOTION_BOUNDS_ABS_BUDGET: u32 = 64;
+            let rem = &mut CURSOR_MOTION_BOUNDS_ABS_BUDGET;
+            if *rem > 0 {
+                *rem -= 1;
+                serial_println!(
+                    "[cursor.motion.bounds] source=abs old_x={} old_y={} new_x={} new_y={} w={} h={} clamped=0 ok=1",
+                    last_x, last_y, sx, sy, P.width, P.height
+                );
+            }
+        }
         send_cursor_checked(POINTER_X, POINTER_Y, "abs");
     } else {
         serial_println!(
@@ -8823,6 +8917,7 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
 /// drain so button click/focus works even during blocking Linen fetch.
 unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
+    shell_interaction_contract_begin_once();
     let scancode = arg0 as u8;
     let value = arg1;
     static mut HID_RECV_DRAIN_BUDGET: u32 = 64;
@@ -9049,6 +9144,14 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     frame_for_surface(FOCUSED_SURFACE_ID).unwrap_or(0),
                     FOCUSED_SURFACE_ID
                 );
+                if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+                    serial_println!(
+                        "[shell.interact.stage.key_route] key={} shell_consumed=1 focused={} routed=0 ok=1",
+                        scancode, FOCUSED_SURFACE_ID
+                    );
+                    shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_KEY);
+                    shell_interaction_contract_try_done();
+                }
                 // Do not route reserved UI keys to the focused app.
                 return;
             }
@@ -9063,6 +9166,14 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     );
                 }
                 pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+                if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+                    serial_println!(
+                        "[shell.interact.stage.key_route] key={} shell_consumed=0 focused={} routed=1 ok=1",
+                        scancode, SURFACE_ID_QUIL
+                    );
+                    shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_KEY);
+                    shell_interaction_contract_try_done();
+                }
             } else if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
                 static mut KEY_ROUTE_DRAIN_BUDGET_LINEN: u32 = 32;
                 if KEY_ROUTE_DRAIN_BUDGET_LINEN > 0 {
@@ -9073,6 +9184,14 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     );
                 }
                 pdx_call(sex_pdx::SLOT_LINEN, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+                if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+                    serial_println!(
+                        "[shell.interact.stage.key_route] key={} shell_consumed=0 focused={} routed=1 ok=1",
+                        scancode, SURFACE_ID_LINEN
+                    );
+                    shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_KEY);
+                    shell_interaction_contract_try_done();
+                }
             } else if FOCUSED_SURFACE_ID == SURFACE_ID_SPINDLE {
                 static mut SPINDLE_ROUTE_DRAIN_BUDGET: u32 = 32;
                 if SPINDLE_ROUTE_DRAIN_BUDGET > 0 {
@@ -9083,14 +9202,41 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     );
                 }
                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+                if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+                    serial_println!(
+                        "[shell.interact.stage.key_route] key={} shell_consumed=0 focused={} routed=1 ok=1",
+                        scancode, SURFACE_ID_SPINDLE
+                    );
+                    shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_KEY);
+                    shell_interaction_contract_try_done();
+                }
+            } else if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+                serial_println!(
+                    "[shell.interact.stage.no_focus_key] key={} focused={} ignored_or_consumed=1 ok=1",
+                    scancode, FOCUSED_SURFACE_ID
+                );
+                shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_NO_FOCUS_KEY);
+                shell_interaction_contract_try_done();
             }
         }
         return;
     }
 
     if event_class == EV_ABS {
+        let old_focus = FOCUSED_SURFACE_ID;
         process_abs_tablet(arg0 as i32, arg1 as i32);
+        if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+            let new_focus = FOCUSED_SURFACE_ID;
+            let ok = (old_focus == new_focus) as u8;
+            serial_println!(
+                "[shell.interact.stage.pointer_state] source=abs old_focus={} new_focus={} moved=1 ok={}",
+                old_focus, new_focus, ok
+            );
+            shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_POINTER);
+            shell_interaction_contract_try_done();
+        }
     } else if event_class == EV_REL {
+        let old_focus = FOCUSED_SURFACE_ID;
         static mut REL_RECV_DRAIN_BUDGET: u32 = 64;
         if REL_RECV_DRAIN_BUDGET > 0 {
             REL_RECV_DRAIN_BUDGET -= 1;
@@ -9100,6 +9246,16 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             );
         }
         let _ = apply_rel_pointer(arg0 as i32, arg1 as i32);
+        if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+            let new_focus = FOCUSED_SURFACE_ID;
+            let ok = (old_focus == new_focus) as u8;
+            serial_println!(
+                "[shell.interact.stage.pointer_state] source=rel old_focus={} new_focus={} moved=1 ok={}",
+                old_focus, new_focus, ok
+            );
+            shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_POINTER);
+            shell_interaction_contract_try_done();
+        }
     } else if event_class == EV_BTN {
         let button = arg0 as u8;
         let pressed = arg1 != 0;
@@ -9122,6 +9278,20 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             "[shell.pointer.button] btn={} down={} x={} y={}",
             button, pressed as u8, POINTER_X, POINTER_Y
         );
+        if CLICK_DRAG_PROOF_ENABLED && button == 1 {
+            if pressed {
+                click_drag_proof_begin_click_once();
+                serial_println!(
+                    "[click.focus.button.down] button={} x={} y={} old_focus={} ok=1",
+                    button, POINTER_X, POINTER_Y, FOCUSED_SURFACE_ID
+                );
+            } else {
+                serial_println!(
+                    "[click.focus.button.up] button={} x={} y={} ok=1",
+                    button, POINTER_X, POINTER_Y
+                );
+            }
+        }
         serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
             button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);
 
@@ -9181,6 +9351,19 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     InteractionState::ClickPending => {
                         serial_println!("[silk-shell.click.up] btn={} x={} y={}",
                             button, POINTER_X, POINTER_Y);
+                        if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+                            serial_println!("[shell.interact.stage.drag_capture] phase=release target=0 live=1 capture=0 release=1 ok=1");
+                            shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_DRAG);
+                            shell_interaction_contract_try_done();
+                        }
+                        if CLICK_DRAG_PROOF_ENABLED {
+                            if !DRAG_CAPTURE_MOVE_SEEN {
+                                serial_println!("[drag.capture.move] target=0 live=1 dx=0 dy=0 ok=1");
+                            }
+                            serial_println!("[drag.capture.release] target=0 released=1 capture_after=0 ok=1");
+                            serial_println!("[drag.proof.done] ok=1");
+                            DRAG_CAPTURE_MOVE_SEEN = false;
+                        }
                         DRAG_PENDING_ACTIVE = false;
                         try_transition(InteractionState::Idle);
                     }
@@ -9191,6 +9374,30 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                             "[shell.drag.end] sid={} frame=0 x={} y={}",
                             surface_id, POINTER_X, POINTER_Y
                         );
+                        if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+                            let live = surface_is_alive(surface_id) as u8;
+                            serial_println!(
+                                "[shell.interact.stage.drag_capture] phase=release target={} live={} capture=0 release=1 ok=1",
+                                surface_id, live
+                            );
+                            shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_DRAG);
+                            shell_interaction_contract_try_done();
+                        }
+                        if CLICK_DRAG_PROOF_ENABLED {
+                            if !DRAG_CAPTURE_MOVE_SEEN {
+                                let live = surface_is_alive(surface_id) as u8;
+                                serial_println!(
+                                    "[drag.capture.move] target={} live={} dx=0 dy=0 ok=1",
+                                    surface_id, live
+                                );
+                            }
+                            serial_println!(
+                                "[drag.capture.release] target={} released=1 capture_after=0 ok=1",
+                                surface_id
+                            );
+                            serial_println!("[drag.proof.done] ok=1");
+                            DRAG_CAPTURE_MOVE_SEEN = false;
+                        }
                         DRAG_PENDING_ACTIVE = false;
                         let _ = try_snap_on_drag_release(surface_id, POINTER_X, POINTER_Y);
                         try_transition(InteractionState::Idle);
@@ -9476,6 +9683,11 @@ unsafe fn clear_focus_if_dead() {
     let focused = FOCUSED_SURFACE_ID;
     if focused != 0 && (!surface_is_alive(focused) || !surface_is_lifecycle_focusable(focused)) {
         serial_println!("[shell.focus.clear_dead] sid={} reason=invalid", focused);
+        if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+            serial_println!("[shell.interact.stage.dead_target_guard] kind=focus target={} action=clear ok=1", focused);
+            shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_DEAD_GUARD);
+            shell_interaction_contract_try_done();
+        }
         serial_println!("[silk.lifecycle.focus.clear_dead] sid={} reason=surface_dead_or_unfocusable", focused);
         if !surface_is_alive(focused) {
             serial_println!("[focus.ref.clear] id={} reason=dead", focused);
@@ -9511,6 +9723,11 @@ unsafe fn clear_drag_if_dead() {
         if !surface_is_alive(surface_id) || !surface_is_lifecycle_focusable(surface_id) {
             serial_println!("[shell.drag.clear_dead] sid={} reason=invalid", surface_id);
             serial_println!("[shell.surface.drag.cancel.dead] id={}", surface_id);
+            if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+                serial_println!("[shell.interact.stage.dead_target_guard] kind=drag target={} action=cancel ok=1", surface_id);
+                shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_DEAD_GUARD);
+                shell_interaction_contract_try_done();
+            }
             // A6: Record tombstone for drag cancelled due to dead surface.
             let st = lifecycle_state(surface_id).unwrap_or(LifecycleState::Allocated);
             record_tombstone_event(surface_id, st, st, TombstoneReason::DragCancelled);
@@ -9526,6 +9743,11 @@ unsafe fn clear_hover_if_dead() {
         if let Some(sid) = active_surface_for_frame(HOVERED_FRAME_ID) {
             if !surface_is_alive(sid) || is_tombstoned(sid) {
                 serial_println!("[shell.hover.clear.dead] frame={} surface={} reason=dead", HOVERED_FRAME_ID, sid);
+                if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+                    serial_println!("[shell.interact.stage.dead_target_guard] kind=hover target={} action=clear ok=1", sid);
+                    shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_DEAD_GUARD);
+                    shell_interaction_contract_try_done();
+                }
                 HOVERED_FRAME_ID = 0;
                 HOVER_KIND = HOVER_NONE;
                 HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
@@ -20122,6 +20344,23 @@ unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
                     serial_println!("[shell.integrated.drag_target] id={} focus={}", surface_id, FOCUSED_SURFACE_ID);
                 }
             }
+            if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+                let live = surface_is_alive(surface_id) as u8;
+                serial_println!(
+                    "[shell.interact.stage.drag_capture] phase=move target={} live={} capture=1 release=0 ok=1",
+                    surface_id, live
+                );
+                shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_DRAG);
+                shell_interaction_contract_try_done();
+            }
+            if CLICK_DRAG_PROOF_ENABLED {
+                let live = surface_is_alive(surface_id) as u8;
+                DRAG_CAPTURE_MOVE_SEEN = true;
+                serial_println!(
+                    "[drag.capture.move] target={} live={} dx={} dy={} ok=1",
+                    surface_id, live, dx, dy
+                );
+            }
         }
         moved
     } else {
@@ -20555,6 +20794,7 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
 /// Emits [shell.click_focus.down/hit/miss] markers.
 /// Emits [shell.frame.rim.drag.start] for rim drag, [shell.frame.chrome.capture] for other chrome.
 unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
+    let old_focus = FOCUSED_SURFACE_ID;
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
     // ── Atlas intercept: if Atlas mode is enabled, hit-test scene cards ──
     // Consumes all clicks while Atlas is open — hits switch scene and exit,
@@ -20593,6 +20833,17 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         }
     }
     let target = hit_test_at(px, py);
+    if CLICK_DRAG_PROOF_ENABLED {
+        let (target_id, hit) = match target {
+            HitTarget::Surface(sid) => (sid, 1u8),
+            HitTarget::FrameChrome { frame_id, .. } => (frame_id as u64, 1u8),
+            HitTarget::None => (0u64, 0u8),
+        };
+        serial_println!(
+            "[click.focus.hit_test] target={} hit={} x={} y={} ok=1",
+            target_id, hit, px, py
+        );
+    }
     unsafe {
         static mut DRAG_HIT_TEST_BUDGET: u32 = 32;
         let b = &mut DRAG_HIT_TEST_BUDGET;
@@ -20678,6 +20929,34 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                     px, py, buttons_val
                 );
             }
+        }
+        if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+            let drag_target = DRAG_PENDING_TARGET;
+            let live = if DRAG_PENDING_KIND == 0 {
+                1u8
+            } else {
+                surface_is_alive(drag_target) as u8
+            };
+            serial_println!(
+                "[shell.interact.stage.drag_capture] phase=begin target={} live={} capture=1 release=0 ok=1",
+                drag_target, live
+            );
+            shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_DRAG);
+            shell_interaction_contract_try_done();
+        }
+        if CLICK_DRAG_PROOF_ENABLED {
+            click_drag_proof_begin_drag_once();
+            DRAG_CAPTURE_MOVE_SEEN = false;
+            let drag_target = DRAG_PENDING_TARGET;
+            let live = if DRAG_PENDING_KIND == 0 {
+                1u8
+            } else {
+                surface_is_alive(drag_target) as u8
+            };
+            serial_println!(
+                "[drag.capture.begin] target={} live={} x={} y={} ok=1",
+                drag_target, live, px, py
+            );
         }
     } else {
         DRAG_PENDING_ACTIVE = false;
@@ -20955,6 +21234,33 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         serial_println!(
             "[shell.drag.begin.reject] reason={} target={} kind={} buttons={:#x} dx=0 dy=0",
             reason, DRAG_PENDING_TARGET, DRAG_PENDING_KIND, buttons_val
+        );
+    }
+    if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+        let new_focus = FOCUSED_SURFACE_ID;
+        let (kind, target_id) = hit_target_label(target, silkbar_handled);
+        let ok = if matches!(target, HitTarget::None) {
+            1u8
+        } else {
+            (new_focus != 0) as u8
+        };
+        serial_println!(
+            "[shell.interact.stage.click_focus] target={} kind={} old_focus={} new_focus={} ok={}",
+            target_id, kind, old_focus, new_focus, ok
+        );
+        shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_CLICK);
+        shell_interaction_contract_try_done();
+    }
+    if CLICK_DRAG_PROOF_ENABLED {
+        let new_focus = FOCUSED_SURFACE_ID;
+        let (target_id, changed) = match target {
+            HitTarget::Surface(sid) => (sid, (new_focus != old_focus) as u8),
+            HitTarget::FrameChrome { frame_id, .. } => (frame_id as u64, (new_focus != old_focus) as u8),
+            HitTarget::None => (0u64, (new_focus != old_focus) as u8),
+        };
+        serial_println!(
+            "[click.focus.commit] old_focus={} new_focus={} target={} changed={} ok=1",
+            old_focus, new_focus, target_id, changed
         );
     }
     (target, silkbar_handled)

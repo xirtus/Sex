@@ -168,6 +168,20 @@ gate_browser_placeholder="SKIP"
 gate_atlas_scene_stub="SKIP"
 gate_browser_url_intent="SKIP"
 gate_quil_visible_typing_e2e="SKIP"
+gate_shell_interaction_contract="SKIP"
+gate_shell_interaction_pointer_no_focus_mutation="SKIP"
+gate_shell_interaction_key_route="SKIP"
+gate_shell_interaction_dead_target_guard="SKIP"
+gate_shell_interaction_no_focus_key="SKIP"
+gate_cursor_visible_motion="SKIP"
+gate_cursor_motion_no_focus_mutation="SKIP"
+gate_cursor_motion_bounds="SKIP"
+gate_click_focus_button_edges="SKIP"
+gate_click_focus_hit_test_commit="SKIP"
+gate_drag_capture_lifecycle="SKIP"
+gate_drag_release_clears_capture="SKIP"
+gate_click_drag_dead_target_guard="SKIP"
+gate_click_drag_faults_zero="SKIP"
 gate_webstub_static_text_render="SKIP"
 gate_shell_draw_text_helper="SKIP"
 gate_browser_stub_v2="SKIP"
@@ -4936,7 +4950,7 @@ if [ "$(has '\[linen\.sexobject\.native\.begin\]')" -ge 1 ]; then
     has_sf_ready=$(has 'sexfiles\.init\.ready.*slot=1.*ok=1')
     has_sf_dispatch_40=$(has 'sexfiles\.route\.dispatch.*op=0x40.*ok=1')
     has_sf_reply_40_s=$(has 'sexfiles\.route\.reply.*op=0x40.*status=S.*ok=1')
-    sf_stage_detail="sexfiles_started=$([ \"$has_sf_start\" -ge 1 ] && echo 1 || echo 0) sexfiles_before_trampoline=$([ \"$has_sf_before_trampoline\" -ge 1 ] && echo 1 || echo 0) sexfiles_trampoline_enter=$([ \"$has_sf_trampoline_enter\" -ge 1 ] && echo 1 || echo 0) sexfiles_ready=$([ \"$has_sf_ready\" -ge 1 ] && echo 1 || echo 0) dispatch_op40=$([ \"$has_sf_dispatch_40\" -ge 1 ] && echo 1 || echo 0)"
+    sf_stage_detail="sexfiles_started=$([ \"$(printf '%s' \"${has_sf_start:-}\" | tr -cd '0-9')\" != \"0\" ] && echo 1 || echo 0) sexfiles_before_trampoline=$([ \"$(printf '%s' \"${has_sf_before_trampoline:-}\" | tr -cd '0-9')\" != \"0\" ] && echo 1 || echo 0) sexfiles_trampoline_enter=$([ \"$(printf '%s' \"${has_sf_trampoline_enter:-}\" | tr -cd '0-9')\" != \"0\" ] && echo 1 || echo 0) sexfiles_ready=$([ \"$(printf '%s' \"${has_sf_ready:-}\" | tr -cd '0-9')\" != \"0\" ] && echo 1 || echo 0) dispatch_op40=$([ \"$(printf '%s' \"${has_sf_dispatch_40:-}\" | tr -cd '0-9')\" != \"0\" ] && echo 1 || echo 0)"
     has_route=$(has 'linen\.sexobject\.native\.route.*uses_slot_storage=1.*uses_slot_block=0.*direct_sexdrive=0')
     has_save=$(has 'linen\.sexobject\.native\.save\.send.*label=test.*len=4.*kind=text')
     has_linen_call=$(has 'linen\.sexobject\.native\.call.*slot=1.*op=0x40.*ok=1')
@@ -6715,6 +6729,207 @@ else
     fi
 fi
 
+# ---- shell_interaction_contract ----
+shell_interact_begin_re='shell\.interact\.contract\.begin'
+if [ "$(has "$shell_interact_begin_re")" -eq 0 ]; then
+    gate_shell_interaction_contract="SKIP"
+    gate_shell_interaction_pointer_no_focus_mutation="SKIP"
+    gate_shell_interaction_key_route="SKIP"
+    gate_shell_interaction_dead_target_guard="SKIP"
+    gate_shell_interaction_no_focus_key="SKIP"
+    print_row "shell_interaction_contract" "SKIP" "not_requested (missing explicit begin marker)"
+    print_row "shell_interaction_pointer_no_focus_mutation" "SKIP" "not_requested (missing explicit begin marker)"
+    print_row "shell_interaction_key_route" "SKIP" "not_requested (missing explicit begin marker)"
+    print_row "shell_interaction_dead_target_guard" "SKIP" "not_requested (missing explicit begin marker)"
+    print_row "shell_interaction_no_focus_key" "SKIP" "not_requested (missing explicit begin marker)"
+else
+    has_contract_done=$(has 'shell\.interact\.contract\.done')
+    has_stage_pointer=$(has 'shell\.interact\.stage\.pointer_state')
+    has_stage_click=$(has 'shell\.interact\.stage\.click_focus')
+    has_stage_drag=$(has 'shell\.interact\.stage\.drag_capture')
+    has_stage_key=$(has 'shell\.interact\.stage\.key_route')
+    has_stage_pointer_ok=$(has 'shell\.interact\.stage\.pointer_state.*moved=1.*ok=1')
+    has_stage_key_ok=$(has 'shell\.interact\.stage\.key_route.*(shell_consumed=1|routed=1).*ok=1')
+    has_stage_dead_guard=$(has 'shell\.interact\.stage\.dead_target_guard')
+    has_stage_dead_guard_legacy=$(has 'shell\.tile\.skip_dead|tiling\.focus\.clear|shell\.surface\.drag\.cancel\.dead|shell\.hover\.clear\.dead')
+    has_stage_no_focus_key=$(has 'shell\.interact\.stage\.no_focus_key.*ignored_or_consumed=1.*ok=1')
+
+    missing=""
+    [ "$has_contract_done" -eq 0 ] && missing="${missing} done"
+    [ "$has_stage_pointer" -eq 0 ] && missing="${missing} pointer_state"
+    [ "$has_stage_click" -eq 0 ] && missing="${missing} click_focus"
+    [ "$has_stage_drag" -eq 0 ] && missing="${missing} drag_capture"
+    [ "$has_stage_key" -eq 0 ] && missing="${missing} key_route"
+    if [ -z "$missing" ]; then
+        gate_shell_interaction_contract="PASS"
+        print_row "shell_interaction_contract" "PASS" "begin+done+required interaction stage markers present"
+    else
+        gate_shell_interaction_contract="FAIL"
+        print_row "shell_interaction_contract" "FAIL" "begin present but missing:${missing}"
+    fi
+
+    if [ "$has_stage_pointer_ok" -eq 1 ]; then
+        gate_shell_interaction_pointer_no_focus_mutation="PASS"
+        print_row "shell_interaction_pointer_no_focus_mutation" "PASS" "pointer moved=1 with focus unchanged ok=1 observed"
+    else
+        gate_shell_interaction_pointer_no_focus_mutation="FAIL"
+        print_row "shell_interaction_pointer_no_focus_mutation" "FAIL" "begin present but no pointer no-focus-mutation marker with ok=1"
+    fi
+
+    if [ "$has_stage_key_ok" -eq 1 ]; then
+        gate_shell_interaction_key_route="PASS"
+        print_row "shell_interaction_key_route" "PASS" "key route proven via shell_consumed=1 or routed=1 with ok=1"
+    else
+        gate_shell_interaction_key_route="FAIL"
+        print_row "shell_interaction_key_route" "FAIL" "begin present but missing key_route shell_consumed/routed ok marker"
+    fi
+
+    if [ "$has_stage_dead_guard" -eq 1 ] || [ "$has_stage_dead_guard_legacy" -eq 1 ]; then
+        gate_shell_interaction_dead_target_guard="PASS"
+        print_row "shell_interaction_dead_target_guard" "PASS" "dead target guard proven via contract or legacy markers"
+    else
+        gate_shell_interaction_dead_target_guard="FAIL"
+        print_row "shell_interaction_dead_target_guard" "FAIL" "begin present but dead target guard evidence missing"
+    fi
+
+    if [ "$has_stage_no_focus_key" -eq 1 ]; then
+        gate_shell_interaction_no_focus_key="PASS"
+        print_row "shell_interaction_no_focus_key" "PASS" "no-focus key safely ignored/consumed marker observed"
+    else
+        gate_shell_interaction_no_focus_key="SKIP"
+        print_row "shell_interaction_no_focus_key" "SKIP" "no explicit no-focus key marker in this proof lane"
+    fi
+fi
+
+# ---- cursor_visible_motion / cursor_motion_* ----
+if [ "$(has "$shell_interact_begin_re")" -eq 0 ]; then
+    gate_cursor_visible_motion="SKIP"
+    gate_cursor_motion_no_focus_mutation="SKIP"
+    gate_cursor_motion_bounds="SKIP"
+    print_row "cursor_visible_motion" "SKIP" "not_requested (missing explicit begin marker)"
+    print_row "cursor_motion_no_focus_mutation" "SKIP" "not_requested (missing explicit begin marker)"
+    print_row "cursor_motion_bounds" "SKIP" "not_requested (missing explicit begin marker)"
+else
+    has_cursor_move=$(has 'shell\.cursor\.move')
+    has_pointer_state_ok=$(has 'shell\.interact\.stage\.pointer_state.*moved=1.*ok=1')
+    has_cursor_bounds_ok=$(has 'cursor\.motion\.bounds.*ok=1')
+
+    if [ "$has_cursor_move" -eq 1 ] && [ "$has_cursor_bounds_ok" -eq 1 ]; then
+        gate_cursor_visible_motion="PASS"
+        print_row "cursor_visible_motion" "PASS" "cursor move + bounds ok marker observed"
+    elif [ "$has_cursor_bounds_ok" -eq 1 ]; then
+        gate_cursor_visible_motion="PASS"
+        print_row "cursor_visible_motion" "PASS" "bounds ok marker observed (logical movement lane)"
+    else
+        gate_cursor_visible_motion="FAIL"
+        print_row "cursor_visible_motion" "FAIL" "begin present but missing cursor motion bounds evidence"
+    fi
+
+    if [ "$has_pointer_state_ok" -eq 1 ]; then
+        gate_cursor_motion_no_focus_mutation="PASS"
+        print_row "cursor_motion_no_focus_mutation" "PASS" "reused shell.interact pointer_state moved=1 old_focus==new_focus"
+    else
+        gate_cursor_motion_no_focus_mutation="FAIL"
+        print_row "cursor_motion_no_focus_mutation" "FAIL" "begin present but no pointer_state moved=1 ok=1 marker"
+    fi
+
+    if [ "$has_cursor_bounds_ok" -eq 1 ]; then
+        gate_cursor_motion_bounds="PASS"
+        print_row "cursor_motion_bounds" "PASS" "cursor.motion.bounds ok=1 observed"
+    else
+        gate_cursor_motion_bounds="FAIL"
+        print_row "cursor_motion_bounds" "FAIL" "begin present but no cursor.motion.bounds ok=1 marker"
+    fi
+fi
+
+# ---- click_focus_drag_impl_v1 (AP8) ----
+click_focus_begin_re='click\.focus\.proof\.begin'
+drag_proof_begin_re='drag\.proof\.begin'
+any_ap8_begin_re='click\.focus\.proof\.begin|drag\.proof\.begin'
+if [ "$(has "$click_focus_begin_re")" -eq 0 ]; then
+    gate_click_focus_button_edges="SKIP"
+    gate_click_focus_hit_test_commit="SKIP"
+    print_row "click_focus_button_edges" "SKIP" "not_requested (missing click.focus.proof.begin)"
+    print_row "click_focus_hit_test_commit" "SKIP" "not_requested (missing click.focus.proof.begin)"
+else
+    down_line_raw="$(grep -n 'click\.focus\.button\.down' "$LOG" | head -n1 | cut -d: -f1 || true)"
+    up_line_raw="$(grep -n 'click\.focus\.button\.up' "$LOG" | head -n1 | cut -d: -f1 || true)"
+    down_line="$(printf '%s' "${down_line_raw:-}" | tr -cd '0-9')"
+    up_line="$(printf '%s' "${up_line_raw:-}" | tr -cd '0-9')"
+    has_down=$([ -n "${down_line:-}" ] && echo 1 || echo 0)
+    has_up=$([ -n "${up_line:-}" ] && echo 1 || echo 0)
+    if [ "$has_down" -eq 1 ] && [ "$has_up" -eq 1 ] && [ "$down_line" -lt "$up_line" ]; then
+        gate_click_focus_button_edges="PASS"
+        print_row "click_focus_button_edges" "PASS" "begin+down+up present and ordered"
+    else
+        gate_click_focus_button_edges="FAIL"
+        print_row "click_focus_button_edges" "FAIL" "begin present but button edge markers missing or out of order"
+    fi
+
+    has_hit_test=$(has 'click\.focus\.hit_test')
+    has_commit_ok=$(has 'click\.focus\.commit.*ok=1')
+    if [ "$has_hit_test" -eq 1 ] && [ "$has_commit_ok" -eq 1 ]; then
+        gate_click_focus_hit_test_commit="PASS"
+        print_row "click_focus_hit_test_commit" "PASS" "begin+hit_test+commit ok=1 present"
+    else
+        gate_click_focus_hit_test_commit="FAIL"
+        print_row "click_focus_hit_test_commit" "FAIL" "begin present but hit_test/commit evidence missing"
+    fi
+fi
+
+if [ "$(has "$drag_proof_begin_re")" -eq 0 ]; then
+    gate_drag_capture_lifecycle="SKIP"
+    gate_drag_release_clears_capture="SKIP"
+    print_row "drag_capture_lifecycle" "SKIP" "not_requested (missing drag.proof.begin)"
+    print_row "drag_release_clears_capture" "SKIP" "not_requested (missing drag.proof.begin)"
+else
+    has_drag_begin=$(has 'drag\.capture\.begin')
+    has_drag_move=$(has 'drag\.capture\.move')
+    has_drag_release=$(has 'drag\.capture\.release')
+    has_drag_done=$(has 'drag\.proof\.done')
+    if [ "$has_drag_begin" -eq 1 ] && [ "$has_drag_move" -eq 1 ] && [ "$has_drag_release" -eq 1 ] && [ "$has_drag_done" -eq 1 ]; then
+        gate_drag_capture_lifecycle="PASS"
+        print_row "drag_capture_lifecycle" "PASS" "drag begin+move+release+done present"
+    else
+        gate_drag_capture_lifecycle="FAIL"
+        print_row "drag_capture_lifecycle" "FAIL" "drag begin present but lifecycle markers incomplete"
+    fi
+
+    has_drag_release_clear=$(has 'drag\.capture\.release.*released=1.*capture_after=0.*ok=1')
+    if [ "$has_drag_release_clear" -eq 1 ]; then
+        gate_drag_release_clears_capture="PASS"
+        print_row "drag_release_clears_capture" "PASS" "release proves capture_after=0"
+    else
+        gate_drag_release_clears_capture="FAIL"
+        print_row "drag_release_clears_capture" "FAIL" "drag begin present but release does not prove capture clear"
+    fi
+fi
+
+if [ "$(has "$any_ap8_begin_re")" -eq 0 ]; then
+    gate_click_drag_dead_target_guard="SKIP"
+    gate_click_drag_faults_zero="SKIP"
+    print_row "click_drag_dead_target_guard" "SKIP" "not_requested (missing click/drag proof begin)"
+    print_row "click_drag_faults_zero" "SKIP" "not_requested (missing click/drag proof begin)"
+else
+    has_dead_guard=$(has 'click\.drag\.dead_target_guard.*ok=1|shell\.tile\.skip_dead|tiling\.focus\.clear|shell\.interact\.stage\.dead_target_guard')
+    if [ "$has_dead_guard" -eq 1 ]; then
+        gate_click_drag_dead_target_guard="PASS"
+        print_row "click_drag_dead_target_guard" "PASS" "dead-target guard evidence present"
+    else
+        gate_click_drag_dead_target_guard="FAIL"
+        print_row "click_drag_dead_target_guard" "FAIL" "proof begin present but no dead-target guard evidence"
+    fi
+
+    ap8_fault_hits=$(count '#PF|#GP|panic|fault\.kill|null-jump|IPC storm|ring overflow')
+    if [ "$ap8_fault_hits" -eq 0 ]; then
+        gate_click_drag_faults_zero="PASS"
+        print_row "click_drag_faults_zero" "PASS" "0 AP8 fault tokens"
+    else
+        gate_click_drag_faults_zero="FAIL"
+        print_row "click_drag_faults_zero" "FAIL" "fault tokens found:${ap8_fault_hits}"
+    fi
+fi
+
 # ---- SCORE ----
 echo ""
 echo "============================================"
@@ -6813,6 +7028,20 @@ ALL_GATES=(
     "webstub_localdoc_text:$gate_webstub_localdoc_text"
     "browser_url_intent:$gate_browser_url_intent"
     "quil_visible_typing_e2e:$gate_quil_visible_typing_e2e"
+    "shell_interaction_contract:$gate_shell_interaction_contract"
+    "shell_interaction_pointer_no_focus_mutation:$gate_shell_interaction_pointer_no_focus_mutation"
+    "shell_interaction_key_route:$gate_shell_interaction_key_route"
+    "shell_interaction_dead_target_guard:$gate_shell_interaction_dead_target_guard"
+    "shell_interaction_no_focus_key:$gate_shell_interaction_no_focus_key"
+    "cursor_visible_motion:$gate_cursor_visible_motion"
+    "cursor_motion_no_focus_mutation:$gate_cursor_motion_no_focus_mutation"
+    "cursor_motion_bounds:$gate_cursor_motion_bounds"
+    "click_focus_button_edges:$gate_click_focus_button_edges"
+    "click_focus_hit_test_commit:$gate_click_focus_hit_test_commit"
+    "drag_capture_lifecycle:$gate_drag_capture_lifecycle"
+    "drag_release_clears_capture:$gate_drag_release_clears_capture"
+    "click_drag_dead_target_guard:$gate_click_drag_dead_target_guard"
+    "click_drag_faults_zero:$gate_click_drag_faults_zero"
     "webstub_static_text_render:$gate_webstub_static_text_render"
     "shell_draw_text_helper:$gate_shell_draw_text_helper"
     "browser_stub_v2:$gate_browser_stub_v2"
