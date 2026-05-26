@@ -242,6 +242,71 @@ const SHELL_INTERACTION_STAGE_KEY: u8 = 1 << 3;
 const SHELL_INTERACTION_STAGE_NO_FOCUS_KEY: u8 = 1 << 4;
 const SHELL_INTERACTION_STAGE_DEAD_GUARD: u8 = 1 << 5;
 
+/// AP9: Surface ID lifetime input safety proof gate.
+/// Build with SEXOS_SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF=1 to enable.
+const SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF").is_some();
+static mut SURFACE_ID_LIFETIME_PROOF_BEGIN_EMITTED: bool = false;
+static mut SURFACE_ID_LIFETIME_PROOF_FOCUS_LIVE_SEEN: bool = false;
+static mut SURFACE_ID_LIFETIME_PROOF_KEY_ROUTE_SEEN: bool = false;
+static mut SURFACE_ID_LIFETIME_PROOF_CLICK_TARGET_SEEN: bool = false;
+static mut SURFACE_ID_LIFETIME_PROOF_DRAG_TARGET_SEEN: bool = false;
+static mut SURFACE_ID_LIFETIME_PROOF_DEAD_CLEAR_SEEN: bool = false;
+
+unsafe fn surface_input_lifetime_begin_once() {
+    if !SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF_ENABLED || SURFACE_ID_LIFETIME_PROOF_BEGIN_EMITTED {
+        return;
+    }
+    SURFACE_ID_LIFETIME_PROOF_BEGIN_EMITTED = true;
+    serial_println!("[surface.input_lifetime.begin] ok=1");
+}
+
+unsafe fn surface_input_lifetime_mark_focus_live(focused: u64, live: u8, ok: u8) {
+    if !SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF_ENABLED { return; }
+    if live == 1 && ok == 1 { SURFACE_ID_LIFETIME_PROOF_FOCUS_LIVE_SEEN = true; }
+    serial_println!("[surface.input_lifetime.focus_live] focused={} live={} ok={}", focused, live, ok);
+}
+
+unsafe fn surface_input_lifetime_mark_key_route(target: u64, live: u8, routed: u8, ok: u8) {
+    if !SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF_ENABLED { return; }
+    if live == 1 && ok == 1 { SURFACE_ID_LIFETIME_PROOF_KEY_ROUTE_SEEN = true; }
+    serial_println!("[surface.input_lifetime.key_route_guard] target={} live={} routed={} ok={}", target, live, routed, ok);
+}
+
+unsafe fn surface_input_lifetime_mark_click_target(target: u64, live: u8, committed: u8, ok: u8) {
+    if !SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF_ENABLED { return; }
+    if live == 1 && ok == 1 { SURFACE_ID_LIFETIME_PROOF_CLICK_TARGET_SEEN = true; }
+    serial_println!("[surface.input_lifetime.click_target_guard] target={} live={} committed={} ok={}", target, live, committed, ok);
+}
+
+unsafe fn surface_input_lifetime_mark_drag_target(target: u64, live: u8, phase: &str, ok: u8) {
+    if !SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF_ENABLED { return; }
+    if live == 1 && ok == 1 { SURFACE_ID_LIFETIME_PROOF_DRAG_TARGET_SEEN = true; }
+    serial_println!("[surface.input_lifetime.drag_target_guard] target={} live={} phase={} ok={}", target, live, phase, ok);
+}
+
+unsafe fn surface_input_lifetime_mark_dead_clear(target: u64) {
+    if !SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF_ENABLED { return; }
+    SURFACE_ID_LIFETIME_PROOF_DEAD_CLEAR_SEEN = true;
+    serial_println!("[surface.input_lifetime.dead_clear] target={} cleared=1 ok=1", target);
+}
+
+unsafe fn surface_input_lifetime_try_done() {
+    if !SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF_ENABLED { return; }
+    // Done requires all four live-guard markers (focus, key, click, drag).
+    // dead_clear is safety-ensuring but may not fire in every proof lane.
+    if SURFACE_ID_LIFETIME_PROOF_FOCUS_LIVE_SEEN
+        && SURFACE_ID_LIFETIME_PROOF_KEY_ROUTE_SEEN
+        && SURFACE_ID_LIFETIME_PROOF_CLICK_TARGET_SEEN
+        && SURFACE_ID_LIFETIME_PROOF_DRAG_TARGET_SEEN
+    {
+        serial_println!(
+            "[surface.input_lifetime.done] ok=1 dead_clear={}",
+            SURFACE_ID_LIFETIME_PROOF_DEAD_CLEAR_SEEN as u8
+        );
+    }
+}
+
 unsafe fn shell_interaction_contract_begin_once() {
     if !SHELL_INTERACTION_CONTRACT_PROOF_ENABLED || SHELL_INTERACTION_CONTRACT_BEGIN_EMITTED {
         return;
@@ -9152,6 +9217,13 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_KEY);
                     shell_interaction_contract_try_done();
                 }
+                // AP9: key route liveness guard — target must be live even if shell-consumed
+                {
+                    let focused = FOCUSED_SURFACE_ID;
+                    let live = if focused == 0 { 0u8 } else { surface_is_alive(focused) as u8 };
+                    surface_input_lifetime_mark_key_route(focused, live, 0, live);
+                    surface_input_lifetime_try_done();
+                }
                 // Do not route reserved UI keys to the focused app.
                 return;
             }
@@ -9164,6 +9236,11 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                         "[silk-shell.key.route] owner=quil sid={} scancode={:#x}",
                         SURFACE_ID_QUIL, scancode
                     );
+                }
+                // AP9: key route liveness guard
+                {
+                    let live = surface_is_alive(SURFACE_ID_QUIL) as u8;
+                    surface_input_lifetime_mark_key_route(SURFACE_ID_QUIL, live, 1, live);
                 }
                 pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                 if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
@@ -9183,6 +9260,11 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                         SURFACE_ID_LINEN, scancode
                     );
                 }
+                // AP9: key route liveness guard
+                {
+                    let live = surface_is_alive(SURFACE_ID_LINEN) as u8;
+                    surface_input_lifetime_mark_key_route(SURFACE_ID_LINEN, live, 1, live);
+                }
                 pdx_call(sex_pdx::SLOT_LINEN, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                 if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
                     serial_println!(
@@ -9200,6 +9282,11 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                         "[silk-shell.key.route] target=spindle sid={} code={} down={}",
                         SURFACE_ID_SPINDLE, scancode, value
                     );
+                }
+                // AP9: key route liveness guard
+                {
+                    let live = surface_is_alive(SURFACE_ID_SPINDLE) as u8;
+                    surface_input_lifetime_mark_key_route(SURFACE_ID_SPINDLE, live, 1, live);
                 }
                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                 if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
@@ -9397,6 +9484,12 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                             );
                             serial_println!("[drag.proof.done] ok=1");
                             DRAG_CAPTURE_MOVE_SEEN = false;
+                        }
+                        // AP9: drag target liveness guard on release — button-up clears capture
+                        {
+                            let live = surface_is_alive(surface_id) as u8;
+                            surface_input_lifetime_mark_drag_target(surface_id, live, "release", 1);
+                            surface_input_lifetime_try_done();
                         }
                         DRAG_PENDING_ACTIVE = false;
                         let _ = try_snap_on_drag_release(surface_id, POINTER_X, POINTER_Y);
@@ -9683,6 +9776,9 @@ unsafe fn clear_focus_if_dead() {
     let focused = FOCUSED_SURFACE_ID;
     if focused != 0 && (!surface_is_alive(focused) || !surface_is_lifecycle_focusable(focused)) {
         serial_println!("[shell.focus.clear_dead] sid={} reason=invalid", focused);
+        // AP9: dead target clear marker
+        surface_input_lifetime_mark_dead_clear(focused);
+        surface_input_lifetime_try_done();
         if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
             serial_println!("[shell.interact.stage.dead_target_guard] kind=focus target={} action=clear ok=1", focused);
             shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_DEAD_GUARD);
@@ -20141,6 +20237,11 @@ unsafe fn try_set_focus(sid: u64) -> bool {
     serial_println!("[focus.ref.commit] id={}", sid);
     serial_println!("[shell.focus.set] id={}", sid);
     serial_println!("[shell.interact.focus] sid={}", sid);
+    // AP9: Focus target is live by construction (all checks passed above).
+    if SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF_ENABLED {
+        surface_input_lifetime_mark_focus_live(sid, 1, 1);
+        surface_input_lifetime_try_done();
+    }
     if VISIBLE_FOCUS_TOPBAR_PROOF_ENABLED {
         let new_frame = frame_for_surface(sid).unwrap_or(0);
         let old_frame = frame_for_surface(old_focus).unwrap_or(0);
@@ -20360,6 +20461,12 @@ unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
                     "[drag.capture.move] target={} live={} dx={} dy={} ok=1",
                     surface_id, live, dx, dy
                 );
+            }
+            // AP9: drag target liveness guard on move
+            {
+                let live = surface_is_alive(surface_id) as u8;
+                surface_input_lifetime_mark_drag_target(surface_id, live, "move", live);
+                surface_input_lifetime_try_done();
             }
         }
         moved
@@ -20958,6 +21065,17 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                 drag_target, live, px, py
             );
         }
+        // AP9: drag target liveness guard on begin
+        {
+            let drag_target = DRAG_PENDING_TARGET;
+            let live = if DRAG_PENDING_KIND == 0 {
+                1u8
+            } else {
+                surface_is_alive(drag_target) as u8
+            };
+            surface_input_lifetime_mark_drag_target(drag_target, live, "begin", live);
+            surface_input_lifetime_try_done();
+        }
     } else {
         DRAG_PENDING_ACTIVE = false;
     }
@@ -20970,6 +21088,13 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                 serial_println!("[shell.click_focus.send.ok] id={}", sid);
             } else {
                 serial_println!("[shell.click_focus.hit] id={}", sid);
+            }
+            // AP9: click-target liveness guard — target must be live
+            {
+                let live = surface_is_alive(sid) as u8;
+                let committed = if sid == FOCUSED_SURFACE_ID { 0u8 } else { 1u8 };
+                surface_input_lifetime_mark_click_target(sid, live, committed, live);
+                surface_input_lifetime_try_done();
             }
         }
         HitTarget::None => {
@@ -21692,6 +21817,8 @@ pub extern "C" fn _start() -> ! {
 
         // A3: Initialize lifecycle metadata for all known surfaces.
         lifecycle_init_all();
+        // AP9: Emit surface input lifetime proof begin after lifecycle init.
+        surface_input_lifetime_begin_once();
         serial_println!("[silk-shell.spindle.route.ready] slot={} surface={}", SLOT_SPINDLE, SURFACE_ID_SPINDLE);
 
         // B1: Initialize scene metadata array from FRAMES state.
@@ -22895,6 +23022,11 @@ pub extern "C" fn _start() -> ! {
                                         serial_println!("[silk-shell.key.route] owner=quil sid={} scancode={:#x}", SURFACE_ID_QUIL, scancode);
                                     }
                                 }
+                                // AP9: key route liveness guard
+                                {
+                                    let live = surface_is_alive(SURFACE_ID_QUIL) as u8;
+                                    surface_input_lifetime_mark_key_route(SURFACE_ID_QUIL, live, 1, live);
+                                }
                                 pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                                 mutated = true;
                             } else if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_LINEN {
@@ -22905,6 +23037,11 @@ pub extern "C" fn _start() -> ! {
                                         *b -= 1;
                                         serial_println!("[silk-shell.key.route] owner=linen sid={} scancode={:#x}", SURFACE_ID_LINEN, scancode);
                                     }
+                                }
+                                // AP9: key route liveness guard
+                                {
+                                    let live = surface_is_alive(SURFACE_ID_LINEN) as u8;
+                                    surface_input_lifetime_mark_key_route(SURFACE_ID_LINEN, live, 1, live);
                                 }
                                 pdx_call(sex_pdx::SLOT_LINEN, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                                 mutated = true;

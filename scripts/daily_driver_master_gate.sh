@@ -182,6 +182,13 @@ gate_drag_capture_lifecycle="SKIP"
 gate_drag_release_clears_capture="SKIP"
 gate_click_drag_dead_target_guard="SKIP"
 gate_click_drag_faults_zero="SKIP"
+gate_surface_input_lifetime_contract="SKIP"
+gate_surface_focus_live_guard="SKIP"
+gate_surface_key_route_live_guard="SKIP"
+gate_surface_click_target_live_guard="SKIP"
+gate_surface_drag_target_live_guard="SKIP"
+gate_surface_dead_target_clear="SKIP"
+gate_surface_input_lifetime_faults_zero="SKIP"
 gate_webstub_static_text_render="SKIP"
 gate_shell_draw_text_helper="SKIP"
 gate_browser_stub_v2="SKIP"
@@ -6930,10 +6937,99 @@ else
     fi
 fi
 
+# ---- surface_id_lifetime_input_safety_v1 (AP9) ----
+ap9_begin_re='surface\.input_lifetime\.begin'
+if [ "$(has "$ap9_begin_re")" -eq 0 ]; then
+    gate_surface_input_lifetime_contract="SKIP"
+    gate_surface_focus_live_guard="SKIP"
+    gate_surface_key_route_live_guard="SKIP"
+    gate_surface_click_target_live_guard="SKIP"
+    gate_surface_drag_target_live_guard="SKIP"
+    gate_surface_dead_target_clear="SKIP"
+    gate_surface_input_lifetime_faults_zero="SKIP"
+    print_row "surface_input_lifetime_contract" "SKIP" "not_requested (missing surface.input_lifetime.begin)"
+    print_row "surface_focus_live_guard" "SKIP" "not_requested"
+    print_row "surface_key_route_live_guard" "SKIP" "not_requested"
+    print_row "surface_click_target_live_guard" "SKIP" "not_requested"
+    print_row "surface_drag_target_live_guard" "SKIP" "not_requested"
+    print_row "surface_dead_target_clear" "SKIP" "not_requested"
+    print_row "surface_input_lifetime_faults_zero" "SKIP" "not_requested"
+else
+    # Contract gate: begin + done markers must both exist
+    has_ap9_done=$(has 'surface\.input_lifetime\.done.*ok=1')
+    if [ "$has_ap9_done" -eq 1 ]; then
+        gate_surface_input_lifetime_contract="PASS"
+        print_row "surface_input_lifetime_contract" "PASS" "begin+done markers present"
+    else
+        gate_surface_input_lifetime_contract="FAIL"
+        print_row "surface_input_lifetime_contract" "FAIL" "begin present but missing done marker"
+    fi
+
+    # Focus live guard: must have focus_live with live=1 ok=1
+    has_focus_live_ok=$(has 'surface\.input_lifetime\.focus_live.*live=1.*ok=1')
+    if [ "$has_focus_live_ok" -eq 1 ]; then
+        gate_surface_focus_live_guard="PASS"
+        print_row "surface_focus_live_guard" "PASS" "focus_live marker with live=1 ok=1 observed"
+    else
+        gate_surface_focus_live_guard="FAIL"
+        print_row "surface_focus_live_guard" "FAIL" "begin present but no focus_live with live=1 ok=1"
+    fi
+
+    # Key route live guard: must have key_route_guard with live=1 ok=1 (routed=1 or shell_consumed)
+    has_key_route_ok=$(has 'surface\.input_lifetime\.key_route_guard.*live=1.*ok=1')
+    if [ "$has_key_route_ok" -eq 1 ]; then
+        gate_surface_key_route_live_guard="PASS"
+        print_row "surface_key_route_live_guard" "PASS" "key_route_guard marker with live=1 ok=1 observed"
+    else
+        gate_surface_key_route_live_guard="FAIL"
+        print_row "surface_key_route_live_guard" "FAIL" "begin present but no key_route_guard with live=1 ok=1"
+    fi
+
+    # Click target live guard: must have click_target_guard with live=1 ok=1
+    has_click_target_ok=$(has 'surface\.input_lifetime\.click_target_guard.*live=1.*ok=1')
+    if [ "$has_click_target_ok" -eq 1 ]; then
+        gate_surface_click_target_live_guard="PASS"
+        print_row "surface_click_target_live_guard" "PASS" "click_target_guard marker with live=1 ok=1 observed"
+    else
+        gate_surface_click_target_live_guard="FAIL"
+        print_row "surface_click_target_live_guard" "FAIL" "begin present but no click_target_guard with live=1 ok=1"
+    fi
+
+    # Drag target live guard: must have drag_target_guard with live=1 ok=1
+    has_drag_target_ok=$(has 'surface\.input_lifetime\.drag_target_guard.*live=1.*ok=1')
+    if [ "$has_drag_target_ok" -eq 1 ]; then
+        gate_surface_drag_target_live_guard="PASS"
+        print_row "surface_drag_target_live_guard" "PASS" "drag_target_guard marker with live=1 ok=1 observed"
+    else
+        gate_surface_drag_target_live_guard="FAIL"
+        print_row "surface_drag_target_live_guard" "FAIL" "begin present but no drag_target_guard with live=1 ok=1"
+    fi
+
+    # Dead target clear: must have dead_clear marker
+    has_dead_clear=$(has 'surface\.input_lifetime\.dead_clear.*cleared=1.*ok=1')
+    if [ "$has_dead_clear" -eq 1 ]; then
+        gate_surface_dead_target_clear="PASS"
+        print_row "surface_dead_target_clear" "PASS" "dead_clear marker with cleared=1 ok=1 observed"
+    else
+        gate_surface_dead_target_clear="FAIL"
+        print_row "surface_dead_target_clear" "FAIL" "begin present but no dead_clear marker with cleared=1 ok=1"
+    fi
+
+    # Faults zero
+    ap9_fault_hits=$(count '#PF|#GP|panic|fault\.kill|null-jump|IPC storm|ring overflow')
+    if [ "$ap9_fault_hits" -eq 0 ]; then
+        gate_surface_input_lifetime_faults_zero="PASS"
+        print_row "surface_input_lifetime_faults_zero" "PASS" "0 fault tokens"
+    else
+        gate_surface_input_lifetime_faults_zero="FAIL"
+        print_row "surface_input_lifetime_faults_zero" "FAIL" "fault tokens found:${ap9_fault_hits}"
+    fi
+fi
+
 # ---- SCORE ----
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V36 - RESULTS"
+echo " DAILY-DRIVER MASTER GATE V37 - RESULTS"
 echo "============================================"
 echo ""
 
@@ -7042,6 +7138,13 @@ ALL_GATES=(
     "drag_release_clears_capture:$gate_drag_release_clears_capture"
     "click_drag_dead_target_guard:$gate_click_drag_dead_target_guard"
     "click_drag_faults_zero:$gate_click_drag_faults_zero"
+    "surface_input_lifetime_contract:$gate_surface_input_lifetime_contract"
+    "surface_focus_live_guard:$gate_surface_focus_live_guard"
+    "surface_key_route_live_guard:$gate_surface_key_route_live_guard"
+    "surface_click_target_live_guard:$gate_surface_click_target_live_guard"
+    "surface_drag_target_live_guard:$gate_surface_drag_target_live_guard"
+    "surface_dead_target_clear:$gate_surface_dead_target_clear"
+    "surface_input_lifetime_faults_zero:$gate_surface_input_lifetime_faults_zero"
     "webstub_static_text_render:$gate_webstub_static_text_render"
     "shell_draw_text_helper:$gate_shell_draw_text_helper"
     "browser_stub_v2:$gate_browser_stub_v2"
