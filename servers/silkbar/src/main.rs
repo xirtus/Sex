@@ -703,27 +703,22 @@ pub extern "C" fn _start() -> ! {
                 u64::MAX
             }
         } else {
-            // ── Bounded clock send: stop after CLOCK_SEND_LIMIT cadences ──
-            // Prevents eternal flooding when sexdisplay handoff is permanently
-            // rejected.  After limit, sexdisplay fallback (tick-gated V9) handles
-            // visible clock.  Force-stall proof path (above) is unaffected.
-            const CLOCK_SEND_LIMIT: u64 = 900; // 15 min at 1/sec cadence
-            if loop_iter < CLOCK_SEND_LIMIT {
-                clock_sent = true;
-                send_update_status(SilkBarUpdate::new(
-                    UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
-                ))
-            } else {
-                clock_sent = false;
-                static mut CLOCK_SEND_LIMIT_ONESHOT: bool = false;
-                unsafe {
-                    if !CLOCK_SEND_LIMIT_ONESHOT {
-                        CLOCK_SEND_LIMIT_ONESHOT = true;
-                        sex_pdx::serial_println!("[silkbar.clock.send.limit] iter={} reason=bounded_flood_gate ok=1", loop_iter);
-                    }
-                }
-                u64::MAX
-            }
+            // ── Bounded clock send: cadence-gated liveness with periodic proof ──
+            // V9 CLOCK_SEND_LIMIT removed: the 900-cadence cutoff killed the only
+            // live source when stale-real-tick fast-cadence raced loop_iter to 900,
+            // leaving sexdisplay stranded in clock_from_silkbar=true with no updates.
+            //
+            // Cadence itself provides rate limiting (LIVE_CLOCK_THRESHOLD=100,
+            // SYNTHETIC_VISIBLE_CLOCK_THRESHOLD=16, STALE_REAL_TICK_FALLBACK_THRESHOLD=4).
+            // Post-V9 V8 independent cadence ensures sexdisplay fallback resumes if
+            // silkbar becomes silent — no permanent-flood risk.
+            //
+            // Periodic liveness marker proves the clock source is still sending;
+            // enables diagnostics without an artificial cutoff.
+            clock_sent = true;
+            send_update_status(SilkBarUpdate::new(
+                UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
+            ))
         };
         if !degraded {
             if clock_sent {
@@ -747,6 +742,23 @@ pub extern "C" fn _start() -> ! {
             if *b > 0 {
                 *b -= 1;
                 sex_pdx::serial_println!("[silkbar.clock.boot_canary] suppressed=degraded threshold={}", cadence_threshold);
+            }
+        }
+        // ── Periodic clock-source liveness proof: once per clock-minute ──
+        // Proves silkbar is still sending SetClock without artificial cutoff.
+        // Replaces V9 CLOCK_SEND_LIMIT which killed the only live source after
+        // stale-real-tick fast-cadence raced loop_iter to 900.
+        if !degraded && clock_sent && loop_iter > 0 && loop_iter % 60 == 0 {
+            unsafe {
+                static mut CLOCK_SOURCE_LIVENESS_BUDGET: u32 = 32;
+                let b = &mut CLOCK_SOURCE_LIVENESS_BUDGET;
+                if *b > 0 {
+                    *b -= 1;
+                    sex_pdx::serial_println!(
+                        "[silkbar.clock.source.liveness] iter={} ss={} threshold={} ok=1",
+                        loop_iter, ss, cadence_threshold
+                    );
+                }
             }
         }
         if loop_iter == 1 {

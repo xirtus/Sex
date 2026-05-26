@@ -2352,6 +2352,9 @@ pub extern "C" fn _start() -> ! {
     let mut render_proof_done = false;
     let mut loop_iter: u64 = 0;
     let mut last_fallback_raw_tick: u64 = 0;
+    /// Counts consecutive loops where raw_ticks>0 but raw_ticks==last_fallback_raw_tick.
+    /// After threshold, falls back to synthetic cadence (fixes freeze on constant non-zero ticks).
+    let mut fallback_stale_real_ticks: u16 = 0;
     let mut handoff_reject_ss: u8 = 0;
     let mut handoff_reject_streak: u8 = 0;
 
@@ -2447,11 +2450,25 @@ pub extern "C" fn _start() -> ! {
             let mut advance_fallback = false;
             const FALLBACK_TICKS_PER_SEC: u64 = 62;
             const FALLBACK_SYNTHETIC_THRESHOLD: u16 = 16;
+            /// Loops of constant non-zero raw_ticks before synthetic fallback kicks in.
+            /// Matches silkbars STALE_REAL_TICK_FALLBACK_LOOPS=16 so both servers
+            /// converge on synthetic cadence at roughly the same time on stalled-tick
+            /// platforms (KVM with one-shot LAPIC, native with uncalibrated timer).
+            const FALLBACK_STALE_REAL_THRESHOLD: u16 = 16;
+
+            // ── Determine cadence source ──
+            // use_synthetic is true when: raw_ticks==0 (TCG), or raw_ticks is a
+            // constant non-zero value for >= STALE_REAL_THRESHOLD loops (stalled timer).
+            // Otherwise use real-tick-gated cadence (62 ticks/sec → 1 sec).
+            let mut use_synthetic = raw_ticks == 0;
+
             if raw_ticks > 0 {
                 if last_fallback_raw_tick == 0 {
                     // Seed on first real-tick cycle; do not advance.
                     last_fallback_raw_tick = raw_ticks;
-                } else {
+                } else if raw_ticks > last_fallback_raw_tick {
+                    // Real tick advancing: reset stale counter, use tick-gated cadence.
+                    fallback_stale_real_ticks = 0;
                     let tick_delta = raw_ticks.wrapping_sub(last_fallback_raw_tick);
                     let secs = (tick_delta / FALLBACK_TICKS_PER_SEC).min(60) as u8;
                     if secs > 0 {
@@ -2465,9 +2482,21 @@ pub extern "C" fn _start() -> ! {
                         }
                         advance_fallback = true;
                     }
+                } else {
+                    // raw_ticks == last_fallback_raw_tick (constant non-zero).
+                    // Real ticks exist but aren't advancing — e.g. LAPIC fired once
+                    // then stalled, or KVM without proper timer passthrough.
+                    // After grace period, fall back to synthetic cadence so the
+                    // clock doesn't freeze while waiting for the next timer IRQ.
+                    fallback_stale_real_ticks = fallback_stale_real_ticks.wrapping_add(1);
+                    if fallback_stale_real_ticks >= FALLBACK_STALE_REAL_THRESHOLD {
+                        use_synthetic = true;
+                    }
                 }
-            } else {
-                // QEMU TCG: synthetic cadence independent of silkbar rejects.
+            }
+
+            // ── Synthetic cadence (TCG or stalled real ticks) ──
+            if use_synthetic {
                 fallback_idle_loops = fallback_idle_loops.wrapping_add(1);
                 if fallback_idle_loops >= FALLBACK_SYNTHETIC_THRESHOLD {
                     fallback_idle_loops = 0;
