@@ -40,7 +40,7 @@ validate_silk_de_gates() {
 
 spec_get() {
   local key="$1"
-  rg -n "^${key}\\s*=\\s*\"[^\"]+\"" "$SPEC_PATH" | head -n1 | sed -E 's/.*=\s*"([^"]+)".*/\1/'
+  rg -n "^${key}\\s*=\\s*\"[^\"]+\"" "$SPEC_PATH" | head -n1 | sed -E 's/.*=[[:space:]]*"([^"]+)".*/\1/'
 }
 
 echo "[SEXOS ENTRYPOINT] BUILD_ROOT=$BUILD_ROOT"

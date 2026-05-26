@@ -18,7 +18,7 @@ SPEC="$1"
 
 spec_get() {
   local key="$1"
-  rg -n "^${key}\\s*=\\s*\"[^\"]+\"" "$SPEC" | head -n1 | sed -E 's/.*=\s*"([^"]+)".*/\1/'
+  rg -n "^${key}\\s*=\\s*\"[^\"]+\"" "$SPEC" | head -n1 | sed -E 's/.*=[[:space:]]*"([^"]+)".*/\1/'
 }
 
 TARGET="$(spec_get target)"
@@ -47,7 +47,7 @@ is_allowed_crate() {
 run_stage() {
   local stage="$1"
   local action
-  action="$(rg -n "^action\\s*=\\s*\"[^\"]+\"" "$stage" | head -n1 | sed -E 's/.*=\s*"([^"]+)".*/\1/')"
+  action="$(rg -n "^action\\s*=\\s*\"[^\"]+\"" "$stage" | head -n1 | sed -E 's/.*=[[:space:]]*"([^"]+)".*/\1/')"
   [[ -n "$action" ]] || { echo "[FAIL] stage missing action"; exit 1; }
 
   case "$action" in

@@ -138,8 +138,8 @@ const FRAME_RIM_PX: usize = 4;
 const FRAME_RIM_COLOR: u32 = 0x00B4BEFE;
 
 // ── Frame Light Colors (top-left rim band, matches shell FRAME_LIGHTS_HIT_TARGET_V1) ──
-const FRAME_LIGHT_SIZE_PX: usize = 4;
-const FRAME_LIGHT_GAP_PX: usize = 2;
+const FRAME_LIGHT_SIZE_PX: usize = 10;
+const FRAME_LIGHT_GAP_PX: usize = 4;
 const FRAME_LIGHT_CLOSE_COLOR: u32 = 0x00FF4444;
 const FRAME_LIGHT_MINIMIZE_COLOR: u32 = 0x00FFCC44;
 const FRAME_LIGHT_ZOOM_COLOR: u32 = 0x0044FF44;
@@ -884,31 +884,34 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar) -> u32 {
     // Selected-window option indicators (display-only, no action behavior).
     // Rendered as small colored dots between launcher and workspace indicators.
     // Each dot is 3x3 px at a fixed position, colored by option bit.
+    // Options dots: only intercept the exact 3×3 pixel positions, fall through
+    // for all other x values so workspace indicators, chips, and other bar
+    // elements render correctly at the same y range (y=19..22).
+    // An early return for the full y-range overrides those modules and creates
+    // a visible horizontal strip of wrong color across the bar.
     if bar.selected_options_mask != 0 {
-        const OPTIONS_X: usize = 135; // after launcher (x=100, w=20)
-        const OPTIONS_Y: usize = 19;  // same row as workspace/chip indicators
+        const OPTIONS_X: usize = 135;
+        const OPTIONS_Y: usize = 19;
         const DOT_W: usize = 3;
         const DOT_H: usize = 3;
-        const DOT_GAP: usize = 5;     // spacing between dots
+        const DOT_GAP: usize = 5;
         if y >= OPTIONS_Y && y < OPTIONS_Y + DOT_H {
             for bit in 0..4 {
                 let dot_x = OPTIONS_X + bit * DOT_GAP;
                 if x >= dot_x && x < dot_x + DOT_W {
                     if (bar.selected_options_mask >> bit) & 1 != 0 {
                         return match bit {
-                            0 => 0x00FF4444, // CLOSE   → red
-                            1 => 0x0044FF44, // ZOOM    → green
-                            2 => 0x00FFCC44, // MINIMIZE→ yellow
-                            3 => 0x0044CCFF, // MOVE    → cyan
+                            0 => 0x00FF4444,
+                            1 => 0x0044FF44,
+                            2 => 0x00FFCC44,
+                            3 => 0x0044CCFF,
                             _ => DEFAULT_THEME.panel_fill,
                         };
-                    } else {
-                        return DEFAULT_THEME.panel_fill; // unset bit: no dot
                     }
+                    // Unset bit: fall through to normal module rendering
                 }
             }
-            // In options row but between dots → panel background
-            return DEFAULT_THEME.panel_fill;
+            // Between dots: fall through to normal module rendering
         }
     }
     // Workspace indicators
@@ -1347,28 +1350,11 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         Some(v) => v,
         None => return,
     };
-    // [silk.live_topstrip.v2.fb_clear] Clear actual framebuffer rows 0..BAR_BG_H
-    // with the raw desktop gradient BEFORE refilling buffers and rendering the bar.
-    // This is a forward defensive clear: bar_color()/glass_over_bg() read from
-    // BAR_BLUR_BUF, not the framebuffer, so the rendering loop overwrites every
-    // pixel correctly. The clear only matters if any pixel in rows 0..50 is
-    // somehow NOT written by the bar loop — it guarantees a clean gradient instead
-    // of a stale fragment (e.g., cursor/launcher pixels from a previous
-    // redraw_surface_area -> draw_cursor_z_top pass). No visible change on
-    // correct boots; prevents topstrip glitch artifacts on live clock ticks.
-    {
-        let clear_h = BAR_BG_H.min(h);
-        for y in 0..clear_h {
-            let clear_color = bg(y, h);
-            let row_base = y * w;
-            for x in 0..w {
-                let idx = row_base + x;
-                if idx < total_pixels {
-                    unsafe { core::ptr::write_volatile(fb.add(idx), clear_color); }
-                }
-            }
-        }
-    }
+    // [silk.live_topstrip.v2.fb_clear] REMOVED: writing raw desktop gradient over
+    // the bar area before rendering the bar causes a visible black/purple flash
+    // on every clock tick (the host displays the partial gradient before the bar
+    // loop finishes overwriting it). The bar loop covers rows 0..51 unconditionally,
+    // so the clear is unnecessary.
 
     // [silk.live_topstrip.v2.audit] Row-sampled hash diagnostics for top strip rows.
     // Emitted at first live redraw (ss=any) and again at ss=4 to narrow down
@@ -1555,6 +1541,15 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
             }
         }
     }
+    // Redraw top-layer overlays that may extend into the bar area (rows 0..50).
+    // Without these, a clock-tick-triggered top-strip redraw would erase cursor
+    // pixels, launcher panel, atlas cards, and frame preview content that the
+    // initial render() placed above the bar, causing glitch artifacts across
+    // the top chrome.
+    draw_atlas_cards_pass(fb, w, h, total_pixels);
+    draw_atlas_frame_previews_pass(fb, w, h, total_pixels);
+    draw_cursor_z_top(fb, w, h, total_pixels);
+    draw_launcher_panel(fb, w, h, total_pixels);
 }
 
 /// Redraw all pixels from y=50 to bottom (background gradient + all active surfaces).
@@ -2347,8 +2342,6 @@ pub extern "C" fn _start() -> ! {
     let mut silkbar_clock_seen = false;
     let mut fallback_after_drop_pending = false;
     let mut fallback_after_drop_pending_proof = false;
-    let mut has_pending_reject = false;
-    let mut pending_reject_ss: u8 = 0;
     let mut stale_probe_done = false;
     let mut fb_live = false;
     let mut render_proof_done = false;
@@ -2412,8 +2405,11 @@ pub extern "C" fn _start() -> ! {
 
         let raw_ticks = sex_pdx::get_ticks();
         let sec_now = raw_ticks / 62;
-        const SILKBAR_STALE_NO_MSG_LOOPS: u64 = 1200;
-        const SILKBAR_STALE_REPEAT_MSGS: u32 = 120;
+        // Lower staleness thresholds for slow emulation (TCG on M1).
+        // 1200 loops at ~1ms each = 1.2s on native; 1200 loops on TCG can
+        // take 30+ real seconds, making the clock appear frozen.
+        const SILKBAR_STALE_NO_MSG_LOOPS: u64 = 120;
+        const SILKBAR_STALE_REPEAT_MSGS: u32 = 20;
         let stale_no_msg = display_loop_counter.saturating_sub(last_silkbar_msg_loop) > SILKBAR_STALE_NO_MSG_LOOPS;
         let stale_repeats = repeated_silkbar_second_msgs > SILKBAR_STALE_REPEAT_MSGS;
         if clock_from_silkbar && (stale_no_msg || stale_repeats) {
@@ -2431,9 +2427,10 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
-        if !clock_from_silkbar && raw_ticks > last_clock_tick {
-            last_clock_tick = raw_ticks;
-            fallback_idle_loops = 0;
+        // ── Fallback clock: loop-counter tick on every display loop ──
+        // On native (1000+ Hz) this is ~1000 ticks/second, but silkbar takes over
+        // within milliseconds. On slow TCG (~1 Hz) it gives ~1 tick per wall second.
+        if !clock_from_silkbar {
             bar.clock_ss = bar.clock_ss.wrapping_add(1);
             if bar.clock_ss >= 60 { bar.clock_ss = 0; bar.clock_mm = bar.clock_mm.wrapping_add(1); }
             if bar.clock_mm >= 60 { bar.clock_mm = 0; bar.clock_hh = bar.clock_hh.wrapping_add(1); }
@@ -2447,108 +2444,6 @@ pub extern "C" fn _start() -> ! {
                 let continue_is_proof = fallback_after_drop_pending_proof;
                 fallback_after_drop_pending = false;
                 fallback_after_drop_pending_proof = false;
-                unsafe {
-                    static mut CLOCK_FALLBACK_AFTER_DROP_BUDGET: u32 = 16;
-                    let b = &mut CLOCK_FALLBACK_AFTER_DROP_BUDGET;
-                    if *b > 0 {
-                        *b -= 1;
-                        serial_println!(
-                            "[sexdisplay.clock.fallback.continue_after_drop] ss={} source=fallback proof={}",
-                            bar.clock_ss,
-                            if continue_is_proof { 1 } else { 0 }
-                        );
-                    }
-                }
-            }
-            if has_pending_reject && bar.clock_ss != pending_reject_ss {
-                let r = pending_reject_ss;
-                has_pending_reject = false;
-                unsafe {
-                    static mut CLOCK_LIVE_AFTER_REJECT_BUDGET: u32 = 64;
-                    let b = &mut CLOCK_LIVE_AFTER_REJECT_BUDGET;
-                    if *b > 0 {
-                        *b -= 1;
-                        serial_println!(
-                            "[sexdisplay.clock.fallback.live_after_reject] reject_ss={} now_ss={} source=fallback ok=1",
-                            r, bar.clock_ss
-                        );
-                    }
-                }
-            }
-            unsafe {
-                static mut CLOCK_SOURCE_FALLBACK_TICK_BUDGET: u32 = 64;
-                let b = &mut CLOCK_SOURCE_FALLBACK_TICK_BUDGET;
-                if *b > 0 {
-                    *b -= 1;
-                    serial_println!(
-                        "[sexdisplay.clock.source.fallback.tick] hh={} mm={} ss={}",
-                        bar.clock_hh, bar.clock_mm, bar.clock_ss
-                    );
-                }
-            }
-        } else if !clock_from_silkbar {
-            const FALLBACK_SYNTH_TICK_LOOPS_STARTUP: u16 = 1;
-            const FALLBACK_SYNTH_TICK_LOOPS_STEADY: u16 = 64;
-            let synth_tick_loops = if silkbar_clock_seen {
-                FALLBACK_SYNTH_TICK_LOOPS_STEADY
-            } else {
-                FALLBACK_SYNTH_TICK_LOOPS_STARTUP
-            };
-            fallback_idle_loops = fallback_idle_loops.wrapping_add(1);
-            if fallback_idle_loops >= synth_tick_loops {
-                fallback_idle_loops = 0;
-                bar.clock_ss = bar.clock_ss.wrapping_add(1);
-                if bar.clock_ss >= 60 { bar.clock_ss = 0; bar.clock_mm = bar.clock_mm.wrapping_add(1); }
-                if bar.clock_mm >= 60 { bar.clock_mm = 0; bar.clock_hh = bar.clock_hh.wrapping_add(1); }
-                if bar.clock_hh >= 24 { bar.clock_hh = 0; }
-                clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
-                if fb_live {
-                    needs_top_strip_redraw = true;
-                    unsafe { CLOCK_REDRAW_SOURCE = 1; }
-                }
-                if fallback_after_drop_pending {
-                    let continue_is_proof = fallback_after_drop_pending_proof;
-                    fallback_after_drop_pending = false;
-                    fallback_after_drop_pending_proof = false;
-                    unsafe {
-                        static mut CLOCK_FALLBACK_AFTER_DROP_SYNTH_BUDGET: u32 = 16;
-                        let b = &mut CLOCK_FALLBACK_AFTER_DROP_SYNTH_BUDGET;
-                        if *b > 0 {
-                            *b -= 1;
-                            serial_println!(
-                                "[sexdisplay.clock.fallback.continue_after_drop] ss={} source=fallback proof={}",
-                                bar.clock_ss,
-                                if continue_is_proof { 1 } else { 0 }
-                            );
-                        }
-                    }
-                }
-                if has_pending_reject && bar.clock_ss != pending_reject_ss {
-                    let r = pending_reject_ss;
-                    has_pending_reject = false;
-                    unsafe {
-                        static mut CLOCK_LIVE_AFTER_REJECT_SYNTH_BUDGET: u32 = 64;
-                        let b = &mut CLOCK_LIVE_AFTER_REJECT_SYNTH_BUDGET;
-                        if *b > 0 {
-                            *b -= 1;
-                            serial_println!(
-                                "[sexdisplay.clock.fallback.live_after_reject] reject_ss={} now_ss={} source=fallback ok=1",
-                                r, bar.clock_ss
-                            );
-                        }
-                    }
-                }
-                unsafe {
-                    static mut CLOCK_SOURCE_FALLBACK_TICK_SYNTH_BUDGET: u32 = 64;
-                    let b = &mut CLOCK_SOURCE_FALLBACK_TICK_SYNTH_BUDGET;
-                    if *b > 0 {
-                        *b -= 1;
-                        serial_println!(
-                            "[sexdisplay.clock.source.fallback.tick] hh={} mm={} ss={}",
-                            bar.clock_hh, bar.clock_mm, bar.clock_ss
-                        );
-                    }
-                }
             }
         }
         if !stale_probe_done {
@@ -2615,6 +2510,10 @@ pub extern "C" fn _start() -> ! {
                                 if incoming_total < canonical_total {
                                     handoff_rejected = true;
                                     clock_canon_apply_to_bar(&mut bar);
+                                    // Reset clock tick tracker so fallback raw_ticks
+                                    // path fires immediately, preventing clock freeze
+                                    // on slow emulation after a rejected handoff.
+                                    last_clock_tick = 0;
                                     unsafe {
                                         static mut CLOCK_HANDOFF_REJECT_BUDGET: u32 = 64;
                                         let b = &mut CLOCK_HANDOFF_REJECT_BUDGET;
@@ -2669,12 +2568,9 @@ pub extern "C" fn _start() -> ! {
                                 unsafe { CLOCK_REDRAW_SOURCE = 0; } // silkbar source
                             } else if handoff_rejected {
                                 clock_from_silkbar = false;
-                                // Do NOT reset fallback_idle_loops — preserves synth tick accumulator liveness.
-                                // Resetting here starves the synth path when SilkBar sends rapid backward updates.
-                                let (canon_hh, canon_mm, canon_ss_r) = unsafe { (CLOCK_CANON_HH, CLOCK_CANON_MM, CLOCK_CANON_SS) };
-                                let _ = (canon_hh, canon_mm);
-                                has_pending_reject = true;
-                                pending_reject_ss = canon_ss_r;
+                                // Do NOT reset fallback_idle_loops here.  Silkbar keeps sending
+                                // stale clock messages which would perpetually reset the synthetic
+                                // tick counter, freezing the visual clock on slow emulation (TCG).
                                 unsafe { CLOCK_REDRAW_SOURCE = 1; }
                             }
                             unsafe {
