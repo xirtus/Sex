@@ -703,10 +703,27 @@ pub extern "C" fn _start() -> ! {
                 u64::MAX
             }
         } else {
-            clock_sent = true;
-            send_update_status(SilkBarUpdate::new(
-                UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
-            ))
+            // ── Bounded clock send: stop after CLOCK_SEND_LIMIT cadences ──
+            // Prevents eternal flooding when sexdisplay handoff is permanently
+            // rejected.  After limit, sexdisplay fallback (tick-gated V9) handles
+            // visible clock.  Force-stall proof path (above) is unaffected.
+            const CLOCK_SEND_LIMIT: u64 = 900; // 15 min at 1/sec cadence
+            if loop_iter < CLOCK_SEND_LIMIT {
+                clock_sent = true;
+                send_update_status(SilkBarUpdate::new(
+                    UpdateKind::SetClock as u32, 0, hh as u32, ((mm as u32) << 8) | ss as u32,
+                ))
+            } else {
+                clock_sent = false;
+                static mut CLOCK_SEND_LIMIT_ONESHOT: bool = false;
+                unsafe {
+                    if !CLOCK_SEND_LIMIT_ONESHOT {
+                        CLOCK_SEND_LIMIT_ONESHOT = true;
+                        sex_pdx::serial_println!("[silkbar.clock.send.limit] iter={} reason=bounded_flood_gate ok=1", loop_iter);
+                    }
+                }
+                u64::MAX
+            }
         };
         if !degraded {
             if clock_sent {
