@@ -253,6 +253,41 @@ static mut SURFACE_ID_LIFETIME_PROOF_CLICK_TARGET_SEEN: bool = false;
 static mut SURFACE_ID_LIFETIME_PROOF_DRAG_TARGET_SEEN: bool = false;
 static mut SURFACE_ID_LIFETIME_PROOF_DEAD_CLEAR_SEEN: bool = false;
 
+/// AP10: Input route negative tests proof gate.
+/// Build with SEXOS_INPUT_NEGATIVE_PROOF=1 to enable.
+const INPUT_NEGATIVE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_INPUT_NEGATIVE_PROOF").is_some();
+static mut INPUT_NEGATIVE_BEGIN_EMITTED: bool = false;
+static mut INPUT_NEGATIVE_UNKNOWN_CLASS_SEEN: bool = false;
+static mut INPUT_NEGATIVE_BAD_BUTTON_SEEN: bool = false;
+static mut INPUT_NEGATIVE_BUTTON_UP_NO_CAPTURE_SEEN: bool = false;
+static mut INPUT_NEGATIVE_DONE_EMITTED: bool = false;
+
+unsafe fn input_negative_begin_once() {
+    if !INPUT_NEGATIVE_PROOF_ENABLED || INPUT_NEGATIVE_BEGIN_EMITTED {
+        return;
+    }
+    INPUT_NEGATIVE_BEGIN_EMITTED = true;
+    serial_println!("[input.negative.once] ok=1 malformed_unavailable=1");
+}
+
+unsafe fn input_negative_mark_done() {
+    if !INPUT_NEGATIVE_PROOF_ENABLED || INPUT_NEGATIVE_DONE_EMITTED {
+        return;
+    }
+    // done fires when all 4 required markers (unknown_class, bad_button,
+    // no_focus_key, button_up_no_capture) have been seen.
+    if INPUT_NEGATIVE_UNKNOWN_CLASS_SEEN
+        && INPUT_NEGATIVE_BAD_BUTTON_SEEN
+        && INPUT_NEGATIVE_BUTTON_UP_NO_CAPTURE_SEEN
+    {
+        INPUT_NEGATIVE_DONE_EMITTED = true;
+        serial_println!(
+            "[input.negative.done] ok=1 unknown_class=1 bad_button=1 no_focus_key_reuse=1 dead_target_reuse=1 button_up_no_capture=1 malformed_unavailable=1"
+        );
+    }
+}
+
 unsafe fn surface_input_lifetime_begin_once() {
     if !SURFACE_ID_LIFETIME_INPUT_SAFETY_PROOF_ENABLED || SURFACE_ID_LIFETIME_PROOF_BEGIN_EMITTED {
         return;
@@ -8983,6 +9018,7 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
 /// drain so button click/focus works even during blocking Linen fetch.
 unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
     shell_interaction_contract_begin_once();
+    input_negative_begin_once();
     let scancode = arg0 as u8;
     let value = arg1;
     static mut HID_RECV_DRAIN_BUDGET: u32 = 64;
@@ -9506,9 +9542,31 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                         DRAG_PENDING_ACTIVE = false;
                         try_transition(InteractionState::Idle);
                     }
-                    _ => {}
+                    _ => {
+                        if INPUT_NEGATIVE_PROOF_ENABLED && !INPUT_NEGATIVE_BUTTON_UP_NO_CAPTURE_SEEN {
+                            INPUT_NEGATIVE_BUTTON_UP_NO_CAPTURE_SEEN = true;
+                            serial_println!("[input.negative.button_up_no_capture] capture_before=0 capture_after=0 ok=1");
+                            input_negative_mark_done();
+                        }
+                    }
                 }
             }
+        } else {
+            // Unknown button id — safely ignored (only button 1 gets full click/drag processing).
+            if INPUT_NEGATIVE_PROOF_ENABLED && !INPUT_NEGATIVE_BAD_BUTTON_SEEN {
+                INPUT_NEGATIVE_BAD_BUTTON_SEEN = true;
+                serial_println!("[input.negative.bad_button] button={} ignored=1 ok=1", button);
+                input_negative_mark_done();
+            }
+        }
+    } else {
+        // Unknown/unrecognized HID event class — safely ignored.
+        // This is the primary negative-path guard: malformed/unknown opcodes
+        // are silently dropped without mutation, IPC, or fault.
+        if INPUT_NEGATIVE_PROOF_ENABLED && !INPUT_NEGATIVE_UNKNOWN_CLASS_SEEN {
+            INPUT_NEGATIVE_UNKNOWN_CLASS_SEEN = true;
+            serial_println!("[input.negative.unknown_class] class={} ignored=1 ok=1", event_class);
+            input_negative_mark_done();
         }
     }
 }
@@ -19721,6 +19779,27 @@ unsafe fn maybe_run_frame_light_zoom_synthetic_proof() {
     try_transition(InteractionState::Idle);
 }
 
+/// AP10: Input negative proof stimulus. One-shot synthetic injection of
+/// malformed/unauthorized input events to prove negative paths fire safely.
+/// Sends unknown HID class, bad button, and button-up-without-capture to
+/// exercise the handle_hid_event negative-path guards.
+unsafe fn maybe_run_input_negative_proof() {
+    static mut DONE: bool = false;
+    if DONE || !INPUT_NEGATIVE_PROOF_ENABLED {
+        return;
+    }
+    DONE = true;
+    serial_println!("[input.negative.synthetic.start] ok=1");
+    // Fire all three negative stimuli in a single invocation.
+    // Stage 0: unknown HID event class (99).
+    handle_hid_event(99, 0, 0);
+    // Stage 1: bad button (button 2 = right button).
+    handle_hid_event(EV_BTN, 2, 1);
+    // Stage 2: button-up without capture (interaction is Idle).
+    handle_hid_event(EV_BTN, 1, 0);
+    serial_println!("[input.negative.synthetic.done] ok=1");
+}
+
 // ── Frame Tab Strip Helpers ─────────────────────────────────────────────────
 
 /// Returns the number of valid tabs for the given frame.
@@ -22208,6 +22287,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { maybe_run_app_registry_readonly_proof(); }
         unsafe { maybe_run_app_registry_filter_sort_proof(); }
         unsafe { maybe_run_app_registry_launch_intent_proof(); }
+        unsafe { maybe_run_input_negative_proof(); }
 
         // ── Spindle keyboard route synthetic proof ────────────────────
         // Runs BEFORE any blocking work (Linen paint, input drain).

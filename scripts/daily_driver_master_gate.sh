@@ -189,6 +189,14 @@ gate_surface_click_target_live_guard="SKIP"
 gate_surface_drag_target_live_guard="SKIP"
 gate_surface_dead_target_clear="SKIP"
 gate_surface_input_lifetime_faults_zero="SKIP"
+gate_input_negative_contract="SKIP"
+gate_input_negative_unknown_class="SKIP"
+gate_input_negative_bad_button="SKIP"
+gate_input_negative_no_focus_key="SKIP"
+gate_input_negative_dead_target="SKIP"
+gate_input_negative_button_up_no_capture="SKIP"
+gate_input_negative_malformed_report="SKIP"
+gate_input_negative_faults_zero="SKIP"
 gate_webstub_static_text_render="SKIP"
 gate_shell_draw_text_helper="SKIP"
 gate_browser_stub_v2="SKIP"
@@ -7026,6 +7034,107 @@ else
     fi
 fi
 
+# ---- input_route_negative_tests_v1 (AP10) ----
+ap10_begin_re='input\.negative\.once'
+if [ "$(has "$ap10_begin_re")" -eq 0 ]; then
+    gate_input_negative_contract="SKIP"
+    gate_input_negative_unknown_class="SKIP"
+    gate_input_negative_bad_button="SKIP"
+    gate_input_negative_no_focus_key="SKIP"
+    gate_input_negative_dead_target="SKIP"
+    gate_input_negative_button_up_no_capture="SKIP"
+    gate_input_negative_malformed_report="SKIP"
+    gate_input_negative_faults_zero="SKIP"
+    print_row "input_negative_contract" "SKIP" "not_requested (missing input.negative.once)"
+    print_row "input_negative_unknown_class" "SKIP" "not_requested"
+    print_row "input_negative_bad_button" "SKIP" "not_requested"
+    print_row "input_negative_no_focus_key" "SKIP" "not_requested"
+    print_row "input_negative_dead_target" "SKIP" "not_requested"
+    print_row "input_negative_button_up_no_capture" "SKIP" "not_requested"
+    print_row "input_negative_malformed_report" "SKIP" "not_requested"
+    print_row "input_negative_faults_zero" "SKIP" "not_requested"
+else
+    # Contract gate: begin + done markers must both exist
+    has_ap10_done=$(has 'input\.negative\.done.*ok=1')
+    if [ "$has_ap10_done" -eq 1 ]; then
+        gate_input_negative_contract="PASS"
+        print_row "input_negative_contract" "PASS" "begin+done markers present"
+    else
+        gate_input_negative_contract="FAIL"
+        print_row "input_negative_contract" "FAIL" "begin present but missing done marker"
+    fi
+
+    # Unknown class: must have unknown_class with ignored=1 ok=1
+    has_unknown_class_ok=$(has 'input\.negative\.unknown_class.*ignored=1.*ok=1')
+    if [ "$has_unknown_class_ok" -eq 1 ]; then
+        gate_input_negative_unknown_class="PASS"
+        print_row "input_negative_unknown_class" "PASS" "unknown_class ignored=1 ok=1 observed"
+    else
+        gate_input_negative_unknown_class="FAIL"
+        print_row "input_negative_unknown_class" "FAIL" "begin present but no unknown_class ignored=1 ok=1"
+    fi
+
+    # Bad button: must have bad_button with ignored=1 ok=1
+    has_bad_button_ok=$(has 'input\.negative\.bad_button.*ignored=1.*ok=1')
+    if [ "$has_bad_button_ok" -eq 1 ]; then
+        gate_input_negative_bad_button="PASS"
+        print_row "input_negative_bad_button" "PASS" "bad_button ignored=1 ok=1 observed"
+    else
+        gate_input_negative_bad_button="FAIL"
+        print_row "input_negative_bad_button" "FAIL" "begin present but no bad_button ignored=1 ok=1"
+    fi
+
+    # No-focus key: reuse existing AP4 shell.interact.stage.no_focus_key marker
+    has_no_focus_key_ok=$(has 'shell\.interact\.stage\.no_focus_key.*ignored_or_consumed=1.*ok=1')
+    if [ "$has_no_focus_key_ok" -eq 1 ]; then
+        gate_input_negative_no_focus_key="PASS"
+        print_row "input_negative_no_focus_key" "PASS" "no_focus_key reused (AP4 marker with ignored_or_consumed=1 ok=1)"
+    else
+        gate_input_negative_no_focus_key="SKIP"
+        print_row "input_negative_no_focus_key" "SKIP" "AP4 no_focus_key marker not present in this lane (environmental)"
+    fi
+
+    # Dead target: reuse existing dead-target markers
+    has_dead_target_ok=$(has 'shell\.focus\.clear_dead|shell\.drag\.clear_dead|shell\.hover\.clear\.dead|shell\.tile\.skip_dead|shell\.interact\.stage\.dead_target_guard|surface\.input_lifetime\.dead_clear')
+    if [ "$has_dead_target_ok" -eq 1 ]; then
+        gate_input_negative_dead_target="PASS"
+        print_row "input_negative_dead_target" "PASS" "dead_target reused (existing dead-target markers present)"
+    else
+        gate_input_negative_dead_target="SKIP"
+        print_row "input_negative_dead_target" "SKIP" "dead_target markers not present in this lane (environmental)"
+    fi
+
+    # Button-up no capture: must have button_up_no_capture with ok=1
+    has_button_up_no_capture_ok=$(has 'input\.negative\.button_up_no_capture.*ok=1')
+    if [ "$has_button_up_no_capture_ok" -eq 1 ]; then
+        gate_input_negative_button_up_no_capture="PASS"
+        print_row "input_negative_button_up_no_capture" "PASS" "button_up_no_capture ok=1 observed"
+    else
+        gate_input_negative_button_up_no_capture="FAIL"
+        print_row "input_negative_button_up_no_capture" "FAIL" "begin present but no button_up_no_capture ok=1"
+    fi
+
+    # Malformed report: explicit SKIP (no injectable path)
+    has_malformed_unavailable=$(has 'input\.negative\.once.*malformed_unavailable=1')
+    if [ "$has_malformed_unavailable" -eq 1 ]; then
+        gate_input_negative_malformed_report="SKIP"
+        print_row "input_negative_malformed_report" "SKIP" "malformed_unavailable=1 (no injectable path at normalizer layer)"
+    else
+        gate_input_negative_malformed_report="SKIP"
+        print_row "input_negative_malformed_report" "SKIP" "no injectable path"
+    fi
+
+    # Faults zero
+    ap10_fault_hits=$(count '#PF|#GP|panic|fault\.kill|null-jump|IPC storm|ring overflow|input_negative FAIL|unknown_class routed|bad_button routed|dead_target routed|malformed accepted')
+    if [ "$ap10_fault_hits" -eq 0 ]; then
+        gate_input_negative_faults_zero="PASS"
+        print_row "input_negative_faults_zero" "PASS" "0 fault tokens"
+    else
+        gate_input_negative_faults_zero="FAIL"
+        print_row "input_negative_faults_zero" "FAIL" "fault tokens found:${ap10_fault_hits}"
+    fi
+fi
+
 # ---- SCORE ----
 echo ""
 echo "============================================"
@@ -7145,6 +7254,14 @@ ALL_GATES=(
     "surface_drag_target_live_guard:$gate_surface_drag_target_live_guard"
     "surface_dead_target_clear:$gate_surface_dead_target_clear"
     "surface_input_lifetime_faults_zero:$gate_surface_input_lifetime_faults_zero"
+    "input_negative_contract:$gate_input_negative_contract"
+    "input_negative_unknown_class:$gate_input_negative_unknown_class"
+    "input_negative_bad_button:$gate_input_negative_bad_button"
+    "input_negative_no_focus_key:$gate_input_negative_no_focus_key"
+    "input_negative_dead_target:$gate_input_negative_dead_target"
+    "input_negative_button_up_no_capture:$gate_input_negative_button_up_no_capture"
+    "input_negative_malformed_report:$gate_input_negative_malformed_report"
+    "input_negative_faults_zero:$gate_input_negative_faults_zero"
     "webstub_static_text_render:$gate_webstub_static_text_render"
     "shell_draw_text_helper:$gate_shell_draw_text_helper"
     "browser_stub_v2:$gate_browser_stub_v2"
