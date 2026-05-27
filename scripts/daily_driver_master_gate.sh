@@ -114,6 +114,12 @@ gate_usb_keyboard_decode="SKIP"
 gate_usb_keyboard_to_hid="SKIP"
 gate_usb_keyboard_shell_recv="SKIP"
 gate_usb_keyboard_faults_zero="SKIP"
+gate_usb_mouse_detect="SKIP"
+gate_usb_mouse_raw_report="SKIP"
+gate_usb_mouse_pack="SKIP"
+gate_usb_mouse_to_normalizer="SKIP"
+gate_usb_mouse_normalizer_out="SKIP"
+gate_usb_mouse_faults_zero="SKIP"
 gate_quil_save_open_nonblocking_startup="SKIP"
 gate_spindle_editor_finish="SKIP"
 gate_linen_search_bridge="SKIP"
@@ -5412,6 +5418,88 @@ else
     print_row "usb_keyboard_faults_zero" "SKIP" "USB keyboard proof lane not active, no fault context"
 fi
 
+# ---- usb_mouse_detect ----
+# PASS if [usb.mouse.detect] with ok=1
+if [ "$(has 'usb\.mouse\.detect.*ok=1')" -ge 1 ]; then
+    gate_usb_mouse_detect="PASS"
+    print_row "usb_mouse_detect" "PASS" "USB mouse/tablet boot interface detected"
+elif [ "$(has 'sexusb\.xhci\.config\.hid_boot_mouse\.found')" -ge 1 ]; then
+    gate_usb_mouse_detect="PASS"
+    print_row "usb_mouse_detect" "PASS" "USB boot mouse interface found (compat marker)"
+elif [ "$(has 'sexusb\.xhci\.config\.hid_tablet\.found')" -ge 1 ]; then
+    gate_usb_mouse_detect="PASS"
+    print_row "usb_mouse_detect" "PASS" "USB tablet interface found (compat marker)"
+else
+    gate_usb_mouse_detect="SKIP"
+    print_row "usb_mouse_detect" "SKIP" "USB mouse/tablet not detected or proof lane not enabled"
+fi
+
+# ---- usb_mouse_raw_report ----
+# PASS if [usb.mouse.report.raw] with ok=1
+if [ "$(has 'usb\.mouse\.report\.raw.*ok=1')" -ge 1 ]; then
+    gate_usb_mouse_raw_report="PASS"
+    print_row "usb_mouse_raw_report" "PASS" "USB mouse/tablet raw report received"
+elif [ "$(has 'usb\.mouse\.detect.*ok=1')" -ge 1 ]; then
+    gate_usb_mouse_raw_report="SKIP"
+    print_row "usb_mouse_raw_report" "SKIP" "USB mouse/tablet detected but no report received (timeout or idle device)"
+else
+    gate_usb_mouse_raw_report="SKIP"
+    print_row "usb_mouse_raw_report" "SKIP" "USB mouse/tablet proof lane not enabled"
+fi
+
+# ---- usb_mouse_pack ----
+# PASS if [usb.mouse.report.pack] with ok=1
+if [ "$(has 'usb\.mouse\.report\.pack.*ok=1')" -ge 1 ]; then
+    gate_usb_mouse_pack="PASS"
+    print_row "usb_mouse_pack" "PASS" "USB mouse/tablet report packed for sexinput"
+elif [ "$(has 'usb\.mouse\.detect.*ok=1')" -ge 1 ]; then
+    gate_usb_mouse_pack="SKIP"
+    print_row "usb_mouse_pack" "SKIP" "USB mouse/tablet detected but no report to pack"
+else
+    gate_usb_mouse_pack="SKIP"
+    print_row "usb_mouse_pack" "SKIP" "USB mouse/tablet proof lane not enabled"
+fi
+
+# ---- usb_mouse_to_normalizer ----
+# PASS if [usb.mouse.to_normalizer] with ok=1
+if [ "$(has 'usb\.mouse\.to_normalizer.*ok=1')" -ge 1 ]; then
+    gate_usb_mouse_to_normalizer="PASS"
+    print_row "usb_mouse_to_normalizer" "PASS" "USB mouse/tablet report delivered to normalizer"
+elif [ "$(has 'usb\.mouse\.detect.*ok=1')" -ge 1 ]; then
+    gate_usb_mouse_to_normalizer="SKIP"
+    print_row "usb_mouse_to_normalizer" "SKIP" "USB mouse/tablet detected but report did not reach normalizer"
+else
+    gate_usb_mouse_to_normalizer="SKIP"
+    print_row "usb_mouse_to_normalizer" "SKIP" "USB mouse/tablet proof lane not enabled"
+fi
+
+# ---- usb_mouse_normalizer_out ----
+# PASS if [usb.mouse.normalizer.out] with ok=1
+if [ "$(has 'usb\.mouse\.normalizer\.out.*ok=1')" -ge 1 ]; then
+    gate_usb_mouse_normalizer_out="PASS"
+    print_row "usb_mouse_normalizer_out" "PASS" "USB mouse/tablet normalizer output emitted"
+elif [ "$(has 'usb\.mouse\.detect.*ok=1')" -ge 1 ]; then
+    gate_usb_mouse_normalizer_out="SKIP"
+    print_row "usb_mouse_normalizer_out" "SKIP" "USB mouse/tablet detected but normalizer did not emit output"
+else
+    gate_usb_mouse_normalizer_out="SKIP"
+    print_row "usb_mouse_normalizer_out" "SKIP" "USB mouse/tablet proof lane not enabled"
+fi
+
+# ---- usb_mouse_faults_zero ----
+# PASS if no #PF/#GP/panic when USB mouse detection active
+usb_mouse_faults=$(has '#PF|#GP|panic|KERNEL PANIC|PAGE FAULT|GENERAL PROTECTION')
+if [ "$(has 'usb\.mouse\.detect.*ok=1')" -ge 1 ] && [ "$usb_mouse_faults" -eq 0 ]; then
+    gate_usb_mouse_faults_zero="PASS"
+    print_row "usb_mouse_faults_zero" "PASS" "no faults during USB mouse proof lane"
+elif [ "$usb_mouse_faults" -ge 1 ]; then
+    gate_usb_mouse_faults_zero="FAIL"
+    print_row "usb_mouse_faults_zero" "FAIL" "fault detected during USB mouse proof lane"
+else
+    gate_usb_mouse_faults_zero="SKIP"
+    print_row "usb_mouse_faults_zero" "SKIP" "USB mouse proof lane not active, no fault context"
+fi
+
 # ---- quil_save_open_nonblocking_startup ----
 # PASS if: main_loop.enter + input_ready + no_startup_block markers all present,
 # no faults, existing quil_save_open_sexobject is PASS or SKIP (not FAIL),
@@ -7302,6 +7390,12 @@ ALL_GATES=(
     "usb_keyboard_to_hid:$gate_usb_keyboard_to_hid"
     "usb_keyboard_shell_recv:$gate_usb_keyboard_shell_recv"
     "usb_keyboard_faults_zero:$gate_usb_keyboard_faults_zero"
+    "usb_mouse_detect:$gate_usb_mouse_detect"
+    "usb_mouse_raw_report:$gate_usb_mouse_raw_report"
+    "usb_mouse_pack:$gate_usb_mouse_pack"
+    "usb_mouse_to_normalizer:$gate_usb_mouse_to_normalizer"
+    "usb_mouse_normalizer_out:$gate_usb_mouse_normalizer_out"
+    "usb_mouse_faults_zero:$gate_usb_mouse_faults_zero"
     "quil_save_open_nonblocking_startup:$gate_quil_save_open_nonblocking_startup"
     "spindle_editor_finish:$gate_spindle_editor_finish"
     "storage_phasea:$gate_storage_phasea"

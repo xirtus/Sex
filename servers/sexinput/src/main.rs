@@ -381,6 +381,21 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
 
+                // AP13: proof marker before normalizer call
+                // Only fires for nonzero content — the bootgraph zero-report
+                // (buttons=0 dx=0 dy=0 is_abs=0) does not trigger this marker.
+                if buttons != 0 || dx != 0 || dy != 0 || is_abs {
+                    unsafe {
+                        static mut MOUSE_TO_NORMALIZER_PROOF_EMITTED: bool = false;
+                        if !MOUSE_TO_NORMALIZER_PROOF_EMITTED {
+                            MOUSE_TO_NORMALIZER_PROOF_EMITTED = true;
+                            serial_println!(
+                                "[usb.mouse.to_normalizer] dx={} dy={} buttons={} wheel={} is_abs={} ok=1",
+                                dx, dy, buttons, wheel, if is_abs { 1 } else { 0 }
+                            );
+                        }
+                    }
+                }
                 serial_println!("[sexinput.usb_mouse.normalize.start]");
                 let report = HidPointerRawReport {
                     dx,
@@ -402,6 +417,24 @@ pub extern "C" fn _start() -> ! {
                     },
                 );
                 serial_println!("[sexinput.usb_mouse.normalize.ok]");
+
+                // AP13: one-shot normalizer output proof markers
+                unsafe {
+                    static mut NORMALIZER_OUT_PROOF_EMITTED: bool = false;
+                    if !NORMALIZER_OUT_PROOF_EMITTED && norm_count > 0 {
+                        NORMALIZER_OUT_PROOF_EMITTED = true;
+                        for i in 0..norm_count {
+                            let (arg0, arg1, arg2) = normalized_events[i];
+                            let cls_str = if arg2 == EV_REL { "EV_REL" }
+                                else if arg2 == EV_ABS { "EV_ABS" }
+                                else { "EV_BTN" };
+                            serial_println!(
+                                "[usb.mouse.normalizer.out] class={} code={} value={} ok=1",
+                                cls_str, arg0 as i32, arg1 as i32
+                            );
+                        }
+                    }
+                }
 
                 // Budgeted diagnostic for real USB mouse deltas arriving from sexusb.
                 // Not triggered by synthetic proof paths (those send HID_EVENT directly).

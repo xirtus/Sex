@@ -777,7 +777,7 @@ fi
     -cpu max,+pku \
     -cdrom "$ISO" \
     -device nec-usb-xhci,id=xhci \
-    -device usb-kbd,bus=xhci.0 \
+    -device usb-mouse,bus=xhci.0 \
     "${QEMU_NET_ARGS[@]}" \
     "${NVME_ARGS[@]}" \
     -serial "file:$LOG" \

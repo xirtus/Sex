@@ -2137,6 +2137,15 @@ pub extern "C" fn _start() -> ! {
                             hid_interface_number = b_intf_num;
                             serial_println!("[sexusb.xhci.config.hid_boot_mouse.found] intf={} off={}",
                                 b_intf_num, walk_off);
+                            // AP13: one-shot mouse/pointer detect proof marker
+                            unsafe {
+                                static mut MOUSE_DETECT_PROOF_EMITTED: bool = false;
+                                if !MOUSE_DETECT_PROOF_EMITTED {
+                                    MOUSE_DETECT_PROOF_EMITTED = true;
+                                    serial_println!("[usb.mouse.detect] interface={} boot=1 ok=1",
+                                        b_intf_num);
+                                }
+                            }
                         } else if is_boot_keyboard {
                             current_hid_role = 1;
                             found_hid_keyboard = true;
@@ -2152,6 +2161,15 @@ pub extern "C" fn _start() -> ! {
                             hid_interface_number = b_intf_num;
                             serial_println!("[sexusb.xhci.config.hid_tablet.found] intf={} off={} subclass={} protocol={}",
                                 b_intf_num, walk_off, b_subclass, b_protocol);
+                            // AP13: one-shot tablet/pointer detect proof marker
+                            unsafe {
+                                static mut TABLET_DETECT_PROOF_EMITTED: bool = false;
+                                if !TABLET_DETECT_PROOF_EMITTED {
+                                    TABLET_DETECT_PROOF_EMITTED = true;
+                                    serial_println!("[usb.mouse.detect] interface={} boot=0 tablet=1 ok=1",
+                                        b_intf_num);
+                                }
+                            }
                         } else {
                             current_hid_role = 4;
                         }
@@ -4276,6 +4294,17 @@ pub extern "C" fn _start() -> ! {
             }
 
             if let Some(td) = decode_tablet_report(&report_bytes, intr_actual as usize) {
+                // AP13: one-shot raw report proof marker for tablet
+                unsafe {
+                    static mut TABLET_RAW_PROOF_EMITTED: bool = false;
+                    if !TABLET_RAW_PROOF_EMITTED {
+                        TABLET_RAW_PROOF_EMITTED = true;
+                        serial_println!(
+                            "[usb.mouse.report.raw] len={} b0={} b1={} b2={} b3={} b4={} ok=1",
+                            intr_actual, rb0, rb1, rb2, rb3, rb4
+                        );
+                    }
+                }
                 // Active path liveness marker.
                 unsafe {
                     static mut TABLET_ACTIVE_COUNT: u64 = 0;
@@ -4287,7 +4316,18 @@ pub extern "C" fn _start() -> ! {
                 }
                 // Pass absolute coordinates directly. Set bit 32 of packed_axes to indicate absolute.
                 let packed_axes = (td.abs_x as u64) | ((td.abs_y as u64) << 16) | (1u64 << 32);
-                
+                // AP13: one-shot pack proof marker for tablet
+                unsafe {
+                    static mut TABLET_PACK_PROOF_EMITTED: bool = false;
+                    if !TABLET_PACK_PROOF_EMITTED {
+                        TABLET_PACK_PROOF_EMITTED = true;
+                        serial_println!(
+                            "[usb.mouse.report.pack] dx={} dy={} buttons={} wheel=0 is_abs=1 ok=1",
+                            td.abs_x, td.abs_y, td.buttons
+                        );
+                    }
+                }
+
                 unsafe {
                     static mut POINTER_CANDIDATE_BUDGET: u32 = 16;
                     static mut POINTER_CANDIDATE_SEQ: u32 = 0;
@@ -4388,6 +4428,17 @@ pub extern "C" fn _start() -> ! {
             let rb3 = unsafe { core::ptr::read_volatile(report_ptr.add(3)) };
             let report_bytes = [rb0, rb1, rb2, rb3];
             if let Some(decoded) = decode_boot_mouse_report(&report_bytes, intr_actual as usize) {
+                // AP13: one-shot raw report proof marker for boot mouse
+                unsafe {
+                    static mut MOUSE_RAW_PROOF_EMITTED: bool = false;
+                    if !MOUSE_RAW_PROOF_EMITTED {
+                        MOUSE_RAW_PROOF_EMITTED = true;
+                        serial_println!(
+                            "[usb.mouse.report.raw] len={} b0={} b1={} b2={} b3={} ok=1",
+                            intr_actual, rb0, rb1, rb2, rb3
+                        );
+                    }
+                }
                 unsafe {
                     static mut INTR_CLASSIFY_BUDGET: u32 = 16;
                     static mut INTR_CLASSIFY_SEQ: u32 = 0;
@@ -4436,6 +4487,17 @@ pub extern "C" fn _start() -> ! {
                 let packed_axes = (decoded.dx as u8 as u64)
                     | ((decoded.dy as u8 as u64) << 8)
                     | ((decoded.wheel as u8 as u64) << 16);
+                // AP13: one-shot pack proof marker for boot mouse
+                unsafe {
+                    static mut MOUSE_PACK_PROOF_EMITTED: bool = false;
+                    if !MOUSE_PACK_PROOF_EMITTED {
+                        MOUSE_PACK_PROOF_EMITTED = true;
+                        serial_println!(
+                            "[usb.mouse.report.pack] dx={} dy={} buttons={} wheel={} is_abs=0 ok=1",
+                            decoded.dx, decoded.dy, decoded.buttons, decoded.wheel
+                        );
+                    }
+                }
                 // Budgeted marker for what is forwarded to sexinput (mouse path).
                 unsafe {
                     static mut FORWARD_MOUSE_BUDGET_BOOT: u32 = 16;
