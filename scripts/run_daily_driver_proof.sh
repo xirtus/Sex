@@ -777,7 +777,7 @@ fi
     -cpu max,+pku \
     -cdrom "$ISO" \
     -device nec-usb-xhci,id=xhci \
-    -device usb-mouse,bus=xhci.0 \
+    -device usb-tablet,bus=xhci.0 \
     "${QEMU_NET_ARGS[@]}" \
     "${NVME_ARGS[@]}" \
     -serial "file:$LOG" \
@@ -850,6 +850,27 @@ try:
         time.sleep(0.3)
         resp = sock.recv(4096)
         print(f'[proof] QMP sendkey {key}: {resp.decode().strip()}')
+
+    # AP14: inject mouse_move via HMP to target USB tablet
+    MOUSE_SEQ = [(400, 300, 0), (400, 300, 1), (450, 320, 1), (450, 320, 0)]
+    for (mx, my, mb) in MOUSE_SEQ:
+        cmd_move = f'{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"mouse_move {mx} {my}\"}}}}\n'
+        sock.sendall(cmd_move.encode())
+        time.sleep(0.2)
+        resp = sock.recv(4096)
+        print(f'[proof] QMP mouse_move {mx} {my}: {resp.decode().strip()}')
+        if mb == 1:
+            cmd_btn = f'{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"mouse_button 1\"}}}}\n'
+            sock.sendall(cmd_btn.encode())
+            time.sleep(0.2)
+            resp = sock.recv(4096)
+            print(f'[proof] QMP mouse_button 1: {resp.decode().strip()}')
+        elif mb == 0:
+            cmd_btn = f'{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"mouse_button 0\"}}}}\n'
+            sock.sendall(cmd_btn.encode())
+            time.sleep(0.2)
+            resp = sock.recv(4096)
+            print(f'[proof] QMP mouse_button 0: {resp.decode().strip()}')
 
     sock.close()
     print('[proof] QMP: key injection complete')

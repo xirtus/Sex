@@ -3858,6 +3858,8 @@ pub extern "C" fn _start() -> ! {
     };
     serial_println!("[sexusb.hid.{}.continuous.start] attempts=unbounded", dev_kind);
     serial_println!("[sexusb.poll.budget.enter] budget=1_per_iter");
+    // AP14: pointer producer begin marker
+    serial_println!("[usb.pointer.producer.begin] ok=1");
     let mut saw_nonzero = false;
     let mut hid_report_nonzero_emitted = false;
     let mut hid_report_idle_emitted = false;
@@ -4303,6 +4305,11 @@ pub extern "C" fn _start() -> ! {
                             "[usb.mouse.report.raw] len={} b0={} b1={} b2={} b3={} b4={} ok=1",
                             intr_actual, rb0, rb1, rb2, rb3, rb4
                         );
+                        // AP14: pointer producer report marker (tablet)
+                        serial_println!(
+                            "[usb.pointer.producer.report] source=usb-tablet len={} ok=1",
+                            intr_actual
+                        );
                     }
                 }
                 // Active path liveness marker.
@@ -4379,6 +4386,14 @@ pub extern "C" fn _start() -> ! {
                     td.buttons as u64,
                     packed_axes,
                 );
+                // AP14: pointer producer to_input marker
+                unsafe {
+                    static mut TABLET_TO_INPUT_EMITTED: bool = false;
+                    if !TABLET_TO_INPUT_EMITTED {
+                        TABLET_TO_INPUT_EMITTED = true;
+                        serial_println!("[usb.pointer.producer.to_input] op=0x260 ok=1");
+                    }
+                }
                 unsafe {
                     static mut LAST_ABS_X: u16 = 0xFFFF;
                     static mut LAST_ABS_Y: u16 = 0xFFFF;
@@ -4436,6 +4451,11 @@ pub extern "C" fn _start() -> ! {
                         serial_println!(
                             "[usb.mouse.report.raw] len={} b0={} b1={} b2={} b3={} ok=1",
                             intr_actual, rb0, rb1, rb2, rb3
+                        );
+                        // AP14: pointer producer report marker (boot mouse)
+                        serial_println!(
+                            "[usb.pointer.producer.report] source=usb-mouse len={} ok=1",
+                            intr_actual
                         );
                     }
                 }
@@ -4514,6 +4534,14 @@ pub extern "C" fn _start() -> ! {
                     decoded.buttons as u64,
                     packed_axes,
                 );
+                // AP14: pointer producer to_input marker (mouse)
+                unsafe {
+                    static mut MOUSE_TO_INPUT_EMITTED: bool = false;
+                    if !MOUSE_TO_INPUT_EMITTED {
+                        MOUSE_TO_INPUT_EMITTED = true;
+                        serial_println!("[usb.pointer.producer.to_input] op=0x260 ok=1");
+                    }
+                }
                 if decoded.buttons == 0 && decoded.dx == 0 && decoded.dy == 0 && decoded.wheel == 0 {
                     if HID_VERBOSE_RING_LOG && (i < 8 || i % 64 == 0) {
                         serial_println!("[sexusb.hid.mouse.continuous.idle] i={}", i);

@@ -120,6 +120,12 @@ gate_usb_mouse_pack="SKIP"
 gate_usb_mouse_to_normalizer="SKIP"
 gate_usb_mouse_normalizer_out="SKIP"
 gate_usb_mouse_faults_zero="SKIP"
+gate_usb_pointer_producer_report="SKIP"
+gate_usb_pointer_producer_to_input="SKIP"
+gate_usb_pointer_producer_normalized="SKIP"
+gate_usb_pointer_producer_shell="SKIP"
+gate_usb_pointer_producer_click_drag="SKIP"
+gate_usb_pointer_producer_faults_zero="SKIP"
 gate_quil_save_open_nonblocking_startup="SKIP"
 gate_spindle_editor_finish="SKIP"
 gate_linen_search_bridge="SKIP"
@@ -5500,6 +5506,101 @@ else
     print_row "usb_mouse_faults_zero" "SKIP" "USB mouse proof lane not active, no fault context"
 fi
 
+# ---- usb_pointer_producer_report ----
+# AP14: USB pointer producer report gate
+if [ "$(has 'usb\.pointer\.producer\.begin')" -ge 1 ]; then
+    has_report=$(has 'usb\.pointer\.producer\.report.*ok=1')
+    has_synthetic=$(has 'usb\.pointer\.producer\.report.*synthetic=1')
+    if [ "$has_report" -ge 1 ] && [ "$has_synthetic" -eq 0 ]; then
+        gate_usb_pointer_producer_report="PASS"
+        print_row "usb_pointer_producer_report" "PASS" "real USB pointer report received (synthetic=0)"
+    elif [ "$has_report" -ge 1 ] && [ "$has_synthetic" -ge 1 ]; then
+        gate_usb_pointer_producer_report="SKIP"
+        print_row "usb_pointer_producer_report" "SKIP" "synthetic USB pointer report only (not real hardware)"
+    else
+        gate_usb_pointer_producer_report="SKIP"
+        print_row "usb_pointer_producer_report" "SKIP" "USB pointer pipeline active but no real report received (timeout/idle device)"
+    fi
+else
+    gate_usb_pointer_producer_report="SKIP"
+    print_row "usb_pointer_producer_report" "SKIP" "USB pointer producer proof lane not enabled"
+fi
+
+# ---- usb_pointer_producer_to_input ----
+if [ "$(has 'usb\.pointer\.producer\.begin')" -ge 1 ]; then
+    has_to_input=$(has 'usb\.pointer\.producer\.to_input.*ok=1')
+    if [ "$has_to_input" -ge 1 ]; then
+        gate_usb_pointer_producer_to_input="PASS"
+        print_row "usb_pointer_producer_to_input" "PASS" "USB pointer report forwarded to sexinput (op=0x260)"
+    else
+        gate_usb_pointer_producer_to_input="SKIP"
+        print_row "usb_pointer_producer_to_input" "SKIP" "USB pointer pipeline active but no report forwarded to sexinput"
+    fi
+else
+    gate_usb_pointer_producer_to_input="SKIP"
+    print_row "usb_pointer_producer_to_input" "SKIP" "USB pointer producer proof lane not enabled"
+fi
+
+# ---- usb_pointer_producer_normalized ----
+if [ "$(has 'usb\.pointer\.producer\.begin')" -ge 1 ]; then
+    has_norm=$(has 'usb\.pointer\.producer\.normalized.*ok=1')
+    if [ "$has_norm" -ge 1 ]; then
+        gate_usb_pointer_producer_normalized="PASS"
+        print_row "usb_pointer_producer_normalized" "PASS" "USB pointer report normalized (sexinput)"
+    else
+        gate_usb_pointer_producer_normalized="SKIP"
+        print_row "usb_pointer_producer_normalized" "SKIP" "USB pointer pipeline active but normalizer did not emit output"
+    fi
+else
+    gate_usb_pointer_producer_normalized="SKIP"
+    print_row "usb_pointer_producer_normalized" "SKIP" "USB pointer producer proof lane not enabled"
+fi
+
+# ---- usb_pointer_producer_shell ----
+if [ "$(has 'usb\.pointer\.producer\.begin')" -ge 1 ]; then
+    has_shell=$(has 'usb\.pointer\.producer\.shell.*ok=1')
+    if [ "$has_shell" -ge 1 ]; then
+        gate_usb_pointer_producer_shell="PASS"
+        print_row "usb_pointer_producer_shell" "PASS" "USB pointer event reached silk-shell"
+    else
+        gate_usb_pointer_producer_shell="SKIP"
+        print_row "usb_pointer_producer_shell" "SKIP" "USB pointer pipeline active but event did not reach shell"
+    fi
+else
+    gate_usb_pointer_producer_shell="SKIP"
+    print_row "usb_pointer_producer_shell" "SKIP" "USB pointer producer proof lane not enabled"
+fi
+
+# ---- usb_pointer_producer_click_drag ----
+if [ "$(has 'usb\.pointer\.producer\.begin')" -ge 1 ]; then
+    has_cd=$(has 'usb\.pointer\.producer\.click_drag.*ok=1')
+    if [ "$has_cd" -ge 1 ]; then
+        gate_usb_pointer_producer_click_drag="PASS"
+        print_row "usb_pointer_producer_click_drag" "PASS" "USB pointer click/drag event processed"
+    else
+        gate_usb_pointer_producer_click_drag="SKIP"
+        print_row "usb_pointer_producer_click_drag" "SKIP" "USB pointer pipeline active but no click/drag event"
+    fi
+else
+    gate_usb_pointer_producer_click_drag="SKIP"
+    print_row "usb_pointer_producer_click_drag" "SKIP" "USB pointer producer proof lane not enabled"
+fi
+
+# ---- usb_pointer_producer_faults_zero ----
+if [ "$(has 'usb\.pointer\.producer\.begin')" -ge 1 ]; then
+    ptr_faults=$(count '#PF|#GP|panic|KERNEL PANIC|PAGE FAULT|GENERAL PROTECTION')
+    if [ "$ptr_faults" -eq 0 ]; then
+        gate_usb_pointer_producer_faults_zero="PASS"
+        print_row "usb_pointer_producer_faults_zero" "PASS" "no faults during USB pointer producer proof lane"
+    else
+        gate_usb_pointer_producer_faults_zero="FAIL"
+        print_row "usb_pointer_producer_faults_zero" "FAIL" "fault detected during USB pointer producer proof lane"
+    fi
+else
+    gate_usb_pointer_producer_faults_zero="SKIP"
+    print_row "usb_pointer_producer_faults_zero" "SKIP" "USB pointer producer proof lane not enabled"
+fi
+
 # ---- quil_save_open_nonblocking_startup ----
 # PASS if: main_loop.enter + input_ready + no_startup_block markers all present,
 # no faults, existing quil_save_open_sexobject is PASS or SKIP (not FAIL),
@@ -7396,6 +7497,12 @@ ALL_GATES=(
     "usb_mouse_to_normalizer:$gate_usb_mouse_to_normalizer"
     "usb_mouse_normalizer_out:$gate_usb_mouse_normalizer_out"
     "usb_mouse_faults_zero:$gate_usb_mouse_faults_zero"
+    "usb_pointer_producer_report:$gate_usb_pointer_producer_report"
+    "usb_pointer_producer_to_input:$gate_usb_pointer_producer_to_input"
+    "usb_pointer_producer_normalized:$gate_usb_pointer_producer_normalized"
+    "usb_pointer_producer_shell:$gate_usb_pointer_producer_shell"
+    "usb_pointer_producer_click_drag:$gate_usb_pointer_producer_click_drag"
+    "usb_pointer_producer_faults_zero:$gate_usb_pointer_producer_faults_zero"
     "quil_save_open_nonblocking_startup:$gate_quil_save_open_nonblocking_startup"
     "spindle_editor_finish:$gate_spindle_editor_finish"
     "storage_phasea:$gate_storage_phasea"

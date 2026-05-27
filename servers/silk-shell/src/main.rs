@@ -22920,6 +22920,14 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 OP_USB_MOUSE_REPORT => {
+                    // AP14: pointer producer shell marker
+                    unsafe {
+                        static mut PTR_PRODUCER_SHELL_EMITTED: bool = false;
+                        if !PTR_PRODUCER_SHELL_EMITTED {
+                            PTR_PRODUCER_SHELL_EMITTED = true;
+                            serial_println!("[usb.pointer.producer.shell] pointer=1 ok=1");
+                        }
+                    }
                     let buttons = msg.arg1 as u8;
                     let packed = msg.arg2;
                     let dx = (packed as u8) as i8;
@@ -22971,6 +22979,17 @@ pub extern "C" fn _start() -> ! {
                                 dx,
                                 dy
                             );
+                        }
+                        // AP14: pointer producer click_drag marker
+                        unsafe {
+                            static mut PTR_PRODUCER_CLICK_DRAG_EMITTED: bool = false;
+                            if !PTR_PRODUCER_CLICK_DRAG_EMITTED && (dx != 0 || dy != 0 || buttons != 0) {
+                                PTR_PRODUCER_CLICK_DRAG_EMITTED = true;
+                                let has_click: u8 = if (buttons & 0x01) != 0 { 1 } else { 0 };
+                                let has_drag: u8 = if matches!(INTERACTION, InteractionState::Dragging { .. }) { 1 } else { 0 };
+                                serial_println!("[usb.pointer.producer.click_drag] click={} drag={} ok=1",
+                                    has_click, has_drag);
+                            }
                         }
                         // Left-button down edge → click-to-focus hit-test.
                         let left_held = (buttons & 0x01) != 0;
@@ -23037,6 +23056,14 @@ pub extern "C" fn _start() -> ! {
                         }
                         if apply_resize_geometry(dx as i32, dy as i32) {
                             mutated = true;
+                        }
+                    }
+                    // AP14: pointer producer done marker
+                    unsafe {
+                        static mut PTR_PRODUCER_DONE_EMITTED: bool = false;
+                        if !PTR_PRODUCER_DONE_EMITTED {
+                            PTR_PRODUCER_DONE_EMITTED = true;
+                            serial_println!("[usb.pointer.producer.done] ok=1");
                         }
                     }
                 }

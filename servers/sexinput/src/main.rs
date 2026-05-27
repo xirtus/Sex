@@ -432,6 +432,11 @@ pub extern "C" fn _start() -> ! {
                                 "[usb.mouse.normalizer.out] class={} code={} value={} ok=1",
                                 cls_str, arg0 as i32, arg1 as i32
                             );
+                            // AP14: pointer producer normalized marker
+                            serial_println!(
+                                "[usb.pointer.producer.normalized] class={} ok=1",
+                                arg2
+                            );
                         }
                     }
                 }
