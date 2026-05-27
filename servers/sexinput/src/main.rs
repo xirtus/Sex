@@ -589,6 +589,14 @@ pub extern "C" fn _start() -> ! {
                         }
                         if cur != 0 {
                             if let Some(sc) = hid_to_ps2(cur) {
+                                // [usb.keyboard.to_hid] — one-shot proof marker
+                                unsafe {
+                                    static mut KBD_TO_HID_PROOF_EMITTED: bool = false;
+                                    if !KBD_TO_HID_PROOF_EMITTED {
+                                        KBD_TO_HID_PROOF_EMITTED = true;
+                                        serial_println!("[usb.keyboard.to_hid] key={} ev_key=1 ok=1", cur);
+                                    }
+                                }
                                 static mut KBD_EVKEY_BUDGET: u32 = 64;
                                 let rem = &mut KBD_EVKEY_BUDGET;
                                 if *rem > 0 {

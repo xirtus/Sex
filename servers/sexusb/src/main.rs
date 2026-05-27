@@ -2143,6 +2143,8 @@ pub extern "C" fn _start() -> ! {
                             hid_interface_number = b_intf_num;
                             serial_println!("[sexusb.xhci.config.hid_boot_keyboard.found] intf={} off={}",
                                 b_intf_num, walk_off);
+                            serial_println!("[usb.keyboard.detect] interface={} boot=1 ok=1",
+                                b_intf_num);
                         } else if b_protocol != 0x01 {
                             current_hid_role = 3;
                             // Non-keyboard HID interface (tablet/pointer)
@@ -2472,6 +2474,7 @@ pub extern "C" fn _start() -> ! {
     let mut has_usage_page_gd = false;
     let mut has_usage_mouse = false;
     let mut has_usage_pointer = false;
+    let mut has_usage_keyboard = false;
     let mut has_collection_app = false;
     let mut has_usage_x = false;
     let mut has_usage_y = false;
@@ -2485,6 +2488,8 @@ pub extern "C" fn _start() -> ! {
             has_usage_mouse = true;
         } else if b0 == 0x09 && b1 == 0x01 {
             has_usage_pointer = true;
+        } else if b0 == 0x09 && b1 == 0x06 {
+            has_usage_keyboard = true;
         } else if b0 == 0xA1 && b1 == 0x01 {
             has_collection_app = true;
         } else if b0 == 0x09 && b1 == 0x30 {
@@ -2500,17 +2505,21 @@ pub extern "C" fn _start() -> ! {
         si += 1;
     }
 
+    let is_keyboard_shape = has_usage_page_gd && has_usage_keyboard && has_collection_app;
     let is_mouse_shape = has_usage_page_gd && has_usage_mouse && has_collection_app && has_usage_x && has_usage_y;
     let is_tablet_shape = has_usage_page_gd && has_usage_pointer && has_usage_x && has_usage_y;
+    if is_keyboard_shape {
+        serial_println!("[sexusb.xhci.hid.report_desc.keyboard_shape.ok]");
+    }
     if is_tablet_shape {
         serial_println!("[sexusb.xhci.hid.report_desc.tablet_shape.ok]");
     }
     if is_mouse_shape {
         serial_println!("[sexusb.xhci.hid.report_desc.mouse_shape.ok]");
     }
-    if !is_mouse_shape && !is_tablet_shape {
-        serial_println!("[sexusb.xhci.hid.report_desc.shape.warn] mouse={} tablet={}",
-            is_mouse_shape, is_tablet_shape);
+    if !is_mouse_shape && !is_tablet_shape && !is_keyboard_shape {
+        serial_println!("[sexusb.xhci.hid.report_desc.shape.warn] mouse={} tablet={} keyboard={}",
+            is_mouse_shape, is_tablet_shape, is_keyboard_shape);
     }
 
     serial_println!("[sexusb.xhci.hid.report_desc.complete.ok] len={}", hid_actual_len);
@@ -4086,6 +4095,17 @@ pub extern "C" fn _start() -> ! {
             let kb_b5 = unsafe { core::ptr::read_volatile(report_ptr.add(5)) };
             let kb_b6 = unsafe { core::ptr::read_volatile(report_ptr.add(6)) };
             let kb_b7 = unsafe { core::ptr::read_volatile(report_ptr.add(7)) };
+            // [usb.keyboard.report.raw] — one-shot proof marker
+            unsafe {
+                static mut KBD_RAW_PROOF_EMITTED: bool = false;
+                if !KBD_RAW_PROOF_EMITTED {
+                    KBD_RAW_PROOF_EMITTED = true;
+                    serial_println!(
+                        "[usb.keyboard.report.raw] len={} modifiers={} k0={} ok=1",
+                        intr_actual, kb_b0, kb_b2
+                    );
+                }
+            }
             // Forward keyboard report to sexinput.
             unsafe {
                 static mut KBD_RAW_BUDGET: u32 = 128;
@@ -4097,6 +4117,18 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             let first_key = kb_b2 as u64;
+            // [usb.keyboard.report.decode] — one-shot proof marker on first report
+            unsafe {
+                static mut KBD_DECODE_PROOF_EMITTED: bool = false;
+                if !KBD_DECODE_PROOF_EMITTED {
+                    KBD_DECODE_PROOF_EMITTED = true;
+                    let down: u64 = if first_key > 0 && first_key < 0x04 { 0 } else { 1 };
+                    serial_println!(
+                        "[usb.keyboard.report.decode] key={} down={} ok=1",
+                        first_key, down
+                    );
+                }
+            }
             unsafe {
                 static mut KBD_FORWARD_BUDGET: u32 = 128;
                 let rem = &mut KBD_FORWARD_BUDGET;

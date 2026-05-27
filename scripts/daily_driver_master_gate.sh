@@ -108,6 +108,12 @@ gate_text_input_pipeline="SKIP"
 gate_live_usb_quil_create_save_reopen="SKIP"
 gate_physical_keyboard_to_quil_text="SKIP"
 gate_usb_hid_boot_keyboard="SKIP"
+gate_usb_keyboard_detect="SKIP"
+gate_usb_keyboard_raw_report="SKIP"
+gate_usb_keyboard_decode="SKIP"
+gate_usb_keyboard_to_hid="SKIP"
+gate_usb_keyboard_shell_recv="SKIP"
+gate_usb_keyboard_faults_zero="SKIP"
 gate_quil_save_open_nonblocking_startup="SKIP"
 gate_spindle_editor_finish="SKIP"
 gate_linen_search_bridge="SKIP"
@@ -5327,6 +5333,85 @@ else
     print_row "usb_hid_boot_keyboard" "SKIP" "USB HID boot keyboard proof not triggered"
 fi
 
+# ---- usb_keyboard_detect ----
+# PASS if [usb.keyboard.detect] with ok=1
+if [ "$(has 'usb\.keyboard\.detect.*ok=1')" -ge 1 ]; then
+    gate_usb_keyboard_detect="PASS"
+    print_row "usb_keyboard_detect" "PASS" "USB keyboard boot interface detected"
+elif [ "$(has 'sexusb\.xhci\.config\.hid_boot_keyboard\.found')" -ge 1 ]; then
+    gate_usb_keyboard_detect="PASS"
+    print_row "usb_keyboard_detect" "PASS" "USB keyboard boot interface found (compat marker)"
+else
+    gate_usb_keyboard_detect="SKIP"
+    print_row "usb_keyboard_detect" "SKIP" "USB keyboard not detected or proof lane not enabled"
+fi
+
+# ---- usb_keyboard_raw_report ----
+# PASS if [usb.keyboard.report.raw] with ok=1
+if [ "$(has 'usb\.keyboard\.report\.raw.*ok=1')" -ge 1 ]; then
+    gate_usb_keyboard_raw_report="PASS"
+    print_row "usb_keyboard_raw_report" "PASS" "USB keyboard raw report received"
+elif [ "$(has 'usb\.keyboard\.detect.*ok=1')" -ge 1 ]; then
+    gate_usb_keyboard_raw_report="SKIP"
+    print_row "usb_keyboard_raw_report" "SKIP" "USB keyboard detected but no report received (timeout or idle device)"
+else
+    gate_usb_keyboard_raw_report="SKIP"
+    print_row "usb_keyboard_raw_report" "SKIP" "USB keyboard proof lane not enabled"
+fi
+
+# ---- usb_keyboard_decode ----
+# PASS if [usb.keyboard.report.decode] with ok=1
+if [ "$(has 'usb\.keyboard\.report\.decode.*ok=1')" -ge 1 ]; then
+    gate_usb_keyboard_decode="PASS"
+    print_row "usb_keyboard_decode" "PASS" "USB keyboard report decoded"
+elif [ "$(has 'usb\.keyboard\.detect.*ok=1')" -ge 1 ]; then
+    gate_usb_keyboard_decode="SKIP"
+    print_row "usb_keyboard_decode" "SKIP" "USB keyboard detected but no report to decode"
+else
+    gate_usb_keyboard_decode="SKIP"
+    print_row "usb_keyboard_decode" "SKIP" "USB keyboard proof lane not enabled"
+fi
+
+# ---- usb_keyboard_to_hid ----
+# PASS if [usb.keyboard.to_hid] with ok=1
+if [ "$(has 'usb\.keyboard\.to_hid.*ok=1')" -ge 1 ]; then
+    gate_usb_keyboard_to_hid="PASS"
+    print_row "usb_keyboard_to_hid" "PASS" "USB keyboard report converted to HID EV_KEY"
+elif [ "$(has 'usb\.keyboard\.detect.*ok=1')" -ge 1 ]; then
+    gate_usb_keyboard_to_hid="SKIP"
+    print_row "usb_keyboard_to_hid" "SKIP" "USB keyboard detected but no HID conversion event"
+else
+    gate_usb_keyboard_to_hid="SKIP"
+    print_row "usb_keyboard_to_hid" "SKIP" "USB keyboard proof lane not enabled"
+fi
+
+# ---- usb_keyboard_shell_recv ----
+# PASS if [usb.keyboard.shell.recv] with ok=1
+if [ "$(has 'usb\.keyboard\.shell\.recv.*ok=1')" -ge 1 ]; then
+    gate_usb_keyboard_shell_recv="PASS"
+    print_row "usb_keyboard_shell_recv" "PASS" "USB keyboard event received in silk-shell"
+elif [ "$(has 'usb\.keyboard\.detect.*ok=1')" -ge 1 ]; then
+    gate_usb_keyboard_shell_recv="SKIP"
+    print_row "usb_keyboard_shell_recv" "SKIP" "USB keyboard detected but event did not reach shell"
+else
+    gate_usb_keyboard_shell_recv="SKIP"
+    print_row "usb_keyboard_shell_recv" "SKIP" "USB keyboard proof lane not enabled"
+fi
+
+# ---- usb_keyboard_faults_zero ----
+# PASS if no #PF/#GP/panic when USB keyboard detection active
+usb_kbd_faults=$(has '#PF|#GP|panic|KERNEL PANIC|PAGE FAULT|GENERAL PROTECTION')
+if [ "$(has 'usb\.keyboard\.detect.*ok=1')" -ge 1 ] && [ "$usb_kbd_faults" -eq 0 ]; then
+    gate_usb_keyboard_faults_zero="PASS"
+    print_row "usb_keyboard_faults_zero" "PASS" "no faults during USB keyboard proof lane"
+elif [ "$usb_kbd_faults" -ge 1 ]; then
+    gate_usb_keyboard_faults_zero="FAIL"
+    print_row "usb_keyboard_faults_zero" "FAIL" "fault detected during USB keyboard proof lane"
+else
+    gate_usb_keyboard_faults_zero="SKIP"
+    print_row "usb_keyboard_faults_zero" "SKIP" "USB keyboard proof lane not active, no fault context"
+fi
+
 # ---- quil_save_open_nonblocking_startup ----
 # PASS if: main_loop.enter + input_ready + no_startup_block markers all present,
 # no faults, existing quil_save_open_sexobject is PASS or SKIP (not FAIL),
@@ -7211,6 +7296,12 @@ ALL_GATES=(
     "text_input_pipeline:$gate_text_input_pipeline"
     "live_usb_quil_create_save_reopen:$gate_live_usb_quil_create_save_reopen"
     "physical_keyboard_to_quil_text:$gate_physical_keyboard_to_quil_text"
+    "usb_keyboard_detect:$gate_usb_keyboard_detect"
+    "usb_keyboard_raw_report:$gate_usb_keyboard_raw_report"
+    "usb_keyboard_decode:$gate_usb_keyboard_decode"
+    "usb_keyboard_to_hid:$gate_usb_keyboard_to_hid"
+    "usb_keyboard_shell_recv:$gate_usb_keyboard_shell_recv"
+    "usb_keyboard_faults_zero:$gate_usb_keyboard_faults_zero"
     "quil_save_open_nonblocking_startup:$gate_quil_save_open_nonblocking_startup"
     "spindle_editor_finish:$gate_spindle_editor_finish"
     "storage_phasea:$gate_storage_phasea"

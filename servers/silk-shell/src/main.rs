@@ -23086,6 +23086,12 @@ pub extern "C" fn _start() -> ! {
                                     FOCUSED_SURFACE_ID
                                 );
                             }
+                            // [usb.keyboard.shell.recv] — one-shot proof marker
+                            static mut USB_KBD_SHELL_RECV_EMITTED: bool = false;
+                            if !USB_KBD_SHELL_RECV_EMITTED {
+                                USB_KBD_SHELL_RECV_EMITTED = true;
+                                serial_println!("[usb.keyboard.shell.recv] key={} ok=1", scancode);
+                            }
                         }
 
                         // ── Event-class dispatch ──
