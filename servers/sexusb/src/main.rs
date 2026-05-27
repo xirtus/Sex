@@ -723,8 +723,16 @@ pub extern "C" fn _start() -> ! {
                 // ERDP advance: lower dword first (QEMU nec-xhci requirement).
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            } else {
+                // Consume unexpected event to avoid ev_idx stall
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
             }
-            break;
         }
         sys_yield();
     }
@@ -793,8 +801,16 @@ pub extern "C" fn _start() -> ! {
                 // ERDP advance: lower dword first (QEMU nec-xhci requirement).
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            } else {
+                // Consume unexpected event to avoid ev_idx stall
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
             }
-            break;
         }
         sys_yield();
     }
@@ -1199,8 +1215,16 @@ pub extern "C" fn _start() -> ! {
                 // ERDP advance: lower dword first (QEMU nec-xhci requirement).
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            } else {
+                // Consume unexpected event to avoid ev_idx stall
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
             }
-            break;
         }
         sys_yield();
     }
@@ -1373,8 +1397,16 @@ pub extern "C" fn _start() -> ! {
                 // ERDP advance: lower dword first (QEMU nec-xhci requirement).
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            } else {
+                // Consume unexpected event to avoid ev_idx stall
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
             }
-            break;
         }
         sys_yield();
     }
@@ -1530,8 +1562,16 @@ pub extern "C" fn _start() -> ! {
                 // ERDP advance: lower dword first (QEMU nec-xhci requirement).
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            } else {
+                // Consume unexpected event to avoid ev_idx stall
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
             }
-            break;
         }
         sys_yield();
     }
@@ -1693,8 +1733,16 @@ pub extern "C" fn _start() -> ! {
                 // ERDP advance: lower dword first (QEMU nec-xhci requirement).
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            } else {
+                // Consume unexpected event to avoid ev_idx stall
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
             }
-            break;
         }
         sys_yield();
     }
@@ -1897,8 +1945,16 @@ pub extern "C" fn _start() -> ! {
                 // ERDP advance: lower dword first (QEMU nec-xhci requirement).
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            } else {
+                // Consume unexpected event to avoid ev_idx stall
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
             }
-            break;
         }
         sys_yield();
     }
@@ -2046,8 +2102,16 @@ pub extern "C" fn _start() -> ! {
                 // ERDP advance: lower dword first (QEMU nec-xhci requirement).
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            } else {
+                // Consume unexpected event to avoid ev_idx stall
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
             }
-            break;
         }
         sys_yield();
     }
@@ -2458,8 +2522,16 @@ pub extern "C" fn _start() -> ! {
                 let new_erdp = event_ring_phys + ev_idx * 16;
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            } else {
+                // Consume unexpected event to avoid ev_idx stall
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
             }
-            break;
         }
         sys_yield();
     }
@@ -2618,8 +2690,16 @@ pub extern "C" fn _start() -> ! {
                 let new_erdp = event_ring_phys + ev_idx * 16;
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            } else {
+                // Consume unexpected event to avoid ev_idx stall
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
             }
-            break;
         }
         sys_yield();
     }
@@ -2699,8 +2779,16 @@ pub extern "C" fn _start() -> ! {
                 let new_erdp = event_ring_phys + ev_idx * 16;
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                break;
+            } else {
+                // Consume unexpected event to avoid ev_idx stall
+                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                ev_idx += 1;
+                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                let new_erdp = event_ring_phys + ev_idx * 16;
+                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
             }
-            break;
         }
         sys_yield();
     }
@@ -2897,8 +2985,16 @@ pub extern "C" fn _start() -> ! {
                     if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                     mmio_write32(intr_base, XHCI_INTR_ERDP, (event_ring_phys + ev_idx * 16) as u32);
                     mmio_write32(intr_base, XHCI_INTR_ERDP + 4, ((event_ring_phys + ev_idx * 16) >> 32) as u32);
+                    break;
+                } else {
+                    // Consume unexpected event to avoid ev_idx stall
+                    trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                    ev_idx += 1;
+                    if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                    let new_erdp = event_ring_phys + ev_idx * 16;
+                    mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                    mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
                 }
-                break;
             }
             sys_yield();
         }
@@ -3019,8 +3115,16 @@ pub extern "C" fn _start() -> ! {
                     if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                     mmio_write32(intr_base, XHCI_INTR_ERDP, (event_ring_phys + ev_idx * 16) as u32);
                     mmio_write32(intr_base, XHCI_INTR_ERDP + 4, ((event_ring_phys + ev_idx * 16) >> 32) as u32);
+                    break;
+                } else {
+                    // Consume unexpected event to avoid ev_idx stall
+                    trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                    ev_idx += 1;
+                    if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                    let new_erdp = event_ring_phys + ev_idx * 16;
+                    mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                    mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
                 }
-                break;
             }
             sys_yield();
         }
@@ -3102,8 +3206,16 @@ pub extern "C" fn _start() -> ! {
                         let new_erdp = event_ring_phys + ev_idx * 16;
                         mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                         mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                        break;
+                    } else {
+                        // Consume unexpected event to avoid ev_idx stall
+                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        ev_idx += 1;
+                        if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                        let new_erdp = event_ring_phys + ev_idx * 16;
+                        mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                        mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
                     }
-                    break;
                 }
                 sys_yield();
             }
@@ -3167,8 +3279,16 @@ pub extern "C" fn _start() -> ! {
                         let new_erdp = event_ring_phys + ev_idx * 16;
                         mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                         mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                        break;
+                    } else {
+                        // Consume unexpected event to avoid ev_idx stall
+                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        ev_idx += 1;
+                        if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                        let new_erdp = event_ring_phys + ev_idx * 16;
+                        mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                        mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
                     }
-                    break;
                 }
                 sys_yield();
             }
@@ -3244,8 +3364,16 @@ pub extern "C" fn _start() -> ! {
                         let new_erdp = event_ring_phys + ev_idx * 16;
                         mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                         mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                        break;
+                    } else {
+                        // Consume unexpected event to avoid ev_idx stall
+                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        ev_idx += 1;
+                        if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                        let new_erdp = event_ring_phys + ev_idx * 16;
+                        mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                        mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
                     }
-                    break;
                 }
                 sys_yield();
             }
@@ -3334,8 +3462,16 @@ pub extern "C" fn _start() -> ! {
                         let new_erdp = event_ring_phys + ev_idx * 16;
                         mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                         mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                        break;
+                    } else {
+                        // Consume unexpected event to avoid ev_idx stall
+                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        ev_idx += 1;
+                        if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                        let new_erdp = event_ring_phys + ev_idx * 16;
+                        mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                        mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
                     }
-                    break;
                 }
                 sys_yield();
             }
@@ -3537,8 +3673,16 @@ pub extern "C" fn _start() -> ! {
                     let new_erdp = event_ring_phys + ev_idx * 16;
                     mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                     mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                    break;
+                } else {
+                    // Consume unexpected event to avoid ev_idx stall
+                    trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                    ev_idx += 1;
+                    if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                    let new_erdp = event_ring_phys + ev_idx * 16;
+                    mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                    mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
                 }
-                break;
             }
             sys_yield();
         }
