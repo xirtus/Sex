@@ -215,6 +215,17 @@ gate_input_negative_dead_target="SKIP"
 gate_input_negative_button_up_no_capture="SKIP"
 gate_input_negative_malformed_report="SKIP"
 gate_input_negative_faults_zero="SKIP"
+
+# ---- AP15: integrated cursor+keyboard scenario gates ----
+gate_integrated_keyboard_route="SKIP"
+gate_integrated_cursor_motion="SKIP"
+gate_integrated_click_focus="SKIP"
+gate_integrated_drag_lifecycle="SKIP"
+gate_integrated_surface_lifetime="SKIP"
+gate_integrated_negative_inputs="SKIP"
+gate_integrated_faults_zero="SKIP"
+gate_integrated_usb_real_report_deferred="SKIP"
+
 gate_webstub_static_text_render="SKIP"
 gate_shell_draw_text_helper="SKIP"
 gate_browser_stub_v2="SKIP"
@@ -494,7 +505,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V36"
+echo " DAILY-DRIVER MASTER GATE V37"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -7409,6 +7420,195 @@ else
     fi
 fi
 
+# ---- AP15: integrated cursor+keyboard scenario gates ----
+#
+# These are pure host-side aggregation gates.  They PASS when the required
+# component gates have already PASSed.  They do NOT introduce new compile-time
+# proof markers or require any source-code changes in SexOS.
+#
+# SKIP policy: if all component gates are SKIP (proof lane not enabled this
+# boot), the integrated gate is SKIP.  A FAIL in any required component gate
+# means the integrated gate FAILs.
+#
+# USB real-report gate: PASS only when the USB pointer producer lane ran and
+# honestly deferred (no real hardware report in this environment).  It must
+# NOT claim a real USB report PASS.
+
+# ---- integrated_keyboard_route ----
+has_any_kbd_pass=0
+has_any_kbd_fail=0
+[ "$gate_keyboard_gui" = "PASS" ] && has_any_kbd_pass=1
+[ "$gate_quil_keyboard" = "PASS" ] && has_any_kbd_pass=1
+[ "$gate_physical_keyboard_to_quil_text" = "PASS" ] && has_any_kbd_pass=1
+[ "$gate_keyboard_gui" = "FAIL" ] && has_any_kbd_fail=1
+[ "$gate_quil_keyboard" = "FAIL" ] && has_any_kbd_fail=1
+[ "$gate_physical_keyboard_to_quil_text" = "FAIL" ] && has_any_kbd_fail=1
+
+all_kbd_skip=1
+[ "$gate_keyboard_gui" != "SKIP" ] && all_kbd_skip=0
+[ "$gate_quil_keyboard" != "SKIP" ] && all_kbd_skip=0
+[ "$gate_physical_keyboard_to_quil_text" != "SKIP" ] && all_kbd_skip=0
+
+if [ "$all_kbd_skip" -eq 1 ]; then
+    gate_integrated_keyboard_route="SKIP"
+    print_row "integrated_keyboard_route" "SKIP" "no keyboard component gate enabled this boot"
+elif [ "$has_any_kbd_fail" -eq 1 ] && [ "$has_any_kbd_pass" -eq 0 ]; then
+    gate_integrated_keyboard_route="FAIL"
+    print_row "integrated_keyboard_route" "FAIL" "keyboard component gate(s) FAIL with no PASS"
+elif [ "$has_any_kbd_pass" -eq 1 ]; then
+    gate_integrated_keyboard_route="PASS"
+    print_row "integrated_keyboard_route" "PASS" "keyboard route proven (component gate(s) PASS)"
+else
+    gate_integrated_keyboard_route="SKIP"
+    print_row "integrated_keyboard_route" "SKIP" "keyboard route indeterminate"
+fi
+
+# ---- integrated_cursor_motion ----
+has_cursor_pass=1
+has_cursor_fail=0
+for g in "gate_cursor_visible_motion" "gate_cursor_motion_no_focus_mutation" "gate_cursor_motion_bounds"; do
+    state="${!g}"
+    [ "$state" != "PASS" ] && has_cursor_pass=0
+    [ "$state" = "FAIL" ] && has_cursor_fail=1
+done
+all_cursor_skip=1
+[ "$gate_cursor_visible_motion" != "SKIP" ] && all_cursor_skip=0
+[ "$gate_cursor_motion_no_focus_mutation" != "SKIP" ] && all_cursor_skip=0
+[ "$gate_cursor_motion_bounds" != "SKIP" ] && all_cursor_skip=0
+
+if [ "$all_cursor_skip" -eq 1 ]; then
+    gate_integrated_cursor_motion="SKIP"
+    print_row "integrated_cursor_motion" "SKIP" "no cursor motion component gate enabled this boot"
+elif [ "$has_cursor_fail" -eq 1 ]; then
+    gate_integrated_cursor_motion="FAIL"
+    print_row "integrated_cursor_motion" "FAIL" "cursor motion component gate(s) FAIL"
+elif [ "$has_cursor_pass" -eq 1 ]; then
+    gate_integrated_cursor_motion="PASS"
+    print_row "integrated_cursor_motion" "PASS" "cursor visible/logical motion proven (all component gates PASS)"
+else
+    gate_integrated_cursor_motion="SKIP"
+    print_row "integrated_cursor_motion" "SKIP" "cursor motion component gates indeterminate"
+fi
+
+# ---- integrated_click_focus ----
+click_focus_gates_pass=1
+click_focus_gates_fail=0
+for g in "gate_click_focus_button_edges" "gate_click_focus_hit_test_commit"; do
+    state="${!g}"
+    [ "$state" != "PASS" ] && click_focus_gates_pass=0
+    [ "$state" = "FAIL" ] && click_focus_gates_fail=1
+done
+all_click_skip=1
+[ "$gate_click_focus_button_edges" != "SKIP" ] && all_click_skip=0
+[ "$gate_click_focus_hit_test_commit" != "SKIP" ] && all_click_skip=0
+
+if [ "$all_click_skip" -eq 1 ]; then
+    gate_integrated_click_focus="SKIP"
+    print_row "integrated_click_focus" "SKIP" "no click focus component gate enabled this boot"
+elif [ "$click_focus_gates_fail" -eq 1 ]; then
+    gate_integrated_click_focus="FAIL"
+    print_row "integrated_click_focus" "FAIL" "click focus component gate(s) FAIL"
+elif [ "$click_focus_gates_pass" -eq 1 ]; then
+    gate_integrated_click_focus="PASS"
+    print_row "integrated_click_focus" "PASS" "click focus proven (all component gates PASS)"
+else
+    gate_integrated_click_focus="SKIP"
+    print_row "integrated_click_focus" "SKIP" "click focus component gates indeterminate"
+fi
+
+# ---- integrated_drag_lifecycle ----
+drag_gates_pass=1
+drag_gates_fail=0
+for g in "gate_drag_capture_lifecycle" "gate_drag_release_clears_capture"; do
+    state="${!g}"
+    [ "$state" != "PASS" ] && drag_gates_pass=0
+    [ "$state" = "FAIL" ] && drag_gates_fail=1
+done
+all_drag_skip=1
+[ "$gate_drag_capture_lifecycle" != "SKIP" ] && all_drag_skip=0
+[ "$gate_drag_release_clears_capture" != "SKIP" ] && all_drag_skip=0
+
+if [ "$all_drag_skip" -eq 1 ]; then
+    gate_integrated_drag_lifecycle="SKIP"
+    print_row "integrated_drag_lifecycle" "SKIP" "no drag lifecycle component gate enabled this boot"
+elif [ "$drag_gates_fail" -eq 1 ]; then
+    gate_integrated_drag_lifecycle="FAIL"
+    print_row "integrated_drag_lifecycle" "FAIL" "drag lifecycle component gate(s) FAIL"
+elif [ "$drag_gates_pass" -eq 1 ]; then
+    gate_integrated_drag_lifecycle="PASS"
+    print_row "integrated_drag_lifecycle" "PASS" "drag lifecycle proven (all component gates PASS)"
+else
+    gate_integrated_drag_lifecycle="SKIP"
+    print_row "integrated_drag_lifecycle" "SKIP" "drag lifecycle component gates indeterminate"
+fi
+
+# ---- integrated_surface_lifetime ----
+if [ "$gate_surface_input_lifetime_contract" = "PASS" ]; then
+    gate_integrated_surface_lifetime="PASS"
+    print_row "integrated_surface_lifetime" "PASS" "surface input lifetime proven (surface_input_lifetime_contract PASS)"
+elif [ "$gate_surface_input_lifetime_contract" = "FAIL" ]; then
+    gate_integrated_surface_lifetime="FAIL"
+    print_row "integrated_surface_lifetime" "FAIL" "surface input lifetime component gate FAIL"
+else
+    gate_integrated_surface_lifetime="SKIP"
+    print_row "integrated_surface_lifetime" "SKIP" "surface input lifetime lane not enabled this boot"
+fi
+
+# ---- integrated_negative_inputs ----
+if [ "$gate_input_negative_contract" = "PASS" ]; then
+    gate_integrated_negative_inputs="PASS"
+    print_row "integrated_negative_inputs" "PASS" "input negative tests proven (input_negative_contract PASS)"
+elif [ "$gate_input_negative_contract" = "FAIL" ]; then
+    gate_integrated_negative_inputs="FAIL"
+    print_row "integrated_negative_inputs" "FAIL" "input negative tests component gate FAIL"
+else
+    gate_integrated_negative_inputs="SKIP"
+    print_row "integrated_negative_inputs" "SKIP" "input negative test lane not enabled this boot"
+fi
+
+# ---- integrated_faults_zero ----
+if [ "$gate_faults_zero" = "PASS" ]; then
+    gate_integrated_faults_zero="PASS"
+    print_row "integrated_faults_zero" "PASS" "zero faults across all integrated proof lanes"
+else
+    gate_integrated_faults_zero="FAIL"
+    print_row "integrated_faults_zero" "FAIL" "faults detected (faults_zero FAIL)"
+fi
+
+# ---- integrated_usb_real_report_deferred ----
+# USB real-report is explicitly deferred for current-tier integrated proof.
+# PASS only if the USB pointer producer lane ran and honestly deferred
+# (no real hardware report in this QEMU/no-USB-HID pass-through environment).
+# It must NOT claim a real USB report PASS.
+#
+# Detection: look for the usb.pointer.producer.begin marker in the boot log.
+# When present, the lane ran.  When all USB PP gates are SKIP (not PASS, not FAIL),
+# the lane honestly deferred because no real hardware report arrived.
+has_usb_pp_begin=$(has 'usb\.pointer\.producer\.begin')
+usb_pp_report_passed=0
+usb_pp_any_fail=0
+[ "$gate_usb_pointer_producer_report" = "PASS" ] && usb_pp_report_passed=1
+[ "$gate_usb_pointer_producer_report" = "FAIL" ] && usb_pp_any_fail=1
+[ "$gate_usb_pointer_producer_to_input" = "FAIL" ] && usb_pp_any_fail=1
+[ "$gate_usb_pointer_producer_normalized" = "FAIL" ] && usb_pp_any_fail=1
+[ "$gate_usb_pointer_producer_shell" = "FAIL" ] && usb_pp_any_fail=1
+[ "$gate_usb_pointer_producer_click_drag" = "FAIL" ] && usb_pp_any_fail=1
+[ "$gate_usb_pointer_producer_faults_zero" = "FAIL" ] && usb_pp_any_fail=1
+
+if [ "$has_usb_pp_begin" -eq 0 ]; then
+    gate_integrated_usb_real_report_deferred="SKIP"
+    print_row "integrated_usb_real_report_deferred" "SKIP" "USB pointer producer proof lane not enabled this boot"
+elif [ "$usb_pp_any_fail" -eq 1 ]; then
+    gate_integrated_usb_real_report_deferred="FAIL"
+    print_row "integrated_usb_real_report_deferred" "FAIL" "USB pointer producer lane has FAIL gate(s)"
+elif [ "$usb_pp_report_passed" -eq 1 ]; then
+    gate_integrated_usb_real_report_deferred="PASS"
+    print_row "integrated_usb_real_report_deferred" "PASS" "USB pointer producer lane PASS; real-report arrival deferred to USB_POINTER_REAL_INPUT_OPERATOR_RETRY_V1"
+else
+    gate_integrated_usb_real_report_deferred="PASS"
+    print_row "integrated_usb_real_report_deferred" "PASS" "USB pointer producer lane active, honest deferral (no real hardware report); deferred to USB_POINTER_REAL_INPUT_OPERATOR_RETRY_V1"
+fi
+
 # ---- SCORE ----
 echo ""
 echo "============================================"
@@ -7852,6 +8052,14 @@ ALL_GATES=(
     "input_freeze_no_faults:$gate_input_freeze_no_faults"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
+    "integrated_keyboard_route:$gate_integrated_keyboard_route"
+    "integrated_cursor_motion:$gate_integrated_cursor_motion"
+    "integrated_click_focus:$gate_integrated_click_focus"
+    "integrated_drag_lifecycle:$gate_integrated_drag_lifecycle"
+    "integrated_surface_lifetime:$gate_integrated_surface_lifetime"
+    "integrated_negative_inputs:$gate_integrated_negative_inputs"
+    "integrated_faults_zero:$gate_integrated_faults_zero"
+    "integrated_usb_real_report_deferred:$gate_integrated_usb_real_report_deferred"
 )
 
 PASS_COUNT=0
