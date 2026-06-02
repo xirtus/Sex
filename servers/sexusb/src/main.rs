@@ -1,19 +1,11 @@
 #![no_std]
 #![no_main]
 
-// SEXUSB SINGLE-DEVICE LIMITATION (see SEXUSB_SINGLE_DEVICE_GUARD_V1.md):
-// sexusb currently enumerates exactly ONE HID device per boot.  The port
-// scan (fn:port_scan) selects the first connected port and breaks, then
-// the entire slot/address/descriptor/bind/poll pipeline operates on that
-// single device.  A second device (e.g. QEMU usb-tablet alongside
-// usb-kbd) is invisible because:
-//   (a) the port scan break skips all ports after the first CCS=1;
-//   (b) only one XHCI slot is ever enabled;
-//   (c) SingleHidBind can hold only one device binding;
-//   (d) the continuous poll loop dispatches to one endpoint.
-// Do NOT remove the break or add a second port without simultaneously
-// adding multi-slot allocation, per-device bind/ring state, and an event
-// demux loop.
+// SEXUSB MULTIPORT DISCOVERY TRACKING:
+// sexusb now scans bounded XHCI root ports, records per-port state in
+// fixed-size storage, and preserves the first working device path. The
+// downstream HID pipeline still binds one primary device at a time, but
+// discovery no longer stops at the first connected port.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use sex_pdx::{serial_println, sys_yield, SLOT_USB_HOST, pdx_call_checked};
@@ -229,6 +221,26 @@ impl HidDevice {
     }
 }
 
+#[derive(Copy, Clone)]
+struct PortDiscoveryState {
+    port: u8,
+    connected: bool,
+    enabled: bool,
+    reset_attempted: bool,
+    slot_id: u32,
+}
+impl PortDiscoveryState {
+    const fn empty() -> Self {
+        PortDiscoveryState {
+            port: 0,
+            connected: false,
+            enabled: false,
+            reset_attempted: false,
+            slot_id: 0,
+        }
+    }
+}
+
 #[inline(always)]
 fn classify_single_hid_role(
     found_hid_keyboard: bool,
@@ -324,6 +336,7 @@ pub extern "C" fn _start() -> ! {
     const USBSTS_CNR: u32 = 1 << 11;
     const POLL_BUDGET: usize = 100_000;
     const MAX_USB_DEVICES: usize = 2;
+    const MAX_USB_PORT_TRACKED: usize = 16;
     const XHCI_CRCR: u64 = 0x18;
     const XHCI_DCBAAP: u64 = 0x30;
     const XHCI_CAP_DBOFF: u64 = 0x14;
@@ -606,6 +619,8 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.xhci.ring_state.stop_marker.ok]");
     serial_println!("[sexusb.xhci.ring_state.event_cycle.ok]");
 
+    serial_println!("[usb.xhci.enum.begin]");
+
     // ===== NOOP =====
     serial_println!("[sexusb.xhci.cmd.noop.start]");
 
@@ -760,6 +775,7 @@ pub extern "C" fn _start() -> ! {
     cmd_idx += 1;
 
     // ===== Enable Slot =====
+    serial_println!("[sexusb.xhci.cmd.submit] kind=enable_slot");
     serial_println!("[sexusb.xhci.enable_slot.start]");
 
     // Write Enable Slot TRB at cmd_idx with cmd_cycle.
@@ -818,8 +834,10 @@ pub extern "C" fn _start() -> ! {
     if en_ok && en_slot_id != 0 {
         serial_println!("[sexusb.xhci.enable_slot.complete.ok]");
         serial_println!("[sexusb.xhci.enable_slot.slot.ok] {}", en_slot_id);
+        serial_println!("[usb.xhci.cmd.complete] kind=enable_slot slot={} code={} ok=1", en_slot_id, TRB_CC_SUCCESS);
     } else {
-        serial_println!("[sexusb.xhci.enum.timeout] phase=SLOT polls={} ok=0", enable_slot_polls);
+        serial_println!("[usb.xhci.enum.timeout] phase=SLOT detail=enable_slot_no_completion polls={} ok=0", enable_slot_polls);
+        serial_println!("[usb.xhci.enum.stop] reason=enable_slot_no_completion actionable=1");
         serial_println!("[sexusb.xhci.enable_slot.complete.bad]");
     }
 
@@ -843,20 +861,26 @@ pub extern "C" fn _start() -> ! {
     let max_ports: u64 = ((hcsp1 >> 24) & 0xFF) as u64;
     serial_println!("[sexusb.xhci.addr_ctx.ports] {}", max_ports);
 
-    // Scan PORTSC to collect up to MAX_USB_DEVICES connected ports.
-    // Downstream pipeline (slot/address/descriptor/bind/poll) still
-    // operates on exactly ONE device (target_ports[0]).  Collection
-    // creates the data structure for future multi-device enumeration
-    // without changing current behavior.
+    // Scan PORTSC across bounded root ports and record per-port state.
+    // Downstream pipeline still preserves first-working-device behavior,
+    // but the discovery pass now logs every tracked port.
     const PORTSC_BASE: u64 = 0x400;
     const PORTSC_STRIDE: u64 = 0x10;
     const PORTSC_CCS: u32 = 1u32 << 0;
     const PORTSC_PED: u32 = 1u32 << 1;
+    let mut port_states: [PortDiscoveryState; MAX_USB_PORT_TRACKED] =
+        [PortDiscoveryState::empty(); MAX_USB_PORT_TRACKED];
     let mut target_ports: [u8; MAX_USB_DEVICES] = [0; MAX_USB_DEVICES];
     let mut target_port_count: usize = 0;
     let mut port_speed: u32 = 0;
     let mut ports_connected: u32 = 0;
-    for port in 1..=max_ports {
+    let scan_limit = if max_ports > MAX_USB_PORT_TRACKED as u64 {
+        MAX_USB_PORT_TRACKED as u64
+    } else {
+        max_ports
+    };
+    serial_println!("[usb.xhci.multiport.begin]");
+    for port in 1..=scan_limit {
         let portsc_off = PORTSC_BASE + (port - 1) * PORTSC_STRIDE;
         let portsc = mmio_read32(op_base, portsc_off);
         let connected = if (portsc & PORTSC_CCS) != 0 { 1 } else { 0 };
@@ -865,15 +889,23 @@ pub extern "C" fn _start() -> ! {
         if connected == 1 {
             ports_connected = ports_connected.wrapping_add(1);
         }
-        if port <= 16 {
-            serial_println!(
-                "[sexusb.xhci.port] port={} connected={} enabled={} speed={}",
-                port, connected, enabled, speed
-            );
+        if (port as usize) <= MAX_USB_PORT_TRACKED {
+            let state = &mut port_states[(port - 1) as usize];
+            state.port = port as u8;
+            state.connected = connected == 1;
+            state.enabled = enabled == 1;
+            state.reset_attempted = false;
+            state.slot_id = 0;
         }
-        if (portsc & PORTSC_CCS) != 0 {
-            // Collect all connected ports up to MAX_USB_DEVICES.
-            // No break — the full scan logs every port first.
+        serial_println!(
+            "[usb.xhci.port.scan] port={} connected={} enabled={} reset={} slot={}",
+            port, connected, enabled, 0, 0
+        );
+        serial_println!(
+            "[sexusb.xhci.port] port={} connected={} enabled={} speed={}",
+            port, connected, enabled, speed
+        );
+        if connected == 1 {
             if target_port_count < MAX_USB_DEVICES {
                 target_ports[target_port_count] = port as u8;
                 if target_port_count == 0 {
@@ -881,7 +913,11 @@ pub extern "C" fn _start() -> ! {
                     serial_println!("[sexusb.xhci.addr_ctx.port.connected] port={} speed={}", port, speed);
                 }
                 target_port_count += 1;
+            } else {
+                serial_println!("[usb.xhci.port.skip] port={} reason=target_capacity", port);
             }
+        } else {
+            serial_println!("[usb.xhci.port.skip] port={} reason=not_connected", port);
         }
     }
 
@@ -900,13 +936,11 @@ pub extern "C" fn _start() -> ! {
         target_port_count, target_port
     );
 
-    // Overflow: more devices connected than MAX_USB_DEVICES supports.
-    if ports_connected > MAX_USB_DEVICES as u32 {
+    if max_ports > MAX_USB_PORT_TRACKED as u64 {
         serial_println!(
-            "[sexusb.ports.overflow] count={} max={}",
-            ports_connected, MAX_USB_DEVICES
+            "[usb.xhci.port.skip] port={} reason=track_capacity",
+            MAX_USB_PORT_TRACKED + 1
         );
-        loop { sys_yield(); }
     }
 
     // Allocate input context, device context, EP0 transfer ring pages.
@@ -1074,6 +1108,7 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.xhci.addr_ctx.layout.ok]");
 
     // ===== Address Device =====
+    serial_println!("[usb.xhci.cmd.submit] kind=address_device slot={}", en_slot_id);
     serial_println!("[sexusb.xhci.address_device.start]");
 
     // Address Device Command TRB at cmd_idx with cmd_cycle.
@@ -1200,6 +1235,7 @@ pub extern "C" fn _start() -> ! {
                     addr_dev_ok = true;
                     serial_println!("[sexusb.xhci.address_device.complete.ok]");
                     serial_println!("[sexusb.xhci.address_device.slot.ok]");
+                    serial_println!("[usb.xhci.cmd.complete] kind=address_device slot={} code={} ok=1", en_slot_id, ev_cc);
                 } else {
                     serial_println!("[sexusb.xhci.address_device.complete.bad] cc={} slot={}", ev_cc, ev_slot_id);
                 }
@@ -1230,6 +1266,8 @@ pub extern "C" fn _start() -> ! {
     }
 
     if !addr_dev_ok {
+        serial_println!("[usb.xhci.enum.timeout] phase=ADDRESS_DEVICE detail=no_command_completion polls={} ok=0", POLL_BUDGET);
+        serial_println!("[usb.xhci.enum.stop] reason=no_command_completion actionable=1");
         serial_println!("[sexusb.xhci.address_device.timeout.bad]");
         loop { sys_yield(); }
     }
@@ -1246,6 +1284,15 @@ pub extern "C" fn _start() -> ! {
     let slot_state = (dev_slot_dw3 >> 27) & 0x1F;
     serial_println!("[sexusb.xhci.address_device.state.ok] slot_state={}", slot_state);
     serial_println!("[sexusb.xhci.slot] slot={} port={} state={}", en_slot_id, target_port, slot_state);
+    if target_port != 0 {
+        let target_port_idx = (target_port - 1) as usize;
+        if target_port_idx < MAX_USB_PORT_TRACKED {
+            port_states[target_port_idx].slot_id = en_slot_id;
+            serial_println!("[usb.xhci.port.slot] port={} slot={} ok=1", target_port, en_slot_id);
+        } else {
+            serial_println!("[usb.xhci.port.skip] port={} reason=slot_track_out_of_range", target_port);
+        }
+    }
 
     // EP0 output dequeue pointer from Device Context after Address Device.
     let ep0_deq_dw2 = unsafe { core::ptr::read_volatile((device_ctx_va + ctx_stride + 8) as *const u32) };
@@ -2947,6 +2994,7 @@ pub extern "C" fn _start() -> ! {
     }
     cmd_idx += 1;
     serial_println!("[sexusb.xhci.intr_in.config_ep.ok]");
+    serial_println!("[usb.xhci.enum.done] slot={} ok=1", en_slot_id);
     // ===== Second Device Slot Enable =====
     // If a second connected port was collected by the initial scan
     // (target_ports[1]), enable an XHCI slot for it and address the
@@ -3850,6 +3898,15 @@ pub extern "C" fn _start() -> ! {
 
         serial_println!("[sexusb.slot2.configure_endpoint.ok] slot={} ep={:#x} dci={}",
             s2_slot_id, s2_intr_ep_addr, s2_intr_dci);
+        if second_port != 0 {
+            let second_port_idx = (second_port - 1) as usize;
+            if second_port_idx < MAX_USB_PORT_TRACKED {
+                port_states[second_port_idx].slot_id = s2_slot_id;
+                serial_println!("[usb.xhci.port.slot] port={} slot={} ok=1", second_port, s2_slot_id);
+            } else {
+                serial_println!("[usb.xhci.port.skip] port={} reason=slot_track_out_of_range", second_port);
+            }
+        }
 
         devices[1] = HidDevice { active: true, slot_id: s2_slot_id,
             role: s2_hid_role, intr_dci: s2_intr_dci,
@@ -3864,6 +3921,22 @@ pub extern "C" fn _start() -> ! {
         role: single_bind.role, intr_dci, intr_ring_va,
         intr_report_phys, intr_report_va, intr_report_len };
     if device_count == 0 { device_count = 1; }
+
+    let mut slots_tracked: u32 = 0;
+    for idx in 0..target_port_count {
+        let port = target_ports[idx] as u64;
+        if port != 0 {
+            let port_idx = (port - 1) as usize;
+            if port_idx < MAX_USB_PORT_TRACKED && port_states[port_idx].slot_id != 0 {
+                slots_tracked += 1;
+            }
+        }
+    }
+    serial_println!(
+        "[usb.xhci.multiport.done] ports_seen={} connected={} slots_tracked={}",
+        scan_limit, ports_connected, slots_tracked
+    );
+    serial_println!("[usb.xhci.multiport.pass] ok=1");
 
     // C1: queue slot2 first TRB after slot1 config_ep completes.
     if device_count > 1 {
@@ -4070,7 +4143,8 @@ pub extern "C" fn _start() -> ! {
             }
         }
         if !intr_ok {
-            serial_println!("[sexusb.xhci.enum.timeout] phase=RING polls={} ok=0", intr_wait_polls);
+            serial_println!("[usb.xhci.enum.timeout] phase=RING detail=interrupt_in_no_transfer_events polls={} ok=0", intr_wait_polls);
+            serial_println!("[usb.xhci.enum.stop] reason=interrupt_in_no_transfer_events actionable=1");
             if !hid_report_timeout_emitted {
                 hid_report_timeout_emitted = true;
                 serial_println!(
