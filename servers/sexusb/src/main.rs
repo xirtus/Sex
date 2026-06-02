@@ -2857,6 +2857,7 @@ pub extern "C" fn _start() -> ! {
     }
 
     let intr_dci: u32 = single_bind.ep_dci; // EP1 IN endpoint context index (single-slot path)
+    let intr_ep_id: u32 = (single_bind.ep_addr & 0x0F) as u32; // Doorbell/event endpoint ID
     const EP_TYPE_INTERRUPT_IN: u32 = 7;
     let intr_report_len: u32 = single_bind.max_packet as u32;
 
@@ -2935,6 +2936,21 @@ pub extern "C" fn _start() -> ! {
         core::ptr::write_volatile(in_ep_base.add(3), ep_dw3);
         core::ptr::write_volatile(in_ep_base.add(4), ep_dw4);
     }
+    serial_println!(
+        "[usb.hid.endpoint.config] slot={} ep={} type=interrupt_in max_packet={} interval={} ok=1",
+        single_bind.slot_id,
+        intr_ep_id,
+        intr_report_len,
+        single_bind.interval
+    );
+    serial_println!(
+        "[usb.hid.ep.identity] usb_ep=0x{:02x} ep_num={} dir_in={} dci={} doorbell_target={} ok=1",
+        single_bind.ep_addr,
+        intr_ep_id,
+        if (single_bind.ep_addr & 0x80) != 0 { 1 } else { 0 },
+        intr_dci,
+        intr_dci
+    );
 
     // Configure Endpoint command.
     let cfg_ep_d0 = (input_ctx_phys & 0xFFFF_FFFF) as u32;
@@ -4082,9 +4098,17 @@ pub extern "C" fn _start() -> ! {
     let mut hid_report_idle_emitted = false;
     let mut hid_report_timeout_emitted = false;
     let mut hid_report_total_polls: u64 = 0;
+    let mut boot_mouse_pass_emitted = false;
+    let mut intr_liveness_pass_emitted = false;
+    let mut hid_short_packet_begin_emitted = false;
+    let mut hid_short_packet_pass_emitted = false;
+    let mut hid_event_any_seen = false;
+    let mut hid_event_any_code: u32 = 0;
     let mut i: u32 = 0;
     let mut intr_prod: u64 = 0;
     let mut intr_pcs: u32 = 1;
+    serial_println!("[usb.hid.boot_mouse.begin]");
+    serial_println!("[usb.hid.intr_liveness.begin]");
     serial_println!("[sexusb.ready]");
     if !BOOTGRAPH_PROOF_SENT.swap(true, Ordering::Relaxed) {
         // Zero-motion, zero-button report: exercises the edge without input action.
@@ -4093,6 +4117,7 @@ pub extern "C" fn _start() -> ! {
         }
         let _ = send_report_to_sexinput(OP_USB_MOUSE_REPORT, 0, 0, 0);
     }
+    const HID_INTR_LIVENESS_BUDGET: usize = POLL_BUDGET * 4;
     loop {
         let mut skip_advance = false;
         // NOTE: report buffer is NOT cleared here. xHCI overwrites it on TRB
@@ -4112,14 +4137,21 @@ pub extern "C" fn _start() -> ! {
             intr_report_len,
             (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs, // IOC + current cycle
         );
-
+        serial_println!(
+            "[usb.hid.intr.trb.submit] slot={} dci={} len={} cycle={} ioc=1",
+            single_bind.slot_id,
+            intr_dci,
+            intr_report_len,
+            intr_pcs
+        );
         mmio_write32(db_base, single_bind.slot_id as u64 * 4, intr_dci);
 
         // Wait indefinitely: xHCI retries interrupt-IN until device sends data.
         let mut intr_ok = false;
         let mut intr_residue: u32 = 0;
+        let mut intr_actual: u32 = 0;
         let mut intr_wait_polls: usize = 0;
-        while intr_wait_polls < POLL_BUDGET {
+        while intr_wait_polls < HID_INTR_LIVENESS_BUDGET {
             intr_wait_polls += 1;
             hid_report_total_polls = hid_report_total_polls.wrapping_add(1);
             let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
@@ -4128,12 +4160,23 @@ pub extern "C" fn _start() -> ! {
                 continue;
             }
             let ev_type = (ev_d3 >> 10) & 0x3F;
+            let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
+            let cc = (ev_d2 >> 24) & 0xFF;
+            let slot = (ev_d3 >> 24) & 0xFF;
+            let ep = (ev_d3 >> 16) & 0x1F;
+            if !hid_event_any_seen {
+                serial_println!(
+                    "[usb.hid.event.any] type={} slot={} ep={} code={}",
+                    ev_type,
+                    slot,
+                    ep,
+                    cc
+                );
+                hid_event_any_seen = true;
+                hid_event_any_code = cc;
+            }
             if ev_type == TRB_TYPE_TRANSFER_EVENT {
-                let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
-                let cc = (ev_d2 >> 24) & 0xFF;
                 intr_residue = ev_d2 & 0xFFFFFF;
-                let slot = (ev_d3 >> 24) & 0xFF;
-                let ep = (ev_d3 >> 16) & 0x1F;
                 let mut matched_idx: i32 = -1;
                 for midx in 0..device_count {
                     let d = &devices[midx];
@@ -4142,20 +4185,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             }
         }
-        if !intr_ok {
-            serial_println!("[usb.xhci.enum.timeout] phase=RING detail=interrupt_in_no_transfer_events polls={} ok=0", intr_wait_polls);
-            serial_println!("[usb.xhci.enum.stop] reason=interrupt_in_no_transfer_events actionable=1");
-            if !hid_report_timeout_emitted {
-                hid_report_timeout_emitted = true;
-                serial_println!(
-                    "[sexusb.hid.report.timeout] polls={} ok=0",
-                    hid_report_total_polls
-                );
-            }
-            sys_yield();
-            continue;
-        }
-                if SEXUSB_SLOT2_OWNERSHIP_PROOF {
+	                if SEXUSB_SLOT2_OWNERSHIP_PROOF {
                     unsafe {
                         static mut OWN_BUDGET: u32 = 64;
                         static mut OWN_MISS_BUDGET: u32 = 8;
@@ -4194,7 +4224,63 @@ pub extern "C" fn _start() -> ! {
                 if (cc == TRB_CC_SUCCESS || cc == TRB_CC_SHORT_PACKET)
                     && slot == single_bind.slot_id && ep == intr_dci
                 {
+                    intr_actual = if intr_residue <= intr_report_len {
+                        intr_report_len - intr_residue
+                    } else {
+                        0
+                    };
+                    if cc == TRB_CC_SHORT_PACKET && !hid_short_packet_begin_emitted {
+                        hid_short_packet_begin_emitted = true;
+                        serial_println!("[usb.hid.short_packet.begin]");
+                    }
+                    serial_println!(
+                        "[usb.hid.transfer.decode] code={} requested={} residual={} actual={} slot={} dci={}",
+                        cc,
+                        intr_report_len,
+                        intr_residue,
+                        intr_actual,
+                        slot,
+                        intr_dci
+                    );
+                    if cc == TRB_CC_SHORT_PACKET {
+                        if intr_actual > 0 && intr_actual <= intr_report_len {
+                            serial_println!(
+                                "[usb.hid.short_packet.accept] actual={} ok=1",
+                                intr_actual
+                            );
+                        } else {
+                            serial_println!(
+                                "[usb.hid.short_packet.reject] reason=no_payload actual={} code={}",
+                                intr_actual,
+                                cc
+                            );
+                            serial_println!(
+                                "[usb.hid.short_packet.stop] actionable=1 reason=no_payload"
+                            );
+                            serial_println!(
+                                "[usb.hid.intr_liveness.stop] actionable=1 reason=no_payload"
+                            );
+                            serial_println!(
+                                "[usb.hid.boot_mouse.stop] actionable=1 reason=no_payload"
+                            );
+                            hid_report_timeout_emitted = true;
+                            trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                            ev_idx += 1;
+                            if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
+                            let new_erdp = event_ring_phys + ev_idx * 16;
+                            mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
+                            mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
+                            break;
+                        }
+                    }
                     intr_ok = true;
+                    serial_println!(
+                        "[usb.hid.intr.event] slot={} dci={} code={} actual={} ok=1",
+                        slot,
+                        intr_dci,
+                        cc,
+                        intr_actual
+                    );
                 } else {
                     serial_println!("[sexusb.xhci.intr_in.event.bad] cc={} slot={} ep={}", cc, slot, ep);
                     // C2C: bounded slot2 report classify (no forwarding).
@@ -4243,22 +4329,74 @@ pub extern "C" fn _start() -> ! {
         }
         if !intr_ok {
             // Wrong slot/endpoint on this event — skip report, re-arm.
+            if !hid_report_timeout_emitted {
+                let timeout_reason = if hid_event_any_seen {
+                    match hid_event_any_code {
+                        13 => "transfer_event_code_13",
+                        _ => "transfer_event_seen_but_unmatched",
+                    }
+                } else {
+                    "device_or_qemu_no_input_stimulus"
+                };
+                serial_println!(
+                    "[usb.hid.boot_mouse.timeout] reason={} slot={} ep={} polls={}",
+                    timeout_reason,
+                    single_bind.slot_id,
+                    intr_ep_id,
+                    intr_wait_polls
+                );
+                serial_println!(
+                    "[usb.hid.endpoint.diag] slot={} ep={} dci={} max_packet={} interval={}",
+                    single_bind.slot_id,
+                    intr_ep_id,
+                    intr_dci,
+                    intr_report_len,
+                    single_bind.interval
+                );
+                serial_println!(
+                    "[usb.hid.transfer_ring.diag] phys={:#x} prod={} cycle={} len={}",
+                    intr_ring_phys,
+                    intr_prod,
+                    intr_pcs,
+                    intr_report_len
+                );
+                serial_println!(
+                    "[usb.hid.event_ring.diag] ev_idx={} ev_dcs={} erdp={:#x}",
+                    ev_idx,
+                    ev_dcs,
+                    event_ring_phys + ev_idx * 16
+                );
+                serial_println!(
+                    "[usb.hid.boot_mouse.stop] actionable=1 reason={}",
+                    timeout_reason
+                );
+                hid_report_timeout_emitted = true;
+            }
             continue;
         }
         if intr_residue > intr_report_len {
             serial_println!("[sexusb.xhci.intr_in.residue.bad] residue={}", intr_residue);
             break;
         }
-        let intr_actual = intr_report_len - intr_residue;
         let report_ptr = intr_report_va as *const u8;
-        let b0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
-        let b1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
-        let b2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
-        let b3 = unsafe { core::ptr::read_volatile(report_ptr.add(3)) };
-        let b4 = unsafe { core::ptr::read_volatile(report_ptr.add(4)) };
-        let b5 = unsafe { core::ptr::read_volatile(report_ptr.add(5)) };
-        let b6 = unsafe { core::ptr::read_volatile(report_ptr.add(6)) };
-        let b7 = unsafe { core::ptr::read_volatile(report_ptr.add(7)) };
+        let mut report_bytes = [0u8; 8];
+        if intr_actual > 0 {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    report_ptr,
+                    report_bytes.as_mut_ptr(),
+                    intr_actual as usize,
+                );
+            }
+        }
+        let b0 = report_bytes[0];
+        let b1 = report_bytes[1];
+        let b2 = report_bytes[2];
+        let b3 = report_bytes[3];
+        let b4 = report_bytes[4];
+        let b5 = report_bytes[5];
+        let b6 = report_bytes[6];
+        let b7 = report_bytes[7];
         if !hid_report_nonzero_emitted || !hid_report_idle_emitted {
             let r0 = if intr_actual >= 1 { b0 } else { 0 };
             let r1 = if intr_actual >= 2 { b1 } else { 0 };
@@ -4277,6 +4415,26 @@ pub extern "C" fn _start() -> ! {
             } else if !hid_report_idle_emitted {
                 hid_report_idle_emitted = true;
                 serial_println!("[sexusb.hid.report.idle] len={} ok=1", intr_actual);
+            }
+        }
+        if !boot_mouse_pass_emitted {
+            boot_mouse_pass_emitted = true;
+            serial_println!(
+                "[usb.hid.boot_mouse.report] len={} b0={:02x} b1={:02x} b2={:02x} b3={:02x} ok=1",
+                intr_actual,
+                b0,
+                b1,
+                b2,
+                b3
+            );
+            serial_println!("[usb.hid.boot_mouse.pass] ok=1");
+            if !hid_short_packet_pass_emitted {
+                hid_short_packet_pass_emitted = true;
+                serial_println!("[usb.hid.short_packet.pass] ok=1");
+            }
+            if !intr_liveness_pass_emitted {
+                intr_liveness_pass_emitted = true;
+                serial_println!("[usb.hid.intr_liveness.pass] ok=1");
             }
         }
         let classify_kind = if is_keyboard_device {
@@ -4325,14 +4483,14 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             // === Keyboard decode path ===
-            let kb_b0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
-            let kb_b1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
-            let kb_b2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
-            let kb_b3 = unsafe { core::ptr::read_volatile(report_ptr.add(3)) };
-            let kb_b4 = unsafe { core::ptr::read_volatile(report_ptr.add(4)) };
-            let kb_b5 = unsafe { core::ptr::read_volatile(report_ptr.add(5)) };
-            let kb_b6 = unsafe { core::ptr::read_volatile(report_ptr.add(6)) };
-            let kb_b7 = unsafe { core::ptr::read_volatile(report_ptr.add(7)) };
+            let kb_b0 = report_bytes[0];
+            let kb_b1 = report_bytes[1];
+            let kb_b2 = report_bytes[2];
+            let kb_b3 = report_bytes[3];
+            let kb_b4 = report_bytes[4];
+            let kb_b5 = report_bytes[5];
+            let kb_b6 = report_bytes[6];
+            let kb_b7 = report_bytes[7];
             // [usb.keyboard.report.raw] — one-shot proof marker
             unsafe {
                 static mut KBD_RAW_PROOF_EMITTED: bool = false;
@@ -4442,8 +4600,8 @@ pub extern "C" fn _start() -> ! {
 
                                 if residue <= intr_report_len {
                                     let b_actual = intr_report_len - residue;
-                                    let b_b0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
-                                    let b_b2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
+                                    let b_b0 = report_bytes[0];
+                                    let b_b2 = report_bytes[2];
                                     serial_println!("[sexusb.kbd.poll.burst] b2=0x{:x} actual={}", b_b2, b_actual);
                                     let burst_key = b_b2 as u64;
                                     let _ = send_report_to_sexinput(
@@ -4501,11 +4659,11 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             // === Tablet decode path ===
-            let rb0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
-            let rb1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
-            let rb2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
-            let rb3 = unsafe { core::ptr::read_volatile(report_ptr.add(3)) };
-            let rb4 = unsafe { core::ptr::read_volatile(report_ptr.add(4)) };
+            let rb0 = report_bytes[0];
+            let rb1 = report_bytes[1];
+            let rb2 = report_bytes[2];
+            let rb3 = report_bytes[3];
+            let rb4 = report_bytes[4];
             let report_bytes = [rb0, rb1, rb2, rb3, rb4];
             // Dump raw bytes for first tablet report to verify data.
             if i == 0 && intr_actual >= 5 {
@@ -4655,10 +4813,10 @@ pub extern "C" fn _start() -> ! {
             // Same single-device limitation: reachable only when no keyboard
             // or tablet interface is found on the single enumerated device.
             // See SEXUSB_SINGLE_DEVICE_GUARD_V1.md.
-            let rb0 = unsafe { core::ptr::read_volatile(report_ptr.add(0)) };
-            let rb1 = unsafe { core::ptr::read_volatile(report_ptr.add(1)) };
-            let rb2 = unsafe { core::ptr::read_volatile(report_ptr.add(2)) };
-            let rb3 = unsafe { core::ptr::read_volatile(report_ptr.add(3)) };
+            let rb0 = report_bytes[0];
+            let rb1 = report_bytes[1];
+            let rb2 = report_bytes[2];
+            let rb3 = report_bytes[3];
             let report_bytes = [rb0, rb1, rb2, rb3];
             if let Some(decoded) = decode_boot_mouse_report(&report_bytes, intr_actual as usize) {
                 // AP13: one-shot raw report proof marker for boot mouse
