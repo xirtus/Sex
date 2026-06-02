@@ -172,6 +172,13 @@ fn normalize_pointer_report_v1(
     // Emit BTN events AFTER ABS/REL so cursor position is current
     // before silk-shell processes the button click.
     if changed != 0 { reason = "buttons"; }
+    if changed != 0 {
+        serial_println!(
+            "[usb.hid.pointer.button] buttons={} left={} ok=1",
+            buttons,
+            (buttons & 0x01 != 0) as u8
+        );
+    }
     let mut bit = 1u8;
     let mut btn_id = 1u8;
     while bit <= 0x04 {

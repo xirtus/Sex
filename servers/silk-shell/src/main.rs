@@ -8961,8 +8961,19 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
     let sy = normalize_abs_coord(raw_y, P.height);
     let last_x = LAST_VALID_ABS_X;
     let last_y = LAST_VALID_ABS_Y;
+    let buttons = (POINTER_BUTTONS & 0x07) as u8;
     let mut accepted = true;
     let mut reason = "ok";
+
+    static mut USB_TABLET_ABS_SCALE_BUDGET: u32 = 128;
+    let rem = &mut USB_TABLET_ABS_SCALE_BUDGET;
+    if *rem > 0 {
+        *rem -= 1;
+        serial_println!(
+            "[usb.tablet.abs.scale] x={} y={} screen_w={} screen_h={} ok=1",
+            sx, sy, P.width, P.height
+        );
+    }
 
     if !ABS_SEEN_VALID && sx <= 1 && sy <= 1 {
         accepted = false;
@@ -8993,6 +9004,17 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
     }
 
     if accepted {
+        if !ABS_SEEN_VALID {
+            serial_println!("[usb.tablet.abs.init] x={} y={} ok=1", sx, sy);
+        }
+        let delta_x = if last_x >= 0 { sx - last_x } else { 0 };
+        let delta_y = if last_y >= 0 { sy - last_y } else { 0 };
+        serial_println!(
+            "[usb.tablet.abs.delta] dx={} dy={} buttons={} ok=1",
+            delta_x,
+            delta_y,
+            buttons
+        );
         ABS_SEEN_VALID = true;
         LAST_VALID_ABS_X = sx;
         LAST_VALID_ABS_Y = sy;
@@ -9011,7 +9033,13 @@ unsafe fn process_abs_tablet(raw_x: i32, raw_y: i32) {
             }
         }
         send_cursor_checked(POINTER_X, POINTER_Y, "abs");
+        serial_println!("[usb.tablet.abs.pass] ok=1");
     } else {
+        if reason == "zero_init" || reason == "duplicate_sample" {
+            serial_println!(
+                "[usb.tablet.abs.no_motion] reason=raw_constant_or_no_stimulus actionable=1"
+            );
+        }
         serial_println!(
             "[shell.abs.reject] reason={} raw_x={} raw_y={} last_x={} last_y={}",
             reason, raw_x, raw_y, last_x, last_y
@@ -9475,6 +9503,12 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         }
         serial_println!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
             button, pressed);
+        if button == 1 {
+            serial_println!(
+                "[usb.hid.pointer.click.recv] left=1 value={} ok=1",
+                pressed as u8
+            );
+        }
         serial_println!(
             "[shell.pointer.button] btn={} down={} x={} y={}",
             button, pressed as u8, POINTER_X, POINTER_Y
