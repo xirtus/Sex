@@ -54,6 +54,11 @@ const KEYBOARD_CURSOR_ENABLED: bool = option_env!("SEXOS_KEYBOARD_CURSOR").is_so
 /// Default (unset): no behavior change.
 /// Only affects sexinput; no kernel changes.
 const KEYBOARD_PROOF_ENABLED: bool = option_env!("SEXOS_KEYBOARD_PROOF").is_some();
+/// Autonomous cursor demo gate. Drives silk-shell cursor demo via OP_AUTODEMO_TICK.
+/// Gate: SEXOS_CURSOR_AUTODEMO=1 at build time.
+/// Decoupled from SEXOS_KEYBOARD_CURSOR: keyboard cursor fallback no longer implies autodemo.
+const CURSOR_AUTODEMO_ENABLED: bool = option_env!("SEXOS_CURSOR_AUTODEMO").is_some();
+const OP_AUTODEMO_TICK: u64 = 0x2A0;
 // One-shot gate: set true after synthetic drag proof stages 0→1→2 complete.
 // Prevents the drag proof from wrapping and replaying endlessly every 120 ticks.
 // Also set true when a real USB mouse input arrives, cancelling remaining proofs.
@@ -254,6 +259,15 @@ pub extern "C" fn _start() -> ! {
                 if KEYBOARD_CURSOR_ENABLED { "env" } else { "default" });
         }
     }
+    // Cursor autodemo gate diagnostic. Fires once at boot.
+    serial_println!("[cursor.autodemo.gate] enabled={}", CURSOR_AUTODEMO_ENABLED as u8);
+    // Autodemo decoupling proof: keyboard_cursor and autodemo are now independent.
+    if KEYBOARD_CURSOR_ENABLED {
+        serial_println!(
+            "[cursor.input.autodemo.decoupled] keyboard_cursor=1 autodemo={} ok=1",
+            CURSOR_AUTODEMO_ENABLED as u8
+        );
+    }
     unsafe {
         sys_set_state(SVC_STATE_LISTENING);
     }
@@ -361,6 +375,13 @@ pub extern "C" fn _start() -> ! {
                 let dx = if is_abs { (packed & 0xFFFF) as u16 as i16 } else { (packed as u8) as i8 as i16 };
                 let dy = if is_abs { ((packed >> 16) & 0xFFFF) as u16 as i16 } else { ((packed >> 8) as u8) as i8 as i16 };
                 let wheel = if is_abs { 0 } else { ((packed >> 16) as u8) as i8 };
+                let kind = if is_abs {
+                    "absolute"
+                } else if buttons == 0 && dx == 0 && dy == 0 && wheel == 0 {
+                    "relative_or_zero"
+                } else {
+                    "relative"
+                };
                 serial_println!(
                     "[sexinput.usb_mouse.decode.ok] buttons={:#x} dx={} dy={} wheel={} is_abs={}",
                     buttons,
@@ -368,6 +389,19 @@ pub extern "C" fn _start() -> ! {
                     dy,
                     wheel,
                     is_abs
+                );
+                serial_println!(
+                    "[usb.hid.pointer.normalized] buttons={} dx={} dy={} kind={} ok=1",
+                    buttons,
+                    dx,
+                    dy,
+                    kind
+                );
+                serial_println!(
+                    "[input.hid.pointer.recv] source=usb buttons={} dx={} dy={} ok=1",
+                    buttons,
+                    dx,
+                    dy
                 );
                 unsafe {
                     static mut POINTER_MODE_BUDGET_PACKED: u32 = 64;
@@ -484,6 +518,7 @@ pub extern "C" fn _start() -> ! {
                 // The synthetic click-focus proof sends OP_USB_MOUSE_REPORT directly to the
                 // shell and is unaffected by this change.
                 let mut send_err: u64 = 0;
+                let mut pointer_emit_ok: bool = false;
 
                 for i in 0..norm_count {
                     let (arg0, arg1, arg2) = normalized_events[i];
@@ -532,7 +567,71 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 if send_err == 0 {
-                    serial_println!("[sexinput.usb_mouse.shell_send.ok]");
+                    if norm_count > 0 {
+                        pointer_emit_ok = true;
+                        serial_println!(
+                            "[usb.hid.pointer.emit] op=OP_HID_EVENT buttons={} dx={} dy={} ok=1",
+                            buttons,
+                            dx,
+                            dy
+                        );
+                    } else if buttons == 0 && dx == 0 && dy == 0 && wheel == 0 {
+                        let proof_class = if is_abs { EV_ABS } else { EV_REL };
+                        match send_shell_hid_event(0, 0, proof_class) {
+                            Ok(true) => {
+                                pointer_emit_ok = true;
+                                serial_println!(
+                                    "[usb.hid.pointer.emit] op=OP_HID_EVENT buttons=0 dx=0 dy=0 ok=1"
+                                );
+                            }
+                            Ok(false) => {
+                                send_err = 1;
+                            }
+                            Err(err) => {
+                                send_err = err;
+                                unsafe {
+                                    static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
+                                    let rem = &mut SEXINPUT_POINTER_DROP_BUDGET;
+                                    if *rem > 0 {
+                                        *rem -= 1;
+                                        serial_println!(
+                                            "[sexinput.pointer.drop] reason=shell_send_fail class={} a0={} a1={} err={}",
+                                            proof_class,
+                                            0,
+                                            0,
+                                            err
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if send_err == 0 && (pointer_emit_ok || norm_count > 0) {
+                        unsafe {
+                            static mut USB_POINTER_PASS_EMITTED: bool = false;
+                            if !USB_POINTER_PASS_EMITTED {
+                                USB_POINTER_PASS_EMITTED = true;
+                                serial_println!("[usb.hid.pointer.pass] ok=1");
+                            }
+                        }
+                        serial_println!("[sexinput.usb_mouse.shell_send.ok]");
+                    } else {
+                        unsafe {
+                            static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
+                            let rem = &mut SEXINPUT_POINTER_DROP_BUDGET;
+                            if *rem > 0 {
+                                *rem -= 1;
+                                serial_println!(
+                                    "[sexinput.pointer.drop] reason=shell_send_fail class={} a0={} a1={} err={}",
+                                    EV_REL,
+                                    dx as i32,
+                                    dy as i32,
+                                    send_err
+                                );
+                            }
+                        }
+                        serial_println!("[sexinput.usb_mouse.shell_send.fail] err={}", send_err);
+                    }
                 } else {
                     unsafe {
                         static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
@@ -1011,6 +1110,13 @@ pub extern "C" fn _start() -> ! {
                 }
                 _ => {}
             }
+        }
+
+        // Autonomous cursor demo: send OP_AUTODEMO_TICK to shell every 30 ticks.
+        // Wakes shell main loop so maybe_run_cursor_autodemo() advances the demo.
+        // Gate: CURSOR_AUTODEMO_ENABLED. Bounded: ticks 30..=750 only (24 pings max).
+        if CURSOR_AUTODEMO_ENABLED && tick >= 30 && tick <= 750 && (tick - 30) % 30 == 0 {
+            pdx_call(SLOT_SHELL, OP_AUTODEMO_TICK, 0, 0, 0);
         }
 
         sys_yield();

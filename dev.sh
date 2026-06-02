@@ -8,8 +8,10 @@ if [ -n "$SEXUSB_XHCI_TRACE" ]; then
     TRACE_ARGS="-trace usb_xhci_slot_address -trace usb_xhci_queue_event -trace usb_xhci_fetch_trb -trace usb_xhci_doorbell"
 fi
 
-# Select USB device: mouse (boot HID, default), tablet, tablet-display-sdl, or kbd.
-USB_DEV="${SEXUSB_QEMU_DEVICE:-mouse}"
+# Select USB device: tablet-display-sdl (default), mouse, tablet, or kbd.
+# tablet-display-sdl binds SDL mouse events directly to USB HID, enabling cursor input.
+# Override: SEXUSB_QEMU_DEVICE=mouse to revert to boot-HID-only probe mode.
+USB_DEV="${SEXUSB_QEMU_DEVICE:-tablet-display-sdl}"
 case "$USB_DEV" in
   mouse)  USB_DEVICE_ARG="-device usb-mouse,bus=xhci.0" ;;
   tablet) USB_DEVICE_ARG="-device usb-tablet,bus=xhci.0" ;;
@@ -136,7 +138,7 @@ case "$CMD" in
     echo "usage: ./dev.sh [run|run-nographic]"
     echo ""
     echo "Environment variables:"
-    echo "  SEXUSB_QEMU_DEVICE=mouse|tablet|tablet-display-sdl|kbd  (default: mouse)"
+    echo "  SEXUSB_QEMU_DEVICE=mouse|tablet|tablet-display-sdl|kbd  (default: tablet-display-sdl)"
     echo "  SEXOS_QEMU_DISPLAY=sdl|sdl-grab|gtk|gtk-grab|none   (default: sdl)"
     echo "  SEXOS_QEMU_NODEFAULTS=1          disable PS/2 defaults"
     echo "  SEXOS_QEMU_I8042=off              disable i8042/PS2 controller (USB HID input)"

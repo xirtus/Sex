@@ -222,6 +222,24 @@ const KEYBOARD_GUI_BROAD_PROOF_ENABLED: bool =
     option_env!("SEXOS_KEYBOARD_GUI_BROAD_PROOF").is_some();
 static mut KEYBOARD_GUI_BROAD_PROOF_STAGE: u8 = 0;
 static mut KEYBOARD_GUI_BROAD_PROOF_DONE: bool = false;
+/// Debug-only keyboard cursor fallback gate.
+/// NOT a USB success path. Arrow keys move cursor, Space/Enter = click if pointer ready.
+/// Active only when SEXOS_KEYBOARD_CURSOR=1 at build time.
+const KEYBOARD_CURSOR_DEBUG_ENABLED: bool =
+    option_env!("SEXOS_KEYBOARD_CURSOR").is_some();
+static mut KEYBOARD_CURSOR_DEBUG_BEGUN: bool = false;
+static mut KEYBOARD_CURSOR_DEBUG_DONE: bool = false;
+static mut KEYBOARD_CURSOR_MOVE_BUDGET: u32 = 64;
+/// Debug-only autonomous cursor demo gate.
+/// Drive: sexinput sends OP_AUTODEMO_TICK every 30 ticks.
+/// Shell moves cursor right→down→left→up, 96px steps, 24 moves total.
+/// Gate: SEXOS_CURSOR_AUTODEMO=1 at build time.
+/// Decoupled from SEXOS_KEYBOARD_CURSOR: keyboard cursor fallback no longer implies autodemo.
+/// NOT USB success. Zero behavior change when flags absent.
+const CURSOR_AUTODEMO_ENABLED: bool =
+    option_env!("SEXOS_CURSOR_AUTODEMO").is_some();
+/// OP code: sexinput → silk-shell autonomous cursor demo tick.
+pub const OP_AUTODEMO_TICK: u64 = 0x2A0;
 /// Shell interaction state contract proof gate.
 /// Default OFF. Emits bounded contract markers on existing interaction paths.
 const SHELL_INTERACTION_CONTRACT_PROOF_ENABLED: bool =
@@ -9082,6 +9100,66 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     _ => {}
                 }
                 return;
+            }
+
+            // ── Debug keyboard cursor fallback ──────────────────────────────
+            // SEXOS_KEYBOARD_CURSOR=1 only. NOT USB success — debug only.
+            // Arrow keys move the OS cursor. Space(0x39)/Enter(0x1C) = click
+            // if pointer is already ready (ABS_SEEN_VALID || POINTER_USB_STATE_INIT).
+            if KEYBOARD_CURSOR_DEBUG_ENABLED {
+                static mut KEYTRACE_BUDGET: u32 = 64;
+                if KEYTRACE_BUDGET > 0 {
+                    KEYTRACE_BUDGET -= 1;
+                    serial_println!(
+                        "[keyboard.cursor.debug.keytrace] key={:#04x} pressed={} ok=1",
+                        scancode, value
+                    );
+                }
+                const CURSOR_STEP: i32 = 32;
+                match scancode {
+                    // Arrows: 0x4B=Left 0x4D=Right 0x48=Up 0x50=Down
+                    // WASD:   0x1E=A   0x20=D    0x11=W   0x1F=S
+                    0x4B | 0x4D | 0x48 | 0x50 | 0x11 | 0x1E | 0x1F | 0x20 => {
+                        if !KEYBOARD_CURSOR_DEBUG_BEGUN {
+                            serial_println!("[keyboard.cursor.debug.begin] ok=1");
+                            KEYBOARD_CURSOR_DEBUG_BEGUN = true;
+                        }
+                        let old_x = POINTER_X;
+                        let old_y = POINTER_Y;
+                        let (dx, dy): (i32, i32) = match scancode {
+                            0x4B | 0x1E => (-CURSOR_STEP, 0), // Left / A
+                            0x4D | 0x20 => (CURSOR_STEP, 0),  // Right / D
+                            0x48 | 0x11 => (0, -CURSOR_STEP), // Up / W
+                            0x50 | 0x1F => (0, CURSOR_STEP),  // Down / S
+                            _ => (0, 0),
+                        };
+                        send_cursor_checked(old_x + dx, old_y + dy, "keyboard_cursor_debug");
+                        if KEYBOARD_CURSOR_MOVE_BUDGET > 0 {
+                            KEYBOARD_CURSOR_MOVE_BUDGET -= 1;
+                            serial_println!(
+                                "[keyboard.cursor.debug.move] key={:#04x} dx={} dy={} old_x={} old_y={} new_x={} new_y={} ok=1",
+                                scancode, dx, dy, old_x, old_y, POINTER_X, POINTER_Y
+                            );
+                        }
+                        if !KEYBOARD_CURSOR_DEBUG_DONE {
+                            serial_println!("[keyboard.cursor.debug.done] ok=1");
+                            KEYBOARD_CURSOR_DEBUG_DONE = true;
+                        }
+                        return;
+                    }
+                    0x39 | 0x1C => {
+                        let pointer_ready = ABS_SEEN_VALID || POINTER_USB_STATE_INIT;
+                        if pointer_ready {
+                            handle_hid_event(EV_BTN, 1, 1);
+                            handle_hid_event(EV_BTN, 1, 0);
+                            serial_println!("[keyboard.cursor.debug.click] key={:#04x} button=1 ok=1", scancode);
+                        } else {
+                            serial_println!("[keyboard.cursor.debug.click] key={:#04x} button=1 ok=0 reason=pointer_not_ready", scancode);
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
             }
 
             // ── Spindle text key passthrough in drain path ──────────────────
@@ -19800,6 +19878,54 @@ unsafe fn maybe_run_input_negative_proof() {
     serial_println!("[input.negative.synthetic.done] ok=1");
 }
 
+/// Autonomous cursor demo. Moves cursor right→down→left→up in 96px steps.
+/// 24 moves total. Called from OP_AUTODEMO_TICK handler in main dispatch.
+/// Gate: CURSOR_AUTODEMO_ENABLED (SEXOS_CURSOR_AUTODEMO=1 or SEXOS_KEYBOARD_CURSOR=1).
+unsafe fn maybe_run_cursor_autodemo() {
+    if !CURSOR_AUTODEMO_ENABLED { return; }
+    static mut AUTODEMO_BEGUN: bool = false;
+    static mut AUTODEMO_DONE: bool = false;
+    static mut AUTODEMO_PHASE: u8 = 0;
+    static mut AUTODEMO_MOVES: u8 = 0;
+
+    if AUTODEMO_DONE { return; }
+
+    // Ensure cursor is at a known position before first move.
+    if POINTER_X == 0 && POINTER_Y == 0 {
+        POINTER_X = P.width / 2;
+        POINTER_Y = P.height / 2;
+    }
+
+    if !AUTODEMO_BEGUN {
+        serial_println!("[cursor.autodemo.debug.begin] ok=1");
+        AUTODEMO_BEGUN = true;
+    }
+
+    const STEP: i32 = 96;
+    let (dx, dy): (i32, i32) = match AUTODEMO_PHASE % 4 {
+        0 => (STEP, 0),   // right
+        1 => (0, STEP),   // down
+        2 => (-STEP, 0),  // left
+        _ => (0, -STEP),  // up
+    };
+
+    let old_x = POINTER_X;
+    let old_y = POINTER_Y;
+    send_cursor_checked(old_x + dx, old_y + dy, "cursor_autodemo_debug");
+
+    serial_println!(
+        "[cursor.autodemo.debug.move] phase={} old_x={} old_y={} new_x={} new_y={} ok=1",
+        AUTODEMO_PHASE % 4, old_x, old_y, POINTER_X, POINTER_Y
+    );
+
+    AUTODEMO_PHASE = AUTODEMO_PHASE.wrapping_add(1);
+    AUTODEMO_MOVES += 1;
+    if AUTODEMO_MOVES >= 24 {
+        serial_println!("[cursor.autodemo.debug.done] moves=24 ok=1");
+        AUTODEMO_DONE = true;
+    }
+}
+
 // ── Frame Tab Strip Helpers ─────────────────────────────────────────────────
 
 /// Returns the number of valid tabs for the given frame.
@@ -22355,6 +22481,9 @@ pub extern "C" fn _start() -> ! {
                 }
                 if req.type_id == OP_HID_EVENT {
                     handle_hid_event(req.arg2, req.arg0, req.arg1);
+                } else if req.type_id == OP_AUTODEMO_TICK {
+                    maybe_run_cursor_autodemo();
+                    pdx_reply(req.caller_pd, 0);
                 } else if req.type_id == 0x1 {
                     // Reply from async service (e.g. sexstore GET).
                     // Handled by the main match block later; just ack here.
@@ -22865,6 +22994,10 @@ pub extern "C" fn _start() -> ! {
 
         let msg = pdx_listen_raw(0);
         match msg.type_id {
+                OP_AUTODEMO_TICK => {
+                    unsafe { maybe_run_cursor_autodemo(); }
+                    pdx_reply(msg.caller_pd, 0);
+                }
                 OP_SHELL_BIND_BUFFER => {
                     let buffer_handle = msg.arg0;
                     serial_println!("[silk-shell] Binding buffer {:#x} to sexdrive window", buffer_handle);
@@ -23123,6 +23256,56 @@ pub extern "C" fn _start() -> ! {
 
                         // ── Event-class dispatch ──
                         if event_class == EV_KEY && value == 1 {
+                            // ── Debug keyboard cursor fallback (main dispatch path) ──────────
+                            // SEXOS_KEYBOARD_CURSOR=1 only. Fires keytrace for every key-down.
+                            // WASD/arrow keys also move the cursor directly from this path.
+                            // Runs BEFORE focus routing so cursor moves regardless of focused surface.
+                            // Does NOT consume the key — normal routing continues after.
+                            // This mirrors the handle_hid_event cursor debug for live PS/2 input.
+                            unsafe {
+                                if KEYBOARD_CURSOR_DEBUG_ENABLED {
+                                    static mut MAIN_KEYTRACE_BUDGET: u32 = 64;
+                                    if MAIN_KEYTRACE_BUDGET > 0 {
+                                        MAIN_KEYTRACE_BUDGET -= 1;
+                                        serial_println!(
+                                            "[keyboard.cursor.debug.keytrace] key={:#04x} pressed=1 ok=1",
+                                            scancode
+                                        );
+                                    }
+                                    const KBD_CURSOR_STEP: i32 = 32;
+                                    match scancode {
+                                        0x4B | 0x4D | 0x48 | 0x50 | 0x11 | 0x1E | 0x1F | 0x20 => {
+                                            if !KEYBOARD_CURSOR_DEBUG_BEGUN {
+                                                serial_println!("[keyboard.cursor.debug.begin] ok=1");
+                                                KEYBOARD_CURSOR_DEBUG_BEGUN = true;
+                                            }
+                                            let old_x = POINTER_X;
+                                            let old_y = POINTER_Y;
+                                            let (kdx, kdy): (i32, i32) = match scancode {
+                                                0x4B | 0x1E => (-KBD_CURSOR_STEP, 0),
+                                                0x4D | 0x20 => (KBD_CURSOR_STEP, 0),
+                                                0x48 | 0x11 => (0, -KBD_CURSOR_STEP),
+                                                0x50 | 0x1F => (0, KBD_CURSOR_STEP),
+                                                _ => (0, 0),
+                                            };
+                                            send_cursor_checked(old_x + kdx, old_y + kdy, "keyboard_cursor_debug");
+                                            if KEYBOARD_CURSOR_MOVE_BUDGET > 0 {
+                                                KEYBOARD_CURSOR_MOVE_BUDGET -= 1;
+                                                serial_println!(
+                                                    "[keyboard.cursor.debug.move] key={:#04x} dx={} dy={} old_x={} old_y={} new_x={} new_y={} ok=1",
+                                                    scancode, kdx, kdy, old_x, old_y, POINTER_X, POINTER_Y
+                                                );
+                                            }
+                                            if !KEYBOARD_CURSOR_DEBUG_DONE {
+                                                serial_println!("[keyboard.cursor.debug.done] ok=1");
+                                                KEYBOARD_CURSOR_DEBUG_DONE = true;
+                                            }
+                                            mutated = true;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
                             let reserved_ui_action = scancode_to_action(scancode);
                             let reserved_ui_key = reserved_ui_action.is_some();
                             // Track C2: key routing proof
