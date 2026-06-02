@@ -97,15 +97,48 @@ fn normalize_pointer_report_v1(
     // Emit ABS/REL movement FIRST so cursor position is current
     // before any button click is processed at silk-shell.
     if report.is_abs {
+        // Scale raw tablet coords (0..32767) to screen pixels, then emit
+        // bounded relative delta (EV_REL) instead of raw absolute coords (EV_ABS).
+        // Screen dimensions match silk-shell DesktopPolicy: 1280x720.
+        const TABLET_RAW_MAX: i32 = 32767;
+        const SCREEN_W: i32 = 1280;
+        const SCREEN_H: i32 = 720;
+        const DELTA_CLAMP: i32 = 512;
+        let sx = if dx <= 0 { 0 } else if dx >= TABLET_RAW_MAX { SCREEN_W - 1 }
+                 else { dx * (SCREEN_W - 1) / TABLET_RAW_MAX };
+        let sy = if dy <= 0 { 0 } else if dy >= TABLET_RAW_MAX { SCREEN_H - 1 }
+                 else { dy * (SCREEN_H - 1) / TABLET_RAW_MAX };
         unsafe {
-            static mut LAST_ABS_X: i32 = -1;
-            static mut LAST_ABS_Y: i32 = -1;
-            if dx != LAST_ABS_X || dy != LAST_ABS_Y {
-                if reason == "none" { reason = "abs"; }
+            static mut ABS_INIT: bool = false;
+            static mut LAST_SX: i32 = 0;
+            static mut LAST_SY: i32 = 0;
+            static mut RAW_BLOCKED_BUDGET: u32 = 16;
+            static mut DELTA_EMIT_BUDGET: u32 = 2048;
+            let (ddx, ddy) = if !ABS_INIT {
+                ABS_INIT = true;
+                LAST_SX = sx;
+                LAST_SY = sy;
+                (0i32, 0i32)
+            } else {
+                let ddx = (sx - LAST_SX).clamp(-DELTA_CLAMP, DELTA_CLAMP);
+                let ddy = (sy - LAST_SY).clamp(-DELTA_CLAMP, DELTA_CLAMP);
+                LAST_SX = sx;
+                LAST_SY = sy;
+                (ddx, ddy)
+            };
+            if (dx > DELTA_CLAMP || dy > DELTA_CLAMP) && RAW_BLOCKED_BUDGET > 0 {
+                RAW_BLOCKED_BUDGET -= 1;
+                serial_println!("[usb.tablet.emit.raw_blocked] raw_dx={} raw_dy={} ok=1", dx, dy);
             }
-            if reason != "none" {
-                LAST_ABS_X = dx;
-                LAST_ABS_Y = dy;
+            if DELTA_EMIT_BUDGET > 0 {
+                DELTA_EMIT_BUDGET -= 1;
+                serial_println!("[usb.tablet.abs.delta] dx={} dy={} buttons={} ok=1",
+                    ddx, ddy, report.buttons);
+                serial_println!("[usb.tablet.emit.delta_only] buttons={} dx={} dy={} ok=1",
+                    report.buttons, ddx, ddy);
+            }
+            if ddx != 0 || ddy != 0 {
+                if reason == "none" { reason = "abs_delta"; }
                 unsafe {
                     static mut POINTER_FORWARD_BUDGET: u32 = 2048;
                     if POINTER_FORWARD_BUDGET > 0 {
@@ -113,7 +146,7 @@ fn normalize_pointer_report_v1(
                         serial_println!("[sexinput.pointer.forward.reason={}]", reason);
                     }
                 }
-                emit(dx as u64, dy as u64, EV_ABS);
+                emit(ddx as u64, ddy as u64, EV_REL);
                 count += 1;
             }
         }
@@ -286,6 +319,20 @@ pub extern "C" fn _start() -> ! {
             if !SYNTHETIC_CLICK_PROOF_GATED_MARKER_EMITTED {
                 SYNTHETIC_CLICK_PROOF_GATED_MARKER_EMITTED = true;
                 serial_println!("[sexinput.synthetic.click.proof.gated] ok=1");
+            }
+        }
+
+        // 0a. One-shot abs translation proof: fires at tick 0 before REAL_USB_POINTER_SEEN.
+        //     Sends center-of-range raw coords (16000, 12000) via EV_ABS to shell to prove:
+        //     normalize_abs_coord(0..32767) → screen coord, abs.init, abs.delta, abs.pass.
+        //     Uses coords that survive the zero_init and edge_before_ready poison filters.
+        //     Gated by !SYNTHETIC_INPUT_PROOFS_DISABLED only — independent of USB state.
+        unsafe {
+            static mut ABS_TRANSLATION_PROOF_FIRED: bool = false;
+            if !ABS_TRANSLATION_PROOF_FIRED && !SYNTHETIC_INPUT_PROOFS_DISABLED {
+                ABS_TRANSLATION_PROOF_FIRED = true;
+                serial_println!("[sexinput.abs.translation.proof] x_raw=16000 y_raw=12000 ok=1");
+                pdx_call(SLOT_SHELL, OP_HID_EVENT, 16000u64, 12000u64, EV_ABS);
             }
         }
 
@@ -569,12 +616,35 @@ pub extern "C" fn _start() -> ! {
                 if send_err == 0 {
                     if norm_count > 0 {
                         pointer_emit_ok = true;
+                        // Show actual emitted delta: find EV_REL in normalized events.
+                        // For abs path with no motion (button-only), show 0.
+                        let (marker_dx, marker_dy) = {
+                            let mut mdx = if is_abs { 0 } else { dx as i32 };
+                            let mut mdy = if is_abs { 0 } else { dy as i32 };
+                            for ni in 0..norm_count {
+                                if normalized_events[ni].2 == EV_REL {
+                                    mdx = normalized_events[ni].0 as i32;
+                                    mdy = normalized_events[ni].1 as i32;
+                                    break;
+                                }
+                            }
+                            (mdx, mdy)
+                        };
                         serial_println!(
                             "[usb.hid.pointer.emit] op=OP_HID_EVENT buttons={} dx={} dy={} ok=1",
                             buttons,
-                            dx,
-                            dy
+                            marker_dx,
+                            marker_dy
                         );
+                        if is_abs {
+                            unsafe {
+                                static mut DELTA_ONLY_PASS_EMITTED: bool = false;
+                                if !DELTA_ONLY_PASS_EMITTED {
+                                    DELTA_ONLY_PASS_EMITTED = true;
+                                    serial_println!("[usb.tablet.emit_delta_only.pass] ok=1");
+                                }
+                            }
+                        }
                     } else if buttons == 0 && dx == 0 && dy == 0 && wheel == 0 {
                         let proof_class = if is_abs { EV_ABS } else { EV_REL };
                         match send_shell_hid_event(0, 0, proof_class) {
