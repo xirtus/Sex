@@ -103,7 +103,7 @@ fn normalize_pointer_report_v1(
         const TABLET_RAW_MAX: i32 = 32767;
         const SCREEN_W: i32 = 1280;
         const SCREEN_H: i32 = 720;
-        const DELTA_CLAMP: i32 = 512;
+        const DELTA_CLAMP: i32 = 64;
         let sx = if dx <= 0 { 0 } else if dx >= TABLET_RAW_MAX { SCREEN_W - 1 }
                  else { dx * (SCREEN_W - 1) / TABLET_RAW_MAX };
         let sy = if dy <= 0 { 0 } else if dy >= TABLET_RAW_MAX { SCREEN_H - 1 }
@@ -132,6 +132,14 @@ fn normalize_pointer_report_v1(
             }
             if DELTA_EMIT_BUDGET > 0 {
                 DELTA_EMIT_BUDGET -= 1;
+                serial_println!(
+                    "[usb.tablet.delta.clamp] limit={} dx_in={} dy_in={} dx_out={} dy_out={} ok=1",
+                    DELTA_CLAMP,
+                    dx,
+                    dy,
+                    ddx,
+                    ddy
+                );
                 serial_println!("[usb.tablet.abs.delta] dx={} dy={} buttons={} ok=1",
                     ddx, ddy, report.buttons);
                 serial_println!("[usb.tablet.emit.delta_only] buttons={} dx={} dy={} ok=1",
@@ -144,6 +152,19 @@ fn normalize_pointer_report_v1(
                     if POINTER_FORWARD_BUDGET > 0 {
                         POINTER_FORWARD_BUDGET -= 1;
                         serial_println!("[sexinput.pointer.forward.reason={}]", reason);
+                    }
+                }
+                unsafe {
+                    static mut USB_POINTER_PRODUCER_EVREL_BUDGET: u32 = 64;
+                    let rem = &mut USB_POINTER_PRODUCER_EVREL_BUDGET;
+                    if *rem > 0 {
+                        *rem -= 1;
+                        serial_println!(
+                            "[usb.pointer.producer.evrel] dx={} dy={} buttons={} ok=1",
+                            ddx,
+                            ddy,
+                            report.buttons
+                        );
                     }
                 }
                 emit(ddx as u64, ddy as u64, EV_REL);
@@ -604,22 +625,17 @@ pub extern "C" fn _start() -> ! {
                             }
                         }
                     }
-                }
-                if norm_count == 0 {
-                    unsafe {
-                        static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
-                        let rem = &mut SEXINPUT_POINTER_DROP_BUDGET;
-                        if *rem > 0 {
-                            *rem -= 1;
-                            serial_println!(
-                                "[sexinput.pointer.drop] reason=idle_or_no_edges class={} a0={} a1={}",
-                                EV_REL,
-                                dx as i32,
-                                dy as i32
-                            );
+                    }
+                    if norm_count == 0 {
+                        unsafe {
+                            static mut USB_POINTER_ZERO_DROP_BUDGET: u32 = 64;
+                            let rem = &mut USB_POINTER_ZERO_DROP_BUDGET;
+                            if *rem > 0 {
+                                *rem -= 1;
+                                serial_println!("[usb.pointer.zero_drop] buttons={} ok=1", buttons);
+                            }
                         }
                     }
-                }
                 if send_err == 0 {
                     if norm_count > 0 {
                         pointer_emit_ok = true;
@@ -649,36 +665,6 @@ pub extern "C" fn _start() -> ! {
                                 if !DELTA_ONLY_PASS_EMITTED {
                                     DELTA_ONLY_PASS_EMITTED = true;
                                     serial_println!("[usb.tablet.emit_delta_only.pass] ok=1");
-                                }
-                            }
-                        }
-                    } else if buttons == 0 && dx == 0 && dy == 0 && wheel == 0 {
-                        let proof_class = if is_abs { EV_ABS } else { EV_REL };
-                        match send_shell_hid_event(0, 0, proof_class) {
-                            Ok(true) => {
-                                pointer_emit_ok = true;
-                                serial_println!(
-                                    "[usb.hid.pointer.emit] op=OP_HID_EVENT buttons=0 dx=0 dy=0 ok=1"
-                                );
-                            }
-                            Ok(false) => {
-                                send_err = 1;
-                            }
-                            Err(err) => {
-                                send_err = err;
-                                unsafe {
-                                    static mut SEXINPUT_POINTER_DROP_BUDGET: u32 = 16;
-                                    let rem = &mut SEXINPUT_POINTER_DROP_BUDGET;
-                                    if *rem > 0 {
-                                        *rem -= 1;
-                                        serial_println!(
-                                            "[sexinput.pointer.drop] reason=shell_send_fail class={} a0={} a1={} err={}",
-                                            proof_class,
-                                            0,
-                                            0,
-                                            err
-                                        );
-                                    }
                                 }
                             }
                         }

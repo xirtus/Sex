@@ -8934,6 +8934,14 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
             }
         }
     }
+    unsafe {
+        static mut USB_POINTER_CURSOR_BOUNDS_BUDGET: u32 = 64;
+        let rem = &mut USB_POINTER_CURSOR_BOUNDS_BUDGET;
+        if *rem > 0 {
+            *rem -= 1;
+            serial_println!("[usb.pointer.cursor.bounds] x={} y={} ok=1", new_x, new_y);
+        }
+    }
     POINTER_X = new_x;
     POINTER_Y = new_y;
 
@@ -24470,6 +24478,18 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             unsafe {
+                                static mut USB_POINTER_SHELL_RECV_EVREL_BUDGET: u32 = 64;
+                                let rem = &mut USB_POINTER_SHELL_RECV_EVREL_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!(
+                                        "[usb.pointer.shell.recv.evrel] dx={} dy={} ok=1",
+                                        dx_raw,
+                                        dy_raw
+                                    );
+                                }
+                            }
+                            unsafe {
                                 static mut REL_RECV_MAIN_BUDGET: u32 = 64;
                                 let rem = &mut REL_RECV_MAIN_BUDGET;
                                 if *rem > 0 {
@@ -24492,6 +24512,20 @@ pub extern "C" fn _start() -> ! {
                             }
                             // Apply filter + clamp + cursor update via shared helper.
                             let (dx, dy) = apply_rel_pointer(dx_raw, dy_raw);
+                            unsafe {
+                                static mut USB_POINTER_SHELL_APPLY_BUDGET: u32 = 64;
+                                let rem = &mut USB_POINTER_SHELL_APPLY_BUDGET;
+                                if *rem > 0 {
+                                    *rem -= 1;
+                                    serial_println!(
+                                        "[usb.pointer.shell.apply] x={} y={} dx={} dy={} ok=1",
+                                        POINTER_X,
+                                        POINTER_Y,
+                                        dx,
+                                        dy
+                                    );
+                                }
+                            }
                             if matches!(INTERACTION, InteractionState::ClickPending) && DRAG_PENDING_ACTIVE {
                                 let pdx = POINTER_X - DRAG_PENDING_START_X;
                                 let pdy = POINTER_Y - DRAG_PENDING_START_Y;
