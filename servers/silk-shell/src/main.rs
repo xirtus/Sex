@@ -8829,12 +8829,10 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
     // Mark that real relative input has been seen.
     REAL_POINTER_SEEN = true;
 
-    // ABS tablet mode: REL deltas would fight ABS position authority.
-    if ABS_SEEN_VALID {
-        return (0, 0);
-    }
-
     // ── Conservative REL transfer (no acceleration) ──
+    // (ABS_SEEN_VALID gate removed: USB tablet path now exclusively uses
+    // EV_REL abs-to-rel deltas from sexinput, so REL deltas must never be
+    // blocked.  See USB_POINTER_SHELL_APPLY_FIX_V1.)
     // Keep micro motion 1:1, reduce medium deltas, hard-cap large bursts.
     // This tames host-side ±127 saturation while preserving fine control.
     fn transfer_axis(raw: i32) -> i32 {
