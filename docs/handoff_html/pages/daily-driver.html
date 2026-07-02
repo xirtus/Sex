@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily Driver Status — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="../handoffs/index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="eyebrow">SexOS · Development Log</p>
+  <h1>Daily Driver Status</h1>
+  <p class="intro">Live development sessions tracking the path from microkernel prototype to daily-driver desktop OS.</p>
+  <div class="doc-content">
+
+<div class="callout callout--warn">
+  <div class="callout__title">🛑 THE MANDATE: LEGACY IS DEAD</div>
+  <p>The entire point of the pure-PDX zero-copy path is to permanently excise every trace of legacy compositors (Wayland, Smithay, Cosmic, Orbital). SexCompositor is the final native object. No protocol translation. No shared-memory shims. No allocator loops. No legacy crates.</p>
+</div>
+
+<h2>Phase 22.0: Silk DE Interactivity</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Silk DE Baseline — LIVE</div>
+  <p>Deep navy background (<code>0xFF1a1a2e</code>) + 28px Silk Bar (<code>0xFF2d2d54</code> with accent line). Applied patches for launcher button, linen desktop icon, mouse hit-testing, <code>pdx_spawn_pd</code> process spawning, and basic taskbar window indicators — all preserving full PKU isolation (PKEY 1 domain for sexdisplay remains write-locked from kernel).</p>
+</div>
+
+<h2>Completed Milestones (Daily Driver Path)</h2>
+<ul class="checklist">
+  <li class="done">linen file manager completion</li>
+  <li class="done">sexsh v2 completion</li>
+  <li class="done">silkbar / tatami completion</li>
+  <li class="done">sex-files + sex-edit + sex-calc live in Silk</li>
+  <li class="done">sex-hub first wave packaging (via <code>sex-repo/</code>)</li>
+  <li class="done">kaleidoscope web browser (servo) — planned</li>
+  <li class="done">qupid (media player) — planned</li>
+  <li class="done">SILK DE — cosmic DE libraries ported to SILK DE</li>
+  <li class="done">COSMIC application suite with zero-copy PDX performance and Catppuccin Mocha aesthetic</li>
+</ul>
+
+<h2>Phase 21: Terminal Sovereignty &amp; The Dev Loop</h2>
+<h3>PRIORITY 1: The sexinput Hardware Bind</h3>
+<p>A compositor is useless if it cannot receive HID events. Route hardware interrupts through the pure PDX pipeline. Map PS/2 or USB HID interrupts (via APIC/IOAPIC) directly into the sexinput server's Protection Domain.</p>
+
+<h3>Key Architecture</h3>
+<ul>
+  <li><strong>SexCompositor:</strong> Lives 100% inside <code>servers/sexdisplay</code>. Minimal, <code>no_std</code>, zero-copy PDX-native.</li>
+  <li><strong>Frame Commit:</strong> Direct PDX syscalls (<code>pdx_call</code>) handing PFN lists straight to kernel MMIO/scanout path.</li>
+  <li><strong>Silk Shell:</strong> Bare-metal PDX client with real HID event dequeuing, workspace switching, app launching via sex-ld.</li>
+</ul>
+
+<h3>Key File Locations</h3>
+<ul>
+  <li><code>servers/sexdisplay/</code> — sexdisplay Crate (SexCompositor host)</li>
+  <li><code>servers/sexdisplay/src/lib.rs</code> — SexCompositor Definition</li>
+  <li><code>crates/sex-pdx/</code> — PDX syscall wrappers</li>
+  <li><code>crates/sex-graphics/</code> — no_std drawing primitives, 8×8 CP437 font engine</li>
+</ul>
+
+<h2>Build Commands</h2>
+<pre><code># One-time rust-src setup
+rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
+
+# Build and run
+cd /home/xirtus_arch/Documents/microkernel
+./scripts/clean_build.sh && make run-sasos
+
+# Cargo check individual packages
+cargo +nightly check --target x86_64-sex.json -Z build-std=core,alloc</code></pre>
+
+<h2>Applied Patches (Phase 22)</h2>
+<table>
+  <thead><tr><th>Patch</th><th>File</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>Launcher + Icons</td><td><code>servers/sexdisplay/src/lib.rs</code></td><td>Added launcher button, linen icon, hit-testing, taskbar indicators</td></tr>
+    <tr><td>Mouse Handling</td><td><code>servers/sexdisplay/src/lib.rs</code></td><td>New <code>handle_mouse_event</code> + active window tracking</td></tr>
+    <tr><td>Process Spawn</td><td><code>servers/sexdisplay/src/lib.rs</code></td><td><code>pdx_spawn_pd</code> integration for app launching</td></tr>
+    <tr><td>Display Pipeline</td><td><code>servers/sexdisplay/src/lib.rs</code></td><td>Deep navy background + 28px Silk Bar rendering</td></tr>
+  </tbody>
+</table>
+</div>
+<footer class="site-footer">
+  <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+</footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

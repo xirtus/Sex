@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Server Refactor Template — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="../handoffs/index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="eyebrow">SexOS · Standard Operating Procedure</p>
+  <h1>Server Refactor Template</h1>
+  <p class="intro">Canonical procedure for modifying SexOS server processes. Follow this exactly. Deviations cause kernel panics.</p>
+  <div class="doc-content">
+
+<div class="callout callout--warn">
+  <div class="callout__title">MISSION</div>
+  <p>Describe the task — e.g., "add blur support to sexdisplay", "wire silknet tray applet", "implement PDX_GET_CPU_USAGE".</p>
+</div>
+
+<h2>Environment (Never Violate)</h2>
+<table>
+  <thead><tr><th>Constraint</th><th>Rule</th></tr></thead>
+  <tbody>
+    <tr><td><strong>no_std, no libc, no alloc</strong> unless already present</td><td>Never <code>use std::*</code>, never <code>println!</code>, never <code>thread::spawn</code></td></tr>
+    <tr><td><strong>SASOS</strong> — single shared address space</td><td>No pointer is "foreign"; PKU enforces isolation, not page tables</td></tr>
+    <tr><td><strong>PDX IPC only</strong></td><td>Cross-PD calls via <code>pdx_call(slot, opcode, arg0, arg1, arg2)</code>; replies via <code>pdx_reply(caller_pd)</code></td></tr>
+    <tr><td><strong>MPK/PKU isolation</strong></td><td>Never touch another PD's pages without explicit <code>PageHandover</code> + <code>pku_grant_temporary</code></td></tr>
+    <tr><td><strong>Only the compositor writes the framebuffer</strong></td><td>All other servers send PDX draw commands to sexdisplay</td></tr>
+    <tr><td><strong>No heap</strong> unless the server already uses <code>Vec</code>/<code>Box</code></td><td>Prefer <code>[T; N]</code> arrays and <code>AtomicU64</code> statics</td></tr>
+    <tr><td><strong>No POSIX time / sleep / blocking syscalls</strong></td><td>Spin on <code>pdx_listen_raw(slot)</code>; use <code>core::hint::spin_loop()</code></td></tr>
+    <tr><td><strong>Deterministic, no UB, zero warnings</strong></td><td><code>#[deny(warnings)]</code> implied</td></tr>
+    <tr><td><strong>PIE</strong> — no absolute symbol assumptions</td><td>Never hardcode VAs except documented constants (e.g. <code>HHDM_OFFSET</code>)</td></tr>
+  </tbody>
+</table>
+
+<h2>Pre-Flight Checklist (Run Before Any Change)</h2>
+<ol>
+  <li><strong>Understand the PD topology.</strong> Which PDs talk to which? Draw the PDX call graph.</li>
+  <li><strong>Verify PKU keys.</strong> Which PKEY owns which memory? Check <code>kernel/src/memory/pku.rs</code>.</li>
+  <li><strong>Check capability grants.</strong> Does the target PD already have the caps it needs?</li>
+  <li><strong>Read the relevant <code>lib.rs</code>.</strong> Understand the existing PDX dispatch table before adding opcodes.</li>
+  <li><strong>Confirm <code>no_std</code> compatibility.</strong> Run <code>cargo +nightly check --target x86_64-sex.json -Z build-std=core,alloc</code>.</li>
+</ol>
+
+<h2>Patch Protocol</h2>
+<ol>
+  <li><strong>One concern per patch.</strong> Never mix PDX opcode additions with rendering changes.</li>
+  <li><strong>Add opcodes at the end.</strong> Never renumber existing PDX opcodes — other PDs depend on them.</li>
+  <li><strong>Document the struct ABI.</strong> Every PDX call payload must have a <code>#[repr(C)]</code> struct with explicit field sizes.</li>
+  <li><strong>Test with QEMU.</strong> <code>make run-sasos</code> before claiming completion.</li>
+  <li><strong>Preserve PKU invariants.</strong> After your change, sexdisplay must still be write-locked from kernel (PKEY 1).</li>
+</ol>
+
+<h2>Common Patterns</h2>
+
+<h3>Adding a PDX Opcode</h3>
+<pre><code>// 1. Define the opcode constant
+pub const PDX_MY_NEW_FEATURE: u64 = 0x50;
+
+// 2. Define the request/response structs
+#[repr(C)]
+pub struct MyFeatureRequest {
+    pub param1: u64,
+    pub param2: u32,
+}
+
+#[repr(C)]
+pub struct MyFeatureResponse {
+    pub result: u64,
+}
+
+// 3. Add to the dispatch table in handle_pdx_call()
+match opcode {
+    // ... existing opcodes ...
+    PDX_MY_NEW_FEATURE => {
+        let req: &MyFeatureRequest = unsafe { &*(arg0 as *const _) };
+        let resp = MyFeatureResponse { result: do_work(req) };
+        pdx_reply(caller_pd, &resp);
+    }
+    _ => { /* unknown opcode */ }
+}</code></pre>
+
+<h3>Lending Memory Between PDs</h3>
+<pre><code>// NEVER: direct pointer sharing
+// let ptr = some_other_pd_address; // ← KERNEL PANIC
+
+// ALWAYS: explicit PageHandover
+let cap = PageHandover::new(source_pd, dest_pd, phys_addr, num_pages);
+capability_table.grant(dest_pd, cap);
+pdx_call(dest_slot, PDX_MEMORY_LENT, &cap);</code></pre>
+
+<h3>Event Loop Template</h3>
+<pre><code>#![no_std]
+#![no_main]
+
+use sex_pdx::{pdx_listen_raw, pdx_reply};
+use core::hint::spin_loop;
+
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    // Register with kernel
+    let slot = pdx_register(PD_ID, PKEY);
+
+    loop {
+        match pdx_listen_raw(slot) {
+            Some(msg) => {
+                handle_message(msg);
+            }
+            None => {
+                spin_loop(); // Yield without blocking
+            }
+        }
+    }
+}</code></pre>
+
+<div class="callout callout--success">
+  <div class="callout__title">Remember</div>
+  <p>SexOS is a <strong>Single Address Space</strong>. All pointers are valid everywhere. PKU, not page tables, enforces isolation. The compositor owns the framebuffer. PDX is the only IPC mechanism. There is no <code>std</code>, no <code>libc</code>, and no POSIX. You are programming bare metal.</p>
+</div>
+</div>
+<footer class="site-footer">
+  <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+</footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

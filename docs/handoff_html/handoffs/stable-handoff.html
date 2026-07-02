@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HANDOFF.md — microkernel_0.1_stable — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="breadcrumb"><a href="index.html">Handoffs</a><span>›</span>microkernel_0.1_stable/HANDOFF.md</p>
+  <p class="eyebrow">Stable Branch Handoff</p>
+  <h1>HANDOFF.md — microkernel_0.1_stable</h1>
+  <div class="doc-content">
+<div class="callout callout--info">
+  <div class="callout__title">Date: April 18, 2026 · Phase: 17.5 → 18</div>
+  <p>The "Black Screen of Life" is solved. Higher-Half kernel boots in QEMU. Pure in-kernel Rust driver renders full-screen 32-bit ARGB blue gradient to Limine Framebuffer. Tuxedo tranny tool purged and replaced by pure Rust tooling.</p>
+</div>
+
+<h2>AI Workflow & Token Optimization Rules</h2>
+<ul>
+  <li><strong>Search Boundaries:</strong> NEVER run unconstrained <code>find</code>. Restrict all file ops to the microkernel directory.</li>
+  <li><strong>Compression Modes:</strong> <code>/caveman ultra</code> for telegraphic output. <code>/caveman wenyan</code> for maximum compression.</li>
+  <li><strong>Driver Forge Pipeline:</strong> Use <code>c2rust</code> combined with <code>sex-driver-forge</code> agent for legacy C porting.</li>
+</ul>
+
+<h2>Architectural Context</h2>
+<ul>
+  <li><strong>Architecture:</strong> x86_64 Higher-Half Microkernel (<code>0xffffffff80000000</code>), SASOS.</li>
+  <li><strong>Isolation:</strong> 100% Lock-free, hardware-enforced via Intel PKU/MPK.</li>
+  <li><strong>Build Stack:</strong> Rust Nightly (<code>build-std=core,alloc</code>), custom <code>x86_64-sex.json</code>, Docker <code>sexos-builder:v28</code>.</li>
+  <li><strong>Host:</strong> M1 Mac using <code>qemu-system-x86_64 -machine q35 -cpu max,+pku</code>.</li>
+</ul>
+
+<h2>Phase 28a: The Zero-Copy GUI Handoff</h2>
+<p>Userland graphics stack deferred until "ship orbital compositor" command. Execution sequence:</p>
+<ol>
+  <li><strong>PDX Message:</strong> Kernel packages framebuffer metadata into lock-free <code>MessageType::DisplayPrimaryFramebuffer</code>.</li>
+  <li><strong>Hardware-Enforced Handover:</strong> Kernel revokes own write access, uses Intel PKU (<code>pkey_set</code>) to grant exclusive zero-copy access to <code>sexdisplay</code> PD.</li>
+</ol>
+
+<h2>Roadmap: COSMIC Compositor Integration</h2>
+<ul>
+  <li><strong>Backend (Orbital/Orbclient):</strong> sexdisplay initializes <code>orbital</code> windowing system on raw memory pointer.</li>
+  <li><strong>Frontend (Cosmic Compositor):</strong> Cosmic desktop ecosystem adapted to interface with <code>orbclient</code>.</li>
+</ul>
+
+<h2>macOS M1/M2 Build Commandments</h2>
+<ul>
+  <li><strong>Rule 1 — Bootstrap Bypass:</strong> <code>RUSTC_BOOTSTRAP=1</code> required to force <code>-Z build-std</code>.</li>
+  <li><strong>Rule 2 — Linker Override:</strong> Install <code>lld</code> via Homebrew and inject <code>RUSTFLAGS="-C linker=lld"</code>.</li>
+</ul>
+<pre><code>export RUSTFLAGS="-C linker=lld"
+RUSTC_BOOTSTRAP=1 cargo build --target x86_64-sex.json -Z build-std=core,alloc -p sex-kernel --release</code></pre>
+
+<h2>Phase Roadmap</h2>
+<table>
+  <thead><tr><th>Phase</th><th>Milestone</th><th>Mechanism</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td>18.6</td><td>Serial Debugging</td><td>UART 0x3F8</td><td><span class="tag tag--done">Complete</span></td></tr>
+    <tr><td>18.7</td><td>Hardware Isolation</td><td>Intel PKU (MPK)</td><td><span class="tag tag--done">Complete</span></td></tr>
+    <tr><td>19.5</td><td>Framebuffer Claim</td><td>Midnight Blue + PDX prep</td><td><span class="tag tag--done">Complete</span></td></tr>
+    <tr><td>20.0</td><td>Zero-Copy Handover</td><td>sexdisplay ELF + PKU grant</td><td><span class="tag tag--wip">In Progress</span></td></tr>
+    <tr><td>21.0</td><td>Windowing</td><td>Orbital (SAS Surfaces)</td><td><span class="tag tag--wip">Queued</span></td></tr>
+    <tr><td>22.0</td><td>Desktop Environment</td><td>COSMIC (Smithay Port)</td><td>Roadmap</td></tr>
+  </tbody>
+</table>
+  </div>
+  <footer class="site-footer">
+    <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+  </footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

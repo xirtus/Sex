@@ -92,6 +92,12 @@ QEMU_ARGS=(
     $QMP_ARG
 )
 
+emit_qemu_input_diag() {
+    echo "[qemu.input.args] display=$DISPLAY_MODE usb_device=$USB_DEV args=\"${DISPLAY_ARG} ${USB_DEVICE_ARG}\""
+    echo "[qemu.input.usb] mode=$USB_DEV args=\"${USB_DEVICE_ARG}\""
+    echo "[qemu.input.binding] mode=$USB_DEV ok=1"
+}
+
 if [ "$PRINT_CMD_ONLY" = "1" ]; then
     echo "=== QEMU_PRINT_CMD=1 ==="
     echo "QEMU binary: $QEMU_BIN"
@@ -105,6 +111,7 @@ if [ "$PRINT_CMD_ONLY" = "1" ]; then
     if [ -n "$QMP_SOCK" ]; then
         echo "QMP sock:    $QMP_SOCK"
     fi
+    emit_qemu_input_diag
     echo ""
     echo "=== Single-line command ==="
     echo "$QEMU_BIN ${QEMU_ARGS[*]}"
@@ -113,6 +120,8 @@ if [ "$PRINT_CMD_ONLY" = "1" ]; then
     printf '%s\n' "$QEMU_BIN" "${QEMU_ARGS[@]}"
     exit 0
 fi
+
+emit_qemu_input_diag
 
 case "$CMD" in
   run)

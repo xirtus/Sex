@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Developer Manual — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="../handoffs/index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="eyebrow">SexOS · Developer Reference</p>
+  <h1>System Developer Manual</h1>
+  <p class="intro"><strong>Version:</strong> Phase 21 (Userland Handoff) &middot; <strong>Kernel:</strong> sex-kernel v0.1.0 &middot; <strong>Bootloader:</strong> Limine 7.13.3 &middot; <strong>Architecture:</strong> x86_64 no_std pure Rust</p>
+  <div class="doc-content">
+
+<div class="toc">
+  <div class="toc__title">Contents</div>
+  <ol>
+    <li><a href="#overview">System Overview</a></li>
+    <li><a href="#repo-layout">Repository Layout</a></li>
+    <li><a href="#boot-flow">Boot Flow — Limine 7.x Protocol</a></li>
+    <li><a href="#kernel-init">Kernel Init Sequence</a></li>
+    <li><a href="#hal">Hardware Abstraction Layer (HAL)</a></li>
+    <li><a href="#memory">Memory Subsystem</a></li>
+    <li><a href="#pku">Protection Keys (PKU / Intel MPK)</a></li>
+    <li><a href="#pds">Protection Domains</a></li>
+    <li><a href="#elf-loader">ELF Loader</a></li>
+    <li><a href="#ring3">Ring-3 Handoff (IRETQ)</a></li>
+    <li><a href="#ipc">IPC System</a></li>
+    <li><a href="#sexdisplay">Display Server — sexdisplay</a></li>
+    <li><a href="#build">Build System</a></li>
+    <li><a href="#qemu">QEMU Testing</a></li>
+    <li><a href="#known-issues">Known Issues &amp; Phase Status</a></li>
+  </ol>
+</div>
+
+<h2 id="overview">1. System Overview</h2>
+<p>SexOS is a <strong>Single Address Space Operating System (SASOS)</strong> built entirely in Rust (<code>no_std</code>). All kernel and userland processes share one virtual address space. Isolation between processes is enforced by <strong>Intel Memory Protection Keys (PKU/MPK)</strong> rather than separate page tables.</p>
+
+<h3>Design Principles</h3>
+<table>
+  <thead><tr><th>Principle</th><th>Mechanism</th></tr></thead>
+  <tbody>
+    <tr><td>Isolation without page-table switching</td><td>Intel PKU — each PD gets a unique PKEY (1–15)</td></tr>
+    <tr><td>Zero kernel/userland address-space boundary</td><td>Single PML4 shared by all</td></tr>
+    <tr><td>Lock-free IPC</td><td>Per-PD atomic ring buffers (<code>RingBuffer&lt;MessageType, 256&gt;</code>)</td></tr>
+    <tr><td>No dynamic kernel modules</td><td>All drivers compile into server ELFs, loaded at boot</td></tr>
+    <tr><td>Capability-based access control</td><td><code>CapabilityTable</code> per PD, CHERI-style bounds</td></tr>
+  </tbody>
+</table>
+
+<h2 id="repo-layout">2. Repository Layout</h2>
+<pre><code>microkernel/
+├── kernel/          # Core microkernel (no_std, ring 0)
+├── servers/         # Ring-3 server ELFs
+│   ├── sexdisplay/  # Compositor & framebuffer
+│   ├── sexinput/    # PS/2 + USB HID
+│   ├── sexfiles/    # Virtual File System
+│   └── ...
+├── crates/          # Shared no_std libraries
+│   ├── sex-pdx/     # PDX syscall wrappers
+│   └── sex-graphics/# Drawing primitives
+├── scripts/         # Build scripts
+├── Makefile         # Top-level build orchestration
+└── x86_64-sex.json  # Custom target specification</code></pre>
+
+<h2 id="boot-flow">3. Boot Flow — Limine 7.x Protocol</h2>
+<ol>
+  <li>UEFI firmware loads <strong>Limine</strong> bootloader</li>
+  <li>Limine loads the kernel ELF at the Higher-Half offset (<code>0xFFFFFFFF80000000</code>)</li>
+  <li>Limine passes <strong>memory map</strong>, <strong>framebuffer</strong>, <strong>RSDP</strong>, and <strong>SMP info</strong> via request/response protocol</li>
+  <li>Kernel entry point (<code>_start</code>) receives the Limine boot info struct</li>
+</ol>
+
+<h2 id="kernel-init">4. Kernel Init Sequence</h2>
+<ol>
+  <li><strong>HHDM Setup:</strong> Map physical memory into Higher-Half Direct Mapping window</li>
+  <li><strong>GDT/IDT:</strong> Install Global Descriptor Table and Interrupt Descriptor Table</li>
+  <li><strong>APIC:</strong> Initialize Local APIC timer for preemptive scheduling</li>
+  <li><strong>PKU:</strong> Configure initial Protection Key registers (WRPKRU)</li>
+  <li><strong>Server Loading:</strong> ELF-load sexdisplay, sexinput, and other server PDs</li>
+  <li><strong>Ring-3 Transition:</strong> IRETQ to userspace with appropriate PKRU value</li>
+</ol>
+
+<h2 id="hal">5. Hardware Abstraction Layer (HAL)</h2>
+<pre><code>kernel/src/hal/
+├── gdt.rs       # Global Descriptor Table
+├── idt.rs       # Interrupt Descriptor Table
+├── apic.rs      # Local APIC / IOAPIC
+├── pci.rs       # PCI enumeration
+└── pku.rs       # Protection Key manipulation</code></pre>
+
+<h2 id="memory">6. Memory Subsystem</h2>
+<ul>
+  <li><strong>Physical Allocator:</strong> Lock-free buddy allocator (4 KiB / 2 MiB / 1 GiB sharding)</li>
+  <li><strong>Virtual Memory:</strong> Single 64-bit VAS, all mappings in one PML4</li>
+  <li><strong>HHDM:</strong> Higher-Half Direct Mapping — physical memory is always accessible</li>
+  <li><strong>Page Faults:</strong> Asynchronous #PF forwarding to standalone <code>sext</code> server</li>
+</ul>
+
+<h2 id="pku">7. Protection Keys (PKU / Intel MPK)</h2>
+<pre><code>PKEY 0  — kernel + default (no restriction)
+PKEY 1  — sexdisplay / framebuffer (trusted display domain)
+PKEY 2+ — future userland PDs</code></pre>
+<p>Each page is tagged with a 4-bit PKEY in bits 62:59 of the Page Table Entry. The <code>PKRU</code> register controls per-key access rights for the current thread. Switching domains = a single <code>WRPKRU</code> instruction — zero TLB flush.</p>
+
+<h2 id="pds">8. Protection Domains</h2>
+<p>Each PD has:</p>
+<ul>
+  <li><strong>PD ID:</strong> Unique numeric identifier</li>
+  <li><strong>PKEY:</strong> Hardware protection key (1–15)</li>
+  <li><strong>Capability Table:</strong> Sparse array of unforgeable access tokens</li>
+  <li><strong>IPC Ring Buffer:</strong> SPSC lock-free message queue</li>
+  <li><strong>ELF Image:</strong> Memory region backing the server binary</li>
+</ul>
+
+<h2 id="elf-loader">9. ELF Loader</h2>
+<p>The kernel ELF loader parses program headers, maps LOAD segments via the buddy allocator, and sets up initial capability grants for the new PD. Load phase is fully asynchronous via <code>sys_spawn_pd</code>.</p>
+
+<h2 id="ring3">10. Ring-3 Handoff (IRETQ)</h2>
+<p>The kernel prepares a Ring-3 stack frame with appropriate segment selectors and uses <code>iretq</code> to drop privilege. The PKRU register is set before the transition so the new PD wakes up with correct memory access rights.</p>
+
+<h2 id="ipc">11. IPC System</h2>
+<ul>
+  <li><strong>PDX (Protected Procedure Call):</strong> Synchronous, hardware-accelerated domain switch via capability validation</li>
+  <li><strong>Fused PDX:</strong> Capability-bypassing variant for hot paths</li>
+  <li><strong>Ring Buffers:</strong> Lock-free SPSC queues for async messaging and interrupt delivery</li>
+  <li><strong>Page Handover:</strong> Zero-copy memory transfer via PKU temporary grants</li>
+</ul>
+
+<h2 id="sexdisplay">12. Display Server — sexdisplay</h2>
+<p>The <code>sexdisplay</code> server runs as PKEY 1 and owns the framebuffer. It implements <strong>SexCompositor</strong>, a pure PDX-native compositor that accepts window buffers via PDX calls and composites them into the scanout framebuffer.</p>
+
+<h2 id="build">13. Build System</h2>
+<div class="callout callout--warn">
+  <div class="callout__title">CRITICAL: rust-src Requirement</div>
+  <p>SexOS requires <code>rust-src</code> for the nightly toolchain to rebuild <code>core</code> and <code>alloc</code> via <code>-Z build-std</code>.</p>
+  <pre><code>rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu</code></pre>
+</div>
+<pre><code># Docker build (canonical)
+./scripts/clean_build.sh
+
+# Run in QEMU
+make run-sasos
+
+# Native build (advanced)
+make release</code></pre>
+
+<h2 id="qemu">14. QEMU Testing</h2>
+<pre><code>make run-sasos  # Requires: -cpu host,+pku for Intel PKU passthrough</code></pre>
+<p>Without <code>+pku</code>, the kernel triggers a General Protection Fault (GPF) at boot because the PDX security handshake cannot initialize.</p>
+
+<h2 id="known-issues">15. Known Issues &amp; Phase Status</h2>
+<ul class="checklist">
+  <li class="done">Kernel boot + HHDM mapping</li>
+  <li class="done">PKU domain initialization</li>
+  <li class="done">sexdisplay framebuffer rendering</li>
+  <li class="done">SexCompositor zero-copy frame commit</li>
+  <li class="done">Silk DE baseline (silkbar, tatami, linen)</li>
+  <li class="done">Real PDX HID event routing</li>
+  <li>Full input interactivity polish</li>
+  <li>Kaleidoscope browser integration</li>
+  <li>Qupid media engine</li>
+</ul>
+</div>
+<footer class="site-footer">
+  <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+</footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

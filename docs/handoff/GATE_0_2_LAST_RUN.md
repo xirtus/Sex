@@ -1,11 +1,11 @@
 # GATE_0_2_LAST_RUN
 
-- date: 2026-07-02T16:38:12+02:00
-- git commit: f07eb9dc
-- qmp_sock: /tmp/qmp_lane_stabilize_v1/qmp.sock
+- date: 2026-07-02T17:40:20+02:00
+- git commit: 167bf934
+- qmp_sock: /tmp/qmp_lane_cdc_v3/qmp.sock
 - log_path: /home/xirtus_arch/Projects/Sex/logs/qemu-latest.log
 - qmp_environment_failure: no
-- qemu lane: qemu-system-x86_64 -M q35 -m 512M -cdrom sexos-v1.0.0.iso -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0 -serial file:/home/xirtus_arch/Projects/Sex/logs/qemu-latest.log -qmp unix:/tmp/qmp_lane_stabilize_v1/qmp.sock,server=on,wait=off -no-reboot -no-shutdown
+- qemu lane: qemu-system-x86_64 -M q35 -m 512M -cdrom sexos-v1.0.0.iso -device nec-usb-xhci,id=xhci -device usb-tablet,bus=xhci.0 -serial file:/home/xirtus_arch/Projects/Sex/logs/qemu-latest.log -qmp unix:/tmp/qmp_lane_cdc_v3/qmp.sock,server=on,wait=off -no-reboot -no-shutdown
 
 ## Gate Results
 
@@ -14,7 +14,7 @@
 - POINTER_LIVE_GATE: FAIL
 - KEYBOARD_LIVE_GATE: FAIL
 - INPUT_OWNERSHIP_GATE: PASS
-- FAULT_REGRESSION_GATE: PASS
+- FAULT_REGRESSION_GATE: FAIL
 - SCOPE_GATE: WARN
 - FINAL_SCORE: RED_0_2
 
@@ -28,16 +28,16 @@
 - [silk-shell.keyboard.recv]: 0
 
 - [sexinput.pointer.recv]: 16
-- [sexinput.pointer.send]: 532
-- [silk-shell.pointer.recv]: 12
-- [silk-shell.cursor.update]: 2
+- [sexinput.pointer.send]: 202
+- [silk-shell.pointer.recv]: 0
+- [silk-shell.cursor.update]: 0
 - [sexdisplay.cursor.draw]: 16
 
 ## First Missing Marker
 
-- pointer chain: none
+- pointer chain: [silk-shell.pointer.recv]
 - keyboard chain: [sexinput.keyboard.send]
-- overall: [sexinput.keyboard.send]
+- overall: [silk-shell.pointer.recv]
 
 ## Remaining Risks
 

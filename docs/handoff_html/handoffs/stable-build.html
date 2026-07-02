@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>handoffbuild.txt — microkernel_0.1_stable — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="breadcrumb"><a href="index.html">Handoffs</a><span>›</span>microkernel_0.1_stable/handoffbuild.txt</p>
+  <p class="eyebrow">Stable Branch Build Doc</p>
+  <h1>handoffbuild.txt — microkernel_0.1_stable</h1>
+  <div class="doc-content">
+<div class="callout callout--success">
+  <div class="callout__title">Status: SYSCALL LIVE, INPUT ROUTED 🚀</div>
+  <ul>
+    <li><strong>Kernel:</strong> <code>LSTAR</code> syscall handler enabled (rax=24,27,28,29). <code>CoreLocal</code> stack switching active.</li>
+    <li><strong>Protocol:</strong> <code>sex-pdx</code> unified with <code>HIDEvent</code>. <code>libsys</code> dependency minimized.</li>
+    <li><strong>Input:</strong> <code>sexinput</code> routes PS/2 scancodes to <code>sexdisplay</code> via PDX.</li>
+    <li><strong>Display:</strong> <code>sexdisplay</code> handles <code>HIDEvent</code>. Routes events to window <code>AtomicRing</code> buffers.</li>
+    <li><strong>Build:</strong> Darwin ARM fix verified. Darwin <code>rust-lld</code> injection stable.</li>
+    <li><strong>Dependencies:</strong> <code>Cargo.toml</code> modernized (acpi 6.1.1, smoltcp, RustCrypto). <code>pic8259</code> removed.</li>
+  </ul>
+</div>
+
+<h2>⚡ Efficiency Protocol (No Waste Mode)</h2>
+<ul>
+  <li><strong>Communication:</strong> Terse caveman mode MANDATORY. No articles, filler, pleasantries.</li>
+  <li><strong>Pattern:</strong> <code>[thing] [action] [reason]. [next step].</code></li>
+  <li><strong>Tooling:</strong> Parallel search/read. Scoped grep. No redundant reads.</li>
+</ul>
+
+<h2>Phase 20 Plan: Redox Rustification & Orbital Maturity</h2>
+<ol>
+  <li><strong>Redox Integration:</strong> Audit <code>docs/grok/redox.txt</code>. Implement <code>acpi</code> 6.1.1 logic in <code>kernel/src/apic.rs</code>.</li>
+  <li><strong>Orbital Evolution:</strong> Implement Z-order and focus logic in <code>sexdisplay</code>.</li>
+  <li><strong>Rust Drivers:</strong> Replace legacy C VGA/PS2 code with pure Rust crates.</li>
+  <li><strong>COSMIC Adaptation:</strong> Port <code>cosmic-comp</code> sub-components to SASOS domains.</li>
+</ol>
+
+<h2>Next Steps</h2>
+<ul>
+  <li>Verify <code>egui-hello</code> event loop (mouse/key) in QEMU.</li>
+  <li>Implement <code>acpi</code> table discovery for PCIe/NVMe.</li>
+  <li>Add <code>RustCrypto</code> backend to <code>sexdisplay</code> window authentication.</li>
+</ul>
+  </div>
+  <footer class="site-footer">
+    <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+  </footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

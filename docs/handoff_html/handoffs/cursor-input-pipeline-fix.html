@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cursor Input Pipeline Fix — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page page--wide">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="../handoffs/index.html" class="active">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+
+  <p class="eyebrow">SexOS · Handoff · 2026-06-06</p>
+  <h1>Cursor Input Pipeline Fix</h1>
+  <p class="intro">Current cursor-input handoff for the USB → sexinput → silk-shell → sexdisplay path. The active patch is bounded to <code>servers/sexusb</code>: slot2 HID pointer reports are demuxed, forwarded to sexinput, and re-armed on their own interrupt ring.</p>
+
+  <div class="doc-content">
+    <h2>Status</h2>
+    <ul>
+      <li><strong>Domain touched:</strong> <code>servers/sexusb/src/main.rs</code> only for runtime code.</li>
+      <li><strong>Boundary preserved:</strong> USB still only produces normalized HID reports for sexinput; shell/display policy remains untouched.</li>
+      <li><strong>Synthetic drag path:</strong> not used for this fix; proof bloat remains gated/off in sexusb.</li>
+      <li><strong>Headless limitation:</strong> QEMU does not generate host pointer movement in nographic mode, so slot2 forwarding is ready but requires SDL/interactive movement to observe live cursor deltas.</li>
+    </ul>
+
+    <h2>Root Cause</h2>
+    <p>The old path was effectively single-device. The first enumerated HID device became the active interrupt endpoint, so a keyboard on port 1 could make the QEMU tablet on port 2 unreachable for live cursor input. Existing slot2 enumeration/configuration work addressed the second device but did not continuously forward/re-arm slot2 interrupt reports.</p>
+
+    <h2>Fix Pattern</h2>
+    <ol>
+      <li>Keep bounded root-port scan and two-slot enumeration.</li>
+      <li>Track slot2 interrupt ring physical address in <code>HidDevice</code> so the link TRB can be rewritten on wrap.</li>
+      <li>When the shared event ring yields a Transfer Event for slot2, decode tablet/mouse reports by role.</li>
+      <li>Forward pointer reports through <code>OP_USB_MOUSE_REPORT</code> to sexinput.</li>
+      <li>Clear slot2 report bytes and queue the next slot2 interrupt-IN TRB.</li>
+    </ol>
+
+    <h2>New Proof Markers</h2>
+    <table>
+      <tr><th>Marker</th><th>Meaning</th></tr>
+      <tr><td><code>[sexusb.slot2.forward.mouse]</code></td><td>Slot2 pointer report decoded and forwarded to sexinput.</td></tr>
+      <tr><td><code>[sexusb.slot2.poll.rearm]</code></td><td>Slot2 interrupt-IN TRB re-queued after a slot2 Transfer Event.</td></tr>
+    </table>
+
+    <h2>Verification</h2>
+    <pre><code>./scripts/entrypoint_build.sh
+# exit code: 0
+# final marker: [SEXOS ENTRYPOINT] success
+
+SEXUSB_QEMU_DEVICE=kbd+tablet timeout 55s ./dev.sh run-nographic
+# exit code: 124 (expected timeout)
+# faults: 0
+# observed:
+# [sexusb.slot2.enable.ok]
+# [sexusb.slot2.address.ok]
+# [sexusb.slot2.desc.config] ... hid_role=PointerTablet
+# [sexusb.slot2.set_config.ok]
+# [sexusb.slot2.configure_endpoint.ok]
+# [usb.xhci.multiport.pass] ok=1</code></pre>
+
+    <h2>Next Interactive Proof</h2>
+    <pre><code>SEXUSB_QEMU_DEVICE=kbd+tablet ./dev.sh run
+# move/click inside SDL window, then check serial for:
+# [sexusb.slot2.forward.mouse]
+# [sexusb.slot2.poll.rearm]
+# [sexinput.mouse.live]
+# [sexinput.hid.emit.rel]
+# [shell.hid.rel.live]
+# [sexdisplay.cursor.surface.update]</code></pre>
+  </div>
+
+  <footer class="site-footer">
+    <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+  </footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>docs/HANDOFF.md — Handoffs — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="breadcrumb"><a href="index.html">Handoffs</a><span>›</span>docs/HANDOFF.md</p>
+  <p class="eyebrow">Main Documentation Handoff</p>
+  <h1>SexOS SASOS Handoff: Silk Desktop Environment — Phase 19</h1>
+  <div class="doc-content">
+
+<div class="callout callout--warn">
+  <div class="callout__title">ℹ IMPORTANT: Working Directory</div>
+  <p>All work is strictly constrained to the directory: <code>/home/xirtus_arch/Documents/microkernel</code>.</p>
+</div>
+
+<div class="callout callout--warn">
+  <div class="callout__title">🛑 CRITICAL TOOLCHAIN MANDATE: The rust-src Requirement</div>
+  <p><strong>Architecture Context:</strong> SexOS targets a custom bare-metal environment (<code>x86_64-sex.json</code>). Building the microkernel and native PDX servers requires the compiler to rebuild the Rust <code>core</code> and <code>alloc</code> libraries from scratch using the unstable <code>-Z build-std=core,alloc</code> flag.</p>
+  <p><strong>The Rule:</strong> You <strong>CANNOT</strong> build SexOS without the <code>rust-src</code> component installed for your specific nightly toolchain.</p>
+  <pre><code>rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu</code></pre>
+</div>
+
+<h2>🛑 THE MANDATE: LEGACY IS DEAD</h2>
+<p>SexCompositor now replaces PdxCompositor. We are building a pure-PDX zero-copy path <code>SexCompositor</code> as a Pdx system that will solve issues from Orbital, Wayland, Smithay, or Cosmic. Those are legacy compositors that speak their own protocols (DRM-like messages, <code>wl_*</code> over Unix sockets) and cause allocator loops and <code>std</code> leakage. <strong>The entire point of the pure-PDX zero-copy path (Phase 18) is to permanently excise every trace of them.</strong></p>
+
+<h2>🏗️ THE NEW ARCHITECTURE: SexCompositor & Silk Shell</h2>
+<ul>
+  <li>Minimal, <code>no_std</code>, zero-copy PDX-native object.</li>
+  <li>Lives entirely inside the SEX microkernel's display server (<code>sexdisplay</code>).</li>
+  <li><strong>Does not</strong> wrap or inherit from any external compositor — <strong>it is the compositor.</strong></li>
+  <li><strong>Mechanism:</strong> Zero-copy frame commit via direct PDX syscalls (<code>pdx_call</code>) handing PFN lists to kernel MMIO/scanout.</li>
+  <li><strong>Constraints:</strong> No protocol translation. No shared-memory shims. No allocator loops. No legacy crates.</li>
+</ul>
+
+<h3>Key File Locations</h3>
+<ul>
+  <li><strong>sexdisplay Crate:</strong> <code>servers/sexdisplay/</code></li>
+  <li><strong>SexCompositor Definition:</strong> <code>servers/sexdisplay/src/lib.rs</code></li>
+  <li><strong>sex-pdx Crate:</strong> <code>crates/sex-pdx/</code></li>
+</ul>
+
+<h2>COMPLETED</h2>
+
+<h3>1. KERNEL & PDX IPC</h3>
+<p>Memory/Syscalls: PdxMapMemory, PdxAllocateMemory, PDX_SEX_WINDOW_CREATE, PDX_GET_TIME, PDX_SWITCH_VIEW, PDX_GET_ALL_VIEWS, PDX_SILKBAR_*. Structs/Fixes: SexWindowCreateParams, SilkbarRegisterParams. Fixed pdx_commit_window_frame 5-arg ABI.</p>
+
+<h3>2. SEXCOMPOSITOR & GRAPHICS</h3>
+<p>Core: WindowState, dynamic advanced tiling (Master/Stack/V/H, ratios, gaps), window decorations/borders. sex-graphics: no_std shared crate, WindowBuffer, draw primitives, 8x8 CP437 font engine. Input Pipeline: sexdisplay forwards sexinput HID events to focused PD.</p>
+
+<h3>3. SILK SHELL (BARE-METAL PDX CLIENT)</h3>
+<p>Capabilities: Real HIDEvent PDX dequeuing, dynamic FB layout queries, workspace switching, window move/resize, app launching (via sex-ld).</p>
+
+<h3>4. USERLAND FLEET (APPS & DAEMONS)</h3>
+<ul>
+  <li><strong>silkbar:</strong> 40px Catppuccin panel. 3-zone layout (launcher, task, tray). HID clicks & applet registration.</li>
+  <li><strong>silknet:</strong> Tray applet + 360x480 GUI. WireGuard/WiFi toggles via sexnet PDX calls.</li>
+  <li><strong>tatami:</strong> 900x640 Settings daemon (Display, Network, Sound, Input, Capabilities).</li>
+  <li><strong>toys:</strong> Desktop widget framework (Clock, CPU sparkline, RAM, Calendar).</li>
+  <li><strong>sexsh v2:</strong> GPU-accelerated terminal.</li>
+  <li><strong>linen:</strong> Dual-pane file manager.</li>
+</ul>
+
+<h3>5. INFRASTRUCTURE</h3>
+<p>Restored .cargo/config.toml. Re-established workspace build rules. Planned gesture & modern UI (blur/animations) architecture. Wired PDX_GET_TIME / PDX_GET_CPU_USAGE / PDX_GET_MEM_USAGE in kernel. Added sexnet PDX server. silkbar workspace switching. Real HID event routing from sexinput → silkbar.</p>
+
+<h2>TODO</h2>
+<table>
+  <thead><tr><th>Phase</th><th>Project</th><th>Goal</th></tr></thead>
+  <tbody>
+    <tr><td>Phase 20</td><td><strong>kaleidoscope</strong></td><td>Browser (servo port)</td></tr>
+    <tr><td>Phase 21</td><td><strong>qupid</strong></td><td>Media player (rust-media fork)</td></tr>
+    <tr><td>Phase 22</td><td>Media & Automation</td><td>rasta, celluloid, rosebud, snowseed</td></tr>
+    <tr><td>Phase 23</td><td><strong>sex-hub + sexshop</strong></td><td>App store + backend</td></tr>
+  </tbody>
+</table>
+
+<h2>Important Apps (Make It Actually Usable)</h2>
+
+<h3>kaleidoscope — HTML5/JS/Node Capable Browser</h3>
+<p>Native Rust browser (servo + custom WebRender fork). Full adblock (uBlock Origin rules baked in + AI classifier), YouTube 4K/60 HDR, Google Docs/Sheets real-time collab, X.com full feature parity, hardware video decode via SexOS DRM. No Electron. Multi-process sandbox using microkernel capabilities.</p>
+
+<h3>qupid — Pure-Rust VLC Clone</h3>
+<p>Best foundations ranked for SexOS:</p>
+<ol>
+  <li><strong>rust-media</strong> (pcwalton) — Closest to "libvlc for Rust". Designed for Servo embedding. Zero-copy friendly.</li>
+  <li><strong>rust-av + oxideav</strong> — Pure-Rust multimedia toolkit. Active 2026 crates for AV1/VP9/HEVC parsing.</li>
+  <li><strong>Symphonia</strong> — Pure-Rust audio decoders + container support.</li>
+</ol>
+
+<h3>Media & Automation Kickoff</h3>
+<ul>
+  <li><strong>rasta:</strong> Photoshop/GIMP pure-Rust clone (stub)</li>
+  <li><strong>celluloid:</strong> Kdenlive pure-Rust clone (stub)</li>
+  <li><strong>rosebud:</strong> Auto translation / i18n pipeline</li>
+  <li><strong>snowseed:</strong> Proton-style Linux ELF / Steam compatibility layer</li>
+</ul>
+
+<h3>sex-hub & sexshop</h3>
+<ul>
+  <li><strong>sex-hub:</strong> The client (GUI app store front-end). Native Silk app for browsing, one-click install, "native Rust" badge system.</li>
+  <li><strong>sexshop:</strong> The server (backend service). Dedicated PDX service running package index, metadata, signing, mirror sync, and secure download daemon.</li>
+</ul>
+
+<h2>First Wave of Redox + COSMIC Ports</h2>
+<p>Files, Editor, Calculator live in <strong>sex-hub</strong>. Full dogfooding of Silk as daily driver.</p>
+</div>
+<footer class="site-footer">
+  <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+</footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Development Sessions — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="../handoffs/index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="eyebrow">SexOS · Meta</p>
+  <h1>Development Sessions</h1>
+  <p class="intro">Raw session logs: Claude sessions, Gemini outputs, Grok handoffs, and agent coordination records.</p>
+  <div class="doc-content">
+
+<h2>Claude Session Logs</h2>
+<div class="callout callout--info">
+  <div class="callout__title">Session: Caveman Bug Fix — Frame Counter Blockade</div>
+  <p>A massive victory: QEMU did not crash or Triple Fault. The kernel successfully mapped HHDM, revoked its own write access via WRPKRU, and jumped to Ring 3. <code>sexdisplay</code> successfully requested FB0 and FB1, mapped them into its PKEY 1 domain, and processed frames.</p>
+  <p><strong>THE BLOCKADE:</strong> The system was functioning as a finite test runner rather than a persistent OS. A hardcoded CI/CD training wheel (<code>for _ in 0..100</code>) in the sexdisplay event loop or kernel's PDX scanout listener needed removal.</p>
+  <p><strong>Resolution:</strong> Located the hardcoded counter in <code>kernel/src/interrupts.rs:226</code> — "Kernel: 100 frames committed to scanout". The sexdisplay loop was already infinite but the kernel-side exit trigger needed removal. The real culprit was not in <code>test_runner</code> but in the PDX commit handler region.</p>
+</div>
+
+<h2>Gemini/Grok Handoffs</h2>
+
+<h3>Phase 29: HAL Polish + ACPI/NVMe Stubs</h3>
+<div class="callout callout--info">
+  <div class="callout__title">Grok Handoff — macOS Cross-Compilation</div>
+  <p>Strict operational boundaries: all operations restricted to <code>/Users/xirtus/sites/microkernel/</code>. Pre-flight safety enforcement via <code>.envrc</code> with aliased find/cargo commands. Architecture: SEX Single Address Space Microkernel, tiny TCB, 100% no_std Rust 2024 Edition, Intel PKU + CHERI isolation. Build target: x86_64-unknown-none (Skylake+).</p>
+</div>
+
+<h3>COSMIC Plan — Phase 20.5: Isolation Implementation</h3>
+<div class="callout callout--info">
+  <div class="callout__title">The Silent Canvas</div>
+  <p>Transition from Infrastructure Survival to Hardware Enforcement. Successfully stabilized macOS cross-compilation and Limine 0.6.x API. The Silent Canvas painted Midnight Blue; next: build the Page Table Walker to revoke the kernel's brush and hand it to sexdisplay. PKEY tagging on framebuffer pages via manual 4-level page table traversal, PTE modification (bits 62:59), and TLB invalidation via <code>invlpg</code>.</p>
+</div>
+
+<h3>Pure Rust Migration Plan (Redox)</h3>
+<div class="callout callout--info">
+  <div class="callout__title">Eradicating Legacy C Dependencies</div>
+  <p>Bootloader: Utilize the <code>limine</code> Rust crate for pure-Rust boot protocol handling. Remove all C-based trampoline code. Hardware Discovery: Integrate <code>acpi</code> and <code>aml</code> crates instead of ACPICA. File Systems: Replace C-based filesystem drivers with pure-Rust alternatives. Network Stack: Implement TCP/IP entirely in Rust using <code>smoltcp</code> or custom no_std networking crate.</p>
+</div>
+
+<h2>Lead Response Log</h2>
+<h3>SexOS SASOS Build Pipeline v1.0.0</h3>
+<pre><code>clean_build.sh: terminal output parsed — fish shell + Cargo target errors
+clean_build.sh: exact issues identified:
+  • fish shell split the long command
+  • Cargo error: .json target spec requires -Zjson-target-spec
+  • warning: profiles belong in workspace root Cargo.toml
+clean_build.sh: silkclient is now pure no_std
+clean_build.sh: gradients still visible in QEMU → SexCompositor zero-copy path untouched
+
+Fixes (4 commands):
+1. cd /home/xirtus_arch/Documents/microkernel
+2. cargo +nightly clean -p silkclient
+3. [environment/config corrections]
+4. make run-sasos</code></pre>
+
+<h2>Silk Plan & Fix Sessions</h2>
+<h3>Phase 18: Pure PDX Zero-Copy SexCompositor Build Plan</h3>
+<ul>
+  <li><strong>Architecture Lock:</strong> Legacy is dead — NO std, NO alloc, NO relibc, NO Wayland, NO Smithay, NO Cosmic, NO Orbital, NO protocol shims.</li>
+  <li><strong>SexCompositor:</strong> Lives 100% inside <code>servers/sexdisplay</code>. no_std bare-metal PDX-native compositor.</li>
+  <li><strong>Frame Commit:</strong> Uses direct <code>pdx_call(0, 0xDD, PFN-list)</code> → kernel MMIO/scanout with ZERO copies.</li>
+  <li><strong>Status:</strong> Sexdisplay gradients visible in QEMU → SexCompositor already rendering via pure PDX path.</li>
+</ul>
+
+<h3>Silk Fix — River Tag Model</h3>
+<pre><code>#![no_std]
+#![no_main]
+
+pub type TagMask = u32;
+
+pub struct Window {
+    pub id: u64,
+    pub tags: TagMask,
+    pub buffer: WindowBuffer,
+    pub mode: WindowMode,
+}</code></pre>
+<p>The River Tag Model freezes the window management abstraction for Phase 20A. All visibility decisions are pure math on <code>TagMask</code> bitwise operations. No workspaces, no containers — just tags.</p>
+</div>
+<footer class="site-footer">
+  <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+</footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

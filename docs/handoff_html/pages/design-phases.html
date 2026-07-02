@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design Phases — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page page--wide">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="../handoffs/index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="eyebrow">SexOS · Design Documents</p>
+  <h1>Design Phases</h1>
+  <p class="intro">Detailed design documents spanning Phases 3 through 16, covering Wayland lifting, signal trampolines, voxel rendering, font systems, and more.</p>
+  <div class="doc-content">
+
+<div class="card-grid card-grid--3">
+
+<a class="card" href="#phase3">
+  <h3>Phase 3: sexfiles Design</h3>
+  <p>Real PDX-based VFS on lock-free foundation. Block I/O dispatch to sexdrive via lent-memory.</p>
+  <div class="card-meta"><span class="tag tag--done">Complete</span></div>
+</a>
+
+<a class="card" href="#phase4">
+  <h3>Phase 4: Distribution</h3>
+  <p>sexnet server PD for networking and remote proxy. Remote PDX routing via cluster fabric.</p>
+  <div class="card-meta"><span class="tag tag--done">Complete</span></div>
+</a>
+
+<a class="card" href="#phase5">
+  <h3>Phase 5: Hardware &amp; sexdrive</h3>
+  <p>ARM64 Design (Raspberry Pi 5). NVIDIA 3070 GPU PD. Pi 5 Peripheral support.</p>
+  <div class="card-meta"><span class="tag tag--done">Complete</span></div>
+</a>
+
+<a class="card" href="#phase6">
+  <h3>Phase 6: Signal Trampoline</h3>
+  <p>Background trampoline thread per PD. Full POSIX sigaction ABI on dedicated stack. Lock-free signal state (RCU-style).</p>
+  <div class="card-meta"><span class="tag tag--done">Complete</span></div>
+</a>
+
+<a class="card" href="#phase7">
+  <h3>Phase 7: Memory Subsystem</h3>
+  <p>Lock-free Buddy Allocator (4 KiB / 2 MiB / 1 GiB). Async #PF forwarding to sext server. Demand paging.</p>
+  <div class="card-meta"><span class="tag tag--done">Complete</span></div>
+</a>
+
+<a class="card" href="#phase8">
+  <h3>Phase 8: ELF Loader + PD Spawn</h3>
+  <p>Kernel ELF loader, segment parsing, buddy-allocator mapping. sys_spawn_pd async path.</p>
+  <div class="card-meta"><span class="tag tag--done">Complete</span></div>
+</a>
+
+<a class="card" href="#phase9">
+  <h3>Phase 9: Driver Enablement</h3>
+  <p>NVMe/AHCI driver in standalone PD. Zero-copy DMA. MSI-X interrupt routing. Input stack polish.</p>
+  <div class="card-meta"><span class="tag tag--done">Complete</span></div>
+</a>
+
+<a class="card" href="#phase10">
+  <h3>Phase 10: Wayland &amp; sexinput</h3>
+  <p>Wayland IPC emulation via PDX. Shared memory sext. libinput lifting. Mesa/wlroots bootstrap.</p>
+  <div class="card-meta"><span class="tag tag--done">Complete</span></div>
+</a>
+
+<a class="card" href="#phase11">
+  <h3>Phase 11: GNU Pipeline</h3>
+  <p>POSIX pipe(), fork(), execve(). Coreutils as isolated PDs. End-to-end signal delivery.</p>
+  <div class="card-meta"><span class="tag tag--done">Complete</span></div>
+</a>
+
+<a class="card" href="#phase12">
+  <h3>Phase 12: Dynamic Translators</h3>
+  <p>sexnode translator. On-the-fly ELF to Sex native. Capability-based translator loading.</p>
+  <div class="card-meta"><span class="tag tag--done">Complete</span></div>
+</a>
+
+<a class="card" href="#phase13">
+  <h3>Phase 13: Self-Hosting</h3>
+  <p>sex-gemini agent. sexstore packages. Full build loop: kernel rebuild from source inside Sex.</p>
+  <div class="card-meta"><span class="tag tag--done">Complete</span></div>
+</a>
+
+<a class="card" href="#phase14">
+  <h3>Phase 14: Formal Verification</h3>
+  <p>Refined physical allocator. Hardened PKU domain init. CHERI capability prep.</p>
+  <div class="card-meta"><span class="tag tag--done">Complete</span></div>
+</a>
+
+</div>
+
+<hr>
+
+<h2 id="phase3">Phase 3: Services &amp; sexfiles</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: Stable 🚀</div>
+  <p>Real PDX-based VFS on lock-free foundation. Standalone sexfiles server PD. Real block I/O dispatch to sexdrive. Minimal ramfs using Phase-7 lock-free buddy allocator. POSIX syscall bridge in sexc for VFS operations.</p>
+</div>
+
+<h2 id="phase4">Phase 4: Distribution</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: Complete ✅</div>
+  <p>Standalone sexnet server PD for networking and remote proxy. Remote PDX routing via cluster fabric capabilities. Zero-copy packet transfer via lent-memory. Translucent network-local capability transparency.</p>
+</div>
+
+<h2 id="phase5">Phase 5: Hardware &amp; sexdrive</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: Complete ✅</div>
+  <p>ARM64 Design (Raspberry Pi 5). DDE-Sex Shim (Linux/BSD sexdrive lifting). NVIDIA 3070 GPU PD (Nouveau-lifted skeleton). Pi 5 Peripheral support design. Standalone sexdrive server PD. Pure PDX hardware dispatch and MSI-X interrupt routing. Zero-copy DMA via lent-memory capabilities.</p>
+</div>
+
+<h2 id="phase6">Phase 6: Asynchronous POSIX Signal Trampoline</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: Complete ✅</div>
+  <p>Background trampoline thread per PD with FLSCHED::park. Zero busy-wait signal dequeuing from control ring. Full POSIX sigaction ABI (siginfo_t, ucontext_t) on dedicated stack. Lock-free signal state management (RCU-style).</p>
+</div>
+
+<h2 id="phase7">Phase 7: Real Memory Subsystem</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: Complete ✅</div>
+  <p>Lock-free Buddy Allocator (4 KiB / 2 MiB / 1 GiB sharding). Hardware-enforced PKU domain management. Asynchronous #PF forwarding to standalone sext server. Demand paging via lent-memory capabilities.</p>
+</div>
+
+<h2 id="phase8">Phase 8: Full ELF Loader + PD Spawn</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: Complete ✅</div>
+  <p>Kernel ELF loader: Segment parsing and buddy-allocator mapping (Lock-Free). PD creation: Pure PDX-based ELF loading and initial capability grants via RCU Table. sys_spawn_pd: Fully asynchronous spawn path.</p>
+</div>
+
+<h2 id="phase9">Phase 9: Driver Enablement</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: Complete ✅</div>
+  <p>Production-grade NVMe/AHCI driver in standalone PD. Zero-copy DMA via Lent-Memory capabilities. MSI-X interrupt routing to driver SPSC rings. Polished Input stack (PS/2 + USB HID) with TTY routing. sexfiles real block I/O dispatch integration.</p>
+</div>
+
+<h2 id="phase10">Phase 10: Wayland Ecosystem &amp; sexinput</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: Complete ✅</div>
+  <p>Standalone sexdisplay server PD for framebuffer/GPU management. HID event routing from sexinput to sexdisplay via PDX. Zero-copy graphical command buffers via lent-memory. User-space Mesa/wlroots compatibility layer bootstrap.</p>
+  <h4>Wayland Architecture on SASOS</h4>
+  <ul>
+    <li><strong>Wayland IPC (AF_UNIX + FD Passing):</strong> Emulated in sexc using PDX primitives. FD passing mapped directly to Capability Passing.</li>
+    <li><strong>Shared Memory (Wayland-SHM):</strong> Implemented via SHM sext using Memory Lending.</li>
+    <li><strong>sexinput Handling:</strong> libinput lifted via DDE-Sex into sexinput PD, pushing events into ring buffers.</li>
+  </ul>
+</div>
+
+<h2 id="phase11">Phase 11: GNU Pipeline &amp; Filesystem Parity</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: Complete ✅</div>
+  <p>Full POSIX pipe(), fork(), and execve() support via PDX. Pipes as lent-memory ring buffers. Coreutils (ash, ls, cat, grep) running as real isolated PDs. End-to-end signal delivery within pipelines. Lin-Sex (Linux Binary Compatibility). Multi-Filesystem support (Ext4, Btrfs, FAT, NTFS). GNU Toolchain integration (GCC/Bash).</p>
+</div>
+
+<h2 id="phase12">Phase 12: Dynamic Translators</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: Complete ✅</div>
+  <p>Standalone sexnode server PD for translator discovery and loading. On-the-fly binary translation (ELF → Sex native) via PDX. Capability-based translator loading and lent-memory code pages. Distributed node discovery and cross-translator transparent routing.</p>
+</div>
+
+<h2 id="phase13">Phase 13: Native Self-Hosting</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: Complete ✅</div>
+  <p>sex-gemini self-repair agent running as isolated PD. Standalone sexstore PD for package management via PDX. Full build loop: kernel rebuild from source inside Sex. Zero host dependencies for the self-hosted environment. Zero-Nits Polish: replaced hardcoded BAR0, full MSI-X completion, standardized FLSCHED park, eradicated all stubs.</p>
+</div>
+
+<h2 id="phase14">Phase 14: Formal Verification Hooks</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: Complete ✅</div>
+  <p>Refined Physical Allocator: Per-core sharded queues and O(1) local allocation. Hardened PKU Domain Init: Runtime WRPKRU validation and isolation invariants. Formal Verification Hooks: Ownership and revocation asserts in Capability system. CHERI Capability Prep: Metadata alignment and safety-critical hardening.</p>
+</div>
+
+<h2>Phase 16: Voxel &amp; Multimedia</h2>
+<div class="callout callout--info">
+  <div class="callout__title">Status: Planned 📅</div>
+  <p>Enable high-performance multimedia and 3D voxel rendering by porting Classic DOOM and ClassiCube. SDL2 SexOS Backend for PDX communication with srv_wayland. srv_audio for DMA-based playback. srv_font for TrueType rendering. Vibe Coding with integrated Gemini AI to assist porting legacy C code.</p>
+</div>
+
+<h2>Change Report: Signal Trampoline</h2>
+<div class="callout callout--info">
+  <div class="callout__title">Key Implementation Details</div>
+  <p>The POSIX Signal Trampoline required background thread architecture per PD with FLSCHED::park for zero busy-wait signal dequeuing. Full sigaction ABI compatibility (siginfo_t, ucontext_t) is delivered on dedicated stacks with RCU-style lock-free state management. See <code>CHANGE_REPORT_SIGNAL_TRAMPOLINE.md</code> for full details.</p>
+</div>
+</div>
+<footer class="site-footer">
+  <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+</footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Server Reference Manual — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page page--wide">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="../handoffs/index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="eyebrow">SexOS · Server Reference</p>
+  <h1>Server Reference Manual</h1>
+  <p class="intro">All ring-3 server processes in <code>servers/</code>. Architecture: x86_64 no_std Rust, PDX IPC, PKU isolation. Cross-reference with <a href="system-manual.html">System Developer Manual</a> for kernel internals.</p>
+  <div class="doc-content">
+
+<div class="toc">
+  <div class="toc__title">Contents</div>
+  <ol>
+    <li><a href="#overview">Server Architecture Overview</a></li>
+    <li><a href="#sexdisplay">sexdisplay — Compositor &amp; Display Server</a></li>
+    <li><a href="#silk-shell">silk-shell — Window Manager &amp; Desktop Shell</a></li>
+    <li><a href="#sexinput">sexinput — Input / PS2 Driver</a></li>
+    <li><a href="#sexfiles">sexfiles — Virtual Filesystem Server</a></li>
+    <li><a href="#sexdrive">sexdrive — NVMe / AHCI Storage Driver</a></li>
+    <li><a href="#sexshop">sexshop — Object &amp; Package Store</a></li>
+    <li><a href="#sexnet">sexnet — Network Manager</a></li>
+    <li><a href="#sexnode">sexnode — Cluster Node &amp; Translator</a></li>
+    <li><a href="#sex-ld">sex-ld — Dynamic Linker</a></li>
+  </ol>
+</div>
+
+<h2 id="overview">1. Server Architecture Overview</h2>
+<p>All SexOS servers share a common architecture:</p>
+<ul>
+  <li><strong>no_std Rust:</strong> No standard library. All servers compile against <code>x86_64-unknown-none</code>.</li>
+  <li><strong>PDX Entry Point:</strong> Servers register a PDX listener slot and park on <code>pdx_listen_raw()</code>.</li>
+  <li><strong>Event Loop:</strong> <code>loop { let msg = pdx_listen_raw(slot); handle(msg); }</code></li>
+  <li><strong>PKU Isolation:</strong> Each server runs in its own PKEY domain. No cross-domain memory access without explicit <code>PageHandover</code>.</li>
+  <li><strong>FLSCHED Park:</strong> All servers use <code>libsys::sched::park_on_ring()</code> for wait-free event polling.</li>
+</ul>
+
+<h2 id="sexdisplay">2. sexdisplay — Compositor &amp; Display Server</h2>
+<table>
+  <thead><tr><th>Property</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td><strong>PKEY</strong></td><td>1 (trusted display domain)</td></tr>
+    <tr><td><strong>Role</strong></td><td>Framebuffer owner, SexCompositor host, scanout engine</td></tr>
+    <tr><td><strong>Key Type</strong></td><td>SexWindowCreateParams, SilkbarRegisterParams</td></tr>
+    <tr><td><strong>IPC</strong></td><td>PDX calls for window creation, frame commit, view switching</td></tr>
+  </tbody>
+</table>
+
+<h3>SexCompositor Design</h3>
+<ul>
+  <li>Minimal, <code>no_std</code>, zero-copy PDX-native compositor</li>
+  <li>Window state with dynamic advanced tiling (Master/Stack/V/H, ratios, gaps)</li>
+  <li>Window decorations/borders</li>
+  <li>Frame commit via <code>pdx_call</code> handing PFN lists directly to kernel MMIO/scanout</li>
+  <li>Input forwarding: sexdisplay forwards sexinput HID events to focused PD</li>
+</ul>
+
+<h2 id="silk-shell">3. silk-shell — Window Manager &amp; Desktop Shell</h2>
+<table>
+  <thead><tr><th>Property</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Role</strong></td><td>Main user-facing desktop process</td></tr>
+    <tr><td><strong>Key Features</strong></td><td>HID event dequeuing, FB layout queries, workspace switching, window move/resize</td></tr>
+    <tr><td><strong>App Launching</strong></td><td>Via sex-ld dynamic linker</td></tr>
+  </tbody>
+</table>
+
+<h2 id="sexinput">4. sexinput — Input / PS2 Driver</h2>
+<table>
+  <thead><tr><th>Property</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Role</strong></td><td>PS/2 keyboard + mouse driver, HID event source</td></tr>
+    <tr><td><strong>Output</strong></td><td>PDX ring buffer → sexdisplay → focused PD</td></tr>
+    <tr><td><strong>Scancode Decoding</strong></td><td>Full PS/2 scancode set 2 → HID event translation</td></tr>
+  </tbody>
+</table>
+
+<h2 id="sexfiles">5. sexfiles — Virtual Filesystem Server</h2>
+<table>
+  <thead><tr><th>Property</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Role</strong></td><td>Unified VFS with multi-backend support</td></tr>
+    <tr><td><strong>Backends</strong></td><td>Ext4, Btrfs, FAT32, NTFS, ramfs</td></tr>
+    <tr><td><strong>IPC</strong></td><td>PDX-based VFS operations; block I/O dispatch to sexdrive</td></tr>
+    <tr><td><strong>Cache</strong></td><td>Lock-free 2Q LRU cache with shared physical pages</td></tr>
+    <tr><td><strong>Architecture</strong></td><td>100% lock-free trampoline polling loop, 3-cycle PKU handover for large I/O</td></tr>
+  </tbody>
+</table>
+
+<h2 id="sexdrive">6. sexdrive — NVMe / AHCI Storage Driver</h2>
+<table>
+  <thead><tr><th>Property</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Role</strong></td><td>Production-grade NVMe/AHCI block I/O</td></tr>
+    <tr><td><strong>Transfer</strong></td><td>Zero-copy DMA via Lent-Memory capabilities</td></tr>
+    <tr><td><strong>Interrupts</strong></td><td>MSI-X routing to driver SPSC rings</td></tr>
+    <tr><td><strong>PCI</strong></td><td><code>PciCapData</code> resolution for BAR discovery</td></tr>
+  </tbody>
+</table>
+
+<h2 id="sexshop">7. sexshop — Object &amp; Package Store</h2>
+<table>
+  <thead><tr><th>Property</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Role</strong></td><td>Backend package index, metadata, signing, mirror sync, secure download daemon</td></tr>
+    <tr><td><strong>Client</strong></td><td><strong>sex-hub</strong> — GUI app store front-end (native Silk app)</td></tr>
+    <tr><td><strong>IPC</strong></td><td>PDX communication between sex-hub and sexshop (zero-copy)</td></tr>
+  </tbody>
+</table>
+
+<h2 id="sexnet">8. sexnet — Network Manager</h2>
+<table>
+  <thead><tr><th>Property</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Role</strong></td><td>User-space TCP/IP stack with WireGuard support</td></tr>
+    <tr><td><strong>PDX Calls</strong></td><td>SEXNET_GET_STATUS, SEXNET_SCAN_WIFI</td></tr>
+    <tr><td><strong>Transfer</strong></td><td>Zero-copy packet transfer via lent-memory</td></tr>
+  </tbody>
+</table>
+
+<h2 id="sexnode">9. sexnode — Cluster Node &amp; Translator</h2>
+<table>
+  <thead><tr><th>Property</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Role</strong></td><td>Translator discovery, on-the-fly ELF→Sex binary translation, distributed node discovery</td></tr>
+    <tr><td><strong>Key Feature</strong></td><td>Linux driver hot-plug translation via DDE-style wrappers</td></tr>
+    <tr><td><strong>Revocation</strong></td><td>RevokeKey Multicast — hardware-accelerated capability revocation across sexnode</td></tr>
+  </tbody>
+</table>
+
+<h2 id="sex-ld">10. sex-ld — Dynamic Linker</h2>
+<table>
+  <thead><tr><th>Property</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Role</strong></td><td>Dynamic ELF linking for SexOS userland applications</td></tr>
+    <tr><td><strong>Usage</strong></td><td>App launching from silk-shell: <code>sex-ld /path/to/app.elf</code></td></tr>
+  </tbody>
+</table>
+</div>
+<footer class="site-footer">
+  <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+</footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

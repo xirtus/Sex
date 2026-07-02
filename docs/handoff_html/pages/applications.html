@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Applications & Ecosystem — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="../handoffs/index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="eyebrow">SexOS · Ecosystem</p>
+  <h1>Applications & Ecosystem</h1>
+  <p class="intro">The SexOS application ecosystem — from the native Kaleidoscope browser to the Qupid media engine, COSMIC ports, and font strategy.</p>
+  <div class="doc-content">
+
+<h2>Kaleidoscope — Native Browser</h2>
+<div class="callout callout--info">
+  <div class="callout__title">Architectural Manifesto v0.3</div>
+  <p><strong>Target:</strong> SexOS microkernel (x86_64 SASOS, Intel PKU, 100% Zero-Copy PDX fabric)</p>
+  <p><strong>Core Directives:</strong> Pure Rust · Servo-based · PKU-Sandboxed · No Electron · No Glutin/Winit · Direct sexdisplay/tranny/sexnet/sexaudio/sexinput integration</p>
+</div>
+
+<h3>Phase 1: The Servo Substrate & Bare-Metal Grafting</h3>
+<ul>
+  <li>Compile Servo core against <code>x86_64-sex.json</code> using the in-tree relibc fork.</li>
+  <li>Map all Servo threading/memory requests to <code>sex_rt::LockedHeap</code> and local pthread shims.</li>
+  <li>Completely excise Winit/Glutin. Replace with a pure PDX client talking directly to <code>sexdisplay</code>.</li>
+</ul>
+
+<h3>Phase 2: Hardware-Enforced Tab Sandboxing (Intel PKU)</h3>
+<ul>
+  <li>Each logical origin (tab/iframe) = dedicated Protection Key (PKEY).</li>
+  <li>Context switch = single <code>wrpkru</code> instruction in user space (zero TLB flush, zero kernel transition).</li>
+  <li>16-key hardware limit → Origin-Based PKEY Pool.</li>
+</ul>
+
+<h3>Phase 3: Zero-Copy WebRender + Input Routing</h3>
+<ul>
+  <li>WebRender builds display list directly into GPU DMA buffers acquired via <code>tranny</code>.</li>
+  <li>Finalized frame pointer passed via PDX atomic ring to <code>sexdisplay</code> (SexCompositor) for immediate scanout.</li>
+  <li>Zero compositing tax: GPU pixels = screen pixels.</li>
+  <li>Input routing: Keystrokes + mouse events from <code>sexinput</code> bypass compositor entirely.</li>
+</ul>
+
+<h3>Phase 4: Media & Audio Pipeline (4K/60 HDR)</h3>
+<ul>
+  <li>Custom Servo <code>&lt;video&gt;</code> backend → <code>tranny</code> VA-API/VDPAU hardware decode.</li>
+  <li>Audio: <code>sexaudio</code> PDX rings for PCM frames, hardware-mixed per PKEY domain.</li>
+</ul>
+
+<hr>
+
+<h2>Qupid — SASOS Native Media Engine (VLC Clone)</h2>
+<div class="callout callout--info">
+  <div class="callout__title">Architectural Manifesto v1.4</div>
+  <p><strong>Core Directives:</strong> FFmpeg primary (relibc graft) + symphonia optional fallback · PKU sandboxed decode · tranny hardware accel · sexdisplay/sexaudio/sexfiles direct · Pure Rust surface · 100% VLC codec parity</p>
+</div>
+
+<h3>Hybrid Codec Engine</h3>
+<ul>
+  <li><strong>Primary:</strong> FFmpeg (libavcodec/libavformat) grafted via relibc for 100% VLC codec coverage + tranny hardware decode (VAAPI/VDPAU/NVDEC).</li>
+  <li><strong>Fallback:</strong> symphonia + av1-rs for pure-Rust paths on simple containers.</li>
+</ul>
+
+<h3>PKU-Enforced Decoder Sandbox</h3>
+<ul>
+  <li>Every decode thread spins inside its own Intel PKEY domain.</li>
+  <li>Media file mapped read-only from sexfiles. Out-of-bounds = immediate #PF.</li>
+  <li>sexgemini restarts only the isolated domain.</li>
+</ul>
+
+<h3>Zero-Copy Video Pipeline</h3>
+<ul>
+  <li>Decoded frames (or dmabuf refs) handed via PDX atomic ring to sexdisplay.</li>
+  <li>Silk Shell / compositor takes PFN and scans out directly. Zero copies, zero CPU overhead on 4K/60/HDR.</li>
+</ul>
+
+<h3>Foundations (ranked for SexOS)</h3>
+<ol>
+  <li><strong>rust-media</strong> (pcwalton/rust-media) — Closest to "libvlc for Rust". Designed for Servo embedding.</li>
+  <li><strong>rust-av + oxideav</strong> — Pure-Rust multimedia toolkit (demuxers, muxers, primitives). Active 2026 crates.</li>
+  <li><strong>Symphonia</strong> — Pure-Rust audio decoders + container support.</li>
+</ol>
+
+<hr>
+
+<h2>COSMIC Ports</h2>
+<div class="callout callout--success">
+  <div class="callout__title">Status: 100% Complete ✅</div>
+  <p>Full COSMIC application suite implemented for SexOS Silk DE with zero-copy PDX performance and Catppuccin Mocha aesthetic.</p>
+</div>
+<ul class="checklist">
+  <li class="done">linen file manager completion</li>
+  <li class="done">sexsh v2 completion</li>
+  <li class="done">silkbar / tatami completion</li>
+  <li class="done">sex-files + sex-edit + sex-calc live in Silk</li>
+  <li class="done">sex-hub first wave packaging (via <code>sex-repo/</code>)</li>
+  <li class="done">kaleidoscope web browser (servo) — planned</li>
+  <li class="done">qupid (media player) — planned</li>
+  <li class="done">cosmic DE libraries ported to SILK DE</li>
+</ul>
+
+<hr>
+
+<h2>Font Strategy</h2>
+<h3>Stage 1: PSF (PC Screen Font)</h3>
+<p>Minimal PSF2 parser in the kernel for basic terminal output. Functional for boot logging.</p>
+
+<h3>Stage 2: srv_font (User-Space Font Server)</h3>
+<p>Isolated PD embedding a TrueType rendering engine (<code>fontdue</code>/<code>rusttype</code>). Apps request glyph bitmaps via PDX. SAS zero-copy: font server renders to shared SHM region.</p>
+
+<h3>Stage 3: Hardware Acceleration</h3>
+<p>GPU-accelerated font rendering via Mesa/Gallium for high-DPI displays.</p>
+
+<h3>Font Assets</h3>
+<ul>
+  <li><strong>Fixed-width:</strong> Terminus, JetBrains Mono (developer shell)</li>
+  <li><strong>Proportional:</strong> Inter (GUI elements)</li>
+</ul>
+
+<hr>
+
+<h2>CrewCast — AI Engineering Team Playbook</h2>
+<table>
+  <thead><tr><th>Agent</th><th>Role</th><th>Strengths</th></tr></thead>
+  <tbody>
+    <tr><td><strong>ChatGPT</strong></td><td>Chief Architect / Program Director</td><td>Systems architecture, roadmaps, debug triage, multi-agent orchestration</td></tr>
+    <tr><td><strong>Gemini CLI</strong></td><td>High-Speed Repo Worker</td><td>Fast terminal workflow, large repo scanning, broad implementation passes</td></tr>
+    <tr><td><strong>Claude</strong></td><td>Precision Engineer</td><td>Deep code analysis, no_std Rust expertise, PKU/MPK implementation</td></tr>
+    <tr><td><strong>Grok</strong></td><td>Systems Validator</td><td>Hardware compliance checks, correctness verification</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2>Future Apps</h2>
+<table>
+  <thead><tr><th>App</th><th>Purpose</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td><strong>rasta</strong></td><td>Photoshop/GIMP pure-Rust clone</td><td><span class="tag tag--wip">Stub</span></td></tr>
+    <tr><td><strong>celluloid</strong></td><td>Kdenlive pure-Rust clone</td><td><span class="tag tag--wip">Stub</span></td></tr>
+    <tr><td><strong>rosebud</strong></td><td>Auto translation / i18n pipeline</td><td><span class="tag tag--wip">Planned</span></td></tr>
+    <tr><td><strong>snowseed</strong></td><td>Proton-style Linux ELF / Steam compatibility layer</td><td><span class="tag tag--wip">Planned</span></td></tr>
+    <tr><td><strong>sex-hub</strong></td><td>GUI app store front-end (native Silk app)</td><td><span class="tag tag--done">Done</span></td></tr>
+    <tr><td><strong>sexshop</strong></td><td>Backend package service (PDX-based)</td><td><span class="tag tag--done">Done</span></td></tr>
+  </tbody>
+</table>
+</div>
+<footer class="site-footer">
+  <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+</footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>User Manual — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="../handoffs/index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="eyebrow">SexOS · Reference</p>
+  <h1>User Manual</h1>
+  <p class="intro">Welcome to <strong>SexOS</strong>, the high-performance, Distributed Single Address Space Operating System (DSAS). This manual provides an overview of the core system commands and services. Type <code>help</code> in your SexOS terminal to display this reference.</p>
+  <div class="doc-content">
+
+<div class="toc">
+  <div class="toc__title">Contents</div>
+  <ol>
+    <li><a href="#sex-src">sex-src — Software Management</a></li>
+    <li><a href="#services">System Services & Supervisors</a></li>
+    <li><a href="#lin-sex">Lin-Sex — Linux Compatibility</a></li>
+    <li><a href="#desktop">Desktop Environments</a></li>
+  </ol>
+</div>
+
+<h2 id="sex-src">🛠 sex-src (Software & Sexdrive Management)</h2>
+<p><code>sex-src</code> is the primary build and package management system for SexOS. It fetches source code, applies DDE-Sex patches, and compiles packages into isolated Protection Domains (PDs).</p>
+<ul>
+  <li><code>sex-src pkg &lt;name&gt;</code>: Fetch and compile a package or sexdrive (e.g., <code>sex-src pkg nouveau-rtx</code>).</li>
+  <li><code>sex-src probe</code>: Analyze your local PCI and Device Tree hardware to recommend sexdrive.</li>
+  <li><code>sex-src install &lt;script&gt;</code>: Launch an interactive installation script.</li>
+  <li><code>sex-provision &lt;target&gt;</code>: Bundle the compiled kernel and <code>.spd</code> images into a bootable EFI/Pi disk image.</li>
+</ul>
+
+<h2 id="services">🕹 System Services & Supervisors</h2>
+<p>SexOS runs traditional monolithic kernel components as isolated, user-space servers.</p>
+
+<table>
+  <thead><tr><th>Service</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td><strong>sexit</strong></td><td>Minimalist service supervisor (replaces <code>systemd</code>). Ensures critical PDs stay alive. Usage: <code>sexit::start_service("name", pd_id)</code></td></tr>
+    <tr><td><strong>sexfiles</strong></td><td>Virtual File System registry. Manages mount points for ext4, btrfs, FAT32, and NTFS.</td></tr>
+    <tr><td><strong>sext</strong></td><td>Global Memory Manager. Handles demand sexting and Distributed Shared Memory (DSM) across the sexnode.</td></tr>
+    <tr><td><strong>sexnet</strong></td><td>Zero-Copy TCP/IP sexnet Stack.</td></tr>
+    <tr><td><strong>sexnode</strong></td><td>Sexnode Manager. Discovers other SexOS machines on the network for transparent remote IPC.</td></tr>
+    <tr><td><strong>sexdrm</strong></td><td>Direct Rendering Manager. Interfaces with your GPU for Wayland compositors.</td></tr>
+    <tr><td><strong>sexsound</strong></td><td>ALSA-lifted audio server.</td></tr>
+    <tr><td><strong>sexinput</strong></td><td>libinput-lifted server for mouse and keyboard events.</td></tr>
+    <tr><td><strong>sexwifi</strong></td><td>Wireless networking server.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="lin-sex">🐧 Lin-Sex (Linux Compatibility)</h2>
+<p>SexOS can run unmodified Linux binaries (like <code>bash</code>, <code>gcc</code>, <code>grep</code>).</p>
+<ul>
+  <li>The <strong>Lin-Sex</strong> loader automatically intercepts Linux system calls and translates them into native high-speed <strong>PDX</strong> calls routed through <strong>sexc</strong> (our POSIX emulation layer).</li>
+  <li>Just execute Linux ELF binaries directly from the shell; the kernel handles the rest.</li>
+</ul>
+
+<h2 id="desktop">🖥 Desktop Environments</h2>
+<p>SexOS ships with the <strong>Silk Desktop Environment</strong> — a pure PDX-native desktop built on SexCompositor with zero-copy graphics, hardware-accelerated animations, and Catppuccin Mocha theming. See the <a href="silk.html">Silk DE documentation</a> for full details.</p>
+
+<h2>📁 Stack Structure</h2>
+<ul>
+  <li><strong>Core:</strong> Pure Rust <code>no_std</code> Microkernel (&lt; 7 kLOC).</li>
+  <li><strong>Userspace:</strong> Isolated Standalone ELFs (<code>sexc</code>, <code>sexfiles</code>, <code>sexnet</code>, <code>sexnode</code>, etc.).</li>
+  <li><strong>Isolation:</strong> Intel MPK (Hardware Keys) + CHERI Metadata Prep.</li>
+</ul>
+
+<div class="callout callout--info">
+  <div class="callout__title">Quick Start</div>
+  <pre><code>git clone https://github.com/xirtus/sex.git && cd sex
+./scripts/clean_build.sh && make run-sasos</code></pre>
+</div>
+</div>
+<footer class="site-footer">
+  <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+</footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

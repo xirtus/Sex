@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Silk Desktop Environment — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="../handoffs/index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="eyebrow">SexOS · Desktop Environment</p>
+  <h1>Silk Desktop Environment</h1>
+  <p class="intro">Silk is the official SexOS Desktop Environment, built as a pure PDX-native userspace on top of the SEX microkernel ecosystem. Luxurious, smooth, modern — zero-copy, zero-legacy.</p>
+  <div class="doc-content">
+
+<div class="toc">
+  <div class="toc__title">Contents</div>
+  <ol>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#principles">Core Principles</a></li>
+    <li><a href="#architecture">Architecture (3 Layers)</a></li>
+    <li><a href="#components">Components</a></li>
+    <li><a href="#userland">Userland Fleet</a></li>
+    <li><a href="#theming">Theme System</a></li>
+  </ol>
+</div>
+
+<h2 id="overview">Overview</h2>
+<p><strong>Silk DE</strong> is not a traditional desktop environment. It is a <strong>deterministic UI projection pipeline</strong> running directly inside the SASOS microkernel's native display server. Everything is a projection of kernel-visible objects with zero state duplication.</p>
+
+<h2 id="principles">Core Principles</h2>
+<ul>
+  <li><strong>100% SEX microkernel ecosystem:</strong> All components run within the Protection Domain (PD) system.</li>
+  <li><strong>SexCompositor as Foundation:</strong> Silk extends the <code>sexdisplay</code> server's <code>SexCompositor</code> via direct PDX syscalls. It <em>is</em> the sole compositor.</li>
+  <li><strong>Zero-Copy Everywhere:</strong> All graphical operations utilize PFN (Page Frame Number) lists for direct memory access, eliminating data copies.</li>
+  <li><strong>No Legacy or Shims:</strong> Avoids Unix sockets, IPC protocols, and other traditional OS abstractions. Everything is direct <code>pdx_call</code> syscalls.</li>
+  <li><strong>Minimal Userspace:</strong> <code>no_std</code> and bare-metal efficiency where possible.</li>
+</ul>
+
+<h2 id="architecture">Architecture (3 Layers Only)</h2>
+
+<h3>1. Kernel Truth (SexCompositor owns this)</h3>
+<ul>
+  <li><code>Window { id, tags: TagMask, buffer: PFNList, floating_override, … }</code></li>
+  <li><code>OutputState { active_tags: TagMask, … }</code></li>
+  <li>River-inspired tag system: <code>TagMask = u32</code>. No workspaces, no containers.</li>
+  <li>Visibility = pure math: <code>window.tags &amp; active_tags != 0</code></li>
+</ul>
+
+<h3>2. Projection Layer (stateless functions)</h3>
+<ul>
+  <li><code>fn project_layout(windows, output_state) → Layout</code></li>
+  <li><code>fn project_decisions(layout, state) → RenderCommands</code></li>
+  <li>No reactive state, no observers, no dirty tracking.</li>
+</ul>
+
+<h3>3. Input Pipeline</h3>
+<ul>
+  <li><code>sexinput</code> → PDX ring buffer → <code>SilkShell.handle_event()</code></li>
+  <li>Events mutate kernel state; re-project; animate.</li>
+</ul>
+
+<h2 id="components">Components</h2>
+
+<h3>SexCompositor (inside sexdisplay)</h3>
+<p>The minimal, <code>no_std</code>, zero-copy PDX-native compositor. Handles window creation, movement, resizing, layering, and damage tracking. Incorporates a built-in tiling engine inspired by modern WMs.</p>
+
+<h3>SilkShell</h3>
+<p>The main user-facing process, running as a dedicated PD. Manages:</p>
+<ul>
+  <li><strong>Panel (silkbar):</strong> 40px top bar with clock, system tray, and workspace indicators. Catppuccin-themed, 3-zone layout (launcher, task, tray).</li>
+  <li><strong>Launcher:</strong> Fuzzy search and application grid, driven by keyboard and gestures.</li>
+  <li><strong>Notifications / OSD:</strong> System notifications and on-screen displays.</li>
+  <li><strong>Gesture Recognizer:</strong> Processes raw input PDX events for gestures (swipes, pinches).</li>
+</ul>
+
+<h3>SilkClient Library</h3>
+<p>A minimal Rust crate for applications to interface with the Silk DE. Provides simple functions for creating and managing windows. Applications draw directly into their PFN-backed buffers, committing updates via <code>SexCompositor</code>.</p>
+
+<h2 id="userland">Userland Fleet (Apps & Daemons)</h2>
+<table>
+  <thead><tr><th>App</th><th>Description</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td><strong>silkbar</strong></td><td>40px Catppuccin panel. 3-zone layout. HID clicks & applet registration.</td><td><span class="tag tag--done">Complete</span></td></tr>
+    <tr><td><strong>silknet</strong></td><td>Tray applet + 360×480 GUI. WireGuard/WiFi toggles via sexnet PDX calls.</td><td><span class="tag tag--done">Complete</span></td></tr>
+    <tr><td><strong>tatami</strong></td><td>900×640 Settings daemon (Display, Network, Sound, Input, Capabilities).</td><td><span class="tag tag--done">Complete</span></td></tr>
+    <tr><td><strong>toys</strong></td><td>Desktop widget framework (Clock, CPU sparkline, RAM, Calendar).</td><td><span class="tag tag--done">Complete</span></td></tr>
+    <tr><td><strong>sexsh v2</strong></td><td>GPU-accelerated terminal emulator.</td><td><span class="tag tag--done">Complete</span></td></tr>
+    <tr><td><strong>linen</strong></td><td>Dual-pane file manager.</td><td><span class="tag tag--done">Complete</span></td></tr>
+    <tr><td><strong>kaleidoscope</strong></td><td>Native Rust browser (servo port).</td><td><span class="tag tag--wip">Planned</span></td></tr>
+    <tr><td><strong>qupid</strong></td><td>Pure-Rust VLC clone media player.</td><td><span class="tag tag--wip">Planned</span></td></tr>
+  </tbody>
+</table>
+
+<h2 id="theming">SilkTheme System</h2>
+<p>Manages the visual appearance of the desktop. Supports system-wide dark/light modes and accent colors. Enables smooth, high-frame-rate animations (60–240 fps) due to the zero-copy foundation.</p>
+<ul>
+  <li>Blurred backgrounds</li>
+  <li>Rounded corners</li>
+  <li>Fluid scaling</li>
+  <li><strong>Colors:</strong> Catppuccin Mocha (Base: <code>#1E1E2E</code>, Text: <code>#CDD6F4</code>, Blue: <code>#89B4FA</code>)</li>
+  <li><strong>Surface:</strong> <code>silk-client</code> zero-copy PDX frames</li>
+  <li><strong>Font:</strong> <code>sex-graphics</code> CP437 8×8 engine</li>
+</ul>
+
+<h3>Key File Locations</h3>
+<ul>
+  <li><strong>sexdisplay Crate:</strong> <code>servers/sexdisplay/</code></li>
+  <li><strong>SexCompositor Definition:</strong> <code>servers/sexdisplay/src/lib.rs</code></li>
+  <li><strong>sex-pdx Crate:</strong> <code>crates/sex-pdx/</code></li>
+  <li><strong>sex-graphics Crate:</strong> <code>crates/sex-graphics/</code></li>
+</ul>
+
+<div class="callout callout--success">
+  <div class="callout__title">Phase 19 Completion</div>
+  <p>Silk DE Phase 19 is complete: kernel PDX IPC, SexCompositor, graphics primitives, input pipeline, Silk Shell, and full userland fleet (silkbar, silknet, tatami, toys, sexsh v2, linen). Infrastructure restored with workspace build rules.</p>
+</div>
+</div>
+<footer class="site-footer">
+  <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+</footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

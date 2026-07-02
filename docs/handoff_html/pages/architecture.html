@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Architecture — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="../handoffs/index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="eyebrow">SexOS · Core Design</p>
+  <h1>Architecture</h1>
+  <div class="doc-content">
+
+<div class="toc">
+  <div class="toc__title">Contents</div>
+  <ol>
+    <li><a href="#kernel-core">Kernel Core</a></li>
+    <li><a href="#memory">Memory &amp; Protection Domains</a></li>
+    <li><a href="#ipc">IPC Primitives: PDX &amp; Ring Buffers</a></li>
+    <li><a href="#capability">Capability System</a></li>
+    <li><a href="#servers">User-space Servers</a></li>
+    <li><a href="#roadmap-arch">Roadmap</a></li>
+  </ol>
+</div>
+
+<h2 id="kernel-core">🏛 Kernel Core</h2>
+<p>Sex is a <strong>microkernel</strong>, meaning it implements only the most fundamental primitives required to build a complete operating system. The goal is to keep the privileged code within a <strong>Tiny Trusted Computing Base (TCB)</strong> of roughly 5–8 kLOC.</p>
+
+<h3>🌟 Design Principles</h3>
+<ul>
+  <li><strong>Global Single Virtual Address Space (SAS):</strong> Every thread, process, and server shares the same 64-bit virtual address space.</li>
+  <li><strong>Hardware-Enforced Protection:</strong> Isolation is achieved through hardware features like Intel PKU/MPK and CHERI (where available), rather than page table switching.</li>
+  <li><strong>Zero-Copy IPC:</strong> High-performance messaging through shared memory regions and Protected Procedure Calls (PDX).</li>
+  <li><strong>Capability-Based Security:</strong> All system resources (memory, IPC ports, interrupts) are managed via unforgeable capabilities.</li>
+  <li><strong>Asynchronous I/O (Zero Mediation):</strong> Hardware signals are pushed into lockless ring buffers, eliminating context switch jitter.</li>
+</ul>
+
+<h2 id="memory">🔒 Memory &amp; Protection Domains</h2>
+
+<h3>🌏 Global Single Virtual Address Space (SAS)</h3>
+<p>In Sex, all data is mapped into a single 64-bit address space. This removes the need for page table switching (and the resulting TLB flushes) when moving between protection domains. Addresses are globally unique across the entire system.</p>
+
+<h3>🛡 Protection Domains (PDs)</h3>
+<p>Isolation is enforced by <strong>Protection Domains (PDs)</strong>. Each domain represents a logical set of permissions (Read, Write, Execute) over specific address ranges.</p>
+<ul>
+  <li><strong>Intel PKU / MPK:</strong> Sex uses Intel Memory Protection Keys (PKU) to assign a 4-bit "key" to each page. A hardware register (PKRU) defines the current thread's access rights for each of the 16 available keys.</li>
+  <li><strong>Atomic PKRU Management:</strong> Domain masks are managed via atomic operations to ensure thread-safe switches in multicore environments.</li>
+</ul>
+
+<div class="callout callout--info">
+  <div class="callout__title">Protection Key Model</div>
+  <table>
+    <thead><tr><th>PKEY</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>PKEY 0</code></td><td>Kernel + default (no restriction)</td></tr>
+      <tr><td><code>PKEY 1</code></td><td>sexdisplay / framebuffer (trusted display domain)</td></tr>
+      <tr><td><code>PKEY 2+</code></td><td>Future userland PDs</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2 id="ipc">⚡ IPC Primitives: PDX &amp; Ring Buffers</h2>
+
+<h3>🚀 Protected Procedure Calls (PDX)</h3>
+<p>The core IPC mechanism is a synchronous <strong>Protected Procedure Call (PDX)</strong>.</p>
+<ol>
+  <li><strong>Safe PDX:</strong> Validates a capability before performing a hardware-accelerated domain switch.</li>
+  <li><strong>Fused PDX:</strong> Bypasses capability checks for high-frequency hot-paths between "fused" domains.</li>
+</ol>
+
+<h3>📦 Asynchronous Ring Buffers</h3>
+<p>For interrupts and high-volume data transfer, Sex uses lockless, SPSC (Single Producer, Single Consumer) ring buffers. These are cache-line aligned to prevent false sharing on 128-core systems.</p>
+
+<h2 id="capability">🗝 Capability System</h2>
+<p>Sex uses a <strong>Sparse Capability</strong> system. A capability is an unforgeable token that proves its holder has the right to access a specific resource.</p>
+
+<h3>🛠 Capability Types</h3>
+<ul>
+  <li><strong>Memory Capabilities:</strong> Define access (R/W/X) to a range of virtual memory via "Memory Lending".</li>
+  <li><strong>IPC Capabilities:</strong> Grant permission to call or listen on a specific PDX port.</li>
+  <li><strong>Interrupt Capabilities:</strong> Allow a user-space sexdrive to respond to hardware interrupts via ring buffers.</li>
+  <li><strong>Domain Capabilities:</strong> Allow management and configuration of Protection Domains.</li>
+</ul>
+
+<h2 id="servers">🖥 User-space Servers</h2>
+<p>All traditional OS services run in isolated user-space Protection Domains.</p>
+
+<table>
+  <thead><tr><th>Server</th><th>Responsibility</th></tr></thead>
+  <tbody>
+    <tr><td><strong>sext</strong></td><td>Manages the global VAS and handles asynchronous page faults via large pages.</td></tr>
+    <tr><td><strong>Capability Server</strong></td><td>Central authority for capability policy, distributed for local core scaling.</td></tr>
+    <tr><td><strong>sexfiles</strong></td><td>Unified file system interface (Phase 3).</td></tr>
+    <tr><td><strong>sexnet</strong></td><td>User-space TCP/IP stack (Phase 3).</td></tr>
+    <tr><td><strong>sexinput</strong></td><td>Isolated hardware management (Mouse, Keyboard, etc.).</td></tr>
+  </tbody>
+</table>
+
+<h2 id="roadmap-arch">🗺 Architecture Roadmap</h2>
+
+<table>
+  <thead><tr><th>Phase</th><th>Status</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>0: Bootstrap</td><td><span class="tag tag--done">Complete ✅</span></td><td>Bootable kernel skeleton, basic HAL, VGA/serial console, UEFI.</td></tr>
+    <tr><td>1: Core Primitives</td><td><span class="tag tag--done">Stable 🚀</span></td><td>Physical memory manager, sexting, Protection Domains, PDX, SMP boot.</td></tr>
+    <tr><td>2: Capabilities &amp; Servers</td><td><span class="tag tag--done">Stable 🚀</span></td><td>Capability engine, user-space sext, SMP 128-core, interrupt management.</td></tr>
+    <tr><td>3: Services &amp; sexfiles</td><td><span class="tag tag--done">Stable 🚀</span></td><td>Standalone sexfiles, real block I/O, ramfs, POSIX syscall bridge.</td></tr>
+    <tr><td>4: Distribution</td><td><span class="tag tag--done">Complete ✅</span></td><td>Standalone sexnet, remote PDX routing, zero-copy packet transfer.</td></tr>
+    <tr><td>5: Hardware &amp; sexdrive</td><td><span class="tag tag--done">Complete ✅</span></td><td>ARM64 design, DDE-Sex shim, NVIDIA 3070 GPU, sexdrive server.</td></tr>
+    <tr><td>6: Signal Trampoline</td><td><span class="tag tag--done">Complete ✅</span></td><td>Background trampoline threads, POSIX sigaction ABI, lock-free signals.</td></tr>
+    <tr><td>7: Memory Subsystem</td><td><span class="tag tag--done">Complete ✅</span></td><td>Lock-free buddy allocator, PKU domain management, async #PF forwarding.</td></tr>
+    <tr><td>8: ELF Loader + PD Spawn</td><td><span class="tag tag--done">Complete ✅</span></td><td>ELF segment parsing, PD creation, sys_spawn_pd.</td></tr>
+    <tr><td>9: Driver Enablement</td><td><span class="tag tag--done">Complete ✅</span></td><td>NVMe/AHCI driver, zero-copy DMA, MSI-X, input stack.</td></tr>
+    <tr><td>10: Graphical Plumbing</td><td><span class="tag tag--done">Complete ✅</span></td><td>sexdisplay server, HID routing, zero-copy graphics, Mesa bootstrap.</td></tr>
+    <tr><td>11: GNU Pipeline</td><td><span class="tag tag--done">Complete ✅</span></td><td>POSIX pipes, fork/exec, coreutils, signal delivery, Lin-Sex compatibility.</td></tr>
+    <tr><td>12: Dynamic Translators</td><td><span class="tag tag--done">Complete ✅</span></td><td>sexnode translator, on-the-fly ELF→Sex binary translation.</td></tr>
+    <tr><td>13: Self-Hosting</td><td><span class="tag tag--done">Complete ✅</span></td><td>sex-gemini agent, sexstore packages, full in-Sex build loop.</td></tr>
+    <tr><td>14: Formal Verification</td><td><span class="tag tag--done">Complete ✅</span></td><td>Refined allocator, hardened PKU init, CHERI prep, verification hooks.</td></tr>
+    <tr><td>15: Linux Driver Translation</td><td><span class="tag tag--done">Complete ✅</span></td><td>DDE-style wrappers, on-the-fly Linux driver translation, hot-plug.</td></tr>
+    <tr><td>16: Userspace Maturity</td><td><span class="tag tag--done">Complete ✅</span></td><td>Operational sexnode, GitHub fetch, Linux benchmarks, FLSCHED verification.</td></tr>
+    <tr><td>19: sexfiles Overhaul</td><td><span class="tag tag--done">Complete ✅</span></td><td>100% lock-free VFS, zero-copy PKU handover, lock-free LRU cache.</td></tr>
+    <tr><td>20: Graphical Sex-Store</td><td><span class="tag tag--wip">In Progress 🏗️</span></td><td>One-click sexting, binary caching, app store GUI.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout callout--success">
+  <div class="callout__title">🏆 The Vision Realized</div>
+  <p>The Sex Microkernel project has successfully evolved from a single-core bootloader into a high-performance, distributed Single Address Space Operating System. By leveraging Intel PKU for zero-cost isolation and a global 64-bit VAS, we have created a platform that treats a sexnode of machines as one unified, secure, and lightning-fast computer.</p>
+</div>
+  </div>
+  <footer class="site-footer">
+    <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+  </footer>
+</main>
+<script>
+(function() {
+  var toggle = document.getElementById('themeToggle');
+  var root = document.documentElement;
+  var saved = localStorage.getItem('pretext-theme');
+  if (saved === 'dark') root.classList.add('theme-dark');
+  else if (saved === 'light') root.classList.add('theme-light');
+  if (saved) toggle.textContent = saved === 'dark' ? '◑' : '◐';
+  else toggle.textContent = window.matchMedia('(prefers-color-scheme: dark)').matches ? '◑' : '◐';
+  toggle.addEventListener('click', function() {
+    var isDark = root.classList.contains('theme-dark') || (!root.classList.contains('theme-light') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    var next = isDark ? 'light' : 'dark';
+    root.classList.remove('theme-dark', 'theme-light');
+    if (next === 'dark') root.classList.add('theme-dark');
+    else root.classList.add('theme-light');
+    localStorage.setItem('pretext-theme', next);
+    toggle.textContent = next === 'dark' ? '◑' : '◐';
+  });
+})();
+</script>
+</body>
+</html>

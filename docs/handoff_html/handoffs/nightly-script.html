@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>safe_sasos_handoff.sh — microkernel_nightly — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="breadcrumb"><a href="index.html">Handoffs</a><span>›</span>microkernel_nightly/scripts/safe_sasos_handoff.sh</p>
+  <p class="eyebrow">Nightly Branch Script</p>
+  <h1>safe_sasos_handoff.sh — microkernel_nightly</h1>
+  <div class="doc-content">
+<h2>Nightly SASOS Handoff Script</h2>
+<div class="callout callout--warn">
+  <div class="callout__title">Experimental</div>
+  <p>This script includes additional verification steps for experimental nightly features. May include extra diagnostics logging.</p>
+</div>
+<h3>Additional Checks (vs. Stable)</h3>
+<ul>
+  <li>Multi-PKEY domain validation</li>
+  <li>Experimental feature flag verification</li>
+  <li>Extended memory map diagnostics</li>
+</ul>
+  </div>
+  <footer class="site-footer">
+    <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+  </footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>

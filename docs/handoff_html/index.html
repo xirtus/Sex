@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SexOS — Sex Microkernel Documentation</title>
+<link rel="stylesheet" href="css/pretext.css">
+<style>
+  .hero .version { font: 12px/1 'Geist Mono', ui-monospace, monospace; color: var(--muted); letter-spacing: 0.04em; }
+  .stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 24px; }
+  .stat { text-align: center; padding: 18px 12px; border: 1px solid var(--rule); border-radius: 16px; background: var(--panel); box-shadow: var(--shadow-sm); }
+  .stat__num { font: 700 28px/1 'Geist', sans-serif; color: var(--accent); }
+  .stat__label { font-size: 0.82rem; color: var(--muted); margin-top: 4px; }
+  @media (max-width: 640px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="index.html" class="site-nav__logo">Sex Microkernel</a>
+    <div class="site-nav__links">
+      <a href="index.html" class="active">Docs</a>
+      <a href="handoffs/index.html">Handoffs</a>
+      <a href="pages/architecture.html">Architecture</a>
+      <a href="pages/roadmap.html">Roadmap</a>
+      <a href="pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <p class="eyebrow">SexOS · Single Address Space Operating System</p>
+    <h1>The Sex Microkernel<br>Documentation</h1>
+    <p class="version">v1.0.0 · Phase 22 · Pure PDX zero-copy architecture</p>
+    <p class="intro">
+      SexOS is a revolutionary microkernel written in Rust — 96× smaller than Linux and 4× faster.
+      Hardware-enforced isolation via Intel PKU. 100% lock-free wait-free core.
+      Sub-cycle context switching. Zero-copy I/O throughput.
+    </p>
+  </section>
+
+  <div class="stat-grid">
+    <div class="stat"><div class="stat__num">3.5×</div><div class="stat__label">IPC Faster Than Linux</div></div>
+    <div class="stat"><div class="stat__num">96×</div><div class="stat__label">Smaller Memory Footprint</div></div>
+    <div class="stat"><div class="stat__num">&lt;128K</div><div class="stat__label">Kernel Image Size</div></div>
+    <div class="stat"><div class="stat__num">22</div><div class="stat__label">Completed Phases</div></div>
+  </div>
+
+  <section class="card-grid" aria-label="Documentation sections">
+    <a class="card" href="pages/architecture.html">
+      <h2>Architecture</h2>
+      <p>Global SAS, PKU isolation, PDX IPC primitives, capability system, and user-space server design.</p>
+      <div class="card-meta"><span class="tag tag--accent">Core</span><span class="tag tag--done">Complete</span></div>
+    </a>
+
+    <a class="card" href="pages/roadmap.html">
+      <h2>Roadmap</h2>
+      <p>Phase-by-phase journey from bootloader skeleton to daily-driver desktop OS. All milestones tracked.</p>
+      <div class="card-meta"><span class="tag tag--accent">Planning</span><span class="tag tag--wip">Active</span></div>
+    </a>
+
+    <a class="card" href="pages/manual.html">
+      <h2>User Manual</h2>
+      <p>System commands, sex-src package management, service supervisors, and Linux compatibility layer.</p>
+      <div class="card-meta"><span class="tag tag--accent">Reference</span><span class="tag tag--done">Complete</span></div>
+    </a>
+
+    <a class="card" href="pages/system-manual.html">
+      <h2>System Developer Manual</h2>
+      <p>Kernel internals: boot flow, HAL, memory subsystem, PKU protection, ELF loader, IPC system, build system.</p>
+      <div class="card-meta"><span class="tag tag--accent">Deep Dive</span><span class="tag tag--done">Phase 21</span></div>
+    </a>
+
+    <a class="card" href="pages/servers-manual.html">
+      <h2>Server Reference Manual</h2>
+      <p>All ring-3 server processes: sexdisplay, silk-shell, sexinput, sexfiles, sexdrive, sexshop, sexnet, sexnode, sex-ld.</p>
+      <div class="card-meta"><span class="tag tag--accent">Reference</span><span class="tag tag--done">Complete</span></div>
+    </a>
+
+    <a class="card" href="pages/silk.html">
+      <h2>Silk Desktop Environment</h2>
+      <p>Pure PDX-native desktop: SexCompositor, SilkShell, SilkClient, tiling engine, themes, and zero-copy graphics.</p>
+      <div class="card-meta"><span class="tag tag--accent">Desktop</span><span class="tag tag--done">Phase 19</span></div>
+    </a>
+
+    <a class="card" href="pages/design-phases.html">
+      <h2>Design Phases</h2>
+      <p>Detailed design documents for Phases 3–14: Wayland lifting, signal trampolines, voxel rendering, and more.</p>
+      <div class="card-meta"><span class="tag tag--accent">Design</span><span class="tag">12 docs</span></div>
+    </a>
+
+    <a class="card" href="pages/applications.html">
+      <h2>Applications & Ecosystem</h2>
+      <p>Kaleidoscope browser, Qupid media player, CrewCast AI team playbook, COSMIC ports, font strategy.</p>
+      <div class="card-meta"><span class="tag tag--accent">Apps</span><span class="tag tag--wip">Growing</span></div>
+    </a>
+
+    <a class="card" href="pages/daily-driver.html">
+      <h2>Daily Driver Status</h2>
+      <p>Live development sessions, build fixes, interactivity patches, and the path to daily-driver readiness.</p>
+      <div class="card-meta"><span class="tag tag--accent">Dev Log</span><span class="tag tag--wip">Active</span></div>
+    </a>
+
+    <a class="card" href="pages/sessions.html">
+      <h2>Development Sessions</h2>
+      <p>Raw session logs: Claude sessions, Gemini outputs, Grok handoffs, and refactor templates.</p>
+      <div class="card-meta"><span class="tag tag--accent">Meta</span><span class="tag">Session logs</span></div>
+    </a>
+
+    <a class="card" href="handoffs/index.html">
+      <h2>Project Handoffs</h2>
+      <p>Historical handoff documents from microkernel_0.1_stable, microkernel_nightly, microkernel_wrapper_recovered, Sex-master, and active Hermes cursor-input work.</p>
+      <div class="card-meta"><span class="tag tag--accent">Archive</span><span class="tag">22 files</span></div>
+    </a>
+
+    <a class="card" href="pages/refactor-template.html">
+      <h2>Server Refactor Template</h2>
+      <p>Standard operating procedure for modifying SexOS servers. Environment constraints, PDX IPC rules, PKU isolation.</p>
+      <div class="card-meta"><span class="tag tag--accent">SOP</span><span class="tag tag--done">Canonical</span></div>
+    </a>
+  </section>
+
+  <footer class="site-footer">
+    <p>SexOS Documentation · Generated in Sex Microkernel format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+  </footer>
+</main>
+
+<script>
+(function() {
+  const toggle = document.getElementById('themeToggle');
+  const root = document.documentElement;
+
+  const saved = localStorage.getItem('pretext-theme');
+  if (saved === 'dark') root.classList.add('theme-dark');
+  else if (saved === 'light') root.classList.add('theme-light');
+
+  if (saved) {
+    updateIcon(saved);
+  } else {
+    updateIcon(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  }
+
+  toggle.addEventListener('click', () => {
+    const isDark = root.classList.contains('theme-dark') ||
+      (!root.classList.contains('theme-light') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const next = isDark ? 'light' : 'dark';
+    root.classList.remove('theme-dark', 'theme-light');
+    if (next === 'dark') root.classList.add('theme-dark');
+    else root.classList.add('theme-light');
+    localStorage.setItem('pretext-theme', next);
+    updateIcon(next);
+  });
+
+  function updateIcon(theme) {
+    toggle.textContent = theme === 'dark' ? '◑' : '◐';
+    toggle.setAttribute('aria-label', theme === 'dark' ? 'Toggle light mode' : 'Toggle dark mode');
+  }
+
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+    if (!localStorage.getItem('pretext-theme')) updateIcon(e.matches ? 'dark' : 'light');
+  });
+})();
+</script>
+</body>
+</html>

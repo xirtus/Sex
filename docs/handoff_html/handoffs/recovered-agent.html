@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AGENT_HANDOFF_GP_CLOCK.md — microkernel_wrapper_recovered — SexOS PreTeXt</title>
+<link rel="stylesheet" href="../css/pretext.css">
+</head>
+<body>
+<main class="page">
+  <nav class="site-nav">
+    <a href="../index.html" class="site-nav__logo">PreTeXt</a>
+    <div class="site-nav__links">
+      <a href="../index.html">Docs</a>
+      <a href="index.html">Handoffs</a>
+      <a href="../pages/architecture.html">Architecture</a>
+      <a href="../pages/roadmap.html">Roadmap</a>
+      <a href="../pages/manual.html">Manual</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    </div>
+  </nav>
+  <p class="breadcrumb"><a href="index.html">Handoffs</a><span>›</span>microkernel_wrapper_recovered/AGENT_HANDOFF_GP_CLOCK.md</p>
+  <p class="eyebrow">Recovered Branch · Agent GP Clock</p>
+  <h1>AGENT_HANDOFF_GP_CLOCK.md — microkernel_wrapper_recovered</h1>
+  <div class="doc-content">
+<h2>Agent Handoff: GP Clock Management</h2>
+<div class="callout callout--info">
+  <div class="callout__title">Timing & Synchronization</div>
+  <p>Specialized handoff for GP (General Purpose) clock management within the recovered microkernel wrapper. Covers timing, synchronization, and scheduling specifics for agent-based operations.</p>
+</div>
+<h3>Key Responsibilities</h3>
+<ul>
+  <li><strong>Clock Synchronization:</strong> Maintain consistent timekeeping across Protection Domains.</li>
+  <li><strong>Scheduling:</strong> Coordinate agent execution with microkernel preemptive scheduler.</li>
+  <li><strong>Timing Verification:</strong> Ensure deterministic behavior for lock-free operations.</li>
+</ul>
+  </div>
+  <footer class="site-footer">
+    <p>SexOS Documentation · Generated in PreTeXt format · <a href="https://github.com/xirtus/pretext">github.com/xirtus/pretext</a></p>
+  </footer>
+</main>
+<script>
+(function(){
+var t=document.getElementById('themeToggle'),r=document.documentElement,s=localStorage.getItem('pretext-theme');
+if(s==='dark')r.classList.add('theme-dark');else if(s==='light')r.classList.add('theme-light');
+if(s)t.textContent=s==='dark'?'◑':'◐';else t.textContent=window.matchMedia('(prefers-color-scheme: dark)').matches?'◑':'◐';
+t.addEventListener('click',function(){var d=r.classList.contains('theme-dark')||(!r.classList.contains('theme-light')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var n=d?'light':'dark';r.classList.remove('theme-dark','theme-light');if(n==='dark')r.classList.add('theme-dark');else r.classList.add('theme-light');localStorage.setItem('pretext-theme',n);t.textContent=n==='dark'?'◑':'◐';});
+})();
+</script>
+</body>
+</html>
