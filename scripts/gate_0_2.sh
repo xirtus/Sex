@@ -132,7 +132,12 @@ s.connect(sock_path)
 read_json(s)  # greeting
 send_cmd(s,{"execute":"qmp_capabilities"})
 
-points=[(1000,200),(5000,500),(12000,2000),(22000,6000),(30000,12000),(10000,28000)]
+# Steer to shell-owned surface 100 content, avoiding app-owned Mesh content.
+# QEMU usb-tablet reports are normalized into bounded relative deltas, so the
+# decreasing x sweep walks the shell cursor left from its boot position.
+points=[(30000,12000)]
+for x in range(29000, -1, -1000):
+    points.append((x,12000))
 for x,y in points:
     cmd={
       "execute":"input-send-event",
@@ -142,15 +147,35 @@ for x,y in points:
       ]}
     }
     send_cmd(s,cmd)
-    time.sleep(0.05)
+    time.sleep(0.08)
 
-# click press/release
-for down in (True, False):
-    cmd={"execute":"input-send-event","arguments":{"events":[
-      {"type":"btn","data":{"down":down,"button":"left"}}
-    ]}}
+# Let the guest drain the pre-drag motion before button-down, otherwise the
+# press can be observed while the cursor is still over app-owned Mesh content.
+time.sleep(2.0)
+
+# Press on shell-owned surface 100, drag right, then release.
+cmd={"execute":"input-send-event","arguments":{"events":[
+  {"type":"btn","data":{"down":True,"button":"left"}}
+]}}
+send_cmd(s,cmd)
+time.sleep(0.08)
+
+for x in range(1000, 9000, 1000):
+    cmd={
+      "execute":"input-send-event",
+      "arguments":{"events":[
+        {"type":"abs","data":{"axis":"x","value":x}},
+        {"type":"abs","data":{"axis":"y","value":12000}}
+      ]}
+    }
     send_cmd(s,cmd)
     time.sleep(0.05)
+
+cmd={"execute":"input-send-event","arguments":{"events":[
+  {"type":"btn","data":{"down":False,"button":"left"}}
+]}}
+send_cmd(s,cmd)
+time.sleep(0.05)
 
 s.close()
 PY

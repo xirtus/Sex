@@ -9480,7 +9480,44 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 arg0 as i32, arg1 as i32, POINTER_BUTTONS
             );
         }
-        let _ = apply_rel_pointer(arg0 as i32, arg1 as i32);
+        let (dx, dy) = apply_rel_pointer(arg0 as i32, arg1 as i32);
+        static mut HID_DRAIN_USB_POINTER_SHELL_APPLY_BUDGET: u32 = 64;
+        if HID_DRAIN_USB_POINTER_SHELL_APPLY_BUDGET > 0 {
+            HID_DRAIN_USB_POINTER_SHELL_APPLY_BUDGET -= 1;
+            serial_println!(
+                "[usb.pointer.shell.apply] x={} y={} dx={} dy={} ok=1",
+                POINTER_X,
+                POINTER_Y,
+                dx,
+                dy
+            );
+        }
+        static mut HID_DRAIN_POINTER_MOVE_OK_BUDGET: u32 = 8;
+        if (dx != 0 || dy != 0) && HID_DRAIN_POINTER_MOVE_OK_BUDGET > 0 {
+            HID_DRAIN_POINTER_MOVE_OK_BUDGET -= 1;
+            serial_println!(
+                "[input.pointer.move.ok] x={} y={} dx={} dy={}",
+                POINTER_X,
+                POINTER_Y,
+                dx,
+                dy
+            );
+        }
+        let mut mutated = false;
+        clear_drag_if_dead();
+        clear_resize_if_dead();
+        if drag_move_focused(dx, dy) {
+            mutated = true;
+        }
+        if resize_accumulate_delta(dx, dy) {
+            mutated = true;
+        }
+        if apply_resize_geometry(dx, dy) {
+            mutated = true;
+        }
+        if mutated {
+            emit_snapshot();
+        }
         if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
             let new_focus = FOCUSED_SURFACE_ID;
             let ok = (old_focus == new_focus) as u8;
@@ -9519,6 +9556,15 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             "[shell.pointer.button] btn={} down={} x={} y={}",
             button, pressed as u8, POINTER_X, POINTER_Y
         );
+        static mut BUTTON_EDGE_OK_BUDGET: u32 = 16;
+        if BUTTON_EDGE_OK_BUDGET > 0 {
+            BUTTON_EDGE_OK_BUDGET -= 1;
+            if pressed {
+                serial_println!("[input.button.down.ok] btn={} x={} y={}", button, POINTER_X, POINTER_Y);
+            } else {
+                serial_println!("[input.button.up.ok] btn={} x={} y={}", button, POINTER_X, POINTER_Y);
+            }
+        }
         if CLICK_DRAG_PROOF_ENABLED && button == 1 {
             if pressed {
                 click_drag_proof_begin_click_once();
@@ -9611,6 +9657,10 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     InteractionState::Dragging { surface_id, .. } => {
                         serial_println!("[shell.interact.drag.end] sid={} x={} y={}",
                             surface_id, POINTER_X, POINTER_Y);
+                        serial_println!(
+                            "[silk.drag.end.ok] sid={} x={} y={}",
+                            surface_id, POINTER_X, POINTER_Y
+                        );
                         serial_println!(
                             "[shell.drag.end] sid={} frame=0 x={} y={}",
                             surface_id, POINTER_X, POINTER_Y
@@ -20676,6 +20726,11 @@ unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
                         surface_id, POINTER_X, POINTER_Y, dx, dy
                     );
                 }
+                static mut DRAG_MOVE_OK_BUDGET: u32 = 8;
+                if DRAG_MOVE_OK_BUDGET > 0 {
+                    DRAG_MOVE_OK_BUDGET -= 1;
+                    serial_println!("[silk.drag.move.ok] sid={} dx={} dy={}", surface_id, dx, dy);
+                }
             }
             // Integrated contract diagnostic: logs drag target surface_id and
             // current FOCUSED_SURFACE_ID. When id == focus, drag target matches
@@ -21340,6 +21395,16 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                 let committed = if sid == FOCUSED_SURFACE_ID { 0u8 } else { 1u8 };
                 surface_input_lifetime_mark_click_target(sid, live, committed, live);
                 surface_input_lifetime_try_done();
+                static mut CLICK_HIT_LIVE_OK_BUDGET: u32 = 8;
+                if live == 1 && CLICK_HIT_LIVE_OK_BUDGET > 0 {
+                    CLICK_HIT_LIVE_OK_BUDGET -= 1;
+                    serial_println!("[silk.click.hit.live.ok] target={} x={} y={}", sid, px, py);
+                }
+                static mut FOCUS_SET_OK_BUDGET: u32 = 8;
+                if sid == FOCUSED_SURFACE_ID && FOCUS_SET_OK_BUDGET > 0 {
+                    FOCUS_SET_OK_BUDGET -= 1;
+                    serial_println!("[silk.focus.set.ok] id={} source=click", sid);
+                }
             }
         }
         HitTarget::None => {
@@ -21445,6 +21510,12 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                                         "[shell.drag.begin] sid={} frame={} x={} y={}",
                                         surface_id, frame_id, px, py
                                     );
+                                }
+                                static mut RIM_DRAG_BEGIN_OK_BUDGET: u32 = 8;
+                                if RIM_DRAG_BEGIN_OK_BUDGET > 0 {
+                                    RIM_DRAG_BEGIN_OK_BUDGET -= 1;
+                                    serial_println!("[silk.drag.begin.ok] sid={} zone=chrome frame={} x={} y={}",
+                                        surface_id, frame_id, px, py);
                                 }
                             }
                         } else {
@@ -21586,6 +21657,11 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
             "[shell.drag.begin] sid={} frame=0 x={} y={}",
             FOCUSED_SURFACE_ID, px, py
         );
+        static mut DRAG_BEGIN_OK_BUDGET: u32 = 8;
+        if DRAG_BEGIN_OK_BUDGET > 0 {
+            DRAG_BEGIN_OK_BUDGET -= 1;
+            serial_println!("[silk.drag.begin.ok] sid={} zone=content x={} y={}", FOCUSED_SURFACE_ID, px, py);
+        }
         DRAG_PENDING_ACTIVE = false;
     } else if !silkbar_handled && matches!(target, HitTarget::FrameChrome { kind: FRAME_CHROME_TAB_STRIP, .. }) {
         serial_println!("[shell.drag.skip.chrome] kind=tab_strip x={} y={}", px, py);
@@ -24523,6 +24599,12 @@ pub extern "C" fn _start() -> ! {
                                         dy
                                     );
                                 }
+                                static mut POINTER_MOVE_OK_BUDGET: u32 = 8;
+                                if (dx != 0 || dy != 0) && POINTER_MOVE_OK_BUDGET > 0 {
+                                    POINTER_MOVE_OK_BUDGET -= 1;
+                                    serial_println!("[input.pointer.move.ok] x={} y={} dx={} dy={}",
+                                        POINTER_X, POINTER_Y, dx, dy);
+                                }
                             }
                             if matches!(INTERACTION, InteractionState::ClickPending) && DRAG_PENDING_ACTIVE {
                                 let pdx = POINTER_X - DRAG_PENDING_START_X;
@@ -24675,6 +24757,10 @@ pub extern "C" fn _start() -> ! {
                                         }
                                         InteractionState::Dragging { surface_id, .. } => {
                                             serial_println!("[shell.interact.drag.end] sid={} x={} y={}", surface_id, POINTER_X, POINTER_Y);
+                                            serial_println!(
+                                                "[silk.drag.end.ok] sid={} x={} y={}",
+                                                surface_id, POINTER_X, POINTER_Y
+                                            );
                                             DRAG_PENDING_ACTIVE = false;
                                             if try_snap_on_drag_release(surface_id, POINTER_X, POINTER_Y) {
                                                 mutated = true;
