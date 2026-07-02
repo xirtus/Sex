@@ -208,6 +208,7 @@ struct HidDevice {
     slot_id: u32,
     role: HidRole,
     intr_dci: u32,
+    intr_ring_phys: u64,
     intr_ring_va: u64,
     intr_report_phys: u64,
     intr_report_va: u64,
@@ -216,8 +217,8 @@ struct HidDevice {
 impl HidDevice {
     const fn empty() -> Self {
         HidDevice { active: false, slot_id: 0, role: HidRole::Unknown,
-            intr_dci: 0, intr_ring_va: 0, intr_report_phys: 0,
-            intr_report_va: 0, intr_report_len: 0 }
+            intr_dci: 0, intr_ring_phys: 0, intr_ring_va: 0,
+            intr_report_phys: 0, intr_report_va: 0, intr_report_len: 0 }
     }
 }
 
@@ -727,7 +728,7 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[sexusb.xhci.cmd.noop.event.raw] d0={:#x} d1={:#x} d2={:#x} d3={:#x} type={} cc={}",
                     ev_d0, ev_d1, ev_d2, ev_d3, ev_type, cc);
                 // Clear consumed event cycle bit (spec 4.11.4)
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 // Advance event dequeue pointer and update ERDP.
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS {
@@ -741,7 +742,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             } else {
                 // Consume unexpected event to avoid ev_idx stall
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
@@ -806,7 +807,7 @@ pub extern "C" fn _start() -> ! {
                 en_ok = cc == TRB_CC_SUCCESS;
                 en_slot_id = (ev_d3 >> 24) & 0xFF;
                 // Clear consumed event cycle bit (spec 4.11.4)
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 // Advance event dequeue pointer and update ERDP.
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS {
@@ -820,7 +821,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             } else {
                 // Consume unexpected event to avoid ev_idx stall
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
@@ -1240,7 +1241,7 @@ pub extern "C" fn _start() -> ! {
                     serial_println!("[sexusb.xhci.address_device.complete.bad] cc={} slot={}", ev_cc, ev_slot_id);
                 }
                 // Clear consumed event cycle bit (spec 4.11.4)
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 // Advance event dequeue pointer and update ERDP.
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS {
@@ -1254,7 +1255,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             } else {
                 // Consume unexpected event to avoid ev_idx stall
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
@@ -1433,7 +1434,7 @@ pub extern "C" fn _start() -> ! {
                     serial_println!("[sexusb.xhci.desc8.event.bad] cc={} slot={} ep={}", cc, slot, ep);
                 }
                 // Clear consumed event cycle bit (spec 4.11.4)
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 // Advance event dequeue pointer and update ERDP.
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS {
@@ -1447,7 +1448,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             } else {
                 // Consume unexpected event to avoid ev_idx stall
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
@@ -1598,7 +1599,7 @@ pub extern "C" fn _start() -> ! {
                     serial_println!("[sexusb.xhci.eval_ctx.event.bad] cc={} slot={}", cc, slot);
                 }
                 // Clear consumed event cycle bit (spec 4.11.4)
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 // Advance event dequeue pointer and update ERDP.
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS {
@@ -1612,7 +1613,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             } else {
                 // Consume unexpected event to avoid ev_idx stall
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
@@ -1769,7 +1770,7 @@ pub extern "C" fn _start() -> ! {
                     serial_println!("[sexusb.xhci.full18.event.bad] cc={} slot={} ep={}", cc, slot, ep);
                 }
                 // Clear consumed event cycle bit (spec 4.11.4)
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 // Advance event dequeue pointer and update ERDP.
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS {
@@ -1783,7 +1784,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             } else {
                 // Consume unexpected event to avoid ev_idx stall
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
@@ -1981,7 +1982,7 @@ pub extern "C" fn _start() -> ! {
                     serial_println!("[sexusb.xhci.config.header.event.bad] cc={} slot={} ep={}", cc, slot, ep);
                 }
                 // Clear consumed event cycle bit (spec 4.11.4)
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 // Advance event dequeue pointer and update ERDP.
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS {
@@ -1995,7 +1996,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             } else {
                 // Consume unexpected event to avoid ev_idx stall
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
@@ -2138,7 +2139,7 @@ pub extern "C" fn _start() -> ! {
                     serial_println!("[sexusb.xhci.config.full.event.bad] cc={} slot={} ep={}", cc, slot, ep);
                 }
                 // Clear consumed event cycle bit (spec 4.11.4)
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 // Advance event dequeue pointer and update ERDP.
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS {
@@ -2152,7 +2153,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             } else {
                 // Consume unexpected event to avoid ev_idx stall
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
@@ -2560,7 +2561,7 @@ pub extern "C" fn _start() -> ! {
                 } else {
                     serial_println!("[sexusb.xhci.hid.report_desc.event.bad] cc={} slot={} ep={}", cc, slot, ep);
                 }
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS {
                     ev_idx = 0;
@@ -2572,7 +2573,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             } else {
                 // Consume unexpected event to avoid ev_idx stall
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
@@ -2728,7 +2729,7 @@ pub extern "C" fn _start() -> ! {
                 } else {
                     serial_println!("[sexusb.xhci.set_config.event.bad] cc={} slot={} ep={}", cc, slot, ep);
                 }
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS {
                     ev_idx = 0;
@@ -2740,7 +2741,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             } else {
                 // Consume unexpected event to avoid ev_idx stall
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
@@ -2788,7 +2789,11 @@ pub extern "C" fn _start() -> ! {
     trb_write_volatile(
         ep0_ring_va,
         setidle_deq_index,
-        0x0100_0A21u32, // bmReqType=0x21, bReq=0x0A, wValue=0x0100
+        // bmReqType=0x21, bReq=0x0A (SET_IDLE), wValue=0x0000: duration=0 =
+        // report only on change (HID 1.11 §7.2.4). duration=1 (4ms) made QEMU
+        // stream ~250 all-zero idle reports/s, saturating the sexusb loop and
+        // starving slot2 tablet cadence (run15).
+        0x0000_0A21u32,
         hid_interface_number as u32, // wIndex=interface, wLength=0
         8u32,
         setidle_setup_d3,
@@ -2817,7 +2822,7 @@ pub extern "C" fn _start() -> ! {
                 if cc == TRB_CC_SUCCESS && slot == en_slot_id && ep == 1 && residue == 0 {
                     setidle_ok = true;
                 }
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS {
                     ev_idx = 0;
@@ -2829,7 +2834,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             } else {
                 // Consume unexpected event to avoid ev_idx stall
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
@@ -2883,16 +2888,23 @@ pub extern "C" fn _start() -> ! {
     }
     unsafe {
         core::ptr::write_bytes(intr_ring_va as *mut u8, 0, PAGE_SIZE as usize);
-        core::ptr::write_bytes(intr_report_va as *mut u8, 0, intr_report_len as usize);
+        core::ptr::write_bytes(intr_report_va as *mut u8, 0, PAGE_SIZE as usize);
         core::ptr::write_bytes(input_ctx_va as *mut u8, 0, PAGE_SIZE as usize);
     }
     // Circular interrupt Transfer Ring: 15 Normal slots + Link TRB at slot 15.
     // Link TRB wraps ring back to slot 0 with TC=1 (toggles xHCI consumer cycle).
     const TRB_TYPE_LINK: u32 = 6;
     const INTR_TR_RING_SIZE: u64 = 16;
+    // Cadence fix: keep eight interrupt-IN TRBs outstanding per HID endpoint.
+    // The ring is eight Normal TRBs plus a Link TRB at index 8. Completion
+    // index N maps to report buffer offset N*64 and is rearmed in-place with
+    // the next cycle bit before forwarding the decoded report.
+    const HID_INFLIGHT: u64 = 8;
+    const HID_BUF_STRIDE: u64 = 64;
+    const HID_RING_LINK_INDEX: u64 = HID_INFLIGHT;
     trb_write_volatile(
         intr_ring_va,
-        INTR_TR_RING_SIZE - 1,
+        HID_RING_LINK_INDEX,
         (intr_ring_phys & 0xFFFF_FFFF) as u32,
         (intr_ring_phys >> 32) as u32,
         0u32,
@@ -2983,7 +2995,7 @@ pub extern "C" fn _start() -> ! {
                 } else {
                     serial_println!("[sexusb.xhci.intr_in.config_ep.event.bad] cc={} slot={}", cc, slot);
                 }
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS {
                     ev_idx = 0;
@@ -2995,7 +3007,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             }
             // Non-command event: consume and continue.
-            trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+            // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
             ev_idx += 1;
             if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
             let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3044,7 +3056,7 @@ pub extern "C" fn _start() -> ! {
                     let cc = (ev_d2 >> 24) & 0xFF;
                     s2_en_ok = cc == TRB_CC_SUCCESS;
                     s2_slot_id = (ev_d3 >> 24) & 0xFF;
-                    trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                    // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                     ev_idx += 1;
                     if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                     mmio_write32(intr_base, XHCI_INTR_ERDP, (event_ring_phys + ev_idx * 16) as u32);
@@ -3052,7 +3064,7 @@ pub extern "C" fn _start() -> ! {
                     break;
                 } else {
                     // Consume unexpected event to avoid ev_idx stall
-                    trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                    // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                     ev_idx += 1;
                     if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                     let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3174,7 +3186,7 @@ pub extern "C" fn _start() -> ! {
                     if cc == TRB_CC_SUCCESS && ev_slot == s2_slot_id {
                         s2_addr_ok = true;
                     }
-                    trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                    // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                     ev_idx += 1;
                     if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                     mmio_write32(intr_base, XHCI_INTR_ERDP, (event_ring_phys + ev_idx * 16) as u32);
@@ -3182,7 +3194,7 @@ pub extern "C" fn _start() -> ! {
                     break;
                 } else {
                     // Consume unexpected event to avoid ev_idx stall
-                    trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                    // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                     ev_idx += 1;
                     if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                     let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3264,7 +3276,7 @@ pub extern "C" fn _start() -> ! {
                         if cc == TRB_CC_SUCCESS && slot == s2_slot_id && ep == 1 {
                             s_desc8_ok = true;
                         }
-                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                         ev_idx += 1;
                         if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                         let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3273,7 +3285,7 @@ pub extern "C" fn _start() -> ! {
                         break;
                     } else {
                         // Consume unexpected event to avoid ev_idx stall
-                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                         ev_idx += 1;
                         if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                         let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3337,7 +3349,7 @@ pub extern "C" fn _start() -> ! {
                         if cc == TRB_CC_SUCCESS && slot == s2_slot_id && ep == 1 {
                             s_full_ok = true;
                         }
-                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                         ev_idx += 1;
                         if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                         let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3346,7 +3358,7 @@ pub extern "C" fn _start() -> ! {
                         break;
                     } else {
                         // Consume unexpected event to avoid ev_idx stall
-                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                         ev_idx += 1;
                         if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                         let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3422,7 +3434,7 @@ pub extern "C" fn _start() -> ! {
                         if cc == TRB_CC_SUCCESS && slot == s2_slot_id && ep == 1 {
                             s_cfg_hdr_ok = true;
                         }
-                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                         ev_idx += 1;
                         if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                         let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3431,7 +3443,7 @@ pub extern "C" fn _start() -> ! {
                         break;
                     } else {
                         // Consume unexpected event to avoid ev_idx stall
-                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                         ev_idx += 1;
                         if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                         let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3520,7 +3532,7 @@ pub extern "C" fn _start() -> ! {
                         if cc == TRB_CC_SUCCESS && slot == s2_slot_id && ep == 1 {
                             s_cfg_full_ok = true;
                         }
-                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                         ev_idx += 1;
                         if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                         let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3529,7 +3541,7 @@ pub extern "C" fn _start() -> ! {
                         break;
                     } else {
                         // Consume unexpected event to avoid ev_idx stall
-                        trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                        // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                         ev_idx += 1;
                         if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                         let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3728,7 +3740,7 @@ pub extern "C" fn _start() -> ! {
                     } else {
                         serial_println!("[sexusb.slot2.set_config.event.bad] cc={} slot={} ep={}", cc, slot, ep);
                     }
-                    trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                    // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                     ev_idx += 1;
                     if ev_idx >= EVENT_RING_TRBS {
                         ev_idx = 0;
@@ -3740,7 +3752,7 @@ pub extern "C" fn _start() -> ! {
                     break;
                 } else {
                     // Consume unexpected event to avoid ev_idx stall
-                    trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                    // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                     ev_idx += 1;
                     if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                     let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3804,15 +3816,14 @@ pub extern "C" fn _start() -> ! {
         // Zero pages
         unsafe {
             core::ptr::write_bytes(s2_intr_ring_va as *mut u8, 0, PAGE_SIZE as usize);
-            core::ptr::write_bytes(s2_intr_report_va as *mut u8, 0, s2_intr_report_len as usize);
+            core::ptr::write_bytes(s2_intr_report_va as *mut u8, 0, PAGE_SIZE as usize);
             core::ptr::write_bytes(s2_input_va as *mut u8, 0, PAGE_SIZE as usize);
         }
 
         // Slot2 interrupt Transfer Ring: 15 Normal TRB slots + Link TRB at slot 15.
-        const S2_INTR_TR_RING_SIZE: u64 = 16;
         trb_write_volatile(
             s2_intr_ring_va,
-            S2_INTR_TR_RING_SIZE - 1,
+            HID_RING_LINK_INDEX,
             (s2_intr_ring_phys & 0xFFFF_FFFF) as u32,
             (s2_intr_ring_phys >> 32) as u32,
             0u32,
@@ -3882,7 +3893,7 @@ pub extern "C" fn _start() -> ! {
                         serial_println!("[sexusb.slot2.configure_endpoint.event.bad] cc={} slot={}",
                             cc, slot);
                     }
-                    trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                    // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                     ev_idx += 1;
                     if ev_idx >= EVENT_RING_TRBS {
                         ev_idx = 0;
@@ -3894,7 +3905,7 @@ pub extern "C" fn _start() -> ! {
                     break;
                 }
                 // Non-command event: consume and continue.
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
@@ -3926,7 +3937,8 @@ pub extern "C" fn _start() -> ! {
 
         devices[1] = HidDevice { active: true, slot_id: s2_slot_id,
             role: s2_hid_role, intr_dci: s2_intr_dci,
-            intr_ring_va: s2_intr_ring_va, intr_report_phys: s2_intr_report_phys,
+            intr_ring_phys: s2_intr_ring_phys, intr_ring_va: s2_intr_ring_va,
+            intr_report_phys: s2_intr_report_phys,
             intr_report_va: s2_intr_report_va, intr_report_len: s2_intr_report_len };
         device_count = 2;
     }
@@ -3934,7 +3946,7 @@ pub extern "C" fn _start() -> ! {
 
 
     devices[0] = HidDevice { active: true, slot_id: single_bind.slot_id,
-        role: single_bind.role, intr_dci, intr_ring_va,
+        role: single_bind.role, intr_dci, intr_ring_phys, intr_ring_va,
         intr_report_phys, intr_report_va, intr_report_len };
     if device_count == 0 { device_count = 1; }
 
@@ -3954,15 +3966,24 @@ pub extern "C" fn _start() -> ! {
     );
     serial_println!("[usb.xhci.multiport.pass] ok=1");
 
-    // C1: queue slot2 first TRB after slot1 config_ep completes.
+    // C1: prime slot2 with HID_INFLIGHT interrupt-IN TRBs so xHCI can complete
+    // back-to-back reports without waiting for software re-arm (cadence fix).
+    // Each ring position p uses report buffer offset p*64 (15*64 < PAGE_SIZE),
+    // so in-flight completions never share a buffer slot.
     if device_count > 1 {
         let d2 = &devices[1];
-        trb_write_volatile(d2.intr_ring_va, 0,
-            (d2.intr_report_phys & 0xFFFF_FFFF) as u32,
-            (d2.intr_report_phys >> 32) as u32,
-            d2.intr_report_len,
-            (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | 1u32);
+        let mut p: u64 = 0;
+        while p < HID_INFLIGHT {
+            trb_write_volatile(d2.intr_ring_va, p,
+                ((d2.intr_report_phys + p * HID_BUF_STRIDE) & 0xFFFF_FFFF) as u32,
+                ((d2.intr_report_phys + p * HID_BUF_STRIDE) >> 32) as u32,
+                d2.intr_report_len,
+                (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | 1u32);
+            p += 1;
+        }
         mmio_write32(db_base, d2.slot_id as u64 * 4, d2.intr_dci);
+        serial_println!("[sexusb.hid.inflight.init] slot={} ep={} count={}",
+            d2.slot_id, d2.intr_dci, HID_INFLIGHT);
         serial_println!("[sexusb.slot2.poll.start] slot={} dci={}",
             d2.slot_id, d2.intr_dci);
     }
@@ -4105,8 +4126,7 @@ pub extern "C" fn _start() -> ! {
     let mut hid_event_any_seen = false;
     let mut hid_event_any_code: u32 = 0;
     let mut i: u32 = 0;
-    let mut intr_prod: u64 = 0;
-    let mut intr_pcs: u32 = 1;
+    let intr_pcs: u32 = 1;
     serial_println!("[usb.hid.boot_mouse.begin]");
     serial_println!("[usb.hid.intr_liveness.begin]");
     serial_println!("[sexusb.ready]");
@@ -4118,25 +4138,22 @@ pub extern "C" fn _start() -> ! {
         let _ = send_report_to_sexinput(OP_USB_MOUSE_REPORT, 0, 0, 0);
     }
     const HID_INTR_LIVENESS_BUDGET: usize = POLL_BUDGET * 4;
-    loop {
-        let mut skip_advance = false;
-        // NOTE: report buffer is NOT cleared here. xHCI overwrites it on TRB
-        // completion. Clearing here would destroy data from a re-arm TRB that
-        // completed during IPC (see keyboard re-arm path). The re-arm path
-        // clears the buffer explicitly before queueing its TRB.
-        let clear_len = if intr_report_len > 8 { 8 } else { intr_report_len };
-
-        // Queue one interrupt-IN Normal TRB at current ring producer slot.
-        // Circular ring (Link TRB at slot INTR_TR_RING_SIZE-1) keeps xHCI dequeue
-        // advancing correctly across iterations — no stuck-at-slot-1 stall.
-        trb_write_volatile(
-            intr_ring_va,
-            intr_prod,
-            (intr_report_phys & 0xFFFF_FFFF) as u32,
-            (intr_report_phys >> 32) as u32,
-            intr_report_len,
-            (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs, // IOC + current cycle
-        );
+    // Prime slot1 with HID_INFLIGHT interrupt-IN TRBs (cadence fix): xHCI can
+    // complete back-to-back reports without waiting for per-event re-arm.
+    // Ring position p uses report buffer offset p*64 (never shared).
+    {
+        let mut p: u64 = 0;
+        while p < HID_INFLIGHT {
+            trb_write_volatile(
+                intr_ring_va,
+                p,
+                ((intr_report_phys + p * HID_BUF_STRIDE) & 0xFFFF_FFFF) as u32,
+                ((intr_report_phys + p * HID_BUF_STRIDE) >> 32) as u32,
+                intr_report_len,
+                (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs, // IOC + current cycle
+            );
+            p += 1;
+        }
         serial_println!(
             "[usb.hid.intr.trb.submit] slot={} dci={} len={} cycle={} ioc=1",
             single_bind.slot_id,
@@ -4144,18 +4161,52 @@ pub extern "C" fn _start() -> ! {
             intr_report_len,
             intr_pcs
         );
+        serial_println!("[sexusb.hid.inflight.init] slot={} ep={} count={}",
+            single_bind.slot_id, intr_dci, HID_INFLIGHT);
         mmio_write32(db_base, single_bind.slot_id as u64 * 4, intr_dci);
+    }
+    loop {
+        let mut skip_advance = false;
+        // NOTE: report buffers are NOT cleared here. xHCI overwrites them on
+        // TRB completion. The re-arm paths clear the specific 64-byte buffer
+        // slot before queueing a replacement TRB.
+        let clear_len = if intr_report_len > 8 { 8 } else { intr_report_len };
 
         // Wait indefinitely: xHCI retries interrupt-IN until device sends data.
         let mut intr_ok = false;
         let mut intr_residue: u32 = 0;
         let mut intr_actual: u32 = 0;
+        // Report-buffer offset of the completed TRB (ring position * 64),
+        // derived from the Transfer Event's TRB pointer.
+        let mut intr_completed_idx: u64 = 0;
+        let mut intr_completed_off: u64 = 0;
         let mut intr_wait_polls: usize = 0;
         while intr_wait_polls < HID_INTR_LIVENESS_BUDGET {
             intr_wait_polls += 1;
             hid_report_total_polls = hid_report_total_polls.wrapping_add(1);
             let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
             if (ev_d3 & 1) != (ev_dcs as u32) {
+                // Liveness kick: QEMU 11 xhci intermittently loses the device
+                // wakeup for a pending interrupt-IN TRB (tablet stalls after a
+                // random number of events with a valid TRB armed — runs 15-17).
+                // Re-ringing the doorbell on an armed ring is harmless and
+                // revives the endpoint. Every ~20k empty polls.
+                if intr_wait_polls % 20_000 == 0 {
+                    mmio_write32(db_base, single_bind.slot_id as u64 * 4, intr_dci);
+                    if device_count > 1 {
+                        let d2 = &devices[1];
+                        if d2.active {
+                            mmio_write32(db_base, d2.slot_id as u64 * 4, d2.intr_dci);
+                        }
+                    }
+                    unsafe {
+                        static mut KICK_BUDGET: u32 = 16;
+                        if KICK_BUDGET > 0 {
+                            KICK_BUDGET -= 1;
+                            serial_println!("[sexusb.hid.liveness.kick] polls={}", intr_wait_polls);
+                        }
+                    }
+                }
                 sys_yield();
                 continue;
             }
@@ -4177,6 +4228,11 @@ pub extern "C" fn _start() -> ! {
             }
             if ev_type == TRB_TYPE_TRANSFER_EVENT {
                 intr_residue = ev_d2 & 0xFFFFFF;
+                // Transfer Event dw0/dw1 = physical pointer to the completed
+                // transfer TRB. Ring position determines the report buffer slot.
+                let ev_d0 = trb_read_dword(event_ring_va, ev_idx, 0);
+                let ev_d1 = trb_read_dword(event_ring_va, ev_idx, 1);
+                let ev_trb_ptr = ((ev_d1 as u64) << 32) | (ev_d0 as u64);
                 let mut matched_idx: i32 = -1;
                 for midx in 0..device_count {
                     let d = &devices[midx];
@@ -4229,6 +4285,36 @@ pub extern "C" fn _start() -> ! {
                     } else {
                         0
                     };
+                    let mut event_idx = HID_INFLIGHT;
+                    if ev_trb_ptr >= intr_ring_phys {
+                        let pos = (ev_trb_ptr - intr_ring_phys) / 16;
+                        if pos < HID_INFLIGHT {
+                            event_idx = pos;
+                            intr_completed_idx = pos;
+                            intr_completed_off = pos * HID_BUF_STRIDE;
+                        }
+                    }
+                    if event_idx >= HID_INFLIGHT {
+                        serial_println!(
+                            "[sexusb.hid.transfer.index.bad] slot={} ep={} ptr={:#x} ring={:#x}",
+                            slot,
+                            ep,
+                            ev_trb_ptr,
+                            intr_ring_phys
+                        );
+                    } else {
+                        unsafe {
+                            static mut XFER_EVENT_BUDGET: u32 = 32;
+                            if XFER_EVENT_BUDGET > 0 {
+                                XFER_EVENT_BUDGET -= 1;
+                                serial_println!(
+                                    "[sexusb.hid.transfer.event] slot={} ep={} index={}",
+                                    slot,
+                                    ep,
+                                    event_idx
+                                );
+                            }
+                        }
                     if cc == TRB_CC_SHORT_PACKET && !hid_short_packet_begin_emitted {
                         hid_short_packet_begin_emitted = true;
                         serial_println!("[usb.hid.short_packet.begin]");
@@ -4264,7 +4350,7 @@ pub extern "C" fn _start() -> ! {
                                 "[usb.hid.boot_mouse.stop] actionable=1 reason=no_payload"
                             );
                             hid_report_timeout_emitted = true;
-                            trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                            // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                             ev_idx += 1;
                             if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                             let new_erdp = event_ring_phys + ev_idx * 16;
@@ -4281,9 +4367,12 @@ pub extern "C" fn _start() -> ! {
                         cc,
                         intr_actual
                     );
+                    }
                 } else {
                     serial_println!("[sexusb.xhci.intr_in.event.bad] cc={} slot={} ep={}", cc, slot, ep);
-                    // C2C: bounded slot2 report classify (no forwarding).
+                    // Slot2 demux path: classify, forward pointer reports to sexinput,
+                    // then re-arm slot2's independent interrupt ring.  Slot1 remains
+                    // the primary wait owner, but slot2 no longer starves after one TRB.
                     if device_count > 1 {
                         let d2 = &devices[1];
                         if d2.active && slot == d2.slot_id && ep == d2.intr_dci
@@ -4291,10 +4380,91 @@ pub extern "C" fn _start() -> ! {
                         {
                             let s2_actual = if intr_residue <= d2.intr_report_len {
                                 d2.intr_report_len - intr_residue } else { 0 };
-                            let p = d2.intr_report_va as *const u8;
-                            let b0 = unsafe { core::ptr::read_volatile(p.add(0)) };
-                            let b1 = unsafe { core::ptr::read_volatile(p.add(1)) };
-                            let b2 = unsafe { core::ptr::read_volatile(p.add(2)) };
+                            // Read the buffer slot of the COMPLETED TRB
+                            // (Transfer Event TRB pointer -> ring position).
+                            let mut s2_completed_idx = HID_INFLIGHT;
+                            let mut s2_off: u64 = 0;
+                            if ev_trb_ptr >= d2.intr_ring_phys {
+                                let pos = (ev_trb_ptr - d2.intr_ring_phys) / 16;
+                                if pos < HID_INFLIGHT {
+                                    s2_completed_idx = pos;
+                                    s2_off = pos * HID_BUF_STRIDE;
+                                }
+                            }
+                            if s2_completed_idx >= HID_INFLIGHT {
+                                serial_println!(
+                                    "[sexusb.hid.transfer.index.bad] slot={} ep={} ptr={:#x} ring={:#x}",
+                                    slot,
+                                    ep,
+                                    ev_trb_ptr,
+                                    d2.intr_ring_phys
+                                );
+                            } else {
+                                unsafe {
+                                    static mut S2_XFER_EVENT_BUDGET: u32 = 32;
+                                    if S2_XFER_EVENT_BUDGET > 0 {
+                                        S2_XFER_EVENT_BUDGET -= 1;
+                                        serial_println!(
+                                            "[sexusb.hid.transfer.event] slot={} ep={} index={}",
+                                            slot,
+                                            ep,
+                                            s2_completed_idx
+                                        );
+                                    }
+                                }
+                            let p = (d2.intr_report_va + s2_off) as *const u8;
+                            let mut s2_report = [0u8; 8];
+                            let copy_len = if s2_actual > 8 { 8 } else { s2_actual };
+                            let mut bi: u32 = 0;
+                            while bi < copy_len {
+                                s2_report[bi as usize] = unsafe { core::ptr::read_volatile(p.add(bi as usize)) };
+                                bi += 1;
+                            }
+                            let s2_completed_cycle =
+                                trb_read_dword(d2.intr_ring_va, s2_completed_idx, 3) & 1;
+                            let s2_next_cycle = s2_completed_cycle ^ 1;
+                            if s2_completed_idx == 0 {
+                                trb_write_volatile(
+                                    d2.intr_ring_va,
+                                    HID_RING_LINK_INDEX,
+                                    (d2.intr_ring_phys & 0xFFFF_FFFF) as u32,
+                                    (d2.intr_ring_phys >> 32) as u32,
+                                    0u32,
+                                    (TRB_TYPE_LINK << 10) | (1u32 << 1) | s2_completed_cycle,
+                                );
+                            }
+                            let clear_len = if d2.intr_report_len > 8 { 8 } else { d2.intr_report_len };
+                            unsafe {
+                                core::ptr::write_bytes(
+                                    (d2.intr_report_va + s2_off) as *mut u8,
+                                    0,
+                                    clear_len as usize,
+                                );
+                            }
+                            trb_write_volatile(
+                                d2.intr_ring_va,
+                                s2_completed_idx,
+                                ((d2.intr_report_phys + s2_off) & 0xFFFF_FFFF) as u32,
+                                ((d2.intr_report_phys + s2_off) >> 32) as u32,
+                                d2.intr_report_len,
+                                (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | s2_next_cycle,
+                            );
+                            mmio_write32(db_base, d2.slot_id as u64 * 4, d2.intr_dci);
+                            unsafe {
+                                static mut S2_REARM_OK_BUDGET: u32 = 32;
+                                if S2_REARM_OK_BUDGET > 0 {
+                                    S2_REARM_OK_BUDGET -= 1;
+                                    serial_println!(
+                                        "[sexusb.hid.rearm.ok] slot={} ep={} index={}",
+                                        d2.slot_id,
+                                        d2.intr_dci,
+                                        s2_completed_idx
+                                    );
+                                }
+                            }
+                            let b0 = s2_report[0];
+                            let b1 = s2_report[1];
+                            let b2 = s2_report[2];
                             let class = if b0 == 0 && b1 == 0 && b2 == 0 { "all_zero" }
                                 else if b0 != 0 { "button" }
                                 else if b1 != 0 || b2 != 0 { "motion" }
@@ -4308,19 +4478,59 @@ pub extern "C" fn _start() -> ! {
                                     serial_println!("[sexusb.c2c.report.classify] class={}", class);
                                 }
                             }
+
+                            if d2.role == HidRole::PointerTablet {
+                                if let Some(td) = decode_tablet_report(&s2_report, s2_actual as usize) {
+                                    let packed_axes = (td.abs_x as u64) | ((td.abs_y as u64) << 16) | (1u64 << 32);
+                                    serial_println!("[sexusb.slot2.forward.mouse] kind=tablet buttons=0x{:x} packed=0x{:x}",
+                                        td.buttons, packed_axes);
+                                    let _ = send_report_to_sexinput(
+                                        OP_USB_MOUSE_REPORT,
+                                        0,
+                                        td.buttons as u64,
+                                        packed_axes,
+                                    );
+                                } else {
+                                    serial_println!("[sexusb.slot2.tablet.decode.bad] len={}", s2_actual);
+                                }
+                            } else if d2.role == HidRole::PointerMouse {
+                                if let Some(md) = decode_boot_mouse_report(&s2_report, s2_actual as usize) {
+                                    let packed_axes = (md.dx as u8 as u64)
+                                        | ((md.dy as u8 as u64) << 8)
+                                        | ((md.wheel as u8 as u64) << 16);
+                                    serial_println!("[sexusb.slot2.forward.mouse] kind=mouse buttons=0x{:x} packed=0x{:x}",
+                                        md.buttons, packed_axes);
+                                    let _ = send_report_to_sexinput(
+                                        OP_USB_MOUSE_REPORT,
+                                        0,
+                                        md.buttons as u64,
+                                        packed_axes,
+                                    );
+                                } else {
+                                    serial_println!("[sexusb.slot2.mouse.decode.bad] len={}", s2_actual);
+                                }
+                            }
+                            }
                         }
                     }
                 }
-                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+                // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
                 ev_idx += 1;
                 if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
                 let new_erdp = event_ring_phys + ev_idx * 16;
                 mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
                 mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
-                break;
+                // Only a slot1 completion leaves the wait loop (its report is
+                // processed below). Slot2 events were fully handled by the
+                // demux above — keep draining so tablet bursts are not gated
+                // to one event per outer iteration.
+                if intr_ok {
+                    break;
+                }
+                continue;
             }
             // Consume unrelated owned events and continue waiting.
-            trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
+            // event ring is hardware-owned: no clearing; cycle-bit tracking marks staleness
             ev_idx += 1;
             if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
             let new_erdp = event_ring_phys + ev_idx * 16;
@@ -4356,7 +4566,7 @@ pub extern "C" fn _start() -> ! {
                 serial_println!(
                     "[usb.hid.transfer_ring.diag] phys={:#x} prod={} cycle={} len={}",
                     intr_ring_phys,
-                    intr_prod,
+                    HID_INFLIGHT,
                     intr_pcs,
                     intr_report_len
                 );
@@ -4378,17 +4588,59 @@ pub extern "C" fn _start() -> ! {
             serial_println!("[sexusb.xhci.intr_in.residue.bad] residue={}", intr_residue);
             break;
         }
-        let report_ptr = intr_report_va as *const u8;
+        let report_ptr = (intr_report_va + intr_completed_off) as *const u8;
         let mut report_bytes = [0u8; 8];
         if intr_actual > 0 {
+            let copy_len = if intr_actual > 8 { 8 } else { intr_actual };
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     report_ptr,
                     report_bytes.as_mut_ptr(),
-                    intr_actual as usize,
+                    copy_len as usize,
                 );
             }
         }
+        let completed_cycle = trb_read_dword(intr_ring_va, intr_completed_idx, 3) & 1;
+        let next_cycle = completed_cycle ^ 1;
+        if intr_completed_idx == 0 {
+            trb_write_volatile(
+                intr_ring_va,
+                HID_RING_LINK_INDEX,
+                (intr_ring_phys & 0xFFFF_FFFF) as u32,
+                (intr_ring_phys >> 32) as u32,
+                0u32,
+                (TRB_TYPE_LINK << 10) | (1u32 << 1) | completed_cycle,
+            );
+        }
+        unsafe {
+            core::ptr::write_bytes(
+                (intr_report_va + intr_completed_off) as *mut u8,
+                0,
+                clear_len as usize,
+            );
+        }
+        trb_write_volatile(
+            intr_ring_va,
+            intr_completed_idx,
+            ((intr_report_phys + intr_completed_off) & 0xFFFF_FFFF) as u32,
+            ((intr_report_phys + intr_completed_off) >> 32) as u32,
+            intr_report_len,
+            (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | next_cycle,
+        );
+        mmio_write32(db_base, single_bind.slot_id as u64 * 4, intr_dci);
+        unsafe {
+            static mut REARM_OK_BUDGET: u32 = 32;
+            if REARM_OK_BUDGET > 0 {
+                REARM_OK_BUDGET -= 1;
+                serial_println!(
+                    "[sexusb.hid.rearm.ok] slot={} ep={} index={}",
+                    single_bind.slot_id,
+                    intr_dci,
+                    intr_completed_idx
+                );
+            }
+        }
+        skip_advance = true;
         let b0 = report_bytes[0];
         let b1 = report_bytes[1];
         let b2 = report_bytes[2];
@@ -4533,37 +4785,6 @@ pub extern "C" fn _start() -> ! {
                     serial_println!("[sexusb.kbd.forward] key=0x{:x}", first_key);
                 }
             }
-            // RE-ARM before IPC: queue next interrupt-IN TRB so xHCI keeps
-            // polling during the synchronous pdx_call (which may block sexusb).
-            // Without this, USB polls during IPC are lost → missed short taps.
-            intr_prod += 1;
-            if intr_prod >= INTR_TR_RING_SIZE - 1 {
-                intr_pcs ^= 1;
-                trb_write_volatile(
-                    intr_ring_va,
-                    INTR_TR_RING_SIZE - 1,
-                    (intr_ring_phys & 0xFFFF_FFFF) as u32,
-                    (intr_ring_phys >> 32) as u32,
-                    0u32,
-                    (TRB_TYPE_LINK << 10) | (1u32 << 1) | intr_pcs,
-                );
-                intr_prod = 0;
-            }
-            unsafe {
-                core::ptr::write_bytes(intr_report_va as *mut u8, 0, clear_len as usize);
-            }
-            trb_write_volatile(
-                intr_ring_va,
-                intr_prod,
-                (intr_report_phys & 0xFFFF_FFFF) as u32,
-                (intr_report_phys >> 32) as u32,
-                intr_report_len,
-                (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs,
-            );
-            mmio_write32(db_base, single_bind.slot_id as u64 * 4, intr_dci);
-            // Mark advance done so bottom-of-loop skips it.
-            skip_advance = true;
-
             let _ = send_report_to_sexinput(
                 OP_USB_KEYBOARD_REPORT,
                 0,
@@ -4571,73 +4792,12 @@ pub extern "C" fn _start() -> ! {
                 first_key,     // arg2 = first pressed keycode (0 if none)
             );
 
-            // Lightweight spin on event ring: catch the re-arm TRB completion if it
-            // occurred during IPC. No new TRB is queued here (intr_prod unchanged),
-            // so there is zero risk of overwriting a pending TRB.
-            // Falls through silently if the re-arm TRB has not yet completed.
-            {
-                let mut spin: u32 = 0;
-                loop {
-                    let ev_d3 = trb_read_dword(event_ring_va, ev_idx, 3);
-                    if (ev_d3 & 1) == (ev_dcs as u32) {
-                        let ev_type = (ev_d3 >> 10) & 0x3F;
-                        if ev_type == TRB_TYPE_TRANSFER_EVENT {
-                            let ev_d2 = trb_read_dword(event_ring_va, ev_idx, 2);
-                            let cc = (ev_d2 >> 24) & 0xFF;
-                            let residue = ev_d2 & 0xFFFFFF;
-                            let slot = (ev_d3 >> 24) & 0xFF;
-                            let ep = (ev_d3 >> 16) & 0x1F;
-                            if (cc == TRB_CC_SUCCESS || cc == TRB_CC_SHORT_PACKET)
-                                && slot == single_bind.slot_id && ep == intr_dci
-                            {
-                                // Re-arm TRB completed during IPC. Read and forward.
-                                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
-                                ev_idx += 1;
-                                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
-                                let new_erdp = event_ring_phys + ev_idx * 16;
-                                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
-                                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
-
-                                if residue <= intr_report_len {
-                                    let b_actual = intr_report_len - residue;
-                                    let b_b0 = report_bytes[0];
-                                    let b_b2 = report_bytes[2];
-                                    serial_println!("[sexusb.kbd.poll.burst] b2=0x{:x} actual={}", b_b2, b_actual);
-                                    let burst_key = b_b2 as u64;
-                                    let _ = send_report_to_sexinput(
-                                        OP_USB_KEYBOARD_REPORT,
-                                        0,
-                                        b_b0 as u64,
-                                        burst_key,
-                                    );
-                                }
-                            } else {
-                                // Not our event; consume and continue spinning.
-                                trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
-                                ev_idx += 1;
-                                if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
-                                let new_erdp = event_ring_phys + ev_idx * 16;
-                                mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
-                                mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
-                            }
-                        } else {
-                            // Non-transfer event; consume, continue spinning.
-                            trb_write_volatile(event_ring_va, ev_idx, 0, 0, 0, ev_d3 & !1u32);
-                            ev_idx += 1;
-                            if ev_idx >= EVENT_RING_TRBS { ev_idx = 0; ev_dcs ^= 1; }
-                            let new_erdp = event_ring_phys + ev_idx * 16;
-                            mmio_write32(intr_base, XHCI_INTR_ERDP, new_erdp as u32);
-                            mmio_write32(intr_base, XHCI_INTR_ERDP + 4, (new_erdp >> 32) as u32);
-                        }
-                        // If we get here, we consumed an event. Continue spinning for more.
-                    }
-                    spin += 1;
-                    if spin >= 3000 {
-                        break; // Nothing more right now; main loop will pick it up.
-                    }
-                    core::hint::spin_loop();
-                }
-            }
+            // NOTE(cadence fix): the old post-IPC "burst spin" that consumed
+            // events here was removed. It forwarded stale report bytes,
+            // silently discarded slot2 (tablet) events, and consumed
+            // completions without re-arming — shrinking the in-flight TRB
+            // window. With HID_INFLIGHT TRBs primed, the main wait loop
+            // handles any events that complete during IPC.
         // SINGLE-DEVICE GUARD: tablet decode is COMPLETE and CORRECT for
         // QEMU usb-tablet, but it is REACHABLE ONLY IF the single enumerated
         // device is classified as tablet (i.e. no boot keyboard interface
@@ -4954,67 +5114,9 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[sexusb.hid.mouse.decode.bad] len={}", intr_actual);
             }
         }
-        // Re-arm interrupt endpoint: advance ring, handle wrap, write TRB, ring doorbell.
+        // Re-arm is done immediately after copying the completed report buffer.
         if !skip_advance {
-            intr_prod += 1;
-            if intr_prod >= INTR_TR_RING_SIZE - 1 {
-                // Wrap: toggle PCS for new TRBs.  Link TRB must use OLD PCS
-                // because the controller reaches it with the old CCS.
-                // After following the Link (TC=1), controller toggles CCS
-                // to match our new PCS, sees the NORMAL TRB at slot 0.
-                let old_pcs = intr_pcs;
-                intr_pcs ^= 1;
-                let new_pcs = intr_pcs;
-                intr_prod = 0;
-                unsafe {
-                    core::ptr::write_bytes(intr_report_va as *mut u8, 0, intr_report_len as usize);
-                }
-                // 1. Write NORMAL TRB at slot 0 with NEW cycle.
-                trb_write_volatile(
-                    intr_ring_va,
-                    0,
-                    (intr_report_phys & 0xFFFF_FFFF) as u32,
-                    (intr_report_phys >> 32) as u32,
-                    intr_report_len,
-                    (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | new_pcs,
-                );
-                // 2. Update Link TRB with OLD cycle (controller still has old CCS).
-                trb_write_volatile(
-                    intr_ring_va,
-                    INTR_TR_RING_SIZE - 1,
-                    (intr_ring_phys & 0xFFFF_FFFF) as u32,
-                    (intr_ring_phys >> 32) as u32,
-                    0u32,
-                    (TRB_TYPE_LINK << 10) | (1u32 << 1) | old_pcs,
-                );
-                unsafe {
-                    static mut WRAP_COUNT: u64 = 0;
-                    WRAP_COUNT += 1;
-                    serial_println!("[sexusb.xhci.intr_ring.wrap] n={} pcs={}",
-                        WRAP_COUNT, intr_pcs);
-                }
-            } else {
-                unsafe {
-                    core::ptr::write_bytes(intr_report_va as *mut u8, 0, intr_report_len as usize);
-                }
-                trb_write_volatile(
-                    intr_ring_va,
-                    intr_prod,
-                    (intr_report_phys & 0xFFFF_FFFF) as u32,
-                    (intr_report_phys >> 32) as u32,
-                    intr_report_len,
-                    (TRB_TYPE_NORMAL << 10) | (1u32 << 5) | intr_pcs,
-                );
-            }
-            mmio_write32(db_base, single_bind.slot_id as u64 * 4, intr_dci);
-            unsafe {
-                static mut REQUEUE_COUNT: u64 = 0;
-                REQUEUE_COUNT += 1;
-                if REQUEUE_COUNT <= 64 || REQUEUE_COUNT % 64 == 0 {
-                    serial_println!("[sexusb.tablet.requeue.doorbell] n={} prod={} pcs={}",
-                        REQUEUE_COUNT, intr_prod, intr_pcs);
-                }
-            }
+            serial_println!("[sexusb.hid.rearm.skip.bad] reason=missing_index_rearm");
         }
         i = i.wrapping_add(1);
         // Option B: budgeted yield — give scheduler a tick every iteration
