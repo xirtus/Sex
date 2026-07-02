@@ -1751,6 +1751,26 @@ fn emit_renderer_conformance_marker(contract_ok: bool) {
     serial_println!("[silk.de.renderer.conformance.pass] model=1 renderer_only=1 bounds=1 policy=0 drift=0");
 }
 
+/// INPUT_PRESENT_TRACE_V1: trace-only correlation state. Shell packs a
+/// monotonic sequence into the unused high 32 bits of OP_SURFACE_UPDATE
+/// arg1 for the cursor surface; seq==0 means the sender did not tag
+/// (reported as seq=unknown). Direct framebuffer writes mean cursor draw
+/// completion IS the present point — presents are counted there.
+static mut INPUT_TRACE_LAST_SEQ: u32 = 0;
+static mut INPUT_TRACE_RECV: u32 = 0;
+static mut INPUT_TRACE_DRAWS: u32 = 0;
+static mut INPUT_TRACE_PRESENTS: u32 = 0;
+static mut INPUT_TRACE_DISPLAY_BUDGET_HIT: u32 = 0;
+
+/// Emit the display trace summary (unbounded counters, budget-free marker).
+unsafe fn input_trace_display_summary() {
+    serial_println!(
+        "[input.trace.display.summary] recv={} draws={} presents={} budget_hit={}",
+        INPUT_TRACE_RECV, INPUT_TRACE_DRAWS, INPUT_TRACE_PRESENTS,
+        INPUT_TRACE_DISPLAY_BUDGET_HIT
+    );
+}
+
 /// Pass 3: draw cursor surface (CURSOR_SURFACE_ID) unconditionally on top of all other surfaces.
 /// Renders an arrow bitmap instead of a solid rect; transparent pixels are not written.
 /// Called at the end of both render() and redraw_surface_area().
@@ -1773,6 +1793,20 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
                     serial_println!("[sexdisplay.cursor.draw] n=0 x={} y={}", ox as i32, oy as i32);
                 }
             }
+            // INPUT_PRESENT_TRACE_V1: budgeted draw trace with last received seq.
+            unsafe {
+                INPUT_TRACE_DRAWS = INPUT_TRACE_DRAWS.wrapping_add(1);
+                static mut INPUT_TRACE_DRAW_BUDGET: u32 = 32;
+                if INPUT_TRACE_DRAW_BUDGET > 0 {
+                    INPUT_TRACE_DRAW_BUDGET -= 1;
+                    if INPUT_TRACE_LAST_SEQ != 0 {
+                        serial_println!("[input.trace.display.cursor.draw] seq={} x={} y={}", INPUT_TRACE_LAST_SEQ, ox as i32, oy as i32);
+                    } else {
+                        serial_println!("[input.trace.display.cursor.draw] seq=unknown x={} y={}", ox as i32, oy as i32);
+                    }
+                    if INPUT_TRACE_DRAW_BUDGET == 0 { INPUT_TRACE_DISPLAY_BUDGET_HIT = 1; }
+                }
+            }
             for row in 0..CURSOR_ARROW_H {
                 let py = oy + row;
                 if py >= h { break; }
@@ -1786,6 +1820,23 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
                     if idx < total_pixels {
                         core::ptr::write_volatile(fb.add(idx), CURSOR_ARROW_COLOR);
                     }
+                }
+            }
+            // INPUT_PRESENT_TRACE_V1: cursor pixels are now in the framebuffer
+            // (direct write, no flip) — this is the present point.
+            unsafe {
+                INPUT_TRACE_PRESENTS = INPUT_TRACE_PRESENTS.wrapping_add(1);
+                static mut INPUT_TRACE_PRESENT_BUDGET: u32 = 32;
+                if INPUT_TRACE_PRESENT_BUDGET > 0 {
+                    INPUT_TRACE_PRESENT_BUDGET -= 1;
+                    if INPUT_TRACE_LAST_SEQ != 0 {
+                        serial_println!("[input.trace.display.present] seq={} x={} y={}", INPUT_TRACE_LAST_SEQ, ox as i32, oy as i32);
+                    } else {
+                        serial_println!("[input.trace.display.present] seq=unknown x={} y={}", ox as i32, oy as i32);
+                    }
+                }
+                if INPUT_TRACE_PRESENTS == 4 || INPUT_TRACE_PRESENTS % 32 == 0 {
+                    input_trace_display_summary();
                 }
             }
             break;
@@ -3039,6 +3090,26 @@ pub extern "C" fn _start() -> ! {
                                     if *rem > 0 {
                                         *rem -= 1;
                                         serial_println!("[sexdisplay.cursor.surface.update] n=0 x={} y={}", new_x, new_y);
+                                    }
+                                }
+                                // INPUT_PRESENT_TRACE_V1: extract trace seq from
+                                // unused high 32 bits of arg1 (0 = untagged sender).
+                                unsafe {
+                                    let seq = (msg.arg1 >> 32) as u32;
+                                    if seq != 0 { INPUT_TRACE_LAST_SEQ = seq; }
+                                    INPUT_TRACE_RECV = INPUT_TRACE_RECV.wrapping_add(1);
+                                    static mut INPUT_TRACE_RECV_BUDGET: u32 = 32;
+                                    if INPUT_TRACE_RECV_BUDGET > 0 {
+                                        INPUT_TRACE_RECV_BUDGET -= 1;
+                                        if seq != 0 {
+                                            serial_println!("[input.trace.display.cursor.recv] seq={} x={} y={}", seq, new_x, new_y);
+                                        } else {
+                                            serial_println!("[input.trace.display.cursor.recv] seq=unknown x={} y={}", new_x, new_y);
+                                        }
+                                        if INPUT_TRACE_RECV_BUDGET == 0 { INPUT_TRACE_DISPLAY_BUDGET_HIT = 1; }
+                                    }
+                                    if INPUT_TRACE_RECV == 4 || INPUT_TRACE_RECV % 32 == 0 {
+                                        input_trace_display_summary();
                                     }
                                 }
                             }

@@ -8771,6 +8771,25 @@ static mut LAST_VALID_ABS_X: i32 = -1;
 static mut LAST_VALID_ABS_Y: i32 = -1;
 static mut ABS_SAMPLE_COUNT: u32 = 0;
 static mut CURSOR_SEND_COUNT: u32 = 0;
+/// INPUT_PRESENT_TRACE_V1: trace-only correlation state. The sequence is
+/// packed into the unused high 32 bits of OP_SURFACE_UPDATE arg1 for the
+/// cursor surface only; sexdisplay truncates arg1 with `as i32` so existing
+/// consumers are unaffected (no ABI layout or semantic change).
+static mut INPUT_TRACE_SEQ: u32 = 0;
+static mut INPUT_TRACE_APPLIES: u32 = 0;
+static mut INPUT_TRACE_SENDS: u32 = 0;
+static mut INPUT_TRACE_DRAG_MOVES: u32 = 0;
+static mut INPUT_TRACE_MAX_JUMP: i32 = 0;
+static mut INPUT_TRACE_BUDGET_HIT: u32 = 0;
+
+/// Emit the shell trace summary (unbounded counters, budget-free marker).
+unsafe fn input_trace_shell_summary() {
+    serial_println!(
+        "[input.trace.shell.summary] applies={} sends={} drag_moves={} max_jump={} budget_hit={}",
+        INPUT_TRACE_APPLIES, INPUT_TRACE_SENDS, INPUT_TRACE_DRAG_MOVES,
+        INPUT_TRACE_MAX_JUMP, INPUT_TRACE_BUDGET_HIT
+    );
+}
 /// Tracker-lite accumulator: raw deltas are queued across EV_REL frames
 /// and flushed as a single cursor update when enough motion accumulates.
 /// Reduces steppy feel from per-event scaling of large bursts.
@@ -8796,8 +8815,23 @@ unsafe fn send_cursor_checked(x: i32, y: i32, source: &str) {
     }
     POINTER_X = cx;
     POINTER_Y = cy;
-    pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, cx as u64, cy as u64);
+    // INPUT_PRESENT_TRACE_V1: pack trace seq into unused high 32 bits of
+    // arg1 (cursor surface only; cx is clamped >= 0 so low 32 bits carry x
+    // unchanged for the display's `as i32` truncation).
+    let trace_arg1 = ((INPUT_TRACE_SEQ as u64) << 32) | (cx as u32 as u64);
+    pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, trace_arg1, cy as u64);
     CURSOR_SEND_COUNT = CURSOR_SEND_COUNT.saturating_add(1);
+    INPUT_TRACE_SENDS = INPUT_TRACE_SENDS.wrapping_add(1);
+    {
+        static mut INPUT_TRACE_SEND_BUDGET: u32 = 32;
+        if INPUT_TRACE_SEND_BUDGET > 0 {
+            INPUT_TRACE_SEND_BUDGET -= 1;
+            serial_println!(
+                "[input.trace.shell.cursor.send] seq={} x={} y={}",
+                INPUT_TRACE_SEQ, cx, cy
+            );
+        }
+    }
     static mut CURSOR_DELTA_BUDGET: u32 = 96;
     if CURSOR_DELTA_BUDGET > 0 {
         CURSOR_DELTA_BUDGET -= 1;
@@ -8943,7 +8977,30 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
     POINTER_X = new_x;
     POINTER_Y = new_y;
 
+    // INPUT_PRESENT_TRACE_V1: real USB relative apply. apply_rel_pointer is
+    // only reached from HID EV_REL delivered by sexinput (real USB path);
+    // synthetic boot pointer movement uses the ABS path and never gets here,
+    // so source=usb is accurate.
+    INPUT_TRACE_SEQ = INPUT_TRACE_SEQ.wrapping_add(1);
+    INPUT_TRACE_APPLIES = INPUT_TRACE_APPLIES.wrapping_add(1);
+    let jump = dx.abs().max(dy.abs());
+    if jump > INPUT_TRACE_MAX_JUMP { INPUT_TRACE_MAX_JUMP = jump; }
+    {
+        static mut INPUT_TRACE_APPLY_BUDGET: u32 = 32;
+        if INPUT_TRACE_APPLY_BUDGET > 0 {
+            INPUT_TRACE_APPLY_BUDGET -= 1;
+            serial_println!(
+                "[input.trace.shell.apply] seq={} x={} y={} dx={} dy={} source=usb",
+                INPUT_TRACE_SEQ, new_x, new_y, dx, dy
+            );
+            if INPUT_TRACE_APPLY_BUDGET == 0 { INPUT_TRACE_BUDGET_HIT = 1; }
+        }
+    }
     send_cursor_checked(new_x, new_y, "rel");
+    // Summary cadence: early sample at 4 applies, then every 32.
+    if INPUT_TRACE_APPLIES == 4 || INPUT_TRACE_APPLIES % 32 == 0 {
+        input_trace_shell_summary();
+    }
     (dx, dy)
 }
 
@@ -20715,6 +20772,7 @@ unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
             moved = true;
         }
         if moved {
+            unsafe { INPUT_TRACE_DRAG_MOVES = INPUT_TRACE_DRAG_MOVES.wrapping_add(1); }
             unsafe {
                 static mut INTERACT_DRAG_MOVE_BUDGET: u32 = 24;
                 let b = &mut INTERACT_DRAG_MOVE_BUDGET;
