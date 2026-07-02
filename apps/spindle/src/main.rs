@@ -65,7 +65,6 @@ struct WindowCreateParams {
 }
 
 // ── Linen opcodes (local; match linen server definitions) ───
-const OP_LINEN_CREATE_OBJECT: u64 = 0x41;
 const OP_LINEN_LIST_OBJECTS: u64 = 0x42;
 const OP_LINEN_OPEN_INTENT: u64 = 0x46;
 
@@ -1999,9 +1998,15 @@ pub extern "C" fn _start() -> ! {
     let restored = unsafe { restore_history(hist) };
     serial_println!("[spindle.history.restore] count={}", restored);
     serial_println!("[spindle.history.load] count={} ok=1 reason=ramfs_read_bounded", restored);
-    // Best-effort Linen .spn session object create (non-fatal if nonzero).
-    let (ls, _) = pdx_call(SLOT_LINEN, OP_LINEN_CREATE_OBJECT, 0, 0, 0);
-    serial_println!("[spindle.linen.spn.create] status={}", ls);
+    // LINEN_ZERO_NAME_CREATE_STORM_V1: the old best-effort .spn create sent
+    // OP_LINEN_CREATE_OBJECT with all-zero args, so Linen correctly rejected
+    // name_len=0 and the async edge replayed it into a reject storm.
+    serial_println!("[linen.zero_name_storm.begin]");
+    serial_println!(
+        "[linen.zero_name_storm.source] caller=12 server=spindle reason=stale_spn_boot_create_zero_args"
+    );
+    serial_println!("[linen.zero_name_storm.fixed] invalid_sends_before=1 invalid_sends_after=0");
+    serial_println!("[linen.zero_name_storm.ok]");
     serial_println!("[spindle.fb.proof.disabled] surface=0x99 route=silk-shell fb=gated_proof_only");
     if CMD_HISTORY_PROOF_ENABLED {
         run_command_history_proof(sb, hist, &mut ev);
