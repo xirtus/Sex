@@ -4,23 +4,16 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-GATE_DIR="${GATE_DIR:-/tmp/sexos_gate_0_2}"
+GATE_DIR="${GATE_DIR:-$ROOT_DIR/.gate_0_2}"
 mkdir -p "$GATE_DIR"
-mkdir -p "$ROOT_DIR/logs"
 
-LOG="${LOG_PATH:-$ROOT_DIR/logs/qemu-latest.log}"
+LOG="${LOG_PATH:-$GATE_DIR/sexos-input.log}"
 QMP_SOCK="${QMP_SOCK:-$GATE_DIR/qmp.sock}"
 QEMU_PID=""
 ISO="${ISO:-sexos-v1.0.0.iso}"
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 PROBE_SECONDS="${PROBE_SECONDS:-18}"
-READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-45}"
-POST_STIMULUS_TIMEOUT_SECONDS="${POST_STIMULUS_TIMEOUT_SECONDS:-24}"
 QMP_ENV_FAIL=0
-
-# This lane proves host-injected QMP input. Disable built-in synthetic input
-# proofs for the gate build so they cannot race or consume the drag/click path.
-export SEXOS_PROOFS_DISABLED="${SEXOS_PROOFS_DISABLED:-1}"
 
 EXPECTED_SCOPE_PREFIXES=(
   "servers/sexinput/src/main.rs"
@@ -76,61 +69,6 @@ has_marker() {
   fi
 }
 
-wait_for_marker() {
-  local pattern="$1"
-  local timeout="$2"
-  local i
-  for i in $(seq 1 "$((timeout * 4))"); do
-    if grep -qE "$pattern" "$LOG" 2>/dev/null; then
-      return 0
-    fi
-    sleep 0.25
-  done
-  return 1
-}
-
-wait_for_qmp_socket() {
-  local timeout="$1"
-  local i
-  for i in $(seq 1 "$((timeout * 4))"); do
-    if [[ -S "$QMP_SOCK" ]]; then
-      return 0
-    fi
-    sleep 0.25
-  done
-  return 1
-}
-
-hard_fault_seen() {
-  grep -qE "panic|PAGE FAULT|#PF|GENERAL PROTECTION|#GP|fault\\.kill|triple fault|Triple fault|reset[_ -]?loop|reboot[_ -]?loop|freeze=1|frozen=1|freeze\\.detected|watchdog\\.freeze|scheduler\\.freeze|input\\.freeze|runtime\\.freeze" "$LOG" 2>/dev/null
-}
-
-linen_storm_fixed() {
-  ! grep -qE "\\[linen\\.session\\.reject\\] reason=bad_name_len len=0.*caller=12" "$LOG" 2>/dev/null \
-    && ! grep -qE "\\[perf\\.noise\\.summary\\].*name=linen\\.session\\.reject" "$LOG" 2>/dev/null \
-    && grep -qF "[linen.zero_name_storm.ok]" "$LOG" 2>/dev/null
-}
-
-input_gates_pass() {
-  scripts/input_current_tier_gate.sh "$LOG" >/tmp/gate_0_2_input_current.out 2>&1 \
-    && scripts/input_control_quality_gate.sh "$LOG" >/tmp/gate_0_2_input_quality.out 2>&1
-}
-
-wait_for_clean_proof() {
-  local timeout="$1"
-  local i
-  for i in $(seq 1 "$((timeout * 4))"); do
-    if hard_fault_seen; then
-      return 2
-    fi
-    if linen_storm_fixed && input_gates_pass; then
-      return 0
-    fi
-    sleep 0.25
-  done
-  return 1
-}
-
 first_missing_from_chain() {
   local -n chain_ref=$1
   for m in "${chain_ref[@]}"; do
@@ -147,13 +85,7 @@ extract_cursor_unique_positions() {
     echo 0
     return
   fi
-  local matches
-  matches="$(grep -oE 'sexdisplay\.cursor\.draw[^\n]*x=[0-9]+ y=[0-9]+' "$LOG" 2>/dev/null || true)"
-  if [[ -z "$matches" ]]; then
-    echo 0
-    return
-  fi
-  printf '%s\n' "$matches" \
+  grep -oE 'sexdisplay\.cursor\.draw[^\n]*x=[0-9]+ y=[0-9]+' "$LOG" \
     | sed -E 's/.*x=([0-9]+) y=([0-9]+).*/\1,\2/' \
     | sort -u | wc -l | tr -d ' '
 }
@@ -161,16 +93,14 @@ extract_cursor_unique_positions() {
 run_qmp_injection() {
   # Keyboard injection using existing helper
   if [[ -S "$QMP_SOCK" ]]; then
-    python3 scripts/qmp_input_probe.py "$QMP_SOCK" ret >/tmp/gate_0_2_qmp_kbd.out 2>/tmp/gate_0_2_qmp_kbd.err || true
-    wait_for_marker "\\[shell\\.focus\\.set\\] id=100|\\[shell\\.kbd\\.ui\\.focus\\].*new=100" 30 || return 0
+    python3 scripts/qmp_input_probe.py "$QMP_SOCK" a >/tmp/gate_0_2_qmp_kbd.out 2>/tmp/gate_0_2_qmp_kbd.err || true
   fi
 
   # Pointer injection via QMP absolute events for usb-tablet
   if [[ -S "$QMP_SOCK" ]]; then
-    SEXOS_QMP_LOG="$LOG" python3 - "$QMP_SOCK" <<'PY' >/tmp/gate_0_2_qmp_ptr.out 2>/tmp/gate_0_2_qmp_ptr.err || true
-import json, os, re, socket, sys, time
+    python3 - "$QMP_SOCK" <<'PY' >/tmp/gate_0_2_qmp_ptr.out 2>/tmp/gate_0_2_qmp_ptr.err || true
+import json, os, socket, sys, time
 sock_path = sys.argv[1]
-log_path = os.environ.get("SEXOS_QMP_LOG")
 
 def read_json(s):
     buf=b""
@@ -193,21 +123,6 @@ def send_cmd(s, cmd):
     s.sendall((json.dumps(cmd)+"\n").encode())
     return read_json(s)
 
-def wait_log(pattern, timeout=5.0):
-    if not log_path:
-        return False
-    deadline = time.monotonic() + timeout
-    rx = re.compile(pattern)
-    while time.monotonic() < deadline:
-        try:
-            with open(log_path, "r", errors="ignore") as f:
-                if rx.search(f.read()):
-                    return True
-        except OSError:
-            pass
-        time.sleep(0.1)
-    return False
-
 if not os.path.exists(sock_path):
     sys.exit(1)
 
@@ -220,7 +135,10 @@ send_cmd(s,{"execute":"qmp_capabilities"})
 # Steer to shell-owned surface 100 content, avoiding app-owned Mesh content.
 # QEMU usb-tablet reports are normalized into bounded relative deltas, so the
 # decreasing x sweep walks the shell cursor left from its boot position.
-def abs_move(x, y, delay=0.08):
+points=[(30000,12000)]
+for x in range(29000, -1, -1000):
+    points.append((x,12000))
+for x,y in points:
     cmd={
       "execute":"input-send-event",
       "arguments":{"events":[
@@ -229,23 +147,11 @@ def abs_move(x, y, delay=0.08):
       ]}
     }
     send_cmd(s,cmd)
-    time.sleep(delay)
+    time.sleep(0.08)
 
-def left_sweep(y):
-    abs_move(30000, y, 0.04)
-    for x in range(28000, -1, -2000):
-        abs_move(x, y, 0.04)
-
-left_sweep(14000)
-time.sleep(0.2)
-left_sweep(14000)
-abs_move(1200, 14000, 0.04)
-
-# Let the guest drain the pre-drag motion before button-down. The final raw
-# coordinate is unique to this proof lane, so the wait is marker-driven.
-wait_log(r"\[sexusb\.tablet\.abs\] x=1200 y=14000 buttons=0", 6.0)
-wait_log(r"\[usb\.pointer\.shell\.apply\] x=([0-9]{1,2}|1[0-9]{2}) y=", 3.0)
-time.sleep(0.6)
+# Let the guest drain the pre-drag motion before button-down, otherwise the
+# press can be observed while the cursor is still over app-owned Mesh content.
+time.sleep(2.0)
 
 # Press on shell-owned surface 100, drag right, then release.
 cmd={"execute":"input-send-event","arguments":{"events":[
@@ -254,22 +160,22 @@ cmd={"execute":"input-send-event","arguments":{"events":[
 send_cmd(s,cmd)
 time.sleep(0.08)
 
-for x in (2200, 3200):
-    abs_move(x, 14000, 0.05)
+for x in range(1000, 9000, 1000):
+    cmd={
+      "execute":"input-send-event",
+      "arguments":{"events":[
+        {"type":"abs","data":{"axis":"x","value":x}},
+        {"type":"abs","data":{"axis":"y","value":12000}}
+      ]}
+    }
+    send_cmd(s,cmd)
+    time.sleep(0.05)
 
 cmd={"execute":"input-send-event","arguments":{"events":[
   {"type":"btn","data":{"down":False,"button":"left"}}
 ]}}
 send_cmd(s,cmd)
 time.sleep(0.05)
-
-# Duplicate release to clear any queued tablet button state before the
-# post-drag display-trace sweep.
-send_cmd(s,cmd)
-time.sleep(0.10)
-
-for x in (4200, 5200, 6200):
-    abs_move(x, 14000, 0.06)
 
 s.close()
 PY
@@ -310,30 +216,15 @@ if ! kill -0 "$QEMU_PID" 2>/dev/null; then
   QMP_ENV_FAIL=1
 fi
 
+sleep 4
 if [[ "$QMP_ENV_FAIL" -eq 0 ]]; then
-  if ! wait_for_qmp_socket 8; then
+  if [[ ! -S "$QMP_SOCK" ]]; then
     QMP_ENV_FAIL=1
   else
-    if ! wait_for_marker "\\[usb\\.xhci\\.enum\\.done\\]" "$READY_TIMEOUT_SECONDS"; then
-      QMP_ENV_FAIL=1
-    elif ! wait_for_marker "\\[silk-shell\\.ready\\]" "$READY_TIMEOUT_SECONDS"; then
-      QMP_ENV_FAIL=1
-    else
-      # The successful Chapter 1/2 lane needs a short post-readiness settle so
-      # boot layout and focus markers stop racing the first pointer packets.
-      sleep 3
-    fi
-  fi
-  if [[ "$QMP_ENV_FAIL" -eq 0 ]]; then
     run_qmp_injection
   fi
 fi
-
-if [[ "$QMP_ENV_FAIL" -eq 0 ]]; then
-  wait_for_clean_proof "$POST_STIMULUS_TIMEOUT_SECONDS" || true
-else
-  sleep "$PROBE_SECONDS"
-fi
+sleep "$PROBE_SECONDS"
 
 if kill -0 "$QEMU_PID" 2>/dev/null; then
   kill "$QEMU_PID" 2>/dev/null || true
@@ -357,7 +248,7 @@ else
 fi
 
 # Fault gate
-if [[ -f "$LOG" ]] && ! hard_fault_seen; then
+if [[ -f "$LOG" ]] && ! grep -qE "panic|PAGE FAULT|#PF|GENERAL PROTECTION|#GP|triple fault|Triple fault|reset" "$LOG"; then
   FAULT_GATE="PASS"
 else
   FAULT_GATE="FAIL"

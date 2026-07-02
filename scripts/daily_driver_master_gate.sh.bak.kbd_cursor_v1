@@ -195,7 +195,6 @@ gate_cursor_visible_motion="SKIP"
 gate_cursor_motion_no_focus_mutation="SKIP"
 gate_cursor_motion_bounds="SKIP"
 gate_cursor_visual_contrast="SKIP"
-gate_keyboard_cursor_debug="SKIP"
 gate_click_focus_button_edges="SKIP"
 gate_click_focus_hit_test_commit="SKIP"
 gate_drag_capture_lifecycle="SKIP"
@@ -7160,24 +7159,6 @@ else
     print_row "cursor_visual_contrast" "SKIP" "no cursor visual contrast proof markers"
 fi
 
-# ---- keyboard_cursor_debug ----
-# SKIP when SEXOS_KEYBOARD_CURSOR not set (no markers). PASS only when interactive
-# arrow key events fired: begin + at least one move ok=1 + done all present.
-if [ "$(has 'keyboard\.cursor\.debug\.begin')" -eq 1 ]; then
-    has_kcd_move=$(has 'keyboard\.cursor\.debug\.move.*ok=1')
-    has_kcd_done=$(has 'keyboard\.cursor\.debug\.done')
-    if [ "$has_kcd_move" -eq 1 ] && [ "$has_kcd_done" -eq 1 ]; then
-        gate_keyboard_cursor_debug="PASS"
-        print_row "keyboard_cursor_debug" "PASS" "debug begin+move ok=1+done all present"
-    else
-        gate_keyboard_cursor_debug="FAIL"
-        print_row "keyboard_cursor_debug" "FAIL" "debug begin present but move ok=1 or done missing"
-    fi
-else
-    gate_keyboard_cursor_debug="SKIP"
-    print_row "keyboard_cursor_debug" "SKIP" "no keyboard cursor debug markers (SEXOS_KEYBOARD_CURSOR absent or no arrow keys pressed)"
-fi
-
 # ---- click_focus_drag_impl_v1 (AP8) ----
 click_focus_begin_re='click\.focus\.proof\.begin'
 drag_proof_begin_re='drag\.proof\.begin'
@@ -7770,7 +7751,6 @@ ALL_GATES=(
     "cursor_motion_no_focus_mutation:$gate_cursor_motion_no_focus_mutation"
     "cursor_motion_bounds:$gate_cursor_motion_bounds"
     "cursor_visual_contrast:$gate_cursor_visual_contrast"
-    "keyboard_cursor_debug:$gate_keyboard_cursor_debug"
     "click_focus_button_edges:$gate_click_focus_button_edges"
     "click_focus_hit_test_commit:$gate_click_focus_hit_test_commit"
     "drag_capture_lifecycle:$gate_drag_capture_lifecycle"

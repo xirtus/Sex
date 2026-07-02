@@ -148,10 +148,27 @@ tick_chains=$(echo "$tick_stats" | sed -n 's/.*chains=\([0-9]*\).*/\1/p')
 max_total_logical=$(echo "$tick_stats" | sed -n 's/.*max_total_logical=\(-\{0,1\}[0-9a-z]*\).*/\1/p')
 
 # ── 10. serial log volume / marker budget ──
+# PERF_LOG_NOISE_ABLATION_V1: noisy families print first 4 event lines then
+# power-of-two [perf.noise.summary] lines. True event count = last summary
+# count if present, else raw line count (pre-ablation logs).
+noise_true_count() {
+    # $1 = summary name, $2 = raw line count
+    awk -v name="$1" -v raw="$2" '
+        /\[perf\.noise\.summary\]/ {
+            for (i = 1; i <= NF; i++) {
+                split($i, kv, "=")
+                if (kv[1] == "name" && kv[2] == name) matched = 1
+                if (kv[1] == "count") c = kv[2]
+            }
+            if (matched) { last = c; matched = 0 }
+        }
+        END { print (last + 0 > raw + 0) ? last : raw }
+    ' "$LOG"
+}
 total_lines=$(wc -l < "$LOG")
-noise_bootframe=$(count_marker '[kernel.mem.boot_frame.alloc]')
-noise_linen=$(count_marker '[linen.session.reject]')
-noise_yield="$sched_yield"
+noise_bootframe=$(noise_true_count 'boot_frame.alloc' "$(count_marker '[kernel.mem.boot_frame.alloc]')")
+noise_linen=$(noise_true_count 'linen.session.reject' "$(count_marker '[linen.session.reject]')")
+noise_yield=$(noise_true_count 'scheduler.yield' "$sched_yield")
 
 # ── 11. fault scan ──
 pf=$(grep -c '#PF' "$LOG")

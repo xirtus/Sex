@@ -114,18 +114,6 @@ gate_usb_keyboard_decode="SKIP"
 gate_usb_keyboard_to_hid="SKIP"
 gate_usb_keyboard_shell_recv="SKIP"
 gate_usb_keyboard_faults_zero="SKIP"
-gate_usb_mouse_detect="SKIP"
-gate_usb_mouse_raw_report="SKIP"
-gate_usb_mouse_pack="SKIP"
-gate_usb_mouse_to_normalizer="SKIP"
-gate_usb_mouse_normalizer_out="SKIP"
-gate_usb_mouse_faults_zero="SKIP"
-gate_usb_pointer_producer_report="SKIP"
-gate_usb_pointer_producer_to_input="SKIP"
-gate_usb_pointer_producer_normalized="SKIP"
-gate_usb_pointer_producer_shell="SKIP"
-gate_usb_pointer_producer_click_drag="SKIP"
-gate_usb_pointer_producer_faults_zero="SKIP"
 gate_quil_save_open_nonblocking_startup="SKIP"
 gate_spindle_editor_finish="SKIP"
 gate_linen_search_bridge="SKIP"
@@ -194,8 +182,6 @@ gate_shell_interaction_no_focus_key="SKIP"
 gate_cursor_visible_motion="SKIP"
 gate_cursor_motion_no_focus_mutation="SKIP"
 gate_cursor_motion_bounds="SKIP"
-gate_cursor_visual_contrast="SKIP"
-gate_keyboard_cursor_debug="SKIP"
 gate_click_focus_button_edges="SKIP"
 gate_click_focus_hit_test_commit="SKIP"
 gate_drag_capture_lifecycle="SKIP"
@@ -217,17 +203,6 @@ gate_input_negative_dead_target="SKIP"
 gate_input_negative_button_up_no_capture="SKIP"
 gate_input_negative_malformed_report="SKIP"
 gate_input_negative_faults_zero="SKIP"
-
-# ---- AP15: integrated cursor+keyboard scenario gates ----
-gate_integrated_keyboard_route="SKIP"
-gate_integrated_cursor_motion="SKIP"
-gate_integrated_click_focus="SKIP"
-gate_integrated_drag_lifecycle="SKIP"
-gate_integrated_surface_lifetime="SKIP"
-gate_integrated_negative_inputs="SKIP"
-gate_integrated_faults_zero="SKIP"
-gate_integrated_usb_real_report_deferred="SKIP"
-
 gate_webstub_static_text_render="SKIP"
 gate_shell_draw_text_helper="SKIP"
 gate_browser_stub_v2="SKIP"
@@ -507,7 +482,7 @@ LOG_LINES=$(wc -l < "$LOG" 2>/dev/null || echo 0)
 
 echo ""
 echo "============================================"
-echo " DAILY-DRIVER MASTER GATE V37"
+echo " DAILY-DRIVER MASTER GATE V36"
 echo "============================================"
 echo ""
 echo "  log:     $LOG"
@@ -5437,183 +5412,6 @@ else
     print_row "usb_keyboard_faults_zero" "SKIP" "USB keyboard proof lane not active, no fault context"
 fi
 
-# ---- usb_mouse_detect ----
-# PASS if [usb.mouse.detect] with ok=1
-if [ "$(has 'usb\.mouse\.detect.*ok=1')" -ge 1 ]; then
-    gate_usb_mouse_detect="PASS"
-    print_row "usb_mouse_detect" "PASS" "USB mouse/tablet boot interface detected"
-elif [ "$(has 'sexusb\.xhci\.config\.hid_boot_mouse\.found')" -ge 1 ]; then
-    gate_usb_mouse_detect="PASS"
-    print_row "usb_mouse_detect" "PASS" "USB boot mouse interface found (compat marker)"
-elif [ "$(has 'sexusb\.xhci\.config\.hid_tablet\.found')" -ge 1 ]; then
-    gate_usb_mouse_detect="PASS"
-    print_row "usb_mouse_detect" "PASS" "USB tablet interface found (compat marker)"
-else
-    gate_usb_mouse_detect="SKIP"
-    print_row "usb_mouse_detect" "SKIP" "USB mouse/tablet not detected or proof lane not enabled"
-fi
-
-# ---- usb_mouse_raw_report ----
-# PASS if [usb.mouse.report.raw] with ok=1
-if [ "$(has 'usb\.mouse\.report\.raw.*ok=1')" -ge 1 ]; then
-    gate_usb_mouse_raw_report="PASS"
-    print_row "usb_mouse_raw_report" "PASS" "USB mouse/tablet raw report received"
-elif [ "$(has 'usb\.mouse\.detect.*ok=1')" -ge 1 ]; then
-    gate_usb_mouse_raw_report="SKIP"
-    print_row "usb_mouse_raw_report" "SKIP" "USB mouse/tablet detected but no report received (timeout or idle device)"
-else
-    gate_usb_mouse_raw_report="SKIP"
-    print_row "usb_mouse_raw_report" "SKIP" "USB mouse/tablet proof lane not enabled"
-fi
-
-# ---- usb_mouse_pack ----
-# PASS if [usb.mouse.report.pack] with ok=1
-if [ "$(has 'usb\.mouse\.report\.pack.*ok=1')" -ge 1 ]; then
-    gate_usb_mouse_pack="PASS"
-    print_row "usb_mouse_pack" "PASS" "USB mouse/tablet report packed for sexinput"
-elif [ "$(has 'usb\.mouse\.detect.*ok=1')" -ge 1 ]; then
-    gate_usb_mouse_pack="SKIP"
-    print_row "usb_mouse_pack" "SKIP" "USB mouse/tablet detected but no report to pack"
-else
-    gate_usb_mouse_pack="SKIP"
-    print_row "usb_mouse_pack" "SKIP" "USB mouse/tablet proof lane not enabled"
-fi
-
-# ---- usb_mouse_to_normalizer ----
-# PASS if [usb.mouse.to_normalizer] with ok=1
-if [ "$(has 'usb\.mouse\.to_normalizer.*ok=1')" -ge 1 ]; then
-    gate_usb_mouse_to_normalizer="PASS"
-    print_row "usb_mouse_to_normalizer" "PASS" "USB mouse/tablet report delivered to normalizer"
-elif [ "$(has 'usb\.mouse\.detect.*ok=1')" -ge 1 ]; then
-    gate_usb_mouse_to_normalizer="SKIP"
-    print_row "usb_mouse_to_normalizer" "SKIP" "USB mouse/tablet detected but report did not reach normalizer"
-else
-    gate_usb_mouse_to_normalizer="SKIP"
-    print_row "usb_mouse_to_normalizer" "SKIP" "USB mouse/tablet proof lane not enabled"
-fi
-
-# ---- usb_mouse_normalizer_out ----
-# PASS if [usb.mouse.normalizer.out] with ok=1
-if [ "$(has 'usb\.mouse\.normalizer\.out.*ok=1')" -ge 1 ]; then
-    gate_usb_mouse_normalizer_out="PASS"
-    print_row "usb_mouse_normalizer_out" "PASS" "USB mouse/tablet normalizer output emitted"
-elif [ "$(has 'usb\.mouse\.detect.*ok=1')" -ge 1 ]; then
-    gate_usb_mouse_normalizer_out="SKIP"
-    print_row "usb_mouse_normalizer_out" "SKIP" "USB mouse/tablet detected but normalizer did not emit output"
-else
-    gate_usb_mouse_normalizer_out="SKIP"
-    print_row "usb_mouse_normalizer_out" "SKIP" "USB mouse/tablet proof lane not enabled"
-fi
-
-# ---- usb_mouse_faults_zero ----
-# PASS if no #PF/#GP/panic when USB mouse detection active
-usb_mouse_faults=$(has '#PF|#GP|panic|KERNEL PANIC|PAGE FAULT|GENERAL PROTECTION')
-if [ "$(has 'usb\.mouse\.detect.*ok=1')" -ge 1 ] && [ "$usb_mouse_faults" -eq 0 ]; then
-    gate_usb_mouse_faults_zero="PASS"
-    print_row "usb_mouse_faults_zero" "PASS" "no faults during USB mouse proof lane"
-elif [ "$usb_mouse_faults" -ge 1 ]; then
-    gate_usb_mouse_faults_zero="FAIL"
-    print_row "usb_mouse_faults_zero" "FAIL" "fault detected during USB mouse proof lane"
-else
-    gate_usb_mouse_faults_zero="SKIP"
-    print_row "usb_mouse_faults_zero" "SKIP" "USB mouse proof lane not active, no fault context"
-fi
-
-# ---- usb_pointer_producer_report ----
-# AP14: USB pointer producer report gate
-if [ "$(has 'usb\.pointer\.producer\.begin')" -ge 1 ]; then
-    has_report=$(has 'usb\.pointer\.producer\.report.*ok=1')
-    has_synthetic=$(has 'usb\.pointer\.producer\.report.*synthetic=1')
-    if [ "$has_report" -ge 1 ] && [ "$has_synthetic" -eq 0 ]; then
-        gate_usb_pointer_producer_report="PASS"
-        print_row "usb_pointer_producer_report" "PASS" "real USB pointer report received (synthetic=0)"
-    elif [ "$has_report" -ge 1 ] && [ "$has_synthetic" -ge 1 ]; then
-        gate_usb_pointer_producer_report="SKIP"
-        print_row "usb_pointer_producer_report" "SKIP" "synthetic USB pointer report only (not real hardware)"
-    else
-        gate_usb_pointer_producer_report="SKIP"
-        print_row "usb_pointer_producer_report" "SKIP" "USB pointer pipeline active but no real report received (timeout/idle device)"
-    fi
-else
-    gate_usb_pointer_producer_report="SKIP"
-    print_row "usb_pointer_producer_report" "SKIP" "USB pointer producer proof lane not enabled"
-fi
-
-# ---- usb_pointer_producer_to_input ----
-if [ "$(has 'usb\.pointer\.producer\.begin')" -ge 1 ]; then
-    has_to_input=$(has 'usb\.pointer\.producer\.to_input.*ok=1')
-    if [ "$has_to_input" -ge 1 ]; then
-        gate_usb_pointer_producer_to_input="PASS"
-        print_row "usb_pointer_producer_to_input" "PASS" "USB pointer report forwarded to sexinput (op=0x260)"
-    else
-        gate_usb_pointer_producer_to_input="SKIP"
-        print_row "usb_pointer_producer_to_input" "SKIP" "USB pointer pipeline active but no report forwarded to sexinput"
-    fi
-else
-    gate_usb_pointer_producer_to_input="SKIP"
-    print_row "usb_pointer_producer_to_input" "SKIP" "USB pointer producer proof lane not enabled"
-fi
-
-# ---- usb_pointer_producer_normalized ----
-if [ "$(has 'usb\.pointer\.producer\.begin')" -ge 1 ]; then
-    has_norm=$(has 'usb\.pointer\.producer\.normalized.*ok=1')
-    if [ "$has_norm" -ge 1 ]; then
-        gate_usb_pointer_producer_normalized="PASS"
-        print_row "usb_pointer_producer_normalized" "PASS" "USB pointer report normalized (sexinput)"
-    else
-        gate_usb_pointer_producer_normalized="SKIP"
-        print_row "usb_pointer_producer_normalized" "SKIP" "USB pointer pipeline active but normalizer did not emit output"
-    fi
-else
-    gate_usb_pointer_producer_normalized="SKIP"
-    print_row "usb_pointer_producer_normalized" "SKIP" "USB pointer producer proof lane not enabled"
-fi
-
-# ---- usb_pointer_producer_shell ----
-if [ "$(has 'usb\.pointer\.producer\.begin')" -ge 1 ]; then
-    has_shell=$(has 'usb\.pointer\.producer\.shell.*ok=1')
-    if [ "$has_shell" -ge 1 ]; then
-        gate_usb_pointer_producer_shell="PASS"
-        print_row "usb_pointer_producer_shell" "PASS" "USB pointer event reached silk-shell"
-    else
-        gate_usb_pointer_producer_shell="SKIP"
-        print_row "usb_pointer_producer_shell" "SKIP" "USB pointer pipeline active but event did not reach shell"
-    fi
-else
-    gate_usb_pointer_producer_shell="SKIP"
-    print_row "usb_pointer_producer_shell" "SKIP" "USB pointer producer proof lane not enabled"
-fi
-
-# ---- usb_pointer_producer_click_drag ----
-if [ "$(has 'usb\.pointer\.producer\.begin')" -ge 1 ]; then
-    has_cd=$(has 'usb\.pointer\.producer\.click_drag.*ok=1')
-    if [ "$has_cd" -ge 1 ]; then
-        gate_usb_pointer_producer_click_drag="PASS"
-        print_row "usb_pointer_producer_click_drag" "PASS" "USB pointer click/drag event processed"
-    else
-        gate_usb_pointer_producer_click_drag="SKIP"
-        print_row "usb_pointer_producer_click_drag" "SKIP" "USB pointer pipeline active but no click/drag event"
-    fi
-else
-    gate_usb_pointer_producer_click_drag="SKIP"
-    print_row "usb_pointer_producer_click_drag" "SKIP" "USB pointer producer proof lane not enabled"
-fi
-
-# ---- usb_pointer_producer_faults_zero ----
-if [ "$(has 'usb\.pointer\.producer\.begin')" -ge 1 ]; then
-    ptr_faults=$(count '#PF|#GP|panic|KERNEL PANIC|PAGE FAULT|GENERAL PROTECTION')
-    if [ "$ptr_faults" -eq 0 ]; then
-        gate_usb_pointer_producer_faults_zero="PASS"
-        print_row "usb_pointer_producer_faults_zero" "PASS" "no faults during USB pointer producer proof lane"
-    else
-        gate_usb_pointer_producer_faults_zero="FAIL"
-        print_row "usb_pointer_producer_faults_zero" "FAIL" "fault detected during USB pointer producer proof lane"
-    fi
-else
-    gate_usb_pointer_producer_faults_zero="SKIP"
-    print_row "usb_pointer_producer_faults_zero" "SKIP" "USB pointer producer proof lane not enabled"
-fi
-
 # ---- quil_save_open_nonblocking_startup ----
 # PASS if: main_loop.enter + input_ready + no_startup_block markers all present,
 # no faults, existing quil_save_open_sexobject is PASS or SKIP (not FAIL),
@@ -7144,40 +6942,6 @@ else
     fi
 fi
 
-# ---- cursor_visual_contrast ----
-if [ "$(has 'sexdisplay\.cursor\.visual\.contrast.*ok=1')" -eq 1 ]; then
-    has_ztop=$(has 'sexdisplay\.cursor_surface\.z_top\.ok')
-    has_draw=$(has 'sexdisplay\.cursor\.draw')
-    if [ "$has_ztop" -eq 1 ] && [ "$has_draw" -eq 1 ]; then
-        gate_cursor_visual_contrast="PASS"
-        print_row "cursor_visual_contrast" "PASS" "visual.contrast ok=1 + z_top.ok + cursor.draw all present"
-    else
-        gate_cursor_visual_contrast="PASS"
-        print_row "cursor_visual_contrast" "PASS" "visual.contrast ok=1 (supporting markers partial)"
-    fi
-else
-    gate_cursor_visual_contrast="SKIP"
-    print_row "cursor_visual_contrast" "SKIP" "no cursor visual contrast proof markers"
-fi
-
-# ---- keyboard_cursor_debug ----
-# SKIP when SEXOS_KEYBOARD_CURSOR not set (no markers). PASS only when interactive
-# arrow key events fired: begin + at least one move ok=1 + done all present.
-if [ "$(has 'keyboard\.cursor\.debug\.begin')" -eq 1 ]; then
-    has_kcd_move=$(has 'keyboard\.cursor\.debug\.move.*ok=1')
-    has_kcd_done=$(has 'keyboard\.cursor\.debug\.done')
-    if [ "$has_kcd_move" -eq 1 ] && [ "$has_kcd_done" -eq 1 ]; then
-        gate_keyboard_cursor_debug="PASS"
-        print_row "keyboard_cursor_debug" "PASS" "debug begin+move ok=1+done all present"
-    else
-        gate_keyboard_cursor_debug="FAIL"
-        print_row "keyboard_cursor_debug" "FAIL" "debug begin present but move ok=1 or done missing"
-    fi
-else
-    gate_keyboard_cursor_debug="SKIP"
-    print_row "keyboard_cursor_debug" "SKIP" "no keyboard cursor debug markers (SEXOS_KEYBOARD_CURSOR absent or no arrow keys pressed)"
-fi
-
 # ---- click_focus_drag_impl_v1 (AP8) ----
 click_focus_begin_re='click\.focus\.proof\.begin'
 drag_proof_begin_re='drag\.proof\.begin'
@@ -7456,195 +7220,6 @@ else
     fi
 fi
 
-# ---- AP15: integrated cursor+keyboard scenario gates ----
-#
-# These are pure host-side aggregation gates.  They PASS when the required
-# component gates have already PASSed.  They do NOT introduce new compile-time
-# proof markers or require any source-code changes in SexOS.
-#
-# SKIP policy: if all component gates are SKIP (proof lane not enabled this
-# boot), the integrated gate is SKIP.  A FAIL in any required component gate
-# means the integrated gate FAILs.
-#
-# USB real-report gate: PASS only when the USB pointer producer lane ran and
-# honestly deferred (no real hardware report in this environment).  It must
-# NOT claim a real USB report PASS.
-
-# ---- integrated_keyboard_route ----
-has_any_kbd_pass=0
-has_any_kbd_fail=0
-[ "$gate_keyboard_gui" = "PASS" ] && has_any_kbd_pass=1
-[ "$gate_quil_keyboard" = "PASS" ] && has_any_kbd_pass=1
-[ "$gate_physical_keyboard_to_quil_text" = "PASS" ] && has_any_kbd_pass=1
-[ "$gate_keyboard_gui" = "FAIL" ] && has_any_kbd_fail=1
-[ "$gate_quil_keyboard" = "FAIL" ] && has_any_kbd_fail=1
-[ "$gate_physical_keyboard_to_quil_text" = "FAIL" ] && has_any_kbd_fail=1
-
-all_kbd_skip=1
-[ "$gate_keyboard_gui" != "SKIP" ] && all_kbd_skip=0
-[ "$gate_quil_keyboard" != "SKIP" ] && all_kbd_skip=0
-[ "$gate_physical_keyboard_to_quil_text" != "SKIP" ] && all_kbd_skip=0
-
-if [ "$all_kbd_skip" -eq 1 ]; then
-    gate_integrated_keyboard_route="SKIP"
-    print_row "integrated_keyboard_route" "SKIP" "no keyboard component gate enabled this boot"
-elif [ "$has_any_kbd_fail" -eq 1 ] && [ "$has_any_kbd_pass" -eq 0 ]; then
-    gate_integrated_keyboard_route="FAIL"
-    print_row "integrated_keyboard_route" "FAIL" "keyboard component gate(s) FAIL with no PASS"
-elif [ "$has_any_kbd_pass" -eq 1 ]; then
-    gate_integrated_keyboard_route="PASS"
-    print_row "integrated_keyboard_route" "PASS" "keyboard route proven (component gate(s) PASS)"
-else
-    gate_integrated_keyboard_route="SKIP"
-    print_row "integrated_keyboard_route" "SKIP" "keyboard route indeterminate"
-fi
-
-# ---- integrated_cursor_motion ----
-has_cursor_pass=1
-has_cursor_fail=0
-for g in "gate_cursor_visible_motion" "gate_cursor_motion_no_focus_mutation" "gate_cursor_motion_bounds"; do
-    state="${!g}"
-    [ "$state" != "PASS" ] && has_cursor_pass=0
-    [ "$state" = "FAIL" ] && has_cursor_fail=1
-done
-all_cursor_skip=1
-[ "$gate_cursor_visible_motion" != "SKIP" ] && all_cursor_skip=0
-[ "$gate_cursor_motion_no_focus_mutation" != "SKIP" ] && all_cursor_skip=0
-[ "$gate_cursor_motion_bounds" != "SKIP" ] && all_cursor_skip=0
-
-if [ "$all_cursor_skip" -eq 1 ]; then
-    gate_integrated_cursor_motion="SKIP"
-    print_row "integrated_cursor_motion" "SKIP" "no cursor motion component gate enabled this boot"
-elif [ "$has_cursor_fail" -eq 1 ]; then
-    gate_integrated_cursor_motion="FAIL"
-    print_row "integrated_cursor_motion" "FAIL" "cursor motion component gate(s) FAIL"
-elif [ "$has_cursor_pass" -eq 1 ]; then
-    gate_integrated_cursor_motion="PASS"
-    print_row "integrated_cursor_motion" "PASS" "cursor visible/logical motion proven (all component gates PASS)"
-else
-    gate_integrated_cursor_motion="SKIP"
-    print_row "integrated_cursor_motion" "SKIP" "cursor motion component gates indeterminate"
-fi
-
-# ---- integrated_click_focus ----
-click_focus_gates_pass=1
-click_focus_gates_fail=0
-for g in "gate_click_focus_button_edges" "gate_click_focus_hit_test_commit"; do
-    state="${!g}"
-    [ "$state" != "PASS" ] && click_focus_gates_pass=0
-    [ "$state" = "FAIL" ] && click_focus_gates_fail=1
-done
-all_click_skip=1
-[ "$gate_click_focus_button_edges" != "SKIP" ] && all_click_skip=0
-[ "$gate_click_focus_hit_test_commit" != "SKIP" ] && all_click_skip=0
-
-if [ "$all_click_skip" -eq 1 ]; then
-    gate_integrated_click_focus="SKIP"
-    print_row "integrated_click_focus" "SKIP" "no click focus component gate enabled this boot"
-elif [ "$click_focus_gates_fail" -eq 1 ]; then
-    gate_integrated_click_focus="FAIL"
-    print_row "integrated_click_focus" "FAIL" "click focus component gate(s) FAIL"
-elif [ "$click_focus_gates_pass" -eq 1 ]; then
-    gate_integrated_click_focus="PASS"
-    print_row "integrated_click_focus" "PASS" "click focus proven (all component gates PASS)"
-else
-    gate_integrated_click_focus="SKIP"
-    print_row "integrated_click_focus" "SKIP" "click focus component gates indeterminate"
-fi
-
-# ---- integrated_drag_lifecycle ----
-drag_gates_pass=1
-drag_gates_fail=0
-for g in "gate_drag_capture_lifecycle" "gate_drag_release_clears_capture"; do
-    state="${!g}"
-    [ "$state" != "PASS" ] && drag_gates_pass=0
-    [ "$state" = "FAIL" ] && drag_gates_fail=1
-done
-all_drag_skip=1
-[ "$gate_drag_capture_lifecycle" != "SKIP" ] && all_drag_skip=0
-[ "$gate_drag_release_clears_capture" != "SKIP" ] && all_drag_skip=0
-
-if [ "$all_drag_skip" -eq 1 ]; then
-    gate_integrated_drag_lifecycle="SKIP"
-    print_row "integrated_drag_lifecycle" "SKIP" "no drag lifecycle component gate enabled this boot"
-elif [ "$drag_gates_fail" -eq 1 ]; then
-    gate_integrated_drag_lifecycle="FAIL"
-    print_row "integrated_drag_lifecycle" "FAIL" "drag lifecycle component gate(s) FAIL"
-elif [ "$drag_gates_pass" -eq 1 ]; then
-    gate_integrated_drag_lifecycle="PASS"
-    print_row "integrated_drag_lifecycle" "PASS" "drag lifecycle proven (all component gates PASS)"
-else
-    gate_integrated_drag_lifecycle="SKIP"
-    print_row "integrated_drag_lifecycle" "SKIP" "drag lifecycle component gates indeterminate"
-fi
-
-# ---- integrated_surface_lifetime ----
-if [ "$gate_surface_input_lifetime_contract" = "PASS" ]; then
-    gate_integrated_surface_lifetime="PASS"
-    print_row "integrated_surface_lifetime" "PASS" "surface input lifetime proven (surface_input_lifetime_contract PASS)"
-elif [ "$gate_surface_input_lifetime_contract" = "FAIL" ]; then
-    gate_integrated_surface_lifetime="FAIL"
-    print_row "integrated_surface_lifetime" "FAIL" "surface input lifetime component gate FAIL"
-else
-    gate_integrated_surface_lifetime="SKIP"
-    print_row "integrated_surface_lifetime" "SKIP" "surface input lifetime lane not enabled this boot"
-fi
-
-# ---- integrated_negative_inputs ----
-if [ "$gate_input_negative_contract" = "PASS" ]; then
-    gate_integrated_negative_inputs="PASS"
-    print_row "integrated_negative_inputs" "PASS" "input negative tests proven (input_negative_contract PASS)"
-elif [ "$gate_input_negative_contract" = "FAIL" ]; then
-    gate_integrated_negative_inputs="FAIL"
-    print_row "integrated_negative_inputs" "FAIL" "input negative tests component gate FAIL"
-else
-    gate_integrated_negative_inputs="SKIP"
-    print_row "integrated_negative_inputs" "SKIP" "input negative test lane not enabled this boot"
-fi
-
-# ---- integrated_faults_zero ----
-if [ "$gate_faults_zero" = "PASS" ]; then
-    gate_integrated_faults_zero="PASS"
-    print_row "integrated_faults_zero" "PASS" "zero faults across all integrated proof lanes"
-else
-    gate_integrated_faults_zero="FAIL"
-    print_row "integrated_faults_zero" "FAIL" "faults detected (faults_zero FAIL)"
-fi
-
-# ---- integrated_usb_real_report_deferred ----
-# USB real-report is explicitly deferred for current-tier integrated proof.
-# PASS only if the USB pointer producer lane ran and honestly deferred
-# (no real hardware report in this QEMU/no-USB-HID pass-through environment).
-# It must NOT claim a real USB report PASS.
-#
-# Detection: look for the usb.pointer.producer.begin marker in the boot log.
-# When present, the lane ran.  When all USB PP gates are SKIP (not PASS, not FAIL),
-# the lane honestly deferred because no real hardware report arrived.
-has_usb_pp_begin=$(has 'usb\.pointer\.producer\.begin')
-usb_pp_report_passed=0
-usb_pp_any_fail=0
-[ "$gate_usb_pointer_producer_report" = "PASS" ] && usb_pp_report_passed=1
-[ "$gate_usb_pointer_producer_report" = "FAIL" ] && usb_pp_any_fail=1
-[ "$gate_usb_pointer_producer_to_input" = "FAIL" ] && usb_pp_any_fail=1
-[ "$gate_usb_pointer_producer_normalized" = "FAIL" ] && usb_pp_any_fail=1
-[ "$gate_usb_pointer_producer_shell" = "FAIL" ] && usb_pp_any_fail=1
-[ "$gate_usb_pointer_producer_click_drag" = "FAIL" ] && usb_pp_any_fail=1
-[ "$gate_usb_pointer_producer_faults_zero" = "FAIL" ] && usb_pp_any_fail=1
-
-if [ "$has_usb_pp_begin" -eq 0 ]; then
-    gate_integrated_usb_real_report_deferred="SKIP"
-    print_row "integrated_usb_real_report_deferred" "SKIP" "USB pointer producer proof lane not enabled this boot"
-elif [ "$usb_pp_any_fail" -eq 1 ]; then
-    gate_integrated_usb_real_report_deferred="FAIL"
-    print_row "integrated_usb_real_report_deferred" "FAIL" "USB pointer producer lane has FAIL gate(s)"
-elif [ "$usb_pp_report_passed" -eq 1 ]; then
-    gate_integrated_usb_real_report_deferred="PASS"
-    print_row "integrated_usb_real_report_deferred" "PASS" "USB pointer producer lane PASS; real-report arrival deferred to USB_POINTER_REAL_INPUT_OPERATOR_RETRY_V1"
-else
-    gate_integrated_usb_real_report_deferred="PASS"
-    print_row "integrated_usb_real_report_deferred" "PASS" "USB pointer producer lane active, honest deferral (no real hardware report); deferred to USB_POINTER_REAL_INPUT_OPERATOR_RETRY_V1"
-fi
-
 # ---- SCORE ----
 echo ""
 echo "============================================"
@@ -7727,18 +7302,6 @@ ALL_GATES=(
     "usb_keyboard_to_hid:$gate_usb_keyboard_to_hid"
     "usb_keyboard_shell_recv:$gate_usb_keyboard_shell_recv"
     "usb_keyboard_faults_zero:$gate_usb_keyboard_faults_zero"
-    "usb_mouse_detect:$gate_usb_mouse_detect"
-    "usb_mouse_raw_report:$gate_usb_mouse_raw_report"
-    "usb_mouse_pack:$gate_usb_mouse_pack"
-    "usb_mouse_to_normalizer:$gate_usb_mouse_to_normalizer"
-    "usb_mouse_normalizer_out:$gate_usb_mouse_normalizer_out"
-    "usb_mouse_faults_zero:$gate_usb_mouse_faults_zero"
-    "usb_pointer_producer_report:$gate_usb_pointer_producer_report"
-    "usb_pointer_producer_to_input:$gate_usb_pointer_producer_to_input"
-    "usb_pointer_producer_normalized:$gate_usb_pointer_producer_normalized"
-    "usb_pointer_producer_shell:$gate_usb_pointer_producer_shell"
-    "usb_pointer_producer_click_drag:$gate_usb_pointer_producer_click_drag"
-    "usb_pointer_producer_faults_zero:$gate_usb_pointer_producer_faults_zero"
     "quil_save_open_nonblocking_startup:$gate_quil_save_open_nonblocking_startup"
     "spindle_editor_finish:$gate_spindle_editor_finish"
     "storage_phasea:$gate_storage_phasea"
@@ -7769,8 +7332,6 @@ ALL_GATES=(
     "cursor_visible_motion:$gate_cursor_visible_motion"
     "cursor_motion_no_focus_mutation:$gate_cursor_motion_no_focus_mutation"
     "cursor_motion_bounds:$gate_cursor_motion_bounds"
-    "cursor_visual_contrast:$gate_cursor_visual_contrast"
-    "keyboard_cursor_debug:$gate_keyboard_cursor_debug"
     "click_focus_button_edges:$gate_click_focus_button_edges"
     "click_focus_hit_test_commit:$gate_click_focus_hit_test_commit"
     "drag_capture_lifecycle:$gate_drag_capture_lifecycle"
@@ -8090,14 +7651,6 @@ ALL_GATES=(
     "input_freeze_no_faults:$gate_input_freeze_no_faults"
     "linen_search_bridge:$gate_linen_search_bridge"
     "faults_zero:$gate_faults_zero"
-    "integrated_keyboard_route:$gate_integrated_keyboard_route"
-    "integrated_cursor_motion:$gate_integrated_cursor_motion"
-    "integrated_click_focus:$gate_integrated_click_focus"
-    "integrated_drag_lifecycle:$gate_integrated_drag_lifecycle"
-    "integrated_surface_lifetime:$gate_integrated_surface_lifetime"
-    "integrated_negative_inputs:$gate_integrated_negative_inputs"
-    "integrated_faults_zero:$gate_integrated_faults_zero"
-    "integrated_usb_real_report_deferred:$gate_integrated_usb_real_report_deferred"
 )
 
 PASS_COUNT=0
