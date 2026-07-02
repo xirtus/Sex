@@ -6,6 +6,7 @@ mod session;
 mod sexobject;
 
 use core::alloc::{GlobalAlloc, Layout};
+use core::sync::atomic::{AtomicU64, Ordering};
 use sex_pdx::{pdx_call, pdx_listen_raw, pdx_reply, pdx_try_listen_raw, sched_yield, serial_println, SLOT_DISPLAY, SLOT_STORAGE};
 
 struct DummyAllocator;
@@ -15,6 +16,10 @@ unsafe impl GlobalAlloc for DummyAllocator {
 }
 #[global_allocator]
 static ALLOCATOR: DummyAllocator = DummyAllocator;
+
+// PERF_LOG_NOISE_ABLATION_V1: bad_name_len reject spam budget (first 4, then
+// power-of-two summaries).
+static LINEN_REJECT_BAD_NAME_LEN_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }
@@ -1033,8 +1038,17 @@ unsafe fn handle_create_object(arg0: u64, arg1: u64, arg2: u64, caller_pd: u32) 
 
     // Validate name length.
     if name_len == 0 || name_len as usize > LINEN_MAX_NAME {
-        serial_println!("[linen.session.reject] reason=bad_name_len len={} max={} caller={}",
-            name_len, LINEN_MAX_NAME, caller_pd);
+        // PERF_LOG_NOISE_ABLATION_V1: spindle (pd=12) hammers create with len=0 —
+        // 61269 identical reject lines per run. First 4 lines, then power-of-two
+        // summaries. Reject reply still sent every call — logging gated only.
+        let n = LINEN_REJECT_BAD_NAME_LEN_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if n <= 4 {
+            serial_println!("[linen.session.reject] reason=bad_name_len len={} max={} caller={}",
+                name_len, LINEN_MAX_NAME, caller_pd);
+        } else if n & (n - 1) == 0 {
+            serial_println!("[perf.noise.summary] name=linen.session.reject count={} suppressed={}",
+                n, n - 4);
+        }
         pdx_reply(caller_pd, 0xFFFF_FFFF_FFFF_FFFE); // ERR_SERVICE_NOT_READY equivalent
         return;
     }

@@ -155,6 +155,8 @@ static FIRST_SCHEDULE_LOGGED: AtomicU64 = AtomicU64::new(0);
 static SCHED_TICK_ENTER_LOG_BUDGET: AtomicU64 = AtomicU64::new(32);
 static SCHED_PICK_NEXT_LOG_BUDGET: AtomicU64 = AtomicU64::new(32);
 static TASK_LIFECYCLE_LOG_BUDGET: AtomicU64 = AtomicU64::new(128);
+// PERF_LOG_NOISE_ABLATION_V1: first 4 per-event lines, then power-of-two summaries.
+static SCHED_YIELD_SAVED_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[no_mangle]
 pub static mut ACTUAL_IRET_RSP: u64 = 0;
@@ -562,7 +564,13 @@ pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) 
         ctx.rip = user_rip; ctx.cs = 0x2Bu64; ctx.rflags = user_rflags;
         ctx.rsp = user_rsp; ctx.ss = user_ss; ctx.pkru = saved_pkru;
         ctx.kstack_top = ksp_base;
-        serial_println!("scheduler.yield_and_switch.saved pd_id={}", ctx.pd_id);
+        let yield_n = SCHED_YIELD_SAVED_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if yield_n <= 4 {
+            serial_println!("scheduler.yield_and_switch.saved pd_id={}", ctx.pd_id);
+        } else if yield_n & (yield_n - 1) == 0 {
+            serial_println!("[perf.noise.summary] name=scheduler.yield count={} suppressed={}",
+                yield_n, yield_n - 4);
+        }
 
         (*current).state.store(TaskState::Ready as u32, Ordering::Release);
         sched.runqueue.push(current);

@@ -33,9 +33,18 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
                 let offset = self.next.saturating_sub(frame_index) as u64;
                 let phys_addr = region.base + offset * 4096;
                 self.next += 1;
-                // AP1 diagnostic: record boot-frame allocation for overlap detection
-                crate::serial_println!("[kernel.mem.boot_frame.alloc] phys={:#x} idx={}",
-                    phys_addr, self.next);
+                // AP1 diagnostic: record boot-frame allocation for overlap detection.
+                // PERF_LOG_NOISE_ABLATION_V1: first 4 lines, then power-of-two summaries
+                // (67790 per-event lines dominated serial volume; diag_record + reserve
+                // still run every call — logging gated only).
+                let n = self.next as u64;
+                if n <= 4 {
+                    crate::serial_println!("[kernel.mem.boot_frame.alloc] phys={:#x} idx={}",
+                        phys_addr, self.next);
+                } else if n & (n - 1) == 0 {
+                    crate::serial_println!("[perf.noise.summary] name=boot_frame.alloc count={} suppressed={}",
+                        n, n - 4);
+                }
                 crate::memory::allocator::diag_record_boot_frame(phys_addr);
                 // AP2 fix: reserve this frame in GLOBAL_ALLOCATOR metadata so the
                 // buddy allocator cannot reissue page-table frames as data/DMA buffers.
