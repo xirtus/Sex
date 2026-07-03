@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import os
 import sys
+import re
 import subprocess
 import argparse
+import shlex
 
 # sex-lift-ai: AI-Powered Driver Lifting for SexOS
 # This tool analyzes Linux driver source code and generates DDE-Sex shims.
@@ -31,7 +33,7 @@ def analyze_driver(driver_path):
     # 1. Use 'grep' to find kernel symbols that usually need shimming
     # (Simplified: looking for common PCI and IRQ functions)
     try:
-        cmd = f"grep -rE 'pci_|irq_|kmalloc|ioremap' {full_path} | awk -F'(' '{{print $1}}' | awk '{{print $NF}}' | sort -u"
+        cmd = f"grep -rE 'pci_|irq_|kmalloc|ioremap' {shlex.quote(full_path)} | awk -F'(' '{{print $1}}' | awk '{{print $NF}}' | sort -u"
         output = subprocess.check_output(cmd, shell=True).decode()
         symbols = [s.strip() for s in output.split('\n') if s.strip() and not s.startswith('/')]
     except:
@@ -54,8 +56,11 @@ def main():
     parser.add_argument("driver", help="Path to driver in Linux tree (e.g., drivers/net/ethernet/intel/e1000)")
     args = parser.parse_args()
 
-    driver_name = os.path.basename(args.driver).replace(".c", "")
-    lift_dir = f"lifted_drivers/{driver_name}"
+    driver_name = re.sub(r'[^a-zA-Z0-9_\-]', '', os.path.basename(args.driver).replace(".c", ""))
+    if not driver_name:
+        print(f"[{PROGNAME}] Error: Invalid driver name.")
+        sys.exit(1)
+    lift_dir = os.path.join("lifted_drivers", driver_name)
     
     print(f"[{PROGNAME}] Lifting {driver_name} into {lift_dir}...")
     
@@ -72,7 +77,13 @@ def main():
     
     # 4. Generate the Shim
     shim_content = generate_shim(symbols)
-    with open(f"{lift_dir}/ai_shim.rs", "w") as f:
+    _safe_base = os.path.realpath("lifted_drivers")
+    shim_rs_path = os.path.realpath(os.path.join(lift_dir, "ai_shim.rs"))
+    template_path = os.path.realpath(os.path.join(lift_dir, "template"))
+    if not shim_rs_path.startswith(_safe_base + os.sep) or not template_path.startswith(_safe_base + os.sep):
+        print(f"[{PROGNAME}] Error: Invalid driver path.")
+        sys.exit(1)
+    with open(shim_rs_path, "w") as f:
         f.write(shim_content)
     
     # 5. Create Template for sex-src
@@ -81,7 +92,7 @@ version=upstream-ai
 short_desc="AI-Lifted Linux driver for {driver_name}"
 # Build using sex-src
 """
-    with open(f"{lift_dir}/template", "w") as f:
+    with open(template_path, "w") as f:
         f.write(template)
 
     print(f"[{PROGNAME}] SUCCESS. AI has prepared the environment in {lift_dir}")
