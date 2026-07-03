@@ -2,6 +2,8 @@
 import os
 import sys
 import argparse
+import runpy
+import shutil
 
 # vampire: The SexOS Autonomous Ingestion Engine
 # "Vampires" mature code from upstream kernels (Linux/BSD) 
@@ -27,8 +29,15 @@ def bite(upstream_path, pkg_name=None):
     print(f"[{PROGNAME}] Biting upstream source from mirror: {path} -> {pkg_name}")
 
     # 1. Trigger the AI Lifting Pipeline (passing mirror context)
-    cmd = f"python3 /Users/xirtus/sites/Microkernel/sex-src/bin/sex-lift-ai.py {upstream_path}"
-    os.system(cmd)
+    lift_script = "/Users/xirtus/sites/Microkernel/sex-src/bin/sex-lift-ai.py"
+    _saved_argv = sys.argv[:]
+    try:
+        sys.argv = [lift_script, upstream_path]
+        runpy.run_path(lift_script, run_name="__main__")
+    except SystemExit:
+        pass
+    finally:
+        sys.argv = _saved_argv
 
     # ... rest of bite logic ...
 
@@ -40,7 +49,7 @@ def bite(upstream_path, pkg_name=None):
     os.makedirs(pkg_dir, exist_ok=True)
     
     if os.path.exists(f"{lift_dir}/template"):
-        os.system(f"cp {lift_dir}/template {pkg_dir}/template")
+        shutil.copy2(f"{lift_dir}/template", f"{pkg_dir}/template")
         print(f"[{PROGNAME}] Sucked metadata into monorepo: {pkg_name}")
     
     return pkg_name
@@ -63,9 +72,9 @@ def infect(upstream_path):
 
     # 2. Copy upstream source
     if os.path.isdir(full_upstream):
-        os.system(f"cp -r {full_upstream}/* {src_dir}/")
+        shutil.copytree(full_upstream, src_dir, dirs_exist_ok=True)
     else:
-        os.system(f"cp {full_upstream} {src_dir}/")
+        shutil.copy2(full_upstream, src_dir)
 
     # 3. Inject DDE-Sex header into all .c and .h files
     for root, _, files in os.walk(src_dir):
