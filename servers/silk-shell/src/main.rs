@@ -7870,6 +7870,16 @@ unsafe fn tile_active_scene_frames() {
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_QUIL, 0,
                 (QUIL_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
         }
+        // APP_SURFACE_PACK_V1: Mesh visual placeholder, same pattern as Quil.
+        if sid == SURFACE_ID_MESH {
+            pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_MESH, 0,
+                (MESH_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
+            static MESH_VISIBLE_MARK: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
+            if !MESH_VISIBLE_MARK.swap(true, Ordering::Relaxed) {
+                serial_println!("[mesh.surface.visible.ok] sid={}", SURFACE_ID_MESH);
+            }
+        }
     }
 
     // B3: After tiling, validate current focus.
@@ -15068,6 +15078,9 @@ unsafe fn palette_execute_selected() -> bool {
                 sid,
                 open_ok as u8
             );
+            if open_ok {
+                serial_println!("[quil.launch.route.ok]");
+            }
             open_ok
         }
         Command::FocusLinen => {
@@ -15079,6 +15092,9 @@ unsafe fn palette_execute_selected() -> bool {
                 sid,
                 open_ok as u8
             );
+            if open_ok {
+                serial_println!("[linen.launch.route.ok]");
+            }
             open_ok
         }
         Command::FocusAtlas => {
@@ -15119,6 +15135,9 @@ unsafe fn palette_execute_selected() -> bool {
                 sid,
                 open_ok as u8
             );
+            if open_ok {
+                serial_println!("[mesh.launch.route.ok]");
+            }
             open_ok
         }
         Command::RestoreMinimized => {

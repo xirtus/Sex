@@ -26,6 +26,12 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 
 const OP_HID_EVENT: u64 = 0x202;
 const SURFACE_ID_QUIL: u64 = 201;
+// APP_SURFACE_PACK_V1: quil draws on its OWN content sid via the
+// kaleidoscope/spindle-proven 0xEC route. The shell-owned frame sid 201
+// rejects this PD's draw ops (sexdisplay owner_pd check), and at boot sid
+// 201 does not exist at all — every prior quil draw landed nowhere.
+// Created in _start; all draw call sites below target this sid.
+const QUIL_CONTENT_SID: u64 = 0x9C; // 156 — free in shell + display registries
 
 // Surface geometry (matches silk-shell SURFACE_201_W/H and BOOT_*)
 const SURFACE_W: u64 = 640;
@@ -407,7 +413,7 @@ fn draw_title_bar() {
     pdx_call(
         SLOT_DISPLAY,
         0xEF,
-        SURFACE_ID_QUIL,
+        QUIL_CONTENT_SID,
         0u64,
         (1u64 << 56)
             | (QUIL_TITLE_BAR_COLOR << 32)
@@ -424,7 +430,7 @@ fn draw_text_lines(buf: &[u8]) {
     const MAX_CHUNK: usize = 8;              // bytes per OP_TEXT_DRAW call
 
     // Clear previous text on this surface.
-    pdx_call(SLOT_DISPLAY, OP_TEXT_CLEAR, SURFACE_ID_QUIL, 0, 0);
+    pdx_call(SLOT_DISPLAY, OP_TEXT_CLEAR, QUIL_CONTENT_SID, 0, 0);
 
     let line_count = text_buffer_line_count(buf);
     let show_lines = line_count.min(QUIL_MAX_VISIBLE_LINES);
@@ -478,7 +484,7 @@ fn draw_text_lines(buf: &[u8]) {
             | ((chunk_len as u64 & 0xF) << 8)
             | (TEXT_LINE_COLOR << 32);
 
-        pdx_call(SLOT_DISPLAY, OP_TEXT_DRAW, SURFACE_ID_QUIL, packed, arg2);
+        pdx_call(SLOT_DISPLAY, OP_TEXT_DRAW, QUIL_CONTENT_SID, packed, arg2);
         offset += chunk_len;
     }
 
@@ -495,7 +501,7 @@ fn emit_rect_slot(slot: u64, x: u64, y: u64, w: u64, h: u64, color: u64) {
     pdx_call(
         SLOT_DISPLAY,
         0xEF,
-        SURFACE_ID_QUIL,
+        QUIL_CONTENT_SID,
         (y << 32) | x,
         (slot << 56) | (color << 32) | (h << 16) | w,
     );
@@ -553,7 +559,7 @@ fn draw_palette(selected: u8) {
     pdx_call(
         SLOT_DISPLAY,
         0xEF,
-        SURFACE_ID_QUIL,
+        QUIL_CONTENT_SID,
         (QUIL_PANEL_Y << 32) | QUIL_PANEL_X,
         (QUIL_ROW_INACTIVE << 32) | (QUIL_PANEL_H << 16) | QUIL_PANEL_W,
     );
@@ -598,7 +604,7 @@ fn draw_palette(selected: u8) {
         pdx_call(
             SLOT_DISPLAY,
             0xEF,
-            SURFACE_ID_QUIL,
+            QUIL_CONTENT_SID,
             (y << 32) | QUIL_ROW_X,
             (color << 32) | (QUIL_ROW_H << 16) | QUIL_ROW_W,
         );
@@ -607,7 +613,7 @@ fn draw_palette(selected: u8) {
             pdx_call(
                 SLOT_DISPLAY,
                 0xEF,
-                SURFACE_ID_QUIL,
+                QUIL_CONTENT_SID,
                 (y << 32) | QUIL_ROW_X,
                 (QUIL_ACCENT_COLOR << 32) | (QUIL_ROW_H << 16) | QUIL_ACCENT_W,
             );
@@ -1590,7 +1596,7 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                     pdx_call(
                         SLOT_DISPLAY,
                         0xEF,
-                        SURFACE_ID_QUIL,
+                        QUIL_CONTENT_SID,
                         (QUIL_PANEL_Y << 32) | QUIL_PANEL_X,
                         (QUIL_LINE_BG << 32) | (QUIL_PANEL_H << 16) | QUIL_PANEL_W,
                     );
@@ -1616,7 +1622,7 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                         pdx_call(
                             SLOT_DISPLAY,
                             0xEF,
-                            SURFACE_ID_QUIL,
+                            QUIL_CONTENT_SID,
                             0,
                             (color << 32) | (2000u64 << 16) | 2000u64,
                         );
@@ -1680,7 +1686,7 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                             pdx_call(
                                 SLOT_DISPLAY,
                                 0xEF,
-                                SURFACE_ID_QUIL,
+                                QUIL_CONTENT_SID,
                                 0,
                                 (color << 32) | (2000u64 << 16) | 2000u64,
                             );
@@ -2292,6 +2298,13 @@ pub extern "C" fn _start() -> ! {
 
     // ── Initialize mutable buffer ─────────────────────────────────────────
     init_buffer();
+
+    // ── APP_SURFACE_PACK_V1: own visible content surface (0xEC binds this
+    // PD as owner; every draw site targets QUIL_CONTENT_SID now) ──────────
+    pdx_call(SLOT_DISPLAY, 0xEC, QUIL_CONTENT_SID,
+        (56u64 << 32) | 1072u64,   // x=1072, y=56 (right column, under bar)
+        (304u64 << 32) | 200u64);  // w=200, h=304
+    serial_println!("[quil.surface.visible.ok] sid={}", QUIL_CONTENT_SID);
 
     // ── Physical Keyboard → Quil Text Proof Setup ──────────────────────────
     // MUST run before any storage-blocking proofs (sexfiles save/load) so the

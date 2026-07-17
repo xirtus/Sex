@@ -631,6 +631,7 @@ pub extern "C" fn _start() -> ! {
         (20u64 << 32) | 20u64,
         (0x00FF6464u64 << 32) | (60u64 << 16) | 80u64);
     serial_println!("[linen] Fill rect 0xEF sent to sexdisplay");
+    serial_println!("[linen.surface.visible.ok] sid={}", SURFACE_ID_LINEN);
     serial_println!("[linen.ready]");
     serial_println!("[linen.hid.debug_rect.disabled] ok=1 reason=remove_neon_green_red_debug_rect_v1");
 
