@@ -101,6 +101,7 @@ const ACCENT: u32 = 0xFF89B4FA; // Blue
 const GREEN:  u32 = 0xFFA6E3A1; // Green
 const YELLOW: u32 = 0xFFF9E2AF; // Yellow
 const CURSOR: u32 = 0xFFF5E0DC; // Rosewater (cursor color)
+const GHOST:  u32 = 0xFF6C7086; // Overlay0 (dim ghost autosuggest text)
 
 // ── Bounded line editor ────────────────────────────────────────────────────
 
@@ -231,7 +232,7 @@ impl CmdLine {
 // ── Prompt redraw ──────────────────────────────────────────────────────────
 
 /// Stargate prompt: [OK/!!] [I/N] sex> <cmd> — with cursor at line.cur.
-unsafe fn redraw_prompt(fb: &mut WindowBuffer, line: &CmdLine) {
+unsafe fn redraw_prompt(fb: &mut WindowBuffer, line: &CmdLine, hist: &History) {
     fb.draw_rect(sex_pdx::Rect { x: 0, y: CELL_H * 23, width: WIN_W, height: CELL_H }, BG);
 
     // Segment 1: status
@@ -259,6 +260,16 @@ unsafe fn redraw_prompt(fb: &mut WindowBuffer, line: &CmdLine) {
         let vis_cur = line.cur.saturating_sub(start).min(visible.len());
         let cursor_col = header_cols as u32 + vis_cur as u32;
         font::draw_char(fb, cursor_col * CELL_W, CELL_H * 23, b' ', CURSOR, Some(CURSOR));
+
+        // Ghost autosuggest: dim completion from history, right of the cursor.
+        if let Some((suffix, slen)) = ghost_suffix(line, hist) {
+            let ghost_col = cursor_col + 1;
+            let budget = (COLS as u32).saturating_sub(ghost_col) as usize;
+            let n = slen.min(budget);
+            if n > 0 {
+                font::draw_str(fb, 4 + ghost_col * CELL_W, CELL_H * 23 + 4, &suffix[..n], GHOST, None);
+            }
+        }
     } else {
         font::draw_char(fb, header_cols as u32 * CELL_W, CELL_H * 23, b' ', CURSOR, Some(CURSOR));
     }
@@ -356,6 +367,38 @@ fn history_nav(line: &mut CmdLine, hist: &History, up: bool) -> bool {
                 false
             }
         }
+    }
+}
+
+/// Fish-style ghost autosuggest: newest history entry whose prefix matches
+/// the current line, only when the cursor sits at end-of-line.
+fn ghost_suffix(line: &CmdLine, hist: &History) -> Option<([u8; CMD_MAX], usize)> {
+    if line.len == 0 || line.cur != line.len { return None; }
+    let count = (hist.total as usize).min(MAX_HISTORY);
+    let prefix = &line.buf[..line.len];
+    for i in 0..count {
+        if let Some(entry) = hist.get(i) {
+            if entry.len() > line.len && &entry[..line.len] == prefix {
+                let mut suffix = [0u8; CMD_MAX];
+                let slen = entry.len() - line.len;
+                suffix[..slen].copy_from_slice(&entry[line.len..]);
+                return Some((suffix, slen));
+            }
+        }
+    }
+    None
+}
+
+/// Accept the current ghost suggestion (if any) into the live command line.
+fn ghost_accept(line: &mut CmdLine, hist: &History) -> bool {
+    if let Some((suffix, slen)) = ghost_suffix(line, hist) {
+        for i in 0..slen {
+            line.insert_at(line.len, suffix[i]);
+        }
+        serial_println!("[spindle.ghost.accept] len={}", slen);
+        true
+    } else {
+        false
     }
 }
 
@@ -1924,6 +1967,71 @@ unsafe fn restore_history(_hist: &mut History) -> u32 {
 
 // ── Entry ──────────────────────────────────────────────────────────────────
 
+// ── Visible content surface (SEXOS_WORKING_APPS_SPRINT_V1) ───────────────
+// Spindle draws through the proven compositor route: 0xEC surface upsert
+// (owner_pd binds to this PD on create) + 0xFA text clear + 0xFB packed
+// text draw — the same primitives kaleidoscope (sid 300) uses live. The
+// shell-owned frame sid 0x99 is untouched; this PD owns its own content
+// surface, so sexdisplay's per-op ownership checks pass. sexdisplay wraps
+// surface text at 20 chars/line (5x7 glyphs, 128-byte buffer → 6 rows).
+const CONTENT_SID: u64 = 0x9A; // 154 — free in shell + display registries
+const CONTENT_X: i32 = 1072;
+const CONTENT_Y: i32 = 660;
+const CONTENT_W: u32 = 200;
+const CONTENT_H: u32 = 104;
+const CONTENT_COLS: usize = 20; // sexdisplay CHARS_PER_LINE
+const CONTENT_ROWS: usize = 6;  // 120 of the 128 text bytes used
+const CONTENT_TEXT_COLOR: u64 = 0x00E8FFFF;
+
+/// Push the full 6x20 text grid to sexdisplay. Chunks go highest offset
+/// first so text_len jumps past sexdisplay's <=32 per-draw diagnostic
+/// threshold on the very first write — zero per-frame serial output there.
+unsafe fn content_flush(grid: &[u8; CONTENT_COLS * CONTENT_ROWS]) {
+    pdx_call(SLOT_DISPLAY, 0xFA, CONTENT_SID, 0, 0);
+    let mut c = CONTENT_COLS * CONTENT_ROWS / 8;
+    while c > 0 {
+        c -= 1;
+        let off = c * 8;
+        let mut packed: u64 = 0;
+        let mut i = 0;
+        while i < 8 {
+            packed |= (grid[off + i] as u64) << (i * 8);
+            i += 1;
+        }
+        pdx_call(SLOT_DISPLAY, 0xFB, CONTENT_SID, packed,
+            off as u64 | (8u64 << 8) | (CONTENT_TEXT_COLOR << 32));
+    }
+}
+
+/// Render scrollback tail (rows 0-4, bottom-aligned) plus the live prompt
+/// line (row 5) into the content surface. Frame marker is budgeted.
+unsafe fn content_render(line: &CmdLine, sb: &Scrollback) {
+    let mut grid = [0x20u8; CONTENT_COLS * CONTENT_ROWS];
+    let avail = (sb.total_lines as usize).min(CONTENT_ROWS - 1);
+    let mut r = 0;
+    while r < avail {
+        let line_idx = sb.total_lines as usize - avail + r;
+        let src = sb.get(line_idx % MAX_SCROLLBACK);
+        let n = src.len().min(CONTENT_COLS);
+        let dst = (CONTENT_ROWS - 1 - avail + r) * CONTENT_COLS;
+        grid[dst..dst + n].copy_from_slice(&src[..n]);
+        r += 1;
+    }
+    let prow = (CONTENT_ROWS - 1) * CONTENT_COLS;
+    grid[prow] = b'>';
+    let lb = line.as_bytes();
+    let vis = lb.len().min(CONTENT_COLS - 2);
+    let start = lb.len() - vis;
+    grid[prow + 2..prow + 2 + vis].copy_from_slice(&lb[start..]);
+    content_flush(&grid);
+    static mut FRAME_BUDGET: u32 = 8;
+    if FRAME_BUDGET > 0 {
+        FRAME_BUDGET -= 1;
+        serial_println!("[spindle.render.frame.ok] sid={} cols={} rows={}",
+            CONTENT_SID, CONTENT_COLS, CONTENT_ROWS);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[spindle.init.start]");
@@ -1931,6 +2039,17 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[spindle.surface.req] pd=12 kernel_spawned=1");
 
     // ── Input proof gate (compile-time; guards framebuffer access) ──
+    // NOTE: OP_WINDOW_CREATE (0xE4) is called here with the legacy pointer-
+    // struct ABI (arg0 = pointer to WindowCreateParams). sexdisplay's 0xE4
+    // handler (servers/sexdisplay/src/main.rs) expects the packed inline ABI
+    // (arg0=x, arg1=y, arg2=(h<<32)|w) and early-exits on w==0||h==0 without
+    // ever replying — since arg1/arg2 are passed as 0 here, that guard always
+    // trips, and the calling PD blocks forever in the underlying blocking
+    // pdx_call. Confirmed by direct boot test: enabling this path unconditionally
+    // freezes Spindle at [spindle.surface.req], before it ever reaches its main
+    // loop. Left gated (default OFF) until the call site is migrated to the
+    // packed inline ABI — this is real, pre-existing, do-not-enable-by-default
+    // scope, not something this pass fixes. See SILK_SPINDLE_LIVE_INPUT_RENDER_GAP.
     const INPUT_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_INPUT_PROOF").is_some();
     const CMD_HISTORY_PROOF_ENABLED: bool =
@@ -1958,7 +2077,8 @@ pub extern "C" fn _start() -> ! {
             font::draw_str(&mut fb, 4, CELL_H * 3 + 4, b"Type help for commands.", FG, None);
             for col in 0..COLS { fb.draw_pixel(col * CELL_W, CELL_H * 4 + CELL_H / 2 - 1, ACCENT); }
             render_scrollback(&mut fb, sb);
-            font::draw_str(&mut fb, 4, CELL_H * 23 + 4, b"sex> ", GREEN, None);
+            let boot_line = CmdLine::new();
+            redraw_prompt(&mut fb, &boot_line, hist);
             serial_println!("[spindle.surface.ok] boot_lines={}", sb.total_lines);
 
             run_input_proof(&mut fb, sb, hist, &mut ev);
@@ -2267,6 +2387,18 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[spindle.editor.finish.proof.done] ok=1");
     }
 
+    // ── Visible content surface bring-up (proven 0xEC/0xFA/0xFB route) ──
+    serial_println!("[spindle.surface.create.begin]");
+    let (create_status, _) = pdx_call(SLOT_DISPLAY, 0xEC, CONTENT_SID,
+        ((CONTENT_Y as u64) << 32) | (CONTENT_X as u64 & 0xFFFF_FFFF),
+        ((CONTENT_H as u64) << 32) | CONTENT_W as u64);
+    serial_println!("[spindle.surface.create.ok] sid={} status={}", CONTENT_SID, create_status);
+    if sb.total_lines == 0 {
+        sb.push(b"SPINDLE TERMINAL");
+        sb.push(b"TYPE HELP");
+    }
+    unsafe { content_render(&line, sb) };
+
     serial_println!("[spindle.ready]");
 
     loop {
@@ -2327,6 +2459,14 @@ pub extern "C" fn _start() -> ! {
                 line.hist_nav = None;
             }
             handle_key(scancode, &mut line, hist);
+            unsafe {
+                static mut SPINDLE_ECHO_BUDGET: u32 = 16;
+                if SPINDLE_ECHO_BUDGET > 0 {
+                    SPINDLE_ECHO_BUDGET -= 1;
+                    serial_println!("[spindle.input.echo.ok] key={}", scancode);
+                }
+                content_render(&line, sb);
+            }
         }
     }
 }
@@ -2367,6 +2507,16 @@ fn handle_key_insert(scancode: u8, line: &mut CmdLine, hist: &History) {
         }
         0x50 => { // Down
             let _ = history_nav(line, hist, false);
+        }
+        0x4D => { // Right — accept ghost autosuggest if present
+            if !ghost_accept(line, hist) {
+                serial_println!("[spindle.key.right] no_ghost");
+            }
+        }
+        0x0F => { // Tab — accept ghost autosuggest if present (no raw-tab insert)
+            if !ghost_accept(line, hist) {
+                serial_println!("[spindle.key.tab] no_ghost");
+            }
         }
         _ => {
             if let Some(ch) = scancode_to_ascii(scancode) {
@@ -2481,7 +2631,7 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback, hist: &mut
     let test_str = b"hello";
     for &ch in test_str {
         line.push(ch);
-        redraw_prompt(fb, &line);
+        redraw_prompt(fb, &line, &*hist);
         serial_println!("[spindle.line.append] ch={} len={}", ch as char, line.len);
     }
     let stage1_ok = line.len == 5 && line.as_bytes() == b"hello";
@@ -2489,10 +2639,10 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback, hist: &mut
 
     // ── Stage 2: Backspace ──
     line.backspace();
-    redraw_prompt(fb, &line);
+    redraw_prompt(fb, &line, &*hist);
     serial_println!("[spindle.line.backspace] len={}", line.len);
     line.backspace();
-    redraw_prompt(fb, &line);
+    redraw_prompt(fb, &line, &*hist);
     let stage2_ok = line.len == 3 && line.as_bytes() == b"hel";
     serial_println!("[spindle.input.proof.backspace] ok={} len={}", stage2_ok as u8, line.len);
 
@@ -2519,7 +2669,7 @@ unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback, hist: &mut
     if recognized { serial_println!("[spindle.cmd.dispatch] unexpected_recognized"); }
     serial_println!("[spindle.line.enter] text={:?} scrollback_len={}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"), sb.total_lines);
     line.clear();
-    redraw_prompt(fb, &line);
+    redraw_prompt(fb, &line, &*hist);
     render_scrollback(fb, sb);
     let stage5_ok = line.len == 0 && !recognized && hist.total == 1;
     serial_println!("[spindle.input.proof.enter] ok={} history_entries={}", stage5_ok as u8, hist.total);

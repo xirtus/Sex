@@ -168,6 +168,11 @@ const SPINDLE_SYNTH_SEQ: [u8; 6] = [0x1E, 0x30, 0x2E, 0x0E, 0x20, 0x1C];
 ///   3. Type "ab" Backspace "c" Enter through the normal key routing path.
 /// Unlike the synthetic proof, this proof uses the same handle_hid_event path
 /// as real USB keyboard input, proving the full shell -> Spindle dispatch chain.
+/// NOTE: handle_hid_event() is the drain-path dispatch site (forwards to the
+/// real out-of-process Spindle PD via SLOT_SPINDLE); it is a DIFFERENT site
+/// from the live _start() main-loop OP_HID_EVENT dispatch (~line 23900) where
+/// the shell-local YarnSession line editor (ghost autosuggest, history nav)
+/// actually lives. This proof does not exercise YarnSession.
 const SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_ENABLED: bool =
     option_env!("SEXOS_SPINDLE_REAL_KEYBOARD_FOCUS_PROOF").is_some();
 static mut SPINDLE_REAL_KEYBOARD_FOCUS_PROOF_STAGE: u8 = 0;
@@ -195,6 +200,8 @@ const fn is_spindle_text_key(scancode: u8) -> bool {
         || scancode == 0x2C || scancode == 0x2D || scancode == 0x2E
         || scancode == 0x2F || scancode == 0x30 || scancode == 0x31
         || scancode == 0x32
+        // History recall (Up/Down) + ghost-autosuggest accept (Right).
+        || scancode == 0x48 || scancode == 0x50 || scancode == 0x4D
 }
 
 /// Window drag synthetic proof gate.
@@ -3264,6 +3271,186 @@ fn shell_draw_text(sid: u64, text: &[u8], color: u64) -> (usize, bool) {
         offset += chunk;
     }
     (offset, offset > 0)
+}
+
+// ── Focused text sink (current tier) ───────────────────────────────────────
+// Minimal shell-owned typing target: focused surface 100 (SURFACE_ID_APP).
+// Printable non-reserved scancodes append UPPERCASE ASCII (sexdisplay's 5x7
+// text renderer drops bytes above 0x5A, so lowercase would be invisible).
+// Backspace (0x0E) is owned by the sink while surface 100 is focused;
+// AccessFocusPrev remains available from any other focus. Only the focused
+// sink surface mutates text — no global keylogger behavior.
+const SILK_TEXT_SINK_CAP: usize = 96;
+const SILK_TEXT_SINK_SID: u64 = SURFACE_ID_APP;
+static mut SILK_TEXT_BUF: [u8; SILK_TEXT_SINK_CAP] = [0; SILK_TEXT_SINK_CAP];
+static mut SILK_TEXT_LEN: usize = 0;
+static mut SILK_TEXT_PROOF_DONE_EMITTED: bool = false;
+
+/// Map a set-1 make scancode to printable ASCII for the text sink.
+/// Reserved-UI scancodes (scancode_to_action) are intentionally absent so
+/// existing shell keyboard actions keep working while the sink is focused.
+fn sink_scancode_to_char(sc: u8) -> Option<u8> {
+    Some(match sc {
+        0x10 => b'Q', 0x11 => b'W', 0x12 => b'E', 0x14 => b'T',
+        0x15 => b'Y', 0x16 => b'U', 0x17 => b'I', 0x18 => b'O', 0x19 => b'P',
+        0x1E => b'A', 0x1F => b'S', 0x20 => b'D', 0x21 => b'F', 0x22 => b'G',
+        0x23 => b'H', 0x2C => b'Z', 0x2D => b'X', 0x2F => b'V', 0x30 => b'B',
+        0x31 => b'N',
+        0x07 => b'6', 0x08 => b'7', 0x09 => b'8', 0x0A => b'9', 0x0B => b'0',
+        0x39 => b' ',
+        _ => return None,
+    })
+}
+
+/// Redraw the sink buffer on the sink surface via OP_TEXT_CLEAR + OP_TEXT_DRAW.
+/// Bounded: at most SILK_TEXT_SINK_CAP/8 + 1 display calls per keystroke.
+unsafe fn silk_text_sink_redraw() -> bool {
+    pdx_call(SLOT_DISPLAY, sex_pdx::OP_TEXT_CLEAR, SILK_TEXT_SINK_SID, 0, 0);
+    let len = SILK_TEXT_LEN;
+    if len == 0 {
+        serial_println!("[silk.text.draw] surface={} len=0 ok=1", SILK_TEXT_SINK_SID);
+        return true;
+    }
+    let (drawn, ok) = shell_draw_text(SILK_TEXT_SINK_SID, &SILK_TEXT_BUF[..len], 0x00E8FFFF);
+    serial_println!("[silk.text.draw] surface={} len={} ok={}", SILK_TEXT_SINK_SID, drawn, ok as u8);
+    ok
+}
+
+/// Handle one EV_KEY for the focused text sink. Returns true when consumed.
+/// Consumes sink-mapped printables and Backspace (both edges) only while
+/// surface 100 is focused and alive; everything else falls through to the
+/// reserved-UI and app-routing paths unchanged.
+unsafe fn silk_text_sink_key(scancode: u8, value: u64) -> bool {
+    if FOCUSED_SURFACE_ID != SILK_TEXT_SINK_SID || !SURFACE_100_ALIVE {
+        return false;
+    }
+    let printable = sink_scancode_to_char(scancode);
+    if printable.is_none() && scancode != 0x0E {
+        return false;
+    }
+    if value != 1 {
+        // Consume key releases of sink-owned keys so they cannot fall through
+        // to reserved-UI or app routing.
+        return true;
+    }
+    static mut SILK_KEY_ROUTE_BUDGET: u32 = 32;
+    if SILK_KEY_ROUTE_BUDGET > 0 {
+        SILK_KEY_ROUTE_BUDGET -= 1;
+        serial_println!("[silk.key.route] surface={} code={} printable={}",
+            SILK_TEXT_SINK_SID, scancode, printable.is_some() as u8);
+    }
+    if scancode == 0x0E {
+        if SILK_TEXT_LEN > 0 {
+            SILK_TEXT_LEN -= 1;
+            serial_println!("[silk.text.backspace] surface={} len={}", SILK_TEXT_SINK_SID, SILK_TEXT_LEN);
+            let _ = silk_text_sink_redraw();
+        }
+        return true;
+    }
+    if let Some(ch) = printable {
+        if SILK_TEXT_LEN < SILK_TEXT_SINK_CAP {
+            SILK_TEXT_BUF[SILK_TEXT_LEN] = ch;
+            SILK_TEXT_LEN += 1;
+            serial_println!("[silk.text.append] surface={} len={} ch={}",
+                SILK_TEXT_SINK_SID, SILK_TEXT_LEN, ch as char);
+            let ok = silk_text_sink_redraw();
+            if ok && !SILK_TEXT_PROOF_DONE_EMITTED {
+                SILK_TEXT_PROOF_DONE_EMITTED = true;
+                serial_println!("[silk.text.input.proof.done] ok=1");
+            }
+        }
+        return true;
+    }
+    false
+}
+
+/// Focus-reject negative proof (SILK_WINDOW_MOVE_TEXT_INPUT_CURRENT_TIER_V1).
+/// Build with SEXOS_SILK_FOCUS_REJECT_PROOF=1. One-shot, input-free: attempts
+/// to focus the browser stub (sid 205, registered but not alive) and proves
+/// the focus policy rejects it without disturbing the current focus.
+const SILK_FOCUS_REJECT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SILK_FOCUS_REJECT_PROOF").is_some();
+static mut SILK_FOCUS_REJECT_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_silk_focus_reject_proof() {
+    if !SILK_FOCUS_REJECT_PROOF_ENABLED || SILK_FOCUS_REJECT_PROOF_DONE { return; }
+    SILK_FOCUS_REJECT_PROOF_DONE = true;
+    let before = FOCUSED_SURFACE_ID;
+    let accepted = try_set_focus(SURFACE_ID_BROWSER);
+    serial_println!(
+        "[silk.focus.reject.proof] target={} accepted={} focus_before={} focus_after={} ok={}",
+        SURFACE_ID_BROWSER, accepted as u8, before, FOCUSED_SURFACE_ID,
+        (!accepted && FOCUSED_SURFACE_ID == before) as u8
+    );
+}
+
+/// Drag-reject negative proof (SILK_WINDOW_MOVE_TEXT_INPUT_CURRENT_TIER_V1).
+/// Build with SEXOS_SILK_DRAG_REJECT_PROOF=1. One-shot at ready, before any
+/// host stimulus: clicks empty background (right column, no surface there)
+/// through the real HID path and proves no drag begins and nothing moves.
+const SILK_DRAG_REJECT_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SILK_DRAG_REJECT_PROOF").is_some();
+static mut SILK_DRAG_REJECT_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_silk_drag_reject_proof() {
+    if !SILK_DRAG_REJECT_PROOF_ENABLED || SILK_DRAG_REJECT_PROOF_DONE { return; }
+    SILK_DRAG_REJECT_PROOF_DONE = true;
+    let moves_before = INPUT_TRACE_DRAG_MOVES;
+    // Bottom-right corner: outside every boot frame/tile (surface 103 ends at
+    // 1200x680; boot tiling keeps frames left of x=1200 at this row).
+    let focus_before = FOCUSED_SURFACE_ID;
+    handle_hid_event(EV_ABS, abs_screen_to_raw(1270, P.width), abs_screen_to_raw(700, P.height));
+    handle_hid_event(EV_BTN, 1, 1);
+    handle_hid_event(EV_BTN, 1, 0);
+    let idle = matches!(INTERACTION, InteractionState::Idle);
+    serial_println!(
+        "[silk.drag.reject.proof] x=1270 y=700 idle={} drag_moves_delta={} ok={}",
+        idle as u8,
+        INPUT_TRACE_DRAG_MOVES.wrapping_sub(moves_before),
+        (idle && INPUT_TRACE_DRAG_MOVES == moves_before) as u8
+    );
+    // Restore pre-proof focus so the proof cannot steal focus from the
+    // host-driven QMP lane (its Enter-to-focus step expects boot focus state).
+    if FOCUSED_SURFACE_ID != focus_before {
+        let _ = try_set_focus(focus_before);
+    }
+}
+
+/// One-shot window-move proof (SILK_WINDOW_MOVE_TEXT_INPUT_CURRENT_TIER_V1).
+/// Build with SEXOS_SILK_WINDOW_MOVE_PROOF=1. Runs the whole rim-drag
+/// sequence in a single call through the real handle_hid_event path, so it
+/// cannot be starved by main-loop iteration cadence or raced by host input.
+const SILK_WINDOW_MOVE_PROOF_ENABLED: bool =
+    option_env!("SEXOS_SILK_WINDOW_MOVE_PROOF").is_some();
+static mut SILK_WINDOW_MOVE_PROOF_DONE: bool = false;
+
+unsafe fn maybe_run_silk_window_move_proof() {
+    if !SILK_WINDOW_MOVE_PROOF_ENABLED || SILK_WINDOW_MOVE_PROOF_DONE { return; }
+    let (frame, sid, sx, sy, _sw, _sh, x0, y0) = match synthetic_window_drag_target() {
+        Some(v) => v,
+        None => return, // retry next loop iteration until a frame is ready
+    };
+    SILK_WINDOW_MOVE_PROOF_DONE = true;
+    let focus_before = FOCUSED_SURFACE_ID;
+    serial_println!("[silk.window.move.proof.begin] frame={} sid={} x0={} y0={}", frame, sid, x0, y0);
+    handle_hid_event(EV_ABS, abs_screen_to_raw(x0, P.width), abs_screen_to_raw(y0, P.height));
+    handle_hid_event(EV_BTN, 1, 1); // rim press -> Dragging
+    let abs_ready = ABS_SEEN_VALID;
+    ABS_SEEN_VALID = false;
+    handle_hid_event(EV_REL, 40u64, 24u64); // drag move -> move_surface_by
+    ABS_SEEN_VALID = abs_ready;
+    handle_hid_event(EV_BTN, 1, 0); // release -> drag end + snap eval
+    let (nx, ny) = match get_surface_bounds(sid) {
+        Some((bx, by, _, _)) => (bx, by),
+        None => (0, 0),
+    };
+    serial_println!(
+        "[silk.window.move.proof.result] sid={} from=({},{}) to=({},{}) moved={}",
+        sid, sx, sy, nx, ny, ((nx, ny) != (sx, sy)) as u8
+    );
+    if FOCUSED_SURFACE_ID != focus_before {
+        let _ = try_set_focus(focus_before);
+    }
 }
 
 /// Quil visible typing E2E proof.
@@ -8781,6 +8968,15 @@ static mut INPUT_TRACE_SENDS: u32 = 0;
 static mut INPUT_TRACE_DRAG_MOVES: u32 = 0;
 static mut INPUT_TRACE_MAX_JUMP: i32 = 0;
 static mut INPUT_TRACE_BUDGET_HIT: u32 = 0;
+/// INPUT_PRESENT_TICK_TRACE_V1: local monotonic logical tick (no time
+/// source). SHELL_APPLY_TICK increments per real USB pointer apply and is
+/// the single shell tick domain: sends stamp the apply tick current at send
+/// time (INPUT_CURSOR_DRAIN_COHERENCE_V1 removed the separate send counter
+/// because coalescing makes sends < applies). Packed into the unused high
+/// 32 bits of OP_SURFACE_UPDATE arg2 for the cursor surface only;
+/// sexdisplay truncates arg2 with `as i32` (y stays in low 32), same
+/// truncation safety as seq-in-arg1, so no consumer sees a change.
+static mut SHELL_APPLY_TICK: u32 = 0;
 
 /// Emit the shell trace summary (unbounded counters, budget-free marker).
 unsafe fn input_trace_shell_summary() {
@@ -8798,9 +8994,28 @@ static mut PENDING_DY: i32 = 0;
 static mut PENDING_COUNT: u8 = 0;
 static mut INTERACTION: InteractionState = InteractionState::Idle;
 
+/// INPUT_CURSOR_DRAIN_COHERENCE_V1: coalesced cursor send state. Relative
+/// pointer applies mark the cursor dirty instead of sending per event; the
+/// send flushes when the shell's HID backlog drains (main loop) or after
+/// CURSOR_SEND_APPLY_CAP applies, bounding visible staleness. Latest
+/// POINTER_X/Y always wins — intermediate positions are never sent stale.
+const CURSOR_SEND_APPLY_CAP: u32 = 4;
+static mut CURSOR_SEND_PENDING: bool = false;
+static mut CURSOR_APPLIES_SINCE_SEND: u32 = 0;
+
+/// Flush one coalesced cursor send at the current pointer position.
+unsafe fn flush_pending_cursor_send() {
+    if !CURSOR_SEND_PENDING { return; }
+    send_cursor_checked(POINTER_X, POINTER_Y, "rel");
+}
+
 /// Send cursor surface update to sexdisplay with bounds clamping.
 /// All cursor movement paths must use this — no direct pdx_call for cursor.
 unsafe fn send_cursor_checked(x: i32, y: i32, source: &str) {
+    // Any send (rel flush, abs, debug, autodemo) satisfies the pending
+    // coalesced state — the display now has the current position.
+    CURSOR_SEND_PENDING = false;
+    CURSOR_APPLIES_SINCE_SEND = 0;
     let old_x = POINTER_X;
     let old_y = POINTER_Y;
     let cx = x.clamp(0, P.width - 1);
@@ -8819,7 +9034,16 @@ unsafe fn send_cursor_checked(x: i32, y: i32, source: &str) {
     // arg1 (cursor surface only; cx is clamped >= 0 so low 32 bits carry x
     // unchanged for the display's `as i32` truncation).
     let trace_arg1 = ((INPUT_TRACE_SEQ as u64) << 32) | (cx as u32 as u64);
-    pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, trace_arg1, cy as u64);
+    // INPUT_PRESENT_TICK_TRACE_V1: pack the shell logical tick into unused
+    // high 32 bits of arg2 (cy is clamped >= 0 so low 32 bits carry y
+    // unchanged for the display's `as i32` truncation).
+    // INPUT_CURSOR_DRAIN_COHERENCE_V1: the crossing tick is the APPLY tick,
+    // not a separate send counter — with coalescing, sends < applies, and a
+    // per-send counter would put apply_to_send deltas in mixed domains.
+    // A flushed send always carries the tick of its newest apply, so
+    // apply_to_send=0 states "sent with zero further applies elapsed".
+    let trace_arg2 = ((SHELL_APPLY_TICK as u64) << 32) | (cy as u32 as u64);
+    pdx_call(SLOT_DISPLAY, OP_SURFACE_UPDATE, SURFACE_ID_CURSOR, trace_arg1, trace_arg2);
     CURSOR_SEND_COUNT = CURSOR_SEND_COUNT.saturating_add(1);
     INPUT_TRACE_SENDS = INPUT_TRACE_SENDS.wrapping_add(1);
     {
@@ -8827,8 +9051,8 @@ unsafe fn send_cursor_checked(x: i32, y: i32, source: &str) {
         if INPUT_TRACE_SEND_BUDGET > 0 {
             INPUT_TRACE_SEND_BUDGET -= 1;
             serial_println!(
-                "[input.trace.shell.cursor.send] seq={} x={} y={}",
-                INPUT_TRACE_SEQ, cx, cy
+                "[input.trace.shell.cursor.send] seq={} tick={} x={} y={}",
+                INPUT_TRACE_SEQ, SHELL_APPLY_TICK, cx, cy
             );
         }
     }
@@ -8983,6 +9207,7 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
     // so source=usb is accurate.
     INPUT_TRACE_SEQ = INPUT_TRACE_SEQ.wrapping_add(1);
     INPUT_TRACE_APPLIES = INPUT_TRACE_APPLIES.wrapping_add(1);
+    SHELL_APPLY_TICK = SHELL_APPLY_TICK.wrapping_add(1);
     let jump = dx.abs().max(dy.abs());
     if jump > INPUT_TRACE_MAX_JUMP { INPUT_TRACE_MAX_JUMP = jump; }
     {
@@ -8990,13 +9215,18 @@ unsafe fn apply_rel_pointer(dx_raw: i32, dy_raw: i32) -> (i32, i32) {
         if INPUT_TRACE_APPLY_BUDGET > 0 {
             INPUT_TRACE_APPLY_BUDGET -= 1;
             serial_println!(
-                "[input.trace.shell.apply] seq={} x={} y={} dx={} dy={} source=usb",
-                INPUT_TRACE_SEQ, new_x, new_y, dx, dy
+                "[input.trace.shell.apply] seq={} tick={} x={} y={} dx={} dy={} source=usb",
+                INPUT_TRACE_SEQ, SHELL_APPLY_TICK, new_x, new_y, dx, dy
             );
             if INPUT_TRACE_APPLY_BUDGET == 0 { INPUT_TRACE_BUDGET_HIT = 1; }
         }
     }
-    send_cursor_checked(new_x, new_y, "rel");
+    // Coalesced send: mark dirty; flush on backlog-empty or apply cap.
+    CURSOR_SEND_PENDING = true;
+    CURSOR_APPLIES_SINCE_SEND += 1;
+    if CURSOR_APPLIES_SINCE_SEND >= CURSOR_SEND_APPLY_CAP {
+        flush_pending_cursor_send();
+    }
     // Summary cadence: early sample at 4 applies, then every 32.
     if INPUT_TRACE_APPLIES == 4 || INPUT_TRACE_APPLIES % 32 == 0 {
         input_trace_shell_summary();
@@ -9325,6 +9555,13 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 return;
             }
 
+            // Focused text sink: while surface 100 is focused, sink-owned keys
+            // (non-reserved printables + Backspace) are consumed here, before
+            // reserved-UI and app routing.
+            if silk_text_sink_key(scancode, value) {
+                return;
+            }
+
             // KEYBOARD_GUI_AUTOPILOT_V1: check reserved UI keys before app routing.
             // The handle_hid_event path (called from linen_sync_reply and input-first
             // drain) previously routed all EV_KEY events to the focused app without
@@ -9359,6 +9596,13 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                         SurfaceAction::RestoreMinimized => {
                             if let Some(frame_id) = first_minimized_frame_id() {
                                 dispatched = restore_minimized_frame(frame_id);
+                            }
+                        }
+                        // Parity with main dispatch: digit '1' focuses surface
+                        // 100 from the drain path too (make-code only).
+                        SurfaceAction::Focus100 => {
+                            if value == 1 {
+                                dispatched = try_set_focus(SURFACE_ID_APP);
                             }
                         }
                         SurfaceAction::ToggleLinen => {
@@ -9502,13 +9746,22 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_KEY);
                     shell_interaction_contract_try_done();
                 }
-            } else if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
-                serial_println!(
-                    "[shell.interact.stage.no_focus_key] key={} focused={} ignored_or_consumed=1 ok=1",
-                    scancode, FOCUSED_SURFACE_ID
-                );
-                shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_NO_FOCUS_KEY);
-                shell_interaction_contract_try_done();
+            } else {
+                if value == 1 {
+                    static mut SILK_KEY_REJECT_BUDGET: u32 = 8;
+                    if SILK_KEY_REJECT_BUDGET > 0 {
+                        SILK_KEY_REJECT_BUDGET -= 1;
+                        serial_println!("[silk.key.reject] reason=no_focus ok=1");
+                    }
+                }
+                if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
+                    serial_println!(
+                        "[shell.interact.stage.no_focus_key] key={} focused={} ignored_or_consumed=1 ok=1",
+                        scancode, FOCUSED_SURFACE_ID
+                    );
+                    shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_NO_FOCUS_KEY);
+                    shell_interaction_contract_try_done();
+                }
             }
         }
         return;
@@ -9753,6 +10006,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                             surface_input_lifetime_try_done();
                         }
                         DRAG_PENDING_ACTIVE = false;
+                        silk_drag_end_mark(surface_id);
                         let _ = try_snap_on_drag_release(surface_id, POINTER_X, POINTER_Y);
                         try_transition(InteractionState::Idle);
                     }
@@ -13606,6 +13860,91 @@ unsafe fn spindle_vi_delete_at(pos: usize) {
     if SPINDLE_VI_CUR > YARN.cmd_len { SPINDLE_VI_CUR = YARN.cmd_len; }
 }
 
+/// Draft line saved when history navigation begins, restored when navigating
+/// back past the newest entry (fish/readline "return to what you were typing").
+static mut SPINDLE_HIST_DRAFT_BUF: [u8; YARN_CMD_BUF_CAP] = [0u8; YARN_CMD_BUF_CAP];
+static mut SPINDLE_HIST_DRAFT_LEN: usize = 0;
+
+fn spindle_history_entry_len(entry: &[u8; YARN_CMD_BUF_CAP]) -> usize {
+    entry.iter().position(|&b| b == 0).unwrap_or(YARN_CMD_BUF_CAP)
+}
+
+unsafe fn spindle_history_load(idx: usize) {
+    let entry = YARN.history[idx];
+    let elen = spindle_history_entry_len(&entry);
+    YARN.cmd_buf = entry;
+    YARN.cmd_len = elen;
+    SPINDLE_VI_CUR = elen;
+}
+
+/// Up — recall previous (older) history entry, newest-first.
+unsafe fn spindle_history_up() {
+    if YARN.history_count == 0 { return; }
+    if YARN.history_pos == -1 {
+        SPINDLE_HIST_DRAFT_BUF = YARN.cmd_buf;
+        SPINDLE_HIST_DRAFT_LEN = YARN.cmd_len;
+        YARN.history_pos = YARN.history_count as i64 - 1;
+    } else if YARN.history_pos > 0 {
+        YARN.history_pos -= 1;
+    }
+    spindle_history_load(YARN.history_pos as usize);
+    serial_println!("[silk-shell.spindle.history.nav] dir=up pos={} len={}", YARN.history_pos, YARN.cmd_len);
+    spindle_render();
+}
+
+/// Down — recall next (newer) history entry; past the newest, restore draft.
+unsafe fn spindle_history_down() {
+    if YARN.history_pos == -1 { return; }
+    YARN.history_pos += 1;
+    if YARN.history_pos as usize >= YARN.history_count {
+        YARN.history_pos = -1;
+        YARN.cmd_buf = SPINDLE_HIST_DRAFT_BUF;
+        YARN.cmd_len = SPINDLE_HIST_DRAFT_LEN;
+        SPINDLE_VI_CUR = YARN.cmd_len;
+    } else {
+        spindle_history_load(YARN.history_pos as usize);
+    }
+    serial_println!("[silk-shell.spindle.history.nav] dir=down pos={} len={}", YARN.history_pos, YARN.cmd_len);
+    spindle_render();
+}
+
+/// Fish-style ghost autosuggest: newest history entry whose prefix matches
+/// the current line, only when the cursor sits at end-of-line. Returns the
+/// suffix bytes still needed to complete that entry.
+unsafe fn spindle_ghost_suffix() -> Option<([u8; YARN_CMD_BUF_CAP], usize)> {
+    let cmd_len = YARN.cmd_len;
+    if cmd_len == 0 || cmd_len >= YARN_CMD_BUF_CAP { return None; }
+    if SPINDLE_VI_CUR != cmd_len { return None; }
+    let prefix = &YARN.cmd_buf[..cmd_len];
+    let mut i = YARN.history_count;
+    while i > 0 {
+        i -= 1;
+        let entry = YARN.history[i];
+        let elen = spindle_history_entry_len(&entry);
+        if elen > cmd_len && &entry[..cmd_len] == prefix {
+            let mut suffix = [0u8; YARN_CMD_BUF_CAP];
+            let slen = elen - cmd_len;
+            suffix[..slen].copy_from_slice(&entry[cmd_len..elen]);
+            return Some((suffix, slen));
+        }
+    }
+    None
+}
+
+/// Accept the current ghost suggestion (if any) into the live command line.
+unsafe fn spindle_ghost_accept() -> bool {
+    if let Some((suffix, slen)) = spindle_ghost_suffix() {
+        for i in 0..slen {
+            spindle_vi_insert_at(YARN.cmd_len, suffix[i]);
+        }
+        serial_println!("[spindle.ghost.accept] len={}", slen);
+        spindle_render();
+        true
+    } else {
+        false
+    }
+}
+
 unsafe fn spindle_vi_normal_key(scancode: u8) {
     if SPINDLE_VI_PENDING_D {
         SPINDLE_VI_PENDING_D = false;
@@ -13812,18 +14151,33 @@ unsafe fn spindle_render_cmdline() {
     for i in 0..yarn.cmd_len {
         if ti < max_chars { packed_buf[ti] = yarn.cmd_buf[i]; ti += 1; }
     }
+    let cmd_end = ti; // end of real command text, before any ghost suggestion
+
+    // Fish-style ghost autosuggest: dim completion from history, cursor stays
+    // at cmd_end (never included in the real command line until accepted).
+    if let Some((suffix, slen)) = spindle_ghost_suffix() {
+        static mut SPINDLE_GHOST_MARK_BUDGET: u32 = 32;
+        if SPINDLE_GHOST_MARK_BUDGET > 0 {
+            SPINDLE_GHOST_MARK_BUDGET -= 1;
+            serial_println!("[spindle.ghost.suggest] suffix_len={}", slen);
+        }
+        for i in 0..slen {
+            if ti < max_chars { packed_buf[ti] = suffix[i]; ti += 1; } else { break; }
+        }
+    }
 
     let mut offset = 0usize;
     while offset < ti {
         let chunk = 8.min(ti - offset);
         let mut word: u64 = 0;
         for i in 0..chunk { word |= (packed_buf[offset + i] as u64) << (i * 8); }
-        // Color by segment: session → status → mode → prompt (subtext) → cmd text.
+        // Color by segment: session → status → mode → prompt (subtext) → cmd text → ghost (dim).
         let color: u64 = if offset < seg_ends[0]      { session_color }
                          else if offset < seg_ends[1] { status_color }
                          else if offset < seg_ends[2] { mode_color }
                          else if offset < seg_ends[3] { CAT_SUBTEXT1 }
-                         else                          { CAT_TEXT };
+                         else if offset < cmd_end      { CAT_TEXT }
+                         else                          { CAT_OVERLAY2 };
         pdx_call(SLOT_DISPLAY, 0xFB, SURFACE_ID_SPINDLE, word,
             (offset as u64) | ((chunk as u64) << 8) | (color << 32));
         offset += chunk;
@@ -14701,6 +15055,9 @@ unsafe fn palette_execute_selected() -> bool {
                 sid,
                 open_ok as u8
             );
+            if open_ok {
+                serial_println!("[spindle.launch.route.ok]");
+            }
             open_ok
         }
         Command::FocusQuil => {
@@ -18975,18 +19332,50 @@ fn abs_screen_to_raw(screen: i32, dim: i32) -> u64 {
 }
 
 unsafe fn synthetic_window_drag_target() -> Option<(u32, u64, i32, i32, u32, u32, i32, i32)> {
-    let sid = if frame_for_surface(SURFACE_ID_QUIL).is_some() {
-        SURFACE_ID_QUIL
-    } else {
-        let f = FOCUSED_SURFACE_ID;
-        if frame_for_surface(f).is_some() { f } else { return None; }
-    };
-    let frame = frame_for_surface(sid)?;
-    if !frame_accepts_input(frame) {
+    static mut TARGET_REJECT_BUDGET: u32 = 4;
+    // Candidate frames in preference order. Quil can be minimized by the
+    // keyboard autopilot (Enter/AccessActivate) before this proof gets its
+    // first main-loop iteration, so fall back to other boot frames.
+    let candidates = [
+        SURFACE_ID_QUIL,
+        SURFACE_ID_LINEN,
+        SURFACE_ID_MESH,
+        SURFACE_ID_COLLAR,
+        FOCUSED_SURFACE_ID,
+    ];
+    let mut sid = 0u64;
+    let mut frame = 0u32;
+    for &cand in candidates.iter() {
+        if let Some(fid) = frame_for_surface(cand) {
+            if frame_accepts_input(fid) {
+                sid = cand;
+                frame = fid;
+                break;
+            }
+        }
+    }
+    if sid == 0 {
+        if TARGET_REJECT_BUDGET > 0 {
+            TARGET_REJECT_BUDGET -= 1;
+            serial_println!("[shell.drag.synthetic.no_target] reason=no_accepting_frame focused={}", FOCUSED_SURFACE_ID);
+        }
         return None;
     }
-    let (sx, sy, sw, sh) = get_surface_bounds(sid)?;
+    let (sx, sy, sw, sh) = match get_surface_bounds(sid) {
+        Some(b) => b,
+        None => {
+            if TARGET_REJECT_BUDGET > 0 {
+                TARGET_REJECT_BUDGET -= 1;
+                serial_println!("[shell.drag.synthetic.no_target] reason=no_bounds sid={}", sid);
+            }
+            return None;
+        }
+    };
     if sw < 4 || sh < 4 {
+        if TARGET_REJECT_BUDGET > 0 {
+            TARGET_REJECT_BUDGET -= 1;
+            serial_println!("[shell.drag.synthetic.no_target] reason=too_small sid={} w={} h={}", sid, sw, sh);
+        }
         return None;
     }
     // Use left rim below topbar to avoid frame lights and tab-strip.
@@ -20545,17 +20934,20 @@ unsafe fn try_set_focus(sid: u64) -> bool {
     if !is_focusable_surface(sid) {
         serial_println!("[shell.interact.reject] op=focus sid={} reason=nonfocusable", sid);
         serial_println!("[shell.focus.reject.nonfocusable] id={}", sid);
+        serial_println!("[silk.focus.reject] reason=invalid_surface ok=1");
         return false;
     }
     if !surface_is_alive(sid) {
         serial_println!("[shell.interact.reject] op=focus sid={} reason=dead", sid);
         serial_println!("[shell.focus.reject.dead] id={}", sid);
+        serial_println!("[silk.focus.reject] reason=invalid_surface ok=1");
         return false;
     }
     if is_tombstoned(sid) {
         serial_println!("[shell.interact.reject] op=focus sid={} reason=tombstoned", sid);
         serial_println!("[shell.focus.reject.tombstoned] id={}", sid);
         serial_println!("[lifecycle.tombstone.reject_focus] sid={} reason=tombstoned", sid);
+        serial_println!("[silk.focus.reject] reason=invalid_surface ok=1");
         return false;
     }
     // A4: Reject if lifecycle state does not allow focus (Visible or Mapped only).
@@ -20737,39 +21129,123 @@ unsafe fn try_transition(next: InteractionState) {
     }
 }
 
+/// Window-move proof state: set on first drag move, cleared at drag end.
+/// [silk.window.move.proof.done] fires once, at the end of the first drag
+/// that actually moved a surface.
+static mut DRAG_MOVED_THIS_DRAG: bool = false;
+static mut WINDOW_MOVE_PROOF_DONE_EMITTED: bool = false;
+
+/// Move a shell-managed surface by (dx, dy), clamped to the visible content
+/// area via clamp_position. Covers legacy windows 100-103 and frame app
+/// surfaces 200-204 whose positions emit_snapshot() already pushes to
+/// sexdisplay via OP_SURFACE_UPDATE (0xEB).
+/// Returns Some((new_x, new_y, clamped)) when the surface moved.
+unsafe fn move_surface_by(sid: u64, dx: i32, dy: i32) -> Option<(i32, i32, u8)> {
+    if sid == SURFACE_ID_APP && SURFACE_100_ALIVE {
+        let w = WINDOWS.get_mut(1)?;
+        let rx = w.desc.x.wrapping_add(dx);
+        let ry = w.desc.y.wrapping_add(dy);
+        let (cx, cy) = clamp_position(rx, ry, w.desc.width, w.desc.height);
+        w.desc.x = cx; w.desc.y = cy;
+        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
+    }
+    if sid == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
+        let rx = SURFACE_101_X.wrapping_add(dx);
+        let ry = SURFACE_101_Y.wrapping_add(dy);
+        let (cx, cy) = clamp_position(rx, ry, SURFACE_101_W, SURFACE_101_H);
+        SURFACE_101_X = cx; SURFACE_101_Y = cy;
+        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
+    }
+    if sid == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
+        let rx = SURFACE_102_X.wrapping_add(dx);
+        let ry = SURFACE_102_Y.wrapping_add(dy);
+        let (cx, cy) = clamp_position(rx, ry, SURFACE_102_W, SURFACE_102_H);
+        SURFACE_102_X = cx; SURFACE_102_Y = cy;
+        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
+    }
+    if sid == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
+        let rx = SURFACE_103_X.wrapping_add(dx);
+        let ry = SURFACE_103_Y.wrapping_add(dy);
+        let (cx, cy) = clamp_position(rx, ry, SURFACE_103_W, SURFACE_103_H);
+        SURFACE_103_X = cx; SURFACE_103_Y = cy;
+        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
+    }
+    if sid == SURFACE_ID_LINEN {
+        let rx = SURFACE_200_X.wrapping_add(dx);
+        let ry = SURFACE_200_Y.wrapping_add(dy);
+        let (cx, cy) = clamp_position(rx, ry, SURFACE_200_W, SURFACE_200_H);
+        SURFACE_200_X = cx; SURFACE_200_Y = cy;
+        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
+    }
+    if sid == SURFACE_ID_QUIL {
+        let rx = SURFACE_201_X.wrapping_add(dx);
+        let ry = SURFACE_201_Y.wrapping_add(dy);
+        let (cx, cy) = clamp_position(rx, ry, SURFACE_201_W, SURFACE_201_H);
+        SURFACE_201_X = cx; SURFACE_201_Y = cy;
+        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
+    }
+    if sid == SURFACE_ID_MESH {
+        let rx = SURFACE_202_X.wrapping_add(dx);
+        let ry = SURFACE_202_Y.wrapping_add(dy);
+        let (cx, cy) = clamp_position(rx, ry, SURFACE_202_W, SURFACE_202_H);
+        SURFACE_202_X = cx; SURFACE_202_Y = cy;
+        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
+    }
+    if sid == SURFACE_ID_COLLAR {
+        let rx = SURFACE_203_X.wrapping_add(dx);
+        let ry = SURFACE_203_Y.wrapping_add(dy);
+        let (cx, cy) = clamp_position(rx, ry, SURFACE_203_W, SURFACE_203_H);
+        SURFACE_203_X = cx; SURFACE_203_Y = cy;
+        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
+    }
+    if sid == SURFACE_ID_BELL_PLACEHOLDER {
+        let rx = SURFACE_204_X.wrapping_add(dx);
+        let ry = SURFACE_204_Y.wrapping_add(dy);
+        let (cx, cy) = clamp_position(rx, ry, SURFACE_204_W, SURFACE_204_H);
+        SURFACE_204_X = cx; SURFACE_204_Y = cy;
+        return Some((cx, cy, ((cx != rx) || (cy != ry)) as u8));
+    }
+    None
+}
+
+/// Mission drag markers, shared by all drag-begin/end sites.
+unsafe fn silk_drag_begin_mark(surface_id: u64, px: i32, py: i32) {
+    DRAG_MOVED_THIS_DRAG = false;
+    static mut SILK_DRAG_BEGIN_BUDGET: u32 = 16;
+    if SILK_DRAG_BEGIN_BUDGET > 0 {
+        SILK_DRAG_BEGIN_BUDGET -= 1;
+        serial_println!("[silk.drag.begin] surface={} x={} y={}", surface_id, px, py);
+    }
+}
+
+unsafe fn silk_drag_end_mark(surface_id: u64) {
+    static mut SILK_DRAG_END_BUDGET: u32 = 16;
+    if SILK_DRAG_END_BUDGET > 0 {
+        SILK_DRAG_END_BUDGET -= 1;
+        serial_println!("[silk.drag.end] surface={} x={} y={}", surface_id, POINTER_X, POINTER_Y);
+    }
+    if DRAG_MOVED_THIS_DRAG && !WINDOW_MOVE_PROOF_DONE_EMITTED {
+        WINDOW_MOVE_PROOF_DONE_EMITTED = true;
+        serial_println!("[silk.window.move.proof.done] ok=1");
+    }
+    DRAG_MOVED_THIS_DRAG = false;
+}
+
 /// Move the surface tracked by the current Drag state by (dx, dy).
 /// Returns true if the surface was actually moved.
 /// Uses the Drag state's recorded surface_id, not FOCUSED_SURFACE_ID,
 /// so keyboard focus changes during drag do not corrupt the target.
 unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
     if let InteractionState::Dragging { surface_id, .. } = INTERACTION {
-        let mut moved = false;
-        if surface_id == SURFACE_ID_APP && SURFACE_100_ALIVE {
-            if let Some(w) = WINDOWS.get_mut(1) {
-                w.desc.x = w.desc.x.wrapping_add(dx);
-                w.desc.y = w.desc.y.wrapping_add(dy);
-                let (cx, cy) = clamp_position(w.desc.x, w.desc.y, SURFACE_100_W, SURFACE_100_H);
-                w.desc.x = cx; w.desc.y = cy;
-                moved = true;
+        let move_result = move_surface_by(surface_id, dx, dy);
+        let moved = move_result.is_some();
+        if let Some((nx, ny, clamped)) = move_result {
+            DRAG_MOVED_THIS_DRAG = true;
+            static mut SILK_DRAG_MOVE_BUDGET: u32 = 24;
+            if SILK_DRAG_MOVE_BUDGET > 0 {
+                SILK_DRAG_MOVE_BUDGET -= 1;
+                serial_println!("[silk.drag.move] surface={} x={} y={} clamped={}", surface_id, nx, ny, clamped);
             }
-        } else if surface_id == SURFACE_ID_STATIC && SURFACE_101_ALIVE {
-            SURFACE_101_X = SURFACE_101_X.wrapping_add(dx);
-            SURFACE_101_Y = SURFACE_101_Y.wrapping_add(dy);
-            let (cx, cy) = clamp_position(SURFACE_101_X, SURFACE_101_Y, SURFACE_101_W, SURFACE_101_H);
-            SURFACE_101_X = cx; SURFACE_101_Y = cy;
-            moved = true;
-        } else if surface_id == SURFACE_ID_TEST3 && SURFACE_102_ALIVE {
-            SURFACE_102_X = SURFACE_102_X.wrapping_add(dx);
-            SURFACE_102_Y = SURFACE_102_Y.wrapping_add(dy);
-            let (cx, cy) = clamp_position(SURFACE_102_X, SURFACE_102_Y, SURFACE_102_W, SURFACE_102_H);
-            SURFACE_102_X = cx; SURFACE_102_Y = cy;
-            moved = true;
-        } else if surface_id == SURFACE_ID_TEST4 && SURFACE_103_ALIVE {
-            SURFACE_103_X = SURFACE_103_X.wrapping_add(dx);
-            SURFACE_103_Y = SURFACE_103_Y.wrapping_add(dy);
-            let (cx, cy) = clamp_position(SURFACE_103_X, SURFACE_103_Y, SURFACE_103_W, SURFACE_103_H);
-            SURFACE_103_X = cx; SURFACE_103_Y = cy;
-            moved = true;
         }
         if moved {
             unsafe { INPUT_TRACE_DRAG_MOVES = INPUT_TRACE_DRAG_MOVES.wrapping_add(1); }
@@ -21463,6 +21939,11 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                     FOCUS_SET_OK_BUDGET -= 1;
                     serial_println!("[silk.focus.set.ok] id={} source=click", sid);
                 }
+                static mut SILK_FOCUS_CLICK_BUDGET: u32 = 16;
+                if sid == FOCUSED_SURFACE_ID && SILK_FOCUS_CLICK_BUDGET > 0 {
+                    SILK_FOCUS_CLICK_BUDGET -= 1;
+                    serial_println!("[silk.focus.click] surface={} ok=1", sid);
+                }
             }
         }
         HitTarget::None => {
@@ -21557,6 +22038,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                     if let Some(surface_id) = active_surface_for_frame(frame_id) {
                         if surface_is_alive(surface_id) {
                             try_transition(InteractionState::Dragging { surface_id, current_x: px, current_y: py });
+                            silk_drag_begin_mark(surface_id, px, py);
                             unsafe {
                                 static mut RIM_DRAG_START_BUDGET: u32 = 8;
                                 let b = &mut RIM_DRAG_START_BUDGET;
@@ -21710,6 +22192,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
         && point_in_surface(px, py, FOCUSED_SURFACE_ID)
     {
         try_transition(InteractionState::Dragging { surface_id: FOCUSED_SURFACE_ID, current_x: px, current_y: py });
+        silk_drag_begin_mark(FOCUSED_SURFACE_ID, px, py);
         serial_println!("[shell.interact.drag.begin] sid={} x={} y={}", FOCUSED_SURFACE_ID, px, py);
         serial_println!(
             "[shell.drag.begin] sid={} frame=0 x={} y={}",
@@ -21739,6 +22222,16 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
             "[shell.drag.begin.reject] reason={} target={} kind={} buttons={:#x} dx=0 dy=0",
             reason, DRAG_PENDING_TARGET, DRAG_PENDING_KIND, buttons_val
         );
+        // No shell-draggable surface at this click (background, app-owned
+        // content, or outside the focused surface): drag must not begin and
+        // no window may move. Detailed cause is in shell.drag.begin.reject.
+        {
+            static mut SILK_DRAG_REJECT_BUDGET: u32 = 8;
+            if SILK_DRAG_REJECT_BUDGET > 0 {
+                SILK_DRAG_REJECT_BUDGET -= 1;
+                serial_println!("[silk.drag.reject] reason=no_surface ok=1");
+            }
+        }
     }
     if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
         let new_focus = FOCUSED_SURFACE_ID;
@@ -22477,6 +22970,9 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[silkshell.ready]");
 
     loop {
+        unsafe { maybe_run_silk_focus_reject_proof(); }
+        unsafe { maybe_run_silk_window_move_proof(); }
+        unsafe { maybe_run_silk_drag_reject_proof(); }
         unsafe { maybe_run_silk_de_integrated_interaction_proof(); }
         unsafe { maybe_run_frame_light_zoom_synthetic_proof(); }
         unsafe { maybe_run_window_drag_synthetic_proof(); }
@@ -23166,7 +23662,17 @@ pub extern "C" fn _start() -> ! {
 
         let mut mutated = false;
 
-        let msg = pdx_listen_raw(0);
+        // INPUT_CURSOR_DRAIN_COHERENCE_V1: when the message backlog is
+        // empty, flush the coalesced cursor position (latest wins) before
+        // blocking — the display gets exactly one current-state update per
+        // drained burst instead of one IPC per HID event.
+        let msg = match pdx_try_listen_raw(0) {
+            Some(m) => m,
+            None => {
+                unsafe { flush_pending_cursor_send(); }
+                pdx_listen_raw(0)
+            }
+        };
         match msg.type_id {
                 OP_AUTODEMO_TICK => {
                     unsafe { maybe_run_cursor_autodemo(); }
@@ -23323,6 +23829,7 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 InteractionState::Dragging { surface_id, .. } => {
                                     serial_println!("[shell.interact.drag.end] sid={} x={} y={}", surface_id, POINTER_X, POINTER_Y);
+                                    silk_drag_end_mark(surface_id);
                                     if try_snap_on_drag_release(surface_id, POINTER_X, POINTER_Y) {
                                         mutated = true;
                                     }
@@ -23480,8 +23987,11 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }
                             }
-                            let reserved_ui_action = scancode_to_action(scancode);
-                            let reserved_ui_key = reserved_ui_action.is_some();
+                            // Focused text sink (main dispatch path): same policy
+                            // as the handle_hid_event drain path.
+                            let sink_consumed = silk_text_sink_key(scancode, value);
+                            let reserved_ui_action = if sink_consumed { None } else { scancode_to_action(scancode) };
+                            let reserved_ui_key = reserved_ui_action.is_some() || sink_consumed;
                             // Track C2: key routing proof
                             if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_QUIL {
                                 unsafe {
@@ -23688,15 +24198,13 @@ pub extern "C" fn _start() -> ! {
                             // Consumes: Enter, Backspace, Escape, Space, alphanumeric.
                             // All other keys fall through to scancode_to_action unchanged.
                             } else if FOCUSED_SURFACE_ID == SURFACE_ID_SPINDLE
-                                && (scancode == 0x1C || scancode == 0x0E || scancode == 0x01
-                                    || scancode == 0x0F || scancode == 0x39
-                                    || (scancode >= 0x02 && scancode <= 0x0B)
-                                    || (scancode >= 0x10 && scancode <= 0x19)
-                                    || (scancode >= 0x1E && scancode <= 0x26)
-                                    || scancode == 0x2C || scancode == 0x2D || scancode == 0x2E
-                                    || scancode == 0x2F || scancode == 0x30 || scancode == 0x31
-                                    || scancode == 0x32)
+                                && is_spindle_text_key(scancode)
                             {
+                                static mut MAIN_DISPATCH_SPINDLE_REACH_BUDGET: u32 = 32;
+                                if MAIN_DISPATCH_SPINDLE_REACH_BUDGET > 0 {
+                                    MAIN_DISPATCH_SPINDLE_REACH_BUDGET -= 1;
+                                    serial_println!("[silk-shell.main_dispatch.spindle.reach] scancode={:#x}", scancode);
+                                }
                                 // Forward key event to Spindle PD 12 via SLOT_SPINDLE
                                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, scancode as u64, 1, EV_KEY);
                                 serial_println!("[spindle.input.recv] scancode={:#x}", scancode);
@@ -23731,6 +24239,7 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     0x0E => { // Backspace — delete before cursor
                                         if SPINDLE_VI_CUR > 0 {
+                                            YARN.history_pos = -1;
                                             spindle_vi_delete_at(SPINDLE_VI_CUR - 1);
                                             serial_println!("[spindle.key.backspace] len={}", YARN.cmd_len);
                                             serial_println!("[spindle.line.edit] op=backspace len={}", YARN.cmd_len);
@@ -23750,12 +24259,26 @@ pub extern "C" fn _start() -> ! {
                                             spindle_render();
                                         }
                                     }
-                                    0x0F => { // Tab — future completion (consume for now)
-                                        serial_println!("[spindle.key.tab] deferred");
+                                    0x0F => { // Tab — accept ghost autosuggest if present
+                                        if !spindle_ghost_accept() {
+                                            serial_println!("[spindle.key.tab] no_ghost");
+                                        }
+                                    }
+                                    0x48 => { // Up — history recall previous
+                                        spindle_history_up();
+                                    }
+                                    0x50 => { // Down — history recall next
+                                        spindle_history_down();
+                                    }
+                                    0x4D => { // Right — accept ghost autosuggest if present
+                                        if !spindle_ghost_accept() {
+                                            serial_println!("[spindle.key.right] no_ghost");
+                                        }
                                     }
                                     _ => {
                                         if let Some(ch) = spindle_scan_to_char(scancode) {
                                             if ch != b' ' || scancode == 0x39 {
+                                                YARN.history_pos = -1;
                                                 spindle_vi_insert_at(SPINDLE_VI_CUR, ch);
                                                 serial_println!("[spindle.key.char] ch={}", ch as char);
                                                 serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
@@ -24533,6 +25056,29 @@ pub extern "C" fn _start() -> ! {
                                 SURFACE_200_X = cx; SURFACE_200_Y = cy;
                                 serial_println!("[shell.linen.move] x={} y={}", SURFACE_200_X, SURFACE_200_Y);
                             }
+                        } else if value == 1
+                            && (focused == SURFACE_ID_QUIL || focused == SURFACE_ID_MESH
+                                || focused == SURFACE_ID_COLLAR || focused == SURFACE_ID_BELL_PLACEHOLDER)
+                        {
+                            // Keyboard nudge for frame app surfaces: arrows move the
+                            // focused frame by move_step, clamped, same as 100-103.
+                            let (ndx, ndy) = match scancode {
+                                0x4B => (-step, 0),
+                                0x4D => (step, 0),
+                                0x48 => (0, -step),
+                                0x50 => (0, step),
+                                _ => (0, 0),
+                            };
+                            if ndx != 0 || ndy != 0 {
+                                if let Some((nx, ny, clamped)) = move_surface_by(focused, ndx, ndy) {
+                                    mutated = true;
+                                    static mut KBD_NUDGE_BUDGET: u32 = 16;
+                                    if KBD_NUDGE_BUDGET > 0 {
+                                        KBD_NUDGE_BUDGET -= 1;
+                                        serial_println!("[silk.window.nudge] surface={} x={} y={} clamped={}", focused, nx, ny, clamped);
+                                    }
+                                }
+                            }
                         }
 
                         // ── Pointer event state updates (no compositor side effects) ──
@@ -24820,6 +25366,7 @@ pub extern "C" fn _start() -> ! {
                                                 surface_id, POINTER_X, POINTER_Y
                                             );
                                             DRAG_PENDING_ACTIVE = false;
+                                            silk_drag_end_mark(surface_id);
                                             if try_snap_on_drag_release(surface_id, POINTER_X, POINTER_Y) {
                                                 mutated = true;
                                             }
