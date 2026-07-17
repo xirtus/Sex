@@ -518,6 +518,19 @@ pub fn init() {
         use crate::ipc::DOMAIN_REGISTRY;
         use crate::capability::CapabilityData;
         if let Some(pd) = DOMAIN_REGISTRY.get(spindle_id) {
+            if sexdisp_id != 0 {
+                pd.grant_capability(sex_pdx::SLOT_DISPLAY, CapabilityData::Domain(sexdisp_id));
+                serial_println!("[kernel.cap.display.spindle] spindle->sexdisplay slot={}", sex_pdx::SLOT_DISPLAY);
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target={} ok=1]",
+                    spindle_id, sexdisp_id
+                );
+            } else {
+                serial_println!(
+                    "[bootgraph.cap.grant from=kernel to={} slot=SLOT_DISPLAY target=missing ok=0 optional=1 reason=sexdisplay_absent]",
+                    spindle_id
+                );
+            }
             if sexfiles_id != 0 {
                 pd.grant_capability(sex_pdx::SLOT_STORAGE, CapabilityData::Domain(sexfiles_id));
                 serial_println!("[kernel.cap.storage.spindle] spindle->sexfiles slot={}", sex_pdx::SLOT_STORAGE);
@@ -703,7 +716,14 @@ pub fn init() {
                 );
                 unsafe { (*task_ptr).state.store(crate::scheduler::STATE_READY, core::sync::atomic::Ordering::Release); }
                 crate::scheduler::SCHEDULERS[0].runqueue.push(task_ptr);
-                serial_println!("scheduler.enqueue pd_id={}", pd_id);
+                // SCHEDULER_TICK_PD8_PF_FLAKE_V1 phase-2: task ptr + pd_ptr
+                // field address, for hardware-watchpoint corruption capture.
+                serial_println!(
+                    "scheduler.enqueue pd_id={} task={:#x} pdptr_field={:#x}",
+                    pd_id,
+                    task_ptr as u64,
+                    unsafe { core::ptr::addr_of!((*task_ptr).context.pd_ptr) as u64 }
+                );
             }
         }
     }

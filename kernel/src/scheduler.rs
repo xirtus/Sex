@@ -210,6 +210,52 @@ impl Scheduler {
 
         let next_task = self.runqueue.steal();
         let next_task = if next_task.is_null() { self.attempt_steal() } else { next_task };
+        // SCHEDULER_TICK_PD8_PF_FLAKE_V1: reject corrupt steal results before
+        // they reach set_pd/switch_to. A clobbered Task (heap overwrite of a
+        // live Task struct) or a stale/garbage queue slot shows up as an
+        // out-of-heap pointer, a NULL context.pd_ptr, or an absurd pd_id.
+        // Drain-and-retry rather than give up: a corrupt entry can sit AHEAD
+        // of runnable tasks in the queue, and callers like yield_and_switch
+        // park permanently on a None result (timer ticks skip kernel mode),
+        // so returning None with runnable tasks still queued deadlocks
+        // userland. Bounded by QUEUE_SIZE so a fully-corrupt queue cannot
+        // spin forever. The marker payload identifies the injection path
+        // (out_of_heap = queue slot corruption; corrupt_task = overwrite of
+        // Task memory itself).
+        let mut next_task = next_task;
+        let mut reject_guard = 0usize;
+        while !next_task.is_null() {
+            let addr = next_task as usize;
+            let corrupt = if addr < crate::HEAP_START || addr >= crate::HEAP_START + crate::HEAP_SIZE {
+                serial_println!("[sched.steal.reject] ptr={:#x} reason=out_of_heap", addr as u64);
+                true
+            } else {
+                let pd_ptr = unsafe { (*next_task).context.pd_ptr };
+                let pd_id = unsafe { (*next_task).context.pd_id };
+                if pd_ptr.is_null() || pd_id as usize >= crate::ipc::MAX_DOMAINS {
+                    serial_println!(
+                        "[sched.steal.reject] ptr={:#x} pd_ptr={:#x} pd_id={} reason=corrupt_task",
+                        addr as u64, pd_ptr as u64, pd_id
+                    );
+                    true
+                } else {
+                    false
+                }
+            };
+            if !corrupt {
+                break;
+            }
+            reject_guard += 1;
+            if reject_guard >= QUEUE_SIZE {
+                serial_println!("[sched.steal.reject.exhausted] rejects={}", reject_guard);
+                next_task = ptr::null_mut();
+                break;
+            }
+            next_task = self.runqueue.steal();
+            if next_task.is_null() {
+                next_task = self.attempt_steal();
+            }
+        }
         let old_task = self.current_task.swap(next_task, Ordering::AcqRel);
 
         if !next_task.is_null() {
@@ -578,10 +624,23 @@ pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) 
     }
     if let Some((_old, next)) = sched.tick() {
         let kstack_top = (*next).kstack_top;
-        // kstack_top = Task.kstack_top = kstack_alloc_top (one-past-end, correct RSP0).
-        // Do NOT add 168 here: that sets RSP0 past the buffer (timer path uses ctx.kstack_top+168
-        // which is correct because ctx.kstack_top = rax-push addr; Task.kstack_top is already the top).
-        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top));
+        // SCHEDULER_TICK_PD8_PF_FLAKE_V1 root cause: `next` is *const TaskContext,
+        // so kstack_top here is ctx.kstack_top = saved-frame BASE (rax slot), the
+        // same field the timer/page-fault paths take +168 on. (The previous
+        // comment believed this was Task.kstack_top/alloc-top — type confusion;
+        // TaskContext sits at Task offset 0, so the pointers alias numerically.)
+        // Without +168, RSP0 lands at the frame base: the next ring3 interrupt
+        // pushes from there and re-saves the frame 168 bytes lower, permanently.
+        // Each yield-path dispatch of a preempted task ratcheted its kstack down
+        // ~168 bytes until pushes ran off the 64 KiB allocation into the heap
+        // neighbor below (adjacent Task structs — the pd_ptr=0/pointer-spray
+        // corruption captured by hardware watchpoint on quil's Task).
+        // RSP0 must be the frame TOP, identical to the timer path.
+        crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
+        static FIX_MARKER: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+        if !FIX_MARKER.swap(true, Ordering::Relaxed) {
+            serial_println!("[scheduler.pd8.flake.fix.ok] reason=yield_rsp0_frame_base_ratchet");
+        }
         Scheduler::switch_to(core::ptr::null_mut(), next);
     }
     serial_println!("scheduler.yield_and_switch.no_runnable");
