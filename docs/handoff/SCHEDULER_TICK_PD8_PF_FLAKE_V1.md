@@ -255,3 +255,23 @@ two boot-time markers.
 Pre-fix control (same day, same lanes): 1 of 3 watchpoint lanes caught the
 Task-struct overwrite live in `timer_interrupt_stub` pushes; spindle lanes
 historically died ~4/6 (fault line or silent input stall).
+
+---
+
+## REGRESSION GATE (RSP0_RATCHET_REGRESSION_GATE_V1, 2026-07-18)
+
+```sh
+./scripts/rsp0_regression_gate.sh                      # static source rows only
+./scripts/rsp0_regression_gate.sh <serial-log>         # + runtime rows
+```
+
+Static rows: yield_and_switch has exactly one RSP0 assignment, it reads
+`kstack_top + 168`, no bare `kstack_top` variant, and the comment still names
+the `saved-frame BASE` trap. Runtime rows (log given): fix marker present,
+zero faults, zero phase-1 tripwires (`sched.steal.reject` / `sched.set_pd.null`).
+Negative-tested: stripping `+ 168` from the source fails the gate.
+
+Note: the `scheduler.enqueue pd_id=N task=0x... pdptr_field=0x...` boot lines
+(init.rs) are intentional permanent diagnostics — 14 lines once per boot,
+they bootstrap hardware-watchpoint capture for any future Task-corruption
+investigation. Do not strip.
