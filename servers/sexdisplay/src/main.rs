@@ -114,12 +114,26 @@ struct Surface {
     fill_sw: [u32; MAX_RECTS],
     fill_sh: [u32; MAX_RECTS],
     fill_color: [u32; MAX_RECTS],
-    text_len: u8,
+    text_len: u16,
     text_color: u32,
-    text_buf: [u8; 128],
+    // TEXT_MODEL_V2: 512-byte text buffer (was 128). OP_TEXT_DRAW offset
+    // extends past 255 via arg2 bits 12-15 (offset bits 8-11); legacy
+    // senders leave those bits zero and behave identically.
+    text_buf: [u8; TEXT_BUF_CAP],
+    // TEXT_MODEL_V2: per-line start offsets into text_buf, recomputed on
+    // every text write. Lines split on '\n' and wrap at wrap_cols. When the
+    // buffer contains NO '\n', wrap_cols stays at the legacy 20 so every
+    // pre-V2 writer (fixed 20-char padded rows) renders unchanged; a '\n'
+    // anywhere opts the surface into width-derived wrap.
+    line_starts: [u16; TEXT_MAX_ROWS],
+    line_count: u8,
+    wrap_cols: u8,
 }
 
 const MAX_SURFACES: usize = 16;
+const TEXT_BUF_CAP: usize = 512;
+const TEXT_MAX_ROWS: usize = 24;
+const TEXT_LEGACY_COLS: u8 = 20;
 const SURFACE_EMPTY: Surface = Surface {
     surface_id: 0, owner_pd: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false,
     tab_count: 0, active_tab: 0, chrome_flags: 0,
@@ -127,7 +141,8 @@ const SURFACE_EMPTY: Surface = Surface {
     fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
     fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
     fill_color: [0u32; MAX_RECTS],
-    text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; 128],
+    text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
+    line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
 };
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 static mut FOCUSED_SURFACE_ID: u64 = 0;
@@ -1107,13 +1122,55 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64) -> Option<u32> {
 /// Returns `Some(fg_color)` if pixel (x, y) is a text glyph foreground pixel
 /// within the given surface, or `None` if background/not in the text area.
 /// Uses FONT_ASCII_5X7 (5×7 glyphs) with 1px spacing between characters.
+/// TEXT_MODEL_V2: recompute the per-line index table after a text write.
+/// Lines split on '\n' and wrap at wrap_cols. Legacy behavior preserved:
+/// a buffer with no '\n' wraps at the fixed 20 columns every pre-V2 writer
+/// pads to; any '\n' switches the surface to width-derived wrap
+/// ((w - 10) / 6 ≈ usable width over 6px glyph advance, clamped 1..=80).
+fn recompute_text_lines(surf: &mut Surface) {
+    let len = (surf.text_len as usize).min(TEXT_BUF_CAP);
+    surf.line_count = 0;
+    if len == 0 { surf.wrap_cols = TEXT_LEGACY_COLS; return; }
+
+    let has_newline = surf.text_buf[..len].iter().any(|&b| b == b'\n');
+    surf.wrap_cols = if has_newline {
+        let derived = (surf.w.saturating_sub(10) / 6) as u8;
+        derived.clamp(1, 80)
+    } else {
+        TEXT_LEGACY_COLS
+    };
+
+    let cols = surf.wrap_cols as usize;
+    let mut i = 0usize;
+    let mut col = 0usize;
+    surf.line_starts[0] = 0;
+    surf.line_count = 1;
+    while i < len {
+        let c = surf.text_buf[i];
+        i += 1;
+        if c == b'\n' {
+            if (surf.line_count as usize) >= TEXT_MAX_ROWS { break; }
+            surf.line_starts[surf.line_count as usize] = i as u16;
+            surf.line_count += 1;
+            col = 0;
+        } else {
+            col += 1;
+            if col >= cols && i < len {
+                if (surf.line_count as usize) >= TEXT_MAX_ROWS { break; }
+                surf.line_starts[surf.line_count as usize] = i as u16;
+                surf.line_count += 1;
+                col = 0;
+            }
+        }
+    }
+}
+
 fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
-    if surf.text_len == 0 { return None; }
+    if surf.text_len == 0 || surf.line_count == 0 { return None; }
     const GLYPH_W: usize = 5;
     const GLYPH_H: usize = 7;
     const CHAR_SPACING: usize = 1; // 1px gap between chars
     const LINE_H: usize = GLYPH_H + 2; // line height with spacing
-    const CHARS_PER_LINE: usize = 20; // max chars per line before wrap
 
     // Text area inset: 8px from left, 8px from top bar / rim
     let tx = (surf.x as usize).saturating_add(8);
@@ -1127,17 +1184,26 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
     let py = (y - ty) % LINE_H;
 
     if px >= GLYPH_W || py >= GLYPH_H { return None; }
+    if col >= surf.wrap_cols as usize { return None; }
+    if row >= surf.line_count as usize { return None; }
 
-    // Calculate character index in text buffer
-    let char_idx = row * CHARS_PER_LINE + col;
-    if char_idx >= surf.text_len as usize { return None; }
+    // TEXT_MODEL_V2: character index via the per-line start table.
+    let start = surf.line_starts[row] as usize;
+    let end = if row + 1 < surf.line_count as usize {
+        surf.line_starts[row + 1] as usize
+    } else {
+        surf.text_len as usize
+    };
+    let char_idx = start + col;
+    if char_idx >= end || char_idx >= surf.text_len as usize { return None; }
 
     let c = surf.text_buf[char_idx];
-    // Map ASCII to font glyph index: 0x20=0, 0x21=1, ..., 0x5A=58
-    if c < 0x20 || c > 0x5A { return None; }
-    // Map lowercase to uppercase for V1
-    let glyph_idx = if c >= 0x61 && c <= 0x7A {
-        (c - 0x61 + 33) as usize  // 'a' maps to index of 'A' (33)
+    // TEXT_MODEL_V2: lowercase is folded to uppercase glyphs. The pre-V2
+    // guard rejected 0x61-0x7A before the fold ran, making typed lowercase
+    // invisible on every surface.
+    if c < 0x20 || (c > 0x5A && !(0x61..=0x7A).contains(&c)) { return None; }
+    let glyph_idx = if (0x61..=0x7A).contains(&c) {
+        (c - 0x61 + 0x21) as usize // 'a' → glyph of 'A' (0x41 - 0x20)
     } else {
         (c - 0x20) as usize
     };
@@ -3091,7 +3157,8 @@ pub extern "C" fn _start() -> ! {
                                     fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
                                     fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
                                     fill_color: [0u32; MAX_RECTS],
-                                    text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; 128],
+                                    text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
+                                    line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
                                 };
                                 break;
                             }
@@ -3144,7 +3211,8 @@ pub extern "C" fn _start() -> ! {
                                         fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
                                         fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
                                         fill_color: [0u32; MAX_RECTS],
-                                        text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; 128],
+                                        text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
+                                        line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
                                     };
                                     handled = true;
                                     break;
@@ -3389,7 +3457,9 @@ pub extern "C" fn _start() -> ! {
                                     break;
                                 }
                                 slot.text_len = 0;
-                                slot.text_buf = [0u8; 128];
+                                slot.text_buf = [0u8; TEXT_BUF_CAP];
+                                slot.line_count = 0;
+                                slot.wrap_cols = TEXT_LEGACY_COLS;
                                 break;
                             }
                         }
@@ -3397,14 +3467,17 @@ pub extern "C" fn _start() -> ! {
                 }
                 0xFB => {
                     // OP_TEXT_DRAW: arg0=surface_id, arg1=8 ASCII bytes packed LE,
-                    //              arg2 = byte_offset (bits 0-7) | char_count (bits 8-11) | text_color (bits 32-63)
+                    //              arg2 = byte_offset lo (bits 0-7) | char_count (bits 8-11)
+                    //                   | byte_offset hi (bits 12-15, TEXT_MODEL_V2)
+                    //                   | text_color (bits 32-63)
+                    // Legacy senders leave bits 12-15 zero → offsets 0-255 unchanged.
                     let sid = msg.arg0;
                     if sid == 0 { continue; }
                     let packed = msg.arg1;
-                    let byte_offset = (msg.arg2 & 0xFF) as usize;
+                    let byte_offset = ((msg.arg2 & 0xFF) | ((msg.arg2 >> 4) & 0xF00)) as usize;
                     let char_count = ((msg.arg2 >> 8) & 0xF) as usize;
                     let text_color = ((msg.arg2 >> 32) as u32) | 0xFF000000; // force opaque alpha
-                    let max_buf = 128usize;
+                    let max_buf = TEXT_BUF_CAP;
                     unsafe {
                         for slot in SURFACES.iter_mut() {
                             if slot.active && slot.surface_id == sid {
@@ -3426,8 +3499,9 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 let new_len = byte_offset + i;
                                 if new_len > slot.text_len as usize {
-                                    slot.text_len = new_len.min(max_buf) as u8;
+                                    slot.text_len = new_len.min(max_buf) as u16;
                                 }
+                                recompute_text_lines(slot);
                                 // Diagnostic: confirm text was written to surface
                                 if slot.text_len > 0 && slot.text_len <= 32 {
                                     serial_println!("[sexdisplay.text.draw] sid={} len={} color={:#x}",

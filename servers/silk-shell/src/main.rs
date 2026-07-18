@@ -3273,7 +3273,9 @@ unsafe fn maybe_run_bell_launch_outcome_proof() {
 /// No font duplication — sexdisplay renders glyphs from the 5x7 ASCII font.
 fn shell_draw_text(sid: u64, text: &[u8], color: u64) -> (usize, bool) {
     const MAX_CHUNK: usize = 8;
-    let max_bytes = text.len().min(256);
+    // TEXT_MODEL_V2: display text_buf is 512 bytes; offsets past 255 ride
+    // in arg2 bits 12-15 (legacy senders leave them zero).
+    let max_bytes = text.len().min(512);
     let mut offset: usize = 0;
     while offset < max_bytes {
         let chunk = (max_bytes - offset).min(MAX_CHUNK);
@@ -3283,6 +3285,7 @@ fn shell_draw_text(sid: u64, text: &[u8], color: u64) -> (usize, bool) {
         }
         let arg2: u64 = (offset as u64 & 0xFF)
             | ((chunk as u64 & 0xF) << 8)
+            | (((offset as u64 >> 8) & 0xF) << 12)
             | (color << 32);
         pdx_call(SLOT_DISPLAY, 0xFB, sid, packed, arg2);
         offset += chunk;
@@ -4545,6 +4548,9 @@ static mut LINEN_OBJECT_DETAIL_OPEN: bool = false;
 /// Set to true after the first successful remote snapshot fetch from Linen PD.
 /// Prevents re-fetch on every paint; fetch is one-shot per boot.
 static mut LINEN_REMOTE_FETCHED: bool = false;
+/// LINEN_DISK_OBJECTS_V1: true once a snapshot returned real session
+/// entries (not the seed fallback); gates the per-paint re-fetch.
+static mut LINEN_REMOTE_REAL: bool = false;
 
 /// Seed objects for initial Linen workspace. 6 objects covering key kinds.
 const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
@@ -5214,6 +5220,7 @@ unsafe fn linen_fetch_remote_snapshot() {
         slot_idx += 1;
     }
     serial_println!("[linen.remote.snapshot.ok] count={}", write_idx);
+    LINEN_REMOTE_REAL = write_idx > 0;
     // LINEN_QUIL_OPEN_DATA_V1: linen PD has no session objects at plain boot
     // (its object-creating proofs are env-gated), so an empty snapshot used to
     // leave LINEN_OBJECTS wiped — killing the entire open→link→bell/mesh chain
@@ -5232,8 +5239,13 @@ unsafe fn linen_fetch_remote_snapshot() {
 }
 
 /// Paint Linen surface 200: fetch remote snapshot on first call, then render.
+/// LINEN_DISK_OBJECTS_V1: while the last snapshot found no real session
+/// entries (seed fallback active), re-fetch on each paint — linen publishes
+/// its disk-backed objects asynchronously after boot, so an early first
+/// snapshot can race it. Bounded by paint events; stops once real entries
+/// arrive.
 unsafe fn linen_paint_surface() {
-    if !LINEN_REMOTE_FETCHED {
+    if !LINEN_REMOTE_FETCHED || !LINEN_REMOTE_REAL {
         LINEN_REMOTE_FETCHED = true;
         linen_fetch_remote_snapshot();
     }

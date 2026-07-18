@@ -572,6 +572,79 @@ fn tokenize(line: &[u8]) -> (&[u8], &[u8]) {
 
 /// Dispatch a command line. Pushes output lines to scrollback.
 /// Returns true if the command was recognized, false for unknown.
+// SPINDLE_DISK_CMD_V1: bounded synchronous SLOT_STORAGE call. Waits for the
+// type=0x1 reply in-line; non-reply messages are acked, HID events arriving
+// during the wait are dropped with a budgeted marker (user just ran a disk
+// command — losing a keystroke mid-roundtrip is acceptable and bounded).
+// Caps at 64 messages so a dead storage PD cannot hang the terminal.
+const OP_DISKFS_STAT_SPINDLE: u64 = 0x3B;
+const OP_DISKFS_SELECT_SPINDLE: u64 = 0x3E;
+
+fn spindle_storage_sync(op: u64, a0: u64, a1: u64, a2: u64) -> Result<u64, i64> {
+    // Drain replies already queued by earlier fire-and-forget storage calls
+    // (history persist on Enter) so this call's reply isn't matched to a
+    // stale one. Bounded; try_listen yields once on empty.
+    let mut drained = 0u32;
+    while drained < 16 {
+        match sex_pdx::pdx_try_listen_raw(0) {
+            Some(msg) if msg.type_id == 0x1 => drained += 1,
+            Some(msg) if msg.type_id == 0x202 => drained += 1,
+            Some(msg) => { unsafe { sex_pdx::pdx_reply(msg.caller_pd, 0); } drained += 1; }
+            None => break,
+        }
+    }
+    // Enqueue with bounded retry: the async slot can be momentarily busy
+    // right after a previous exchange (observed: SELECT for one path never
+    // reached sexfiles when issued back-to-back).
+    let mut tries = 0u32;
+    loop {
+        let (status, _) = unsafe { pdx_call(SLOT_STORAGE, op, a0, a1, a2) };
+        if status == 0 { break; }
+        tries += 1;
+        if tries >= 32 {
+            serial_println!("[spindle.disk.enqueue.fail] op={:#x} status={:#x}", op, status);
+            return Err(status as i64);
+        }
+        sex_pdx::sys_yield();
+    }
+    // Reply wait: poll (non-blocking) with a yield budget. A blocking listen
+    // here hangs the terminal forever when the request is lost under storage
+    // contention (observed: request enqueued ok, sexfiles never received it).
+    let mut msgs = 0u32;
+    let mut polls = 0u32;
+    loop {
+        let msg = match sex_pdx::pdx_try_listen_raw(0) {
+            Some(m) => m,
+            None => {
+                polls += 1;
+                if polls >= 300_000 {
+                    serial_println!("[spindle.disk.reply.timeout] op={:#x}", op);
+                    return Err(-101);
+                }
+                continue;
+            }
+        };
+        if msg.type_id == 0x1 {
+            let v = msg.arg0 as i64;
+            if v < 0 { return Err(v); }
+            return Ok(msg.arg0);
+        }
+        if msg.type_id == 0x202 {
+            unsafe {
+                static mut DISK_CMD_HID_DROP_BUDGET: u32 = 8;
+                if DISK_CMD_HID_DROP_BUDGET > 0 {
+                    DISK_CMD_HID_DROP_BUDGET -= 1;
+                    serial_println!("[spindle.disk.hid.drop] code={:#x}", msg.arg0);
+                }
+            }
+        } else {
+            unsafe { sex_pdx::pdx_reply(msg.caller_pd, 0); }
+        }
+        msgs += 1;
+        if msgs >= 64 { return Err(-100); }
+    }
+}
+
 fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) -> bool {
     let (raw_cmd, args) = tokenize(line);
     let mut cmd = raw_cmd;
@@ -1098,6 +1171,31 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  spindle_history    command history log");
             sb.push(b"  /tmp/spindle/history.log");
             serial_println!("[spindle.files.command] name=ls ok=1 reason=async_limited_static_fallback");
+            true
+        }
+        b"disk" => {
+            // SPINDLE_DISK_CMD_V1: REAL synchronous DiskFS probe — first live
+            // spindle command backed by an actual storage roundtrip. Lists
+            // which fixed disk objects are present (SELECT + STAT per path).
+            sb.push(b"DISK OBJECTS:");
+            let names: [&[u8]; 3] = [
+                b" 0 SEXFILES-PROOF-V1",
+                b" 1 LINEN-OBJECT-V1",
+                b" 2 N-V1 (QUIL DOC)",
+            ];
+            let mut found = 0u64;
+            for pid in 0..3u64 {
+                let ok = spindle_storage_sync(OP_DISKFS_SELECT_SPINDLE, pid, 0, 0).is_ok()
+                    && spindle_storage_sync(OP_DISKFS_STAT_SPINDLE, 0, 0, 0).is_ok();
+                if ok {
+                    sb.push(names[pid as usize]);
+                    found += 1;
+                }
+            }
+            if found == 0 {
+                sb.push(b"  NONE (NO NVME?)");
+            }
+            serial_println!("[spindle.disk.command] found={} ok=1 reason=sync_diskfs_probe", found);
             true
         }
         b"notify" => {

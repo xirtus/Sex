@@ -619,6 +619,36 @@ unsafe fn run_linen_object_schema_proof() {
     LINEN_OBJECT_SCHEMA_PROOF_DONE = true;
 }
 
+/// LINEN_DISK_OBJECTS_V1: probe the DiskFS fixed objects (path ids 0-2)
+/// through SLOT_STORAGE and surface each present object in the session
+/// table, so the shell's remote snapshot lists REAL disk-backed entries
+/// instead of falling back to seeds. Fails soft per path (marker + skip)
+/// when NVMe/DiskFS is absent. Bounded yields, no busy storage spin.
+unsafe fn linen_publish_disk_objects() {
+    serial_println!("[linen.disk.publish.begin]");
+    for _ in 0..64 { sched_yield(); }
+    let names: [&[u8; 13]; 3] = [b"disk-proof-v1", b"disk-linen-v1", b"disk-nquil-v1"];
+    let mut published = 0u64;
+    for path_id in 0..3u64 {
+        if let Err(e) = pdx_storage_sync(OP_DISKFS_SELECT, path_id, 0, 0) {
+            serial_println!("[linen.disk.publish.skip] path_id={} stage=select err={}", path_id, e);
+            continue;
+        }
+        if let Err(e) = pdx_storage_sync(OP_DISKFS_STAT, 0, 0, 0) {
+            serial_println!("[linen.disk.publish.skip] path_id={} stage=stat err={}", path_id, e);
+            continue;
+        }
+        match SESSION.create(session::ObjectKind::Document, &names[path_id as usize][..], LINEN_OWN_PD) {
+            Ok(id) => {
+                published += 1;
+                serial_println!("[linen.disk.object.ok] path_id={} object_id={}", path_id, id);
+            }
+            Err(e) => serial_println!("[linen.disk.object.err] path_id={} err={}", path_id, e),
+        }
+    }
+    serial_println!("[linen.disk.publish.done] count={}", published);
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[linen.init.start]");
@@ -638,6 +668,10 @@ pub extern "C" fn _start() -> ! {
         (20u64 << 32) | 20u64,
         (0x00FF6464u64 << 32) | (60u64 << 16) | 80u64);
     serial_println!("[linen.surface.visible.ok] sid={}", LINEN_CONTENT_SID);
+    // LINEN_DISK_OBJECTS_V1: publish disk-backed objects into the session
+    // table before any storage-blocking proofs, so the shell snapshot can
+    // pick them up on (re)fetch.
+    unsafe { linen_publish_disk_objects(); }
     serial_println!("[linen.ready]");
     serial_println!("[linen.hid.debug_rect.disabled] ok=1 reason=remove_neon_green_red_debug_rect_v1");
 

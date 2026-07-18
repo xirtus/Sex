@@ -49,7 +49,10 @@ Fill-rect visual representation.\n\
 Buffer capacity: bounded static array.\n\
 Press arrows to navigate, ESC for cmds.";
 const QUIL_BUFFER_MAX_LEN: usize = 512;
-const QUIL_MAX_VISIBLE_LINES: usize = 6;
+// TEXT_MODEL_V2: sexdisplay now supports 512-byte text_buf, '\n' line
+// breaks with width-derived wrap, and 12-bit chunk offsets (arg2 bits
+// 12-15 = offset high nibble). 24 rows is the renderer's line-table cap.
+const QUIL_MAX_VISIBLE_LINES: usize = 24;
 
 /// Mutable text buffer — initialized from QUIL_TEXT_INIT at boot.
 /// Updated by quil_load(). Read by draw_text_lines().
@@ -307,8 +310,10 @@ const QUIL_LINE_ACCENT_W: u64 = 4;
 const QUIL_LINE_ACCENT_COLOR: u64 = 0x00506080;
 
 /// Characters per line for sexdisplay's 5×7 grid renderer (FONT_ASCII_5X7).
+#[allow(dead_code)] // TEXT_MODEL_V2: legacy 20-col padding path retired
 const QUIL_TEXT_CHARS_PER_LINE: usize = 20;
 
+#[allow(dead_code)] // TEXT_MODEL_V2: legacy 20-col padding path retired
 /// Pad a logical line to QUIL_TEXT_CHARS_PER_LINE with trailing spaces so the
 /// sexdisplay renderer places each logical line on its own raster row.
 fn pad_text_line(line: &[u8], out: &mut [u8], max_out: usize) -> usize {
@@ -332,7 +337,11 @@ const QUIL_RECT_SLOT_MAX: u64 = 7;
 // ── Palette (existing command area, rect_index=0, same as before) ────────────
 const QUIL_ROWS: u8 = 5;
 const QUIL_PANEL_X: u64 = 24;
-const QUIL_PANEL_Y: u64 = QUIL_TITLE_BAR_H + 8 + (QUIL_MAX_VISIBLE_LINES as u64) * (QUIL_LINE_H + QUIL_LINE_GAP);
+// TEXT_MODEL_V2: panel geometry keeps the original 6-line text area above
+// it; QUIL_MAX_VISIBLE_LINES is now only the renderer draw cap (24) and
+// must not push the panel off-surface.
+const QUIL_PANEL_TEXT_LINES: u64 = 6;
+const QUIL_PANEL_Y: u64 = QUIL_TITLE_BAR_H + 8 + QUIL_PANEL_TEXT_LINES * (QUIL_LINE_H + QUIL_LINE_GAP);
 const QUIL_PANEL_W: u64 = SURFACE_W - 48;
 const QUIL_PANEL_H: u64 = SURFACE_H - QUIL_PANEL_Y - 16;
 const QUIL_PANEL_PAD_X: u64 = 16;
@@ -439,40 +448,23 @@ fn draw_text_lines(buf: &[u8]) {
 
     if buf.is_empty() || show_lines == 0 { return; }
 
-    // Pad each logical line to QUIL_TEXT_CHARS_PER_LINE so the renderer
-    // places each on its own raster row.
-    let mut line_buf: [u8; 256] = [0u8; 256];
-    let mut total_written: usize = 0;
-    let mut line_start: usize = 0;
-
-    for _line_idx in 0..show_lines {
-        // Find end of this logical line (next \n or end of buf)
-        let mut line_end = line_start;
-        while line_end < buf.len() && buf[line_end] != b'\n' {
-            line_end += 1;
-        }
-        let logical_line = &buf[line_start..line_end];
-
-        // Pad to QUIL_TEXT_CHARS_PER_LINE
-        let w = pad_text_line(logical_line, &mut line_buf[total_written..],
-                              256usize.saturating_sub(total_written));
-        total_written += w;
-
-        // Advance past \n separator
-        line_start = line_end;
-        if line_start < buf.len() && buf[line_start] == b'\n' {
-            line_start += 1;
-        }
-    }
+    // TEXT_MODEL_V2: the buffer's own '\n' bytes now drive line breaks in
+    // sexdisplay (width-derived wrap, 512-byte text_buf) — send the buffer
+    // verbatim instead of padding every line to 20 chars. The renderer caps
+    // at 24 rows; content beyond that is reported via the overflow marker.
+    let mut line_buf: [u8; 512] = [0u8; 512];
+    let total = buf.len().min(512);
+    line_buf[..total].copy_from_slice(&buf[..total]);
+    let mut total_written = total;
 
     if total_written == 0 { return; }
 
     // QUIL_TEXT_BUFFER_STUB_V1: keep surface text_len above sexdisplay's
-    // per-0xFB diagnostic threshold (fires while text_len <= 32). Pad to at
-    // least two full lines (40 bytes) of spaces, and send chunks highest
-    // offset FIRST so text_len jumps past 32 on the first chunk (same dodge
-    // as spindle's reverse-chunk flush).
-    while total_written < 2 * QUIL_TEXT_CHARS_PER_LINE && total_written < 256 {
+    // per-0xFB diagnostic threshold (fires while text_len <= 32). Pad with
+    // trailing spaces to >32 bytes, and send chunks highest offset FIRST so
+    // text_len jumps past 32 on the first chunk (spindle's reverse-chunk
+    // dodge).
+    while total_written < 40 && total_written < 512 {
         line_buf[total_written] = b' ';
         total_written += 1;
     }
@@ -490,9 +482,11 @@ fn draw_text_lines(buf: &[u8]) {
             packed |= (line_buf[offset + i] as u64) << (i * 8);
         }
 
-        // arg2: byte_offset (bits 0-7) | char_count (bits 8-11) | text_color (bits 32-63)
+        // arg2: byte_offset lo (bits 0-7) | char_count (bits 8-11)
+        //     | byte_offset hi (bits 12-15, TEXT_MODEL_V2) | text_color (32-63)
         let arg2: u64 = (offset as u64 & 0xFF)
             | ((chunk_len as u64 & 0xF) << 8)
+            | (((offset as u64 >> 8) & 0xF) << 12)
             | (TEXT_LINE_COLOR << 32);
 
         pdx_call(SLOT_DISPLAY, OP_TEXT_DRAW, QUIL_CONTENT_SID, packed, arg2);
@@ -1257,6 +1251,50 @@ fn pdx_storage_call(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64,
     Ok(value)
 }
 
+/// QUIL_PERSIST_V1: bounded variant for the persist path. The blocking
+/// listen in pdx_call_and_reply hangs the editor forever when a storage
+/// request is lost under contention (observed while linen's boot publish
+/// held sexfiles). Poll non-blocking with a yield budget instead; HID
+/// events are stashed exactly like the blocking path.
+fn pdx_storage_call_bounded(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64, i64> {
+    let (status, _) = pdx_call(SLOT_STORAGE, opcode, arg0, arg1, arg2);
+    if status != 0 {
+        return Err(status as i64);
+    }
+    let mut polls = 0u32;
+    loop {
+        let msg = match sex_pdx::pdx_try_listen_raw(0) {
+            Some(m) => m,
+            None => {
+                polls += 1;
+                if polls >= 300_000 {
+                    serial_println!("[quil.persist.reply.timeout] op={:#x}", opcode);
+                    return Err(-101);
+                }
+                continue;
+            }
+        };
+        if msg.type_id == 0x1 {
+            let v = msg.arg0 as i64;
+            if v < 0 { return Err(v); }
+            return Ok(msg.arg0);
+        }
+        if msg.type_id == OP_HID_EVENT {
+            unsafe {
+                if HID_STASH_COUNT < HID_STASH_CAPACITY {
+                    let idx = HID_STASH_COUNT;
+                    HID_STASH[idx] = (msg.arg0, msg.arg1, msg.arg2);
+                    HID_STASH_COUNT += 1;
+                } else {
+                    serial_println!("[quil.hid.stash.drop] code={:#x} reason=full", msg.arg0);
+                }
+            }
+        } else {
+            serial_println!("[quil.sync.skip] type_id={:#x}", msg.type_id);
+        }
+    }
+}
+
 fn run_quil_diskfs_slot_min_proof() {
     serial_println!("[quil.diskfs.slot.min.begin]");
 
@@ -1504,6 +1542,75 @@ fn quil_load() -> Result<(), i64> {
     Ok(())
 }
 
+// ── QUIL_PERSIST_V1: cross-reboot persistence via DiskFS fixed object ────────
+// Save writes header (magic "QP01" | len) at offset 0 and buffer content at
+// offset 16 into /disk/n-v1 (path_id 2, 4096-byte object, NVMe-backed).
+// Load restores buffer from disk when the RamFS session copy is absent
+// (fresh boot). All through existing SLOT_STORAGE DiskFS bridge opcodes —
+// no new ABI. Fails soft (markers, no panic) when NVMe is absent.
+const QUIL_PERSIST_MAGIC: u64 = 0x3130_5051; // "QP01" LE
+
+fn quil_persist_save() -> Result<usize, i64> {
+    unsafe {
+        let len = QUIL_BUFFER_LEN.min(QUIL_BUFFER_MAX_LEN);
+        if len == 0 {
+            serial_println!("[quil.persist.save.skip] reason=empty");
+            return Err(-1);
+        }
+        pdx_storage_call_bounded(OP_DISKFS_SELECT, QUIL_DISKFS_PATH_ID, 0, 0)
+            .map_err(|e| { serial_println!("[quil.persist.save.err] stage=select err={}", e); e })?;
+        let hdr = QUIL_PERSIST_MAGIC | ((len as u64) << 32);
+        pdx_storage_call_bounded(OP_DISKFS_WRITE, 0, hdr, 0)
+            .map_err(|e| { serial_println!("[quil.persist.save.err] stage=header err={}", e); e })?;
+        let mut off = 0usize;
+        while off < len {
+            let mut lo = 0u64;
+            let mut hi = 0u64;
+            for i in 0..8 {
+                if off + i < len { lo |= (QUIL_BUFFER[off + i] as u64) << (i * 8); }
+            }
+            for i in 8..16 {
+                if off + i < len { hi |= (QUIL_BUFFER[off + i] as u64) << ((i - 8) * 8); }
+            }
+            pdx_storage_call_bounded(OP_DISKFS_WRITE, 16 + off as u64, lo, hi)
+                .map_err(|e| { serial_println!("[quil.persist.save.err] stage=write off={} err={}", off, e); e })?;
+            off += 16;
+        }
+        serial_println!("[quil.persist.save.ok] bytes={}", len);
+        Ok(len)
+    }
+}
+
+fn quil_persist_load() -> Result<usize, i64> {
+    unsafe {
+        pdx_storage_call_bounded(OP_DISKFS_SELECT, QUIL_DISKFS_PATH_ID, 0, 0)
+            .map_err(|e| { serial_println!("[quil.persist.load.err] stage=select err={}", e); e })?;
+        let hdr = pdx_storage_call_bounded(OP_DISKFS_READ, 0, 8, 0)
+            .map_err(|e| { serial_println!("[quil.persist.load.err] stage=header err={}", e); e })?;
+        let magic = hdr & 0xFFFF_FFFF;
+        let len = (((hdr >> 32) & 0xFFFF_FFFF) as usize).min(QUIL_BUFFER_MAX_LEN);
+        if magic != QUIL_PERSIST_MAGIC || len == 0 {
+            serial_println!("[quil.persist.load.miss] magic={:#x} len={}", magic, len);
+            return Err(-2);
+        }
+        let mut off = 0usize;
+        while off < len {
+            let word = pdx_storage_call_bounded(OP_DISKFS_READ, 16 + off as u64, 8, 0)
+                .map_err(|e| { serial_println!("[quil.persist.load.err] stage=read off={} err={}", off, e); e })?;
+            let bytes = word.to_le_bytes();
+            for i in 0..8 {
+                if off + i < len { QUIL_BUFFER[off + i] = bytes[i]; }
+            }
+            off += 8;
+        }
+        QUIL_BUFFER_LEN = len;
+        QUIL_CURSOR_POS = len;
+        serial_println!("[quil.persist.load.ok] bytes={}", len);
+        draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+        Ok(len)
+    }
+}
+
 /// Dispatch a single palette key event. Used by both the main event loop
 /// and the HID replay path (stashed events replayed after boot proofs).
 fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut bool, selected_row: &mut u8) {
@@ -1573,16 +1680,31 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                             serial_println!("[quil.open.request] buffer_id={} ok=1 reason=save_via_ramfs", cmd as u64);
                             if unsafe { QUIL_BUFFER_PROOF_ACTIVE } {
                                 serial_println!("[quil.palette.save.skip] reason=buffer_proof_active");
-                            } else if let Err(e) = quil_save() {
-                                serial_println!("[quil.palette.save.fail] error={}", e);
+                            } else {
+                                if let Err(e) = quil_save() {
+                                    serial_println!("[quil.palette.save.fail] error={}", e);
+                                }
+                                // QUIL_PERSIST_V1: also persist to DiskFS so the
+                                // document survives reboot. Soft-fails (marker
+                                // only) when NVMe is absent.
+                                let _ = quil_persist_save();
                             }
                         }
                         CMD_LOAD_DOCUMENT => {
                             serial_println!("[quil.open.request] buffer_id={} ok=1 reason=load_via_ramfs", cmd as u64);
                             if unsafe { QUIL_BUFFER_PROOF_ACTIVE } {
                                 serial_println!("[quil.palette.load.skip] reason=buffer_proof_active");
-                            } else if let Err(e) = quil_load() {
-                                serial_println!("[quil.palette.load.fail] error={}", e);
+                            } else if let Err(pe) = quil_persist_load() {
+                                // QUIL_PERSIST_V1: DiskFS copy is authoritative
+                                // (every palette save writes it). RamFS is only
+                                // a same-session fallback — the boot buffer
+                                // proof seeds RamFS with the intro text on
+                                // every boot, so trying RamFS first would mask
+                                // the disk copy after a reboot.
+                                serial_println!("[quil.persist.load.miss.fallback] error={}", pe);
+                                if let Err(e) = quil_load() {
+                                    serial_println!("[quil.palette.load.fail] error={}", e);
+                                }
                             }
                         }
                         CMD_NEW_BUFFER_STUB | CMD_RUN_CHECK_STUB | CMD_SETTINGS_STUB => {
