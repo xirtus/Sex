@@ -77,19 +77,6 @@ const BAR_BG_W_CAP: usize = 2560;
 const BAR_BG_H: usize = 50;
 
 // Runtime FB config — starts as fallback, updated by OP_PRIMARY_FB
-
-// SERIAL_DIET_V1: shared budget for hot-loop diagnostics. Early boot keeps
-// the full trace (first 300 lines); steady-state loops go quiet so
-// serial VM-exits stop dominating wall clock. Error and gate-required
-// markers are NOT routed through this.
-static mut HOT_LOG_BUDGET: u32 = 300;
-#[inline(always)]
-fn hot_log() -> bool {
-    unsafe {
-        if HOT_LOG_BUDGET > 0 { HOT_LOG_BUDGET -= 1; true } else { false }
-    }
-}
-
 static mut FB_PTR: u64 = FALLBACK_PTR;
 static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
@@ -127,26 +114,12 @@ struct Surface {
     fill_sw: [u32; MAX_RECTS],
     fill_sh: [u32; MAX_RECTS],
     fill_color: [u32; MAX_RECTS],
-    text_len: u16,
+    text_len: u8,
     text_color: u32,
-    // TEXT_MODEL_V2: 512-byte text buffer (was 128). OP_TEXT_DRAW offset
-    // extends past 255 via arg2 bits 12-15 (offset bits 8-11); legacy
-    // senders leave those bits zero and behave identically.
-    text_buf: [u8; TEXT_BUF_CAP],
-    // TEXT_MODEL_V2: per-line start offsets into text_buf, recomputed on
-    // every text write. Lines split on '\n' and wrap at wrap_cols. When the
-    // buffer contains NO '\n', wrap_cols stays at the legacy 20 so every
-    // pre-V2 writer (fixed 20-char padded rows) renders unchanged; a '\n'
-    // anywhere opts the surface into width-derived wrap.
-    line_starts: [u16; TEXT_MAX_ROWS],
-    line_count: u8,
-    wrap_cols: u8,
+    text_buf: [u8; 128],
 }
 
 const MAX_SURFACES: usize = 16;
-const TEXT_BUF_CAP: usize = 512;
-const TEXT_MAX_ROWS: usize = 24;
-const TEXT_LEGACY_COLS: u8 = 20;
 const SURFACE_EMPTY: Surface = Surface {
     surface_id: 0, owner_pd: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false,
     tab_count: 0, active_tab: 0, chrome_flags: 0,
@@ -154,8 +127,7 @@ const SURFACE_EMPTY: Surface = Surface {
     fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
     fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
     fill_color: [0u32; MAX_RECTS],
-    text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
-    line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
+    text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; 128],
 };
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 static mut FOCUSED_SURFACE_ID: u64 = 0;
@@ -463,13 +435,13 @@ fn composite_pixel(x: usize, y: usize, w: usize, h: usize, bg: u32, focused_id: 
                                 static mut FRAME_LIGHT_STARTUP_RENDER_BUDGET: u32 = 32;
                                 if FRAME_LIGHT_STARTUP_RENDER_BUDGET > 0 && lx == FRAME_TOP_BAR_LIGHT_GAP_PX && ly == FRAME_TOP_BAR_LIGHT_TOP {
                                     FRAME_LIGHT_STARTUP_RENDER_BUDGET -= 1;
-                                    if hot_log() { serial_println!(
+                                    serial_println!(
                                         "[sexdisplay.frame.light.startup.render] sid={} red={} close_allowed={} reason={}",
                                         surf.surface_id,
                                         if close_allowed { "enabled" } else { "disabled" },
                                         close_allowed as u8,
                                         if close_allowed { "close_allowed" } else { "default_disabled_or_protected" }
-                                    ); }
+                                    );
                                 }
                                 // Phase 6 draw.ok: one-shot proof emitted from real render path.
                                 static mut PHASE6_DRAW_OK_PROOF: u32 = 1;
@@ -1135,55 +1107,13 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64) -> Option<u32> {
 /// Returns `Some(fg_color)` if pixel (x, y) is a text glyph foreground pixel
 /// within the given surface, or `None` if background/not in the text area.
 /// Uses FONT_ASCII_5X7 (5×7 glyphs) with 1px spacing between characters.
-/// TEXT_MODEL_V2: recompute the per-line index table after a text write.
-/// Lines split on '\n' and wrap at wrap_cols. Legacy behavior preserved:
-/// a buffer with no '\n' wraps at the fixed 20 columns every pre-V2 writer
-/// pads to; any '\n' switches the surface to width-derived wrap
-/// ((w - 10) / 6 ≈ usable width over 6px glyph advance, clamped 1..=80).
-fn recompute_text_lines(surf: &mut Surface) {
-    let len = (surf.text_len as usize).min(TEXT_BUF_CAP);
-    surf.line_count = 0;
-    if len == 0 { surf.wrap_cols = TEXT_LEGACY_COLS; return; }
-
-    let has_newline = surf.text_buf[..len].iter().any(|&b| b == b'\n');
-    surf.wrap_cols = if has_newline {
-        let derived = (surf.w.saturating_sub(10) / 6) as u8;
-        derived.clamp(1, 80)
-    } else {
-        TEXT_LEGACY_COLS
-    };
-
-    let cols = surf.wrap_cols as usize;
-    let mut i = 0usize;
-    let mut col = 0usize;
-    surf.line_starts[0] = 0;
-    surf.line_count = 1;
-    while i < len {
-        let c = surf.text_buf[i];
-        i += 1;
-        if c == b'\n' {
-            if (surf.line_count as usize) >= TEXT_MAX_ROWS { break; }
-            surf.line_starts[surf.line_count as usize] = i as u16;
-            surf.line_count += 1;
-            col = 0;
-        } else {
-            col += 1;
-            if col >= cols && i < len {
-                if (surf.line_count as usize) >= TEXT_MAX_ROWS { break; }
-                surf.line_starts[surf.line_count as usize] = i as u16;
-                surf.line_count += 1;
-                col = 0;
-            }
-        }
-    }
-}
-
 fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
-    if surf.text_len == 0 || surf.line_count == 0 { return None; }
+    if surf.text_len == 0 { return None; }
     const GLYPH_W: usize = 5;
     const GLYPH_H: usize = 7;
     const CHAR_SPACING: usize = 1; // 1px gap between chars
     const LINE_H: usize = GLYPH_H + 2; // line height with spacing
+    const CHARS_PER_LINE: usize = 20; // max chars per line before wrap
 
     // Text area inset: 8px from left, 8px from top bar / rim
     let tx = (surf.x as usize).saturating_add(8);
@@ -1197,26 +1127,17 @@ fn surface_text_fg_at(x: usize, y: usize, surf: &Surface) -> Option<u32> {
     let py = (y - ty) % LINE_H;
 
     if px >= GLYPH_W || py >= GLYPH_H { return None; }
-    if col >= surf.wrap_cols as usize { return None; }
-    if row >= surf.line_count as usize { return None; }
 
-    // TEXT_MODEL_V2: character index via the per-line start table.
-    let start = surf.line_starts[row] as usize;
-    let end = if row + 1 < surf.line_count as usize {
-        surf.line_starts[row + 1] as usize
-    } else {
-        surf.text_len as usize
-    };
-    let char_idx = start + col;
-    if char_idx >= end || char_idx >= surf.text_len as usize { return None; }
+    // Calculate character index in text buffer
+    let char_idx = row * CHARS_PER_LINE + col;
+    if char_idx >= surf.text_len as usize { return None; }
 
     let c = surf.text_buf[char_idx];
-    // TEXT_MODEL_V2: lowercase is folded to uppercase glyphs. The pre-V2
-    // guard rejected 0x61-0x7A before the fold ran, making typed lowercase
-    // invisible on every surface.
-    if c < 0x20 || (c > 0x5A && !(0x61..=0x7A).contains(&c)) { return None; }
-    let glyph_idx = if (0x61..=0x7A).contains(&c) {
-        (c - 0x61 + 0x21) as usize // 'a' → glyph of 'A' (0x41 - 0x20)
+    // Map ASCII to font glyph index: 0x20=0, 0x21=1, ..., 0x5A=58
+    if c < 0x20 || c > 0x5A { return None; }
+    // Map lowercase to uppercase for V1
+    let glyph_idx = if c >= 0x61 && c <= 0x7A {
+        (c - 0x61 + 33) as usize  // 'a' maps to index of 'A' (33)
     } else {
         (c - 0x20) as usize
     };
@@ -1527,7 +1448,7 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
         let b = &mut TOP_STRIP_REDRAW_BUDGET;
         if *b > 0 {
             *b -= 1;
-            if hot_log() { serial_println!("[sexdisplay.render.top_strip] fb_w={} fb_h={}", w, h); }
+            serial_println!("[sexdisplay.render.top_strip] fb_w={} fb_h={}", w, h);
         }
         // Clock redraw proof: what time is drawn on screen.
         // Source tracked via module-level CLOCK_REDRAW_SOURCE set by apply path.
@@ -1537,13 +1458,13 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
             if *b > 0 {
                 *b -= 1;
                 let src = if CLOCK_REDRAW_SOURCE == 1 { "fallback" } else { "silkbar" };
-                if hot_log() { serial_println!("[sexdisplay.clock.redraw] h={} m={} s={} source={}",
-                    bar.clock_hh, bar.clock_mm, bar.clock_ss, src); }
+                serial_println!("[sexdisplay.clock.redraw] h={} m={} s={} source={}",
+                    bar.clock_hh, bar.clock_mm, bar.clock_ss, src);
                 let source_ok = if bar.clock_ss == CLOCK_CANON_SS { 1 } else { 0 };
-                if hot_log() { serial_println!(
+                serial_println!(
                     "[sexdisplay.clock.redraw.source_check] redraw_ss={} canonical_ss={} source={} ok={}",
                     bar.clock_ss, CLOCK_CANON_SS, src, source_ok
-                ); }
+                );
                 static mut CLOCK_VISIBLE_MONO_INIT: bool = false;
                 static mut CLOCK_VISIBLE_PREV_TOTAL: u32 = 0;
                 let redraw_total = clock_total_seconds(bar.clock_hh, bar.clock_mm, bar.clock_ss);
@@ -1560,14 +1481,14 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
                     }
                     (prev_ss_v, ok)
                 };
-                if hot_log() { serial_println!(
+                serial_println!(
                     "[sexdisplay.clock.monotonic.visible] prev_ss={} redraw_ss={} ok={}",
                     prev_ss, bar.clock_ss, mono_ok
-                ); }
+                );
                 // Visible seconds proof: confirms the exact seconds value that
                 // will be drawn in the subsequent pixel loop (clock_fg_at).
-                if hot_log() { serial_println!("[clock.visible.seconds] h={} m={} s={} drawn=1 ok=1 reason=pixel_loop_follows",
-                    bar.clock_hh, bar.clock_mm, bar.clock_ss); }
+                serial_println!("[clock.visible.seconds] h={} m={} s={} drawn=1 ok=1 reason=pixel_loop_follows",
+                    bar.clock_hh, bar.clock_mm, bar.clock_ss);
             }
         }
         // Phase 3: state marker — prove phase1 fields are populated after receives.
@@ -1659,7 +1580,7 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
         let b = &mut SURFACE_AREA_REDRAW_BUDGET;
         if *b > 0 {
             *b -= 1;
-            if hot_log() { serial_println!("[sexdisplay.render.surface_area] fb_w={} fb_h={}", w, h); }
+            serial_println!("[sexdisplay.render.surface_area] fb_w={} fb_h={}", w, h);
         }
     }
     let focused_id = unsafe { FOCUSED_SURFACE_ID };
@@ -1933,7 +1854,7 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
                 let rem = &mut DISPLAY_CURSOR_DRAW_BUDGET;
                 if *rem > 0 {
                     *rem -= 1;
-                    if hot_log() { serial_println!("[sexdisplay.cursor.draw] n=0 x={} y={}", ox as i32, oy as i32); }
+                    serial_println!("[sexdisplay.cursor.draw] n=0 x={} y={}", ox as i32, oy as i32);
                 }
             }
             // INPUT_PRESENT_TRACE_V1: budgeted draw trace with last received seq.
@@ -2487,7 +2408,7 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> 
         static mut SILK_DE_UPDATE_RECV_BUDGET: u32 = 64;
         if SILK_DE_UPDATE_RECV_BUDGET > 0 {
             SILK_DE_UPDATE_RECV_BUDGET -= 1;
-            if hot_log() { serial_println!("[silk.de.update.recv] kind={} slot={}", kind, slot); }
+            serial_println!("[silk.de.update.recv] kind={} slot={}", kind, slot);
         }
     }
     let update = SilkBarUpdate {
@@ -2502,7 +2423,7 @@ fn handle_silkbar_update(bar: &mut SilkBar, arg0: u64, arg1: u64, arg2: u64) -> 
             static mut SILK_DE_UPDATE_APPLY_BUDGET: u32 = 64;
             if SILK_DE_UPDATE_APPLY_BUDGET > 0 {
                 SILK_DE_UPDATE_APPLY_BUDGET -= 1;
-                if hot_log() { serial_println!("[silk.de.update.apply.ok] kind={} slot={}", kind, slot); }
+                serial_println!("[silk.de.update.apply.ok] kind={} slot={}", kind, slot);
             }
         }
     }
@@ -2794,10 +2715,10 @@ pub extern "C" fn _start() -> ! {
                         let synth: u8 = if advance_synthetic { 1 } else { 0 };
                         let thr: u16 = if advance_synthetic { SYNTHETIC_VISUAL_THRESHOLD } else { FALLBACK_TICKS_PER_SEC as u16 };
                         let source = if advance_synthetic { "fallback_synthetic_visual" } else { "fallback" };
-                        if hot_log() { serial_println!(
+                        serial_println!(
                             "[sexdisplay.clock.cadence.sample] ss={} loops={} raw_delta={} synthetic={} threshold={} source={} ok=1",
                             now_canon_ss, fallback_loops_since_advance, advance_tick_delta, synth, thr, source
-                        ); }
+                        );
                     }
                 }
                 // ── Parity marker (one-shot): prove fallback and post-reject use same threshold ──
@@ -2825,10 +2746,10 @@ pub extern "C" fn _start() -> ! {
                             let b = &mut SKIP_SAME_SECOND_BUDGET;
                             if *b > 0 {
                                 *b -= 1;
-                                if hot_log() { serial_println!(
+                                serial_println!(
                                     "[sexdisplay.clock.redraw.skip_same_second] ss={} reason=no_clock_delta ok=1",
                                     now_canon_ss
-                                ); }
+                                );
                             }
                         }
                     }
@@ -2844,10 +2765,10 @@ pub extern "C" fn _start() -> ! {
                     let b = &mut LIVE_AFTER_REJECT_BUDGET;
                     if *b > 0 {
                         *b -= 1;
-                        if hot_log() { serial_println!(
+                        serial_println!(
                             "[sexdisplay.clock.fallback.live_after_reject] reject_ss={} now_ss={} source=fallback ok=1",
                             reject_ss, now_ss
-                        ); }
+                        );
                     }
                 }
                 // ── Post-reject cadence sample (budgeted) ──
@@ -2856,10 +2777,10 @@ pub extern "C" fn _start() -> ! {
                     let b = &mut POST_REJECT_CADENCE_BUDGET;
                     if *b > 0 {
                         *b -= 1;
-                        if hot_log() { serial_println!(
+                        serial_println!(
                             "[sexdisplay.clock.post_reject.cadence.sample] ss={} loops={} threshold={} ok=1",
                             now_ss, fallback_loops_since_advance, SYNTHETIC_VISUAL_THRESHOLD
-                        ); }
+                        );
                     }
                 }
             }
@@ -2871,10 +2792,10 @@ pub extern "C" fn _start() -> ! {
                     let b = &mut REJECT_STREAK_PROOF_BUDGET;
                     if *b > 0 && handoff_reject_streak == 4 {
                         *b -= 1;
-                        if hot_log() { serial_println!(
+                        serial_println!(
                             "[sexdisplay.clock.handoff.reject.streak] ss={} streak={} redraw_suppressed=1",
                             streak_ss, handoff_reject_streak
-                        ); }
+                        );
                     }
                 }
             }
@@ -2973,14 +2894,14 @@ pub extern "C" fn _start() -> ! {
                                         let b = &mut CLOCK_HANDOFF_REJECT_BUDGET;
                                         if *b > 0 {
                                             *b -= 1;
-                                            if hot_log() { serial_println!(
+                                            serial_println!(
                                                 "[sexdisplay.clock.handoff.reject] from=fallback to=silkbar incoming_ss={} canonical_ss={} reason=backward accepted=0",
                                                 in_ss, canon_ss
-                                            ); }
-                                            if hot_log() { serial_println!(
+                                            );
+                                            serial_println!(
                                                 "[sexdisplay.clock.fallback.continue_after_handoff_reject] ss={} source=fallback",
                                                 canon_ss
-                                            ); }
+                                            );
                                         }
                                     }
                                 } else {
@@ -3033,10 +2954,10 @@ pub extern "C" fn _start() -> ! {
                                 let b = &mut CLOCK_SOURCE_APPLY_BUDGET;
                                 if *b > 0 {
                                     *b -= 1;
-                                    if hot_log() { serial_println!(
+                                    serial_println!(
                                         "[sexdisplay.clock.source.silkbar.apply] hh={} mm={} ss={} loop={}",
                                         bar.clock_hh, bar.clock_mm, bar.clock_ss, display_loop_counter
-                                    ); }
+                                    );
                                 }
                             }
                             unsafe {
@@ -3044,11 +2965,11 @@ pub extern "C" fn _start() -> ! {
                                 let b = &mut CLOCK_RECV_BUDGET;
                                 if *b > 0 {
                                     *b -= 1;
-                                    if hot_log() { serial_println!(
+                                    serial_println!(
                                         "[sexdisplay.clock.recv] in_h={} in_m={} in_s={} old_h={} old_m={} old_s={} sec_now={} changed={} from_silkbar=1",
                                         in_hh, in_mm, in_ss,
                                         old_hh, old_mm, old_ss,
-                                        sec_now, changed as u8); }
+                                        sec_now, changed as u8);
                                 }
                             }
                             unsafe {
@@ -3056,11 +2977,11 @@ pub extern "C" fn _start() -> ! {
                                 let b = &mut CLOCK_APPLY_BUDGET;
                                 if *b > 0 {
                                     *b -= 1;
-                                    if hot_log() { serial_println!(
+                                    serial_println!(
                                         "[sexdisplay.clock.apply] source=silkbar h={} m={} s={} accepted={} reason={}",
                                         bar.clock_hh, bar.clock_mm, bar.clock_ss,
                                         if handoff_rejected { 0 } else { 1 },
-                                        if handoff_rejected { "handoff_backward" } else if changed { "changed" } else { "same" }); }
+                                        if handoff_rejected { "handoff_backward" } else if changed { "changed" } else { "same" });
                                 }
                             }
                             should_redraw_top_strip = changed && !handoff_rejected;
@@ -3102,10 +3023,10 @@ pub extern "C" fn _start() -> ! {
                                         let b = &mut SKIP_SAME_SECOND_STALE_BUDGET;
                                         if *b > 0 {
                                             *b -= 1;
-                                            if hot_log() { serial_println!(
+                                            serial_println!(
                                                 "[sexdisplay.clock.redraw.skip_same_second] ss={} reason=no_clock_delta_stale_drop ok=1",
                                                 now_ss
-                                            ); }
+                                            );
                                         }
                                     }
                                 }
@@ -3170,8 +3091,7 @@ pub extern "C" fn _start() -> ! {
                                     fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
                                     fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
                                     fill_color: [0u32; MAX_RECTS],
-                                    text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
-                                    line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
+                                    text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; 128],
                                 };
                                 break;
                             }
@@ -3224,8 +3144,7 @@ pub extern "C" fn _start() -> ! {
                                         fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
                                         fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],
                                         fill_color: [0u32; MAX_RECTS],
-                                        text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; TEXT_BUF_CAP],
-                                        line_starts: [0u16; TEXT_MAX_ROWS], line_count: 0, wrap_cols: TEXT_LEGACY_COLS,
+                                        text_len: 0, text_color: 0x00FFFFFF, text_buf: [0u8; 128],
                                     };
                                     handled = true;
                                     break;
@@ -3443,7 +3362,7 @@ pub extern "C" fn _start() -> ! {
                             if rect_index + 1 > slot.fill_count as usize {
                                 slot.fill_count = (rect_index + 1) as u8;
                             }
-                            if hot_log() { serial_println!("[display.fill_rect.set] sid={} index={}", surface_id, rect_index); }
+                            serial_println!("[display.fill_rect.set] sid={} index={}", surface_id, rect_index);
                             updated = true;
                             break;
                         }
@@ -3470,9 +3389,7 @@ pub extern "C" fn _start() -> ! {
                                     break;
                                 }
                                 slot.text_len = 0;
-                                slot.text_buf = [0u8; TEXT_BUF_CAP];
-                                slot.line_count = 0;
-                                slot.wrap_cols = TEXT_LEGACY_COLS;
+                                slot.text_buf = [0u8; 128];
                                 break;
                             }
                         }
@@ -3480,17 +3397,14 @@ pub extern "C" fn _start() -> ! {
                 }
                 0xFB => {
                     // OP_TEXT_DRAW: arg0=surface_id, arg1=8 ASCII bytes packed LE,
-                    //              arg2 = byte_offset lo (bits 0-7) | char_count (bits 8-11)
-                    //                   | byte_offset hi (bits 12-15, TEXT_MODEL_V2)
-                    //                   | text_color (bits 32-63)
-                    // Legacy senders leave bits 12-15 zero → offsets 0-255 unchanged.
+                    //              arg2 = byte_offset (bits 0-7) | char_count (bits 8-11) | text_color (bits 32-63)
                     let sid = msg.arg0;
                     if sid == 0 { continue; }
                     let packed = msg.arg1;
-                    let byte_offset = ((msg.arg2 & 0xFF) | ((msg.arg2 >> 4) & 0xF00)) as usize;
+                    let byte_offset = (msg.arg2 & 0xFF) as usize;
                     let char_count = ((msg.arg2 >> 8) & 0xF) as usize;
                     let text_color = ((msg.arg2 >> 32) as u32) | 0xFF000000; // force opaque alpha
-                    let max_buf = TEXT_BUF_CAP;
+                    let max_buf = 128usize;
                     unsafe {
                         for slot in SURFACES.iter_mut() {
                             if slot.active && slot.surface_id == sid {
@@ -3512,9 +3426,8 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 let new_len = byte_offset + i;
                                 if new_len > slot.text_len as usize {
-                                    slot.text_len = new_len.min(max_buf) as u16;
+                                    slot.text_len = new_len.min(max_buf) as u8;
                                 }
-                                recompute_text_lines(slot);
                                 // Diagnostic: confirm text was written to surface
                                 if slot.text_len > 0 && slot.text_len <= 32 {
                                     serial_println!("[sexdisplay.text.draw] sid={} len={} color={:#x}",
@@ -3666,11 +3579,11 @@ pub extern "C" fn _start() -> ! {
             static mut RENDER_BUDGET_CYCLE: u32 = 32;
             if RENDER_BUDGET_CYCLE > 0 {
                 RENDER_BUDGET_CYCLE -= 1;
-                if hot_log() { serial_println!("[sexdisplay.render.budget] drained={} surface={} strip={} primary={}",
+                serial_println!("[sexdisplay.render.budget] drained={} surface={} strip={} primary={}",
                     drained,
                     needs_surface_redraw as u8,
                     needs_top_strip_redraw as u8,
-                    did_primary_fb_render as u8); }
+                    did_primary_fb_render as u8);
             }
         }
 

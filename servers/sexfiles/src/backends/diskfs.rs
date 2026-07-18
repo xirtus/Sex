@@ -8,6 +8,19 @@ use sex_pdx::{
 };
 use spin::RwLock;
 
+
+// SERIAL_DIET_V1: shared budget for hot-loop diagnostics. Early boot keeps
+// the full trace (first 200 lines); steady-state loops go quiet so
+// serial VM-exits stop dominating wall clock. Error and gate-required
+// markers are NOT routed through this.
+static mut HOT_LOG_BUDGET: u32 = 200;
+#[inline(always)]
+fn hot_log() -> bool {
+    unsafe {
+        if HOT_LOG_BUDGET > 0 { HOT_LOG_BUDGET -= 1; true } else { false }
+    }
+}
+
 pub const DISKFS_BLOCK_SIZE: u32 = 4096;
 pub const DISKFS_MAX_OBJECTS: usize = 16;
 pub const DISKFS_JOURNAL_CAPACITY: usize = 64;
@@ -259,31 +272,31 @@ impl DiskFs {
     /// Proof markers emitted: call, reply — validated via serial_println trace.
     #[allow(dead_code)]
     pub fn diskfs_block_call(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
-        serial_println!("[sexfiles.ap24.provenance] head=COMPILE_TIME_UNKNOWN dirty=0 note=clean_diag");
+        if hot_log() { serial_println!("[sexfiles.ap24.provenance] head=COMPILE_TIME_UNKNOWN dirty=0 note=clean_diag"); }
         if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
             let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
             let lba = arg0 / BLOCK_SECTOR_SIZE;
-            serial_println!(
+            if hot_log() { serial_println!(
                 "[sexfiles.diskfs.block.call] op={} lba={} bytes={} slot={} buffer_cap={:#x} device_cap={:#x}",
                 op, lba, arg1, SLOT_BLOCK, arg2, SLOT_BLOCK
-            );
+            ); }
         }
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.diskfs.call] slot={} opcode={:#x} arg0={:#x} arg1={:#x} arg2={:#x}",
             SLOT_BLOCK, opcode, arg0, arg1, arg2
-        );
+        ); }
         // SLOT_BLOCK is a Domain capability → AsyncEnqueue: enqueues to sexdrive's
         // ring and returns (0,0) immediately. Must call pdx_listen_raw(0) to collect
         // sexdrive's reply via the incoming_replies priority queue (send_reply path).
         let (send_status, _) = pdx_call(SLOT_BLOCK, opcode, arg0, arg1, arg2);
         if send_status != 0 {
-            serial_println!("[sexfiles.diskfs.reply] status={:#x} value=0 err=enqueue_fail", send_status);
+            if hot_log() { serial_println!("[sexfiles.diskfs.reply] status={:#x} value=0 err=enqueue_fail", send_status); }
             if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
                 let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
-                serial_println!(
+                if hot_log() { serial_println!(
                     "[sexfiles.diskfs.block.reply] op={} status={} bytes={}",
                     op, send_status, arg1
-                );
+                ); }
             }
             return send_status;
         }
@@ -296,13 +309,13 @@ impl DiskFs {
             let msg = pdx_listen_raw(0);
             if msg.type_id == 0x1 {
                 let reply_val = msg.arg0;
-                serial_println!("[sexfiles.diskfs.reply] status=0x0 value={:#x}", reply_val);
+                if hot_log() { serial_println!("[sexfiles.diskfs.reply] status=0x0 value={:#x}", reply_val); }
                 if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
                     let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
-                    serial_println!(
+                    if hot_log() { serial_println!(
                         "[sexfiles.diskfs.block.reply] op={} status={} bytes={}",
                         op, reply_val, arg1
-                    );
+                    ); }
                 }
                 return reply_val;
             }
@@ -321,15 +334,15 @@ impl DiskFs {
     /// Returns block status code (BLOCK_OK on success, error code on failure).
     #[allow(dead_code)]
     pub fn diskfs_block_read(offset: u64, size: u64, buffer_cap: u64) -> u64 {
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.diskfs.typed.call] cmd=BLOCK_READ offset={:#x} size={} buf_cap={:#x}",
             offset, size, buffer_cap
-        );
+        ); }
         let reply = Self::diskfs_block_call(BLOCK_READ, offset, size, buffer_cap);
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.diskfs.typed.reply] cmd=BLOCK_READ status={}",
             reply
-        );
+        ); }
         reply
     }
 
@@ -377,10 +390,10 @@ impl DiskFs {
             );
             return Err(u64::MAX);
         }
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.diskfs.payload.verify.ok] overwritten=1 first_byte={:#x}",
             first_byte
-        );
+        ); }
         Ok((first_byte, reply))
     }
 
@@ -388,15 +401,15 @@ impl DiskFs {
     /// Typed block write: send BLOCK_WRITE command to sexdrive.
     #[allow(dead_code)]
     pub fn diskfs_block_write(offset: u64, size: u64, buffer_cap: u64) -> u64 {
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.diskfs.typed.call] cmd=BLOCK_WRITE offset={:#x} size={} buf_cap={:#x}",
             offset, size, buffer_cap
-        );
+        ); }
         let reply = Self::diskfs_block_call(BLOCK_WRITE, offset, size, buffer_cap);
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.diskfs.typed.reply] cmd=BLOCK_WRITE status={}",
             reply
-        );
+        ); }
         reply
     }
 
@@ -404,14 +417,14 @@ impl DiskFs {
     /// Typed block sync: send BLOCK_SYNC command to sexdrive (flush/barrier).
     #[allow(dead_code)]
     pub fn diskfs_block_sync() -> u64 {
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.diskfs.typed.call] cmd=BLOCK_SYNC"
-        );
+        ); }
         let reply = Self::diskfs_block_call(BLOCK_SYNC, 0, 0, 0);
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.diskfs.typed.reply] cmd=BLOCK_SYNC status={}",
             reply
-        );
+        ); }
         reply
     }
 

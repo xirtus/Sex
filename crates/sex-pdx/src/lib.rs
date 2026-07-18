@@ -233,7 +233,7 @@ pub struct PdxEvent; // Stub
 
 /// Spin-receive from a specific capability slot.
 pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
-    static mut PDX_LISTEN_WRAPPER_BUDGET: u32 = 64;
+    static mut PDX_LISTEN_WRAPPER_BUDGET: u32 = 8;
     loop {
         let type_id: u64;
         let caller_pd: u64;

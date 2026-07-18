@@ -1,3 +1,13 @@
+// SERIAL_DIET_V1: budget for per-alloc diagnostics; boot keeps full trace.
+static ALLOC_LOG_BUDGET: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(200);
+#[inline(always)]
+fn alloc_log() -> bool {
+    let b = &ALLOC_LOG_BUDGET;
+    let v = b.load(core::sync::atomic::Ordering::Relaxed);
+    if v == 0 { return false; }
+    b.store(v - 1, core::sync::atomic::Ordering::Relaxed);
+    true
+}
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 // ── AP1 Overlap Diagnostic Ring Buffer ──
@@ -129,11 +139,12 @@ impl LockFreeBuddyAllocator {
         let core_id = crate::core_local::CoreLocal::get().core_id as usize % MAX_CORES;
 
         // 1. Try local core shard (Wait-free local path)
+        // (alloc_log defined at module scope)
         if let Some(phys) = self.pop_free_local(core_id, order) {
             self.mark_allocated(phys, order);
             let block_size = PAGE_SIZE << order;
-            crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=local",
-                phys, block_size, order);
+            if alloc_log() { crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=local",
+                phys, block_size, order); }
             if diag_check_overlap(phys) {
                 crate::serial_println!("[kernel.mem.overlap.detected] phys={:#x} source=global_vs_boot_frame path=local order={}", phys, order);
             }
@@ -144,8 +155,8 @@ impl LockFreeBuddyAllocator {
         if let Some(phys) = self.pop_free_global(order) {
             self.mark_allocated(phys, order);
             let block_size = PAGE_SIZE << order;
-            crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=global",
-                phys, block_size, order);
+            if alloc_log() { crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=global",
+                phys, block_size, order); }
             if diag_check_overlap(phys) {
                 crate::serial_println!("[kernel.mem.overlap.detected] phys={:#x} source=global_vs_boot_frame path=global order={}", phys, order);
             }
@@ -163,8 +174,8 @@ impl LockFreeBuddyAllocator {
                 }
                 self.mark_allocated(phys, order);
                 let block_size = PAGE_SIZE << order;
-                crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=split",
-                    phys, block_size, order);
+                if alloc_log() { crate::serial_println!("[kernel.mem.global.alloc] phys={:#x} size={} order={} path=split",
+                    phys, block_size, order); }
                 if diag_check_overlap(phys) {
                     crate::serial_println!("[kernel.mem.overlap.detected] phys={:#x} source=global_vs_boot_frame path=split order={}", phys, order);
                 }
@@ -405,4 +416,15 @@ pub fn init_heap(
     }
 
     Ok(())
+}
+
+/// SERIAL_DIET_V1: budgeted memlend map trace (called from syscall 50 path).
+/// len == 0 => begin marker with cap_slot; len > 0 => ok marker with va/len.
+pub fn diet_memlend_log(a: u64, len: u64) {
+    if !alloc_log() { return; }
+    if len == 0 {
+        crate::serial_println!("[kernel.memlend.map.begin] cap_slot={}", a);
+    } else {
+        crate::serial_println!("[kernel.memlend.map.ok] va={:#x} len={}", a, len);
+    }
 }

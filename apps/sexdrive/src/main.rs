@@ -12,6 +12,19 @@ use sex_pdx::{
     BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER,
 };
 
+
+// SERIAL_DIET_V1: shared budget for hot-loop diagnostics. Early boot keeps
+// the full trace (first 240 lines); steady-state loops go quiet so
+// serial VM-exits stop dominating wall clock. Error and gate-required
+// markers are NOT routed through this.
+static mut HOT_LOG_BUDGET: u32 = 240;
+#[inline(always)]
+fn hot_log() -> bool {
+    unsafe {
+        if HOT_LOG_BUDGET > 0 { HOT_LOG_BUDGET -= 1; true } else { false }
+    }
+}
+
 struct DummyAllocator;
 unsafe impl GlobalAlloc for DummyAllocator {
     unsafe fn alloc(&self, _layout: Layout) -> *mut u8 { core::ptr::null_mut() }
@@ -242,20 +255,20 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
         "[sexdrive.block.read.api.nvme.submit] cid={} nsid={} slba={} nlb={} prp1={:#x} sq_tail={}",
         cid as u64, 1u64, slba, nlb, data_phys, sq_tail as u64
     );
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.submit.detail] path=typed op=READ cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
         cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
-    );
+    ); }
 
     compiler_fence(Ordering::SeqCst);
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.doorbell] path=typed qid=1 tail={}",
         sq_tail as u64
-    );
+    ); }
 
     let mut done = false;
     let mut dw2 = 0u32;
@@ -263,10 +276,10 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
     let max_polls = 1_000_000u32;
     let mut polls = 0u32;
     let mut last_dw3 = 0u32;
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.begin] path=typed cid={} cq_head={} phase={} max_polls={}",
         cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
-    );
+    ); }
     for _ in 0..max_polls {
         polls = polls.wrapping_add(1);
         let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
@@ -286,7 +299,7 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
             break;
         }
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.end] path=typed cid={} found={} status={} cq_head={} phase={} polls={}",
         cid as u64,
         if done { 1u64 } else { 0u64 },
@@ -294,7 +307,7 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
         cq_head as u64,
         cq_phase as u64,
         polls as u64
-    );
+    ); }
     if !done {
         serial_println!(
             "[sexdrive.block.read.api.err] reason=cqe_timeout cid={} head={} phase={}",
@@ -363,10 +376,10 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         return BLOCK_ERR_BAD_LEN;
     }
 
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.block.read.handoff.nvme.begin] offset={:#x} size={} dst_va={:#x}",
         offset, size, dst_va
-    );
+    ); }
 
     let map_va: u64;
     let io_sq_va: u64;
@@ -421,10 +434,10 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
     let max_lba = WRITE_PROOF_LBA;
     let last_lba = slba.saturating_add(nlb);
     let range_ok = if slba > max_lba { 0u64 } else if nlb > (max_lba - slba) { 0u64 } else { 1u64 };
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.cmd.range] path=typed slba={} nlb={} max_lba={} ok={}",
         slba, nlb, max_lba, range_ok
-    );
+    ); }
     let sqe_ptr = (io_sq_va as *mut u8).wrapping_add((sq_tail as usize) * 64) as *mut u32;
     unsafe {
         for i in 0..16usize {
@@ -438,23 +451,23 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr.add(11), (slba >> 32) as u32); // SLBA high
         core::ptr::write_volatile(sqe_ptr.add(12), (nlb & 0xFFFF) as u32); // NLB (0-based)
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.cmd.shape] path=typed op=READ cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_cap={:#x} buffer_kind=memlend last_lba={}",
         cid as u64, 1u64, slba, nlb, size, data_phys, 0u64, dst_va, data_phys, SLOT_BUF_LEND, last_lba
-    );
+    ); }
     compiler_fence(Ordering::SeqCst);
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.submit.detail] path=typed op=READ cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
         cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
-    );
+    ); }
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.doorbell] path=typed qid=1 tail={}",
         sq_tail as u64
-    );
+    ); }
 
     let mut done = false;
     let mut dw2 = 0u32;
@@ -462,10 +475,10 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
     let max_polls = 1_000_000u32;
     let mut polls = 0u32;
     let mut last_dw3 = 0u32;
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.begin] path=typed cid={} cq_head={} phase={} max_polls={}",
         cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
-    );
+    ); }
     for _ in 0..max_polls {
         polls = polls.wrapping_add(1);
         let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
@@ -478,14 +491,14 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
             done = true;
             dw2 = rd_dw2;
             dw3 = rd_dw3;
-            serial_println!(
+            if hot_log() { serial_println!(
                 "[sexdrive.block.read.handoff.nvme.cqe] cid={} phase={} dw2={:#x} dw3={:#x}",
                 cid_now as u64, phase_now as u64, rd_dw2 as u64, rd_dw3 as u64
-            );
+            ); }
             break;
         }
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.end] path=typed cid={} found={} status={} cq_head={} phase={} polls={}",
         cid as u64,
         if done { 1u64 } else { 0u64 },
@@ -493,7 +506,7 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
         cq_head as u64,
         cq_phase as u64,
         polls as u64
-    );
+    ); }
     if !done {
         serial_println!(
             "[sexdrive.block.read.handoff.err] reason=cqe_timeout cid={} head={} phase={}",
@@ -546,10 +559,10 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64) -> u64 {
             i += 1;
         }
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.block.read.handoff.copy.ok] phase=B len={}",
         size
-    );
+    ); }
     0u64
 }
 
@@ -697,10 +710,10 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     let max_lba = WRITE_PROOF_LBA;
     let last_lba = slba;
     let range_ok = if slba <= max_lba { 1u64 } else { 0u64 };
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.cmd.range] path=typed slba={} nlb={} max_lba={} ok={}",
         slba, nlb as u64, max_lba, range_ok
-    );
+    ); }
     let sqe_ptr = (io_sq_va as *mut u8).wrapping_add((sq_tail as usize) * 64) as *mut u32;
     unsafe {
         for i in 0..16usize {
@@ -722,34 +735,34 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         "[sexdrive.block.write.api.nvme.submit] cid={} nsid=1 slba={} nlb=0 prp1={:#x}",
         write_cid as u64, slba, write_phys
     );
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.cmd.shape] path=typed op=WRITE cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_cap={:#x} buffer_kind=memlend last_lba={}",
         write_cid as u64, 1u64, slba, nlb as u64, size, write_phys, 0u64, src_va, write_phys, SLOT_BUF_LEND, last_lba
-    );
-    serial_println!(
+    ); }
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.submit.detail] path=typed op=WRITE cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
         write_cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
-    );
+    ); }
 
     compiler_fence(Ordering::SeqCst);
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.doorbell] path=typed qid=1 tail={}",
         sq_tail as u64
-    );
+    ); }
 
     let mut done = false;
     let mut dw3 = 0u32;
     let max_polls = 1_000_000u32;
     let mut polls = 0u32;
     let mut last_dw3 = 0u32;
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.begin] path=typed cid={} cq_head={} phase={} max_polls={}",
         write_cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
-    );
+    ); }
     for _ in 0..max_polls {
         polls = polls.wrapping_add(1);
         let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
@@ -772,7 +785,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
             break;
         }
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.end] path=typed cid={} found={} status={} cq_head={} phase={} polls={}",
         write_cid as u64,
         if done { 1u64 } else { 0u64 },
@@ -780,7 +793,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         cq_head as u64,
         cq_phase as u64,
         polls as u64
-    );
+    ); }
     if !done {
         serial_println!(
             "[sexdrive.nvme.write.err] reason=cqe_timeout cid={} head={} phase={}",
@@ -930,24 +943,24 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         "[sexdrive.block.write.api.nvme.submit] cid={} nsid=1 slba={} nlb=0 prp1={:#x}",
         write_cid as u64, slba, write_phys
     );
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.cmd.shape] path=selftest op=WRITE cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_kind=internal",
         write_cid as u64, 1u64, slba, nlb as u64, size, write_phys, 0u64, write_va, write_phys
-    );
-    serial_println!(
+    ); }
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.submit.detail] path=selftest op=WRITE cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
         write_cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
-    );
+    ); }
 
     compiler_fence(Ordering::SeqCst);
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.doorbell] path=selftest qid=1 tail={}",
         sq_tail as u64
-    );
+    ); }
 
     let mut done = false;
     let mut dw2 = 0u32;
@@ -955,10 +968,10 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     let max_polls = 1_000_000u32;
     let mut polls = 0u32;
     let mut last_dw3 = 0u32;
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.begin] path=selftest cid={} cq_head={} phase={} max_polls={}",
         write_cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
-    );
+    ); }
     for _ in 0..max_polls {
         polls = polls.wrapping_add(1);
         let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
@@ -982,7 +995,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
             break;
         }
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.end] path=selftest cid={} found={} status={} cq_head={} phase={} polls={}",
         write_cid as u64,
         if done { 1u64 } else { 0u64 },
@@ -990,7 +1003,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         cq_head as u64,
         cq_phase as u64,
         polls as u64
-    );
+    ); }
     if !done {
         serial_println!("[sexdrive.storage100.rw.fail] reason=write_cqe_timeout");
         serial_println!(
@@ -1067,23 +1080,23 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         core::ptr::write_volatile(sqe_ptr2.add(11), (slba >> 32) as u32);
         core::ptr::write_volatile(sqe_ptr2.add(12), 0u32);
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.cmd.shape] path=selftest op=READ cid={} nsid={} slba={} nlb={} bytes={} prp1={:#x} prp2={:#x} buf_va={:#x} buf_phys={:#x} buffer_kind=internal",
         read_cid as u64, 1u64, slba, 0u64, size, read_phys, 0u64, read_va, read_phys
-    );
+    ); }
     compiler_fence(Ordering::SeqCst);
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.submit.detail] path=selftest op=READ cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
         read_cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
-    );
+    ); }
     sq_tail = (sq_tail + 1) % 16;
     unsafe {
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.doorbell] path=selftest qid=1 tail={}",
         sq_tail as u64
-    );
+    ); }
 
     let mut rb_done = false;
     let mut rb_dw2 = 0u32;
@@ -1091,10 +1104,10 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     let max_polls = 1_000_000u32;
     let mut polls = 0u32;
     let mut last_dw3 = 0u32;
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.begin] path=selftest cid={} cq_head={} phase={} max_polls={}",
         read_cid as u64, cq_head as u64, cq_phase as u64, max_polls as u64
-    );
+    ); }
     for _ in 0..max_polls {
         polls = polls.wrapping_add(1);
         let cqe_ptr = (io_cq_va as *const u8).wrapping_add((cq_head as usize) * 16) as *const u32;
@@ -1114,7 +1127,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
             break;
         }
     }
-    serial_println!(
+    if hot_log() { serial_println!(
         "[sexdrive.nvme.poll.end] path=selftest cid={} found={} status={} cq_head={} phase={} polls={}",
         read_cid as u64,
         if rb_done { 1u64 } else { 0u64 },
@@ -1122,7 +1135,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         cq_head as u64,
         cq_phase as u64,
         polls as u64
-    );
+    ); }
     if !rb_done {
         serial_println!("[sexdrive.storage100.rw.fail] reason=read_cqe_timeout");
         serial_println!(
@@ -2825,7 +2838,7 @@ pub extern "C" fn _start() -> ! {
     }
 
     let mut frame: u32 = 0;
-    serial_println!("[sexdrive.ready]");
+    if hot_log() { serial_println!("[sexdrive.ready]"); }
     loop {
         // [sexdrive.block.typed.recv] [sexdrive.block.typed.reply]
         // Typed block command dispatch — decodes SLOT_BLOCK messages.
@@ -2850,28 +2863,28 @@ pub extern "C" fn _start() -> ! {
             let submit_cid_snapshot = unsafe { NVME_IO_STATE.next_cid as u64 };
             let submit_tail_snapshot = unsafe { NVME_IO_STATE.sq_tail as u64 };
 
-            serial_println!(
+            if hot_log() { serial_println!(
                 "[sexdrive.block.typed.recv] cmd={} offset={:#x} size={} buf_cap={:#x} caller={}",
                 cmd, offset, size, _buf_cap, msg.caller_pd
-            );
+            ); }
             if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
-                serial_println!(
+                if hot_log() { serial_println!(
                     "[sexdrive.block.req] op={} ready={} lba={} bytes={} buffer_cap={:#x} device_cap={:#x}",
                     op, ready_snapshot, lba, size, _buf_cap, SLOT_NVME_HOST
-                );
+                ); }
             }
 
             // [sexblock.abi.request.decode] — dispatch on typed command
             let reply_val: u64 = match cmd {
                 BLOCK_READ => {
-                    serial_println!(
+                    if hot_log() { serial_println!(
                         "[sexdrive.block.read.api.recv] offset={:#x} size={} buf_cap={:#x}",
                         offset, size, _buf_cap
-                    );
-                    serial_println!(
+                    ); }
+                    if hot_log() { serial_println!(
                         "[sexdrive.block.read.handoff.begin] offset={:#x} size={} buf_cap={:#x}",
                         offset, size, _buf_cap
-                    );
+                    ); }
                     if size == 0 || size > BLOCK_MAX_XFER {
                         serial_println!(
                             "[sexdrive.block.read.api.err] reason=bad_len size={} max={}",
@@ -2906,17 +2919,17 @@ pub extern "C" fn _start() -> ! {
                                     "[sexdrive.block.read.handoff.err] reason=map_failed va={:#x}",
                                     fill_va
                                 );
-                                serial_println!(
+                                if hot_log() { serial_println!(
                                     "[sexdrive.nvme.cmd.shape.err] path=typed reason=memlend_map_failed buffer_cap={:#x}",
                                     SLOT_BUF_LEND
-                                );
+                                ); }
                                 BLOCK_ERR_NO_DEVICE
                             } else {
-                                serial_println!("[sexdrive.bufcap.map.ok] fill_va={:#x}", fill_va);
-                                serial_println!(
+                                if hot_log() { serial_println!("[sexdrive.bufcap.map.ok] fill_va={:#x}", fill_va); }
+                                if hot_log() { serial_println!(
                                     "[sexdrive.block.nvme.submit] op={} lba={} bytes={} cid={} tail={} ready={}",
                                     op, lba, size, submit_cid_snapshot, submit_tail_snapshot, ready_snapshot
-                                );
+                                ); }
                                 nvme_read_into_mapped_va(offset, size, fill_va)
                             }
                         }
@@ -2938,18 +2951,18 @@ pub extern "C" fn _start() -> ! {
                         }
                         // NOTE: current typed ABI path reads into a sexdrive-owned bounce buffer;
                         // caller buffer handoff via buf_cap is not wired in this mission.
-                        serial_println!(
+                        if hot_log() { serial_println!(
                             "[sexdrive.block.nvme.submit] op={} lba={} bytes={} cid={} tail={} ready={}",
                             op, lba, size, submit_cid_snapshot, submit_tail_snapshot, ready_snapshot
-                        );
+                        ); }
                         nvme_read_into_bounce(offset, size)
                     }
                 }
                 BLOCK_WRITE => {
-                    serial_println!(
+                    if hot_log() { serial_println!(
                         "[sexdrive.block.write.api.recv] offset={:#x} size={} buf_cap={:#x}",
                         offset, size, _buf_cap
-                    );
+                    ); }
                     if write_guard_allows(offset, size, _buf_cap) {
                         let fill_va = sys_map_mem_lend(SLOT_BUF_LEND);
                         if fill_va == 0 || fill_va == u64::MAX {
@@ -2957,17 +2970,17 @@ pub extern "C" fn _start() -> ! {
                                 "[sexdrive.nvme.write.err] reason=map_failed va={:#x}",
                                 fill_va
                             );
-                            serial_println!(
+                            if hot_log() { serial_println!(
                                 "[sexdrive.nvme.cmd.shape.err] path=typed reason=memlend_map_failed buffer_cap={:#x}",
                                 SLOT_BUF_LEND
-                            );
+                            ); }
                             BLOCK_ERR_NO_DEVICE
                         } else {
-                            serial_println!("[sexdrive.bufcap.map.ok] fill_va={:#x}", fill_va);
-                            serial_println!(
+                            if hot_log() { serial_println!("[sexdrive.bufcap.map.ok] fill_va={:#x}", fill_va); }
+                            if hot_log() { serial_println!(
                                 "[sexdrive.block.nvme.submit] op={} lba={} bytes={} cid={} tail={} ready={}",
                                 op, lba, size, submit_cid_snapshot, submit_tail_snapshot, ready_snapshot
-                            );
+                            ); }
                             let proof_offset = WRITE_PROOF_LBA * NVME_LBA_BYTES;
                             if offset == proof_offset {
                                 nvme_write_readback_proof(offset, size, fill_va)
@@ -3006,44 +3019,44 @@ pub extern "C" fn _start() -> ! {
                 }
             };
 
-            serial_println!(
+            if hot_log() { serial_println!(
                 "[sexblock.abi.reply.encode] caller={} status={}",
                 msg.caller_pd, reply_val
-            );
+            ); }
             pdx_reply(msg.caller_pd, reply_val);
-            serial_println!(
+            if hot_log() { serial_println!(
                 "[sexdrive.block.typed.reply] cmd={} caller={} status={}",
                 cmd, msg.caller_pd, reply_val
-            );
+            ); }
             if cmd == BLOCK_READ || cmd == BLOCK_WRITE {
                 if reply_val == 0 {
-                    serial_println!(
+                    if hot_log() { serial_println!(
                         "[sexdrive.block.nvme.cqe] op={} cid={} status=0",
                         op, submit_cid_snapshot
-                    );
-                    serial_println!(
+                    ); }
+                    if hot_log() { serial_println!(
                         "[sexdrive.block.reply] op={} status=0 bytes={} ready=1",
                         op, size
-                    );
+                    ); }
                 } else if reply_val == BLOCK_ERR_NO_DEVICE {
-                    serial_println!(
+                    if hot_log() { serial_println!(
                         "[sexdrive.block.nvme.cqe.timeout] op={} cid={} polls={}",
                         op, submit_cid_snapshot, 0u64
-                    );
+                    ); }
                     let reason = if ready_snapshot == 0 {
                         "no_ioq_ready"
                     } else {
                         "no_device_other"
                     };
-                    serial_println!(
+                    if hot_log() { serial_println!(
                         "[sexdrive.block.reply] op={} status=4 reason={} ready={}",
                         op, reason, ready_snapshot
-                    );
+                    ); }
                 } else {
-                    serial_println!(
+                    if hot_log() { serial_println!(
                         "[sexdrive.block.reply] op={} status={} reason=other ready={}",
                         op, reply_val, ready_snapshot
-                    );
+                    ); }
                 }
             }
         }

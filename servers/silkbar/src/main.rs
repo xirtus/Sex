@@ -13,6 +13,19 @@ use sex_pdx::{OP_BELL_LIST, OP_BELL_SUBSCRIBE, SLOT_BELL};
 const BELL_DELIVERY_PROOF_ENABLED: bool = option_env!("SEXOS_BELL_DELIVERY_PROOF").is_some();
 const CLOCK_FORCE_STALL_PROOF_ENABLED: bool =
     option_env!("SEXOS_SILKBAR_CLOCK_FORCE_STALL_PROOF").is_some();
+
+// SERIAL_DIET_V1: shared budget for hot-loop diagnostics. Early boot keeps
+// the full trace (first 120 lines); steady-state loops go quiet so
+// serial VM-exits stop dominating wall clock. Error and gate-required
+// markers are NOT routed through this.
+static mut HOT_LOG_BUDGET: u32 = 120;
+#[inline(always)]
+fn hot_log() -> bool {
+    unsafe {
+        if HOT_LOG_BUDGET > 0 { HOT_LOG_BUDGET -= 1; true } else { false }
+    }
+}
+
 static CAP_READY_DISPLAY: AtomicBool = AtomicBool::new(false);
 static DEFER_EMITTED_DISPLAY: AtomicBool = AtomicBool::new(false);
 
@@ -355,7 +368,7 @@ pub extern "C" fn _start() -> ! {
                         sex_pdx::serial_println!("[silkbar.stall.after_bell] iter={}", loop_iter);
                     }
                 }
-                sex_pdx::serial_println!("[silkbar.stall.after_bell_all] iter={}", loop_iter);
+                if hot_log() { sex_pdx::serial_println!("[silkbar.stall.after_bell_all] iter={}", loop_iter); }
             } else {
                 sex_pdx::serial_println!("[pdx.opcode.unknown] silkbar type_id={:#x} caller={}", msg.type_id, msg.caller_pd);
             }
@@ -550,14 +563,14 @@ pub extern "C" fn _start() -> ! {
             let b = unsafe { &mut CADENCE_DONE_BUDGET };
             if *b > 0 {
                 *b -= 1;
-                sex_pdx::serial_println!("[silkbar.loop.cadence.done] iter={}", loop_iter);
+                if hot_log() { sex_pdx::serial_println!("[silkbar.loop.cadence.done] iter={}", loop_iter); }
             }
         }
 
         // Advance software clock by one logical second per cadence.
         // raw_ticks captured above in tick-watch cadence section; reused here
         // so only one get_ticks() syscall per loop iteration.
-        sex_pdx::serial_println!("[silkbar.loop.iter_advance] old={} new={}", loop_iter, loop_iter.wrapping_add(1));
+        if hot_log() { sex_pdx::serial_println!("[silkbar.loop.iter_advance] old={} new={}", loop_iter, loop_iter.wrapping_add(1)); }
         loop_iter = loop_iter.wrapping_add(1);
         // [silkbar.loop.alive] budgeted marker
         {
@@ -565,7 +578,7 @@ pub extern "C" fn _start() -> ! {
             let b = unsafe { &mut LOOP_ALIVE_BUDGET };
             if *b > 0 {
                 *b -= 1;
-                sex_pdx::serial_println!("[silkbar.loop.alive] iter={}", loop_iter);
+                if hot_log() { sex_pdx::serial_println!("[silkbar.loop.alive] iter={}", loop_iter); }
             }
         }
         // Software clock: increment by 1 second
@@ -728,10 +741,10 @@ pub extern "C" fn _start() -> ! {
                 let b = &mut SILKBAR_CADENCE_SAMPLE_BUDGET;
                 if *b > 0 {
                     *b -= 1;
-                    sex_pdx::serial_println!(
+                    if hot_log() { sex_pdx::serial_println!(
                         "[silkbar.clock.cadence.sample] ss={} yields={} threshold={} sent=1 ok=1",
                         ss, cadence_yields, cadence_threshold
-                    );
+                    ); }
                 }
             }
         }

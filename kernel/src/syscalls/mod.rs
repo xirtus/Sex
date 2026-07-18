@@ -495,7 +495,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             let caller_pd = core_local.current_pd_ref();
             let caller_pku_key = caller_pd.pku_key;
 
-            crate::serial_println!("[kernel.memlend.map.begin] cap_slot={}", cap_slot);
+            crate::memory::allocator::diet_memlend_log(cap_slot as u64, 0);
             match caller_pd.find_capability(cap_slot) {
                 Some(cap) => {
                     if let CapabilityData::MemLend(data) = cap.data {
@@ -511,7 +511,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                                             | PageTableFlags::WRITABLE
                                             | PageTableFlags::USER_ACCESSIBLE;
                                         if gvas.map_physical_range(VirtAddr::new(va), data.base, data.length, flags, caller_pku_key).is_ok() {
-                                            crate::serial_println!("[kernel.memlend.map.ok] va={:#x} len={}", va, data.length);
+                                            crate::memory::allocator::diet_memlend_log(va, data.length);
                                             va
                                         } else {
                                             crate::serial_println!("[kernel.memlend.map.err] reason=map_fail");

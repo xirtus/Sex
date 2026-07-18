@@ -2,6 +2,19 @@ use crate::pdx::{pdx_listen_raw, pdx_reply, serial_println};
 use crate::messages;
 use crate::vfs;
 
+
+// SERIAL_DIET_V1: shared budget for hot-loop diagnostics. Early boot keeps
+// the full trace (first 120 lines); steady-state loops go quiet so
+// serial VM-exits stop dominating wall clock. Error and gate-required
+// markers are NOT routed through this.
+static mut HOT_LOG_BUDGET: u32 = 120;
+#[inline(always)]
+fn hot_log() -> bool {
+    unsafe {
+        if HOT_LOG_BUDGET > 0 { HOT_LOG_BUDGET -= 1; true } else { false }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn trampoline_main() {
     serial_println!("[sexfiles.trampoline.enter] ok=1");
@@ -218,7 +231,7 @@ pub extern "C" fn trampoline_main() {
         unsafe {
             if SEXFILES_TRAMP_LISTEN_BUDGET > 0 {
                 SEXFILES_TRAMP_LISTEN_BUDGET -= 1;
-                serial_println!("[sexfiles.trampoline.listen.enter]");
+                if hot_log() { serial_println!("[sexfiles.trampoline.listen.enter]"); }
             }
         }
         // SEXFILES_DEFER_V1: drain requests stashed by nested reply-wait
@@ -236,14 +249,14 @@ pub extern "C" fn trampoline_main() {
             arg0: msg_a0, arg1: msg_a1, arg2: msg_a2,
         };
         let caller = msg.caller_pd;
-        serial_println!(
+        if hot_log() { serial_println!(
             "[sexfiles.trampoline.after_listen] type={:#x} caller={} a0={:#x} a1={:#x}",
             msg.type_id, caller, msg.arg0, msg.arg1
-        );
-        serial_println!(
+        ); }
+        if hot_log() { serial_println!(
             "[sexfiles.route.recv] type={:#x} caller={} a0={:#x} a1={:#x}",
             msg.type_id, caller, msg.arg0, msg.arg1
-        );
+        ); }
 
         // Route message type_id to VFS handler, passing caller PD for namespace/cap check
         let reply = vfs::handle_vfs_message(msg.type_id, msg.arg0, msg.arg1, msg.arg2, caller);
