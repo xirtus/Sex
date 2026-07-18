@@ -61,6 +61,54 @@ static mut QUIL_BUFFER_LEN: usize = 0;
 /// QUIL_EDITOR_V1: true when the buffer has unsaved edits. Cleared on
 /// save/load/new; shown as '*' in the status line.
 static mut QUIL_DIRTY: bool = false;
+/// QUIL_TEXT_V3: viewport top display-line (follow-cursor scrolling).
+static mut QUIL_VIEW_TOP: usize = 0;
+/// QUIL_TEXT_V3: goal column for Up/Down (sticky column across short lines).
+/// usize::MAX = "recompute from the current cursor position".
+static mut QUIL_GOAL_COL: usize = usize::MAX;
+
+/// QUIL_TEXT_V3: display-line layout — mirrors sexdisplay TEXT_MODEL_V2
+/// (split on '\n', wrap at 80 cols). Returns line count; starts[i] = byte
+/// offset of display line i. Byte == char: this editor is ASCII-only
+/// (scancode_to_char emits ASCII; sanitizers strip the rest).
+const QUIL_VIEW_COLS: usize = 80;
+const QUIL_VIEW_ROWS: usize = 22;
+const QUIL_MAX_DISPLAY_LINES: usize = QUIL_BUFFER_MAX_LEN + 1;
+
+fn quil_layout(buf: &[u8], starts: &mut [u16; QUIL_MAX_DISPLAY_LINES]) -> usize {
+    let mut count = 1usize;
+    starts[0] = 0;
+    let mut col = 0usize;
+    let mut i = 0usize;
+    while i < buf.len() {
+        let c = buf[i];
+        i += 1;
+        if c == b'\n' {
+            if count >= QUIL_MAX_DISPLAY_LINES { break; }
+            starts[count] = i as u16;
+            count += 1;
+            col = 0;
+        } else {
+            col += 1;
+            if col >= QUIL_VIEW_COLS && i < buf.len() {
+                if count >= QUIL_MAX_DISPLAY_LINES { break; }
+                starts[count] = i as u16;
+                count += 1;
+                col = 0;
+            }
+        }
+    }
+    count
+}
+
+/// Display line index containing byte offset `pos`.
+fn quil_line_of(starts: &[u16; QUIL_MAX_DISPLAY_LINES], count: usize, pos: usize) -> usize {
+    let mut line = 0;
+    for i in 0..count {
+        if (starts[i] as usize) <= pos { line = i; } else { break; }
+    }
+    line
+}
 static mut QUIL_CURSOR_POS: usize = 0;
 static mut QUIL_SEL_START: usize = 0;
 static mut QUIL_SEL_END: usize = 0;
@@ -438,6 +486,44 @@ fn draw_title_bar() {
     );
 }
 
+/// QUIL_TEXT_V3: move the cursor one display line up (dir=-1) or down
+/// (dir=1), keeping a sticky goal column across shorter lines.
+unsafe fn quil_cursor_vertical(dir: i32) {
+    let mut starts = [0u16; QUIL_MAX_DISPLAY_LINES];
+    let count = quil_layout(&QUIL_BUFFER[..QUIL_BUFFER_LEN], &mut starts);
+    let line = quil_line_of(&starts, count, QUIL_CURSOR_POS);
+    let line_start = starts[line] as usize;
+    let cur_col = QUIL_CURSOR_POS - line_start;
+    if QUIL_GOAL_COL == usize::MAX { QUIL_GOAL_COL = cur_col; }
+    let target = if dir < 0 {
+        if line == 0 {
+            serial_println!("[quil.cursor.move] dir=up ok=0 reason=first_line");
+            return;
+        }
+        line - 1
+    } else {
+        if line + 1 >= count {
+            serial_println!("[quil.cursor.move] dir=down ok=0 reason=last_line");
+            return;
+        }
+        line + 1
+    };
+    let t_start = starts[target] as usize;
+    let t_end = if target + 1 < count {
+        // exclude the '\n' separator (cursor lands before it)
+        let e = starts[target + 1] as usize;
+        if e > t_start && QUIL_BUFFER[e - 1] == b'\n' { e - 1 } else { e }
+    } else {
+        QUIL_BUFFER_LEN
+    };
+    let t_len = t_end - t_start;
+    let old = QUIL_CURSOR_POS;
+    QUIL_CURSOR_POS = t_start + QUIL_GOAL_COL.min(t_len);
+    serial_println!("[quil.cursor.move] old={} new={} len={} dir={} ok=1",
+        old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN, if dir < 0 { "up" } else { "down" });
+    draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+}
+
 /// Draw text buffer lines as actual glyphs via OP_TEXT_DRAW (0xFB) to sexdisplay.
 /// Lines are split on \n, padded to QUIL_TEXT_CHARS_PER_LINE, and sent in 8-byte chunks.
 /// Text color: bright cyan (0x00E0F0FF) over the dark slate background.
@@ -462,8 +548,7 @@ fn draw_text_lines(buf: &[u8]) {
     // at 24 rows; content beyond that is reported via the overflow marker.
     let mut line_buf: [u8; 512] = [0u8; 512];
     // QUIL_EDITOR_V1: status line prepended in the DISPLAY copy only (never
-    // persisted): "N-V1 <len>B" plus '*' when dirty. Doc name is the fixed
-    // DiskFS object (/disk/quil-object-v1, path_id 2).
+    // persisted): "N-V1 <len>B" plus '*' when dirty.
     let mut sp = 0usize;
     for &b in b"N-V1 " { line_buf[sp] = b; sp += 1; }
     let blen = buf.len();
@@ -474,9 +559,41 @@ fn draw_text_lines(buf: &[u8]) {
     if unsafe { QUIL_DIRTY } { line_buf[sp] = b'*'; sp += 1; }
     line_buf[sp] = b'\n'; sp += 1;
 
-    let total = buf.len().min(512 - sp);
-    line_buf[sp..sp + total].copy_from_slice(&buf[..total]);
-    let mut total_written = sp + total;
+    // QUIL_TEXT_V3: viewport (follow-cursor) + caret ('#', display-only).
+    // Layout mirrors sexdisplay wrap; the visible window is
+    // QUIL_VIEW_ROWS display lines starting at QUIL_VIEW_TOP.
+    let (view_start, view_end, cursor, vtop) = unsafe {
+        let mut starts = [0u16; QUIL_MAX_DISPLAY_LINES];
+        let count = quil_layout(buf, &mut starts);
+        let cline = quil_line_of(&starts, count, QUIL_CURSOR_POS.min(buf.len()));
+        if cline < QUIL_VIEW_TOP { QUIL_VIEW_TOP = cline; }
+        if cline >= QUIL_VIEW_TOP + QUIL_VIEW_ROWS {
+            QUIL_VIEW_TOP = cline + 1 - QUIL_VIEW_ROWS;
+        }
+        if QUIL_VIEW_TOP >= count { QUIL_VIEW_TOP = count.saturating_sub(1); }
+        let vs = starts[QUIL_VIEW_TOP.min(count - 1)] as usize;
+        let ve = if QUIL_VIEW_TOP + QUIL_VIEW_ROWS < count {
+            starts[QUIL_VIEW_TOP + QUIL_VIEW_ROWS] as usize
+        } else {
+            buf.len()
+        };
+        (vs, ve, QUIL_CURSOR_POS.min(buf.len()), QUIL_VIEW_TOP)
+    };
+    serial_println!("[quil.view] top={} cursor={} win={}..{}", vtop, cursor, view_start, view_end);
+
+    let mut total_written = sp;
+    let mut i = view_start;
+    while i <= view_end && total_written < 512 {
+        if i == cursor && total_written < 512 {
+            line_buf[total_written] = b'#'; // caret (display-only)
+            total_written += 1;
+        }
+        if i < view_end && total_written < 512 {
+            line_buf[total_written] = buf[i];
+            total_written += 1;
+        }
+        i += 1;
+    }
 
     // QUIL_TEXT_BUFFER_STUB_V1: keep surface text_len above sexdisplay's
     // per-0xFB diagnostic threshold (fires while text_len <= 32). Pad with
@@ -746,11 +863,20 @@ fn text_buffer_append(ch: u8) -> bool {
         if ch < 0x20 && ch != b'\n' {
             return false;
         }
-        QUIL_BUFFER[QUIL_BUFFER_LEN] = ch;
+        // QUIL_TEXT_V3: insert AT the cursor (shift tail right).
+        if QUIL_CURSOR_POS > QUIL_BUFFER_LEN { QUIL_CURSOR_POS = QUIL_BUFFER_LEN; }
+        let mut i = QUIL_BUFFER_LEN;
+        while i > QUIL_CURSOR_POS {
+            QUIL_BUFFER[i] = QUIL_BUFFER[i - 1];
+            i -= 1;
+        }
+        QUIL_BUFFER[QUIL_CURSOR_POS] = ch;
         QUIL_BUFFER_LEN += 1;
+        QUIL_CURSOR_POS += 1;
+        QUIL_GOAL_COL = usize::MAX;
         QUIL_DIRTY = true;
-        serial_println!("[quil.text.append] len={} ch={}",
-            QUIL_BUFFER_LEN, ch as char as u32);
+        serial_println!("[quil.text.append] len={} ch={} at={}",
+            QUIL_BUFFER_LEN, ch as char as u32, QUIL_CURSOR_POS - 1);
         true
     }
 }
@@ -760,16 +886,26 @@ fn text_buffer_append(ch: u8) -> bool {
 fn text_buffer_backspace() -> bool {
     text_buffer_undo_push();
     unsafe {
-        if QUIL_BUFFER_LEN == 0 {
-            serial_println!("[quil.text.backspace] old=0 new=0 ok=0 reason=empty");
+        // QUIL_TEXT_V3: delete the byte BEFORE the cursor (shift tail left).
+        // Deleting a '\n' this way joins lines — that is the intended
+        // across-newline behavior.
+        if QUIL_CURSOR_POS > QUIL_BUFFER_LEN { QUIL_CURSOR_POS = QUIL_BUFFER_LEN; }
+        if QUIL_BUFFER_LEN == 0 || QUIL_CURSOR_POS == 0 {
+            serial_println!("[quil.text.backspace] old={} new={} ok=0 reason=at_start",
+                QUIL_BUFFER_LEN, QUIL_BUFFER_LEN);
             return false;
         }
         let old = QUIL_BUFFER_LEN;
+        for i in QUIL_CURSOR_POS - 1..QUIL_BUFFER_LEN - 1 {
+            QUIL_BUFFER[i] = QUIL_BUFFER[i + 1];
+        }
         QUIL_BUFFER_LEN -= 1;
+        QUIL_CURSOR_POS -= 1;
         QUIL_BUFFER[QUIL_BUFFER_LEN] = 0;
+        QUIL_GOAL_COL = usize::MAX;
         QUIL_DIRTY = true;
-        serial_println!("[quil.text.backspace] old={} new={} ok=1",
-            old, QUIL_BUFFER_LEN);
+        serial_println!("[quil.text.backspace] old={} new={} at={} ok=1",
+            old, QUIL_BUFFER_LEN, QUIL_CURSOR_POS);
         true
     }
 }
@@ -784,12 +920,21 @@ fn text_buffer_newline() -> bool {
                 QUIL_BUFFER_LEN);
             return false;
         }
-        let line_count = text_buffer_line_count(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
-        QUIL_BUFFER[QUIL_BUFFER_LEN] = b'\n';
+        // QUIL_TEXT_V3: insert the newline AT the cursor.
+        if QUIL_CURSOR_POS > QUIL_BUFFER_LEN { QUIL_CURSOR_POS = QUIL_BUFFER_LEN; }
+        let mut i = QUIL_BUFFER_LEN;
+        while i > QUIL_CURSOR_POS {
+            QUIL_BUFFER[i] = QUIL_BUFFER[i - 1];
+            i -= 1;
+        }
+        QUIL_BUFFER[QUIL_CURSOR_POS] = b'\n';
         QUIL_BUFFER_LEN += 1;
+        QUIL_CURSOR_POS += 1;
+        QUIL_GOAL_COL = usize::MAX;
         QUIL_DIRTY = true;
-        serial_println!("[quil.text.enter] line={} len={} ok=1",
-            line_count + 1, QUIL_BUFFER_LEN);
+        let line_count = text_buffer_line_count(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+        serial_println!("[quil.text.enter] line={} len={} at={} ok=1",
+            line_count, QUIL_BUFFER_LEN, QUIL_CURSOR_POS - 1);
         true
     }
 }
@@ -1603,7 +1748,13 @@ fn quil_persist_save() -> Result<usize, i64> {
             off += 16;
         }
         QUIL_DIRTY = false;
-        serial_println!("[quil.persist.save.ok] bytes={}", len);
+        // FNV-1a over the saved bytes — lets gates assert EXACT content.
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for i in 0..len {
+            h ^= QUIL_BUFFER[i] as u64;
+            h = h.wrapping_mul(0x100_0000_01b3);
+        }
+        serial_println!("[quil.persist.save.ok] bytes={} hash={:#x}", len, h);
         Ok(len)
     }
 }
@@ -1682,7 +1833,9 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                         old, *selected_row, QUIL_ROWS);
                     draw_palette(*selected_row);
                 } else {
-                    serial_println!("[quil.palette.reject] action=up reason=inactive");
+                    // QUIL_TEXT_V3: Up in text mode — previous display line,
+                    // sticky goal column.
+                    unsafe { quil_cursor_vertical(-1); }
                 }
             }
             2 => { // Down
@@ -1693,7 +1846,8 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                         old, *selected_row, QUIL_ROWS);
                     draw_palette(*selected_row);
                 } else {
-                    serial_println!("[quil.palette.reject] action=down reason=inactive");
+                    // QUIL_TEXT_V3: Down in text mode — next display line.
+                    unsafe { quil_cursor_vertical(1); }
                 }
             }
             3 => { // Enter
@@ -1813,8 +1967,10 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                         unsafe {
                             let old = QUIL_CURSOR_POS;
                             if QUIL_CURSOR_POS > 0 { QUIL_CURSOR_POS -= 1; }
+                            QUIL_GOAL_COL = usize::MAX; // recompute from new pos
                             serial_println!("[quil.cursor.move] old={} new={} len={} dir=left ok=1",
                                 old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN);
+                            draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
                         }
                     // Cursor right (scancode 0x4D = right arrow)
                     } else if scancode == 0x4D {
@@ -1822,25 +1978,35 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                         unsafe {
                             let old = QUIL_CURSOR_POS;
                             if QUIL_CURSOR_POS < QUIL_BUFFER_LEN { QUIL_CURSOR_POS += 1; }
+                            QUIL_GOAL_COL = usize::MAX;
                             serial_println!("[quil.cursor.move] old={} new={} len={} dir=right ok=1",
                                 old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN);
+                            draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
                         }
                     // Home (scancode 0x47 = Home, or 0x147 for extended)
                     } else if scancode == 0x47 {
                         unsafe {
                             let old = QUIL_CURSOR_POS;
                             QUIL_CURSOR_POS = 0;
+                            QUIL_GOAL_COL = usize::MAX;
                             serial_println!("[quil.cursor.move] old={} new=0 len={} dir=home ok=1",
                                 old, QUIL_BUFFER_LEN);
+                            draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
                         }
                     // End (scancode 0x4F)
                     } else if scancode == 0x4F {
                         unsafe {
                             let old = QUIL_CURSOR_POS;
                             QUIL_CURSOR_POS = QUIL_BUFFER_LEN;
+                            QUIL_GOAL_COL = usize::MAX;
                             serial_println!("[quil.cursor.move] old={} new={} len={} dir=end ok=1",
                                 old, QUIL_CURSOR_POS, QUIL_BUFFER_LEN);
+                            draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
                         }
+                    // Delete (scancode 0x53) — delete AT cursor
+                    } else if scancode == 0x53 {
+                        text_buffer_delete_char();
+                        unsafe { draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]); }
                     } else if let Some(ch) = scancode_to_char(scancode, unsafe { SHIFT_HELD }) {
                         serial_println!("[quil.text.recv] code={} ch={}", scancode, ch);
                         text_buffer_append(ch);
