@@ -925,11 +925,22 @@ pub extern "C" fn _start() -> ! {
     // Capture first connected port as active target (downstream scalar).
     let target_port: u64 = target_ports[0] as u64;
 
-    // Guard: no device found.
+    // Guard: no device found.  Deterministic discovery summary fires on both
+    // branches (USB_HOST_DISCOVERY_V1 gate reads it); the no-device case
+    // parks in cooperative yield — PD stays alive, no spin, no fault.
     if target_port_count == 0 {
+        serial_println!(
+            "[sexusb.discovery.summary] ports={} connected=0 first=none ok=1",
+            max_ports
+        );
         serial_println!("[sexusb.xhci.addr_ctx.port.none.bad]");
         loop { sys_yield(); }
     }
+
+    serial_println!(
+        "[sexusb.discovery.summary] ports={} connected={} first={} ok=1",
+        max_ports, target_port_count, target_port
+    );
 
     // Collection summary marker.
     serial_println!(

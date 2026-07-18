@@ -1974,61 +1974,98 @@ unsafe fn restore_history(_hist: &mut History) -> u32 {
 // shell-owned frame sid 0x99 is untouched; this PD owns its own content
 // surface, so sexdisplay's per-op ownership checks pass. sexdisplay wraps
 // surface text at 20 chars/line (5x7 glyphs, 128-byte buffer → 6 rows).
-const CONTENT_SID: u64 = 0x9A; // 154 — free in shell + display registries
-const CONTENT_X: i32 = 1072;
-const CONTENT_Y: i32 = 660;
-const CONTENT_W: u32 = 200;
-const CONTENT_H: u32 = 104;
-const CONTENT_COLS: usize = 20; // sexdisplay CHARS_PER_LINE
-const CONTENT_ROWS: usize = 6;  // 120 of the 128 text bytes used
+// sexdisplay hard limits: 20 chars/line wrap, 128-byte text_buf per
+// surface, MAX_SURFACES=16 slot table. The expanded terminal is therefore
+// a 2x2 band of owned surfaces — 40 cols x 12 rows total, 20x6 per
+// surface. This PD holds 4 of the 16 slots (system steady state ~13);
+// do not add more surfaces without re-auditing slot pressure.
+const CONTENT_SID: u64 = 0x9A; // 154 — band 0 left; lane markers key on it
+const GRID_SIDS: [u64; 4] = [0x9A, 0xA0, 0xA1, 0xA2]; // 154,160,161,162
+const SURF_COLS: usize = 20; // sexdisplay CHARS_PER_LINE
+const SURF_ROWS: usize = 6;  // 120 of the 128 text bytes used
+const GRID_SURF_X: usize = 2; // surfaces per band
+const GRID_SURF_Y: usize = 2; // bands
+const GRID_COLS: usize = SURF_COLS * GRID_SURF_X; // 40
+const GRID_ROWS: usize = SURF_ROWS * GRID_SURF_Y; // 12
+const SURF_W: u32 = 132; // 8px text inset + 20 glyph cells * 6px
+const SURF_H: u32 = 80;  // 24px chrome inset + 6 lines * 9px
+const GRID_X0: i32 = 1008; // 264x160 footprint, bottom-right of 1280x800
+const GRID_Y0: i32 = 632;
 const CONTENT_TEXT_COLOR: u64 = 0x00E8FFFF;
 
-/// Push the full 6x20 text grid to sexdisplay. Chunks go highest offset
-/// first so text_len jumps past sexdisplay's <=32 per-draw diagnostic
-/// threshold on the very first write — zero per-frame serial output there.
-unsafe fn content_flush(grid: &[u8; CONTENT_COLS * CONTENT_ROWS]) {
-    pdx_call(SLOT_DISPLAY, 0xFA, CONTENT_SID, 0, 0);
-    let mut c = CONTENT_COLS * CONTENT_ROWS / 8;
+/// Per-surface subgrid cache for dirty-diffing: a plain keystroke only
+/// reflushes the prompt-band surface it lands in; Enter/scroll reflushes
+/// all four. Zero-init (not 0x20) so the first render flushes everything.
+static mut GRID_PREV: [[u8; SURF_COLS * SURF_ROWS]; GRID_SURF_X * GRID_SURF_Y] =
+    [[0u8; SURF_COLS * SURF_ROWS]; GRID_SURF_X * GRID_SURF_Y];
+
+/// Push one surface's 6x20 text subgrid to sexdisplay. Chunks go highest
+/// offset first so text_len jumps past sexdisplay's <=32 per-draw
+/// diagnostic threshold on the very first write — zero per-frame serial
+/// output there.
+unsafe fn surf_flush(sid: u64, sub: &[u8; SURF_COLS * SURF_ROWS]) {
+    pdx_call(SLOT_DISPLAY, 0xFA, sid, 0, 0);
+    let mut c = SURF_COLS * SURF_ROWS / 8;
     while c > 0 {
         c -= 1;
         let off = c * 8;
         let mut packed: u64 = 0;
         let mut i = 0;
         while i < 8 {
-            packed |= (grid[off + i] as u64) << (i * 8);
+            packed |= (sub[off + i] as u64) << (i * 8);
             i += 1;
         }
-        pdx_call(SLOT_DISPLAY, 0xFB, CONTENT_SID, packed,
+        pdx_call(SLOT_DISPLAY, 0xFB, sid, packed,
             off as u64 | (8u64 << 8) | (CONTENT_TEXT_COLOR << 32));
     }
 }
 
-/// Render scrollback tail (rows 0-4, bottom-aligned) plus the live prompt
-/// line (row 5) into the content surface. Frame marker is budgeted.
+/// Render scrollback tail (rows 0-10, bottom-aligned) plus the live prompt
+/// line (row 11) across the 2x2 surface grid. Only dirty surfaces flush.
 unsafe fn content_render(line: &CmdLine, sb: &Scrollback) {
-    let mut grid = [0x20u8; CONTENT_COLS * CONTENT_ROWS];
-    let avail = (sb.total_lines as usize).min(CONTENT_ROWS - 1);
+    let mut grid = [0x20u8; GRID_COLS * GRID_ROWS];
+    let avail = (sb.total_lines as usize).min(GRID_ROWS - 1);
     let mut r = 0;
     while r < avail {
         let line_idx = sb.total_lines as usize - avail + r;
         let src = sb.get(line_idx % MAX_SCROLLBACK);
-        let n = src.len().min(CONTENT_COLS);
-        let dst = (CONTENT_ROWS - 1 - avail + r) * CONTENT_COLS;
+        let n = src.len().min(GRID_COLS);
+        let dst = (GRID_ROWS - 1 - avail + r) * GRID_COLS;
         grid[dst..dst + n].copy_from_slice(&src[..n]);
         r += 1;
     }
-    let prow = (CONTENT_ROWS - 1) * CONTENT_COLS;
+    let prow = (GRID_ROWS - 1) * GRID_COLS;
     grid[prow] = b'>';
     let lb = line.as_bytes();
-    let vis = lb.len().min(CONTENT_COLS - 2);
+    let vis = lb.len().min(GRID_COLS - 2);
     let start = lb.len() - vis;
     grid[prow + 2..prow + 2 + vis].copy_from_slice(&lb[start..]);
-    content_flush(&grid);
+
+    let mut flushed = 0u32;
+    let mut s = 0;
+    while s < GRID_SURF_X * GRID_SURF_Y {
+        let band = s / GRID_SURF_X;
+        let half = s % GRID_SURF_X;
+        let mut sub = [0x20u8; SURF_COLS * SURF_ROWS];
+        let mut row = 0;
+        while row < SURF_ROWS {
+            let goff = (band * SURF_ROWS + row) * GRID_COLS + half * SURF_COLS;
+            sub[row * SURF_COLS..(row + 1) * SURF_COLS]
+                .copy_from_slice(&grid[goff..goff + SURF_COLS]);
+            row += 1;
+        }
+        if sub != GRID_PREV[s] {
+            GRID_PREV[s] = sub;
+            surf_flush(GRID_SIDS[s], &sub);
+            flushed += 1;
+        }
+        s += 1;
+    }
     static mut FRAME_BUDGET: u32 = 8;
-    if FRAME_BUDGET > 0 {
+    if flushed > 0 && FRAME_BUDGET > 0 {
         FRAME_BUDGET -= 1;
-        serial_println!("[spindle.render.frame.ok] sid={} cols={} rows={}",
-            CONTENT_SID, CONTENT_COLS, CONTENT_ROWS);
+        serial_println!("[spindle.grid.render.ok] cols={} rows={} surfaces={}",
+            GRID_COLS, GRID_ROWS, GRID_SURF_X * GRID_SURF_Y);
     }
 }
 
@@ -2389,10 +2426,20 @@ pub extern "C" fn _start() -> ! {
 
     // ── Visible content surface bring-up (proven 0xEC/0xFA/0xFB route) ──
     serial_println!("[spindle.surface.create.begin]");
-    let (create_status, _) = pdx_call(SLOT_DISPLAY, 0xEC, CONTENT_SID,
-        ((CONTENT_Y as u64) << 32) | (CONTENT_X as u64 & 0xFFFF_FFFF),
-        ((CONTENT_H as u64) << 32) | CONTENT_W as u64);
-    serial_println!("[spindle.surface.create.ok] sid={} status={}", CONTENT_SID, create_status);
+    serial_println!("[spindle.grid.expand.begin]");
+    let mut si = 0;
+    while si < GRID_SURF_X * GRID_SURF_Y {
+        let sx = GRID_X0 + (si % GRID_SURF_X) as i32 * SURF_W as i32;
+        let sy = GRID_Y0 + (si / GRID_SURF_X) as i32 * SURF_H as i32;
+        let (create_status, _) = pdx_call(SLOT_DISPLAY, 0xEC, GRID_SIDS[si],
+            ((sy as u64) << 32) | (sx as u64 & 0xFFFF_FFFF),
+            ((SURF_H as u64) << 32) | SURF_W as u64);
+        serial_println!("[spindle.grid.surface.ok] sid={} idx={}", GRID_SIDS[si], si);
+        if si == 0 {
+            serial_println!("[spindle.surface.create.ok] sid={} status={}", CONTENT_SID, create_status);
+        }
+        si += 1;
+    }
     if sb.total_lines == 0 {
         sb.push(b"SPINDLE TERMINAL");
         sb.push(b"TYPE HELP");

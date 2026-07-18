@@ -171,7 +171,9 @@ noise_linen=$(noise_true_count 'linen.session.reject' "$(count_marker '[linen.se
 noise_yield=$(noise_true_count 'scheduler.yield' "$sched_yield")
 
 # ── 11. fault scan ──
-pf=$(grep -c '#PF' "$LOG")
+# Kernel prints "EXCEPTION: PAGE FAULT" / "KERNEL PAGE FAULT HALT", not "#PF"
+# (2026-07-02: a real kernel PF passed faultscan because of this).
+pf=$(grep -Ec '#PF|PAGE FAULT' "$LOG")
 gp=$(grep -c '#GP' "$LOG")
 panic=$(grep -ci 'panic' "$LOG")
 fkill=$(grep -c 'fault\.kill' "$LOG")
@@ -238,6 +240,15 @@ fi
 if [ -n "$bad" ]; then
     echo "PERF_BISECTION_GATE_V1: BAD ($bad)"
     exit 1
+fi
+
+# ── 125: unmeasurable ratios must not report GOOD ──
+# INPUT_CURSOR_DRAIN_COHERENCE_V1: a run where the shell sent cursor updates
+# but the display recv/draw/present sample is empty (all ratios na) proves
+# nothing — bisect must skip it, not bless it.
+if [ "$ratio_send_to_recv" = "na" ] && [ "$ratio_recv_to_draw" = "na" ]; then
+    echo "PERF_BISECTION_GATE_V1: UNTESTABLE (display trace sample empty — ratios unmeasurable)"
+    exit 125
 fi
 
 echo "PERF_BISECTION_GATE_V1: GOOD"

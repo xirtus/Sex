@@ -45,8 +45,25 @@ row drag_begin               '\[silk\.drag\.begin\.ok\]'
 row drag_move                '\[silk\.drag\.move\.ok\]'
 row drag_end                 '\[silk\.drag\.end\.ok\]'
 
+# SILK_WINDOW_MOVE_TEXT_INPUT_CURRENT_TIER_V1 markers
+row silk_focus_click         '\[silk\.focus\.click\] surface=[0-9]+ ok=1'
+row silk_drag_begin          '\[silk\.drag\.begin\] surface='
+row silk_drag_move           '\[silk\.drag\.move\] surface=.*clamped='
+row silk_drag_end            '\[silk\.drag\.end\] surface='
+row window_move_proof_done   '\[silk\.window\.move\.proof\.done\] ok=1'
+row silk_key_route           '\[silk\.key\.route\] surface='
+row silk_text_append         '\[silk\.text\.append\] surface='
+row silk_text_backspace      '\[silk\.text\.backspace\] surface='
+row silk_text_draw           '\[silk\.text\.draw\] surface='
+row text_input_proof_done    '\[silk\.text\.input\.proof\.done\] ok=1'
+row silk_drag_reject_neg     '\[silk\.drag\.reject\] reason=no_surface ok=1'
+row silk_key_reject_neg      '\[silk\.key\.reject\] reason=no_focus ok=1'
+row silk_focus_reject_neg    '\[silk\.focus\.reject\] reason=invalid_surface ok=1'
+
 # Fault scan
-pf=$(grep -c '#PF' "$LOG")
+# Kernel prints "EXCEPTION: PAGE FAULT" / "KERNEL PAGE FAULT HALT", not "#PF"
+# (2026-07-02: a real kernel PF passed faultscan because of this).
+pf=$(grep -Ec '#PF|PAGE FAULT' "$LOG")
 gp=$(grep -c '#GP' "$LOG")
 panic=$(grep -ci 'panic' "$LOG")
 fkill=$(grep -c 'fault\.kill' "$LOG")

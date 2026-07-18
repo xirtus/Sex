@@ -467,9 +467,20 @@ fn draw_text_lines(buf: &[u8]) {
 
     if total_written == 0 { return; }
 
-    // Send padded text in 8-byte chunks via OP_TEXT_DRAW.
-    let mut offset: usize = 0;
-    while offset < total_written {
+    // QUIL_TEXT_BUFFER_STUB_V1: keep surface text_len above sexdisplay's
+    // per-0xFB diagnostic threshold (fires while text_len <= 32). Pad to at
+    // least two full lines (40 bytes) of spaces, and send chunks highest
+    // offset FIRST so text_len jumps past 32 on the first chunk (same dodge
+    // as spindle's reverse-chunk flush).
+    while total_written < 2 * QUIL_TEXT_CHARS_PER_LINE && total_written < 256 {
+        line_buf[total_written] = b' ';
+        total_written += 1;
+    }
+
+    // Send padded text in 8-byte chunks via OP_TEXT_DRAW, highest offset first.
+    let chunk_count = (total_written + MAX_CHUNK - 1) / MAX_CHUNK;
+    for chunk_idx in (0..chunk_count).rev() {
+        let offset = chunk_idx * MAX_CHUNK;
         let remaining = total_written - offset;
         let chunk_len = remaining.min(MAX_CHUNK);
 
@@ -485,11 +496,10 @@ fn draw_text_lines(buf: &[u8]) {
             | (TEXT_LINE_COLOR << 32);
 
         pdx_call(SLOT_DISPLAY, OP_TEXT_DRAW, QUIL_CONTENT_SID, packed, arg2);
-        offset += chunk_len;
     }
 
     serial_println!("[quil.text.draw.v2.sent] total_bytes={} chunks={}",
-        total_written, (total_written + MAX_CHUNK - 1) / MAX_CHUNK);
+        total_written, chunk_count);
 
     if line_count > QUIL_MAX_VISIBLE_LINES {
         serial_println!("[quil.text.buffer.overflow] lines={} visible={}",

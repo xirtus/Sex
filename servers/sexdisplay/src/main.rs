@@ -1336,7 +1336,7 @@ fn render(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     }
     draw_atlas_cards_pass(fb, w, h, total_pixels);
     draw_atlas_frame_previews_pass(fb, w, h, total_pixels);
-    draw_cursor_z_top(fb, w, h, total_pixels);
+    draw_cursor_z_top(fb, w, h, total_pixels, true);
     draw_launcher_panel(fb, w, h, total_pixels);
 }
 
@@ -1556,7 +1556,10 @@ fn redraw_top_strip(fb: *mut u32, w: usize, h: usize, bar: &SilkBar) {
     // the top chrome.
     draw_atlas_cards_pass(fb, w, h, total_pixels);
     draw_atlas_frame_previews_pass(fb, w, h, total_pixels);
-    draw_cursor_z_top(fb, w, h, total_pixels);
+    // save_under=false: this path repaints only y<50; pixels under the
+    // cursor (y>=51) still contain the drawn cursor — capturing here would
+    // poison the save-under patch with cursor pixels.
+    draw_cursor_z_top(fb, w, h, total_pixels, false);
     draw_launcher_panel(fb, w, h, total_pixels);
 }
 
@@ -1596,7 +1599,7 @@ fn redraw_surface_area(fb: *mut u32, w: usize, h: usize) {
     }
     draw_atlas_cards_pass(fb, w, h, total_pixels);
     draw_atlas_frame_previews_pass(fb, w, h, total_pixels);
-    draw_cursor_z_top(fb, w, h, total_pixels);
+    draw_cursor_z_top(fb, w, h, total_pixels, true);
     draw_launcher_panel(fb, w, h, total_pixels);
 }
 
@@ -1623,6 +1626,45 @@ const CURSOR_ARROW_BITMAP: [u8; 16] = [
     0b00000011, //        **
     0b00000001, //         *
 ];
+
+/// INPUT_CURSOR_DRAIN_COHERENCE_V1: save-under patch for the cursor-only
+/// fast path. Holds the framebuffer pixels beneath the last cursor draw so
+/// a cursor-only move can restore + redraw the 8x16 rect instead of running
+/// a full redraw_surface_area() composite. Local sexdisplay state — no
+/// shared memory, no backing-buffer redesign, no ABI change.
+static mut CURSOR_UNDER_SAVED: [u32; CURSOR_ARROW_W * CURSOR_ARROW_H] =
+    [0; CURSOR_ARROW_W * CURSOR_ARROW_H];
+static mut CURSOR_UNDER_X: usize = 0;
+static mut CURSOR_UNDER_Y: usize = 0;
+static mut CURSOR_UNDER_VALID: bool = false;
+
+/// Restore the framebuffer pixels saved beneath the last cursor draw.
+/// Mirrors draw_cursor_z_top bounds rules exactly: y<51 SilkBar zone never
+/// written, x/y clipped to fb dims, idx bounds-checked against total_pixels.
+fn restore_cursor_under(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
+    unsafe {
+        if !CURSOR_UNDER_VALID { return; }
+        let ox = CURSOR_UNDER_X;
+        let oy = CURSOR_UNDER_Y;
+        for row in 0..CURSOR_ARROW_H {
+            let py = oy + row;
+            if py >= h { break; }
+            if py < 51 { continue; } // never write into SilkBar zone (y<51)
+            for col in 0..CURSOR_ARROW_W {
+                let px = ox + col;
+                if px >= w { continue; }
+                let idx = py * w + px;
+                if idx < total_pixels {
+                    core::ptr::write_volatile(
+                        fb.add(idx),
+                        CURSOR_UNDER_SAVED[row * CURSOR_ARROW_W + col],
+                    );
+                }
+            }
+        }
+        CURSOR_UNDER_VALID = false;
+    }
+}
 
 /// Deterministic top-strip proof vector.
 /// Renders a fixed SilkBar state into a bounded offscreen buffer and hashes it.
@@ -1761,6 +1803,23 @@ static mut INPUT_TRACE_RECV: u32 = 0;
 static mut INPUT_TRACE_DRAWS: u32 = 0;
 static mut INPUT_TRACE_PRESENTS: u32 = 0;
 static mut INPUT_TRACE_DISPLAY_BUDGET_HIT: u32 = 0;
+/// INPUT_PRESENT_TICK_TRACE_V1: shell packs its local monotonic send tick
+/// into the unused high 32 bits of OP_SURFACE_UPDATE arg2 (y stays in low
+/// 32, extracted with `as i32` truncation — untagged senders leave high
+/// bits zero, reported as shell_tick=unknown). Display keeps its own local
+/// logical ticks: recv/draw/present counters (no time source, no ABI change).
+static mut INPUT_TRACE_LAST_SHELL_TICK: u32 = 0;
+static mut DISPLAY_RECV_TICK: u32 = 0;
+static mut DISPLAY_DRAW_TICK: u32 = 0;
+static mut DISPLAY_PRESENT_TICK: u32 = 0;
+/// INPUT_CURSOR_DRAIN_COHERENCE_V1: last seq counted as a draw/present.
+/// Draw/present counters advance only when the drawn seq is new — redundant
+/// same-position cursor repaints (clock top-strip, chrome redraws) present
+/// no new input state and previously inflated DISPLAY_DRAW_TICK with a
+/// boot-time offset that polluted recv_to_draw / total_logical deltas.
+/// Display-side coalescing stays visible: N recvs → one new-seq draw still
+/// measures N:1 in the recv_to_draw ratio.
+static mut LAST_COUNTED_DRAW_SEQ: u32 = 0;
 
 /// Emit the display trace summary (unbounded counters, budget-free marker).
 unsafe fn input_trace_display_summary() {
@@ -1774,7 +1833,12 @@ unsafe fn input_trace_display_summary() {
 /// Pass 3: draw cursor surface (CURSOR_SURFACE_ID) unconditionally on top of all other surfaces.
 /// Renders an arrow bitmap instead of a solid rect; transparent pixels are not written.
 /// Called at the end of both render() and redraw_surface_area().
-fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
+/// `save_under`: capture the pixels beneath the cursor rect before drawing,
+/// enabling the cursor-only fast path. Pass true only when the framebuffer
+/// under the cursor is current (freshly composited or just restored); pass
+/// false from redraw_top_strip, which repaints only y<50 and would capture
+/// cursor-contaminated pixels.
+fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save_under: bool) {
     unsafe {
         for surf in SURFACES.iter() {
             if !surf.active || surf.surface_id != CURSOR_SURFACE_ID { continue; }
@@ -1794,18 +1858,49 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
                 }
             }
             // INPUT_PRESENT_TRACE_V1: budgeted draw trace with last received seq.
+            // Counters advance only on input-driven (seq-advancing) draws —
+            // see LAST_COUNTED_DRAW_SEQ.
+            let input_seq_advanced = unsafe {
+                INPUT_TRACE_LAST_SEQ != 0 && INPUT_TRACE_LAST_SEQ != LAST_COUNTED_DRAW_SEQ
+            };
             unsafe {
+                if input_seq_advanced {
                 INPUT_TRACE_DRAWS = INPUT_TRACE_DRAWS.wrapping_add(1);
+                DISPLAY_DRAW_TICK = DISPLAY_DRAW_TICK.wrapping_add(1);
                 static mut INPUT_TRACE_DRAW_BUDGET: u32 = 32;
                 if INPUT_TRACE_DRAW_BUDGET > 0 {
                     INPUT_TRACE_DRAW_BUDGET -= 1;
-                    if INPUT_TRACE_LAST_SEQ != 0 {
-                        serial_println!("[input.trace.display.cursor.draw] seq={} x={} y={}", INPUT_TRACE_LAST_SEQ, ox as i32, oy as i32);
+                    if INPUT_TRACE_LAST_SEQ != 0 && INPUT_TRACE_LAST_SHELL_TICK != 0 {
+                        serial_println!("[input.trace.display.cursor.draw] seq={} shell_tick={} display_tick={} x={} y={}", INPUT_TRACE_LAST_SEQ, INPUT_TRACE_LAST_SHELL_TICK, DISPLAY_DRAW_TICK, ox as i32, oy as i32);
+                    } else if INPUT_TRACE_LAST_SEQ != 0 {
+                        serial_println!("[input.trace.display.cursor.draw] seq={} shell_tick=unknown display_tick={} x={} y={}", INPUT_TRACE_LAST_SEQ, DISPLAY_DRAW_TICK, ox as i32, oy as i32);
                     } else {
-                        serial_println!("[input.trace.display.cursor.draw] seq=unknown x={} y={}", ox as i32, oy as i32);
+                        serial_println!("[input.trace.display.cursor.draw] seq=unknown shell_tick=unknown display_tick={} x={} y={}", DISPLAY_DRAW_TICK, ox as i32, oy as i32);
                     }
                     if INPUT_TRACE_DRAW_BUDGET == 0 { INPUT_TRACE_DISPLAY_BUDGET_HIT = 1; }
                 }
+                }
+            }
+            // Save-under capture: full 8x16 rect, same clip rules as the
+            // arrow write loop below, read-only against the framebuffer.
+            if save_under {
+                CURSOR_UNDER_X = ox;
+                CURSOR_UNDER_Y = oy;
+                for row in 0..CURSOR_ARROW_H {
+                    let py = oy + row;
+                    if py >= h { break; }
+                    if py < 51 { continue; }
+                    for col in 0..CURSOR_ARROW_W {
+                        let px = ox + col;
+                        if px >= w { continue; }
+                        let idx = py * w + px;
+                        if idx < total_pixels {
+                            CURSOR_UNDER_SAVED[row * CURSOR_ARROW_W + col] =
+                                core::ptr::read_volatile(fb.add(idx));
+                        }
+                    }
+                }
+                CURSOR_UNDER_VALID = true;
             }
             for row in 0..CURSOR_ARROW_H {
                 let py = oy + row;
@@ -1824,19 +1919,27 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize) {
             }
             // INPUT_PRESENT_TRACE_V1: cursor pixels are now in the framebuffer
             // (direct write, no flip) — this is the present point.
+            // Same seq-advance gating as the draw counter above.
             unsafe {
+                if input_seq_advanced {
                 INPUT_TRACE_PRESENTS = INPUT_TRACE_PRESENTS.wrapping_add(1);
+                DISPLAY_PRESENT_TICK = DISPLAY_PRESENT_TICK.wrapping_add(1);
                 static mut INPUT_TRACE_PRESENT_BUDGET: u32 = 32;
                 if INPUT_TRACE_PRESENT_BUDGET > 0 {
                     INPUT_TRACE_PRESENT_BUDGET -= 1;
-                    if INPUT_TRACE_LAST_SEQ != 0 {
-                        serial_println!("[input.trace.display.present] seq={} x={} y={}", INPUT_TRACE_LAST_SEQ, ox as i32, oy as i32);
+                    if INPUT_TRACE_LAST_SEQ != 0 && INPUT_TRACE_LAST_SHELL_TICK != 0 {
+                        serial_println!("[input.trace.display.cursor.present] seq={} shell_tick={} display_tick={} x={} y={}", INPUT_TRACE_LAST_SEQ, INPUT_TRACE_LAST_SHELL_TICK, DISPLAY_PRESENT_TICK, ox as i32, oy as i32);
+                    } else if INPUT_TRACE_LAST_SEQ != 0 {
+                        serial_println!("[input.trace.display.cursor.present] seq={} shell_tick=unknown display_tick={} x={} y={}", INPUT_TRACE_LAST_SEQ, DISPLAY_PRESENT_TICK, ox as i32, oy as i32);
                     } else {
-                        serial_println!("[input.trace.display.present] seq=unknown x={} y={}", ox as i32, oy as i32);
+                        serial_println!("[input.trace.display.cursor.present] seq=unknown shell_tick=unknown display_tick={} x={} y={}", DISPLAY_PRESENT_TICK, ox as i32, oy as i32);
                     }
                 }
-                if INPUT_TRACE_PRESENTS == 4 || INPUT_TRACE_PRESENTS % 32 == 0 {
+                // Same tightened cadence as the recv summary above.
+                if INPUT_TRACE_PRESENTS == 4 || INPUT_TRACE_PRESENTS % 8 == 0 {
                     input_trace_display_summary();
+                }
+                LAST_COUNTED_DRAW_SEQ = INPUT_TRACE_LAST_SEQ;
                 }
             }
             break;
@@ -2461,6 +2564,9 @@ pub extern "C" fn _start() -> ! {
         // ── Per-cycle flags ──
         let mut needs_surface_redraw = false;
         let mut needs_top_strip_redraw = false;
+        // Cursor moved this cycle but nothing else did: eligible for the
+        // save-under fast path instead of a full surface composite.
+        let mut cursor_only_moved = false;
         let mut did_primary_fb_render = false;
         let mut drained: usize = 0;
         if !fb_live {
@@ -3097,23 +3203,39 @@ pub extern "C" fn _start() -> ! {
                                 unsafe {
                                     let seq = (msg.arg1 >> 32) as u32;
                                     if seq != 0 { INPUT_TRACE_LAST_SEQ = seq; }
+                                    // INPUT_PRESENT_TICK_TRACE_V1: shell send
+                                    // tick rides arg2 high 32 bits (0 = untagged).
+                                    let shell_tick = (msg.arg2 >> 32) as u32;
+                                    if shell_tick != 0 { INPUT_TRACE_LAST_SHELL_TICK = shell_tick; }
                                     INPUT_TRACE_RECV = INPUT_TRACE_RECV.wrapping_add(1);
+                                    DISPLAY_RECV_TICK = DISPLAY_RECV_TICK.wrapping_add(1);
                                     static mut INPUT_TRACE_RECV_BUDGET: u32 = 32;
                                     if INPUT_TRACE_RECV_BUDGET > 0 {
                                         INPUT_TRACE_RECV_BUDGET -= 1;
-                                        if seq != 0 {
-                                            serial_println!("[input.trace.display.cursor.recv] seq={} x={} y={}", seq, new_x, new_y);
+                                        if seq != 0 && shell_tick != 0 {
+                                            serial_println!("[input.trace.display.cursor.recv] seq={} shell_tick={} display_tick={} x={} y={}", seq, shell_tick, DISPLAY_RECV_TICK, new_x, new_y);
+                                        } else if seq != 0 {
+                                            serial_println!("[input.trace.display.cursor.recv] seq={} shell_tick=unknown display_tick={} x={} y={}", seq, DISPLAY_RECV_TICK, new_x, new_y);
                                         } else {
-                                            serial_println!("[input.trace.display.cursor.recv] seq=unknown x={} y={}", new_x, new_y);
+                                            serial_println!("[input.trace.display.cursor.recv] seq=unknown shell_tick=unknown display_tick={} x={} y={}", DISPLAY_RECV_TICK, new_x, new_y);
                                         }
                                         if INPUT_TRACE_RECV_BUDGET == 0 { INPUT_TRACE_DISPLAY_BUDGET_HIT = 1; }
                                     }
-                                    if INPUT_TRACE_RECV == 4 || INPUT_TRACE_RECV % 32 == 0 {
+                                    // Summary cadence every 8: cursor sends are
+                                    // coalesced ~4-8x upstream, so %32 left the
+                                    // last summary stale and gates read wrong
+                                    // totals (INPUT_CURSOR_DRAIN_COHERENCE_V1).
+                                    if INPUT_TRACE_RECV == 4 || INPUT_TRACE_RECV % 8 == 0 {
                                         input_trace_display_summary();
                                     }
                                 }
+                                // Cursor-only move: take the save-under fast
+                                // path unless another surface also changed
+                                // this cycle (checked post-drain).
+                                cursor_only_moved = true;
+                            } else {
+                                needs_surface_redraw = true;
                             }
-                            needs_surface_redraw = true;
                         }
                     }
                 }
@@ -3473,6 +3595,18 @@ pub extern "C" fn _start() -> ! {
         if needs_surface_redraw {
             clock_canon_apply_to_bar(&mut bar);
             unsafe { redraw_surface_area(FB_PTR as *mut u32, FB_W as usize, FB_H as usize); }
+        } else if cursor_only_moved && fb_live {
+            // Cursor-only fast path: restore the 8x16 patch saved beneath
+            // the previous cursor draw, then draw at the new position (which
+            // re-saves). Latest cursor state wins — intermediate positions
+            // drained this cycle coalesce into one visible draw. Full
+            // composite still runs whenever any other surface changed.
+            unsafe {
+                let fb = FB_PTR as *mut u32;
+                let (w, h) = (FB_W as usize, FB_H as usize);
+                restore_cursor_under(fb, w, h, w * h);
+                draw_cursor_z_top(fb, w, h, w * h, true);
+            }
         }
         // Top strip: redraw when needed (clock tick, silkbar update).
         if needs_top_strip_redraw {

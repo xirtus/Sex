@@ -87,7 +87,9 @@ drag_jump_count() {
 }
 
 fault_scan() {
-    pf=$(grep -c '#PF' "$LOG")
+    # Kernel prints "EXCEPTION: PAGE FAULT" / "KERNEL PAGE FAULT HALT", not "#PF"
+    # (2026-07-02: a real kernel PF passed faultscan because of this).
+    pf=$(grep -Ec '#PF|PAGE FAULT' "$LOG")
     gp=$(grep -c '#GP' "$LOG")
     panic=$(grep -ci 'panic' "$LOG")
     fkill=$(grep -c 'fault\.kill' "$LOG")
@@ -247,11 +249,20 @@ if [ "$transfer_events" -eq 0 ] \
 fi
 
 # ── Exit 0: tick trace sufficient for logical latency measurement ──
+# INPUT_CURSOR_DRAIN_COHERENCE_V1: minimum sample size. The QMP lane stops
+# the VM at first gate PASS, so ratios were being computed on as few as 4
+# recvs / 1 draw — statistically meaningless. Requiring a minimum recv and
+# present count keeps the lane alive until the trace sample is adequate.
+# Env-overridable for bisecting old logs with sparse instrumentation.
+MIN_TRACE_RECV="${MIN_TRACE_RECV:-8}"
+MIN_TRACE_PRESENTS="${MIN_TRACE_PRESENTS:-4}"
 if [ "$shell_summary_count" -gt 0 ] \
     && [ "$display_summary_count" -gt 0 ] \
     && [ "$seq_recv_numeric" -gt 0 ] \
     && [ "$seq_present_numeric" -gt 0 ] \
     && [ "$trace_presents" -gt 0 ] \
+    && [ "$trace_recv" -ge "$MIN_TRACE_RECV" ] \
+    && [ "$trace_presents" -ge "$MIN_TRACE_PRESENTS" ] \
     && [ "$tick_recv_numeric" -gt 0 ] \
     && [ "$tick_chains" -gt 0 ]; then
     echo "INPUT_PRESENT_TICK_TRACE_V1: PASS"
@@ -263,6 +274,8 @@ echo "INPUT_PRESENT_TICK_TRACE_V1: MEASUREMENT_PARTIAL_STOP_FIRST"
 [ "$seq_present_numeric" -eq 0 ] && echo "[input.trace.missing] display cursor present with numeric seq"
 [ "$tick_recv_numeric" -eq 0 ] && echo "[input.trace.missing] shell tick did not cross shell→display (arg2 high bits)"
 [ "$tick_chains" -eq 0 ] && echo "[input.trace.missing] no seq with full apply/send/recv/draw/present tick chain"
+[ "$trace_recv" -lt "$MIN_TRACE_RECV" ] && echo "[input.trace.missing] recv sample too small ($trace_recv < $MIN_TRACE_RECV)"
+[ "$trace_presents" -lt "$MIN_TRACE_PRESENTS" ] && echo "[input.trace.missing] present sample too small ($trace_presents < $MIN_TRACE_PRESENTS)"
 [ "$shell_summary_count" -eq 0 ] && echo "[input.trace.missing] shell trace summary"
 [ "$display_summary_count" -eq 0 ] && echo "[input.trace.missing] display trace summary"
 exit 1

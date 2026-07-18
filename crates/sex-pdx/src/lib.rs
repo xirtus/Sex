@@ -112,6 +112,14 @@ pub const OP_BELL_SUBSCRIBE:   u64 = 0xC5; // SilkBar → Bell: subscribe to lan
 pub const OP_BELL_SET_POLICY:  u64 = 0xC6; // Shell → Bell: set per-app user policy override
 pub const OP_BELL_MUTE_SENDER: u64 = 0xC7; // Shell → Bell: mute a sender PD
 
+// OP_BELL_NOTIFY category field reservation (BELL_ATTENTION_FIREWALL_V1).
+// category is a u8 packed into arg0 bits [7:0] of OP_BELL_NOTIFY — this is a
+// value convention, not a new opcode, so no ABI/opcode collision risk.
+// 0=Info, 1..5=other existing categories (see servers/sexbell), 6=reserved
+// below. No kernel/ABI edits — Bell enforces this range in its own
+// valid_category() check.
+pub const BELL_CATEGORY_SELF_CAP_DENIED: u8 = 6; // PD self-reports its own ERR_CAP_INVALID; forced into Bell's SYSTEM lane regardless of urgency_hint (not sender-spoofable into a higher lane)
+
 // Surface tab metadata opcode (silk-shell → sexdisplay)
 pub const OP_SURFACE_TAB_INFO: u64 = 0xFD;
 

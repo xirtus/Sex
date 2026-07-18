@@ -769,7 +769,13 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
         Some(sc) => sc,
         None => {
             // Keyboard not initialized (i8042 absent on this machine).
-            // Silently drop the spurious interrupt (IRQ1 may fire from ghost controller).
+            // Drop the spurious interrupt, but MUST drain port 0x60 AND EOI:
+            // an unread byte keeps the i8042 output line asserted (no future
+            // IRQ1 edges), and a missing EOI leaves vector 0x21 in-service.
+            // Either alone kills all future IRQ1 delivery (root cause of
+            // "QEMU sendkey no PS/2 IRQ1 delivery", 2026-07-02).
+            let _ = crate::keyboard::read_scancode_raw();
+            unsafe { send_eoi(); }
             return;
         }
     };

@@ -204,6 +204,23 @@ const fn is_spindle_text_key(scancode: u8) -> bool {
         || scancode == 0x48 || scancode == 0x50 || scancode == 0x4D
 }
 
+/// QUIL_TEXT_BUFFER_STUB_V1: returns true if the scancode should route to
+/// Quil when Quil is focused, even if it is normally a reserved shell UI key.
+/// Matches Quil's dispatch set: Enter=0x1C, Backspace=0x0E, Escape=0x01
+/// (palette toggle), Space=0x39, digits, letters, palette nav Up/Down,
+/// cursor Left/Right/Home/End. Tab (0x0F) stays with the shell
+/// (AccessFocusNext) so keyboard focus escape still works.
+const fn is_quil_text_key(scancode: u8) -> bool {
+    scancode == 0x1C || scancode == 0x0E || scancode == 0x01 || scancode == 0x39
+        || (scancode >= 0x02 && scancode <= 0x0B)
+        || (scancode >= 0x10 && scancode <= 0x19)
+        || (scancode >= 0x1E && scancode <= 0x26)
+        || (scancode >= 0x2C && scancode <= 0x32)
+        || scancode == 0x48 || scancode == 0x50
+        || scancode == 0x4B || scancode == 0x4D
+        || scancode == 0x47 || scancode == 0x4F
+}
+
 /// Window drag synthetic proof gate.
 /// Default OFF. Exercises normal pointer hit-test/drag lifecycle via HID path.
 const WINDOW_DRAG_PROOF_ENABLED: bool =
@@ -6425,6 +6442,65 @@ unsafe fn mesh_render_fact_list() {
     serial_println!("[mesh.fact_list.done] count={} rows={} rects={}", mesh_fact_count(), rows_emitted, rects_sent);
 }
 
+/// MESH_READONLY_PD_GRAPH_V1: render a read-only PD/app surface list as text
+/// on the shell-owned Mesh surface (sid 202). Data comes from the existing
+/// shell frame/registry model (frame_for_surface + FRAME_FLAG_MINIMIZED +
+/// FOCUSED_SURFACE_ID) — no new IPC, no kernel queries, no writes back.
+/// 6 lines x 20 chars = 120 bytes, fits sexdisplay's 128-byte text_buf;
+/// uppercase only (5x7 glyph coverage ends at 0x5A).
+unsafe fn mesh_render_pd_graph() {
+    const ROW_W: usize = 20;
+    const ROWS: usize = 6;
+    let mut buf = [b' '; ROW_W * ROWS];
+
+    // Row state from the live frame model: V=visible frame, M=minimized,
+    // -=no frame in any scene. Focus column: F when sid holds keyboard focus.
+    let state_char = |sid: u64| -> u8 {
+        match frame_for_surface(sid) {
+            Some(fid) => {
+                for f in FRAMES.iter() {
+                    if let Some(frame) = f {
+                        if frame.frame_id == fid {
+                            return if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 {
+                                b'M'
+                            } else {
+                                b'V'
+                            };
+                        }
+                    }
+                }
+                b'-'
+            }
+            None => b'-',
+        }
+    };
+
+    buf[0..11].copy_from_slice(b"PD GRAPH RO");
+    let rows: [(&[u8], u64); 5] = [
+        (b"SPINDLE", SURFACE_ID_SPINDLE),
+        (b"QUIL", SURFACE_ID_QUIL),
+        (b"LINEN", SURFACE_ID_LINEN),
+        (b"MESH", SURFACE_ID_MESH),
+        (b"BELL", SURFACE_ID_BELL_PLACEHOLDER),
+    ];
+    for (i, (name, sid)) in rows.iter().enumerate() {
+        let base = (i + 1) * ROW_W;
+        let n = name.len().min(8);
+        buf[base..base + n].copy_from_slice(&name[..n]);
+        // 3-digit sid at col 8.
+        buf[base + 8] = b'0' + ((sid / 100) % 10) as u8;
+        buf[base + 9] = b'0' + ((sid / 10) % 10) as u8;
+        buf[base + 10] = b'0' + (sid % 10) as u8;
+        buf[base + 12] = state_char(*sid);
+        buf[base + 14] = if FOCUSED_SURFACE_ID == *sid { b'F' } else { b'-' };
+    }
+
+    pdx_call(SLOT_DISPLAY, sex_pdx::OP_TEXT_CLEAR, SURFACE_ID_MESH, 0, 0);
+    let (drawn, ok) = shell_draw_text(SURFACE_ID_MESH, &buf, 0x00E8FFFF);
+    serial_println!("[mesh.pd_graph.render.ok] rows={} bytes={} ok={}",
+        ROWS, drawn, ok as u8);
+}
+
 /// Count facts visible in the Mesh list (capped at MESH_LIST_ROW_RECTS).
 unsafe fn mesh_visible_fact_count() -> u8 {
     let count = mesh_fact_count();
@@ -7874,6 +7950,8 @@ unsafe fn tile_active_scene_frames() {
         if sid == SURFACE_ID_MESH {
             pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_MESH, 0,
                 (MESH_PLACEHOLDER_COLOR as u64) << 32 | ((rh as u64) << 16) | rw as u64);
+            // MESH_READONLY_PD_GRAPH_V1: live PD/app list text over the fill.
+            mesh_render_pd_graph();
             static MESH_VISIBLE_MARK: core::sync::atomic::AtomicBool =
                 core::sync::atomic::AtomicBool::new(false);
             if !MESH_VISIBLE_MARK.swap(true, Ordering::Relaxed) {
@@ -9513,6 +9591,26 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 return;
             }
 
+            // ── Quil text key passthrough in drain path ─────────────────────
+            // QUIL_TEXT_BUFFER_STUB_V1: when Quil is focused, route text and
+            // control keys directly to Quil PD before the shell consumes them
+            // as UI actions (mirrors the Spindle passthrough above). Lets
+            // Enter/Backspace/Escape/letters reach Quil's palette + text buffer.
+            if FOCUSED_SURFACE_ID == SURFACE_ID_QUIL
+                && is_quil_text_key(scancode)
+            {
+                static mut QUIL_DRAIN_ROUTE_BUDGET: u32 = 32;
+                if QUIL_DRAIN_ROUTE_BUDGET > 0 {
+                    QUIL_DRAIN_ROUTE_BUDGET -= 1;
+                    serial_println!(
+                        "[silk-shell.key.route] target=quil sid={} code={} down={}",
+                        SURFACE_ID_QUIL, scancode, value
+                    );
+                }
+                pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+                return;
+            }
+
             // ── Mesh keyboard map passthrough in drain path ─────────────────
             // When Mesh is focused, route J/K/Enter/Escape/F11/Backspace directly
             // to the Mesh handler before the shell consumes them as UI actions.
@@ -9561,6 +9659,99 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                         serial_println!("[mesh.overlay.toggle] enabled={} ok={} reason=close_back", still_visible as u8, ok);
                     }
                     _ => {}
+                }
+                return;
+            }
+
+            // ── Bell focused-surface passthrough in drain path ──────────────
+            // FOCUS_NAV_LIVE_V1: every Bell nav key is a reserved scancode, so
+            // Bell nav was unreachable live. Mirrors the Mesh block above.
+            if FOCUSED_SURFACE_ID == SURFACE_ID_BELL_PLACEHOLDER
+                && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C
+                    || scancode == 0x01 || scancode == 0x0E
+                    || scancode == 0x1A || scancode == 0x1B)
+            {
+                static mut BELL_DRAIN_ROUTE_BUDGET: u32 = 32;
+                if BELL_DRAIN_ROUTE_BUDGET > 0 {
+                    BELL_DRAIN_ROUTE_BUDGET -= 1;
+                    serial_println!(
+                        "[silk-shell.key.route] target=bell sid={} code={} down={}",
+                        SURFACE_ID_BELL_PLACEHOLDER, scancode, value
+                    );
+                }
+                serial_println!("[bell.key.recv] code={} down={} mod=0", scancode, value);
+                match scancode {
+                    0x24 => {
+                        serial_println!("[bell.keyboard.next] sid={}", FOCUSED_SURFACE_ID);
+                        bell_select_next_row();
+                    }
+                    0x25 => {
+                        serial_println!("[bell.keyboard.prev] sid={}", FOCUSED_SURFACE_ID);
+                        bell_select_prev_row();
+                    }
+                    0x1C => {
+                        serial_println!("[bell.keyboard.enter] sid={}", FOCUSED_SURFACE_ID);
+                        bell_emit_selected_event_detail_proof();
+                    }
+                    0x01 | 0x0E => {
+                        bell_close_detail();
+                    }
+                    0x1A | 0x1B => {
+                        let _ = bell_cycle_lane();
+                    }
+                    _ => {}
+                }
+                return;
+            }
+
+            // ── Collar focused-surface passthrough in drain path ────────────
+            // FOCUS_NAV_LIVE_V1: live grant nav (previously proof-only).
+            if FOCUSED_SURFACE_ID == SURFACE_ID_COLLAR
+                && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C
+                    || scancode == 0x01 || scancode == 0x0E)
+            {
+                static mut COLLAR_DRAIN_ROUTE_BUDGET: u32 = 32;
+                if COLLAR_DRAIN_ROUTE_BUDGET > 0 {
+                    COLLAR_DRAIN_ROUTE_BUDGET -= 1;
+                    serial_println!(
+                        "[silk-shell.key.route] target=collar sid={} code={} down={}",
+                        SURFACE_ID_COLLAR, scancode, value
+                    );
+                }
+                serial_println!("[collar.key.recv] code={} down={} mod=0", scancode, value);
+                match scancode {
+                    0x24 => {
+                        collar_select_next_grant();
+                    }
+                    0x25 => {
+                        collar_select_prev_grant();
+                    }
+                    0x1C => {
+                        let _ = collar_emit_selected_grant_detail();
+                    }
+                    0x01 | 0x0E => {
+                        let _ = toggle_collar();
+                    }
+                    _ => {}
+                }
+                return;
+            }
+
+            // ── Atlas modal passthrough in drain path ───────────────────────
+            // FOCUS_NAV_LIVE_V1: Atlas digit-select/arrow keys are reserved
+            // scancodes; while the overlay is open they belong to Atlas.
+            // F10 (0x44) falls through so ToggleAtlas still closes it.
+            if ATLAS_MODE_ENABLED && scancode != 0x44 {
+                static mut ATLAS_DRAIN_ROUTE_BUDGET: u32 = 32;
+                if ATLAS_DRAIN_ROUTE_BUDGET > 0 {
+                    ATLAS_DRAIN_ROUTE_BUDGET -= 1;
+                    serial_println!(
+                        "[silk-shell.key.route] target=atlas code={} down={}",
+                        scancode, value
+                    );
+                }
+                if value == 1 {
+                    handle_atlas_keyboard(scancode);
                 }
                 return;
             }
@@ -24111,11 +24302,18 @@ pub extern "C" fn _start() -> ! {
                             // ── Atlas keyboard intercept: consume non-F10 keys when Atlas active ──
                             if panel_consumed {
                                 // panel or palette handled key; skip Atlas and action dispatch
-                            } else if !reserved_ui_key && ATLAS_MODE_ENABLED && scancode != 0x44 /* F10 falls through to ToggleAtlas */ {
+                            // FOCUS_NAV_LIVE_V1: dropped !reserved_ui_key guard — Atlas is a
+                            // modal overlay; its digit-select (0x02-0x06) and arrow keys are
+                            // reserved shell scancodes, so the guard made live keyboard nav
+                            // unreachable (proofs called handle_atlas_keyboard directly).
+                            } else if ATLAS_MODE_ENABLED && scancode != 0x44 /* F10 falls through to ToggleAtlas */ {
                                 handle_atlas_keyboard(scancode);
                                 mutated = true;
                             // ── Bell focused-surface navigation: J/K nav + Enter detail proof ──
-                            } else if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_BELL_PLACEHOLDER
+                            // FOCUS_NAV_LIVE_V1: dropped !reserved_ui_key guard — every key in
+                            // this whitelist is a reserved scancode, so the branch was dead live
+                            // (same wall Quil had; matches the Mesh/Spindle pattern).
+                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_BELL_PLACEHOLDER
                                 && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C
                                     || scancode == 0x01 || scancode == 0x0E
                                     || scancode == 0x1A || scancode == 0x1B)
@@ -24139,6 +24337,30 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     0x1A | 0x1B => {
                                         let _ = bell_cycle_lane();
+                                    }
+                                    _ => {}
+                                }
+                                mutated = true;
+                            // ── Collar focused-surface: J/K grant nav + Enter detail + Esc/Bksp close ──
+                            // FOCUS_NAV_LIVE_V1: Collar's grant nav existed only behind a
+                            // synthetic proof; this wires the live path, mirroring Bell.
+                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_COLLAR
+                                && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C
+                                    || scancode == 0x01 || scancode == 0x0E)
+                            {
+                                serial_println!("[collar.key.recv] code={} down={} mod=0", scancode, value);
+                                match scancode {
+                                    0x24 => {
+                                        collar_select_next_grant();
+                                    }
+                                    0x25 => {
+                                        collar_select_prev_grant();
+                                    }
+                                    0x1C => {
+                                        let _ = collar_emit_selected_grant_detail();
+                                    }
+                                    0x01 | 0x0E => {
+                                        let _ = toggle_collar();
                                     }
                                     _ => {}
                                 }
@@ -24308,8 +24530,37 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }}
                                 mutated = true;
+                            // ── Quil focused-surface: reserved text-key passthrough ──
+                            // QUIL_TEXT_BUFFER_STUB_V1: reserved UI keys (Enter/
+                            // Backspace/Esc/letters/digits) reach Quil's palette +
+                            // text buffer when Quil is focused, matching the Mesh/
+                            // Spindle pattern above. Non-reserved keys are already
+                            // routed by the early owner=quil branch, hence the
+                            // reserved_ui_key guard here (avoids double-send).
+                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_QUIL
+                                && reserved_ui_key && is_quil_text_key(scancode)
+                            {
+                                static mut MAIN_DISPATCH_QUIL_TEXT_BUDGET: u32 = 32;
+                                if MAIN_DISPATCH_QUIL_TEXT_BUDGET > 0 {
+                                    MAIN_DISPATCH_QUIL_TEXT_BUDGET -= 1;
+                                    serial_println!(
+                                        "[silk-shell.key.route] target=quil sid={} code={} down={}",
+                                        SURFACE_ID_QUIL, scancode, value
+                                    );
+                                }
+                                // AP9: key route liveness guard
+                                {
+                                    let live = surface_is_alive(SURFACE_ID_QUIL) as u8;
+                                    surface_input_lifetime_mark_key_route(SURFACE_ID_QUIL, live, 1, live);
+                                }
+                                pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
+                                mutated = true;
                             // ── Linen focused-surface: Enter/Space → OpenIntent → Quil ──
-                            } else if !reserved_ui_key && FOCUSED_SURFACE_ID == SURFACE_ID_LINEN
+                            // FOCUS_NAV_LIVE_V1: dropped !reserved_ui_key guard — Enter (0x1C)
+                            // is reserved (AccessActivate), so the Enter path was dead live and
+                            // only Space worked. Linen-focused Enter now opens the selected
+                            // object instead of AccessActivate.
+                            } else if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN
                                 && (scancode == 0x1C || scancode == 0x39)
                             {
                                 let obj_id = linen_selected_object_id();

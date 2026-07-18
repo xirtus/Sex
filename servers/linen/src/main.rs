@@ -24,7 +24,13 @@ static LINEN_REJECT_BAD_NAME_LEN_COUNT: AtomicU64 = AtomicU64::new(0);
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }
 
+// Shell-owned frame sid for Linen (focus/tiling target — shell 0xEC-upserts it).
+#[allow(dead_code)]
 const SURFACE_ID_LINEN: u64 = 200;
+// LINEN_OWN_CONTENT_SID_V1: linen's self-owned content surface. Linen must NOT
+// 0xEC-create sid 200 — shell also creates it, first-create wins owner_pd and
+// the loser's draws get AUTH-rejected (boot-order race). Same fix as quil 156.
+const LINEN_CONTENT_SID: u64 = 157; // 0x9D
 const OP_HID_EVENT: u64 = 0x202;
 
 // ── Linen Session Opcodes ───────────────────────────────────────────────────
@@ -619,19 +625,19 @@ pub extern "C" fn _start() -> ! {
     // Brief delay to ensure sexdisplay is ready to receive
     for _ in 0..5_000_000 { core::hint::spin_loop(); }
 
-    // Create placeholder surface on sexdisplay (0xEC upsert by id)
-    // arg1 = (y<<32)|x, arg2 = (h<<32)|w
-    pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_LINEN,
+    // LINEN_OWN_CONTENT_SID_V1: create linen's OWN content surface (0xEC upsert
+    // by id; arg1 = (y<<32)|x, arg2 = (h<<32)|w). owner_pd binds to linen on
+    // first create. Sid 200 is left entirely to the shell (frame/tiling).
+    pdx_call(SLOT_DISPLAY, 0xEC, LINEN_CONTENT_SID,
         (500u64 << 32) | 900u64,  // x=900, y=500
         (150u64 << 32) | 300u64); // w=300, h=150
-    serial_println!("[linen] Placeholder surface 200 created via 0xEC");
+    serial_println!("[linen.content.sid.ok] sid={} reason=own_content_sid_no_shell_race", LINEN_CONTENT_SID);
 
     // Fill rect: local (20, 20, 80, 60), coral color
-    pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_LINEN,
+    pdx_call(SLOT_DISPLAY, 0xEF, LINEN_CONTENT_SID,
         (20u64 << 32) | 20u64,
         (0x00FF6464u64 << 32) | (60u64 << 16) | 80u64);
-    serial_println!("[linen] Fill rect 0xEF sent to sexdisplay");
-    serial_println!("[linen.surface.visible.ok] sid={}", SURFACE_ID_LINEN);
+    serial_println!("[linen.surface.visible.ok] sid={}", LINEN_CONTENT_SID);
     serial_println!("[linen.ready]");
     serial_println!("[linen.hid.debug_rect.disabled] ok=1 reason=remove_neon_green_red_debug_rect_v1");
 

@@ -6,6 +6,17 @@ use sex_pdx::{pdx_listen_raw, pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL
 
 const BELL_DELIVERY_PROOF_ENABLED: bool = option_env!("SEXOS_BELL_DELIVERY_PROOF").is_some();
 
+// ── Attention Lanes ───────────────────────────────────────────────────
+// Named ordinals for the final_lane/lane_override field. Ordinal order is
+// load-bearing: find_lowest_priority_index() evicts the lowest ordinal
+// first, so renaming must never reorder these values.
+const LANE_LATER:   u8 = 0; // background info, no attention needed now (was "PASSIVE")
+const LANE_PROJECT: u8 = 1; // Linen-object/workspace-context events (reserved, unpopulated until Linen lands)
+const LANE_SOON:    u8 = 2; // worth seeing this session, not urgent
+const LANE_SYSTEM:  u8 = 3; // dev-mode / OS-health events (see SelfCapDenied, category=6)
+const LANE_NOW:     u8 = 4; // needs attention this moment
+const LANE_RESERVED_5: u8 = 5; // reserved for future security-class events (was "SECURITY"), unused today
+
 // Replaced local bell_reply helper with shared sex_pdx::pdx_reply(target_pd, value).
 // Kernel: syscall 29 (SYSCALL_PDX_REPLY), rdi=target_pd, rsi=value.
 // Reply received by caller as pdx_listen_raw(0) → msg.type_id=1, msg.arg0=value.
@@ -29,7 +40,7 @@ struct BellQueueEntry {
     category:         u8,
     /// Urgency hint from sender (0..3).
     requested_lane:   u8,
-    /// Final lane after policy derivation (0=PASSIVE .. 5=SECURITY).
+    /// Final lane after policy derivation (LANE_LATER=0 .. LANE_RESERVED_5=5).
     final_lane:       u8,
     /// Final urgency after policy derivation.
     final_urgency:    u8,
@@ -280,7 +291,7 @@ struct PolicyEntry {
     active_flags:  u8,
     /// Privacy override (0=Public .. 3=FullHidden). Only valid if active_flags bit 0 set.
     privacy_level: u8,
-    /// Lane override (0=PASSIVE .. 5=SECURITY). Only valid if active_flags bit 1 set.
+    /// Lane override (LANE_LATER=0 .. LANE_RESERVED_5=5). Only valid if active_flags bit 1 set.
     lane_override: u8,
     /// Mute override (0=unmuted, 1=muted). Only valid if active_flags bit 2 set.
     force_mute:    u8,
@@ -420,10 +431,22 @@ fn max_privacy_for_caller(caller_pd: u32) -> u8 {
     }
 }
 
-/// Validate a BellCategory enum value (0=Info .. 5=Error).
+/// Validate a BellCategory enum value (0=Info .. 5=Error, 6=SelfCapDenied).
+/// Category 6 is reserved for a PD self-reporting its own ERR_CAP_INVALID —
+/// see sex_pdx::BELL_CATEGORY_SELF_CAP_DENIED doc comment.
 fn valid_category(v: u8) -> bool {
-    v <= 5
+    v <= 6
 }
+
+/// Category reserved for a PD self-reporting a local capability denial to
+/// itself (not Bell's own readcap allowlist deny, which already has its own
+/// [bell.readcap.deny] marker). Mirrors sex_pdx::BELL_CATEGORY_SELF_CAP_DENIED.
+///
+/// Convention: reporting PDs should set object_ref_count=0, object_ref=<the
+/// opcode that was denied, truncated to u8, or 0 if unknown>. urgency_hint is
+/// ignored for this category (see the pin below) — it cannot be used to
+/// jump the queue.
+const BELL_CATEGORY_SELF_CAP_DENIED: u8 = 6;
 
 /// Validate a BellPrivacyLevel enum value (0=Public .. 3=FullHidden).
 fn valid_privacy_level(v: u8) -> bool {
@@ -438,13 +461,13 @@ fn valid_redaction_class(v: u8) -> bool {
 /// First-proof placeholder lane derivation.
 ///
 /// No BellCap table exists yet. Every sender is unknown/untrusted.
-/// Unknown/untrusted max lane = PASSIVE (0).
-/// Urgency_hint > 0 downgrades to PASSIVE.
+/// Unknown/untrusted max lane = LANE_LATER.
+/// Urgency_hint > 0 downgrades to LANE_LATER.
 fn derive_lane_first_proof(urgency_hint: u8) -> (u8, u8, Option<&'static str>) {
     if urgency_hint == 0 {
-        (0, 0, None)
+        (LANE_LATER, 0, None)
     } else {
-        (0, 0, Some("no_caps_untrusted"))
+        (LANE_LATER, 0, Some("no_caps_untrusted"))
     }
 }
 
@@ -464,6 +487,30 @@ unsafe fn maybe_run_bell_bridge_status_stub() {
     BELL_BRIDGE_STUB_PROOF_DONE = true;
 }
 
+/// One-shot proof that the LANE_* rename preserved ordinal order (lowest
+/// ordinal still evicts first in find_lowest_priority_index). Emitted once
+/// at boot behind a proof flag so it doesn't spam every run.
+const BELL_LANE_RENAME_PROOF_ENABLED: bool =
+    option_env!("SEXOS_BELL_LANE_RENAME_PROOF").is_some();
+
+unsafe fn maybe_run_bell_lane_rename_proof() {
+    if !BELL_LANE_RENAME_PROOF_ENABLED { return; }
+    serial_println!("[bell.lane.rename] old=0 new=LATER ordinal=0");
+    serial_println!("[bell.lane.rename] old=1 new=PROJECT ordinal=1");
+    serial_println!("[bell.lane.rename] old=2 new=SOON ordinal=2");
+    serial_println!("[bell.lane.rename] old=3 new=SYSTEM ordinal=3");
+    serial_println!("[bell.lane.rename] old=4 new=NOW ordinal=4");
+    serial_println!("[bell.lane.rename] old=5 new=RESERVED_5 ordinal=5");
+    serial_println!(
+        "[bell.lane.rename.done] ok=1 order_preserved={}",
+        (LANE_LATER < LANE_PROJECT) as u8
+            & (LANE_PROJECT < LANE_SOON) as u8
+            & (LANE_SOON < LANE_SYSTEM) as u8
+            & (LANE_SYSTEM < LANE_NOW) as u8
+            & (LANE_NOW < LANE_RESERVED_5) as u8
+    );
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexbell.init.start]");
@@ -472,9 +519,12 @@ pub extern "C" fn _start() -> ! {
     // ── Bell Bridge status stub (Phase 1): marker-only, no IPC ──
     unsafe { maybe_run_bell_bridge_status_stub(); }
 
+    // ── Lane rename proof (F.1): confirms ordinal order unchanged ──
+    unsafe { maybe_run_bell_lane_rename_proof(); }
+
     // ── Demo self-notify (V1): push one notification to exercise Bell→SilkBar→sexdisplay pipe ──
     // caller_pd=0 marks internal Bell event. No sender validation needed for self-generated events.
-    // category=0 (Info), urgency=0 (PASSIVE), lane=0 (PASSIVE), privacy=0 (Public).
+    // category=0 (Info), urgency=0 (LANE_LATER), lane=0 (LANE_LATER), privacy=0 (Public).
     // SilkBar polls LIST every ~2s and forwards packed counts to sexdisplay.
     // Sexdisplay renders gold dot + count badge in the Bell layout slot.
     unsafe {
@@ -566,9 +616,28 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
 
-                // ── Derive lane (placeholder policy: no caps → PASSIVE) ──
-                let (final_lane, final_urgency, downgrade) =
+                // ── Derive lane (placeholder policy: no caps → LANE_LATER) ──
+                let (mut final_lane, final_urgency, downgrade) =
                     derive_lane_first_proof(urgency_hint);
+
+                // ── SelfCapDenied pin: category=6 always lands in LANE_SYSTEM. ──
+                // Sender-controlled urgency_hint must never be able to buy this
+                // event class a higher lane — a malicious sender could otherwise
+                // spoof category=6 with urgency_hint=3 to jump the queue.
+                if category == BELL_CATEGORY_SELF_CAP_DENIED {
+                    final_lane = LANE_SYSTEM;
+                    unsafe {
+                        static mut BELL_SELFREPORT_BUDGET: u32 = 8;
+                        let b = &mut BELL_SELFREPORT_BUDGET;
+                        if *b > 0 {
+                            *b -= 1;
+                            serial_println!(
+                                "[bell.selfreport.capdenied] caller_pd={} target_op={}",
+                                caller_pd, object_ref
+                            );
+                        }
+                    }
+                }
 
                 if let Some(reason) = downgrade {
                     unsafe {
@@ -1085,7 +1154,7 @@ pub extern "C" fn _start() -> ! {
                 // bit 1: lane_override active
                 // bit 2: force_mute active
                 // bits 8-9: privacy_override value (0=Public .. 3=FullHidden)
-                // bits 16-18: lane_override value (0=PASSIVE .. 5=SECURITY)
+                // bits 16-18: lane_override value (LANE_LATER=0 .. LANE_RESERVED_5=5)
                 // bit 24: force_mute value (0=unmuted, 1=muted)
                 let active_flags  = (packed & 0x7) as u8;
                 let privacy_val   = ((packed >> 8) & 0x3) as u8;

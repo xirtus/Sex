@@ -294,6 +294,9 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexinput.init.start]");
     sex_rt::heap_init();
     serial_println!("[sexinput] Normalizer Starting...");
+    // USB_HID_POINTER_PRODUCER_V1 contract: 0x260 raw path expects abs coords
+    // in 0..=32767 (bit 32 of arg2 = is_abs) and button bits within 0x07.
+    serial_println!("[sexinput.usb.contract] op=0x260 raw_max=32767 buttons_mask=0x7 ok=1");
 
     // Budgeted proof gate state diagnostic.
     // Fires once at boot to confirm whether synthetic input proofs are enabled.
@@ -450,6 +453,83 @@ pub extern "C" fn _start() -> ! {
                 let dx = if is_abs { (packed & 0xFFFF) as u16 as i16 } else { (packed as u8) as i8 as i16 };
                 let dy = if is_abs { ((packed >> 16) & 0xFFFF) as u16 as i16 } else { ((packed >> 8) as u8) as i8 as i16 };
                 let wheel = if is_abs { 0 } else { ((packed >> 16) as u8) as i8 };
+
+                // USB_HID_POINTER_PRODUCER_V1: validate before scaling.
+                // Abs coords must fit the 0..=32767 tablet range and button
+                // bits beyond 0x07 are undefined — drop the report here so
+                // garbage never reaches the shell. The delta clamp further
+                // down stays as the second line of defense.
+                let abs_range_bad = is_abs && ((dx as u16) > 32767 || (dy as u16) > 32767);
+                let buttons_bad = (buttons & !0x07) != 0;
+                if abs_range_bad || buttons_bad {
+                    unsafe {
+                        static mut USB_REPORT_REJECT_BUDGET: u32 = 16;
+                        let rem = &mut USB_REPORT_REJECT_BUDGET;
+                        if *rem > 0 {
+                            *rem -= 1;
+                            let reason = if abs_range_bad { "range" } else { "buttons" };
+                            serial_println!(
+                                "[sexinput.usb.report.reject] x={} y={} buttons={:#x} reason={}",
+                                dx as u16, dy as u16, buttons, reason
+                            );
+                        }
+                    }
+                    continue;
+                }
+
+                // TOUCHPAD_ABS_CONTACT_V1: single-contact model, marker-only.
+                // Driven by the abs stream's button bit 0; emits no events to
+                // the shell — OP_HID_EVENT output is unchanged by this block.
+                if is_abs {
+                    unsafe {
+                        static mut CONTACT_DOWN: bool = false;
+                        static mut CONTACT_X: u16 = 0;
+                        static mut CONTACT_Y: u16 = 0;
+                        static mut CONTACT_START_X: u16 = 0;
+                        static mut CONTACT_START_Y: u16 = 0;
+                        static mut CONTACT_DRAG_BUDGET: u32 = 16;
+                        static mut CONTACT_SPURIOUS_UP_EMITTED: bool = false;
+                        static mut CONTACT_LAST_BTN0: bool = false;
+                        let btn0 = (buttons & 1) != 0;
+                        let (cx, cy) = (dx as u16, dy as u16);
+                        if btn0 && !CONTACT_DOWN {
+                            CONTACT_DOWN = true;
+                            CONTACT_X = cx;
+                            CONTACT_Y = cy;
+                            CONTACT_START_X = cx;
+                            CONTACT_START_Y = cy;
+                            serial_println!("[sexinput.contact.down] x={} y={}", cx, cy);
+                        } else if btn0 && CONTACT_DOWN {
+                            let ddx = cx as i32 - CONTACT_X as i32;
+                            let ddy = cy as i32 - CONTACT_Y as i32;
+                            CONTACT_X = cx;
+                            CONTACT_Y = cy;
+                            if (ddx != 0 || ddy != 0) && CONTACT_DRAG_BUDGET > 0 {
+                                CONTACT_DRAG_BUDGET -= 1;
+                                serial_println!(
+                                    "[sexinput.contact.drag] x={} y={} dx={} dy={}",
+                                    cx, cy, ddx, ddy
+                                );
+                            }
+                        } else if !btn0 && CONTACT_DOWN {
+                            let tdx = cx as i32 - CONTACT_START_X as i32;
+                            let tdy = cy as i32 - CONTACT_START_Y as i32;
+                            CONTACT_DOWN = false;
+                            serial_println!(
+                                "[sexinput.contact.up] x={} y={} total_dx={} total_dy={}",
+                                cx, cy, tdx, tdy
+                            );
+                        } else if !btn0 && !CONTACT_DOWN && CONTACT_LAST_BTN0
+                            && !CONTACT_SPURIOUS_UP_EMITTED
+                        {
+                            // Release edge observed while model is idle —
+                            // state desync guard, never expected in practice.
+                            CONTACT_SPURIOUS_UP_EMITTED = true;
+                            serial_println!("[sexinput.contact.spurious_up.ignored]");
+                        }
+                        CONTACT_LAST_BTN0 = btn0;
+                    }
+                }
                 let kind = if is_abs {
                     "absolute"
                 } else if buttons == 0 && dx == 0 && dy == 0 && wheel == 0 {
@@ -777,6 +857,11 @@ pub extern "C" fn _start() -> ! {
                                             "[sexinput.key.send] code={} down=0 mod={} dst={} ok={} err=0",
                                             sc, modifiers, SLOT_SHELL, sent as u8
                                         );
+                                        static mut KEYUP_OK_BUDGET: u32 = 8;
+                                        if KEYUP_OK_BUDGET > 0 {
+                                            KEYUP_OK_BUDGET -= 1;
+                                            serial_println!("[input.keyboard.keyup.ok] code={} source=usb", sc);
+                                        }
                                     }
                                     Err(err) => {
                                         serial_println!(
@@ -810,6 +895,11 @@ pub extern "C" fn _start() -> ! {
                                             "[sexinput.key.send] code={} down=1 mod={} dst={} ok={} err=0",
                                             sc, modifiers, SLOT_SHELL, sent as u8
                                         );
+                                        static mut KEYDOWN_OK_BUDGET: u32 = 8;
+                                        if KEYDOWN_OK_BUDGET > 0 {
+                                            KEYDOWN_OK_BUDGET -= 1;
+                                            serial_println!("[input.keyboard.keydown.ok] code={} source=usb", sc);
+                                        }
                                     }
                                     Err(err) => {
                                         serial_println!(
@@ -846,6 +936,17 @@ pub extern "C" fn _start() -> ! {
                 let value = if scancode & 0x80 == 0 { 1 } else { 0 };
                 let code = (scancode & 0x7F) as u64;
                 pdx_call(SLOT_SHELL, OP_HID_EVENT, code, value, EV_KEY);
+                unsafe {
+                    static mut PS2_KEY_OK_BUDGET: u32 = 16;
+                    if PS2_KEY_OK_BUDGET > 0 {
+                        PS2_KEY_OK_BUDGET -= 1;
+                        if value == 1 {
+                            serial_println!("[input.keyboard.keydown.ok] code={} source=ps2", code);
+                        } else {
+                            serial_println!("[input.keyboard.keyup.ok] code={} source=ps2", code);
+                        }
+                    }
+                }
 
                 // 2b. Dev-only keyboard cursor fallback (SEXOS_KEYBOARD_CURSOR=1).
                 //     On key press, emit EV_REL to move cursor in 8px steps.

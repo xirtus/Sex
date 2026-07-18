@@ -21,6 +21,16 @@ QMP_ENV_FAIL=0
 # This lane proves host-injected QMP input. Disable built-in synthetic input
 # proofs for the gate build so they cannot race or consume the drag/click path.
 export SEXOS_PROOFS_DISABLED="${SEXOS_PROOFS_DISABLED:-1}"
+# Negative proofs that cannot race QMP stimulus: one-shot try_set_focus on a
+# dead surface (input-free), and a one-shot background click at ready that
+# completes before host stimulus begins.
+export SEXOS_SILK_FOCUS_REJECT_PROOF="${SEXOS_SILK_FOCUS_REJECT_PROOF:-1}"
+export SEXOS_SILK_DRAG_REJECT_PROOF="${SEXOS_SILK_DRAG_REJECT_PROOF:-1}"
+# Deterministic one-shot frame-drag proof through the real handle_hid_event
+# path. Runs at ready (before host stimulus). The QMP pointer drag remains a
+# best-effort real-input pass: sexinput's smoothing yields ~1-3px per tablet
+# report, so host sweeps cannot reliably reach the left column.
+export SEXOS_SILK_WINDOW_MOVE_PROOF="${SEXOS_SILK_WINDOW_MOVE_PROOF:-1}"
 
 EXPECTED_SCOPE_PREFIXES=(
   "servers/sexinput/src/main.rs"
@@ -232,19 +242,54 @@ def abs_move(x, y, delay=0.08):
     time.sleep(delay)
 
 def left_sweep(y):
-    abs_move(30000, y, 0.04)
-    for x in range(28000, -1, -2000):
-        abs_move(x, y, 0.04)
+    # Slow, fine-grained sweep: the guest turns each processed tablet report
+    # into one bounded relative step, so pacing must match the guest drain
+    # rate or the ring coalesces reports and the pointer undershoots.
+    abs_move(30000, y, 0.05)
+    for x in range(29000, -1, -1000):
+        abs_move(x, y, 0.08)
 
+def log_size():
+    try:
+        return os.path.getsize(log_path) if log_path else 0
+    except OSError:
+        return 0
+
+def wait_from(offset, pattern, timeout=3.0):
+    # Like wait_log, but only matches content appended after `offset`,
+    # so sweep retries cannot false-positive on earlier pointer positions.
+    if not log_path:
+        return False
+    deadline = time.monotonic() + timeout
+    rx = re.compile(pattern)
+    while time.monotonic() < deadline:
+        try:
+            with open(log_path, "rb") as f:
+                f.seek(offset)
+                data = f.read().decode(errors="ignore")
+            if rx.search(data):
+                return True
+        except OSError:
+            pass
+        time.sleep(0.1)
+    return False
+
+# Let the guest drain the pre-drag motion before button-down. The final raw
+# coordinate is unique to this proof lane, so the wait is marker-driven.
+# One extra sweep retry if the shell-applied position did not reach x<200
+# (the [usb.pointer.shell.apply] marker is budgeted, so only one retry is
+# attempted and only against fresh log content).
 left_sweep(14000)
 time.sleep(0.2)
 left_sweep(14000)
 abs_move(1200, 14000, 0.04)
-
-# Let the guest drain the pre-drag motion before button-down. The final raw
-# coordinate is unique to this proof lane, so the wait is marker-driven.
 wait_log(r"\[sexusb\.tablet\.abs\] x=1200 y=14000 buttons=0", 6.0)
-wait_log(r"\[usb\.pointer\.shell\.apply\] x=([0-9]{1,2}|1[0-9]{2}) y=", 3.0)
+if not wait_log(r"\[usb\.pointer\.shell\.apply\] x=([0-9]{1,2}|1[0-9]{2}) y=", 3.0):
+    start = log_size()
+    left_sweep(14000)
+    abs_move(1200, 14000, 0.04)
+    wait_from(start, r"\[sexusb\.tablet\.abs\] x=1200 y=14000 buttons=0", 6.0)
+    wait_from(start, r"\[usb\.pointer\.shell\.apply\] x=([0-9]{1,2}|1[0-9]{2}) y=", 3.0)
 time.sleep(0.6)
 
 # Press on shell-owned surface 100, drag right, then release.
@@ -271,8 +316,26 @@ time.sleep(0.10)
 for x in (4200, 5200, 6200):
     abs_move(x, 14000, 0.06)
 
+# (The background-click drag.reject negative is covered by the input-free
+# SEXOS_SILK_DRAG_REJECT_PROOF at shell ready — a QMP background click would
+# need a long tablet sweep that floods the input queue and destabilizes
+# the lane.)
+
 s.close()
 PY
+  fi
+
+  # SILK_WINDOW_MOVE_TEXT_INPUT_CURRENT_TIER_V1: focused typing + negatives.
+  if [[ -S "$QMP_SOCK" ]]; then
+    # Pin focus to surface 100 (digit '1' -> Focus100; the pointer phase may
+    # have click-focused an app tile), then type into the shell text sink:
+    # H I <space> H <backspace>.
+    python3 scripts/qmp_input_probe.py "$QMP_SOCK" key 1 h i spc h backspace >/tmp/gate_0_2_qmp_text.out 2>/tmp/gate_0_2_qmp_text.err || true
+    wait_for_marker "\\[silk\\.text\\.input\\.proof\\.done\\] ok=1" 15 || true
+    # Negative: '/' has no sink mapping, no reserved action, and no app route
+    # while surface 100 is focused -> key must be rejected without mutation.
+    python3 scripts/qmp_input_probe.py "$QMP_SOCK" key 1 slash >/tmp/gate_0_2_qmp_neg.out 2>/tmp/gate_0_2_qmp_neg.err || true
+    wait_for_marker "\\[silk\\.key\\.reject\\] reason=no_focus" 10 || true
   fi
 }
 

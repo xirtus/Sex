@@ -85,6 +85,14 @@ impl CoreLocal {
     }
 
     pub fn set_pd(&self, pd_ptr: *mut crate::capability::ProtectionDomain) {
+        // SCHEDULER_TICK_PD8_PF_FLAKE_V1: a stolen task carried a NULL
+        // context.pd_ptr; the unconditional (*pd_ptr).id read below was the
+        // kernel #PF at addr 0x58 inside Scheduler::tick. Refuse the bind
+        // and keep the previous PD binding instead of faulting.
+        if pd_ptr.is_null() {
+            crate::serial_println!("[sched.set_pd.null] refused core={}", self.core_id);
+            return;
+        }
         self.current_pd_ptr.store(pd_ptr, Ordering::Release);
         unsafe {
             self.current_pd_id.store((*pd_ptr).id, Ordering::Release);
