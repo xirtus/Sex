@@ -82,10 +82,17 @@ QEMU_PID=$!
 wait_marker '\[linen\.ready\]' 60 || echo "[app_data_gate] WARN ready timeout"
 sleep 4
 
-# ── Spindle: Scroll Lock toggle, type "help" + Enter ──
+# ── Spindle: Scroll Lock toggle, type "help" + Enter, ghost + history ──
 k scroll_lock; sleep 2
 k h; k e; k l; k p; sleep 1
 k ret; sleep 2
+# ghost autosuggest: "he" + Tab accepts "help" from history, Enter runs it
+k h; k e; sleep 1
+k tab; sleep 1
+k ret; sleep 2
+# history recall: Up brings back last command
+k up; sleep 1
+k esc; sleep 1
 
 # ── Mesh open (F12) so later focus hops fire live refresh ──
 k f12; sleep 2
@@ -143,6 +150,8 @@ QEMU_PID=""
 # ── Rows ──
 has '\[spindle\.grid\.surface\.ok\]' && r spindle_visible PASS || r spindle_visible FAIL
 has '\[spindle\.(input\.echo\.ok|key\.char)\]' && r spindle_typing PASS || r spindle_typing FAIL
+has '\[spindle\.ghost\.accept\]' && r spindle_ghost PASS || r spindle_ghost FAIL
+has '\[spindle\.history\.nav\] dir=up .*ok=1' && r spindle_history PASS || r spindle_history FAIL
 has '\[linen\.surface\.visible\.ok\] sid=157' && r linen_visible PASS || r linen_visible FAIL
 has '\[linen\.remote\.snapshot\.fallback\]|\[linen\.remote\.snapshot\.ok\] count=[1-9]' && r linen_objects PASS || r linen_objects FAIL
 has '\[linen\.nav\.select\.ok\]|\[shell\.action\.select_next_linen\]' && r linen_nav_select PASS || r linen_nav_select FAIL
