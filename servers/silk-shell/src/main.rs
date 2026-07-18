@@ -4318,6 +4318,8 @@ pub const OP_USB_MOUSE_REPORT: u64 = 0x260;
 const OP_LINEN_GET_PUBLIC_SNAPSHOT: u64 = 0x44;
 const OP_LINEN_GET_PUBLIC_NAME: u64 = 0x45;
 const OP_LINEN_OPEN_INTENT: u64 = 0x46;
+/// LINEN_LIVE_V1: shell → linen manifest rescan (see linen main.rs).
+const OP_LINEN_RESCAN_DISK: u64 = 0x49;
 const SHELL_USB_MOUSE_RECEIVE_UNPARK_PROOF_V1: bool = true;
 pub const OP_SURFACE_UPDATE: u64 = 0xEB;
 
@@ -4537,6 +4539,8 @@ struct LinenObject {
     /// name_len == 0 means use display_name. Sanitized to printable ASCII.
     name: [u8; 24],
     name_len: u8,
+    /// LINEN_LIVE_V1: DiskFS V3 path_id + 1 (0 = not disk-backed).
+    disk_path: u8,
 }
 
 /// In-memory Linen object table. No heap, no filesystem, no storage.
@@ -4571,6 +4575,7 @@ const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
         display_name: "SexOS Kernel",
         name: [0u8; 24],
         name_len: 0,
+        disk_path: 0,
     },
     LinenObject {
         object_id: 2,
@@ -4584,6 +4589,7 @@ const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
         display_name: "Compositor Lifecycle Spec",
         name: [0u8; 24],
         name_len: 0,
+        disk_path: 0,
     },
     LinenObject {
         object_id: 3,
@@ -4597,6 +4603,7 @@ const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
         display_name: "Silk Shell main.rs",
         name: [0u8; 24],
         name_len: 0,
+        disk_path: 0,
     },
     LinenObject {
         object_id: 4,
@@ -4610,6 +4617,7 @@ const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
         display_name: "Desktop Screenshot",
         name: [0u8; 24],
         name_len: 0,
+        disk_path: 0,
     },
     LinenObject {
         object_id: 5,
@@ -4623,6 +4631,7 @@ const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
         display_name: "Current ISO Build",
         name: [0u8; 24],
         name_len: 0,
+        disk_path: 0,
     },
     LinenObject {
         object_id: 6,
@@ -4636,6 +4645,7 @@ const LINEN_SEED_OBJECTS: [LinenObject; 6] = [
         display_name: "Drafts",
         name: [0u8; 24],
         name_len: 0,
+        disk_path: 0,
     },
 ];
 
@@ -5217,6 +5227,7 @@ unsafe fn linen_fetch_remote_snapshot() {
                 display_name: "[linen.remote]",
                 name,
                 name_len: fetched_len,
+                disk_path: ((packed >> 48) & 0xFF) as u8,
             });
             serial_println!("[linen.remote.entry] slot={} id={} kind={} name_len={}",
                 slot_idx, object_id, kind_byte, fetched_len);
@@ -5742,14 +5753,15 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
     // nudge the REAL quil PD to restore the document from DiskFS. Shell-side
     // link bookkeeping above is untouched; this is fire-and-forget.
     {
-        let eff_name: &[u8] = if obj.name_len > 0 {
-            &obj.name[..(obj.name_len as usize).min(obj.name.len())]
-        } else {
-            obj.display_name.as_bytes()
-        };
-        if eff_name == b"disk-nquil-v1" {
-            pdx_call(SLOT_QUIL, sex_pdx::OP_QUIL_OPEN_DISK_DOC, object_id, 0, 0);
-            serial_println!("[linen.quil.disk_doc.intent] object_id={} ok=1", object_id);
+        // LINEN_LIVE_V1: any disk-backed object opens in quil with its own
+        // DiskFS path_id (arg1). System object quil-object-v1 (path 2) uses
+        // the legacy arg1=0 encoding for gate compatibility.
+        if obj.disk_path > 0 {
+            let pid = (obj.disk_path - 1) as u64;
+            let arg1 = if pid == 2 { 0 } else { pid };
+            pdx_call(SLOT_QUIL, sex_pdx::OP_QUIL_OPEN_DISK_DOC, object_id, arg1, 0);
+            serial_println!("[linen.quil.disk_doc.intent] object_id={} path_id={} ok=1",
+                object_id, pid);
         }
     }
 
@@ -12467,6 +12479,16 @@ unsafe fn ensure_linen_frame() -> Option<u32> {
 /// focus, and tile. If Linen is already visible in the active scene, focuses it.
 /// Returns true if Linen became visible/focused.
 unsafe fn open_linen_in_active_scene() -> bool {
+    // LINEN_LIVE_V1: every Linen open re-syncs with storage — fire the
+    // rescan (FIFO ring: linen serves it before our snapshot fetch) and
+    // force the next paint to re-fetch the snapshot.
+    pdx_call(sex_pdx::SLOT_LINEN, OP_LINEN_RESCAN_DISK, 0, 0, 0);
+    LINEN_REMOTE_FETCHED = false;
+    serial_println!("[shell.linen.rescan.sent] ok=1");
+    // Re-fetch NOW (FIFO: linen serves the rescan before this fetch) so an
+    // already-visible Linen frame shows fresh entries without waiting for
+    // the next paint event.
+    linen_paint_surface();
     // D1: duplicate guard — if Linen already visible in active scene, reject open.
     for f in FRAMES.iter() {
         if let Some(frame) = f {

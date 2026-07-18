@@ -115,6 +115,19 @@ impl Session {
     /// List objects owned by `caller_pd`, starting from `start_idx`.
     /// Returns the next owned object, or None if no more.
     /// caller_pd == 0 bypasses owner filter (server-internal use).
+    /// LINEN_LIVE_V1: remove an object by id (frees the slot).
+    pub fn remove(&mut self, object_id: u64) -> Result<(), i64> {
+        for slot in self.objects.iter_mut() {
+            if let Some(obj) = slot {
+                if obj.object_id == object_id {
+                    *slot = None;
+                    return Ok(());
+                }
+            }
+        }
+        Err(-3)
+    }
+
     pub fn list(&self, caller_pd: u32, start_idx: u8) -> Option<LinenObject> {
         let start = start_idx as usize;
         for i in start..LINEN_MAX_OBJECTS {

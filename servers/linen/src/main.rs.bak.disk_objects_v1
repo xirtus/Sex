@@ -58,9 +58,6 @@ const OP_LINEN_GET_PUBLIC_NAME: u64 = 0x45;
 /// Stub — no app launch, no caps, no authority grants.
 /// Reply: 0 = accepted/stubbed, negative = error (not found / invalid).
 const OP_LINEN_OPEN_INTENT: u64 = 0x46;
-/// LINEN_LIVE_V1: shell → linen — reconcile session table with DiskFS V3
-/// manifest (generation-gated). Reply = live disk-object count.
-const OP_LINEN_RESCAN_DISK: u64 = 0x49;
 
 /// Search objects by token (local fire-and-forget bridge).
 /// arg0/arg1 = token bytes packed LE (up to 16 bytes).
@@ -622,110 +619,6 @@ unsafe fn run_linen_object_schema_proof() {
     LINEN_OBJECT_SCHEMA_PROOF_DONE = true;
 }
 
-/// LINEN_DISK_OBJECTS_V1: probe the DiskFS fixed objects (path ids 0-2)
-/// through SLOT_STORAGE and surface each present object in the session
-/// table, so the shell's remote snapshot lists REAL disk-backed entries
-/// instead of falling back to seeds. Fails soft per path (marker + skip)
-/// when NVMe/DiskFS is absent. Bounded yields, no busy storage spin.
-/// LINEN_LIVE_V1: reconcile the session table with the DiskFS V3 manifest.
-/// Called at boot AND on OP_LINEN_RESCAN_DISK (shell sends it whenever the
-/// Linen surface opens), so objects created/renamed/deleted after boot
-/// appear without restarting anything. Generation-gated: a cheap 0xFE
-/// query skips the walk when nothing changed. Bounded storage syncs; the
-/// pdx_storage_sync defer stash keeps concurrent requests alive.
-const OP_DISKFS_LIST: u64 = 0x43;
-const DISKFS_V3_SLOTS: usize = 15;
-static mut DISK_SESSION_IDS: [u64; DISKFS_V3_SLOTS] = [0; DISKFS_V3_SLOTS];
-static mut DISK_LAST_GEN: u64 = u64::MAX;
-
-unsafe fn linen_rescan_disk() -> u64 {
-    let gen = match pdx_storage_sync(OP_DISKFS_LIST, 0, 0xFE, 0) {
-        Ok(g) => g,
-        Err(e) => {
-            serial_println!("[linen.disk.rescan.err] stage=gen err={}", e);
-            return DISK_SESSION_IDS.iter().filter(|&&x| x != 0).count() as u64;
-        }
-    };
-    if gen == DISK_LAST_GEN {
-        serial_println!("[linen.disk.rescan.skip] gen={} reason=unchanged", gen);
-        return DISK_SESSION_IDS.iter().filter(|&&x| x != 0).count() as u64;
-    }
-    let mut added = 0u32;
-    let mut removed = 0u32;
-    let mut renamed = 0u32;
-    for pid in 0..DISKFS_V3_SLOTS {
-        let info = match pdx_storage_sync(OP_DISKFS_LIST, pid as u64, 0xFF, 0) {
-            Ok(v) => v,
-            Err(e) => {
-                serial_println!("[linen.disk.rescan.err] stage=info pid={} err={}", pid, e);
-                continue;
-            }
-        };
-        let in_use = (info >> 62) & 1 == 1;
-        if !in_use {
-            if DISK_SESSION_IDS[pid] != 0 {
-                let _ = SESSION.remove(DISK_SESSION_IDS[pid]);
-                DISK_SESSION_IDS[pid] = 0;
-                removed += 1;
-            }
-            continue;
-        }
-        // Fetch the current name (up to 24 bytes, 3 chunks).
-        let mut name = [0u8; 24];
-        let mut nlen = 0usize;
-        'chunks: for c in 0..3u64 {
-            match pdx_storage_sync(OP_DISKFS_LIST, pid as u64, c, 0) {
-                Ok(w) => {
-                    for k in 0..8 {
-                        let b = ((w >> (k * 8)) & 0xFF) as u8;
-                        if b == 0 { break 'chunks; }
-                        if nlen < 24 { name[nlen] = b; nlen += 1; }
-                    }
-                }
-                Err(_) => break 'chunks,
-            }
-        }
-        if nlen == 0 { continue; }
-        if DISK_SESSION_IDS[pid] != 0 {
-            // Present both sides: rename check.
-            let stale = match SESSION.get(DISK_SESSION_IDS[pid], 0) {
-                Ok(obj) => {
-                    let ol = obj.name_len as usize;
-                    ol != nlen || obj.name[..ol] != name[..nlen]
-                }
-                Err(_) => true,
-            };
-            if !stale { continue; }
-            let _ = SESSION.remove(DISK_SESSION_IDS[pid]);
-            DISK_SESSION_IDS[pid] = 0;
-            renamed += 1;
-        }
-        match SESSION.create(session::ObjectKind::Document, &name[..nlen], LINEN_OWN_PD) {
-            Ok(id) => {
-                DISK_SESSION_IDS[pid] = id;
-                // sexfiles_object_id carries (path_id + 1) so the shell can
-                // route disk-backed opens; 0 = not disk-backed.
-                let _ = SESSION.set_sexfiles_object_id(id, pid as u64 + 1);
-                added += 1;
-                serial_println!("[linen.disk.object.ok] path_id={} object_id={}", pid, id);
-            }
-            Err(e) => serial_println!("[linen.disk.object.err] path_id={} err={}", pid, e),
-        }
-    }
-    DISK_LAST_GEN = gen;
-    let live = DISK_SESSION_IDS.iter().filter(|&&x| x != 0).count() as u64;
-    serial_println!("[linen.disk.rescan.ok] gen={} added={} removed={} renamed={} live={}",
-        gen, added, removed, renamed, live);
-    live
-}
-
-unsafe fn linen_publish_disk_objects() {
-    serial_println!("[linen.disk.publish.begin]");
-    for _ in 0..64 { sched_yield(); }
-    let live = linen_rescan_disk();
-    serial_println!("[linen.disk.publish.done] count={}", live);
-}
-
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[linen.init.start]");
@@ -745,10 +638,6 @@ pub extern "C" fn _start() -> ! {
         (20u64 << 32) | 20u64,
         (0x00FF6464u64 << 32) | (60u64 << 16) | 80u64);
     serial_println!("[linen.surface.visible.ok] sid={}", LINEN_CONTENT_SID);
-    // LINEN_DISK_OBJECTS_V1: publish disk-backed objects into the session
-    // table before any storage-blocking proofs, so the shell snapshot can
-    // pick them up on (re)fetch.
-    unsafe { linen_publish_disk_objects(); }
     serial_println!("[linen.ready]");
     serial_println!("[linen.hid.debug_rect.disabled] ok=1 reason=remove_neon_green_red_debug_rect_v1");
 
@@ -989,14 +878,7 @@ pub extern "C" fn _start() -> ! {
 
     loop {
         unsafe { maybe_run_linen_keyboard_nav_proof(); }
-        // LINEN_DEFER_V1: serve requests stashed during storage waits first.
-        struct LoopMsg { type_id: u64, caller_pd: u32, arg0: u64, arg1: u64, arg2: u64 }
-        let msg = if let Some((t, c, a0, a1, a2)) = linen_defer_pop() {
-            LoopMsg { type_id: t, caller_pd: c, arg0: a0, arg1: a1, arg2: a2 }
-        } else {
-            let m = pdx_listen_raw(0);
-            LoopMsg { type_id: m.type_id, caller_pd: m.caller_pd, arg0: m.arg0, arg1: m.arg1, arg2: m.arg2 }
-        };
+        let msg = pdx_listen_raw(0);
 
         match msg.type_id {
             OP_HID_EVENT => {
@@ -1031,10 +913,6 @@ pub extern "C" fn _start() -> ! {
                 unsafe {
                     handle_open_intent(msg.arg0, msg.caller_pd);
                 }
-            }
-            OP_LINEN_RESCAN_DISK => {
-                let live = unsafe { linen_rescan_disk() };
-                pdx_reply(msg.caller_pd, live);
             }
             OP_LINEN_SEARCH_OBJECTS => {
                 unsafe {
@@ -1311,10 +1189,7 @@ unsafe fn handle_get_public_snapshot(arg0: u64, caller_pd: u32) {
         Some(obj) => {
             let packed = (obj.object_id & 0xFFFF_FFFF)
                        | ((obj.kind as u8 as u64) << 32)
-                       | ((obj.name_len as u64) << 40)
-                       // LINEN_LIVE_V1: bits 48-55 = disk path_id + 1
-                       // (0 = not disk-backed) so the shell can route opens.
-                       | ((obj.sexfiles_object_id & 0xFF) << 48);
+                       | ((obj.name_len as u64) << 40);
             serial_println!("[linen.snapshot.slot] slot={} id={} kind={} name_len={}",
                 slot, obj.object_id, obj.kind as u8, obj.name_len);
             pdx_reply(caller_pd, packed);
@@ -1431,51 +1306,6 @@ fn pack_name(name: &[u8]) -> (u64, u64) {
 /// Synchronous PDX call to SexFiles SLOT_STORAGE.
 /// Returns the reply value on success, or the error code on failure.
 /// Pattern matches Quil pdx_call_and_reply.
-/// LINEN_DEFER_V1: client requests (shell snapshot/name/intent) arriving
-/// while pdx_storage_sync waits for a storage reply. The old loop silently
-/// dropped them — during the boot disk publish the shell's snapshot fetch
-/// request vanished, parking the shell inside its fetch loop for the whole
-/// session (empty linen list, drain-path-only input). Stash and replay in
-/// the main serving loop. Single-threaded PD — plain statics.
-const LINEN_DEFER_CAP: usize = 8;
-static mut LINEN_DEFER_RING: [(u64, u32, u64, u64, u64); LINEN_DEFER_CAP] =
-    [(0, 0, 0, 0, 0); LINEN_DEFER_CAP];
-static mut LINEN_DEFER_LEN: usize = 0;
-
-fn linen_defer_stash(type_id: u64, caller_pd: u32, a0: u64, a1: u64, a2: u64) {
-    unsafe {
-        if LINEN_DEFER_LEN >= LINEN_DEFER_CAP {
-            serial_println!(
-                "[linen.defer.drop] type={:#x} caller={} reason=stash_full",
-                type_id, caller_pd
-            );
-            return;
-        }
-        LINEN_DEFER_RING[LINEN_DEFER_LEN] = (type_id, caller_pd, a0, a1, a2);
-        LINEN_DEFER_LEN += 1;
-        serial_println!(
-            "[linen.defer.stash] type={:#x} caller={} depth={}",
-            type_id, caller_pd, LINEN_DEFER_LEN
-        );
-    }
-}
-
-fn linen_defer_pop() -> Option<(u64, u32, u64, u64, u64)> {
-    unsafe {
-        if LINEN_DEFER_LEN == 0 { return None; }
-        let msg = LINEN_DEFER_RING[0];
-        for i in 1..LINEN_DEFER_LEN {
-            LINEN_DEFER_RING[i - 1] = LINEN_DEFER_RING[i];
-        }
-        LINEN_DEFER_LEN -= 1;
-        serial_println!(
-            "[linen.defer.replay] type={:#x} caller={} depth={}",
-            msg.0, msg.1, LINEN_DEFER_LEN
-        );
-        Some(msg)
-    }
-}
-
 fn pdx_storage_sync(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64, i64> {
     let (status, _) = pdx_call(SLOT_STORAGE, opcode, arg0, arg1, arg2);
     if status != 0 {
@@ -1495,9 +1325,6 @@ fn pdx_storage_sync(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64,
         // Non-reply message before reply arrived — handle HID events inline.
         if msg.type_id == OP_HID_EVENT {
             handle_hid_event(msg.arg0, msg.arg1);
-        } else if msg.type_id != 0 {
-            // LINEN_DEFER_V1: live client request mid-roundtrip — keep it.
-            linen_defer_stash(msg.type_id, msg.caller_pd, msg.arg0, msg.arg1, msg.arg2);
         }
     }
 }
