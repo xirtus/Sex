@@ -2136,10 +2136,15 @@ unsafe fn surf_flush(sid: u64, sub: &[u8; SURF_COLS * SURF_ROWS]) {
 /// line (row 11) across the 2x2 surface grid. Only dirty surfaces flush.
 unsafe fn content_render(line: &CmdLine, sb: &Scrollback) {
     let mut grid = [0x20u8; GRID_COLS * GRID_ROWS];
-    let avail = (sb.total_lines as usize).min(GRID_ROWS - 1);
+    let total = sb.total_lines as usize;
+    let avail = total.min(GRID_ROWS - 1);
+    // SPINDLE_PAGING_V1: scroll_offset = lines back from newest. Window is
+    // [start, end) over the line index space; end==total means live tail.
+    let end = total.saturating_sub(sb.scroll_offset as usize).max(avail);
+    let start = end - avail;
     let mut r = 0;
     while r < avail {
-        let line_idx = sb.total_lines as usize - avail + r;
+        let line_idx = start + r;
         let src = sb.get(line_idx % MAX_SCROLLBACK);
         let n = src.len().min(GRID_COLS);
         let dst = (GRID_ROWS - 1 - avail + r) * GRID_COLS;
@@ -2667,6 +2672,8 @@ fn handle_key_insert(scancode: u8, line: &mut CmdLine, hist: &History) {
         0x50 => { // Down
             let _ = history_nav(line, hist, false);
         }
+        0x49 => { scrollback_page(true); }  // PageUp
+        0x51 => { scrollback_page(false); } // PageDown
         0x4D => { // Right — accept ghost autosuggest if present
             if !ghost_accept(line, hist) {
                 serial_println!("[spindle.key.right] no_ghost");
@@ -2688,6 +2695,27 @@ fn handle_key_insert(scancode: u8, line: &mut CmdLine, hist: &History) {
                 serial_println!("[spindle.line.edit.ok] op=insert ch={}", ch as char);
             }
         }
+    }
+}
+
+/// SPINDLE_PAGING_V1: page the scrollback view. up=true pages toward older
+/// lines; offset is clamped to what the ring actually still holds. New
+/// output decrements the offset (Scrollback::push), so the view stays
+/// anchored and naturally returns to the live tail.
+fn scrollback_page(up: bool) {
+    unsafe {
+        let sb = &mut SPINDLE_SCROLLBACK;
+        let page = (GRID_ROWS - 1) as u32;
+        if up {
+            let total = sb.total_lines;
+            let usable = total.min(MAX_SCROLLBACK as u32);
+            let max_off = usable.saturating_sub(page);
+            sb.scroll_offset = (sb.scroll_offset + page).min(max_off);
+        } else {
+            sb.scroll_offset = sb.scroll_offset.saturating_sub(page);
+        }
+        serial_println!("[spindle.page.nav] dir={} offset={} ok=1",
+            if up { "up" } else { "down" }, sb.scroll_offset);
     }
 }
 
@@ -2716,6 +2744,8 @@ fn handle_key_normal(scancode: u8, line: &mut CmdLine, hist: &History) {
         0x50 => {
             let _ = history_nav(line, hist, false);
         }
+        0x49 => { scrollback_page(true); }  // PageUp — parity with insert mode
+        0x51 => { scrollback_page(false); } // PageDown
         _ => {
             if line.pending_d {
                 line.pending_d = false;

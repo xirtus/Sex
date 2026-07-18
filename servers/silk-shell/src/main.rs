@@ -202,6 +202,11 @@ const fn is_spindle_text_key(scancode: u8) -> bool {
         || scancode == 0x32
         // History recall (Up/Down) + ghost-autosuggest accept (Right).
         || scancode == 0x48 || scancode == 0x50 || scancode == 0x4D
+        // SPINDLE_PAGING_V1: PageUp/PageDown page the terminal scrollback
+        // while Spindle is focused. Shell keeps RestoreMinimized/ToggleBell
+        // on these keys for every other focus. Filter is shared by BOTH
+        // dispatch paths (drain + main), so no dead-branch split.
+        || scancode == 0x49 || scancode == 0x51
 }
 
 /// QUIL_TEXT_BUFFER_STUB_V1: returns true if the scancode should route to
