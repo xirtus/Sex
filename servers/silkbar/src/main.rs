@@ -796,12 +796,15 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::serial_println!("[bootgraph.silkbar.clock_ready]");
             }
         }
-        // Budgeted diagnostic: first 12 clock sends
+        // Clock-send liveness: first 12 sends in full, then every 64th —
+        // a periodic proof the clock source is still alive (the old
+        // budget-12 cutoff made "is silkbar still sending?" unanswerable
+        // from a long-session log).
         {
-            static mut CLOCK_SEND_BUDGET: u32 = 12;
-            let remaining = unsafe { &mut CLOCK_SEND_BUDGET };
-            if *remaining > 0 {
-                *remaining -= 1;
+            static mut CLOCK_SEND_COUNT: u32 = 0;
+            let c = unsafe { &mut CLOCK_SEND_COUNT };
+            *c = c.wrapping_add(1);
+            if *c <= 12 || *c % 64 == 0 {
                 sex_pdx::serial_println!(
                     "[silkbar.clock.send] hh={} mm={} ss={} status={:#x}",
                     hh, mm, ss, clock_status
