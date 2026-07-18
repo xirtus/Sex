@@ -58,6 +58,9 @@ const QUIL_MAX_VISIBLE_LINES: usize = 24;
 /// Updated by quil_load(). Read by draw_text_lines().
 static mut QUIL_BUFFER: [u8; QUIL_BUFFER_MAX_LEN] = [0u8; QUIL_BUFFER_MAX_LEN];
 static mut QUIL_BUFFER_LEN: usize = 0;
+/// QUIL_EDITOR_V1: true when the buffer has unsaved edits. Cleared on
+/// save/load/new; shown as '*' in the status line.
+static mut QUIL_DIRTY: bool = false;
 static mut QUIL_CURSOR_POS: usize = 0;
 static mut QUIL_SEL_START: usize = 0;
 static mut QUIL_SEL_END: usize = 0;
@@ -367,10 +370,14 @@ const CMD_SETTINGS_STUB: u8 = 5;
 /// Map palette row index to command ID.
 /// Row 0 is top (index 0), row 4 is bottom.
 const PALETTE_COMMANDS: [u8; QUIL_ROWS as usize] = [
-    CMD_NEW_BUFFER_STUB,    // row 0
+    // QUIL_EDITOR_V1: row 0 must stay a harmless stub — the shell's
+    // open-quil Enter can leak into the palette at row 0, and New Buffer
+    // there would wipe the document on every open. Save/Load stay at rows
+    // 1/2 (gate key sequences depend on them).
+    CMD_RUN_CHECK_STUB,     // row 0
     CMD_SAVE_DOCUMENT,      // row 1
     CMD_LOAD_DOCUMENT,      // row 2
-    CMD_RUN_CHECK_STUB,     // row 3
+    CMD_NEW_BUFFER_STUB,    // row 3 — real New Buffer (clears document)
     CMD_SETTINGS_STUB,      // row 4
 ];
 
@@ -443,21 +450,33 @@ fn draw_text_lines(buf: &[u8]) {
 
     let line_count = text_buffer_line_count(buf);
     let show_lines = line_count.min(QUIL_MAX_VISIBLE_LINES);
-    serial_println!("[quil.text.draw.v2] lines={} bytes={} visible={}",
-        line_count, buf.len(), show_lines);
+    serial_println!("[quil.text.draw.v2] lines={} bytes={} visible={} dirty={}",
+        line_count, buf.len(), show_lines, unsafe { QUIL_DIRTY } as u8);
 
-    if buf.is_empty() || show_lines == 0 { return; }
+    // QUIL_EDITOR_V1: an empty document still draws the status line, so
+    // New Buffer / full deletion leaves visible state instead of a blank.
 
     // TEXT_MODEL_V2: the buffer's own '\n' bytes now drive line breaks in
     // sexdisplay (width-derived wrap, 512-byte text_buf) — send the buffer
     // verbatim instead of padding every line to 20 chars. The renderer caps
     // at 24 rows; content beyond that is reported via the overflow marker.
     let mut line_buf: [u8; 512] = [0u8; 512];
-    let total = buf.len().min(512);
-    line_buf[..total].copy_from_slice(&buf[..total]);
-    let mut total_written = total;
+    // QUIL_EDITOR_V1: status line prepended in the DISPLAY copy only (never
+    // persisted): "N-V1 <len>B" plus '*' when dirty. Doc name is the fixed
+    // DiskFS object (/disk/quil-object-v1, path_id 2).
+    let mut sp = 0usize;
+    for &b in b"N-V1 " { line_buf[sp] = b; sp += 1; }
+    let blen = buf.len();
+    if blen >= 100 { line_buf[sp] = b'0' + ((blen / 100) % 10) as u8; sp += 1; }
+    if blen >= 10  { line_buf[sp] = b'0' + ((blen / 10) % 10) as u8; sp += 1; }
+    line_buf[sp] = b'0' + (blen % 10) as u8; sp += 1;
+    line_buf[sp] = b'B'; sp += 1;
+    if unsafe { QUIL_DIRTY } { line_buf[sp] = b'*'; sp += 1; }
+    line_buf[sp] = b'\n'; sp += 1;
 
-    if total_written == 0 { return; }
+    let total = buf.len().min(512 - sp);
+    line_buf[sp..sp + total].copy_from_slice(&buf[..total]);
+    let mut total_written = sp + total;
 
     // QUIL_TEXT_BUFFER_STUB_V1: keep surface text_len above sexdisplay's
     // per-0xFB diagnostic threshold (fires while text_len <= 32). Pad with
@@ -729,6 +748,7 @@ fn text_buffer_append(ch: u8) -> bool {
         }
         QUIL_BUFFER[QUIL_BUFFER_LEN] = ch;
         QUIL_BUFFER_LEN += 1;
+        QUIL_DIRTY = true;
         serial_println!("[quil.text.append] len={} ch={}",
             QUIL_BUFFER_LEN, ch as char as u32);
         true
@@ -747,6 +767,7 @@ fn text_buffer_backspace() -> bool {
         let old = QUIL_BUFFER_LEN;
         QUIL_BUFFER_LEN -= 1;
         QUIL_BUFFER[QUIL_BUFFER_LEN] = 0;
+        QUIL_DIRTY = true;
         serial_println!("[quil.text.backspace] old={} new={} ok=1",
             old, QUIL_BUFFER_LEN);
         true
@@ -766,6 +787,7 @@ fn text_buffer_newline() -> bool {
         let line_count = text_buffer_line_count(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
         QUIL_BUFFER[QUIL_BUFFER_LEN] = b'\n';
         QUIL_BUFFER_LEN += 1;
+        QUIL_DIRTY = true;
         serial_println!("[quil.text.enter] line={} len={} ok=1",
             line_count + 1, QUIL_BUFFER_LEN);
         true
@@ -786,6 +808,7 @@ fn text_buffer_delete_char() -> bool {
         }
         QUIL_BUFFER_LEN -= 1;
         QUIL_BUFFER[QUIL_BUFFER_LEN] = 0;
+        QUIL_DIRTY = true;
         serial_println!("[quil.text.delete] mode=char old={} new={} ok=1",
             old, QUIL_BUFFER_LEN);
         true
@@ -818,6 +841,7 @@ fn text_buffer_delete_to_eol() -> bool {
         for i in QUIL_BUFFER_LEN..QUIL_BUFFER_LEN + del_count {
             if i < QUIL_BUFFER_MAX_LEN { QUIL_BUFFER[i] = 0; }
         }
+        QUIL_DIRTY = true;
         serial_println!("[quil.text.delete] mode=to_eol old={} new={} ok=1",
             old, QUIL_BUFFER_LEN);
         true
@@ -1458,6 +1482,7 @@ fn quil_save() -> Result<(), i64> {
         pdx_storage_call(OP_RAMFS_CLOSE, handle, 0, 0)
             .map_err(|e| { serial_println!("[quil.save.fail] close error={}", e); e })?;
 
+        unsafe { QUIL_DIRTY = false; }
         serial_println!("[quil.save.ok] bytes={}", buf_len);
         Ok(())
     }
@@ -1533,6 +1558,7 @@ fn quil_load() -> Result<(), i64> {
     unsafe {
         QUIL_BUFFER_LEN = total_read;
     }
+    unsafe { QUIL_DIRTY = false; }
     serial_println!("[quil.load.ok] bytes={}", total_read);
 
     // Redraw text lines with loaded content
@@ -1576,6 +1602,7 @@ fn quil_persist_save() -> Result<usize, i64> {
                 .map_err(|e| { serial_println!("[quil.persist.save.err] stage=write off={} err={}", off, e); e })?;
             off += 16;
         }
+        QUIL_DIRTY = false;
         serial_println!("[quil.persist.save.ok] bytes={}", len);
         Ok(len)
     }
@@ -1605,6 +1632,7 @@ fn quil_persist_load() -> Result<usize, i64> {
         }
         QUIL_BUFFER_LEN = len;
         QUIL_CURSOR_POS = len;
+        QUIL_DIRTY = false;
         serial_println!("[quil.persist.load.ok] bytes={}", len);
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
         Ok(len)
@@ -1707,7 +1735,19 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                                 }
                             }
                         }
-                        CMD_NEW_BUFFER_STUB | CMD_RUN_CHECK_STUB | CMD_SETTINGS_STUB => {
+                        CMD_NEW_BUFFER_STUB => {
+                            // QUIL_EDITOR_V1: New Buffer is real — clear the
+                            // document. Disk copy untouched until next save.
+                            unsafe {
+                                QUIL_BUFFER = [0u8; QUIL_BUFFER_MAX_LEN];
+                                QUIL_BUFFER_LEN = 0;
+                                QUIL_CURSOR_POS = 0;
+                                QUIL_DIRTY = false;
+                                draw_text_lines(&QUIL_BUFFER[..0]);
+                            }
+                            serial_println!("[quil.new.ok] bytes=0");
+                        }
+                        CMD_RUN_CHECK_STUB | CMD_SETTINGS_STUB => {
                             serial_println!("[quil.open.request] buffer_id={} ok=0 reason=stub_not_implemented", cmd as u64);
                             serial_println!("[quil.palette.stub] cmd={}", cmd);
                         }
