@@ -689,6 +689,34 @@ fn spindle_storage_sync(op: u64, a0: u64, a1: u64, a2: u64) -> Result<u64, i64> 
     }
 }
 
+/// WINDOW_LIFECYCLE_V1: create (or re-create) the 2x2 surface grid.
+fn spindle_grid_create() {
+    let mut si = 0;
+    while si < GRID_SURF_X * GRID_SURF_Y {
+        let sx = GRID_X0 + (si % GRID_SURF_X) as i32 * SURF_W as i32;
+        let sy = GRID_Y0 + (si / GRID_SURF_X) as i32 * SURF_H as i32;
+        let (create_status, _) = pdx_call(SLOT_DISPLAY, 0xEC, GRID_SIDS[si],
+            ((sy as u64) << 32) | (sx as u64 & 0xFFFF_FFFF),
+            ((SURF_H as u64) << 32) | SURF_W as u64);
+        serial_println!("[spindle.grid.surface.ok] sid={} idx={}", GRID_SIDS[si], si);
+        if si == 0 {
+            serial_println!("[spindle.surface.create.ok] sid={} status={}", CONTENT_SID, create_status);
+        }
+        si += 1;
+    }
+}
+
+/// WINDOW_LIFECYCLE_V1: destroy the grid surfaces (0xEE, owner-checked in
+/// sexdisplay) — frees their compositor slots for reuse.
+fn spindle_grid_destroy() {
+    let mut si = 0;
+    while si < GRID_SURF_X * GRID_SURF_Y {
+        pdx_call(SLOT_DISPLAY, 0xEE, GRID_SIDS[si], 0, 0);
+        si += 1;
+    }
+    serial_println!("[spindle.grid.destroy.ok] surfaces={}", GRID_SURF_X * GRID_SURF_Y);
+}
+
 fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) -> bool {
     let (raw_cmd, args) = tokenize(line);
     let mut cmd = raw_cmd;
@@ -1252,6 +1280,17 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 sb.push(b"  NONE (NO NVME?)");
             }
             serial_println!("[spindle.disk.command] found={} ok=1 reason=v3_enumerate", found);
+            true
+        }
+        b"winreset" => {
+            // WINDOW_LIFECYCLE_V1: full destroy → recreate cycle of this
+            // terminal's 4 surfaces. Proves compositor slot reclaim: each
+            // cycle would leak 4 slots if destroy didn't free them.
+            spindle_grid_destroy();
+            spindle_grid_create();
+            unsafe { GRID_PREV = [[0u8; SURF_COLS * SURF_ROWS]; GRID_SURF_X * GRID_SURF_Y]; }
+            sb.push(b"WINDOWS RECREATED.");
+            serial_println!("[spindle.winreset] ok=1");
             true
         }
         b"mkdoc" => {
@@ -2641,19 +2680,7 @@ pub extern "C" fn _start() -> ! {
     // ── Visible content surface bring-up (proven 0xEC/0xFA/0xFB route) ──
     serial_println!("[spindle.surface.create.begin]");
     serial_println!("[spindle.grid.expand.begin]");
-    let mut si = 0;
-    while si < GRID_SURF_X * GRID_SURF_Y {
-        let sx = GRID_X0 + (si % GRID_SURF_X) as i32 * SURF_W as i32;
-        let sy = GRID_Y0 + (si / GRID_SURF_X) as i32 * SURF_H as i32;
-        let (create_status, _) = pdx_call(SLOT_DISPLAY, 0xEC, GRID_SIDS[si],
-            ((sy as u64) << 32) | (sx as u64 & 0xFFFF_FFFF),
-            ((SURF_H as u64) << 32) | SURF_W as u64);
-        serial_println!("[spindle.grid.surface.ok] sid={} idx={}", GRID_SIDS[si], si);
-        if si == 0 {
-            serial_println!("[spindle.surface.create.ok] sid={} status={}", CONTENT_SID, create_status);
-        }
-        si += 1;
-    }
+    spindle_grid_create();
     if sb.total_lines == 0 {
         sb.push(b"SPINDLE TERMINAL");
         sb.push(b"TYPE HELP");
