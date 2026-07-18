@@ -5214,6 +5214,20 @@ unsafe fn linen_fetch_remote_snapshot() {
         slot_idx += 1;
     }
     serial_println!("[linen.remote.snapshot.ok] count={}", write_idx);
+    // LINEN_QUIL_OPEN_DATA_V1: linen PD has no session objects at plain boot
+    // (its object-creating proofs are env-gated), so an empty snapshot used to
+    // leave LINEN_OBJECTS wiped — killing the entire open→link→bell/mesh chain
+    // AND invalidating the 12 boot collar grants (which reference seed ids
+    // 1-6). Restore the seed table when the remote session is empty.
+    if write_idx == 0 {
+        for (i, obj) in LINEN_SEED_OBJECTS.iter().enumerate() {
+            if i < LINEN_MAX_OBJECTS {
+                LINEN_OBJECTS[i] = Some(*obj);
+            }
+        }
+        serial_println!("[linen.remote.snapshot.fallback] reason=empty_session seeds={}",
+            LINEN_SEED_OBJECTS.len());
+    }
     linen_select_first_valid_object();
 }
 
@@ -5638,6 +5652,11 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
     let dynamic_buffer_id = QUIL_DYNAMIC_BUFFER_ID_BASE + object_id;
     let mut buffer_created = false;
     let mut found_buf = false;
+    // BIG_APP_SPRINT_V2: the reuse path can land on a SEED buffer whose
+    // buffer_id != dynamic_buffer_id; downstream steps (link marker, bell
+    // event) must use the ACTUAL linked buffer id or the bell event fails
+    // its buffer cross-check and the ring silently never grows on reuse.
+    let mut linked_buffer_id = dynamic_buffer_id;
     for slot in QUIL_BUFFERS.iter_mut() {
         if let Some(buf) = slot {
             if buf.linen_object_ref == object_id {
@@ -5645,6 +5664,7 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
                 buf.state = QuilBufferState::Open;
                 buf.linked_surface_id = SURFACE_ID_QUIL;
                 found_buf = true;
+                linked_buffer_id = buf.buffer_id;
                 serial_println!("[linen.quil.open.reuse_existing] object_id={} buffer_id={}", object_id, buf.buffer_id);
                 break;
             }
@@ -5698,7 +5718,7 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
 
     // 6. Emit buffer link proof marker.
     serial_println!("[linen.quil.buffer.linked] object_id={} buffer_id={} kind={}",
-        object_id, dynamic_buffer_id, buf_kind as u8);
+        object_id, linked_buffer_id, buf_kind as u8);
 
     // 7. Open Quil surface if not already visible.
     let quil_opened = open_quil_in_active_scene();
@@ -5712,7 +5732,7 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
     mesh_emit_linen_quil_links();
 
     // 9. J7: Emit Bell placeholder event for the new link.
-    bell_emit_object_link_event(object_id, dynamic_buffer_id);
+    bell_emit_object_link_event(object_id, linked_buffer_id);
 
     // 10. K3: Refresh Quil buffer list to show the new dynamic buffer.
     quil_render_buffer_list();
@@ -5863,6 +5883,22 @@ unsafe fn collar_check_operation(
         }
         // V3: System capability operations — grant table lookup.
         CollarOperation::AccessBell | CollarOperation::AccessSexFiles => {
+            // LINEN_QUIL_OPEN_DATA_V1: core registry apps (fixed sids, shell-
+            // audited code paths, not runtime-loaded) predate the manifest
+            // system whose grants live at sid 300+. Without this allowlist the
+            // caller_sid < 300 deny below made AccessSexFiles/AccessBell
+            // unreachable for every real app at plain boot (manifest grants
+            // exist only behind proof envs), cap-killing the linen→quil open
+            // chain and Bell toggle. Still audited.
+            if matches!(caller_sid,
+                SURFACE_ID_SPINDLE | SURFACE_ID_LINEN | SURFACE_ID_QUIL
+                | SURFACE_ID_MESH | SURFACE_ID_COLLAR | SURFACE_ID_BELL_PLACEHOLDER)
+            {
+                serial_println!("[collar.policy.allow] op={} object={} caller={} grant=0 reason=core_app",
+                    op as u8, object_id, caller_sid);
+                record_collar_audit(op, object_id, caller_sid, CollarDecision::Allow, 0, 8);
+                return CollarDecision::Allow;
+            }
             // Deny-by-default: unknown/non-app surfaces cannot request system caps.
             if caller_sid < 300 {
                 serial_println!("[collar.gate.reject] reason=unknown_app op={} caller={}", op as u8, caller_sid);
@@ -6080,6 +6116,7 @@ unsafe fn collar_select_next_grant() {
     let new = if old + 1 >= count { 0 } else { old + 1 };
     COLLAR_SELECTED_GRANT_IDX = new;
     serial_println!("[collar.grant.nav] old={} new={} count={}", old, new, count);
+    collar_render_grants_text();
 }
 
 unsafe fn collar_select_prev_grant() {
@@ -6092,6 +6129,55 @@ unsafe fn collar_select_prev_grant() {
     let new = if old == 0 { count - 1 } else { old - 1 };
     COLLAR_SELECTED_GRANT_IDX = new;
     serial_println!("[collar.grant.nav] old={} new={} count={}", old, new, count);
+    collar_render_grants_text();
+}
+
+/// BIG_APP_SPRINT_V2: visible grants list as real text on the shell-owned
+/// Collar surface (sid 203). Header + up to 5 grant rows, 20 chars each
+/// (fits sexdisplay's 128-byte text_buf), uppercase only. '>' marks the
+/// selected row. Data from the live COLLAR_GRANTS table.
+unsafe fn collar_render_grants_text() {
+    const ROW_W: usize = 20;
+    const ROWS: usize = 6;
+    let mut buf = [b' '; ROW_W * ROWS];
+    let total = collar_grant_count();
+
+    buf[0..13].copy_from_slice(b"COLLAR GRANTS");
+    buf[14] = b'0' + ((total / 10) % 10) as u8;
+    buf[15] = b'0' + (total % 10) as u8;
+
+    let mut row = 0usize;
+    let mut vis_idx = 0u8;
+    for slot in COLLAR_GRANTS.iter() {
+        if row >= ROWS - 1 { break; }
+        let g = match slot {
+            Some(g) if g.state == CollarGrantState::Active => g,
+            _ => continue,
+        };
+        let base = (row + 1) * ROW_W;
+        buf[base] = if vis_idx == COLLAR_SELECTED_GRANT_IDX { b'>' } else { b' ' };
+        buf[base + 1] = b'G';
+        buf[base + 2] = b'0' + ((g.grant_id / 10) % 10) as u8;
+        buf[base + 3] = b'0' + (g.grant_id % 10) as u8;
+        buf[base + 5] = b'S';
+        buf[base + 6] = b'0' + ((g.subject_id / 100) % 10) as u8;
+        buf[base + 7] = b'0' + ((g.subject_id / 10) % 10) as u8;
+        buf[base + 8] = b'0' + (g.subject_id % 10) as u8;
+        buf[base + 10] = b'O';
+        buf[base + 11] = b'0' + ((g.object_id / 10) % 10) as u8;
+        buf[base + 12] = b'0' + (g.object_id % 10) as u8;
+        buf[base + 14] = b'A';
+        row += 1;
+        vis_idx += 1;
+    }
+
+    pdx_call(SLOT_DISPLAY, sex_pdx::OP_TEXT_CLEAR, SURFACE_ID_COLLAR, 0, 0);
+    let (_drawn, ok) = shell_draw_text(SURFACE_ID_COLLAR, &buf, 0x00E8FFFF);
+    static mut COLLAR_GRANTS_TEXT_BUDGET: u32 = 8;
+    if COLLAR_GRANTS_TEXT_BUDGET > 0 {
+        COLLAR_GRANTS_TEXT_BUDGET -= 1;
+        serial_println!("[collar.grants.render.ok] grants={} ok={}", total, ok as u8);
+    }
 }
 
 unsafe fn collar_emit_selected_grant_detail() -> bool {
@@ -9809,6 +9895,35 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                         SurfaceAction::ToggleLinen => {
                             dispatched = toggle_linen();
                         }
+                        // BIG_APP_SPRINT_V2: parity with main dispatch — Linen
+                        // j/k selection + open-in-quil were main-path-only, so
+                        // events arriving via the drain lost selection nav.
+                        // Same Linen-focused gating and render calls as K4/K9.
+                        SurfaceAction::SelectNextLinenObject => {
+                            if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN && value == 1 {
+                                linen_select_next_object();
+                                linen_render_object_list();
+                                serial_println!("[linen.nav.select.ok] object={} path=drain", SELECTED_LINEN_OBJECT_ID);
+                                dispatched = true;
+                            }
+                        }
+                        SurfaceAction::SelectPrevLinenObject => {
+                            if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN && value == 1 {
+                                linen_select_prev_object();
+                                linen_render_object_list();
+                                serial_println!("[linen.nav.select.ok] object={} path=drain", SELECTED_LINEN_OBJECT_ID);
+                                dispatched = true;
+                            }
+                        }
+                        SurfaceAction::OpenObjectInQuil => {
+                            if FOCUSED_SURFACE_ID == SURFACE_ID_LINEN && value == 1 {
+                                let obj_id = linen_selected_object_id();
+                                if obj_id != 0 && open_linen_object_in_quil(obj_id) {
+                                    serial_println!("[linen.quil.open.ok] object={} path=drain", obj_id);
+                                    dispatched = true;
+                                }
+                            }
+                        }
                         SurfaceAction::ToggleQuil => {
                             if F9_TOGGLE_DOWN {
                                 serial_println!("[shell.key.repeat.suppressed] scancode=0x43 action=ToggleQuil path=handle_hid_event_drain");
@@ -13014,6 +13129,8 @@ unsafe fn open_collar_in_active_scene() -> bool {
 
     pdx_call(SLOT_DISPLAY, 0xEF, SURFACE_ID_COLLAR, 0,
         (COLLAR_PLACEHOLDER_COLOR as u64) << 32 | ((SURFACE_203_H as u64) << 16) | SURFACE_203_W as u64);
+    // BIG_APP_SPRINT_V2: live grants list text over the fill.
+    collar_render_grants_text();
 
     serial_println!("[collar.placeholder.open] frame={}", fid);
     snap_capture_layout();
@@ -14889,6 +15006,48 @@ unsafe fn bell_render_event_list() {
         rows_emitted += 1;
     });
     serial_println!("[bell.event_list.done] count={} rows={} rects={}", bell_ring_count(), rows_emitted, rects_sent);
+    bell_render_lane_text();
+}
+
+/// BIG_APP_SPRINT_V2: event count + latest entry as real text on the
+/// shell-owned Bell surface (sid 204). 3 lines x 20 chars = 60 bytes,
+/// uppercase only. Data from the live BELL_EVENTS ring.
+unsafe fn bell_render_lane_text() {
+    const ROW_W: usize = 20;
+    let mut buf = [b' '; ROW_W * 3];
+    let total = bell_ring_count();
+
+    buf[0..11].copy_from_slice(b"BELL EVENTS");
+    buf[12] = b'0' + ((total / 10) % 10) as u8;
+    buf[13] = b'0' + (total % 10) as u8;
+
+    // Latest event (newest write) — object/buffer ids, 2 digits each.
+    if total > 0 {
+        let idx = ((BELL_RING_WRITE_INDEX - 1) as usize) % BELL_RING_CAP;
+        if let Some(ev) = BELL_EVENTS[idx] {
+            let base = ROW_W;
+            buf[base..base + 8].copy_from_slice(b"LAST OBJ");
+            buf[base + 9] = b'0' + ((ev.object_id / 10) % 10) as u8;
+            buf[base + 10] = b'0' + (ev.object_id % 10) as u8;
+            buf[base + 12..base + 15].copy_from_slice(b"BUF");
+            // buffer ids are QUIL_DYNAMIC_BUFFER_ID_BASE + obj — show low 2 digits.
+            buf[base + 16] = b'0' + ((ev.buffer_id / 10) % 10) as u8;
+            buf[base + 17] = b'0' + (ev.buffer_id % 10) as u8;
+            let base2 = 2 * ROW_W;
+            buf[base2..base2 + 4].copy_from_slice(b"ROW ");
+            buf[base2 + 4] = b'0' + (BELL_SELECTED_ROW % 10);
+        }
+    } else {
+        buf[ROW_W..ROW_W + 8].copy_from_slice(b"NO LINKS");
+    }
+
+    pdx_call(SLOT_DISPLAY, sex_pdx::OP_TEXT_CLEAR, SURFACE_ID_BELL_PLACEHOLDER, 0, 0);
+    let (_drawn, ok) = shell_draw_text(SURFACE_ID_BELL_PLACEHOLDER, &buf, 0x00E8FFFF);
+    static mut BELL_LANE_TEXT_BUDGET: u32 = 8;
+    if BELL_LANE_TEXT_BUDGET > 0 {
+        BELL_LANE_TEXT_BUDGET -= 1;
+        serial_println!("[bell.lane.render.ok] total={} ok={}", total, ok as u8);
+    }
 }
 
 // ── K11: Command Palette Helpers ─────────────────────────────────────────────
@@ -21189,6 +21348,13 @@ unsafe fn try_set_focus(sid: u64) -> bool {
     // A4: Sync FocusRef shadow and emit commit marker.
     sync_focus_ref();
     serial_println!("[focus.ref.commit] id={}", sid);
+    // MESH_LIVE_REFRESH_V1: keep the Mesh PD-graph focus column live. Only
+    // when focus actually changed and Mesh is visible in the active scene —
+    // bounded to one 0xFA + 15 0xFB calls per real focus change.
+    if old_focus != sid && mesh_is_visible_in_active_scene() {
+        mesh_render_pd_graph();
+        serial_println!("[mesh.pd_graph.refresh] reason=focus_change old={} new={}", old_focus, sid);
+    }
     serial_println!("[shell.focus.set] id={}", sid);
     serial_println!("[shell.interact.focus] sid={}", sid);
     // AP9: Focus target is live by construction (all checks passed above).
