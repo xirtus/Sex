@@ -3518,6 +3518,14 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             }
+            sex_pdx::OP_QUIL_OPEN_DISK_DOC => {
+                // LINEN_DISK_OPEN_V1: shell says the user opened the
+                // disk-backed quil doc in Linen — restore it from DiskFS.
+                serial_println!("[quil.open.disk_doc.recv] object_id={}", msg.arg0);
+                if let Err(e) = quil_persist_load() {
+                    serial_println!("[quil.open.disk_doc.load.fail] error={}", e);
+                }
+            }
             _ => {
                 unsafe {
                     static mut QUIL_UNKNOWN_BUDGET: u32 = 8;

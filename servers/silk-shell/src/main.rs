@@ -5732,6 +5732,22 @@ unsafe fn open_linen_object_in_quil(object_id: u64) -> bool {
     serial_println!("[linen.quil.buffer.linked] object_id={} buffer_id={} kind={}",
         object_id, linked_buffer_id, buf_kind as u8);
 
+    // 6.5 LINEN_DISK_OPEN_V1: if the opened object is the disk-backed quil
+    // doc (published by linen from /disk/quil-object-v1 as "disk-nquil-v1"),
+    // nudge the REAL quil PD to restore the document from DiskFS. Shell-side
+    // link bookkeeping above is untouched; this is fire-and-forget.
+    {
+        let eff_name: &[u8] = if obj.name_len > 0 {
+            &obj.name[..(obj.name_len as usize).min(obj.name.len())]
+        } else {
+            obj.display_name.as_bytes()
+        };
+        if eff_name == b"disk-nquil-v1" {
+            pdx_call(SLOT_QUIL, sex_pdx::OP_QUIL_OPEN_DISK_DOC, object_id, 0, 0);
+            serial_println!("[linen.quil.disk_doc.intent] object_id={} ok=1", object_id);
+        }
+    }
+
     // 7. Open Quil surface if not already visible.
     let quil_opened = open_quil_in_active_scene();
     if quil_opened {

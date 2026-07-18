@@ -162,6 +162,24 @@ kv down '\[quil\.palette\.selected\] row=2' "$L2" 8
 k ret
 wait_marker '\[quil\.persist\.load\.(ok|err|miss)' "$L2" 180 || echo "[dpg] WARN persist load timeout"
 sleep 2
+
+# LINEN_DISK_OPEN_V1: open the disk-backed quil doc from the Linen list —
+# 3rd entry (disk-nquil-v1) → Enter → shell intent → quil PD DiskFS load.
+kv grave_accent '\[shell\.palette\.item\] idx=0' "$L2" 8
+kv j '\[shell\.palette\.select\] old=0 new=1' "$L2" 8
+kv j '\[shell\.palette\.select\] old=1 new=2' "$L2" 8
+kv ret '\[shell\.palette\.exec\] idx=2' "$L2" 10
+sleep 3
+kv j '\[linen\.nav\.select\.ok\]|\[shell\.action\.select_next_linen\]' "$L2" 8
+kv j '\[linen\.nav\.select\.ok\]|\[shell\.action\.select_next_linen\]' "$L2" 8
+k ret
+wait_marker '\[quil\.open\.disk_doc\.recv\]' "$L2" 30 || echo "[dpg] WARN no disk_doc recv"
+# wait for the SECOND persist load completion (first was the palette load)
+d=$((SECONDS+240)); while ((SECONDS<d)); do
+  [[ $(count_re '\[quil\.persist\.load\.(ok|err|miss)' "$L2") -ge 2 ]] && break
+  sleep 2
+done
+sleep 2
 dump "$GATE_DIR/final.ppm"; sleep 1
 stop
 
@@ -180,6 +198,9 @@ SB=$(grep -oE '\[quil\.persist\.save\.ok\] bytes=[0-9]+' "$GATE_DIR/b1.log" | ta
 LB=$(grep -oE '\[quil\.persist\.load\.ok\] bytes=[0-9]+' "$GATE_DIR/b2.log" | tail -1 | grep -oE '[0-9]+$')
 if [[ -n "${SB:-}" && "$SB" == "${LB:-}" ]]; then r persist_bytes_match PASS; else r persist_bytes_match "FAIL save=${SB:-none} load=${LB:-none}"; fi
 
+has2 '\[linen\.quil\.disk_doc\.intent\].*ok=1' && r linen_disk_open_intent PASS || r linen_disk_open_intent FAIL
+has2 '\[quil\.open\.disk_doc\.recv\]' && r quil_disk_doc_recv PASS || r quil_disk_doc_recv FAIL
+[[ $(count_re '\[quil\.persist\.load\.ok\]' "$GATE_DIR/b2.log") -ge 2 ]] && r quil_disk_doc_load PASS || r quil_disk_doc_load FAIL
 grep -qE "$FAULT_RE" "$GATE_DIR/b1.log" && r fault_free_b1 FAIL || r fault_free_b1 PASS
 grep -qE "$FAULT_RE" "$GATE_DIR/b2.log" && r fault_free_b2 FAIL || r fault_free_b2 PASS
 ./scripts/rsp0_regression_gate.sh "$GATE_DIR/b1.log" >/dev/null 2>&1 && r rsp0_gate PASS || r rsp0_gate FAIL

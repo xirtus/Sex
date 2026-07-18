@@ -912,7 +912,14 @@ pub extern "C" fn _start() -> ! {
 
     loop {
         unsafe { maybe_run_linen_keyboard_nav_proof(); }
-        let msg = pdx_listen_raw(0);
+        // LINEN_DEFER_V1: serve requests stashed during storage waits first.
+        struct LoopMsg { type_id: u64, caller_pd: u32, arg0: u64, arg1: u64, arg2: u64 }
+        let msg = if let Some((t, c, a0, a1, a2)) = linen_defer_pop() {
+            LoopMsg { type_id: t, caller_pd: c, arg0: a0, arg1: a1, arg2: a2 }
+        } else {
+            let m = pdx_listen_raw(0);
+            LoopMsg { type_id: m.type_id, caller_pd: m.caller_pd, arg0: m.arg0, arg1: m.arg1, arg2: m.arg2 }
+        };
 
         match msg.type_id {
             OP_HID_EVENT => {
@@ -1340,6 +1347,51 @@ fn pack_name(name: &[u8]) -> (u64, u64) {
 /// Synchronous PDX call to SexFiles SLOT_STORAGE.
 /// Returns the reply value on success, or the error code on failure.
 /// Pattern matches Quil pdx_call_and_reply.
+/// LINEN_DEFER_V1: client requests (shell snapshot/name/intent) arriving
+/// while pdx_storage_sync waits for a storage reply. The old loop silently
+/// dropped them — during the boot disk publish the shell's snapshot fetch
+/// request vanished, parking the shell inside its fetch loop for the whole
+/// session (empty linen list, drain-path-only input). Stash and replay in
+/// the main serving loop. Single-threaded PD — plain statics.
+const LINEN_DEFER_CAP: usize = 8;
+static mut LINEN_DEFER_RING: [(u64, u32, u64, u64, u64); LINEN_DEFER_CAP] =
+    [(0, 0, 0, 0, 0); LINEN_DEFER_CAP];
+static mut LINEN_DEFER_LEN: usize = 0;
+
+fn linen_defer_stash(type_id: u64, caller_pd: u32, a0: u64, a1: u64, a2: u64) {
+    unsafe {
+        if LINEN_DEFER_LEN >= LINEN_DEFER_CAP {
+            serial_println!(
+                "[linen.defer.drop] type={:#x} caller={} reason=stash_full",
+                type_id, caller_pd
+            );
+            return;
+        }
+        LINEN_DEFER_RING[LINEN_DEFER_LEN] = (type_id, caller_pd, a0, a1, a2);
+        LINEN_DEFER_LEN += 1;
+        serial_println!(
+            "[linen.defer.stash] type={:#x} caller={} depth={}",
+            type_id, caller_pd, LINEN_DEFER_LEN
+        );
+    }
+}
+
+fn linen_defer_pop() -> Option<(u64, u32, u64, u64, u64)> {
+    unsafe {
+        if LINEN_DEFER_LEN == 0 { return None; }
+        let msg = LINEN_DEFER_RING[0];
+        for i in 1..LINEN_DEFER_LEN {
+            LINEN_DEFER_RING[i - 1] = LINEN_DEFER_RING[i];
+        }
+        LINEN_DEFER_LEN -= 1;
+        serial_println!(
+            "[linen.defer.replay] type={:#x} caller={} depth={}",
+            msg.0, msg.1, LINEN_DEFER_LEN
+        );
+        Some(msg)
+    }
+}
+
 fn pdx_storage_sync(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64, i64> {
     let (status, _) = pdx_call(SLOT_STORAGE, opcode, arg0, arg1, arg2);
     if status != 0 {
@@ -1359,6 +1411,9 @@ fn pdx_storage_sync(opcode: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<u64,
         // Non-reply message before reply arrived — handle HID events inline.
         if msg.type_id == OP_HID_EVENT {
             handle_hid_event(msg.arg0, msg.arg1);
+        } else if msg.type_id != 0 {
+            // LINEN_DEFER_V1: live client request mid-roundtrip — keep it.
+            linen_defer_stash(msg.type_id, msg.caller_pd, msg.arg0, msg.arg1, msg.arg2);
         }
     }
 }

@@ -580,19 +580,32 @@ fn tokenize(line: &[u8]) -> (&[u8], &[u8]) {
 const OP_DISKFS_STAT_SPINDLE: u64 = 0x3B;
 const OP_DISKFS_SELECT_SPINDLE: u64 = 0x3E;
 
-fn spindle_storage_sync(op: u64, a0: u64, a1: u64, a2: u64) -> Result<u64, i64> {
-    // Drain replies already queued by earlier fire-and-forget storage calls
-    // (history persist on Enter) so this call's reply isn't matched to a
-    // stale one. Bounded; try_listen yields once on empty.
-    let mut drained = 0u32;
-    while drained < 16 {
+// Settle the message queue before a synchronous probe: fire-and-forget
+// storage calls issued earlier on this same Enter (history persist) have
+// replies still IN FLIGHT — a single empty poll proves nothing. Consume
+// messages until a sustained quiet streak, so no stale reply can be
+// matched to the probe's first request. Bounded both ways.
+fn spindle_storage_settle() {
+    let mut quiet = 0u32;
+    let mut total = 0u32;
+    let mut eaten = 0u32;
+    while quiet < 8_000 && total < 200_000 {
         match sex_pdx::pdx_try_listen_raw(0) {
-            Some(msg) if msg.type_id == 0x1 => drained += 1,
-            Some(msg) if msg.type_id == 0x202 => drained += 1,
-            Some(msg) => { unsafe { sex_pdx::pdx_reply(msg.caller_pd, 0); } drained += 1; }
-            None => break,
+            Some(msg) => {
+                quiet = 0;
+                eaten += 1;
+                if msg.type_id != 0x1 && msg.type_id != 0x202 {
+                    unsafe { sex_pdx::pdx_reply(msg.caller_pd, 0); }
+                }
+            }
+            None => quiet += 1,
         }
+        total += 1;
     }
+    serial_println!("[spindle.disk.settle] eaten={}", eaten);
+}
+
+fn spindle_storage_sync(op: u64, a0: u64, a1: u64, a2: u64) -> Result<u64, i64> {
     // Enqueue with bounded retry: the async slot can be momentarily busy
     // right after a previous exchange (observed: SELECT for one path never
     // reached sexfiles when issued back-to-back).
@@ -1178,6 +1191,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             // spindle command backed by an actual storage roundtrip. Lists
             // which fixed disk objects are present (SELECT + STAT per path).
             sb.push(b"DISK OBJECTS:");
+            spindle_storage_settle();
             let names: [&[u8]; 3] = [
                 b" 0 SEXFILES-PROOF-V1",
                 b" 1 LINEN-OBJECT-V1",

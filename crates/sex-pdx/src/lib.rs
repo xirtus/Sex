@@ -99,6 +99,10 @@ pub const SILKBAR_ABI_VERSION: u64 = 1;
 // Quil proof ping — shell→Quil route verification (QUIL_PROTOCOL_ASSIGN_V1C).
 // No display authority. Quil receives and logs, does not draw or create surfaces.
 pub const OP_QUIL_PING: u64 = 0xD0;
+/// LINEN_DISK_OPEN_V1: shell → quil PD nudge. Opening a disk-backed linen
+/// object (the quil doc, /disk/quil-object-v1) tells the real quil PD to
+/// restore the document from DiskFS. arg0 = linen object_id (diagnostic).
+pub const OP_QUIL_OPEN_DISK_DOC: u64 = 0x4A;
 
 // Bell event protocol opcodes (BELL_SLOT_OPCODE_ASSIGNMENT_V1, namespace audited).
 // Range 0xC0-0xC7 assigned; 0xC8-0xCF reserved for Bell future expansion.
