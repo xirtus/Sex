@@ -2192,56 +2192,17 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[spindle.boot]");
     serial_println!("[spindle.surface.req] pd=12 kernel_spawned=1");
 
-    // ── Input proof gate (compile-time; guards framebuffer access) ──
-    // NOTE: OP_WINDOW_CREATE (0xE4) is called here with the legacy pointer-
-    // struct ABI (arg0 = pointer to WindowCreateParams). sexdisplay's 0xE4
-    // handler (servers/sexdisplay/src/main.rs) expects the packed inline ABI
-    // (arg0=x, arg1=y, arg2=(h<<32)|w) and early-exits on w==0||h==0 without
-    // ever replying — since arg1/arg2 are passed as 0 here, that guard always
-    // trips, and the calling PD blocks forever in the underlying blocking
-    // pdx_call. Confirmed by direct boot test: enabling this path unconditionally
-    // freezes Spindle at [spindle.surface.req], before it ever reaches its main
-    // loop. Left gated (default OFF) until the call site is migrated to the
-    // packed inline ABI — this is real, pre-existing, do-not-enable-by-default
-    // scope, not something this pass fixes. See SILK_SPINDLE_LIVE_INPUT_RENDER_GAP.
-    const INPUT_PROOF_ENABLED: bool =
-        option_env!("SEXOS_SPINDLE_INPUT_PROOF").is_some();
     const CMD_HISTORY_PROOF_ENABLED: bool =
         option_env!("SEXOS_SPINDLE_COMMAND_HISTORY_PROOF").is_some();
-    if INPUT_PROOF_ENABLED {
-        unsafe {
-            let params = WindowCreateParams {
-                x: 40, y: 200, width: WIN_W, height: WIN_H, pfn_base: FB_PFN_BASE,
-            };
-            pdx_call(SLOT_DISPLAY, OP_WINDOW_CREATE, &params as *const _ as u64, 0, 0);
-            serial_println!("[spindle.surface.req] w={} h={}", WIN_W, WIN_H);
-
-            let mut fb = WindowBuffer::new((FB_PFN_BASE << 12) as u64, WIN_W, WIN_H, WIN_W);
-            let sb = unsafe { &mut SPINDLE_SCROLLBACK };
-            let hist = unsafe { &mut SPINDLE_HISTORY };
-            let mut ev = EventRing::new();
-
-            sb.push(b"Spindle -- SexOS native command console");
-            sb.push(b""); sb.push(b"Type help for commands. V1.0.0-pre"); sb.push(b"");
-
-            fb.clear(BG);
-            font::draw_str(&mut fb, 4, 4, b"Spindle", ACCENT, None);
-            for col in 0..COLS { fb.draw_pixel(col * CELL_W, CELL_H + CELL_H / 2 - 1, ACCENT); }
-            font::draw_str(&mut fb, 4, CELL_H * 2 + 4, b"SexOS native command console", FG, None);
-            font::draw_str(&mut fb, 4, CELL_H * 3 + 4, b"Type help for commands.", FG, None);
-            for col in 0..COLS { fb.draw_pixel(col * CELL_W, CELL_H * 4 + CELL_H / 2 - 1, ACCENT); }
-            render_scrollback(&mut fb, sb);
-            let boot_line = CmdLine::new();
-            redraw_prompt(&mut fb, &boot_line, hist);
-            serial_println!("[spindle.surface.ok] boot_lines={}", sb.total_lines);
-
-            run_input_proof(&mut fb, sb, hist, &mut ev);
-
-            const SEXOBJECT_PROOF_ENABLED: bool =
-                option_env!("SEXOS_SPINDLE_SEXOBJECT_PROOF").is_some();
-            if SEXOBJECT_PROOF_ENABLED { run_spindle_sexobject_proof(sb); }
-        }
-    }
+    // SPINDLE_CANONICAL_WINDOW_V1: the legacy OP_WINDOW_CREATE proof path
+    // (env-gated SEXOS_SPINDLE_INPUT_PROOF) is REMOVED. It used the dead
+    // pointer-struct ABI (arg0 = &WindowCreateParams) that sexdisplay's 0xE4
+    // handler no longer parses — enabling it froze the PD before its main
+    // loop (documented in SILK_SPINDLE_LIVE_INPUT_RENDER_GAP). The single
+    // canonical window route is the self-owned surface grid: 0xEC create
+    // (packed inline args) + 0xFA/0xFB text, brought up in
+    // content_surfaces_init below.
+    serial_println!("[spindle.window.route] canonical=own_sid_grid legacy_0xE4=removed");
 
     // Initialize state (always, no FB needed).
     // Scrollback (80 KiB) + History (32 KiB) live in BSS to stay within
@@ -2811,154 +2772,6 @@ fn scancode_to_ascii(code: u8) -> Option<u8> {
 /// to forward HID events to. This proof gate injects synthetic keystrokes
 /// directly, proving the line editor logic is correct. Real HID delivery
 /// will be wired when Spindle gets kernel-spawned (STOP FIRST).
-unsafe fn run_input_proof(fb: &mut WindowBuffer, sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) {
-    serial_println!("[spindle.input.proof.start]");
-
-    let mut line = CmdLine::new();
-
-    // ── Stage 1: Append printable characters ──
-    let test_str = b"hello";
-    for &ch in test_str {
-        line.push(ch);
-        redraw_prompt(fb, &line, &*hist);
-        serial_println!("[spindle.line.append] ch={} len={}", ch as char, line.len);
-    }
-    let stage1_ok = line.len == 5 && line.as_bytes() == b"hello";
-    serial_println!("[spindle.input.proof.append] ok={} len={}", stage1_ok as u8, line.len);
-
-    // ── Stage 2: Backspace ──
-    line.backspace();
-    redraw_prompt(fb, &line, &*hist);
-    serial_println!("[spindle.line.backspace] len={}", line.len);
-    line.backspace();
-    redraw_prompt(fb, &line, &*hist);
-    let stage2_ok = line.len == 3 && line.as_bytes() == b"hel";
-    serial_println!("[spindle.input.proof.backspace] ok={} len={}", stage2_ok as u8, line.len);
-
-    // ── Stage 3: Overflow rejection ──
-    while line.len < CMD_MAX {
-        line.push(b'X');
-    }
-    line.push(b'Y');
-    let stage3_ok = line.len == CMD_MAX;
-    serial_println!("[spindle.input.proof.overflow] ok={} len={} max={}", stage3_ok as u8, line.len, CMD_MAX);
-
-    // ── Stage 4: Non-printable rejection ──
-    line.clear();
-    line.push(0x01); line.push(0x00); line.push(0x7F); line.push(b'\n');
-    let stage4_ok = line.len == 0;
-    serial_println!("[spindle.input.proof.nonprintable] ok={} len={}", stage4_ok as u8, line.len);
-
-    // ── Stage 5: Enter -- push to history, dispatch command, output to scrollback ──
-    line.push(b't'); line.push(b'e'); line.push(b's'); line.push(b't');
-    hist.push(line.as_bytes()); // push to in-memory history ring
-    sb.push(line.as_bytes());   // echo the command line
-    let recognized = dispatch(line.as_bytes(), sb, hist, ev);
-    serial_println!("[spindle.cmd.dispatch] cmd={:?} recognized={}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"), recognized as u8);
-    if recognized { serial_println!("[spindle.cmd.dispatch] unexpected_recognized"); }
-    serial_println!("[spindle.line.enter] text={:?} scrollback_len={}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"), sb.total_lines);
-    line.clear();
-    redraw_prompt(fb, &line, &*hist);
-    render_scrollback(fb, sb);
-    let stage5_ok = line.len == 0 && !recognized && hist.total == 1;
-    serial_println!("[spindle.input.proof.enter] ok={} history_entries={}", stage5_ok as u8, hist.total);
-
-    // ── Stage 6: Empty backspace is no-op ──
-    line.backspace();
-    line.backspace();
-    let stage6_ok = line.len == 0;
-    serial_println!("[spindle.input.proof.empty_backspace] ok={}", stage6_ok as u8);
-
-    // ── Stage 7: Scrollback overflow ──
-    // Fill scrollback beyond capacity: push MAX_SCROLLBACK * 2 lines
-    let sb_before = sb.total_lines;
-    for i in 0..(MAX_SCROLLBACK as u32 * 2) {
-        sb.push(b"overflow test line 1234567890123456789012345678901234567890");
-    }
-    let sb_after = sb.total_lines;
-    // Ring wraps correctly -- total_lines > MAX_SCROLLBACK but ring only holds MAX_SCROLLBACK
-    let wrapped = sb_after > sb_before + MAX_SCROLLBACK as u32;
-    serial_println!("[spindle.scrollback.overflow] ok={} total={} capacity={}", wrapped as u8, sb_after, MAX_SCROLLBACK);
-
-    // ── Stage 8: Scrollback line clamping ──
-    // Push a line longer than MAX_LINE_BYTES -- must be clamped
-    sb.push(&[b'L'; 200]);
-    let clamped = sb.get((sb.total_lines - 1) as usize % MAX_SCROLLBACK);
-    let stage8_ok = clamped.len() <= MAX_LINE_BYTES;
-    serial_println!("[spindle.scrollback.clamp] ok={} line_len={} max={}", stage8_ok as u8, clamped.len(), MAX_LINE_BYTES);
-
-    // ── Stage 9: Scroll offset + render ──
-    sb.scroll_offset = 10; // scroll back 10 lines
-    render_scrollback(fb, sb);
-    sb.scroll_offset = 0;  // reset to latest
-    render_scrollback(fb, sb);
-    serial_println!("[spindle.scrollback.render] ok=1 visible_rows={}", VISIBLE_ROWS);
-
-    // ── Stage 10: help command ──
-    let help_recognized = dispatch(b"help", sb, hist, ev);
-    let stage10_ok = help_recognized;
-    serial_println!("[spindle.cmd.dispatch] cmd=help recognized={}", help_recognized as u8);
-
-    // ── Stage 11: status command ──
-    let status_recognized = dispatch(b"status", sb, hist, ev);
-    let stage11_ok = status_recognized;
-    serial_println!("[spindle.cmd.dispatch] cmd=status recognized={}", status_recognized as u8);
-
-    // ── Stage 12: clear command ──
-    let sb_before_clear = sb.total_lines;
-    dispatch(b"clear", sb, hist, ev);
-    let stage12_ok = sb.total_lines < sb_before_clear; // reset to 1 line
-    serial_println!("[spindle.cmd.clear] before={} after={}", sb_before_clear, sb.total_lines);
-
-    // ── Stage 13: pd command ──
-    let pd_recognized = dispatch(b"pd", sb, hist, ev);
-    let stage13_ok = pd_recognized;
-    serial_println!("[spindle.cmd.dispatch] cmd=pd recognized={}", pd_recognized as u8);
-
-    // ── Stage 14: servers command ──
-    let servers_recognized = dispatch(b"servers", sb, hist, ev);
-    let stage14_ok = servers_recognized;
-    serial_println!("[spindle.cmd.dispatch] cmd=servers recognized={}", servers_recognized as u8);
-
-    // ── Stage 15: unknown command ──
-    let unknown_recognized = dispatch(b"asdf", sb, hist, ev);
-    let stage15_ok = !unknown_recognized; // must NOT be recognized
-    serial_println!("[spindle.cmd.unknown] cmd=asdf recognized={} ok={}", unknown_recognized as u8, stage15_ok as u8);
-
-    // ── Stage 16: bell (pending) ──
-    let bell_recognized = dispatch(b"bell", sb, hist, ev);
-    let stage16_ok = bell_recognized;
-    serial_println!("[spindle.cmd.dispatch] cmd=bell recognized={}", bell_recognized as u8);
-
-    // ── Stage 17: launch quil (unavailable) ──
-    let launch_recognized = dispatch(b"launch quil", sb, hist, ev);
-    let stage17_ok = launch_recognized;
-    serial_println!("[spindle.cmd.launch_quil.unavailable] recognized={}", launch_recognized as u8);
-
-    // ── Stage 18: history command ──
-    hist.push(b"ver");
-    let h_before = hist.total;
-    let history_recognized = dispatch(b"history", sb, hist, ev);
-    let stage18_ok = history_recognized && hist.total == h_before;
-    serial_println!("[spindle.history.show] ok={} entries={}", stage18_ok as u8, hist.total);
-
-    // ── Stage 19: history clear ──
-    dispatch(b"history clear", sb, hist, ev);
-    let stage19_ok = hist.total == 0;
-    serial_println!("[spindle.history.clear] ok={} entries={}", stage19_ok as u8, hist.total);
-
-    // ── Stage 20: persistence status ──
-    let stage20_ok = true;
-    serial_println!("[spindle.history.persistence] status=pending reason=spindle_not_kernel_spawned");
-
-    let all_ok = stage1_ok && stage2_ok && stage3_ok && stage4_ok
-              && stage5_ok && stage6_ok && wrapped && stage8_ok
-              && stage10_ok && stage11_ok && stage12_ok && stage13_ok
-              && stage14_ok && stage15_ok && stage16_ok && stage17_ok
-              && stage18_ok && stage19_ok && stage20_ok && true /* events ok */;
-    serial_println!("[spindle.input.proof.done] ok={} stages=20 (events: pending)", all_ok as u8);
-}
-
 fn run_command_history_proof(sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) {
     let mut line = CmdLine::new();
     serial_println!("[spindle.command.history.proof] stage=0 action=start ok=1");
