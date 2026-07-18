@@ -61,6 +61,22 @@ static mut QUIL_BUFFER_LEN: usize = 0;
 /// QUIL_EDITOR_V1: true when the buffer has unsaved edits. Cleared on
 /// save/load/new; shown as '*' in the status line.
 static mut QUIL_DIRTY: bool = false;
+/// QUIL_DOC_V1: current persistent object (DiskFS V3 path_id).
+/// u64::MAX = untitled (no backing object yet). Default: legacy doc 2.
+static mut QUIL_DOC_ID: u64 = 2;
+static mut QUIL_DOC_TITLE: [u8; 16] = *b"n-v1\0\0\0\0\0\0\0\0\0\0\0\0";
+/// QUIL_DOC_V1: modal name-entry (first save of an untitled doc).
+static mut QUIL_NAME_MODE: bool = false;
+static mut QUIL_NAME_BUF: [u8; 16] = [0u8; 16];
+static mut QUIL_NAME_LEN: usize = 0;
+
+fn quil_doc_name_len() -> usize {
+    unsafe {
+        let mut n = 0;
+        while n < 16 && QUIL_DOC_TITLE[n] != 0 { n += 1; }
+        n
+    }
+}
 /// QUIL_TEXT_V3: viewport top display-line (follow-cursor scrolling).
 static mut QUIL_VIEW_TOP: usize = 0;
 /// QUIL_TEXT_V3: goal column for Up/Down (sticky column across short lines).
@@ -315,6 +331,8 @@ const OP_DISKFS_WRITE: u64 = 0x38;
 const OP_DISKFS_READ: u64 = 0x39;
 const OP_DISKFS_STAT: u64 = 0x3B;
 const OP_DISKFS_SELECT: u64 = 0x3E;
+const OP_DISKFS_CREATE: u64 = 0x42;
+const OP_DISKFS_LIST: u64 = 0x43;
 const QUIL_DISKFS_PATH_ID: u64 = 2;
 const QUIL_DISKFS_EXPECT_SIZE: u64 = 4096;
 const QUIL_DISKFS_EXPECT_FLAGS: u64 = 0x3;
@@ -550,7 +568,20 @@ fn draw_text_lines(buf: &[u8]) {
     // QUIL_EDITOR_V1: status line prepended in the DISPLAY copy only (never
     // persisted): "N-V1 <len>B" plus '*' when dirty.
     let mut sp = 0usize;
-    for &b in b"N-V1 " { line_buf[sp] = b; sp += 1; }
+    if unsafe { QUIL_NAME_MODE } {
+        // QUIL_DOC_V1: modal name entry on the status line.
+        for &b in b"NAME? " { line_buf[sp] = b; sp += 1; }
+        unsafe {
+            for i in 0..QUIL_NAME_LEN { line_buf[sp] = QUIL_NAME_BUF[i]; sp += 1; }
+        }
+        line_buf[sp] = b'#'; sp += 1;
+        line_buf[sp] = b'\n'; sp += 1;
+    } else {
+    unsafe {
+        let n = quil_doc_name_len();
+        for i in 0..n { line_buf[sp] = QUIL_DOC_TITLE[i]; sp += 1; }
+    }
+    line_buf[sp] = b' '; sp += 1;
     let blen = buf.len();
     if blen >= 100 { line_buf[sp] = b'0' + ((blen / 100) % 10) as u8; sp += 1; }
     if blen >= 10  { line_buf[sp] = b'0' + ((blen / 10) % 10) as u8; sp += 1; }
@@ -558,6 +589,7 @@ fn draw_text_lines(buf: &[u8]) {
     line_buf[sp] = b'B'; sp += 1;
     if unsafe { QUIL_DIRTY } { line_buf[sp] = b'*'; sp += 1; }
     line_buf[sp] = b'\n'; sp += 1;
+    }
 
     // QUIL_TEXT_V3: viewport (follow-cursor) + caret ('#', display-only).
     // Layout mirrors sexdisplay wrap; the visible window is
@@ -1728,7 +1760,11 @@ fn quil_persist_save() -> Result<usize, i64> {
             serial_println!("[quil.persist.save.skip] reason=empty");
             return Err(-1);
         }
-        pdx_storage_call_bounded(OP_DISKFS_SELECT, QUIL_DISKFS_PATH_ID, 0, 0)
+        if QUIL_DOC_ID == u64::MAX {
+            serial_println!("[quil.persist.save.skip] reason=untitled");
+            return Err(-9);
+        }
+        pdx_storage_call_bounded(OP_DISKFS_SELECT, QUIL_DOC_ID, 0, 0)
             .map_err(|e| { serial_println!("[quil.persist.save.err] stage=select err={}", e); e })?;
         let hdr = QUIL_PERSIST_MAGIC | ((len as u64) << 32);
         pdx_storage_call_bounded(OP_DISKFS_WRITE, 0, hdr, 0)
@@ -1761,7 +1797,11 @@ fn quil_persist_save() -> Result<usize, i64> {
 
 fn quil_persist_load() -> Result<usize, i64> {
     unsafe {
-        pdx_storage_call_bounded(OP_DISKFS_SELECT, QUIL_DISKFS_PATH_ID, 0, 0)
+        if QUIL_DOC_ID == u64::MAX {
+            serial_println!("[quil.persist.load.skip] reason=untitled");
+            return Err(-9);
+        }
+        pdx_storage_call_bounded(OP_DISKFS_SELECT, QUIL_DOC_ID, 0, 0)
             .map_err(|e| { serial_println!("[quil.persist.load.err] stage=select err={}", e); e })?;
         let hdr = pdx_storage_call_bounded(OP_DISKFS_READ, 0, 8, 0)
             .map_err(|e| { serial_println!("[quil.persist.load.err] stage=header err={}", e); e })?;
@@ -1792,7 +1832,71 @@ fn quil_persist_load() -> Result<usize, i64> {
 
 /// Dispatch a single palette key event. Used by both the main event loop
 /// and the HID replay path (stashed events replayed after boot proofs).
+/// QUIL_DOC_V1: create the named object and save into it. On success the
+/// doc identity switches to the new object; on failure dirty state and
+/// name-mode survive so nothing is lost.
+unsafe fn quil_doc_create_and_save() {
+    let mut lo = 0u64;
+    let mut hi = 0u64;
+    for i in 0..QUIL_NAME_LEN.min(16) {
+        let b = QUIL_NAME_BUF[i] as u64;
+        if i < 8 { lo |= b << (i * 8); } else { hi |= b << ((i - 8) * 8); }
+    }
+    match pdx_storage_call_bounded(OP_DISKFS_CREATE, 0, lo, hi) {
+        Ok(id) => {
+            QUIL_DOC_ID = id;
+            QUIL_DOC_TITLE = [0u8; 16];
+            for i in 0..QUIL_NAME_LEN.min(16) { QUIL_DOC_TITLE[i] = QUIL_NAME_BUF[i]; }
+            QUIL_NAME_MODE = false;
+            serial_println!("[quil.doc.create.ok] id={} name_len={}", id, QUIL_NAME_LEN);
+            if let Err(e) = quil_persist_save() {
+                serial_println!("[quil.doc.create.save.fail] error={}", e);
+            }
+            draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+        }
+        Err(e) => {
+            // Stay in name mode; dirty state untouched. -8 = name exists.
+            serial_println!("[quil.doc.create.fail] error={}", e);
+        }
+    }
+}
+
 fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut bool, selected_row: &mut u8) {
+    // QUIL_DOC_V1: modal name entry swallows keys until Enter/Esc.
+    if unsafe { QUIL_NAME_MODE } {
+        if value != 1 { return; }
+        if scancode == 0x2A || scancode == 0xAA { return; } // shift
+        unsafe {
+            match scancode {
+                0x1C => { // Enter → create + save (empty name ignored)
+                    if QUIL_NAME_LEN > 0 {
+                        quil_doc_create_and_save();
+                    } else {
+                        serial_println!("[quil.name.reject] reason=empty");
+                    }
+                }
+                0x01 => { // Esc → cancel (doc stays untitled + dirty)
+                    QUIL_NAME_MODE = false;
+                    serial_println!("[quil.name.mode] on=0 reason=cancel");
+                    draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+                }
+                0x0E => { // Backspace
+                    if QUIL_NAME_LEN > 0 { QUIL_NAME_LEN -= 1; }
+                    draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+                }
+                _ => {
+                    if let Some(ch) = scancode_to_char(scancode, false) {
+                        if ch != b' ' && ch != b'\n' && QUIL_NAME_LEN < 16 {
+                            QUIL_NAME_BUF[QUIL_NAME_LEN] = ch;
+                            QUIL_NAME_LEN += 1;
+                            draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
     unsafe {
         static mut QUIL_KEY_BUDGET: u32 = 16;
         let b = &mut QUIL_KEY_BUDGET;
@@ -1862,6 +1966,16 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                             serial_println!("[quil.open.request] buffer_id={} ok=1 reason=save_via_ramfs", cmd as u64);
                             if unsafe { QUIL_BUFFER_PROOF_ACTIVE } {
                                 serial_println!("[quil.palette.save.skip] reason=buffer_proof_active");
+                            } else if unsafe { QUIL_DOC_ID } == u64::MAX {
+                                // QUIL_DOC_V1: untitled — ask for a name
+                                // first; the object is created on Enter.
+                                unsafe {
+                                    QUIL_NAME_MODE = true;
+                                    QUIL_NAME_LEN = 0;
+                                    *palette_active = false;
+                                    draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
+                                }
+                                serial_println!("[quil.name.mode] on=1");
                             } else {
                                 if let Err(e) = quil_save() {
                                     serial_println!("[quil.palette.save.fail] error={}", e);
@@ -1897,6 +2011,11 @@ fn quil_dispatch_palette_key(scancode: u64, value: u64, palette_active: &mut boo
                                 QUIL_BUFFER_LEN = 0;
                                 QUIL_CURSOR_POS = 0;
                                 QUIL_DIRTY = false;
+                                QUIL_VIEW_TOP = 0;
+                                // QUIL_DOC_V1: fresh doc is UNTITLED until
+                                // first save names + creates its object.
+                                QUIL_DOC_ID = u64::MAX;
+                                QUIL_DOC_TITLE = *b"UNTITLED\0\0\0\0\0\0\0\0";
                                 draw_text_lines(&QUIL_BUFFER[..0]);
                             }
                             serial_println!("[quil.new.ok] bytes=0");
@@ -3725,9 +3844,31 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             sex_pdx::OP_QUIL_OPEN_DISK_DOC => {
-                // LINEN_DISK_OPEN_V1: shell says the user opened the
-                // disk-backed quil doc in Linen — restore it from DiskFS.
-                serial_println!("[quil.open.disk_doc.recv] object_id={}", msg.arg0);
+                // LINEN_DISK_OPEN_V1 / QUIL_DOC_V1: arg1 = DiskFS V3 path_id
+                // (0 = legacy quil doc 2). Switch doc identity, pull the
+                // object's real name from the manifest, restore content.
+                let path_id = if msg.arg1 == 0 { 2 } else { msg.arg1 };
+                serial_println!("[quil.open.disk_doc.recv] object_id={} path_id={}",
+                    msg.arg0, path_id);
+                unsafe {
+                    QUIL_DOC_ID = path_id;
+                    QUIL_DOC_TITLE = [0u8; 16];
+                    let mut n = 0usize;
+                    'name: for c in 0..2u64 {
+                        match pdx_storage_call_bounded(OP_DISKFS_LIST, path_id, c, 0) {
+                            Ok(w) => {
+                                for k in 0..8 {
+                                    let b = ((w >> (k * 8)) & 0xFF) as u8;
+                                    if b == 0 { break 'name; }
+                                    if n < 16 { QUIL_DOC_TITLE[n] = b; n += 1; }
+                                }
+                            }
+                            Err(_) => break 'name,
+                        }
+                    }
+                    if n == 0 { QUIL_DOC_TITLE[..4].copy_from_slice(b"doc?"); }
+                    QUIL_VIEW_TOP = 0;
+                }
                 if let Err(e) = quil_persist_load() {
                     serial_println!("[quil.open.disk_doc.load.fail] error={}", e);
                 }
