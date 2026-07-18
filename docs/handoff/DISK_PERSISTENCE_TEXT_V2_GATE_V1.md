@@ -86,3 +86,24 @@ The "vanished request" hangs were NOT primarily a kernel queue bug. Chain
 QEMU reads last run's log and passes instantly → keys fire during boot →
 random-looking input losses. Fix: `: > "$log"` in `boot()` before starting
 QEMU. Any future multi-boot gate must do the same.
+
+## Userland convergence sprint (2026-07-19)
+- **Serial diet** (c42ea81f): per-file `hot_log()` budgets on hot-loop
+  diagnostics. Boot-to-publish 150s → 10s; disk_persistence_gate
+  8-10 min → 120s. Gate/error markers untouched. New rule: steady-state
+  loops must not log unbudgeted.
+- **Spindle canonical window route** (9a4a8e58): legacy pointer-ABI
+  OP_WINDOW_CREATE proof path deleted; own-sid grid (0xEC/0xFA/0xFB) is
+  the only route.
+- **Quil editor V1** (77747bf8): dirty tracking, `N-V1 <len>B[*]` status
+  line (display-only), real New Buffer at palette row 3 — row 0 must stay
+  a harmless stub because the shell's open-quil Enter leaks into the
+  palette (caught live: real New at row 0 wiped the doc on every open).
+- **IPC audit swept**: all remaining server listen loops are plain main
+  loops (sexstore/sexc/sexnode/sexnet/sexbell/sexsh/sext/sexdrive/sex-ld/
+  sexgemini/sexshop); sexdisplay+silkbar are try_listen-based; shell's
+  linen_sync_reply NACKs (reply 0) rather than discards; kaleidoscope
+  single-take waits are client-only degradation. No further defer sites.
+- **desktop_cycles_gate** (91cd7f41): repeated-use convergence — refocus
+  cycles, output flood + paging, buffer/mode survival, end-of-run input
+  liveness. silkbar clock.send now logs first 12 + every 64th.
