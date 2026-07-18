@@ -221,8 +221,20 @@ pub extern "C" fn trampoline_main() {
                 serial_println!("[sexfiles.trampoline.listen.enter]");
             }
         }
-        // Listen on slot 0 (self message ring — all servers use this pattern).
-        let msg = pdx_listen_raw(0);
+        // SEXFILES_DEFER_V1: drain requests stashed by nested reply-wait
+        // loops before listening for new ones — they arrived first.
+        let (msg_type, msg_caller, msg_a0, msg_a1, msg_a2) =
+            if let Some(d) = crate::pdx::defer_pop() {
+                d
+            } else {
+                // Listen on slot 0 (self message ring — all servers use this pattern).
+                let m = pdx_listen_raw(0);
+                (m.type_id, m.caller_pd, m.arg0, m.arg1, m.arg2)
+            };
+        let msg = crate::pdx::ReplayMsg {
+            type_id: msg_type, caller_pd: msg_caller,
+            arg0: msg_a0, arg1: msg_a1, arg2: msg_a2,
+        };
         let caller = msg.caller_pd;
         serial_println!(
             "[sexfiles.trampoline.after_listen] type={:#x} caller={} a0={:#x} a1={:#x}",

@@ -22,10 +22,19 @@ static DISKFS_BRIDGE_BUF_VA: AtomicU64 = AtomicU64::new(0);
 /// Avoids redundant NVMe manifest reads on every bridge WRITE/READ.
 static DISKFS_MANIFEST_READY: AtomicU64 = AtomicU64::new(0);
 
-/// Currently selected DiskFS object path_id for bridge operations.
-/// Default 0 = /disk/sexfiles-proof-v1. Single-client proof-only.
+/// Currently selected DiskFS object path_id for bridge operations,
+/// PER CALLER PD. Default 0 = /disk/sexfiles-proof-v1.
+/// SEXFILES_DEFER_V1 made concurrent clients real: a single global
+/// selection let interleaved clients clobber each other and do I/O on
+/// the wrong object. Indexed by caller_pd % DISKFS_CLIENT_SLOTS.
 /// Set via OP_DISKFS_SELECT. Read by bridge WRITE/READ/STAT/HASH handlers.
-static DISKFS_SELECTED_PATH_ID: AtomicU64 = AtomicU64::new(0);
+const DISKFS_CLIENT_SLOTS: usize = 32;
+static DISKFS_SELECTED_PATH_ID: [AtomicU64; DISKFS_CLIENT_SLOTS] =
+    [const { AtomicU64::new(0) }; DISKFS_CLIENT_SLOTS];
+
+fn diskfs_selected_for(caller_pd: u32) -> u64 {
+    DISKFS_SELECTED_PATH_ID[caller_pd as usize % DISKFS_CLIENT_SLOTS].load(Ordering::Relaxed)
+}
 
 /// Whether a SELECT has been issued at least once since boot.
 static DISKFS_SELECT_USED: AtomicU64 = AtomicU64::new(0);
@@ -58,7 +67,7 @@ pub(crate) fn diskfs_bridge_get_buf_va() -> u64 {
 
 // ── DiskFS bridge inline handlers ───────────────────────────────────────────
 
-fn handle_diskfs_select(path_id: u64) -> u64 {
+fn handle_diskfs_select(path_id: u64, caller_pd: u32) -> u64 {
     crate::pdx::serial_println!(
         "[sexfiles.bridge.diskfs.recv] op=0x3E select path_id={}",
         path_id
@@ -95,7 +104,8 @@ fn handle_diskfs_select(path_id: u64) -> u64 {
     // Validate the selected path_id resolves.
     match DiskFs::diskfs_lookup_by_path_id(path_id, buf_va) {
         Ok(_entry) => {
-            DISKFS_SELECTED_PATH_ID.store(path_id, Ordering::Relaxed);
+            DISKFS_SELECTED_PATH_ID[caller_pd as usize % DISKFS_CLIENT_SLOTS]
+                .store(path_id, Ordering::Relaxed);
             if DISKFS_SELECT_USED.load(Ordering::Relaxed) == 0 {
                 DISKFS_SELECT_USED.store(1, Ordering::Relaxed);
                 crate::pdx::serial_println!(
@@ -119,12 +129,11 @@ fn handle_diskfs_select(path_id: u64) -> u64 {
 
 /// Resolve the currently selected path_id to a path slice.
 /// Returns the path bytes, or an error if path_id is invalid.
-fn diskfs_selected_path() -> Result<&'static [u8], u64> {
-    let path_id = DISKFS_SELECTED_PATH_ID.load(Ordering::Relaxed);
-    DiskFs::diskfs_path_for_id(path_id)
+fn diskfs_selected_path(caller_pd: u32) -> Result<&'static [u8], u64> {
+    DiskFs::diskfs_path_for_id(diskfs_selected_for(caller_pd))
 }
 
-fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64) -> u64 {
+fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64, caller_pd: u32) -> u64 {
     crate::pdx::serial_println!(
         "[sexfiles.bridge.diskfs.recv] op=0x38 offset={}",
         byte_offset
@@ -172,7 +181,7 @@ fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64) -> u64 {
     }
 
     // Resolve selected path.
-    let path = match diskfs_selected_path() {
+    let path = match diskfs_selected_path(caller_pd) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -266,7 +275,7 @@ fn handle_diskfs_read(byte_offset: u64, max_len: u64, caller_pd: u32) -> u64 {
     }
 
     // Resolve selected path.
-    let path = match diskfs_selected_path() {
+    let path = match diskfs_selected_path(caller_pd) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -323,11 +332,11 @@ fn handle_diskfs_flush() -> u64 {
     status
 }
 
-fn handle_diskfs_stat() -> u64 {
+fn handle_diskfs_stat(caller_pd: u32) -> u64 {
     crate::pdx::serial_println!(
         "[sexfiles.bridge.diskfs.recv] op=0x3B"
     );
-    let path_id = DISKFS_SELECTED_PATH_ID.load(Ordering::Relaxed);
+    let path_id = diskfs_selected_for(caller_pd);
     let path = match DiskFs::diskfs_path_for_id(path_id) {
         Ok(p) => p,
         Err(e) => return e,
@@ -346,11 +355,11 @@ fn handle_diskfs_stat() -> u64 {
     packed
 }
 
-fn handle_diskfs_manifest_hash() -> u64 {
+fn handle_diskfs_manifest_hash(caller_pd: u32) -> u64 {
     crate::pdx::serial_println!(
         "[sexfiles.bridge.diskfs.recv] op=0x3C"
     );
-    let path_id = DISKFS_SELECTED_PATH_ID.load(Ordering::Relaxed);
+    let path_id = diskfs_selected_for(caller_pd);
     let path = match DiskFs::diskfs_path_for_id(path_id) {
         Ok(p) => p,
         Err(e) => return e,
@@ -522,7 +531,7 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
         messages::OP_DISKFS_WRITE => {
             // arg0 = byte_offset, arg1 = data_lo, arg2 = data_hi
             crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x38 name=write caller={}", caller_pd);
-            let reply = handle_diskfs_write(arg0, arg1, arg2);
+            let reply = handle_diskfs_write(arg0, arg1, arg2, caller_pd);
             crate::pdx::serial_println!("[sexfiles.route.reply] op=0x38 caller={} value={:#x}", caller_pd, reply);
             reply
         }
@@ -541,20 +550,20 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
         }
         messages::OP_DISKFS_STAT => {
             crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x3B name=stat caller={}", caller_pd);
-            let reply = handle_diskfs_stat();
+            let reply = handle_diskfs_stat(caller_pd);
             crate::pdx::serial_println!("[sexfiles.route.reply] op=0x3B caller={} value={:#x}", caller_pd, reply);
             reply
         }
         messages::OP_DISKFS_MANIFEST_HASH => {
             crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x3C name=hash caller={}", caller_pd);
-            let reply = handle_diskfs_manifest_hash();
+            let reply = handle_diskfs_manifest_hash(caller_pd);
             crate::pdx::serial_println!("[sexfiles.route.reply] op=0x3C caller={} value={:#x}", caller_pd, reply);
             reply
         }
         messages::OP_DISKFS_SELECT => {
             // arg0 = path_id, arg1/arg2 = 0 (reserved)
             crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x3E name=select caller={}", caller_pd);
-            let reply = handle_diskfs_select(arg0);
+            let reply = handle_diskfs_select(arg0, caller_pd);
             crate::pdx::serial_println!("[sexfiles.route.reply] op=0x3E caller={} value={:#x}", caller_pd, reply);
             reply
         }

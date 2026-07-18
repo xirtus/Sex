@@ -289,8 +289,9 @@ impl DiskFs {
         }
         // Loop until we get the IPC reply (type_id=0x1) from sexdrive.
         // type_id=0x1 = kernel IPC reply; incoming_replies has priority in pdx_listen_raw(0).
-        // Non-reply messages (type_id != 0x1) are stale ring messages from before the proof;
-        // safe to discard during startup (no VFS clients yet).
+        // SEXFILES_DEFER_V1: non-reply messages here are LIVE client requests
+        // arriving mid-roundtrip (the old "stale startup message" discard ate
+        // them — vanished-request root cause). Stash for the main loop.
         loop {
             let msg = pdx_listen_raw(0);
             if msg.type_id == 0x1 {
@@ -305,7 +306,9 @@ impl DiskFs {
                 }
                 return reply_val;
             }
-            // Stale ring message; yield and retry
+            if msg.type_id != 0 {
+                crate::pdx::defer_stash(msg.type_id, msg.caller_pd, msg.arg0, msg.arg1, msg.arg2);
+            }
             sys_yield();
         }
     }
