@@ -2242,12 +2242,24 @@ impl DiskFs {
         data: &[u8],
         buf_va: u64,
     ) -> Result<u64, u64> {
+        let entry = Self::diskfs_lookup_path(path, buf_va)?;
+        Self::diskfs_write_object_entry(entry, offset, data, buf_va)
+    }
+
+    /// DISKFS_V3: entry-based write — resolution (fixed path table or the
+    /// dynamic V3 manifest) happens in the caller; this only does bounds +
+    /// sector RMW against entry.start_lba.
+    pub fn diskfs_write_object_entry(
+        entry: DiskManifestEntryV1,
+        offset: u64,
+        data: &[u8],
+        buf_va: u64,
+    ) -> Result<u64, u64> {
         serial_println!(
             "[sexfiles.disk.file.write.begin] offset={} len={}",
             offset,
             data.len()
         );
-        let entry = Self::diskfs_lookup_path(path, buf_va)?;
 
         if offset >= entry.len_bytes as u64 {
             serial_println!(
@@ -2356,12 +2368,22 @@ impl DiskFs {
         out: &mut [u8],
         buf_va: u64,
     ) -> Result<u64, u64> {
+        let entry = Self::diskfs_lookup_path(path, buf_va)?;
+        Self::diskfs_read_object_entry(entry, offset, out, buf_va)
+    }
+
+    /// DISKFS_V3: entry-based read (see diskfs_write_object_entry).
+    pub fn diskfs_read_object_entry(
+        entry: DiskManifestEntryV1,
+        offset: u64,
+        out: &mut [u8],
+        buf_va: u64,
+    ) -> Result<u64, u64> {
         serial_println!(
             "[sexfiles.disk.file.read.begin] offset={} len={}",
             offset,
             out.len()
         );
-        let entry = Self::diskfs_lookup_path(path, buf_va)?;
 
         if offset >= entry.len_bytes as u64 {
             serial_println!(

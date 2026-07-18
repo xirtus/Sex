@@ -579,6 +579,37 @@ fn tokenize(line: &[u8]) -> (&[u8], &[u8]) {
 // Caps at 64 messages so a dead storage PD cannot hang the terminal.
 const OP_DISKFS_STAT_SPINDLE: u64 = 0x3B;
 const OP_DISKFS_SELECT_SPINDLE: u64 = 0x3E;
+// DISKFS_V3 dynamic object ops (sexfiles messages.rs is canonical).
+const OP_DISKFS_CREATE_SPINDLE: u64 = 0x42;
+const OP_DISKFS_LIST_SPINDLE: u64 = 0x43;
+const OP_DISKFS_DELETE_SPINDLE: u64 = 0x47;
+const OP_DISKFS_RENAME_SPINDLE: u64 = 0x48;
+const DISKFS_V3_SLOTS_SPINDLE: u64 = 15;
+
+/// Pack up to 16 ASCII name bytes into (lo, hi) LE words.
+fn pack_doc_name(name: &[u8]) -> (u64, u64) {
+    let mut lo = 0u64;
+    let mut hi = 0u64;
+    for (i, &b) in name.iter().take(16).enumerate() {
+        if i < 8 { lo |= (b as u64) << (i * 8); }
+        else { hi |= (b as u64) << ((i - 8) * 8); }
+    }
+    (lo, hi)
+}
+
+/// Parse a decimal object id from args. None on empty/garbage.
+fn parse_doc_id(args: &[u8]) -> Option<u64> {
+    let t = args.iter().position(|&b| b != b' ').map(|i| &args[i..])?;
+    let mut v: u64 = 0;
+    let mut any = false;
+    for &b in t {
+        if b == b' ' { break; }
+        if !(b'0'..=b'9').contains(&b) { return None; }
+        v = v * 10 + (b - b'0') as u64;
+        any = true;
+    }
+    if any { Some(v) } else { None }
+}
 
 // Settle the message queue before a synchronous probe: fire-and-forget
 // storage calls issued earlier on this same Enter (history persist) have
@@ -1187,29 +1218,134 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         b"disk" => {
-            // SPINDLE_DISK_CMD_V1: REAL synchronous DiskFS probe — first live
-            // spindle command backed by an actual storage roundtrip. Lists
-            // which fixed disk objects are present (SELECT + STAT per path).
+            // DISKFS_V3: enumerate the dynamic object table — real names via
+            // OP_DISKFS_LIST (info word + up to 3 name chunks per slot).
             sb.push(b"DISK OBJECTS:");
             spindle_storage_settle();
-            let names: [&[u8]; 3] = [
-                b" 0 SEXFILES-PROOF-V1",
-                b" 1 LINEN-OBJECT-V1",
-                b" 2 N-V1 (QUIL DOC)",
-            ];
             let mut found = 0u64;
-            for pid in 0..3u64 {
-                let ok = spindle_storage_sync(OP_DISKFS_SELECT_SPINDLE, pid, 0, 0).is_ok()
-                    && spindle_storage_sync(OP_DISKFS_STAT_SPINDLE, 0, 0, 0).is_ok();
-                if ok {
-                    sb.push(names[pid as usize]);
-                    found += 1;
+            for pid in 0..DISKFS_V3_SLOTS_SPINDLE {
+                let info = match spindle_storage_sync(OP_DISKFS_LIST_SPINDLE, pid, 0xFF, 0) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if (info >> 62) & 1 == 0 { continue; }
+                let mut line = [b' '; 30];
+                line[0] = b' ';
+                if pid >= 10 { line[1] = b'1'; line[2] = b'0' + (pid - 10) as u8; }
+                else { line[2] = b'0' + pid as u8; }
+                let mut ln = 4;
+                'chunks: for c in 0..3u64 {
+                    let w = match spindle_storage_sync(OP_DISKFS_LIST_SPINDLE, pid, c, 0) {
+                        Ok(v) => v,
+                        Err(_) => break 'chunks,
+                    };
+                    for k in 0..8 {
+                        let b = ((w >> (k * 8)) & 0xFF) as u8;
+                        if b == 0 { break 'chunks; }
+                        if ln < line.len() { line[ln] = b; ln += 1; }
+                    }
                 }
+                sb.push(&line[..ln]);
+                found += 1;
             }
             if found == 0 {
                 sb.push(b"  NONE (NO NVME?)");
             }
-            serial_println!("[spindle.disk.command] found={} ok=1 reason=sync_diskfs_probe", found);
+            serial_println!("[spindle.disk.command] found={} ok=1 reason=v3_enumerate", found);
+            true
+        }
+        b"mkdoc" => {
+            // DISKFS_V3: create a named persistent object.
+            let name_end = args.iter().position(|&b| b == b' ').unwrap_or(args.len());
+            let name = &args[..name_end.min(16)];
+            if name.is_empty() {
+                sb.push(b"USAGE: MKDOC <NAME>");
+                serial_println!("[spindle.mkdoc] ok=0 reason=empty_name");
+                return true;
+            }
+            spindle_storage_settle();
+            let (lo, hi) = pack_doc_name(name);
+            match spindle_storage_sync(OP_DISKFS_CREATE_SPINDLE, 0, lo, hi) {
+                Ok(id) => {
+                    sb.push(b"CREATED:");
+                    let mut line = [b' '; 24];
+                    line[1] = b'0' + (id % 10) as u8;
+                    if id >= 10 { line[0] = b'1'; }
+                    let n = name.len().min(16);
+                    line[3..3 + n].copy_from_slice(&name[..n]);
+                    sb.push(&line[..3 + n]);
+                    serial_println!("[spindle.mkdoc] id={} ok=1", id);
+                }
+                Err(e) => {
+                    if e == -8 { sb.push(b"ERROR: NAME EXISTS"); }
+                    else if e == -5 { sb.push(b"ERROR: TABLE FULL"); }
+                    else { sb.push(b"ERROR: CREATE FAILED"); }
+                    serial_println!("[spindle.mkdoc] ok=0 err={}", e);
+                }
+            }
+            true
+        }
+        b"rmdoc" => {
+            // DISKFS_V3: delete an object by id (system slots protected).
+            let Some(id) = parse_doc_id(args) else {
+                sb.push(b"USAGE: RMDOC <ID>");
+                serial_println!("[spindle.rmdoc] ok=0 reason=bad_id");
+                return true;
+            };
+            spindle_storage_settle();
+            match spindle_storage_sync(OP_DISKFS_DELETE_SPINDLE, id, 0, 0) {
+                Ok(_) => {
+                    sb.push(b"DELETED.");
+                    serial_println!("[spindle.rmdoc] id={} ok=1", id);
+                }
+                Err(e) => {
+                    if e == -6 { sb.push(b"ERROR: SYSTEM OBJECT"); }
+                    else if e == -3 { sb.push(b"ERROR: NOT FOUND"); }
+                    else { sb.push(b"ERROR: DELETE FAILED"); }
+                    serial_println!("[spindle.rmdoc] id={} ok=0 err={}", id, e);
+                }
+            }
+            true
+        }
+        b"mvdoc" => {
+            // DISKFS_V3: rename — mvdoc <id> <name>.
+            let Some(id) = parse_doc_id(args) else {
+                sb.push(b"USAGE: MVDOC <ID> <NAME>");
+                serial_println!("[spindle.mvdoc] ok=0 reason=bad_id");
+                return true;
+            };
+            let rest = match args.iter().position(|&b| b == b' ') {
+                Some(i) => {
+                    let r = &args[i..];
+                    match r.iter().position(|&b| b != b' ') {
+                        Some(j) => &r[j..],
+                        None => &[][..],
+                    }
+                }
+                None => &[][..],
+            };
+            let name_end = rest.iter().position(|&b| b == b' ').unwrap_or(rest.len());
+            let name = &rest[..name_end.min(16)];
+            if name.is_empty() {
+                sb.push(b"USAGE: MVDOC <ID> <NAME>");
+                serial_println!("[spindle.mvdoc] ok=0 reason=empty_name");
+                return true;
+            }
+            spindle_storage_settle();
+            let (lo, hi) = pack_doc_name(name);
+            match spindle_storage_sync(OP_DISKFS_RENAME_SPINDLE, id, lo, hi) {
+                Ok(_) => {
+                    sb.push(b"RENAMED.");
+                    serial_println!("[spindle.mvdoc] id={} ok=1", id);
+                }
+                Err(e) => {
+                    if e == -8 { sb.push(b"ERROR: NAME EXISTS"); }
+                    else if e == -6 { sb.push(b"ERROR: SYSTEM OBJECT"); }
+                    else if e == -3 { sb.push(b"ERROR: NOT FOUND"); }
+                    else { sb.push(b"ERROR: RENAME FAILED"); }
+                    serial_println!("[spindle.mvdoc] id={} ok=0 err={}", id, e);
+                }
+            }
             true
         }
         b"notify" => {

@@ -144,6 +144,19 @@ pub const ERR_OVERFLOW: i64 = -4;
 pub const ERR_FULL: i64 = -5;
 pub const ERR_PERM_DENIED: i64 = -6;
 pub const ERR_BAD_CMD: i64 = -7;
+/// DISKFS_V3: name already exists (create/rename).
+pub const ERR_EXISTS: i64 = -8;
+
+// ── DISKFS_V3 dynamic object ops ────────────────────────────────────────────
+/// Create object: arg1|arg2 = up to 16 name bytes LE. Reply = new path_id.
+pub const OP_DISKFS_CREATE: u64 = 0x42;
+/// Enumerate: arg0 = path_id, arg1 = query (0-2 name chunk, 0xFF slot info,
+/// 0xFE global generation). Reply = packed (see vfs.rs).
+pub const OP_DISKFS_LIST: u64 = 0x43;
+/// Delete object: arg0 = path_id. System slots 0-2 protected.
+pub const OP_DISKFS_DELETE: u64 = 0x47;
+/// Rename object: arg0 = path_id, arg1|arg2 = new name.
+pub const OP_DISKFS_RENAME: u64 = 0x48;
 
 // ── Bounds ──
 pub const RAMFS_MAX_FILES: usize = 64;
