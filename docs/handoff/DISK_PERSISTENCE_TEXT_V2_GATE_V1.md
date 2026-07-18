@@ -42,17 +42,43 @@ Gate: `./scripts/disk_persistence_gate.sh` (two boots, shared NVMe image). All r
   persist) before issuing, retries enqueue (bounded), and polls the reply
   non-blocking with a yield budget.
 
-## Known limitation discovered (NOT fixed — kernel domain, out of sprint scope)
-**IPC request loss under storage contention.** A `pdx_call` to sexfiles can
-return status=0 (enqueued) yet never be received by sexfiles when sexfiles is
-mid-exchange with another client (observed repeatedly while linen's boot
-publish held it: quil's and spindle's SELECT vanished; the caller then hung
-forever in a blocking `pdx_listen_raw`). Mitigations shipped: bounded
-non-blocking reply polls in quil (`pdx_storage_call_bounded`) and spindle
-(300k-yield budget) so the PD survives and reports
-`[quil.persist.reply.timeout]` / `[spindle.disk.reply.timeout]`; the gate
-sequences user disk ops after `[linen.disk.publish.done]`. Root cause lives in
-the kernel async-IPC queue and deserves its own lane.
+## IPC request loss — ROOT-CAUSED AND FIXED (follow-up sprint, same day)
+The "vanished request" hangs were NOT primarily a kernel queue bug. Chain
+(commit ee45af07, gate `scripts/ipc_defer_gate.sh`):
+
+1. **Server reply-wait discard (the actual killer).** sexfiles'
+   `diskfs_block_call` waited for sexdrive's reply with `pdx_listen_raw(0)`
+   and DISCARDED every non-reply message as "stale startup message" — but
+   those are live client requests arriving mid-NVMe-roundtrip. Same bug
+   class independently present in linen's `pdx_storage_sync` (ate the
+   shell's snapshot fetch → empty linen list, shell parked in fetch all
+   session). Fix pattern: **defer stash + replay** — stash non-reply
+   messages in a small ring, main serving loop drains it before listening
+   (`[sexfiles.defer.stash/replay]`, `[linen.defer.stash/replay]`).
+   **Any new server sync-wait loop MUST use this pattern.**
+
+2. **Kernel ipc_ring was SPSC used as MPSC.** Every client enqueues into a
+   server's single message_ring; two producers could claim the same slot
+   and both return Ok (one message lost). Now CAS slot claim + per-slot
+   publish seq; consumer treats claimed-but-unwritten slots as empty.
+
+3. **DiskFS bridge selection now per-caller.** Interleaved clients (real
+   once defers landed) clobbered the single global selected path_id.
+
+4. **Client-side settle before sync probes.** Fire-and-forget calls issued
+   earlier on the same event (spindle history persist on Enter) have
+   replies still in flight; a single empty poll proves nothing. Spindle
+   settles (consume until sustained quiet streak) before its disk probe.
+
+## Follow-up features (same day)
+- **LINEN_DISK_OPEN_V1** (commit 7ea22e0b): opening `disk-nquil-v1` from
+  the Linen list sends `OP_QUIL_OPEN_DISK_DOC` (0x4A) to the real quil PD,
+  which restores the doc from DiskFS. Gate rows: linen_disk_open_intent,
+  quil_disk_doc_recv, quil_disk_doc_load (13/13 PASS).
+- **SPINDLE_PAGING_V1** (commit 95a12c5c): PgUp/PgDn page the terminal
+  scrollback (offset honored in content_render, clamped to ring); keys
+  pass through the shared is_spindle_text_key filter — both dispatch
+  paths, no dead-branch split.
 
 ## Gate-authoring trap (cost 3 debug cycles)
 `wait_marker` matched STALE serial logs from the previous run: QEMU truncates
