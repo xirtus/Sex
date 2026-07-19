@@ -109,17 +109,22 @@ k ret; wait_save 1
 kv esc '\[quil\.palette\.action\] kind=esc' 8
 kv backspace '\[quil\.text\.backspace\]' 6
 kv esc 'kind=esc toggle_on=1' 8
+kv down '\[quil\.palette\.selected\] row=1' 8
 k ret; wait_save 2
 sleep 1
 dump "$D/saved.ppm"
-# New Buffer: palette row 3
+# New Buffer: cycle palette off/on to force row-0 reset, then rows 1-3
+kv esc '\[quil\.palette\.action\] kind=esc clear=1' 8
+kv esc 'kind=esc toggle_on=1' 8
+kv down '\[quil\.palette\.selected\] row=1' 8
 kv down '\[quil\.palette\.selected\] row=2' 8
 kv down '\[quil\.palette\.selected\] row=3' 8
 kv ret '\[quil\.new\.ok\]' 8
 sleep 1
 dump "$D/new.ppm"
-# reload from disk: up = row 2 = load
-kv up '\[quil\.palette\.selected\] row=2' 8
+# reload from disk: rows 0→2
+kv down '\[quil\.palette\.selected\] row=1' 8
+kv down '\[quil\.palette\.selected\] row=2' 8
 k ret
 wait_marker '\[quil\.persist\.load\.ok\]' "$L" 120 || echo "MISS reload"
 sleep 1

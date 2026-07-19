@@ -107,3 +107,32 @@ QEMU. Any future multi-boot gate must do the same.
 - **desktop_cycles_gate** (91cd7f41): repeated-use convergence — refocus
   cycles, output flood + paging, buffer/mode survival, end-of-run input
   liveness. silkbar clock.send now logs first 12 + every 64th.
+
+## Dynamic desktop sprint (2026-07-19, second wave)
+- **DISKFS_V3** (e6f2ef2e): dynamic 15-slot object store replaces the fixed
+  3-path model. One 512B manifest sector (LBA 2046): magic/ver3/count/global
+  generation + 15×32B entries (name[24], start_lba, len_sectors, flags, slot
+  gen). Slot index = object id; LBA fixed per slot (2046-8*(i+1)). Ops:
+  CREATE 0x42, LIST 0x43 (name chunks / info bit62 / generation 0xFE),
+  DELETE 0x47, RENAME 0x48 (sexfiles messages.rs canonical). Slots 0-2 =
+  protected system objects at legacy LBAs. Create zeroes first sector.
+  IMPORTANT: reply values are sign-checked by sync clients — never set
+  bit63 in a reply payload.
+- **Quil TEXT_V3 + DOC_V1** (8affa303, 4585311d): true cursor (insert/
+  backspace/delete at cursor, up/down with sticky goal column, layout
+  mirrors display wrap), 22-row follow-cursor viewport, '#' caret
+  (display-only), FNV-1a content hash in the save marker (gates assert
+  exact bytes). Untitled docs; first save prompts for a name on the
+  status line and creates the object. Palette rows: 0=stub(protected),
+  1=Save, 2=Load, 3=New, 4=stub — palette selection PERSISTS across
+  esc toggles (gates must navigate relative to last row).
+- **Linen LIVE_V1** (2ef47cc9): generation-gated manifest rescan
+  (OP_LINEN_RESCAN_DISK 0x49) reconciles session table (add/remove/
+  rename); shell fires it + refetches snapshot on every Linen open;
+  snapshot carries disk path_id+1 in bits 48-55; any disk doc opens in
+  quil by path_id.
+- **Window lifecycle** (3d8c2405): spindle winreset destroys+recreates
+  its 4 surfaces; 5 cycles = 24 creates on the 16-slot table proves 0xEE
+  reclaim. Limitation: PDs are immortal — no dead-owner cleanup path.
+- Gates: dynamic_object (11), quil_cursor (9), quil_viewport (6),
+  linen_live_refresh (8), window_lifecycle (9), all PASS.

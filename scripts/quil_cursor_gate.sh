@@ -106,9 +106,12 @@ kv backspace '\[quil\.text\.backspace\] old=5 new=4' 6
 kv backspace '\[quil\.text\.backspace\] old=4 new=3' 6
 # dirty then save; hash must equal FNV-1a("abX")
 kv esc 'kind=esc toggle_on=1' 8
-kv up '\[quil\.palette\.selected\] row=2' 8
-kv up '\[quil\.palette\.selected\] row=1' 8
+kv down '\[quil\.palette\.selected\] row=1' 8
+kv ret '\[quil\.name\.mode\] on=1' 10
+kv q '\[quil\.text\.draw' 6
+kv c '\[quil\.text\.draw' 6
 k ret
+wait_marker '\[quil\.doc\.create\.ok\]' "$L" 60 || echo "[qc] WARN create"
 wait_marker '\[quil\.persist\.save\.ok\]' "$L" 120 || echo "[qc] WARN save"
 sleep 1
 
