@@ -64,6 +64,11 @@ static mut QUIL_DIRTY: bool = false;
 /// QUIL_DOC_V1: current persistent object (DiskFS V3 path_id).
 /// u64::MAX = untitled (no backing object yet). Default: legacy doc 2.
 static mut QUIL_DOC_ID: u64 = 2;
+/// DISKFS_V4: last real (non-MAX) doc id this session touched. New Buffer
+/// clears QUIL_DOC_ID to force a name prompt on Save, but Load must still
+/// be able to reload the document that was open before New Buffer — so
+/// this tracks identity separately and survives the untitled reset.
+static mut QUIL_LAST_DOC_ID: u64 = 2;
 static mut QUIL_DOC_TITLE: [u8; 16] = *b"n-v1\0\0\0\0\0\0\0\0\0\0\0\0";
 /// QUIL_DOC_V1: modal name-entry (first save of an untitled doc).
 static mut QUIL_NAME_MODE: bool = false;
@@ -1797,11 +1802,16 @@ fn quil_persist_save() -> Result<usize, i64> {
 
 fn quil_persist_load() -> Result<usize, i64> {
     unsafe {
-        if QUIL_DOC_ID == u64::MAX {
+        // DISKFS_V4: an untitled buffer (post New Buffer) has no id of its
+        // own to select, but Load means "reload the document this session
+        // was last attached to" — fall back to QUIL_LAST_DOC_ID rather than
+        // failing outright, and re-adopt it as the current doc on success.
+        let target = if QUIL_DOC_ID != u64::MAX { QUIL_DOC_ID } else { QUIL_LAST_DOC_ID };
+        if target == u64::MAX {
             serial_println!("[quil.persist.load.skip] reason=untitled");
             return Err(-9);
         }
-        pdx_storage_call_bounded(OP_DISKFS_SELECT, QUIL_DOC_ID, 0, 0)
+        pdx_storage_call_bounded(OP_DISKFS_SELECT, target, 0, 0)
             .map_err(|e| { serial_println!("[quil.persist.load.err] stage=select err={}", e); e })?;
         let hdr = pdx_storage_call_bounded(OP_DISKFS_READ, 0, 8, 0)
             .map_err(|e| { serial_println!("[quil.persist.load.err] stage=header err={}", e); e })?;
@@ -1824,6 +1834,8 @@ fn quil_persist_load() -> Result<usize, i64> {
         QUIL_BUFFER_LEN = len;
         QUIL_CURSOR_POS = len;
         QUIL_DIRTY = false;
+        QUIL_DOC_ID = target;
+        QUIL_LAST_DOC_ID = target;
         serial_println!("[quil.persist.load.ok] bytes={}", len);
         draw_text_lines(&QUIL_BUFFER[..QUIL_BUFFER_LEN]);
         Ok(len)
@@ -1845,6 +1857,7 @@ unsafe fn quil_doc_create_and_save() {
     match pdx_storage_call_bounded(OP_DISKFS_CREATE, 0, lo, hi) {
         Ok(id) => {
             QUIL_DOC_ID = id;
+            QUIL_LAST_DOC_ID = id;
             QUIL_DOC_TITLE = [0u8; 16];
             for i in 0..QUIL_NAME_LEN.min(16) { QUIL_DOC_TITLE[i] = QUIL_NAME_BUF[i]; }
             QUIL_NAME_MODE = false;
@@ -3856,6 +3869,7 @@ pub extern "C" fn _start() -> ! {
                     msg.arg0, path_id);
                 unsafe {
                     QUIL_DOC_ID = path_id;
+                    QUIL_LAST_DOC_ID = path_id;
                     QUIL_DOC_TITLE = [0u8; 16];
                     let mut n = 0usize;
                     'name: for c in 0..2u64 {

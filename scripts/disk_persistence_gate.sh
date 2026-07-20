@@ -98,7 +98,7 @@ stop() { kill "$QEMU_PID" 2>/dev/null; sleep 1; kill -9 "$QEMU_PID" 2>/dev/null;
 
 FAULT_RE='KERNEL PAGE FAULT|DOUBLE FAULT|KERNEL PANIC|GP FAULT|fault\.kill'
 FAILED=0
-r() { echo "ROW $1 $2"; [[ "$2" == FAIL ]] && FAILED=1 || true; }
+r() { echo "ROW $1 $2"; [[ "$2" == FAIL* ]] && FAILED=1 || true; }
 
 if [[ "$SKIP_BUILD" != "1" ]]; then
   ./scripts/entrypoint_build.sh >"$GATE_DIR/build.log" 2>&1 || { echo "ROW build FAIL"; echo "[disk.persistence.gate.result] FAIL"; exit 1; }

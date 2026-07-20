@@ -123,7 +123,7 @@ stop
 
 ### Rows
 FAILED=0
-r() { echo "ROW $1 $2"; [[ "$2" == FAIL ]] && FAILED=1 || true; }
+r() { echo "ROW $1 $2"; [[ "$2" == FAIL* ]] && FAILED=1 || true; }
 grep -q '\[spindle\.mkdoc\] id=3 ok=1' "$D/b1.log" && r create_named_object PASS || r create_named_object FAIL
 grep -q '\[spindle\.mkdoc\] ok=0 err=-8' "$D/b1.log" && r duplicate_name_rejected PASS || r duplicate_name_rejected FAIL
 grep -q '\[spindle\.disk\.command\] found=4' "$D/b1.log" && r list_contains_object PASS || r list_contains_object FAIL

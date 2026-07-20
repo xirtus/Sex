@@ -80,7 +80,7 @@ kv down '\[quil\.palette\.selected\] row=1' 8
 kv down '\[quil\.palette\.selected\] row=2' 8
 k ret
 FAILED=0
-r() { echo "ROW $1 $2"; [[ "$2" == FAIL ]] && FAILED=1 || true; }
+r() { echo "ROW $1 $2"; [[ "$2" == FAIL* ]] && FAILED=1 || true; }
 if wait_marker '\[quil\.persist\.load\.(ok|err|miss)' "$L" 240; then
   r persist_completes_mid_publish PASS
 else

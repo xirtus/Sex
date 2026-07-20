@@ -169,7 +169,7 @@ dump "$D/final.ppm"; sleep 1
 
 # ── Rows ──
 FAILED=0
-r() { echo "ROW $1 $2"; [[ "$2" == FAIL ]] && FAILED=1 || true; }
+r() { echo "ROW $1 $2"; [[ "$2" == FAIL* ]] && FAILED=1 || true; }
 [[ $(count_re '\[spindle\.cmd\.exec\] name=help' "$L") -ge 6 ]] && r spindle_flood_6_help PASS || r spindle_flood_6_help FAIL
 grep -q '\[spindle\.disk\.command\] found=3' "$L" && r spindle_disk_after_refocus PASS || r spindle_disk_after_refocus FAIL
 grep -qE '\[spindle\.page\.nav\] dir=up offset=[1-9]' "$L" && r spindle_paging_after_flood PASS || r spindle_paging_after_flood FAIL

@@ -131,7 +131,7 @@ sleep 1
 dump "$D/reloaded.ppm"
 
 FAILED=0
-r() { echo "ROW $1 $2"; [[ "$2" == FAIL ]] && FAILED=1 || true; }
+r() { echo "ROW $1 $2"; [[ "$2" == FAIL* ]] && FAILED=1 || true; }
 grep -qE '\[quil\.text\.draw\.v2\].*dirty=1' "$L" && r quil_dirty_tracking PASS || r quil_dirty_tracking FAIL
 S1=$(grep -oE '\[quil\.persist\.save\.ok\] bytes=[0-9]+' "$L" | head -1 | grep -oE '[0-9]+$')
 S2=$(grep -oE '\[quil\.persist\.save\.ok\] bytes=[0-9]+' "$L" | tail -1 | grep -oE '[0-9]+$')
