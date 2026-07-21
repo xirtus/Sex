@@ -154,6 +154,10 @@ pub const ERR_PERM_DENIED: i64 = -6;
 pub const ERR_BAD_CMD: i64 = -7;
 /// DISKFS_V3: name already exists (create/rename).
 pub const ERR_EXISTS: i64 = -8;
+/// DISKFS_V4: manifest sector matches neither the current format, a
+/// recognized legacy version, nor an all-zero (genuinely unformatted)
+/// sector. Mount refuses to proceed rather than silently overwriting it.
+pub const ERR_CORRUPT: i64 = -9;
 
 // ── DISKFS_V3 dynamic object ops ────────────────────────────────────────────
 /// Create object: arg1|arg2 = up to 16 name bytes LE. Reply = new path_id.

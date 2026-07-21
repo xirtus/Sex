@@ -1314,6 +1314,10 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 }
                 sb.push(&line[..ln]);
                 found += 1;
+                serial_println!(
+                    "[spindle.disk.entry] slot={} name={}",
+                    pid, core::str::from_utf8(&line[4..ln]).unwrap_or("?")
+                );
             }
             if found == 0 {
                 sb.push(b"  NONE (NO NVME?)");

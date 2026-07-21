@@ -890,12 +890,28 @@ fn v4_allocate(
     bm: &mut [u64; 3],
     need_blocks: u64,
     out: &mut [V4Extent; DISKFS_V4_MAX_EXTENTS],
-    mut n: usize,
+    n: usize,
 ) -> Result<usize, i64> {
+    // A multi-run allocation (pool fragmented enough that satisfying
+    // need_blocks takes more than one contiguous stretch) can find and
+    // commit several runs before a LATER run fails - either the pool runs
+    // out of free blocks or `out` runs out of extent slots. Without the
+    // rollback below, the earlier runs' bitmap bits would stay set despite
+    // the overall call returning Err, leaking them until the next reboot's
+    // bitmap rebuild (which recomputes from committed indirect descriptors
+    // only, silently healing it - but same-session, real requests would
+    // spuriously see less free space than actually exists). start_n marks
+    // where this call's own runs begin in `out`, so on failure every run
+    // this call itself set can be freed before returning.
+    let start_n = n;
+    let mut n = n;
     let mut need = need_blocks;
     let mut block = 0u64;
     while need > 0 {
-        if block >= DISKFS_V4_POOL_BLOCKS { return Err(messages::ERR_FULL); }
+        if block >= DISKFS_V4_POOL_BLOCKS {
+            v4_free_pool_only(bm, &out[start_n..n]);
+            return Err(messages::ERR_FULL);
+        }
         if v4_bitmap_test(bm, block) { block += 1; continue; }
         let run_start = block;
         let mut run_len = 0u64;
@@ -903,7 +919,10 @@ fn v4_allocate(
             run_len += 1;
             block += 1;
         }
-        if n >= DISKFS_V4_MAX_EXTENTS { return Err(messages::ERR_FULL); }
+        if n >= DISKFS_V4_MAX_EXTENTS {
+            v4_free_pool_only(bm, &out[start_n..n]);
+            return Err(messages::ERR_FULL);
+        }
         for b in 0..run_len { v4_bitmap_set(bm, run_start + b); }
         out[n] = V4Extent {
             start_lba: (DISKFS_V4_POOL_BASE_LBA + run_start * DISKFS_V4_BLOCK_SECTORS) as u16,
@@ -1143,10 +1162,29 @@ fn v4_ensure(buf_va: u64) -> Result<(), u64> {
         v4_bitmap_rebuild(buf_va);
         return Ok(());
     }
+    // Migration / bootstrap only fires for the two SAFE cases:
+    //  - magic matches (this is genuinely our manifest format) but version
+    //    is an older, recognized predecessor -> real migration.
+    //  - the sector is all-zero -> genuinely unformatted disk.
+    // Anything else (non-matching magic on a non-blank sector: torn write,
+    // bad sector, foreign data) is corruption, not "unknown, so start
+    // fresh" - silently overwriting it would destroy whatever was really
+    // there. Refuse to mount instead; every v4_ensure caller already
+    // propagates Err(e) as a hard error, so this fails visibly rather than
+    // panicking or exposing a partially-valid state.
+    let recognized_legacy = magic == DISKFS_MANIFEST_MAGIC && version < DISKFS_V4_VERSION;
+    let genuinely_blank = sector.iter().all(|&b| b == 0);
+    if !recognized_legacy && !genuinely_blank {
+        crate::pdx::serial_println!(
+            "[sexfiles.diskfs.v4.mount.err] reason=corrupt_manifest magic={:#x} version={}",
+            magic, version
+        );
+        return Err(messages::ERR_CORRUPT as u64);
+    }
     // Migration / bootstrap: recognized V3 manifest -> wrap the 3 legacy
     // system objects as single-extent V4 entries at their EXISTING
-    // physical LBAs (no data movement). Anything else (blank / unknown)
-    // bootstraps fresh at the same legacy layout V3 originally used.
+    // physical LBAs (no data movement). Genuinely blank disk bootstraps
+    // fresh at the same legacy layout V3 originally used.
     let legacy: [(&[u8], u16); 3] = [
         (b"sexfiles-proof-v1", 2038u16),
         (b"linen-object-v1", 2030u16),
@@ -1217,6 +1255,8 @@ fn handle_diskfs_create(name_lo: u64, name_hi: u64, buf_va: u64) -> u64 {
     let gen = unsafe { V4_TABLE[i].gen }.wrapping_add(1).max(1);
     let e = V4Entry { name, size_bytes: 0, gen };
     unsafe { V4_TABLE[i] = e; }
+    crate::pdx::serial_println!(
+        "[sexfiles.diskfs.v4.crash_point.create_pending] slot={} gen={}", i, gen);
     if let Err(er) = v4_persist(buf_va) {
         unsafe { V4_TABLE[i] = V4_EMPTY; }
         return er;
@@ -1269,7 +1309,11 @@ fn handle_diskfs_delete(path_id: u64, buf_va: u64) -> u64 {
         V4_TABLE[i].size_bytes = 0;
         V4_TABLE[i].gen = V4_TABLE[i].gen.wrapping_add(1);
     }
+    crate::pdx::serial_println!(
+        "[sexfiles.diskfs.v4.crash_point.delete_pending] slot={}", i);
     if let Err(e) = v4_persist(buf_va) { return e; }
+    crate::pdx::serial_println!(
+        "[sexfiles.diskfs.v4.crash_point.delete_committed] slot={}", i);
     {
         let mut bm = V4_BITMAP.write();
         v4_free_pool_only(&mut bm, &extents[..count]);
@@ -1294,6 +1338,8 @@ fn handle_diskfs_rename(path_id: u64, name_lo: u64, name_hi: u64, buf_va: u64) -
         }
     }
     unsafe { V4_TABLE[i].name = name; }
+    crate::pdx::serial_println!(
+        "[sexfiles.diskfs.v4.crash_point.rename_pending] slot={}", i);
     if let Err(e) = v4_persist(buf_va) { return e; }
     crate::pdx::serial_println!("[sexfiles.diskfs.v4.rename.ok] slot={}", i);
     0
