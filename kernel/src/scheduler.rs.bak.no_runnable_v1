@@ -34,17 +34,6 @@ pub const STATE_READY: u32 = 0;
 pub const STATE_RUNNING: u32 = 1;
 pub const STATE_BLOCKED: u32 = 2;
 
-/// Phase 1 scheduler ownership decision.
-/// NoRunnable explicitly preserves current_task/current_pd; it must not be
-/// treated as a switch.
-pub enum ScheduleDecision {
-    Switch {
-        old: *mut TaskContext,
-        next: *const TaskContext,
-    },
-    NoRunnable,
-}
-
 pub struct InitArg {
     pub display_lease: crate::capability::DisplayHardwareLease,
 }
@@ -193,7 +182,7 @@ impl Scheduler {
         }
     }
 
-    pub fn tick(&self) -> ScheduleDecision {
+    pub fn tick(&self) -> Option<(*mut TaskContext, *const TaskContext)> {
         if SCHED_TICK_ENTER_LOG_BUDGET
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
             .is_ok()
@@ -267,59 +256,46 @@ impl Scheduler {
                 next_task = self.attempt_steal();
             }
         }
-        // Phase 1: explicit NoRunnable.
-        // Do not touch current_task/current_pd until a real next task exists.
-        if next_task.is_null() {
-            if SCHED_NO_RUNNABLE_LOG_BUDGET
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
-                .is_ok()
-            {
-                let current = self.current_task.load(Ordering::Acquire);
-                if current.is_null() {
+        let old_task = self.current_task.swap(next_task, Ordering::AcqRel);
+
+        if !next_task.is_null() {
+            unsafe {
+                (*next_task).state.store(TaskState::Running as u32, Ordering::Release);
+                if TASK_LIFECYCLE_LOG_BUDGET
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
+                    .is_ok()
+                {
                     serial_println!(
-                        "sched.no_runnable.idle core={} phase={} runqueue_empty=true",
-                        self.core_id,
-                        unsafe { crate::ipc::BOOT_CONTROLLER.phase() as u8 }
-                    );
-                } else {
-                    serial_println!(
-                        "sched.no_runnable.preserve core={} phase={} runqueue_empty=true task={:#x}",
-                        self.core_id,
-                        unsafe { crate::ipc::BOOT_CONTROLLER.phase() as u8 },
-                        current as u64
+                        "task.running id={} pd_id={} rip={:#x} rsp={:#x}",
+                        (*next_task).id,
+                        (*next_task).context.pd_id,
+                        (*next_task).context.rip,
+                        (*next_task).context.rsp
                     );
                 }
             }
-            return ScheduleDecision::NoRunnable;
         }
 
-        // A concrete next task exists: now take ownership.
-        let old_task = self.current_task.swap(next_task, Ordering::AcqRel);
-
         unsafe {
-            (*next_task).state.store(TaskState::Running as u32, Ordering::Release);
-            if TASK_LIFECYCLE_LOG_BUDGET
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
-                .is_ok()
-            {
-                serial_println!(
-                    "task.running id={} pd_id={} rip={:#x} rsp={:#x}",
-                    (*next_task).id,
-                    (*next_task).context.pd_id,
-                    (*next_task).context.rip,
-                    (*next_task).context.rsp
-                );
+            if !next_task.is_null() {
+                let core = crate::core_local::CoreLocal::get();
+                let next_pd_ptr = (*next_task).context.pd_ptr as *mut crate::capability::ProtectionDomain;
+
+                // Enforce strict atomic ordering: bind -> wrpkru -> switch_to
+                core.set_pd(next_pd_ptr);
             }
         }
 
-        unsafe {
-            let core = crate::core_local::CoreLocal::get();
-            let next_pd_ptr = (*next_task).context.pd_ptr as *mut crate::capability::ProtectionDomain;
-
-            // Enforce strict atomic ordering: bind -> wrpkru -> switch_to
-            core.set_pd(next_pd_ptr);
+        if next_task.is_null() {
+            if SCHED_NO_RUNNABLE_LOG_BUDGET.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1)).is_ok() {
+                serial_println!(
+                    "sched.no_runnable core={} phase={} runqueue_empty=true",
+                    self.core_id,
+                    unsafe { crate::ipc::BOOT_CONTROLLER.phase() as u8 }
+                );
+            }
+            return None;
         }
-
         if SCHED_PICK_NEXT_LOG_BUDGET
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
             .is_ok()
@@ -365,10 +341,7 @@ impl Scheduler {
         } else {
             unsafe { &mut (*old_task).context as *mut _ }
         };
-        ScheduleDecision::Switch {
-            old: old_ctx,
-            next: unsafe { &(*next_task).context },
-        }
+        unsafe { Some((old_ctx, &(*next_task).context)) }
     }
 
 
@@ -649,7 +622,7 @@ pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) 
         sched.runqueue.push(current);
         sched.current_task.store(ptr::null_mut(), Ordering::Release);
     }
-    if let ScheduleDecision::Switch { old: _old, next } = sched.tick() {
+    if let Some((_old, next)) = sched.tick() {
         let kstack_top = (*next).kstack_top;
         // SCHEDULER_TICK_PD8_PF_FLAKE_V1 root cause: `next` is *const TaskContext,
         // so kstack_top here is ctx.kstack_top = saved-frame BASE (rax slot), the
@@ -668,9 +641,7 @@ pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) 
         if !FIX_MARKER.swap(true, Ordering::Relaxed) {
             serial_println!("[scheduler.pd8.flake.fix.ok] reason=yield_rsp0_frame_base_ratchet");
         }
-        unsafe {
-            Scheduler::switch_to(core::ptr::null_mut(), next);
-        }
+        Scheduler::switch_to(core::ptr::null_mut(), next);
     }
     serial_println!("scheduler.yield_and_switch.no_runnable");
     loop { x86_64::instructions::hlt(); }

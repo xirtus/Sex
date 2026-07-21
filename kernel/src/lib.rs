@@ -143,45 +143,49 @@ pub fn kernel_init() {
         "interrupts.enable.before if={}",
         x86_64::instructions::interrupts::are_enabled()
     );
+
     // Temporary debug fallback: prove scheduler/context-switch path even if timer IRQ never fires.
     // Remove after timer delivery is verified.
     {
         let core_id = crate::core_local::CoreLocal::get().core_id as usize;
         let sched = &crate::scheduler::SCHEDULERS[core_id];
-        if let Some((_old_ctx_ptr, next_ctx_ptr)) = sched.tick() {
-            unsafe {
-                let kstack_top = (*next_ctx_ptr).kstack_top;
-                // TaskContext.kstack_top points at saved-frame base (rax slot),
-                // not empty kernel stack top. RSP0 must use empty top to avoid
-                // clobbering saved IRET/GPR frame on first user->kernel entry.
-                crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
-                crate::scheduler::log_first_scheduled_pd((*next_ctx_ptr).pd_id);
-                serial_println!(
-                    "context_switch.before_switch_to rip={:#x} rsp={:#x} rflags={:#x} cs={:#x} ss={:#x} pd_id={}",
-                    (*next_ctx_ptr).rip,
-                    (*next_ctx_ptr).rsp,
-                    (*next_ctx_ptr).rflags,
-                    (*next_ctx_ptr).cs,
-                    (*next_ctx_ptr).ss,
-                    (*next_ctx_ptr).pd_id
-                );
-                serial_println!(
-                    "switch.frame rip={:#x} cs={:#x} ss={:#x} rsp={:#x} rflags={:#x}",
-                    (*next_ctx_ptr).rip,
-                    (*next_ctx_ptr).cs,
-                    (*next_ctx_ptr).ss,
-                    (*next_ctx_ptr).rsp,
-                    (*next_ctx_ptr).rflags
-                );
-                crate::scheduler::debug_dump_iret_frame(next_ctx_ptr);
-                crate::scheduler::debug_dump_user_entry_bytes(next_ctx_ptr);
-                crate::gdt::debug_dump_user_selectors();
-                serial_println!("tss.rsp0={:#x}", crate::gdt::debug_tss_rsp0());
-                serial_println!("context_switch.begin");
-                crate::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx_ptr);
+        match sched.tick() {
+            crate::scheduler::ScheduleDecision::Switch { old: _old_ctx_ptr, next: next_ctx_ptr } => {
+                unsafe {
+                    let kstack_top = (*next_ctx_ptr).kstack_top;
+                    // TaskContext.kstack_top points at saved-frame base (rax slot),
+                    // not empty kernel stack top. RSP0 must use empty top to avoid
+                    // clobbering saved IRET/GPR frame on first user->kernel entry.
+                    crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
+                    crate::scheduler::log_first_scheduled_pd((*next_ctx_ptr).pd_id);
+                    serial_println!(
+                        "context_switch.before_switch_to rip={:#x} rsp={:#x} rflags={:#x} cs={:#x} ss={:#x} pd_id={}",
+                        (*next_ctx_ptr).rip,
+                        (*next_ctx_ptr).rsp,
+                        (*next_ctx_ptr).rflags,
+                        (*next_ctx_ptr).cs,
+                        (*next_ctx_ptr).ss,
+                        (*next_ctx_ptr).pd_id
+                    );
+                    serial_println!(
+                        "switch.frame rip={:#x} cs={:#x} ss={:#x} rsp={:#x} rflags={:#x}",
+                        (*next_ctx_ptr).rip,
+                        (*next_ctx_ptr).cs,
+                        (*next_ctx_ptr).ss,
+                        (*next_ctx_ptr).rsp,
+                        (*next_ctx_ptr).rflags
+                    );
+                    crate::scheduler::debug_dump_iret_frame(next_ctx_ptr);
+                    crate::scheduler::debug_dump_user_entry_bytes(next_ctx_ptr);
+                    crate::gdt::debug_dump_user_selectors();
+                    serial_println!("tss.rsp0={:#x}", crate::gdt::debug_tss_rsp0());
+                    serial_println!("context_switch.begin");
+                    crate::scheduler::Scheduler::switch_to(core::ptr::null_mut(), next_ctx_ptr);
+                }
             }
-        } else {
-            serial_println!("scheduler.debug_kick: no runnable task");
+            crate::scheduler::ScheduleDecision::NoRunnable => {
+                serial_println!("scheduler.debug_kick: no runnable task");
+            }
         }
     }
     serial_println!("kernel: Enabling interrupts and entering scheduler loop...");

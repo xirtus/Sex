@@ -27,7 +27,7 @@ pub fn route_signal(caller_pd_id: u32, target_pd_id: u32, signum: u8, cap_id: u6
     if !trampoline_task.is_null() {
         crate::scheduler::unpark_thread(trampoline_task);
     }
-    
+
     Ok(())
 }
 

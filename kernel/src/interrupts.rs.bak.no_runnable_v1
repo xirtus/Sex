@@ -425,13 +425,13 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
         return;
     }
 
-    let (old_ctx_ptr, next_ctx_ptr) = match sched.tick() {
-        crate::scheduler::ScheduleDecision::NoRunnable => {
-            unsafe { send_eoi(); }
-            return;
-        }
-        crate::scheduler::ScheduleDecision::Switch { old, next } => (old, next),
-    };
+    let result = sched.tick();
+    if result.is_none() {
+        unsafe { send_eoi(); }
+        return;
+    }
+
+    let (old_ctx_ptr, next_ctx_ptr) = result.unwrap();
 
     unsafe {
         // Save old context from interrupt stub's GPR push level on the stack.
@@ -585,48 +585,48 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
         }
     }
 
-    let (old_ctx_ptr, next_ctx_ptr) = match sched.tick() {
-        crate::scheduler::ScheduleDecision::NoRunnable => {
-            unsafe { send_eoi(); }
-
-            let current_ptr = sched.current_task.load(Ordering::Acquire);
-            if !current_ptr.is_null() {
-                unsafe {
-                    let state = (*current_ptr).state.load(Ordering::Acquire);
-                    if state == 3u32 {
-                        // Task was killed (Exited) — rewrite the raw IRET frame on the
-                        // kernel stack so iretq returns to a kernel halt loop instead of
-                        // the faulting RIP (which was 0x0).  Direct pointer arithmetic
-                        // bypasses any field-access restrictions on InterruptStackFrame.
-                        //
-                        // IRET frame layout relative to stack_frame (after stub's sub rsp,8):
-                        //   [0] = RIP, [1] = CS, [2] = RFLAGS, [3] = RSP, [4] = SS
-                        let halt_addr = &faulted_task_halt as *const _ as u64;
-                        let iret = stack_frame as *const _ as *mut u64;
-                        core::ptr::write(iret,           halt_addr);  // RIP  → kernel halt loop
-                        core::ptr::write(iret.add(1),    0x08u64);    // CS   → kernel code segment
-                        core::ptr::write(iret.add(2),    0x202u64);   // RFLAGS → IF=1, IOPL=0
-                        let cur_rsp: u64;
-                        core::arch::asm!("mov {}, rsp", out(reg) cur_rsp);
-                        core::ptr::write(iret.add(3),    cur_rsp);    // RSP  → current kernel stack
-                        core::ptr::write(iret.add(4),    0x10u64);    // SS   → kernel data segment
-                        serial_println!(
-                            "fault.kill iret_redirect pd={} halt_addr={:#x}",
-                            cur_pd, halt_addr
-                        );
-                    } else if state != crate::scheduler::STATE_RUNNING {
-                        x86_64::instructions::interrupts::enable();
-                        while (*current_ptr).state.load(Ordering::Acquire) != crate::scheduler::STATE_RUNNING {
-                            x86_64::instructions::hlt();
-                        }
-                        x86_64::instructions::interrupts::disable();
+    let result = sched.tick();
+    if result.is_none() {
+        unsafe { send_eoi(); }
+        
+        let current_ptr = sched.current_task.load(Ordering::Acquire);
+        if !current_ptr.is_null() {
+            unsafe {
+                let state = (*current_ptr).state.load(Ordering::Acquire);
+                if state == 3u32 {
+                    // Task was killed (Exited) — rewrite the raw IRET frame on the
+                    // kernel stack so iretq returns to a kernel halt loop instead of
+                    // the faulting RIP (which was 0x0).  Direct pointer arithmetic
+                    // bypasses any field-access restrictions on InterruptStackFrame.
+                    //
+                    // IRET frame layout relative to stack_frame (after stub's sub rsp,8):
+                    //   [0] = RIP, [1] = CS, [2] = RFLAGS, [3] = RSP, [4] = SS
+                    let halt_addr = &faulted_task_halt as *const _ as u64;
+                    let iret = stack_frame as *const _ as *mut u64;
+                    core::ptr::write(iret,           halt_addr);  // RIP  → kernel halt loop
+                    core::ptr::write(iret.add(1),    0x08u64);    // CS   → kernel code segment
+                    core::ptr::write(iret.add(2),    0x202u64);   // RFLAGS → IF=1, IOPL=0
+                    let cur_rsp: u64;
+                    core::arch::asm!("mov {}, rsp", out(reg) cur_rsp);
+                    core::ptr::write(iret.add(3),    cur_rsp);    // RSP  → current kernel stack
+                    core::ptr::write(iret.add(4),    0x10u64);    // SS   → kernel data segment
+                    serial_println!(
+                        "fault.kill iret_redirect pd={} halt_addr={:#x}",
+                        cur_pd, halt_addr
+                    );
+                } else if state != crate::scheduler::STATE_RUNNING {
+                    x86_64::instructions::interrupts::enable();
+                    while (*current_ptr).state.load(Ordering::Acquire) != crate::scheduler::STATE_RUNNING {
+                        x86_64::instructions::hlt();
                     }
+                    x86_64::instructions::interrupts::disable();
                 }
             }
-            return;
         }
-        crate::scheduler::ScheduleDecision::Switch { old, next } => (old, next),
-    };
+        return;
+    }
+
+    let (old_ctx_ptr, next_ctx_ptr) = result.unwrap();
 
     unsafe {
         if !old_ctx_ptr.is_null() {
