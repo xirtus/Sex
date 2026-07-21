@@ -44,6 +44,41 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+// DISKFS_V4: the new filldoc/truncdoc/catdoc commands pushed codegen past
+// the size where LLVM inlines array copies/zeroing and starts emitting
+// real memcpy/memset calls — no libc here, so provide them ourselves
+// (same pattern as apps/sexdrive, kernel, sex-rt, crates/silk-client).
+#[no_mangle]
+pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    for i in 0..n { *dest.add(i) = *src.add(i); }
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memset(dest: *mut u8, c: i32, n: usize) -> *mut u8 {
+    for i in 0..n { *dest.add(i) = c as u8; }
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    if (dest as usize) <= (src as usize) {
+        for i in 0..n { *dest.add(i) = *src.add(i); }
+    } else {
+        for i in (0..n).rev() { *dest.add(i) = *src.add(i); }
+    }
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
+    for i in 0..n {
+        let diff = *a.add(i) as i32 - *b.add(i) as i32;
+        if diff != 0 { return diff; }
+    }
+    0
+}
+
 use sex_pdx::{
     pdx_call, serial_println,
     OP_WINDOW_CREATE, SLOT_DISPLAY, SLOT_STORAGE,
@@ -585,6 +620,10 @@ const OP_DISKFS_LIST_SPINDLE: u64 = 0x43;
 const OP_DISKFS_DELETE_SPINDLE: u64 = 0x47;
 const OP_DISKFS_RENAME_SPINDLE: u64 = 0x48;
 const DISKFS_V3_SLOTS_SPINDLE: u64 = 15;
+// DISKFS_V4: content ops, for filldoc/truncdoc/catdoc below.
+const OP_DISKFS_WRITE_SPINDLE: u64 = 0x38;
+const OP_DISKFS_READ_SPINDLE: u64 = 0x39;
+const OP_DISKFS_TRUNCATE_SPINDLE: u64 = 0x49;
 
 /// Pack up to 16 ASCII name bytes into (lo, hi) LE words.
 fn pack_doc_name(name: &[u8]) -> (u64, u64) {
@@ -1384,6 +1423,291 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                     else { sb.push(b"ERROR: RENAME FAILED"); }
                     serial_println!("[spindle.mvdoc] id={} ok=0 err={}", id, e);
                 }
+            }
+            true
+        }
+        b"filldoc" => {
+            // DISKFS_V4: filldoc <id> <bytes> — SELECT, then loop WRITE
+            // calls server-side with a deterministic pattern
+            // (byte[i] = (i*37+11) & 0x7F), then TRUNCATE to the exact
+            // length. Proves growth across multiple storage blocks without
+            // needing thousands of individual keystrokes.
+            // & 0x7F (not 0xFF): OP_DISKFS_READ packs raw data bytes into
+            // the reply value, and pdx_storage_call_bounded-style callers
+            // (here and in quil) treat any reply with bit 63 set as an
+            // error — a byte >= 0x80 in the final position of an 8-byte
+            // chunk gets misread as a negative status. Pre-existing
+            // protocol ambiguity (data and error share one channel with
+            // no discriminant), not something this test works around by
+            // accident — see DISKFS_V4_GROWTH_V1.md for the real fix.
+            let Some(id) = parse_doc_id(args) else {
+                sb.push(b"USAGE: FILLDOC <ID> <BYTES>");
+                serial_println!("[spindle.filldoc] ok=0 reason=bad_id");
+                return true;
+            };
+            let rest = match args.iter().position(|&b| b == b' ') { Some(i) => &args[i..], None => &[][..] };
+            let Some(n) = parse_doc_id(rest) else {
+                sb.push(b"USAGE: FILLDOC <ID> <BYTES>");
+                serial_println!("[spindle.filldoc] ok=0 reason=bad_len");
+                return true;
+            };
+            spindle_storage_settle();
+            if let Err(e) = spindle_storage_sync(OP_DISKFS_SELECT_SPINDLE, id, 0, 0) {
+                sb.push(b"ERROR: SELECT FAILED");
+                serial_println!("[spindle.filldoc] id={} ok=0 stage=select err={}", id, e);
+                return true;
+            }
+            let mut off: u64 = 0;
+            let mut fail = false;
+            while off < n {
+                let mut lo = 0u64;
+                let mut hi = 0u64;
+                for i in 0..8u64 {
+                    let idx = off + i;
+                    let v = if idx < n { (idx.wrapping_mul(37).wrapping_add(11)) & 0x7F } else { 0 };
+                    lo |= v << (i * 8);
+                }
+                for i in 8..16u64 {
+                    let idx = off + i;
+                    let v = if idx < n { (idx.wrapping_mul(37).wrapping_add(11)) & 0x7F } else { 0 };
+                    hi |= v << ((i - 8) * 8);
+                }
+                if let Err(e) = spindle_storage_sync(OP_DISKFS_WRITE_SPINDLE, off, lo, hi) {
+                    sb.push(b"ERROR: WRITE FAILED");
+                    serial_println!("[spindle.filldoc] id={} off={} ok=0 err={}", id, off, e);
+                    fail = true;
+                    break;
+                }
+                off += 16;
+            }
+            if !fail {
+                match spindle_storage_sync(OP_DISKFS_TRUNCATE_SPINDLE, n, 0, 0) {
+                    Ok(_) => {
+                        sb.push(b"FILLED.");
+                        serial_println!("[spindle.filldoc] id={} bytes={} ok=1", id, n);
+                    }
+                    Err(e) => {
+                        sb.push(b"ERROR: TRUNCATE FAILED");
+                        serial_println!("[spindle.filldoc] id={} ok=0 stage=truncate err={}", id, e);
+                    }
+                }
+            }
+            true
+        }
+        b"truncdoc" => {
+            // DISKFS_V4: truncdoc <id> <bytes> — SELECT + TRUNCATE, for
+            // exercising shrink independent of a fill.
+            let Some(id) = parse_doc_id(args) else {
+                sb.push(b"USAGE: TRUNCDOC <ID> <BYTES>");
+                serial_println!("[spindle.truncdoc] ok=0 reason=bad_id");
+                return true;
+            };
+            let rest = match args.iter().position(|&b| b == b' ') { Some(i) => &args[i..], None => &[][..] };
+            let Some(n) = parse_doc_id(rest) else {
+                sb.push(b"USAGE: TRUNCDOC <ID> <BYTES>");
+                serial_println!("[spindle.truncdoc] ok=0 reason=bad_len");
+                return true;
+            };
+            spindle_storage_settle();
+            if let Err(e) = spindle_storage_sync(OP_DISKFS_SELECT_SPINDLE, id, 0, 0) {
+                sb.push(b"ERROR: SELECT FAILED");
+                serial_println!("[spindle.truncdoc] id={} ok=0 stage=select err={}", id, e);
+                return true;
+            }
+            match spindle_storage_sync(OP_DISKFS_TRUNCATE_SPINDLE, n, 0, 0) {
+                Ok(newlen) => {
+                    sb.push(b"TRUNCATED.");
+                    serial_println!("[spindle.truncdoc] id={} new_len={} ok=1", id, newlen);
+                }
+                Err(e) => {
+                    sb.push(b"ERROR: TRUNCATE FAILED");
+                    serial_println!("[spindle.truncdoc] id={} ok=0 err={}", id, e);
+                }
+            }
+            true
+        }
+        b"catdoc" => {
+            // DISKFS_V4: catdoc <id> — SELECT + STAT, then read back every
+            // byte and verify it matches filldoc's deterministic pattern
+            // for its own current length (not just a hash match, an actual
+            // per-byte check), reporting an FNV-1a hash either way for
+            // gates to assert exact reproducibility across reboots.
+            let Some(id) = parse_doc_id(args) else {
+                sb.push(b"USAGE: CATDOC <ID>");
+                serial_println!("[spindle.catdoc] ok=0 reason=bad_id");
+                return true;
+            };
+            spindle_storage_settle();
+            if let Err(e) = spindle_storage_sync(OP_DISKFS_SELECT_SPINDLE, id, 0, 0) {
+                sb.push(b"ERROR: SELECT FAILED");
+                serial_println!("[spindle.catdoc] id={} ok=0 stage=select err={}", id, e);
+                return true;
+            }
+            let size = match spindle_storage_sync(OP_DISKFS_STAT_SPINDLE, 0, 0, 0) {
+                Ok(v) => v & 0xFFFF_FFFF,
+                Err(e) => {
+                    sb.push(b"ERROR: STAT FAILED");
+                    serial_println!("[spindle.catdoc] id={} ok=0 stage=stat err={}", id, e);
+                    return true;
+                }
+            };
+            let mut off: u64 = 0;
+            let mut mismatch: i64 = -1;
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            while off < size {
+                let want = (size - off).min(8);
+                let word = match spindle_storage_sync(OP_DISKFS_READ_SPINDLE, off, want, 0) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        sb.push(b"ERROR: READ FAILED");
+                        serial_println!("[spindle.catdoc] id={} off={} ok=0 err={}", id, off, e);
+                        return true;
+                    }
+                };
+                let bytes = word.to_le_bytes();
+                for i in 0..want {
+                    let idx = off + i;
+                    let got = bytes[i as usize];
+                    h ^= got as u64;
+                    h = h.wrapping_mul(0x100_0000_01b3);
+                    let expect = ((idx.wrapping_mul(37).wrapping_add(11)) & 0x7F) as u8;
+                    if got != expect && mismatch < 0 { mismatch = idx as i64; }
+                }
+                off += want;
+            }
+            if mismatch >= 0 {
+                sb.push(b"MISMATCH.");
+                serial_println!("[spindle.catdoc] id={} size={} ok=0 mismatch_at={}", id, size, mismatch);
+            } else {
+                sb.push(b"VERIFIED.");
+                serial_println!("[spindle.catdoc] id={} size={} hash={:#x} ok=1", id, size, h);
+            }
+            true
+        }
+        b"filldocx" => {
+            // LANE3_READ_SIGNBIT_REGRESSION: identical to filldoc, but with
+            // the FULL byte range (& 0xFF instead of & 0x7F) — deliberately
+            // reproduces the known OP_DISKFS_READ bug where a data byte
+            // >= 0x80 in the last position of an 8-byte reply gets
+            // misread as a negative status by pdx_storage_call_bounded-
+            // style callers. See catdocx and
+            // scripts/diskfs_v4_read_signbit_regression_gate.sh — this
+            // pair exists ONLY to give Lane 3 (streaming/chunked IPC,
+            // separate reply status from payload data) a reproducible
+            // starting failure. filldoc/catdoc stay on & 0x7F so the real
+            // DISKFS_V4 growth gate isn't tripped by this pre-existing,
+            // unrelated protocol bug.
+            let Some(id) = parse_doc_id(args) else {
+                sb.push(b"USAGE: FILLDOCX <ID> <BYTES>");
+                serial_println!("[spindle.filldocx] ok=0 reason=bad_id");
+                return true;
+            };
+            let rest = match args.iter().position(|&b| b == b' ') { Some(i) => &args[i..], None => &[][..] };
+            let Some(n) = parse_doc_id(rest) else {
+                sb.push(b"USAGE: FILLDOCX <ID> <BYTES>");
+                serial_println!("[spindle.filldocx] ok=0 reason=bad_len");
+                return true;
+            };
+            spindle_storage_settle();
+            if let Err(e) = spindle_storage_sync(OP_DISKFS_SELECT_SPINDLE, id, 0, 0) {
+                sb.push(b"ERROR: SELECT FAILED");
+                serial_println!("[spindle.filldocx] id={} ok=0 stage=select err={}", id, e);
+                return true;
+            }
+            let mut off: u64 = 0;
+            let mut fail = false;
+            while off < n {
+                let mut lo = 0u64;
+                let mut hi = 0u64;
+                for i in 0..8u64 {
+                    let idx = off + i;
+                    let v = if idx < n { (idx.wrapping_mul(37).wrapping_add(11)) & 0xFF } else { 0 };
+                    lo |= v << (i * 8);
+                }
+                for i in 8..16u64 {
+                    let idx = off + i;
+                    let v = if idx < n { (idx.wrapping_mul(37).wrapping_add(11)) & 0xFF } else { 0 };
+                    hi |= v << ((i - 8) * 8);
+                }
+                if let Err(e) = spindle_storage_sync(OP_DISKFS_WRITE_SPINDLE, off, lo, hi) {
+                    sb.push(b"ERROR: WRITE FAILED");
+                    serial_println!("[spindle.filldocx] id={} off={} ok=0 err={}", id, off, e);
+                    fail = true;
+                    break;
+                }
+                off += 16;
+            }
+            if !fail {
+                match spindle_storage_sync(OP_DISKFS_TRUNCATE_SPINDLE, n, 0, 0) {
+                    Ok(_) => {
+                        sb.push(b"FILLED.");
+                        serial_println!("[spindle.filldocx] id={} bytes={} ok=1", id, n);
+                    }
+                    Err(e) => {
+                        sb.push(b"ERROR: TRUNCATE FAILED");
+                        serial_println!("[spindle.filldocx] id={} ok=0 stage=truncate err={}", id, e);
+                    }
+                }
+            }
+            true
+        }
+        b"catdocx" => {
+            // LANE3_READ_SIGNBIT_REGRESSION: see filldocx. Expected to
+            // report ERROR: READ FAILED once byte 31 (0x86, bit 7 set)
+            // lands as the top byte of the 4th 8-byte reply — that IS the
+            // bug, not a gate malfunction. This command's job is to keep
+            // reproducing it reliably, not to work around it.
+            let Some(id) = parse_doc_id(args) else {
+                sb.push(b"USAGE: CATDOCX <ID>");
+                serial_println!("[spindle.catdocx] ok=0 reason=bad_id");
+                return true;
+            };
+            spindle_storage_settle();
+            if let Err(e) = spindle_storage_sync(OP_DISKFS_SELECT_SPINDLE, id, 0, 0) {
+                sb.push(b"ERROR: SELECT FAILED");
+                serial_println!("[spindle.catdocx] id={} ok=0 stage=select err={}", id, e);
+                return true;
+            }
+            let size = match spindle_storage_sync(OP_DISKFS_STAT_SPINDLE, 0, 0, 0) {
+                Ok(v) => v & 0xFFFF_FFFF,
+                Err(e) => {
+                    sb.push(b"ERROR: STAT FAILED");
+                    serial_println!("[spindle.catdocx] id={} ok=0 stage=stat err={}", id, e);
+                    return true;
+                }
+            };
+            let mut off: u64 = 0;
+            let mut mismatch: i64 = -1;
+            while off < size {
+                let want = (size - off).min(8);
+                let word = match spindle_storage_sync(OP_DISKFS_READ_SPINDLE, off, want, 0) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        // This IS the bug: data bytes >= 0x80 make the
+                        // packed reply look negative, so a legitimate read
+                        // is rejected as if it were a real server error.
+                        sb.push(b"ERROR: READ FAILED (signbit bug)");
+                        serial_println!(
+                            "[spindle.catdocx] id={} off={} ok=0 err={} reason=read_signbit_bug",
+                            id, off, e);
+                        return true;
+                    }
+                };
+                let bytes = word.to_le_bytes();
+                for i in 0..want {
+                    let idx = off + i;
+                    let got = bytes[i as usize];
+                    let expect = ((idx.wrapping_mul(37).wrapping_add(11)) & 0xFF) as u8;
+                    if got != expect && mismatch < 0 { mismatch = idx as i64; }
+                }
+                off += want;
+            }
+            if mismatch >= 0 {
+                sb.push(b"MISMATCH.");
+                serial_println!("[spindle.catdocx] id={} size={} ok=0 mismatch_at={}", id, size, mismatch);
+            } else {
+                sb.push(b"VERIFIED.");
+                serial_println!("[spindle.catdocx] id={} size={} ok=1 reason=signbit_bug_not_triggered_by_this_content", id, size);
             }
             true
         }
