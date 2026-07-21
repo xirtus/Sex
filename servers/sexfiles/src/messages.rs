@@ -216,8 +216,9 @@ pub const OP_DISKFS_TRUNCATE: u64 = 0x49;
 pub const OP_DISKFS_READ_V2: u64 = 0x4A;
 /// Maximum bytes per OP_DISKFS_READ_V2 call - 6, not 8: the top two bytes
 /// of the single-u64 reply are reserved for the unambiguous status/length
-/// header (see OP_DISKFS_READ_V2 doc comment).
-pub const DISKFS_V2_MAX_READ: usize = 6;
+/// header (see OP_DISKFS_READ_V2 doc comment). Single source of truth is
+/// sex_pdx::DISKFS_V2_MAX_READ, shared with every client.
+pub const DISKFS_V2_MAX_READ: usize = sex_pdx::DISKFS_V2_MAX_READ;
 
 // ── Bounds ──
 pub const RAMFS_MAX_FILES: usize = 64;

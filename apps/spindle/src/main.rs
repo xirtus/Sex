@@ -1692,7 +1692,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             let mut off: u64 = 0;
             let mut mismatch: i64 = -1;
             while off < size {
-                let want = (size - off).min(6);
+                let want = (size - off).min(sex_pdx::DISKFS_V2_MAX_READ as u64);
                 let reply = match spindle_storage_sync(OP_DISKFS_READ_V2_SPINDLE, off, want, 0) {
                     Ok(v) => v,
                     Err(e) => {
@@ -1702,21 +1702,21 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                         return true;
                     }
                 };
-                let status = (reply >> 56) & 0xFF;
-                if status == 0x01 {
+                let status = sex_pdx::diskfs_v2_status(reply);
+                if status == sex_pdx::DISKFS_V2_STATUS_EOF {
                     // EOF: offset reached size before this loop expected -
                     // treat as a mismatch condition, not a crash.
                     if mismatch < 0 { mismatch = off as i64; }
                     break;
                 }
-                if status != 0x00 {
+                if status != sex_pdx::DISKFS_V2_STATUS_OK {
                     sb.push(b"ERROR: READ FAILED");
                     serial_println!(
                         "[spindle.catdocx] id={} off={} ok=0 status={:#x}", id, off, status);
                     return true;
                 }
-                let got_n = (reply >> 48) & 0xFF;
-                let payload = (reply & 0xFFFF_FFFF_FFFF).to_le_bytes();
+                let got_n = sex_pdx::diskfs_v2_len_field(reply);
+                let payload = sex_pdx::diskfs_v2_payload(reply);
                 for i in 0..want.min(got_n) {
                     let idx = off + i;
                     let got = payload[i as usize];

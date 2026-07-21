@@ -403,7 +403,7 @@ const OP_DISKFS_TRUNCATE: u64 = 0x49;
 /// never be misread as an error the way OP_DISKFS_READ's full-width reply
 /// could.
 const OP_DISKFS_READ_V2: u64 = 0x4A;
-const DISKFS_V2_MAX_READ: u64 = 6;
+const DISKFS_V2_MAX_READ: u64 = sex_pdx::DISKFS_V2_MAX_READ as u64;
 const QUIL_DISKFS_PATH_ID: u64 = 2;
 const QUIL_DISKFS_EXPECT_SIZE: u64 = 4096;
 const QUIL_DISKFS_EXPECT_FLAGS: u64 = 0x3;
@@ -1642,14 +1642,14 @@ fn run_quil_diskfs_slot_min_proof() {
                 return;
             }
         };
-        let status = (reply >> 56) & 0xFF;
-        if status != 0x00 {
+        let status = sex_pdx::diskfs_v2_status(reply);
+        if status != sex_pdx::DISKFS_V2_STATUS_OK {
             serial_println!("[quil.diskfs.slot.min.read.err] status={:#x}", status);
             serial_println!("[quil.diskfs.slot.min.done] ok=0");
             return;
         }
-        let n = (((reply >> 48) & 0xFF) as usize).min(6);
-        let payload = (reply & 0xFFFF_FFFF_FFFF).to_le_bytes();
+        let n = (sex_pdx::diskfs_v2_len_field(reply) as usize).min(6);
+        let payload = sex_pdx::diskfs_v2_payload(reply);
         if n < want {
             serial_println!("[quil.diskfs.slot.min.read.err] reason=short_read got={} want={}", n, want);
             serial_println!("[quil.diskfs.slot.min.done] ok=0");
@@ -1953,19 +1953,15 @@ const QUIL_PERSIST_MAGIC: u64 = 0x3130_5051; // "QP01" LE
 /// ERR_* vocabulary every other quil storage call already uses.
 fn read_v2_chunk(offset: u64, want: u64) -> Result<([u8; 6], usize), i64> {
     let reply = pdx_storage_call_bounded(OP_DISKFS_READ_V2, offset, want, 0)?;
-    let status = (reply >> 56) & 0xFF;
-    if status == 0x01 {
-        return Ok(([0u8; 6], 0)); // EOF
+    let status = sex_pdx::diskfs_v2_status(reply);
+    if status == sex_pdx::DISKFS_V2_STATUS_EOF {
+        return Ok(([0u8; 6], 0));
     }
-    if status != 0x00 {
-        let mag = ((reply >> 48) & 0xFF) as i64;
-        return Err(-mag);
+    if status != sex_pdx::DISKFS_V2_STATUS_OK {
+        return Err(-(sex_pdx::diskfs_v2_len_field(reply) as i64));
     }
-    let n = (((reply >> 48) & 0xFF) as usize).min(6);
-    let payload = (reply & 0xFFFF_FFFF_FFFF).to_le_bytes();
-    let mut out = [0u8; 6];
-    out[..6].copy_from_slice(&payload[..6]);
-    Ok((out, n))
+    let n = (sex_pdx::diskfs_v2_len_field(reply) as usize).min(6);
+    Ok((sex_pdx::diskfs_v2_payload(reply), n))
 }
 
 fn quil_persist_save() -> Result<usize, i64> {

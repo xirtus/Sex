@@ -417,16 +417,10 @@ fn handle_diskfs_read(byte_offset: u64, max_len: u64, caller_pd: u32) -> u64 {
 /// (47..0), so a data byte >= 0x80 can never be misread as an error the
 /// way OP_DISKFS_READ's full-width reply could.
 fn handle_diskfs_read_v2(byte_offset: u64, want_len: u64, caller_pd: u32) -> u64 {
-    const STATUS_OK: u64 = 0x00;
-    const STATUS_EOF: u64 = 0x01;
-    const STATUS_ERR: u64 = 0xFF;
-    let pack = |status: u64, len_or_err: u64, payload: u64| -> u64 {
-        (status << 56) | ((len_or_err & 0xFF) << 48) | (payload & 0xFFFF_FFFF_FFFF)
-    };
     // Every ERR_* constant is a small negative i64; callers here pass it
     // through as u64 (the huge-unsigned bit pattern), so recover its
-    // magnitude before packing into the 1-byte len_or_err field.
-    let pack_err = |e: u64| -> u64 { pack(STATUS_ERR, (e as i64).unsigned_abs(), 0) };
+    // magnitude before handing it to the shared encoder.
+    let pack_err = |e: u64| -> u64 { sex_pdx::diskfs_v2_encode_err((e as i64).unsigned_abs()) };
 
     if want_len == 0 || want_len > messages::DISKFS_V2_MAX_READ as u64 {
         crate::pdx::serial_println!(
@@ -451,7 +445,7 @@ fn handle_diskfs_read_v2(byte_offset: u64, want_len: u64, caller_pd: u32) -> u64
 
     if byte_offset == entry.size_bytes as u64 {
         // Explicit EOF, not an error: offset sits exactly at the end.
-        return pack(STATUS_EOF, 0, 0);
+        return sex_pdx::diskfs_v2_encode_eof();
     }
     if byte_offset > entry.size_bytes as u64
         || byte_offset.saturating_add(want_len) > entry.size_bytes as u64
@@ -473,17 +467,11 @@ fn handle_diskfs_read_v2(byte_offset: u64, want_len: u64, caller_pd: u32) -> u64
     match DiskFs::diskfs_read_object_entry(piece, rel_off, &mut rbuf[..rlen], buf_va) {
         Ok(n) => {
             let n = n as usize;
-            let mut payload: u64 = 0;
-            let mut i = 0;
-            while i < n && i < messages::DISKFS_V2_MAX_READ {
-                payload |= (rbuf[i] as u64) << (i * 8);
-                i += 1;
-            }
             crate::pdx::serial_println!(
                 "[sexfiles.bridge.diskfs.read_v2.ok] offset={} read={}",
                 byte_offset, n
             );
-            pack(STATUS_OK, n as u64, payload)
+            sex_pdx::diskfs_v2_encode_ok(n, &rbuf[..n])
         }
         Err(e) => {
             crate::pdx::serial_println!(

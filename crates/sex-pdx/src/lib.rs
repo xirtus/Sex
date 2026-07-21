@@ -561,6 +561,59 @@ pub const DISKFS_V4_BLOCK_SECTORS: u64 = 8;
 pub const DISKFS_V4_POOL_BLOCKS: u64 = 176;
 pub const DISKFS_V4_POOL_SECTORS: u64 = DISKFS_V4_POOL_BLOCKS * DISKFS_V4_BLOCK_SECTORS;
 
+// ── DISKFS_V2 canonical reply encoding (LANE3) ──────────────────────────────
+// Shared by the server (servers/sexfiles/src/vfs.rs's handle_diskfs_read_v2)
+// and every client (quil, spindle) so the bit layout is defined exactly
+// once instead of hand-rolled per caller. See OP_DISKFS_READ_V2's doc
+// comment in servers/sexfiles/src/messages.rs for the full rationale:
+// status confined to the top byte, payload to the low 6 bytes, so a
+// payload byte can never be misread as a status/error the way
+// OP_DISKFS_READ's full-8-byte reply could.
+pub const DISKFS_V2_STATUS_OK: u64 = 0x00;
+pub const DISKFS_V2_STATUS_EOF: u64 = 0x01;
+pub const DISKFS_V2_STATUS_ERR: u64 = 0xFF;
+pub const DISKFS_V2_MAX_READ: usize = 6;
+
+/// Server side: encode a successful read of `payload[..n]` (n <= DISKFS_V2_MAX_READ).
+pub fn diskfs_v2_encode_ok(n: usize, payload: &[u8]) -> u64 {
+    let n = n.min(DISKFS_V2_MAX_READ);
+    let mut word: u64 = 0;
+    for i in 0..n { word |= (payload[i] as u64) << (i * 8); }
+    (DISKFS_V2_STATUS_OK << 56) | ((n as u64 & 0xFF) << 48) | (word & 0xFFFF_FFFF_FFFF)
+}
+
+/// Server side: encode explicit EOF (offset == object length; zero bytes
+/// available, not an error).
+pub fn diskfs_v2_encode_eof() -> u64 {
+    DISKFS_V2_STATUS_EOF << 56
+}
+
+/// Server side: encode a real error. `magnitude` is the ERR_* constant's
+/// absolute value (e.g. 4 for ERR_OVERFLOW = -4), recovered by the caller
+/// from whatever u64-encoded-negative-i64 value the rest of the codebase's
+/// error plumbing already produced.
+pub fn diskfs_v2_encode_err(magnitude: u64) -> u64 {
+    (DISKFS_V2_STATUS_ERR << 56) | ((magnitude & 0xFF) << 48)
+}
+
+/// Client side: extract the status byte (compare against the
+/// DISKFS_V2_STATUS_* constants above).
+pub fn diskfs_v2_status(reply: u64) -> u64 { (reply >> 56) & 0xFF }
+
+/// Client side: extract the length/magnitude field (bytes actually read
+/// when status==OK; the ERR_* magnitude when status==ERR; unused/0 on EOF).
+pub fn diskfs_v2_len_field(reply: u64) -> u64 { (reply >> 48) & 0xFF }
+
+/// Client side: extract up to DISKFS_V2_MAX_READ payload bytes, LE. Only
+/// meaningful when status==OK; call diskfs_v2_len_field() first for the
+/// actual valid count.
+pub fn diskfs_v2_payload(reply: u64) -> [u8; DISKFS_V2_MAX_READ] {
+    let bytes = (reply & 0xFFFF_FFFF_FFFF).to_le_bytes();
+    let mut out = [0u8; DISKFS_V2_MAX_READ];
+    out.copy_from_slice(&bytes[..DISKFS_V2_MAX_READ]);
+    out
+}
+
 // SexFS v0 allowed write envelope (apps/sexdrive write_guard_allows) — not
 // itself a reservation, the outer bound DiskFS's pool must stay inside.
 pub const SEXFS_V0_META_START_LBA: u64 = 0;
