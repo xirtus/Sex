@@ -24,7 +24,6 @@ aml = { version = "0.16.4", default-features = false }
 # rustls = { version = "0.23", default-features = false }
 # rustls-rustcrypto = "0.0.2-alpha"
 pci_types = "0.10"
-nvme-oxide = "0.4"
 x2apic = "0.5"
 # pic8259 = { version = "0.10.1", default-features = false } # Removed for APIC parity
 
