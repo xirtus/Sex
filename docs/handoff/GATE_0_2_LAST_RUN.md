@@ -1,7 +1,7 @@
 # GATE_0_2_LAST_RUN
 
-- date: 2026-07-05T19:14:10+02:00
-- git commit: f7af1e32
+- date: 2026-07-21T11:01:35+02:00
+- git commit: f905780a
 - qmp_sock: /tmp/sexos_gate_0_2/qmp.sock
 - log_path: /home/xirtus_arch/Projects/Sex/logs/qemu-latest.log
 - qmp_environment_failure: no
@@ -20,17 +20,17 @@
 
 ## Marker Counts
 
-- [ps2.irq1.entry]: 16
-- [ps2.port60.read]: 16
-- [ps2.input_ring.enqueue]: 16
-- [sexinput.ps2.scancode]: 18
+- [ps2.irq1.entry]: 12
+- [ps2.port60.read]: 10
+- [ps2.input_ring.enqueue]: 10
+- [sexinput.ps2.scancode]: 10
 - [sexinput.keyboard.send]: 0
 - [silk-shell.keyboard.recv]: 0
 
 - [sexinput.pointer.recv]: 16
-- [sexinput.pointer.send]: 1249
-- [silk-shell.pointer.recv]: 12
-- [silk-shell.cursor.update]: 4
+- [sexinput.pointer.send]: 2048
+- [silk-shell.pointer.recv]: 2068
+- [silk-shell.cursor.update]: 16
 - [sexdisplay.cursor.draw]: 16
 
 ## First Missing Marker
