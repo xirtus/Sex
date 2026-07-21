@@ -620,6 +620,10 @@ const OP_DISKFS_LIST_SPINDLE: u64 = 0x43;
 const OP_DISKFS_DELETE_SPINDLE: u64 = 0x47;
 const OP_DISKFS_RENAME_SPINDLE: u64 = 0x48;
 const DISKFS_V3_SLOTS_SPINDLE: u64 = 15;
+// LANE3: canonical-reply READ, fixes the OP_DISKFS_READ signbit ambiguity
+// (see messages.rs OP_DISKFS_READ_V2 doc comment). caller passes want_len
+// 1..=6 in arg1.
+const OP_DISKFS_READ_V2_SPINDLE: u64 = 0x4A;
 // DISKFS_V4: content ops, for filldoc/truncdoc/catdoc below.
 const OP_DISKFS_WRITE_SPINDLE: u64 = 0x38;
 const OP_DISKFS_READ_SPINDLE: u64 = 0x39;
@@ -1656,11 +1660,16 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         b"catdocx" => {
-            // LANE3_READ_SIGNBIT_REGRESSION: see filldocx. Expected to
-            // report ERROR: READ FAILED once byte 31 (0x86, bit 7 set)
-            // lands as the top byte of the 4th 8-byte reply — that IS the
-            // bug, not a gate malfunction. This command's job is to keep
-            // reproducing it reliably, not to work around it.
+            // LANE3: was LANE3_READ_SIGNBIT_REGRESSION, reproducing the
+            // OP_DISKFS_READ signbit bug on purpose (byte 31 = 0x86 lands
+            // as the top byte of the 4th 8-byte reply). Now reads via
+            // OP_DISKFS_READ_V2 instead: status lives in bits 63..56,
+            // payload in bits 47..0, so a data byte >= 0x80 can never be
+            // misread as an error regardless of position. Kept the same
+            // command name/content pattern deliberately — this is the
+            // direct before/after proof that the fix closes the exact
+            // case that used to fail (see
+            // scripts/diskfs_v4_read_signbit_regression_gate.sh).
             let Some(id) = parse_doc_id(args) else {
                 sb.push(b"USAGE: CATDOCX <ID>");
                 serial_println!("[spindle.catdocx] ok=0 reason=bad_id");
@@ -1683,27 +1692,38 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             let mut off: u64 = 0;
             let mut mismatch: i64 = -1;
             while off < size {
-                let want = (size - off).min(8);
-                let word = match spindle_storage_sync(OP_DISKFS_READ_SPINDLE, off, want, 0) {
+                let want = (size - off).min(6);
+                let reply = match spindle_storage_sync(OP_DISKFS_READ_V2_SPINDLE, off, want, 0) {
                     Ok(v) => v,
                     Err(e) => {
-                        // This IS the bug: data bytes >= 0x80 make the
-                        // packed reply look negative, so a legitimate read
-                        // is rejected as if it were a real server error.
-                        sb.push(b"ERROR: READ FAILED (signbit bug)");
+                        sb.push(b"ERROR: READ FAILED");
                         serial_println!(
-                            "[spindle.catdocx] id={} off={} ok=0 err={} reason=read_signbit_bug",
-                            id, off, e);
+                            "[spindle.catdocx] id={} off={} ok=0 err={}", id, off, e);
                         return true;
                     }
                 };
-                let bytes = word.to_le_bytes();
-                for i in 0..want {
+                let status = (reply >> 56) & 0xFF;
+                if status == 0x01 {
+                    // EOF: offset reached size before this loop expected -
+                    // treat as a mismatch condition, not a crash.
+                    if mismatch < 0 { mismatch = off as i64; }
+                    break;
+                }
+                if status != 0x00 {
+                    sb.push(b"ERROR: READ FAILED");
+                    serial_println!(
+                        "[spindle.catdocx] id={} off={} ok=0 status={:#x}", id, off, status);
+                    return true;
+                }
+                let got_n = (reply >> 48) & 0xFF;
+                let payload = (reply & 0xFFFF_FFFF_FFFF).to_le_bytes();
+                for i in 0..want.min(got_n) {
                     let idx = off + i;
-                    let got = bytes[i as usize];
+                    let got = payload[i as usize];
                     let expect = ((idx.wrapping_mul(37).wrapping_add(11)) & 0xFF) as u8;
                     if got != expect && mismatch < 0 { mismatch = idx as i64; }
                 }
+                if got_n < want && mismatch < 0 { mismatch = (off + got_n) as i64; }
                 off += want;
             }
             if mismatch >= 0 {
@@ -1711,7 +1731,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 serial_println!("[spindle.catdocx] id={} size={} ok=0 mismatch_at={}", id, size, mismatch);
             } else {
                 sb.push(b"VERIFIED.");
-                serial_println!("[spindle.catdocx] id={} size={} ok=1 reason=signbit_bug_not_triggered_by_this_content", id, size);
+                serial_println!("[spindle.catdocx] id={} size={} ok=1 reason=read_v2", id, size);
             }
             true
         }

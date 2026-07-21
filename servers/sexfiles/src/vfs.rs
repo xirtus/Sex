@@ -412,6 +412,89 @@ fn handle_diskfs_read(byte_offset: u64, max_len: u64, caller_pd: u32) -> u64 {
     }
 }
 
+/// OP_DISKFS_READ_V2 (0x4A): see messages.rs doc comment for the reply bit
+/// layout. status byte in bits 63..56 is never shared with payload bits
+/// (47..0), so a data byte >= 0x80 can never be misread as an error the
+/// way OP_DISKFS_READ's full-width reply could.
+fn handle_diskfs_read_v2(byte_offset: u64, want_len: u64, caller_pd: u32) -> u64 {
+    const STATUS_OK: u64 = 0x00;
+    const STATUS_EOF: u64 = 0x01;
+    const STATUS_ERR: u64 = 0xFF;
+    let pack = |status: u64, len_or_err: u64, payload: u64| -> u64 {
+        (status << 56) | ((len_or_err & 0xFF) << 48) | (payload & 0xFFFF_FFFF_FFFF)
+    };
+    // Every ERR_* constant is a small negative i64; callers here pass it
+    // through as u64 (the huge-unsigned bit pattern), so recover its
+    // magnitude before packing into the 1-byte len_or_err field.
+    let pack_err = |e: u64| -> u64 { pack(STATUS_ERR, (e as i64).unsigned_abs(), 0) };
+
+    if want_len == 0 || want_len > messages::DISKFS_V2_MAX_READ as u64 {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.read_v2.err] reason=bad_want_len want_len={}",
+            want_len
+        );
+        return pack_err(messages::ERR_OVERFLOW as u64);
+    }
+
+    let buf_va = diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return pack_err(messages::ERR_NOT_FOUND as u64);
+    }
+    if let Err(e) = v4_ensure(buf_va) {
+        return pack_err(e);
+    }
+    let path_id = diskfs_selected_for(caller_pd);
+    let entry = match v4_get(path_id) {
+        Ok(en) => en,
+        Err(e) => return pack_err(e),
+    };
+
+    if byte_offset == entry.size_bytes as u64 {
+        // Explicit EOF, not an error: offset sits exactly at the end.
+        return pack(STATUS_EOF, 0, 0);
+    }
+    if byte_offset > entry.size_bytes as u64
+        || byte_offset.saturating_add(want_len) > entry.size_bytes as u64
+    {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.read_v2.err] reason=read_past_end offset={} want_len={} size={}",
+            byte_offset, want_len, entry.size_bytes
+        );
+        return pack_err(messages::ERR_OVERFLOW as u64);
+    }
+
+    let (piece, rel_off) = match v4_resolve_offset(path_id as usize, byte_offset, buf_va) {
+        Ok(v) => v,
+        Err(e) => return pack_err(e),
+    };
+
+    let rlen = want_len as usize;
+    let mut rbuf = [0u8; messages::DISKFS_V2_MAX_READ];
+    match DiskFs::diskfs_read_object_entry(piece, rel_off, &mut rbuf[..rlen], buf_va) {
+        Ok(n) => {
+            let n = n as usize;
+            let mut payload: u64 = 0;
+            let mut i = 0;
+            while i < n && i < messages::DISKFS_V2_MAX_READ {
+                payload |= (rbuf[i] as u64) << (i * 8);
+                i += 1;
+            }
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.read_v2.ok] offset={} read={}",
+                byte_offset, n
+            );
+            pack(STATUS_OK, n as u64, payload)
+        }
+        Err(e) => {
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.read_v2.err] caller={} err={} off={}",
+                caller_pd, e, byte_offset
+            );
+            pack_err(e)
+        }
+    }
+}
+
 fn handle_diskfs_truncate(new_len: u64, caller_pd: u32) -> u64 {
     if hot_log() { crate::pdx::serial_println!(
         "[sexfiles.bridge.diskfs.recv] op=0x49 new_len={}",
@@ -1565,6 +1648,13 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
             crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x49 name=truncate caller={}", caller_pd);
             let reply = handle_diskfs_truncate(arg0, caller_pd);
             crate::pdx::serial_println!("[sexfiles.route.reply] op=0x49 caller={} value={:#x}", caller_pd, reply);
+            reply
+        }
+        messages::OP_DISKFS_READ_V2 => {
+            // arg0 = byte_offset, arg1 = want_len, arg2 = 0 (reserved)
+            if hot_log() { crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x4A name=read_v2 caller={}", caller_pd); }
+            let reply = handle_diskfs_read_v2(arg0, arg1, caller_pd);
+            if hot_log() { crate::pdx::serial_println!("[sexfiles.route.reply] op=0x4A caller={} value={:#x}", caller_pd, reply); }
             reply
         }
         messages::OP_DISKFS_SELECT => {

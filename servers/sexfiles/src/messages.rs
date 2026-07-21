@@ -180,6 +180,45 @@ pub const OP_DISKFS_RENAME: u64 = 0x48;
 /// failure (ERR_OVERFLOW if new_length_bytes > current size).
 pub const OP_DISKFS_TRUNCATE: u64 = 0x49;
 
+/// Opcode: read up to DISKFS_V2_MAX_READ bytes at a byte offset from the
+/// selected DiskFS object, with an unambiguous reply encoding.
+///
+/// OP_DISKFS_READ (0x39)'s reply packs up to 8 raw data bytes directly into
+/// the return u64 - if the caller does a full 8-byte read and the 8th byte
+/// (bit 63) happens to be >= 0x80, the reply is indistinguishable from a
+/// negative ERR_* code under the `(reply as i64) < 0` convention every
+/// client uses. That's a real, reachable bug (not just theoretical: it
+/// needs a data byte >= 0x80 in the last position of a full-width read),
+/// not merely a "the codebase says so" documentation issue.
+///
+/// Root cause: pdx_reply() (crates/sex-pdx/src/lib.rs) carries exactly one
+/// u64 from server to client - there's no second field available at the
+/// transport layer to split "status" from "payload" without also changing
+/// the kernel IPC relay. Fixed instead by using a canonical bit layout
+/// within that single u64 that makes the split unambiguous:
+///
+///   bits 63..56 (top byte)  = status: 0x00 = OK, 0x01 = EOF (0 bytes
+///                             available, offset == size - not an error),
+///                             0xFF = error follows.
+///   bits 55..48             = bytes_read (0..=DISKFS_V2_MAX_READ), valid
+///                             only when status == 0x00.
+///   bits 47..0 (low 6 bytes)= payload data, LE, valid bytes_read of them
+///                             are meaningful; when status == 0xFF, this
+///                             field instead holds the ERR_* magnitude
+///                             (i.e. -e where e is the field's value).
+///
+/// A genuine payload byte can never be misread as a status byte: status is
+/// always in bits 63..56, payload never occupies those bits (max 6 payload
+/// bytes = bits 47..0). No sign-bit or all-negative-reply ambiguity is
+/// possible by construction, independent of what the data bytes contain.
+///
+/// arg0 = byte_offset, arg1 = want_len (1..=DISKFS_V2_MAX_READ), arg2 = 0.
+pub const OP_DISKFS_READ_V2: u64 = 0x4A;
+/// Maximum bytes per OP_DISKFS_READ_V2 call - 6, not 8: the top two bytes
+/// of the single-u64 reply are reserved for the unambiguous status/length
+/// header (see OP_DISKFS_READ_V2 doc comment).
+pub const DISKFS_V2_MAX_READ: usize = 6;
+
 // ── Bounds ──
 pub const RAMFS_MAX_FILES: usize = 64;
 pub const RAMFS_MAX_NAME: usize = 24; // fits in 3 u64 args
