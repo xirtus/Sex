@@ -70,15 +70,22 @@ pub const OP_RAMFS_READNAME: u64 = 0x3D;
 // Route: Linen → SLOT_STORAGE → SexFiles → DiskFS → SLOT_BLOCK → SexDrive → NVMe
 // Fixed-object only: /disk/sexfiles-proof-v1
 
-/// Opcode: Write up to 16 bytes at a byte offset into the fixed DiskFS object.
-/// arg0 = byte_offset (0..4080, must be 16-byte aligned for full write)
+/// Opcode: Write up to 16 bytes at a byte offset into the selected DiskFS
+/// object. DISKFS_V4: objects are variable-length — a write past the
+/// object's current size grows it (allocating backing blocks as needed,
+/// up to the per-object cap reported by OP_DISKFS_STAT / ERR_OVERFLOW
+/// beyond it). Growth is NOT implicit truncation: to shrink, callers must
+/// issue OP_DISKFS_TRUNCATE explicitly after the final WRITE of a save.
+/// arg0 = byte_offset
 /// arg1 = data bytes 0..7  (little-endian u64)
 /// arg2 = data bytes 8..15 (little-endian u64)
 /// Returns: bytes written (16) on success, error code (negative) on failure.
 pub const OP_DISKFS_WRITE: u64 = 0x38;
 
-/// Opcode: Read up to 8 bytes at a byte offset from the fixed DiskFS object.
-/// arg0 = byte_offset (0..4095)
+/// Opcode: Read up to 8 bytes at a byte offset from the selected DiskFS
+/// object. Bounded by the object's actual (variable) length — a read at
+/// or beyond that length returns 0 (EOF), not stale trailing bytes.
+/// arg0 = byte_offset
 /// arg1 = max_len (1..8)
 /// arg2 = 0 (reserved)
 /// Returns: packed data (u64, bytes 0..max_len-1 LE) or error (negative).
@@ -89,10 +96,11 @@ pub const OP_DISKFS_READ: u64 = 0x39;
 /// Returns: 0 on success, BLOCK_ERR_NO_DEVICE (4) on QEMU, or error (negative).
 pub const OP_DISKFS_FLUSH: u64 = 0x3A;
 
-/// Opcode: Query fixed DiskFS object metadata.
+/// Opcode: Query the selected DiskFS object's metadata.
 /// arg0 = 0, arg1 = 0, arg2 = 0
 /// Returns: packed { flags: u32 in bits 32..63, size: u32 in bits 0..31 }
-///   or error (negative). size=4096, flags bit0=exists, bit1=writeable.
+///   or error (negative). DISKFS_V4: size is the object's exact current
+///   length in bytes (not a fixed constant). flags bit0=exists, bit1=writeable.
 pub const OP_DISKFS_STAT: u64 = 0x3B;
 
 /// Opcode: Return the FNV-1a 64-bit hash of the fixed DiskFS object path.
@@ -157,6 +165,16 @@ pub const OP_DISKFS_LIST: u64 = 0x43;
 pub const OP_DISKFS_DELETE: u64 = 0x47;
 /// Rename object: arg0 = path_id, arg1|arg2 = new name.
 pub const OP_DISKFS_RENAME: u64 = 0x48;
+
+// ── DISKFS_V4 variable-length object ops ────────────────────────────────────
+/// Truncate the selected object to an exact new length.
+/// arg0 = new_length_bytes. Must be <= current size (shrink/no-op only;
+/// growth happens implicitly via OP_DISKFS_WRITE past the current end).
+/// Frees any blocks no longer needed and zeroes the tail of the last
+/// remaining block, so a later regrow never exposes previously-shrunk
+/// content. Reply = new_length_bytes on success, error (negative) on
+/// failure (ERR_OVERFLOW if new_length_bytes > current size).
+pub const OP_DISKFS_TRUNCATE: u64 = 0x49;
 
 // ── Bounds ──
 pub const RAMFS_MAX_FILES: usize = 64;

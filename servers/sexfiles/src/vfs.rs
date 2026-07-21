@@ -1,10 +1,11 @@
 extern crate alloc;
 use crate::backends::ramfs::RamFs;
 use crate::backends::FsBackend;
-use crate::backends::diskfs::{DiskFs, DiskManifestEntryV1, DISKFS_MANIFEST_OBJECT_PATH, DISKFS_MANIFEST_MAGIC, DISKFS_MANIFEST_FLAG_READ, DISKFS_MANIFEST_FLAG_WRITE};
+use crate::backends::diskfs::{DiskFs, DiskManifestEntryV1, DISKFS_MANIFEST_OBJECT_PATH, DISKFS_MANIFEST_MAGIC, DISKFS_MANIFEST_FLAG_READ, DISKFS_MANIFEST_FLAG_WRITE, DISKFS_MANIFEST_LBA};
 use sex_pdx::SLOT_BUF_LEND;
 use crate::messages;
 use core::sync::atomic::{AtomicU64, Ordering};
+use spin::RwLock;
 
 /// VFS operation counters (diagnostic only).
 
@@ -94,12 +95,12 @@ fn handle_diskfs_select(path_id: u64, caller_pd: u32) -> u64 {
         );
         return messages::ERR_NOT_FOUND as u64;
     }
-    if let Err(e) = v3_ensure(buf_va) {
+    if let Err(e) = v4_ensure(buf_va) {
         crate::pdx::serial_println!(
-            "[sexfiles.bridge.diskfs.select.err] reason=v3_ensure_failed code={}", e);
+            "[sexfiles.bridge.diskfs.select.err] reason=v4_ensure_failed code={}", e);
         return e;
     }
-    match v3_resolve(path_id) {
+    match v4_get(path_id) {
         Ok(_entry) => {
             DISKFS_SELECTED_PATH_ID[caller_pd as usize % DISKFS_CLIENT_SLOTS]
                 .store(path_id, Ordering::Relaxed);
@@ -109,9 +110,9 @@ fn handle_diskfs_select(path_id: u64, caller_pd: u32) -> u64 {
                     "[sexfiles.bridge.diskfs.select.v1_single_client]"
                 );
             }
-            if hot_log() { crate::pdx::serial_println!(
-                "[sexfiles.bridge.diskfs.select.ok] path_id={}", path_id
-            ); }
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.select.ok] caller={} path_id={}", caller_pd, path_id
+            );
             0
         }
         Err(e) => {
@@ -125,7 +126,7 @@ fn handle_diskfs_select(path_id: u64, caller_pd: u32) -> u64 {
 }
 
 // DISKFS_V3: path-string resolution retired — selection resolves through
-// the dynamic manifest table (v3_resolve / v3_name_of).
+// the dynamic manifest table (v4_get).
 
 fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64, caller_pd: u32) -> u64 {
     if hot_log() { crate::pdx::serial_println!(
@@ -133,21 +134,27 @@ fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64, caller_pd: 
         byte_offset
     ); }
 
-    if byte_offset >= messages::DISKFS_OBJECT_SIZE {
+    // DISKFS_V4: explicit, enforced, visible cap — growth past this is
+    // ERR_OVERFLOW, never silent truncation. byte_offset is caller-supplied
+    // (an untrusted PDX message argument) — saturating_add so a malicious
+    // or buggy near-u64::MAX offset can't wrap into a small, falsely-valid
+    // value in a release build (no overflow-checks there).
+    if byte_offset >= DISKFS_V4_MAX_OBJECT_BYTES
+        || byte_offset.saturating_add(messages::DISKFS_MAX_WRITE as u64) > DISKFS_V4_MAX_OBJECT_BYTES
+    {
         crate::pdx::serial_println!(
-            "[sexfiles.bridge.diskfs.write.err] reason=offset_past_end offset={}",
-            byte_offset
+            "[sexfiles.bridge.diskfs.write.err] reason=cap_exceeded offset={} cap={}",
+            byte_offset, DISKFS_V4_MAX_OBJECT_BYTES
         );
         return messages::ERR_OVERFLOW as u64;
     }
-
-    let max_write = (messages::DISKFS_OBJECT_SIZE - byte_offset) as usize;
-    if max_write < messages::DISKFS_MAX_WRITE {
-        // Boundary: reject writes that would cross the 4096-byte boundary.
-        // Preferred for V1 simplicity (option A from plan).
+    // A 16-byte chunk must not straddle a 4096-byte block. Real callers
+    // always write 16-byte-aligned chunks from a 4096-aligned object base,
+    // so this never legitimately triggers — it's a defensive bound.
+    if (byte_offset % DISKFS_V4_BLOCK_BYTES).saturating_add(messages::DISKFS_MAX_WRITE as u64) > DISKFS_V4_BLOCK_BYTES {
         crate::pdx::serial_println!(
-            "[sexfiles.bridge.diskfs.write.err] reason=boundary_write offset={} max={}",
-            byte_offset, max_write
+            "[sexfiles.bridge.diskfs.write.err] reason=block_straddle offset={}",
+            byte_offset
         );
         return messages::ERR_OVERFLOW as u64;
     }
@@ -161,15 +168,94 @@ fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64, caller_pd: 
         return messages::ERR_NOT_FOUND as u64;
     }
 
-    // DISKFS_V3: ensure manifest loaded, resolve selection to an entry.
-    if let Err(e) = v3_ensure(buf_va) {
+    if let Err(e) = v4_ensure(buf_va) {
         crate::pdx::serial_println!(
-            "[sexfiles.bridge.diskfs.write.err] reason=v3_ensure_failed code={}", e);
+            "[sexfiles.bridge.diskfs.write.err] reason=v4_ensure_failed code={}", e);
         return e;
     }
-    let entry = match v3_resolve(diskfs_selected_for(caller_pd)) {
-        Ok(en) => en,
-        Err(e) => return e,
+    let path_id = diskfs_selected_for(caller_pd);
+    if path_id >= DISKFS_SLOTS as u64 {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.write.err] reason=bad_path_id caller={} path_id={}",
+            caller_pd, path_id);
+        return messages::ERR_BAD_CMD as u64;
+    }
+    let i = path_id as usize;
+    if !v4_in_use(i) {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.write.err] reason=slot_not_in_use caller={} path_id={}",
+            caller_pd, path_id);
+        return messages::ERR_NOT_FOUND as u64;
+    }
+
+    let mut entry = unsafe { V4_TABLE[i] };
+    // Provably <= DISKFS_V4_MAX_OBJECT_BYTES by the cap_exceeded check
+    // above; saturating regardless so that guarantee doesn't depend on
+    // this line staying textually after it.
+    let need_end = byte_offset.saturating_add(messages::DISKFS_MAX_WRITE as u64);
+    // A never-written (empty) object has no indirect sector yet — that
+    // reads back as "unreadable" (no SFEX magic), which is indistinguishable
+    // here from corruption. That's fine: a genuinely non-empty object's
+    // indirect sector was already validated by v4_bitmap_rebuild() at
+    // mount time, so reaching here with size_bytes>0 and an unreadable
+    // descriptor cannot happen in normal operation.
+    // Cached: a save loop calls WRITE ~len/16 times against the same
+    // selected object — re-reading the indirect sector from disk on every
+    // one of them (V3 had no such read at all) was slow enough to blow
+    // through the gate scripts' keystroke timing windows.
+    let (mut extents, orig_count) = v4_cache_get(i, buf_va);
+    let mut count = orig_count;
+    let cur_capacity: u64 = (0..count).map(|k| extents[k].sector_count as u64 * 512).sum();
+
+    if need_end > cur_capacity {
+        let more_bytes = need_end - cur_capacity;
+        let more_blocks = (more_bytes + DISKFS_V4_BLOCK_BYTES - 1) / DISKFS_V4_BLOCK_BYTES;
+        let new_count = {
+            let mut bm = V4_BITMAP.write();
+            match v4_allocate(&mut bm, more_blocks, &mut extents, count) {
+                Ok(n) => n,
+                Err(e) => {
+                    crate::pdx::serial_println!(
+                        "[sexfiles.bridge.diskfs.write.err] reason=alloc_failed need_blocks={}",
+                        more_blocks
+                    );
+                    return e as u64;
+                }
+            }
+        };
+        // Zero-fill every newly allocated block before anything references
+        // it — never leak a previous tenant's content into fresh storage.
+        for k in count..new_count {
+            let e = extents[k];
+            let mut s = 0u64;
+            while s < e.sector_count as u64 {
+                if let Err(er) = v4_zero_block(e.start_lba as u64 + s, buf_va) {
+                    crate::pdx::serial_println!(
+                        "[sexfiles.bridge.diskfs.write.err] reason=zero_fill_failed lba={} code={}",
+                        e.start_lba as u64 + s, er);
+                    let mut bm = V4_BITMAP.write();
+                    v4_free_pool_only(&mut bm, &extents[count..new_count]);
+                    return er;
+                }
+                s += DISKFS_V4_BLOCK_SECTORS;
+            }
+        }
+        count = new_count;
+    }
+
+    let (piece, rel_off) = match v4_locate(&extents, count, byte_offset) {
+        Ok(v) => v,
+        Err(e) => {
+            crate::pdx::serial_println!(
+                "[sexfiles.bridge.diskfs.write.err] reason=locate_failed offset={} count={} code={}",
+                byte_offset, count, e
+            );
+            if count > orig_count {
+                let mut bm = V4_BITMAP.write();
+                v4_free_pool_only(&mut bm, &extents[orig_count..count]);
+            }
+            return e;
+        }
     };
 
     // Pack 16 bytes inline from data_lo + data_hi.
@@ -185,27 +271,42 @@ fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64, caller_pd: 
         }
     }
 
-    match DiskFs::diskfs_write_object_entry(
-        entry,
-        byte_offset,
-        &inline_data,
-        buf_va,
-    ) {
-        Ok(n) => {
-            crate::pdx::serial_println!(
-                "[sexfiles.bridge.diskfs.write.ok] offset={} written={}",
-                byte_offset, n
-            );
-            n
-        }
+    let written = match DiskFs::diskfs_write_object_entry(piece, rel_off, &inline_data, buf_va) {
+        Ok(n) => n,
         Err(e) => {
             crate::pdx::serial_println!(
                 "[sexfiles.bridge.diskfs.write.err] offset={} code={}",
                 byte_offset, e
             );
-            e
+            if count > orig_count {
+                let mut bm = V4_BITMAP.write();
+                v4_free_pool_only(&mut bm, &extents[orig_count..count]);
+            }
+            return e;
         }
+    };
+
+    // Crash-safety ordering: commit the (possibly grown) indirect
+    // descriptor before the manifest size that makes it visible.
+    if count > orig_count {
+        if let Err(e) = v4_indirect_write(i, buf_va, &extents, count) {
+            let mut bm = V4_BITMAP.write();
+            v4_free_pool_only(&mut bm, &extents[orig_count..count]);
+            return e;
+        }
+        v4_cache_put(i, extents, count);
     }
+    if need_end > entry.size_bytes as u64 {
+        entry.size_bytes = need_end as u32;
+        unsafe { V4_TABLE[i] = entry; }
+        if let Err(e) = v4_persist(buf_va) { return e; }
+    }
+
+    crate::pdx::serial_println!(
+        "[sexfiles.bridge.diskfs.write.ok] offset={} written={}",
+        byte_offset, written
+    );
+    written
 }
 
 fn handle_diskfs_read(byte_offset: u64, max_len: u64, caller_pd: u32) -> u64 {
@@ -222,22 +323,6 @@ fn handle_diskfs_read(byte_offset: u64, max_len: u64, caller_pd: u32) -> u64 {
         return messages::ERR_OVERFLOW as u64;
     }
 
-    if byte_offset >= messages::DISKFS_OBJECT_SIZE {
-        crate::pdx::serial_println!(
-            "[sexfiles.bridge.diskfs.read.err] reason=offset_past_end offset={}",
-            byte_offset
-        );
-        return messages::ERR_OVERFLOW as u64;
-    }
-
-    if byte_offset + max_len > messages::DISKFS_OBJECT_SIZE {
-        crate::pdx::serial_println!(
-            "[sexfiles.bridge.diskfs.read.err] reason=read_past_end offset={} max_len={}",
-            byte_offset, max_len
-        );
-        return messages::ERR_OVERFLOW as u64;
-    }
-
     let buf_va = diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX {
         crate::pdx::serial_println!(
@@ -247,22 +332,39 @@ fn handle_diskfs_read(byte_offset: u64, max_len: u64, caller_pd: u32) -> u64 {
         return messages::ERR_NOT_FOUND as u64;
     }
 
-    // DISKFS_V3: ensure manifest loaded, resolve selection to an entry.
-    if let Err(e) = v3_ensure(buf_va) {
+    if let Err(e) = v4_ensure(buf_va) {
         crate::pdx::serial_println!(
-            "[sexfiles.bridge.diskfs.read.err] reason=v3_ensure_failed code={}", e);
+            "[sexfiles.bridge.diskfs.read.err] reason=v4_ensure_failed code={}", e);
         return e;
     }
-    let entry = match v3_resolve(diskfs_selected_for(caller_pd)) {
+    let path_id = diskfs_selected_for(caller_pd);
+    let entry = match v4_get(path_id) {
         Ok(en) => en,
+        Err(e) => return e,
+    };
+
+    // DISKFS_V4: bounded by the object's ACTUAL (variable) length — a read
+    // at or past it is a deterministic error, never stale trailing bytes.
+    // byte_offset/max_len are caller-supplied; saturating_add so a
+    // near-u64::MAX offset can't wrap past this check in a release build.
+    if byte_offset >= entry.size_bytes as u64 || byte_offset.saturating_add(max_len) > entry.size_bytes as u64 {
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.read.err] reason=read_past_end offset={} max_len={} size={}",
+            byte_offset, max_len, entry.size_bytes
+        );
+        return messages::ERR_OVERFLOW as u64;
+    }
+
+    let (piece, rel_off) = match v4_resolve_offset(path_id as usize, byte_offset, buf_va) {
+        Ok(v) => v,
         Err(e) => return e,
     };
 
     let rlen = max_len as usize;
     let mut rbuf = [0u8; 8];
     match DiskFs::diskfs_read_object_entry(
-        entry,
-        byte_offset,
+        piece,
+        rel_off,
         &mut rbuf[..rlen],
         buf_va,
     ) {
@@ -294,6 +396,75 @@ fn handle_diskfs_read(byte_offset: u64, max_len: u64, caller_pd: u32) -> u64 {
     }
 }
 
+fn handle_diskfs_truncate(new_len: u64, caller_pd: u32) -> u64 {
+    if hot_log() { crate::pdx::serial_println!(
+        "[sexfiles.bridge.diskfs.recv] op=0x49 new_len={}",
+        new_len
+    ); }
+    let buf_va = diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX {
+        return messages::ERR_NOT_FOUND as u64;
+    }
+    if let Err(e) = v4_ensure(buf_va) { return e; }
+    let path_id = diskfs_selected_for(caller_pd);
+    if path_id >= DISKFS_SLOTS as u64 { return messages::ERR_BAD_CMD as u64; }
+    let i = path_id as usize;
+    if !v4_in_use(i) { return messages::ERR_NOT_FOUND as u64; }
+
+    let mut entry = unsafe { V4_TABLE[i] };
+    if new_len > entry.size_bytes as u64 {
+        // Shrink/no-op only — growth happens implicitly via WRITE.
+        crate::pdx::serial_println!(
+            "[sexfiles.bridge.diskfs.truncate.err] reason=would_grow new_len={} size={}",
+            new_len, entry.size_bytes
+        );
+        return messages::ERR_OVERFLOW as u64;
+    }
+    if new_len == entry.size_bytes as u64 {
+        return new_len;
+    }
+
+    // Shrink-commit-metadata-first ordering (see module doc): the object
+    // is visibly short as of this write, before any extent bookkeeping.
+    entry.size_bytes = new_len as u32;
+    unsafe { V4_TABLE[i] = entry; }
+    if let Err(e) = v4_persist(buf_va) { return e; }
+
+    let (mut extents, count) = v4_cache_get(i, buf_va);
+    let mut cum = 0u64;
+    let mut keep = 0usize;
+    let mut freed: [V4Extent; DISKFS_V4_MAX_EXTENTS] = [V4Extent::default(); DISKFS_V4_MAX_EXTENTS];
+    let mut freed_n = 0usize;
+    for k in 0..count {
+        let e = extents[k];
+        let cap = e.sector_count as u64 * 512;
+        if cum + cap <= new_len {
+            extents[keep] = e; keep += 1;
+        } else if cum >= new_len {
+            freed[freed_n] = e; freed_n += 1;
+        } else {
+            // Straddles the new boundary: keep the whole extent (block
+            // granularity — freeing a partial block isn't worth the extra
+            // bookkeeping at this bar) but zero its tail so a later
+            // regrow never exposes the just-shrunk content.
+            extents[keep] = e; keep += 1;
+            if let Err(er) = v4_zero_tail(e, new_len - cum, buf_va) { return er; }
+        }
+        cum += cap;
+    }
+    if freed_n > 0 {
+        if let Err(e) = v4_indirect_write(i, buf_va, &extents, keep) { return e; }
+        v4_cache_put(i, extents, keep);
+        let mut bm = V4_BITMAP.write();
+        v4_free_pool_only(&mut bm, &freed[..freed_n]);
+    }
+    crate::pdx::serial_println!(
+        "[sexfiles.bridge.diskfs.truncate.ok] new_len={} freed_extents={}",
+        new_len, freed_n
+    );
+    new_len
+}
+
 fn handle_diskfs_flush() -> u64 {
     if hot_log() { crate::pdx::serial_println!(
         "[sexfiles.bridge.diskfs.recv] op=0x3A"
@@ -315,14 +486,15 @@ fn handle_diskfs_stat(caller_pd: u32) -> u64 {
         "[sexfiles.bridge.diskfs.recv] op=0x3B"
     ); }
     let path_id = diskfs_selected_for(caller_pd);
-    let name = match v3_name_of(path_id) {
-        Some(n) => n,
-        None => return messages::ERR_NOT_FOUND as u64,
+    let entry = match v4_get(path_id) {
+        Ok(e) => e,
+        Err(e) => return e,
     };
-    let path = &name[..v3_name_len(&name)];
-    // All V3 objects are fixed 4096 bytes, READ|WRITE.
+    let name = entry.name;
+    let path = &name[..v4_name_len(&name)];
+    // DISKFS_V4: size is the object's exact current length, not a constant.
     let flags: u64 = (DISKFS_MANIFEST_FLAG_READ | DISKFS_MANIFEST_FLAG_WRITE) as u64;
-    let size: u64 = messages::DISKFS_OBJECT_SIZE;
+    let size: u64 = entry.size_bytes as u64;
     let packed = (flags << 32) | (size & 0xFFFF_FFFF);
     if hot_log() { crate::pdx::serial_println!(
         "[sexfiles.bridge.diskfs.stat.ok] path_id={} path={} size={} flags={:#x}",
@@ -338,11 +510,12 @@ fn handle_diskfs_manifest_hash(caller_pd: u32) -> u64 {
         "[sexfiles.bridge.diskfs.recv] op=0x3C"
     ); }
     let path_id = diskfs_selected_for(caller_pd);
-    let name = match v3_name_of(path_id) {
-        Some(n) => n,
-        None => return messages::ERR_NOT_FOUND as u64,
+    let entry = match v4_get(path_id) {
+        Ok(e) => e,
+        Err(e) => return e,
     };
-    let hash = DiskFs::proof_manifest_name_hash(&name[..v3_name_len(&name)]);
+    let name = entry.name;
+    let hash = DiskFs::proof_manifest_name_hash(&name[..v4_name_len(&name)]);
     crate::pdx::serial_println!(
         "[sexfiles.bridge.diskfs.manifest_hash.ok] path_id={} hash={:#x}",
         path_id, hash
@@ -355,196 +528,631 @@ fn handle_diskfs_manifest_hash(caller_pd: u32) -> u64 {
 /// `caller_pd` is the PD of the requesting process (from PDX message).
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  DISKFS_V3 — dynamic object store (replaces the fixed 3-path assumption).
+//  DISKFS_V4 — variable-length dynamic object store (supersedes V3's fixed
+//  4096-byte-per-object limit).
 //
-//  On-disk: ONE 512-byte manifest sector at LBA 2046.
+//  Manifest — ONE 512-byte sector at LBA 2046 (unchanged location):
 //    [0..8)   magic  "SDISKMV1" (unchanged — version field disambiguates)
-//    [8..10)  version = 3
+//    [8..10)  version = 4
 //    [10..12) entry_count = 15
 //    [12..16) generation (u32, bumped on every metadata change)
 //    16 + i*32 .. : entry i (15 entries × 32 bytes = 480):
-//       name[24]  zero-padded ASCII; name[0]==0 → slot free
-//       +24 u16   start_lba (deterministic: 2046 - 8*(i+1))
-//       +26 u16   len_sectors (= 8, 4096-byte objects)
-//       +28 u16   flags (READ|WRITE)
-//       +30 u16   slot generation (bumped on create; stale-id detection)
+//       name[24]       zero-padded ASCII; name[0]==0 → slot free
+//       +24 size_bytes u32  exact logical content length (0 = empty)
+//       +28 checksum   u16  over (name || size_bytes || gen), corruption guard
+//       +30 gen        u16  bumped on create/delete/rename; stale-id detection
 //
-//  Allocation: slot index IS the object id (path_id). LBA mapping is fixed
-//  per slot, so no allocator and no fragmentation; deleting clears the name
-//  and bumps generation; re-creating in the slot zeroes the object's first
-//  sector so stale content headers (e.g. quil "QP01") never resurrect.
-//  Crash behavior: metadata changes are a single 512-byte sector write
-//  (write + read-back verify); content writes are app-level (header last
-//  via reverse-chunk order in quil).
-//  Upgrade: a V2 (or missing) manifest is rewritten as V3 with slots 0-2
-//  seeded at the legacy LBAs — existing object CONTENT is untouched.
-//  Enumeration order: slot index ascending — deterministic.
+//  Indirect extent descriptor — one 512-byte sector PER SLOT, at a fixed,
+//  deterministic LBA (DISKFS_V4_INDIRECT_BASE_LBA - slot_index), so no
+//  separate allocator is needed just to place it:
+//    [0..4)  magic "SFEX"
+//    [4..6)  version = 1
+//    [6..8)  extent_count (0..DISKFS_V4_MAX_EXTENTS)
+//    [8..12) checksum (FNV-1a over the live extent bytes)
+//    12+k*4..: extent k: start_lba u16 (raw sector number), sector_count u16
+//  Extents store raw LBA/sector-count rather than pool-relative block
+//  indices so a migrated legacy object (fixed LBA, not block-aligned to
+//  the pool's origin) fits the same representation as a freshly allocated
+//  one — no special-case field needed.
+//  A slot's indirect sector is meaningful only while its manifest entry is
+//  in use; create/delete always rewrite it fully, so a stale descriptor
+//  left by an interrupted operation is never trusted on its own — the
+//  manifest entry is the sole authority for "does this object exist".
+//
+//  Content pool — DISKFS_V4_POOL_BLOCKS blocks of 4096 bytes each, at
+//  LBA [0, POOL_BLOCKS*8), well clear of the indirect region (starts at
+//  LBA 1911) and the legacy V3 slot / V4 manifest region (LBA 1926..2047).
+//  Free/used state is NOT persisted as its own structure — nothing to
+//  corrupt independently: it is rebuilt every mount by scanning the
+//  indirect descriptor of every in-use manifest slot and marking its
+//  pool-region extents allocated. A block claimed by two slots at once
+//  marks the later slot corrupt and drops it rather than trusting it —
+//  the same "drop, don't trust" policy V3 used for bad slot geometry.
+//
+//  Crash-safety ordering (see diskfs_recovery_gate):
+//    grow:   allocate (in-memory bitmap only) -> zero-fill new block(s) on
+//            disk -> write the requested content -> commit indirect
+//            descriptor -> commit manifest size_bytes.
+//            A crash before the indirect commit leaves new blocks written
+//            but unreferenced (invisible; reclaimed as free next mount).
+//            A crash before the manifest commit leaves the object at its
+//            old (smaller) size — old valid version, nothing exposed.
+//    shrink (TRUNCATE): commit manifest size_bytes DOWN first, then drop
+//            the now-unused trailing extents from the indirect descriptor.
+//            A crash between the two leaves a few blocks "reserved but
+//            unreachable" (reclaimed once the indirect update completes);
+//            content past the committed size_bytes is bounds-checked out
+//            of every read either way, so no stale trailing bytes are
+//            ever visible regardless of which side of the crash it lands.
+//    delete: clear the manifest name (object disappears from every
+//            listing/read/write immediately) -> free its extents from the
+//            live bitmap -> zero the indirect descriptor. A crash between
+//            steps still hides the object (name already cleared); its
+//            blocks are reclaimed on the next mount's rebuild regardless.
+//
+//  Migration from V3: the 3 legacy system objects (sexfiles-proof-v1,
+//  linen-object-v1, quil-object-v1) already live at fixed, contiguous
+//  LBAs outside the new content pool. V3->V4 upgrade wraps each as a
+//  single-extent V4 entry pointing at its EXISTING physical location —
+//  no data is copied or moved, so their content survives byte-for-byte.
+//  Their reported size_bytes becomes 4096, matching what V3 always
+//  exposed for them.
 // ═══════════════════════════════════════════════════════════════════════════
-pub const DISKFS_V3_SLOTS: usize = 15;
+pub const DISKFS_SLOTS: usize = 15;
 pub const DISKFS_V3_NAME_MAX: usize = 24;
-const DISKFS_V3_VERSION: u16 = 3;
+const DISKFS_V3_VERSION: u16 = 3; // still recognized, for migration only
+pub const DISKFS_V4_VERSION: u16 = 4;
 /// System objects (slots 0-2) cannot be deleted or renamed.
 const DISKFS_V3_SYSTEM_SLOTS: u64 = 3;
 
+const DISKFS_V4_BLOCK_SECTORS: u64 = sex_pdx::DISKFS_V4_BLOCK_SECTORS;
+const DISKFS_V4_BLOCK_BYTES: u64 = 4096;
+/// sexdrive's real NVMe write path (apps/sexdrive write_guard_allows) only
+/// accepts writes into pre-declared safe ranges — a deliberate bring-up
+/// guard against writing unknown disk regions, not a bug. LBA [0,47] and
+/// [128,2019] are already allowlisted for SexFS v0; LBA [48,127] is NOT.
+/// The content pool sits inside the [128,2019] range specifically to land
+/// entirely on allowed ground without needing a guard change.
+///
+/// The pool's exact placement is NOT chosen locally anymore — it comes
+/// from crate::sex_pdx's canonical disk-layout module, the single source
+/// of truth every fixed-LBA region in the system must be declared in and
+/// checked against at compile time (`const _: () = assert!(...)` in
+/// sex-pdx). This exists because the pool originally started at LBA 128,
+/// picked independently of apps/sexdrive's own boot-time self-test
+/// (nvme_multiblock_write_readback_proof), which ALSO unconditionally
+/// claims LBA 128..131 on every boot with no gate — no code shared
+/// between the two crates meant nothing caught the collision until a
+/// reboot silently ate real DiskFS content. See
+/// docs/handoff/SEXDRIVE_NVME_QUEUE_WRAP_V1.md for the full incident
+/// (initially misdiagnosed as an NVMe queue-wrap bug before the actual
+/// LBA collision was found).
+const DISKFS_V4_POOL_BASE_LBA: u64 = sex_pdx::DISKFS_V4_POOL_BASE_LBA;
+/// Content pool: blocks 0..POOL_BLOCKS at LBA [POOL_BASE_LBA, POOL_BASE_LBA
+/// + POOL_BLOCKS*8) — comfortably inside the allowed [128,2019] range,
+/// clear of every sexdrive self-test region (including the ones gated off
+/// in normal builds — see sex-pdx's compile-time asserts), and well clear
+/// of the indirect-descriptor region.
+const DISKFS_V4_POOL_BLOCKS: u64 = sex_pdx::DISKFS_V4_POOL_BLOCKS;
+/// Per-object cap: 16 blocks = 64 KiB. Explicit, enforced (ERR_OVERFLOW),
+/// visible — never silently truncated.
+pub const DISKFS_V4_MAX_OBJECT_BLOCKS: u32 = 16;
+pub const DISKFS_V4_MAX_OBJECT_BYTES: u64 = DISKFS_V4_MAX_OBJECT_BLOCKS as u64 * DISKFS_V4_BLOCK_BYTES;
+/// Bounded fragmentation: an object's content may live in up to this many
+/// discontiguous extents before growth is refused (ERR_FULL).
+const DISKFS_V4_MAX_EXTENTS: usize = 8;
+/// Indirect descriptor for slot i lives at this LBA minus i (15 sectors,
+/// the canonical range from sex_pdx::DISKFS_V4_INDIRECT_BASE_LBA up to
+/// this value inclusive), just below the legacy V3 slot region.
+const DISKFS_V4_INDIRECT_BASE_LBA: u64 =
+    sex_pdx::DISKFS_V4_INDIRECT_BASE_LBA + sex_pdx::DISKFS_V4_INDIRECT_SECTORS - 1;
+const DISKFS_V4_EXTENT_MAGIC: [u8; 4] = *b"SFEX";
+
+fn v4_indirect_lba(i: usize) -> u64 { DISKFS_V4_INDIRECT_BASE_LBA - i as u64 }
+
+/// One object's content extent: `sector_count` sectors starting at raw
+/// LBA `start_lba`.
+#[derive(Clone, Copy, Default)]
+struct V4Extent { start_lba: u16, sector_count: u16 }
+
 #[derive(Clone, Copy)]
-struct V3Entry {
+struct V4Entry {
     name: [u8; DISKFS_V3_NAME_MAX],
-    start_lba: u16,
-    len_sectors: u16,
-    flags: u16,
+    size_bytes: u32,
     gen: u16,
 }
+const V4_EMPTY: V4Entry = V4Entry { name: [0u8; DISKFS_V3_NAME_MAX], size_bytes: 0, gen: 0 };
 
-const V3_EMPTY: V3Entry = V3Entry {
-    name: [0u8; DISKFS_V3_NAME_MAX], start_lba: 0, len_sectors: 8,
-    flags: (DISKFS_MANIFEST_FLAG_READ | DISKFS_MANIFEST_FLAG_WRITE), gen: 0,
-};
+static mut V4_TABLE: [V4Entry; DISKFS_SLOTS] = [V4_EMPTY; DISKFS_SLOTS];
+static V4_LOADED: AtomicU64 = AtomicU64::new(0);
+static V4_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Derived (not persisted) free/used map over the content pool — see
+/// module doc. 176 bits fits in 3 u64 words.
+static V4_BITMAP: RwLock<[u64; 3]> = RwLock::new([0u64; 3]);
 
-static mut V3_TABLE: [V3Entry; DISKFS_V3_SLOTS] = [V3_EMPTY; DISKFS_V3_SLOTS];
-static V3_LOADED: AtomicU64 = AtomicU64::new(0);
-static V3_GENERATION: AtomicU64 = AtomicU64::new(0);
-
-fn v3_slot_lba(i: usize) -> u16 { (2046 - 8 * (i as u64 + 1)) as u16 }
-
-fn v3_name_len(name: &[u8; DISKFS_V3_NAME_MAX]) -> usize {
+fn v4_name_len(name: &[u8; DISKFS_V3_NAME_MAX]) -> usize {
     let mut n = 0;
     while n < DISKFS_V3_NAME_MAX && name[n] != 0 { n += 1; }
     n
 }
 
-fn v3_in_use(i: usize) -> bool {
-    unsafe { V3_TABLE[i].name[0] != 0 }
+fn v4_in_use(i: usize) -> bool {
+    unsafe { V4_TABLE[i].name[0] != 0 }
 }
 
-/// Read one 512-byte sector at `lba` into `out` via the lend buffer.
-fn v3_sector_read(lba: u64, buf_va: u64, out: &mut [u8; 512]) -> Result<(), u64> {
-    let status = DiskFs::diskfs_block_read(lba * 512, 512, SLOT_BUF_LEND);
-    if status != 0 { return Err(status); }
+fn v4_checksum_entry(e: &V4Entry) -> u16 {
+    let mut h: u32 = 0x811c_9dc5;
+    for &b in e.name.iter() { h ^= b as u32; h = h.wrapping_mul(0x0100_0193); }
+    for b in e.size_bytes.to_le_bytes() { h ^= b as u32; h = h.wrapping_mul(0x0100_0193); }
+    for b in e.gen.to_le_bytes() { h ^= b as u32; h = h.wrapping_mul(0x0100_0193); }
+    (h ^ (h >> 16)) as u16
+}
+
+fn v4_bitmap_test(bm: &[u64; 3], block: u64) -> bool {
+    let w = (block / 64) as usize; let b = block % 64;
+    bm[w] & (1u64 << b) != 0
+}
+fn v4_bitmap_set(bm: &mut [u64; 3], block: u64) {
+    let w = (block / 64) as usize; let b = block % 64;
+    bm[w] |= 1u64 << b;
+}
+fn v4_bitmap_clear(bm: &mut [u64; 3], block: u64) {
+    let w = (block / 64) as usize; let b = block % 64;
+    bm[w] &= !(1u64 << b);
+}
+
+/// Single-slot extent cache. A save loop issues many small WRITE (or READ)
+/// calls in a row against the SAME selected object — without this, every
+/// one of them re-reads the 512-byte indirect descriptor from disk before
+/// touching content, tripling round-trip count on what used to be a single
+/// R-M-W per call under V3 (which had no indirection at all). Keyed by
+/// slot only (not per-caller): concurrent access to a different object
+/// just misses and refills, never returns wrong data — correctness comes
+/// from always refilling/updating on any mutation, not from the cache
+/// being "sticky" to one caller.
+#[derive(Clone, Copy)]
+struct V4Cache { slot: usize, extents: [V4Extent; DISKFS_V4_MAX_EXTENTS], count: usize }
+static V4_EXTENT_CACHE: RwLock<Option<V4Cache>> = RwLock::new(None);
+
+fn v4_cache_put(i: usize, extents: [V4Extent; DISKFS_V4_MAX_EXTENTS], count: usize) {
+    *V4_EXTENT_CACHE.write() = Some(V4Cache { slot: i, extents, count });
+}
+
+fn v4_cache_invalidate(i: usize) {
+    let mut c = V4_EXTENT_CACHE.write();
+    if matches!(*c, Some(cc) if cc.slot == i) { *c = None; }
+}
+
+/// Cached read of a slot's extents: hit the in-memory cache if it's for
+/// this slot, otherwise fall through to disk and refill.
+fn v4_cache_get(i: usize, buf_va: u64) -> ([V4Extent; DISKFS_V4_MAX_EXTENTS], usize) {
+    if let Some(cc) = *V4_EXTENT_CACHE.read() {
+        if cc.slot == i { return (cc.extents, cc.count); }
+    }
+    let (extents, count) = v4_indirect_read(i, buf_va).unwrap_or(([V4Extent::default(); DISKFS_V4_MAX_EXTENTS], 0));
+    v4_cache_put(i, extents, count);
+    (extents, count)
+}
+
+/// Read a slot's indirect extent descriptor. Err on missing magic, bad
+/// version, or checksum mismatch — callers treat that identically to "no
+/// extents yet" (see handle_diskfs_write's comment on why that's safe).
+fn v4_indirect_read(i: usize, buf_va: u64) -> Result<([V4Extent; DISKFS_V4_MAX_EXTENTS], usize), ()> {
+    let mut sector = [0u8; 512];
+    if DiskFs::diskfs_block_read(v4_indirect_lba(i) * 512, 512, SLOT_BUF_LEND) != 0 { return Err(()); }
     unsafe {
         let p = buf_va as *const u8;
-        for i in 0..512 { out[i] = core::ptr::read_volatile(p.add(i)); }
+        for k in 0..512 { sector[k] = core::ptr::read_volatile(p.add(k)); }
     }
-    Ok(())
+    for k in 0..4 { if sector[k] != DISKFS_V4_EXTENT_MAGIC[k] { return Err(()); } }
+    let version = u16::from_le_bytes(sector[4..6].try_into().unwrap());
+    if version != 1 { return Err(()); }
+    let count = u16::from_le_bytes(sector[6..8].try_into().unwrap()) as usize;
+    if count > DISKFS_V4_MAX_EXTENTS { return Err(()); }
+    let stored_cs = u32::from_le_bytes(sector[8..12].try_into().unwrap());
+    let mut extents = [V4Extent::default(); DISKFS_V4_MAX_EXTENTS];
+    let mut h: u32 = 0x811c_9dc5;
+    for k in 0..count {
+        let off = 12 + k * 4;
+        let sb = u16::from_le_bytes(sector[off..off + 2].try_into().unwrap());
+        let sc = u16::from_le_bytes(sector[off + 2..off + 4].try_into().unwrap());
+        extents[k] = V4Extent { start_lba: sb, sector_count: sc };
+        for b in sector[off..off + 4].iter() { h ^= *b as u32; h = h.wrapping_mul(0x0100_0193); }
+    }
+    if h != stored_cs { return Err(()); }
+    Ok((extents, count))
 }
 
-fn v3_sector_write(lba: u64, buf_va: u64, data: &[u8; 512]) -> Result<(), u64> {
+/// Write (and read-back verify) a slot's indirect extent descriptor.
+fn v4_indirect_write(i: usize, buf_va: u64, extents: &[V4Extent], count: usize) -> Result<(), u64> {
+    let mut sector = [0u8; 512];
+    sector[0..4].copy_from_slice(&DISKFS_V4_EXTENT_MAGIC);
+    sector[4..6].copy_from_slice(&1u16.to_le_bytes());
+    sector[6..8].copy_from_slice(&(count as u16).to_le_bytes());
+    let mut h: u32 = 0x811c_9dc5;
+    for k in 0..count {
+        let off = 12 + k * 4;
+        sector[off..off + 2].copy_from_slice(&extents[k].start_lba.to_le_bytes());
+        sector[off + 2..off + 4].copy_from_slice(&extents[k].sector_count.to_le_bytes());
+        for b in sector[off..off + 4].iter() { h ^= *b as u32; h = h.wrapping_mul(0x0100_0193); }
+    }
+    sector[8..12].copy_from_slice(&h.to_le_bytes());
     unsafe {
         let p = buf_va as *mut u8;
-        for i in 0..512 { core::ptr::write_volatile(p.add(i), data[i]); }
+        for k in 0..512 { core::ptr::write_volatile(p.add(k), sector[k]); }
     }
+    let lba = v4_indirect_lba(i);
     let status = DiskFs::diskfs_block_write(lba * 512, 512, SLOT_BUF_LEND);
     if status != 0 { return Err(status); }
-    Ok(())
-}
-
-fn v3_persist(buf_va: u64) -> Result<(), u64> {
-    let mut sector = [0u8; 512];
-    sector[0..8].copy_from_slice(&DISKFS_MANIFEST_MAGIC.to_le_bytes());
-    sector[8..10].copy_from_slice(&DISKFS_V3_VERSION.to_le_bytes());
-    sector[10..12].copy_from_slice(&(DISKFS_V3_SLOTS as u16).to_le_bytes());
-    let g = V3_GENERATION.fetch_add(1, Ordering::Relaxed) as u32 + 1;
-    sector[12..16].copy_from_slice(&g.to_le_bytes());
-    for i in 0..DISKFS_V3_SLOTS {
-        let e = unsafe { V3_TABLE[i] };
-        let off = 16 + i * 32;
-        sector[off..off + DISKFS_V3_NAME_MAX].copy_from_slice(&e.name);
-        sector[off + 24..off + 26].copy_from_slice(&e.start_lba.to_le_bytes());
-        sector[off + 26..off + 28].copy_from_slice(&e.len_sectors.to_le_bytes());
-        sector[off + 28..off + 30].copy_from_slice(&e.flags.to_le_bytes());
-        sector[off + 30..off + 32].copy_from_slice(&e.gen.to_le_bytes());
-    }
-    v3_sector_write(2046, buf_va, &sector)?;
-    // Read-back verify.
     let mut check = [0u8; 512];
-    v3_sector_read(2046, buf_va, &mut check)?;
-    if check != sector {
-        crate::pdx::serial_println!("[sexfiles.diskfs.v3.persist.err] reason=verify_mismatch");
+    if DiskFs::diskfs_block_read(lba * 512, 512, SLOT_BUF_LEND) != 0 {
         return Err(messages::ERR_BAD_CMD as u64);
     }
-    crate::pdx::serial_println!("[sexfiles.diskfs.v3.persist.ok] generation={}", g);
+    unsafe {
+        let p = buf_va as *const u8;
+        for k in 0..512 { check[k] = core::ptr::read_volatile(p.add(k)); }
+    }
+    if check != sector { return Err(messages::ERR_BAD_CMD as u64); }
     Ok(())
 }
 
-fn v3_seed_slot(i: usize, name: &[u8]) {
+/// Zero-fill one whole 4096-byte pool block on disk. Called on every fresh
+/// allocation before anything references the block — never leak a
+/// previous tenant's content into newly allocated storage.
+///
+/// sexdrive's real NVMe write path only ever accepts exactly
+/// WRITE_PROOF_LEN=512 bytes per BLOCK_WRITE call (nvme_write_one_block
+/// hardcodes nlb=0, i.e. one LBA) — a single 4096-byte write is rejected
+/// with BLOCK_ERR_NO_DEVICE regardless of offset. Zero-fill sector by
+/// sector, matching every other write in this module.
+fn v4_zero_block(start_lba: u64, buf_va: u64) -> Result<(), u64> {
     unsafe {
-        let mut e = V3_EMPTY;
-        let n = name.len().min(DISKFS_V3_NAME_MAX);
-        e.name[..n].copy_from_slice(&name[..n]);
-        e.start_lba = v3_slot_lba(i);
-        e.gen = 1;
-        V3_TABLE[i] = e;
+        let p = buf_va as *mut u8;
+        for k in 0..512 { core::ptr::write_volatile(p.add(k), 0u8); }
+    }
+    for s in 0..DISKFS_V4_BLOCK_SECTORS {
+        let status = DiskFs::diskfs_block_write((start_lba + s) * 512, 512, SLOT_BUF_LEND);
+        if status != 0 { return Err(status); }
+    }
+    Ok(())
+}
+
+/// Zero bytes [keep_len, capacity) of one extent, at 512-byte sector
+/// granularity — one disk round-trip per sector instead of one per 16-byte
+/// inline-message chunk (32x fewer round-trips). The sector straddling
+/// `keep_len` needs a read-modify-write to preserve the bytes before it;
+/// every sector after that is fully zeroed and written directly, same as
+/// `v4_zero_block`. Bounded by DISKFS_V4_MAX_OBJECT_BYTES per extent, so
+/// this loop is small.
+fn v4_zero_tail(e: V4Extent, keep_len: u64, buf_va: u64) -> Result<(), u64> {
+    let cap = e.sector_count as u64 * 512;
+    if keep_len >= cap { return Ok(()); }
+    let mut sector = keep_len / 512;
+    let boundary_off = (keep_len % 512) as usize;
+    if boundary_off != 0 {
+        let lba = e.start_lba as u64 + sector;
+        let rstatus = DiskFs::diskfs_block_read(lba * 512, 512, SLOT_BUF_LEND);
+        if rstatus != 0 { return Err(rstatus); }
+        unsafe {
+            let p = buf_va as *mut u8;
+            for k in boundary_off..512 { core::ptr::write_volatile(p.add(k), 0u8); }
+        }
+        let status = DiskFs::diskfs_block_write(lba * 512, 512, SLOT_BUF_LEND);
+        if status != 0 { return Err(status); }
+        sector += 1;
+    }
+    if sector * 512 < cap {
+        unsafe {
+            let p = buf_va as *mut u8;
+            for k in 0..512 { core::ptr::write_volatile(p.add(k), 0u8); }
+        }
+        while sector * 512 < cap {
+            let lba = e.start_lba as u64 + sector;
+            let status = DiskFs::diskfs_block_write(lba * 512, 512, SLOT_BUF_LEND);
+            if status != 0 { return Err(status); }
+            sector += 1;
+        }
+    }
+    Ok(())
+}
+
+/// Allocate `need_blocks` additional pool blocks, appending new extents to
+/// `out` starting at index `n` (merging is not attempted — MAX_EXTENTS
+/// gives ample headroom for the object-size cap in play). Returns the new
+/// total extent count, or ERR_FULL if fragmentation or pool exhaustion
+/// prevents satisfying the request.
+fn v4_allocate(
+    bm: &mut [u64; 3],
+    need_blocks: u64,
+    out: &mut [V4Extent; DISKFS_V4_MAX_EXTENTS],
+    mut n: usize,
+) -> Result<usize, i64> {
+    let mut need = need_blocks;
+    let mut block = 0u64;
+    while need > 0 {
+        if block >= DISKFS_V4_POOL_BLOCKS { return Err(messages::ERR_FULL); }
+        if v4_bitmap_test(bm, block) { block += 1; continue; }
+        let run_start = block;
+        let mut run_len = 0u64;
+        while block < DISKFS_V4_POOL_BLOCKS && !v4_bitmap_test(bm, block) && run_len < need {
+            run_len += 1;
+            block += 1;
+        }
+        if n >= DISKFS_V4_MAX_EXTENTS { return Err(messages::ERR_FULL); }
+        for b in 0..run_len { v4_bitmap_set(bm, run_start + b); }
+        out[n] = V4Extent {
+            start_lba: (DISKFS_V4_POOL_BASE_LBA + run_start * DISKFS_V4_BLOCK_SECTORS) as u16,
+            sector_count: (run_len * DISKFS_V4_BLOCK_SECTORS) as u16,
+        };
+        n += 1;
+        need -= run_len;
+    }
+    Ok(n)
+}
+
+/// Free extents back into the pool bitmap. Extents outside the pool
+/// region (legacy migrated objects) are silently skipped — they were
+/// never bitmap-tracked in the first place (see module doc).
+fn v4_free_pool_only(bm: &mut [u64; 3], freed: &[V4Extent]) {
+    let pool_end_lba = DISKFS_V4_POOL_BASE_LBA + DISKFS_V4_POOL_BLOCKS * DISKFS_V4_BLOCK_SECTORS;
+    for e in freed {
+        let start = e.start_lba as u64;
+        let end = start + e.sector_count as u64;
+        if start >= DISKFS_V4_POOL_BASE_LBA
+            && end <= pool_end_lba
+            && (start - DISKFS_V4_POOL_BASE_LBA) % DISKFS_V4_BLOCK_SECTORS == 0
+            && e.sector_count as u64 % DISKFS_V4_BLOCK_SECTORS == 0
+        {
+            let b0 = (start - DISKFS_V4_POOL_BASE_LBA) / DISKFS_V4_BLOCK_SECTORS;
+            let bn = e.sector_count as u64 / DISKFS_V4_BLOCK_SECTORS;
+            for b in 0..bn { v4_bitmap_clear(bm, b0 + b); }
+        }
     }
 }
 
-/// Load (or bootstrap/upgrade) the V3 manifest. Idempotent; cached.
-fn v3_ensure(buf_va: u64) -> Result<(), u64> {
-    if V3_LOADED.load(Ordering::Relaxed) != 0 { return Ok(()); }
+/// Rebuild the derived free/used bitmap from every in-use slot's indirect
+/// descriptor. A slot whose descriptor is unreadable, overlaps another
+/// slot's blocks, or claims less capacity than its own size_bytes needs is
+/// dropped (not trusted) rather than mounted; the manifest is
+/// re-persisted once if any drops occurred.
+fn v4_bitmap_rebuild(buf_va: u64) {
+    let mut bm = [0u64; 3];
+    let mut dropped = false;
+    let pool_end_lba = DISKFS_V4_POOL_BASE_LBA + DISKFS_V4_POOL_BLOCKS * DISKFS_V4_BLOCK_SECTORS;
+    for i in 0..DISKFS_SLOTS {
+        if !v4_in_use(i) { continue; }
+        let size_bytes = unsafe { V4_TABLE[i].size_bytes } as u64;
+        if size_bytes == 0 { continue; } // empty object: no indirect sector needed
+        let (extents, count) = match v4_indirect_read(i, buf_va) {
+            Ok(v) => v,
+            Err(_) => {
+                crate::pdx::serial_println!(
+                    "[sexfiles.diskfs.v4.rebuild.drop] slot={} reason=indirect_unreadable", i);
+                unsafe { V4_TABLE[i] = V4_EMPTY; }
+                dropped = true;
+                continue;
+            }
+        };
+        let mut ok = true;
+        let mut total_bytes = 0u64;
+        for k in 0..count {
+            let e = extents[k];
+            if e.sector_count == 0 { ok = false; break; }
+            let start = e.start_lba as u64;
+            let end = start + e.sector_count as u64;
+            if start >= DISKFS_V4_POOL_BASE_LBA && end <= pool_end_lba {
+                if (start - DISKFS_V4_POOL_BASE_LBA) % DISKFS_V4_BLOCK_SECTORS != 0
+                    || e.sector_count as u64 % DISKFS_V4_BLOCK_SECTORS != 0
+                {
+                    ok = false; break;
+                }
+                let b0 = (start - DISKFS_V4_POOL_BASE_LBA) / DISKFS_V4_BLOCK_SECTORS;
+                let bn = e.sector_count as u64 / DISKFS_V4_BLOCK_SECTORS;
+                let mut bad = false;
+                for b in 0..bn { if v4_bitmap_test(&bm, b0 + b) { bad = true; break; } }
+                if bad { ok = false; break; }
+                for b in 0..bn { v4_bitmap_set(&mut bm, b0 + b); }
+            } else if end > DISKFS_V4_POOL_BASE_LBA && start < pool_end_lba {
+                // Straddles a pool boundary — this allocator never
+                // produces that; treat as corruption.
+                ok = false; break;
+            }
+            // else: fully outside the pool (legacy/reserved) — not tracked.
+            total_bytes += e.sector_count as u64 * 512;
+        }
+        if !ok || total_bytes < size_bytes {
+            crate::pdx::serial_println!(
+                "[sexfiles.diskfs.v4.rebuild.drop] slot={} reason=extent_overlap_or_short", i);
+            unsafe { V4_TABLE[i] = V4_EMPTY; }
+            dropped = true;
+        }
+    }
+    *V4_BITMAP.write() = bm;
+    if dropped {
+        let _ = v4_persist(buf_va);
+    }
+}
+
+/// Locate the extent (and offset within it) covering a logical byte
+/// offset, from an in-hand extent array (no disk I/O).
+fn v4_locate(extents: &[V4Extent; DISKFS_V4_MAX_EXTENTS], count: usize, logical_offset: u64) -> Result<(DiskManifestEntryV1, u64), u64> {
+    let mut cum = 0u64;
+    for k in 0..count {
+        let e = extents[k];
+        let cap = e.sector_count as u64 * 512;
+        if logical_offset < cum + cap {
+            return Ok((
+                DiskManifestEntryV1 { name_hash: 0, start_lba: e.start_lba as u64, len_bytes: cap as u32, flags: 0 },
+                logical_offset - cum,
+            ));
+        }
+        cum += cap;
+    }
+    Err(messages::ERR_OVERFLOW as u64)
+}
+
+/// Read a slot's indirect descriptor from disk, then locate the extent
+/// covering `logical_offset`. Used by the read path (no mutation in
+/// flight, so re-reading is simplest).
+fn v4_resolve_offset(i: usize, logical_offset: u64, buf_va: u64) -> Result<(DiskManifestEntryV1, u64), u64> {
+    let (extents, count) = v4_cache_get(i, buf_va);
+    v4_locate(&extents, count, logical_offset)
+}
+
+fn v4_get(path_id: u64) -> Result<V4Entry, u64> {
+    if path_id >= DISKFS_SLOTS as u64 { return Err(messages::ERR_BAD_CMD as u64); }
+    let i = path_id as usize;
+    if !v4_in_use(i) { return Err(messages::ERR_NOT_FOUND as u64); }
+    Ok(unsafe { V4_TABLE[i] })
+}
+
+fn v4_persist(buf_va: u64) -> Result<(), u64> {
     let mut sector = [0u8; 512];
-    v3_sector_read(2046, buf_va, &mut sector)?;
+    sector[0..8].copy_from_slice(&DISKFS_MANIFEST_MAGIC.to_le_bytes());
+    sector[8..10].copy_from_slice(&DISKFS_V4_VERSION.to_le_bytes());
+    sector[10..12].copy_from_slice(&(DISKFS_SLOTS as u16).to_le_bytes());
+    let g = V4_GENERATION.fetch_add(1, Ordering::Relaxed) as u32 + 1;
+    sector[12..16].copy_from_slice(&g.to_le_bytes());
+    for i in 0..DISKFS_SLOTS {
+        let e = unsafe { V4_TABLE[i] };
+        let off = 16 + i * 32;
+        sector[off..off + DISKFS_V3_NAME_MAX].copy_from_slice(&e.name);
+        sector[off + 24..off + 28].copy_from_slice(&e.size_bytes.to_le_bytes());
+        sector[off + 28..off + 30].copy_from_slice(&v4_checksum_entry(&e).to_le_bytes());
+        sector[off + 30..off + 32].copy_from_slice(&e.gen.to_le_bytes());
+    }
+    unsafe {
+        let p = buf_va as *mut u8;
+        for k in 0..512 { core::ptr::write_volatile(p.add(k), sector[k]); }
+    }
+    let status = DiskFs::diskfs_block_write(DISKFS_MANIFEST_LBA * 512, 512, SLOT_BUF_LEND);
+    if status != 0 { return Err(status); }
+    // Read-back verify.
+    let mut check = [0u8; 512];
+    if DiskFs::diskfs_block_read(DISKFS_MANIFEST_LBA * 512, 512, SLOT_BUF_LEND) != 0 {
+        return Err(messages::ERR_BAD_CMD as u64);
+    }
+    unsafe {
+        let p = buf_va as *const u8;
+        for k in 0..512 { check[k] = core::ptr::read_volatile(p.add(k)); }
+    }
+    if check != sector {
+        crate::pdx::serial_println!("[sexfiles.diskfs.v4.persist.err] reason=verify_mismatch");
+        return Err(messages::ERR_BAD_CMD as u64);
+    }
+    crate::pdx::serial_println!("[sexfiles.diskfs.v4.persist.ok] generation={}", g);
+    Ok(())
+}
+
+/// Load (or migrate/bootstrap) the V4 manifest. Idempotent; cached.
+/// Boot-time confirmation that the content pool's resolved LBA range
+/// doesn't intersect any reserved region — sex-pdx's `const _: () =
+/// assert!(...)` block already makes this impossible to build if false,
+/// so this can never actually fail; it exists as a live, gate-greppable
+/// marker (`[sexfiles.diskfs.v4.layout.ok]` / a loud `.layout.fail`) that
+/// the safe layout is really what's running, not just what compiled — see
+/// docs/handoff/SEXDRIVE_NVME_QUEUE_WRAP_V1.md for why "it compiled" and
+/// "it's actually safe" turned out to be two different claims once before.
+fn v4_layout_selfcheck() {
+    let pool_end = DISKFS_V4_POOL_BASE_LBA + DISKFS_V4_POOL_BLOCKS * DISKFS_V4_BLOCK_SECTORS;
+    let reserved: [(&str, u64, u64); 6] = [
+        ("sexdrive_ap3", sex_pdx::SEXDRIVE_AP3_WRITE_PROOF_LBA, sex_pdx::SEXDRIVE_AP3_WRITE_PROOF_SECTORS),
+        ("sexdrive_ap4", sex_pdx::SEXDRIVE_AP4_MULTI_BASE_LBA, sex_pdx::SEXDRIVE_AP4_MULTI_SECTORS),
+        ("sexdrive_ap5a", sex_pdx::SEXDRIVE_AP5A_PERSIST_BASE_LBA, sex_pdx::SEXDRIVE_AP5A_PERSIST_SECTORS),
+        ("sexdrive_ap6", sex_pdx::SEXDRIVE_AP6_NEG_MISMATCH_LBA, sex_pdx::SEXDRIVE_AP6_NEG_MISMATCH_SECTORS),
+        ("diskfs_manifest", sex_pdx::DISKFS_MANIFEST_LBA, sex_pdx::DISKFS_MANIFEST_SECTORS),
+        ("diskfs_legacy_slots", sex_pdx::DISKFS_LEGACY_SLOTS_START_LBA, sex_pdx::DISKFS_LEGACY_SLOTS_SECTORS),
+    ];
+    let mut ok = true;
+    for (name, start, len) in reserved {
+        if sex_pdx::ranges_overlap(DISKFS_V4_POOL_BASE_LBA, DISKFS_V4_POOL_BLOCKS * DISKFS_V4_BLOCK_SECTORS, start, len) {
+            crate::pdx::serial_println!(
+                "[sexfiles.diskfs.v4.layout.fail] pool={}..{} collides_with={} region={}..{}",
+                DISKFS_V4_POOL_BASE_LBA, pool_end, name, start, start + len
+            );
+            ok = false;
+        }
+    }
+    if ok {
+        crate::pdx::serial_println!(
+            "[sexfiles.diskfs.v4.layout.ok] pool={}..{} indirect_top={} manifest={}",
+            DISKFS_V4_POOL_BASE_LBA, pool_end, DISKFS_V4_INDIRECT_BASE_LBA, DISKFS_MANIFEST_LBA
+        );
+    }
+}
+
+fn v4_ensure(buf_va: u64) -> Result<(), u64> {
+    if V4_LOADED.load(Ordering::Relaxed) != 0 { return Ok(()); }
+    v4_layout_selfcheck();
+    let mut sector = [0u8; 512];
+    if DiskFs::diskfs_block_read(DISKFS_MANIFEST_LBA * 512, 512, SLOT_BUF_LEND) != 0 {
+        return Err(messages::ERR_BAD_CMD as u64);
+    }
+    unsafe {
+        let p = buf_va as *const u8;
+        for k in 0..512 { sector[k] = core::ptr::read_volatile(p.add(k)); }
+    }
     let magic = u64::from_le_bytes(sector[0..8].try_into().unwrap());
     let version = u16::from_le_bytes(sector[8..10].try_into().unwrap());
-    if magic == DISKFS_MANIFEST_MAGIC && version == DISKFS_V3_VERSION {
+    if magic == DISKFS_MANIFEST_MAGIC && version == DISKFS_V4_VERSION {
         let g = u32::from_le_bytes(sector[12..16].try_into().unwrap());
-        V3_GENERATION.store(g as u64, Ordering::Relaxed);
+        V4_GENERATION.store(g as u64, Ordering::Relaxed);
         let mut live = 0;
-        for i in 0..DISKFS_V3_SLOTS {
+        for i in 0..DISKFS_SLOTS {
             let off = 16 + i * 32;
-            let mut e = V3_EMPTY;
+            let mut e = V4_EMPTY;
             e.name.copy_from_slice(&sector[off..off + DISKFS_V3_NAME_MAX]);
-            e.start_lba = u16::from_le_bytes(sector[off + 24..off + 26].try_into().unwrap());
-            e.len_sectors = u16::from_le_bytes(sector[off + 26..off + 28].try_into().unwrap());
-            e.flags = u16::from_le_bytes(sector[off + 28..off + 30].try_into().unwrap());
+            e.size_bytes = u32::from_le_bytes(sector[off + 24..off + 28].try_into().unwrap());
+            let stored_cs = u16::from_le_bytes(sector[off + 28..off + 30].try_into().unwrap());
             e.gen = u16::from_le_bytes(sector[off + 30..off + 32].try_into().unwrap());
-            // Corrupt-entry guard: a nonzero name with an out-of-range LBA is
-            // dropped (treated as free) rather than trusted.
-            if e.name[0] != 0 && (e.start_lba != v3_slot_lba(i) || e.len_sectors != 8) {
+            if e.name[0] != 0 && v4_checksum_entry(&e) != stored_cs {
                 crate::pdx::serial_println!(
-                    "[sexfiles.diskfs.v3.load.drop] slot={} reason=bad_geometry lba={}",
-                    i, e.start_lba);
-                e = V3_EMPTY;
+                    "[sexfiles.diskfs.v4.load.drop] slot={} reason=checksum", i);
+                e = V4_EMPTY;
             }
             if e.name[0] != 0 { live += 1; }
-            unsafe { V3_TABLE[i] = e; }
+            unsafe { V4_TABLE[i] = e; }
         }
-        V3_LOADED.store(1, Ordering::Relaxed);
-        crate::pdx::serial_println!("[sexfiles.diskfs.v3.load.ok] live={} generation={}", live, g);
+        V4_LOADED.store(1, Ordering::Relaxed);
+        crate::pdx::serial_println!("[sexfiles.diskfs.v4.load.ok] live={} generation={}", live, g);
+        v4_bitmap_rebuild(buf_va);
         return Ok(());
     }
-    // Bootstrap / upgrade from V2 or blank: seed the 3 legacy objects at
-    // their legacy LBAs (content untouched), everything else free.
-    v3_seed_slot(0, b"sexfiles-proof-v1");
-    v3_seed_slot(1, b"linen-object-v1");
-    v3_seed_slot(2, b"quil-object-v1");
-    for i in 3..DISKFS_V3_SLOTS { unsafe { V3_TABLE[i] = V3_EMPTY; } }
-    v3_persist(buf_va)?;
-    V3_LOADED.store(1, Ordering::Relaxed);
+    // Migration / bootstrap: recognized V3 manifest -> wrap the 3 legacy
+    // system objects as single-extent V4 entries at their EXISTING
+    // physical LBAs (no data movement). Anything else (blank / unknown)
+    // bootstraps fresh at the same legacy layout V3 originally used.
+    let legacy: [(&[u8], u16); 3] = [
+        (b"sexfiles-proof-v1", 2038u16),
+        (b"linen-object-v1", 2030u16),
+        (b"quil-object-v1", 2022u16),
+    ];
+    for i in 0..DISKFS_SLOTS {
+        if i < legacy.len() {
+            let (nm, lba) = legacy[i];
+            let mut e = V4_EMPTY;
+            e.name[..nm.len()].copy_from_slice(nm);
+            e.size_bytes = 4096; // V3 objects were always fully-sized 4096B
+            e.gen = 1;
+            unsafe { V4_TABLE[i] = e; }
+            let extents = [V4Extent { start_lba: lba, sector_count: 8 }];
+            if let Err(er) = v4_indirect_write(i, buf_va, &extents, 1) {
+                crate::pdx::serial_println!("[sexfiles.diskfs.v4.migrate.err] slot={} err={}", i, er);
+                return Err(er);
+            }
+        } else {
+            unsafe { V4_TABLE[i] = V4_EMPTY; }
+        }
+    }
+    v4_persist(buf_va)?;
+    V4_LOADED.store(1, Ordering::Relaxed);
     crate::pdx::serial_println!(
-        "[sexfiles.diskfs.v3.bootstrap.ok] from_version={} seeded=3", version);
+        "[sexfiles.diskfs.v4.migrate.ok] from_version={} seeded=3", version);
+    v4_bitmap_rebuild(buf_va);
     Ok(())
 }
 
-/// Resolve a live path_id to a legacy-shape manifest entry for object I/O.
-fn v3_resolve(path_id: u64) -> Result<DiskManifestEntryV1, u64> {
-    if path_id >= DISKFS_V3_SLOTS as u64 { return Err(messages::ERR_BAD_CMD as u64); }
-    let i = path_id as usize;
-    if !v3_in_use(i) { return Err(messages::ERR_NOT_FOUND as u64); }
-    let e = unsafe { V3_TABLE[i] };
-    Ok(DiskManifestEntryV1 {
-        name_hash: 0,
-        start_lba: e.start_lba as u64,
-        len_bytes: (e.len_sectors as u32) * 512,
-        flags: e.flags,
-    })
-}
-
-fn v3_name_of(path_id: u64) -> Option<[u8; DISKFS_V3_NAME_MAX]> {
-    if path_id >= DISKFS_V3_SLOTS as u64 { return None; }
-    let i = path_id as usize;
-    if !v3_in_use(i) { return None; }
-    Some(unsafe { V3_TABLE[i].name })
-}
-
-fn v3_unpack_name(lo: u64, hi: u64) -> ([u8; DISKFS_V3_NAME_MAX], usize) {
+fn v4_unpack_name(lo: u64, hi: u64) -> ([u8; DISKFS_V3_NAME_MAX], usize) {
     let mut name = [0u8; DISKFS_V3_NAME_MAX];
     name[..8].copy_from_slice(&lo.to_le_bytes());
     name[8..16].copy_from_slice(&hi.to_le_bytes());
@@ -560,46 +1168,35 @@ fn v3_unpack_name(lo: u64, hi: u64) -> ([u8; DISKFS_V3_NAME_MAX], usize) {
 
 /// OP_DISKFS_CREATE (0x42): arg1|arg2 = up to 16 name bytes packed LE.
 /// Returns new path_id. Duplicate name → ERR_EXISTS; no name → ERR_BAD_CMD;
-/// table full → ERR_FULL. Zeroes the object's first sector so stale headers
-/// from a previously deleted object never resurrect.
+/// table full → ERR_FULL. The new object starts empty (size_bytes=0, no
+/// extents) — there is nothing to zero because there is no backing storage
+/// until the first WRITE, which always zero-fills newly allocated blocks.
 fn handle_diskfs_create(name_lo: u64, name_hi: u64, buf_va: u64) -> u64 {
-    let (name, n) = v3_unpack_name(name_lo, name_hi);
+    let (name, n) = v4_unpack_name(name_lo, name_hi);
     if n == 0 { return messages::ERR_BAD_CMD as u64; }
-    for i in 0..DISKFS_V3_SLOTS {
-        if v3_in_use(i) && unsafe { V3_TABLE[i].name } == name {
+    for i in 0..DISKFS_SLOTS {
+        if v4_in_use(i) && unsafe { V4_TABLE[i].name } == name {
             crate::pdx::serial_println!(
-                "[sexfiles.diskfs.v3.create.err] reason=exists slot={}", i);
+                "[sexfiles.diskfs.v4.create.err] reason=exists slot={}", i);
             return messages::ERR_EXISTS as u64;
         }
     }
     let mut slot = None;
-    for i in (DISKFS_V3_SYSTEM_SLOTS as usize)..DISKFS_V3_SLOTS {
-        if !v3_in_use(i) { slot = Some(i); break; }
+    for i in (DISKFS_V3_SYSTEM_SLOTS as usize)..DISKFS_SLOTS {
+        if !v4_in_use(i) { slot = Some(i); break; }
     }
     let Some(i) = slot else {
-        crate::pdx::serial_println!("[sexfiles.diskfs.v3.create.err] reason=full");
+        crate::pdx::serial_println!("[sexfiles.diskfs.v4.create.err] reason=full");
         return messages::ERR_FULL as u64;
     };
-    unsafe {
-        let mut e = V3_EMPTY;
-        e.name = name;
-        e.start_lba = v3_slot_lba(i);
-        e.gen = V3_TABLE[i].gen.wrapping_add(1).max(1);
-        V3_TABLE[i] = e;
+    let gen = unsafe { V4_TABLE[i].gen }.wrapping_add(1).max(1);
+    let e = V4Entry { name, size_bytes: 0, gen };
+    unsafe { V4_TABLE[i] = e; }
+    if let Err(er) = v4_persist(buf_va) {
+        unsafe { V4_TABLE[i] = V4_EMPTY; }
+        return er;
     }
-    // Zero the object's first sector (kills stale content headers).
-    let zero = [0u8; 512];
-    if let Err(e) = v3_sector_write(v3_slot_lba(i) as u64, buf_va, &zero) {
-        unsafe { V3_TABLE[i] = V3_EMPTY; }
-        crate::pdx::serial_println!("[sexfiles.diskfs.v3.create.err] reason=zero_failed code={}", e);
-        return e;
-    }
-    if let Err(e) = v3_persist(buf_va) {
-        unsafe { V3_TABLE[i] = V3_EMPTY; }
-        return e;
-    }
-    crate::pdx::serial_println!(
-        "[sexfiles.diskfs.v3.create.ok] slot={} gen={}", i, unsafe { V3_TABLE[i].gen });
+    crate::pdx::serial_println!("[sexfiles.diskfs.v4.create.ok] slot={} gen={}", i, gen);
     i as u64
 }
 
@@ -610,17 +1207,18 @@ fn handle_diskfs_create(name_lo: u64, name_hi: u64, buf_va: u64) -> u64 {
 ///   query 0xFE  → global manifest generation (change detection for Linen)
 fn handle_diskfs_list(path_id: u64, query: u64) -> u64 {
     if query == 0xFE {
-        return V3_GENERATION.load(Ordering::Relaxed);
+        return V4_GENERATION.load(Ordering::Relaxed);
     }
     if query == 0xFF {
-        if path_id >= DISKFS_V3_SLOTS as u64 { return 0; }
+        if path_id >= DISKFS_SLOTS as u64 { return 0; }
         let i = path_id as usize;
-        let used = v3_in_use(i) as u64;
-        let gen = unsafe { V3_TABLE[i].gen } as u64;
+        let used = v4_in_use(i) as u64;
+        let gen = unsafe { V4_TABLE[i].gen } as u64;
         // bit62 (NOT 63): reply values are sign-checked by sync clients.
-        return (used << 62) | (gen << 32) | (DISKFS_V3_SLOTS as u64);
+        return (used << 62) | (gen << 32) | (DISKFS_SLOTS as u64);
     }
-    let Some(name) = v3_name_of(path_id) else { return 0; };
+    if path_id >= DISKFS_SLOTS as u64 || !v4_in_use(path_id as usize) { return 0; }
+    let name = unsafe { V4_TABLE[path_id as usize].name };
     let chunk = (query as usize).min(2);
     let mut v = 0u64;
     for k in 0..8 {
@@ -632,37 +1230,47 @@ fn handle_diskfs_list(path_id: u64, query: u64) -> u64 {
     v
 }
 
-/// OP_DISKFS_DELETE (0x47): arg0 = path_id. System slots protected.
+/// OP_DISKFS_DELETE (0x47): arg0 = path_id. System slots protected. Frees
+/// the object's extents from the live bitmap immediately (same-boot reuse,
+/// not just after reboot), then invalidates the indirect descriptor.
 fn handle_diskfs_delete(path_id: u64, buf_va: u64) -> u64 {
     if path_id < DISKFS_V3_SYSTEM_SLOTS { return messages::ERR_PERM_DENIED as u64; }
-    if path_id >= DISKFS_V3_SLOTS as u64 { return messages::ERR_BAD_CMD as u64; }
+    if path_id >= DISKFS_SLOTS as u64 { return messages::ERR_BAD_CMD as u64; }
     let i = path_id as usize;
-    if !v3_in_use(i) { return messages::ERR_NOT_FOUND as u64; }
+    if !v4_in_use(i) { return messages::ERR_NOT_FOUND as u64; }
+    let (extents, count) = v4_indirect_read(i, buf_va).unwrap_or(([V4Extent::default(); DISKFS_V4_MAX_EXTENTS], 0));
     unsafe {
-        V3_TABLE[i].name = [0u8; DISKFS_V3_NAME_MAX];
-        V3_TABLE[i].gen = V3_TABLE[i].gen.wrapping_add(1);
+        V4_TABLE[i].name = [0u8; DISKFS_V3_NAME_MAX];
+        V4_TABLE[i].size_bytes = 0;
+        V4_TABLE[i].gen = V4_TABLE[i].gen.wrapping_add(1);
     }
-    if let Err(e) = v3_persist(buf_va) { return e; }
-    crate::pdx::serial_println!("[sexfiles.diskfs.v3.delete.ok] slot={}", i);
+    if let Err(e) = v4_persist(buf_va) { return e; }
+    {
+        let mut bm = V4_BITMAP.write();
+        v4_free_pool_only(&mut bm, &extents[..count]);
+    }
+    let _ = v4_indirect_write(i, buf_va, &[], 0);
+    v4_cache_invalidate(i);
+    crate::pdx::serial_println!("[sexfiles.diskfs.v4.delete.ok] slot={}", i);
     0
 }
 
 /// OP_DISKFS_RENAME (0x48): arg0 = path_id, arg1|arg2 = new name.
 fn handle_diskfs_rename(path_id: u64, name_lo: u64, name_hi: u64, buf_va: u64) -> u64 {
     if path_id < DISKFS_V3_SYSTEM_SLOTS { return messages::ERR_PERM_DENIED as u64; }
-    if path_id >= DISKFS_V3_SLOTS as u64 { return messages::ERR_BAD_CMD as u64; }
+    if path_id >= DISKFS_SLOTS as u64 { return messages::ERR_BAD_CMD as u64; }
     let i = path_id as usize;
-    if !v3_in_use(i) { return messages::ERR_NOT_FOUND as u64; }
-    let (name, n) = v3_unpack_name(name_lo, name_hi);
+    if !v4_in_use(i) { return messages::ERR_NOT_FOUND as u64; }
+    let (name, n) = v4_unpack_name(name_lo, name_hi);
     if n == 0 { return messages::ERR_BAD_CMD as u64; }
-    for j in 0..DISKFS_V3_SLOTS {
-        if j != i && v3_in_use(j) && unsafe { V3_TABLE[j].name } == name {
+    for j in 0..DISKFS_SLOTS {
+        if j != i && v4_in_use(j) && unsafe { V4_TABLE[j].name } == name {
             return messages::ERR_EXISTS as u64;
         }
     }
-    unsafe { V3_TABLE[i].name = name; }
-    if let Err(e) = v3_persist(buf_va) { return e; }
-    crate::pdx::serial_println!("[sexfiles.diskfs.v3.rename.ok] slot={}", i);
+    unsafe { V4_TABLE[i].name = name; }
+    if let Err(e) = v4_persist(buf_va) { return e; }
+    crate::pdx::serial_println!("[sexfiles.diskfs.v4.rename.ok] slot={}", i);
     0
 }
 
@@ -855,7 +1463,7 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
             crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x42 name=create caller={}", caller_pd);
             let buf_va = diskfs_bridge_get_buf_va();
             if buf_va == 0 || buf_va == u64::MAX { return messages::ERR_NOT_FOUND as u64; }
-            if let Err(e) = v3_ensure(buf_va) { return e; }
+            if let Err(e) = v4_ensure(buf_va) { return e; }
             let reply = handle_diskfs_create(arg1, arg2, buf_va);
             crate::pdx::serial_println!("[sexfiles.route.reply] op=0x42 caller={} value={:#x}", caller_pd, reply);
             reply
@@ -864,22 +1472,29 @@ pub fn handle_vfs_message(type_id: u64, arg0: u64, arg1: u64, arg2: u64, caller_
             if hot_log() { crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x43 name=list caller={}", caller_pd); }
             let buf_va = diskfs_bridge_get_buf_va();
             if buf_va == 0 || buf_va == u64::MAX { return messages::ERR_NOT_FOUND as u64; }
-            if let Err(e) = v3_ensure(buf_va) { return e; }
+            if let Err(e) = v4_ensure(buf_va) { return e; }
             handle_diskfs_list(arg0, arg1)
         }
         messages::OP_DISKFS_DELETE => {
             crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x47 name=delete caller={}", caller_pd);
             let buf_va = diskfs_bridge_get_buf_va();
             if buf_va == 0 || buf_va == u64::MAX { return messages::ERR_NOT_FOUND as u64; }
-            if let Err(e) = v3_ensure(buf_va) { return e; }
+            if let Err(e) = v4_ensure(buf_va) { return e; }
             handle_diskfs_delete(arg0, buf_va)
         }
         messages::OP_DISKFS_RENAME => {
             crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x48 name=rename caller={}", caller_pd);
             let buf_va = diskfs_bridge_get_buf_va();
             if buf_va == 0 || buf_va == u64::MAX { return messages::ERR_NOT_FOUND as u64; }
-            if let Err(e) = v3_ensure(buf_va) { return e; }
+            if let Err(e) = v4_ensure(buf_va) { return e; }
             handle_diskfs_rename(arg0, arg1, arg2, buf_va)
+        }
+        messages::OP_DISKFS_TRUNCATE => {
+            // arg0 = new_length_bytes
+            crate::pdx::serial_println!("[sexfiles.route.dispatch] op=0x49 name=truncate caller={}", caller_pd);
+            let reply = handle_diskfs_truncate(arg0, caller_pd);
+            crate::pdx::serial_println!("[sexfiles.route.reply] op=0x49 caller={} value={:#x}", caller_pd, reply);
+            reply
         }
         messages::OP_DISKFS_SELECT => {
             // arg0 = path_id, arg1/arg2 = 0 (reserved)
