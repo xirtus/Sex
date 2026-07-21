@@ -19,6 +19,41 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+// DISKFS_V4: QUIL_BUFFER grew past the size where LLVM inlines zero-init /
+// copy loops and starts emitting real memset/memcpy calls — no libc here,
+// so provide them ourselves (same pattern as apps/sexdrive, kernel,
+// sex-rt, crates/silk-client).
+#[no_mangle]
+pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    for i in 0..n { *dest.add(i) = *src.add(i); }
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memset(dest: *mut u8, c: i32, n: usize) -> *mut u8 {
+    for i in 0..n { *dest.add(i) = c as u8; }
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    if (dest as usize) <= (src as usize) {
+        for i in 0..n { *dest.add(i) = *src.add(i); }
+    } else {
+        for i in (0..n).rev() { *dest.add(i) = *src.add(i); }
+    }
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
+    for i in 0..n {
+        let diff = *a.add(i) as i32 - *b.add(i) as i32;
+        if diff != 0 { return diff; }
+    }
+    0
+}
+
 // ── Quil Text Surface V1 Constants ───────────────────────────────────────────
 // Text rendering is NOT available in sexdisplay (no font subsystem).
 // Fill-rect visuals represent the text surface structure.
@@ -48,11 +83,24 @@ No text rendering available yet.\n\
 Fill-rect visual representation.\n\
 Buffer capacity: bounded static array.\n\
 Press arrows to navigate, ESC for cmds.";
-const QUIL_BUFFER_MAX_LEN: usize = 512;
-// TEXT_MODEL_V2: sexdisplay now supports 512-byte text_buf, '\n' line
-// breaks with width-derived wrap, and 12-bit chunk offsets (arg2 bits
-// 12-15 = offset high nibble). 24 rows is the renderer's line-table cap.
+// DISKFS_V4: 12 KiB spans 3 DiskFS content blocks (4096B each), clearing
+// the ">4KiB, grows across multiple storage units" bar with headroom
+// under the backend's 64KiB per-object cap.
+const QUIL_BUFFER_MAX_LEN: usize = 12288;
+// TEXT_MODEL_V2: sexdisplay's surface text_buf is a separate 512-byte
+// RENDER buffer, not a document-size cap — draw_text_lines() already
+// windows to the QUIL_VIEW_ROWS viewport around the cursor before sending
+// anything to the display, so it stays well under 512 bytes regardless of
+// QUIL_BUFFER_MAX_LEN. 24 rows is the renderer's line-table cap.
 const QUIL_MAX_VISIBLE_LINES: usize = 24;
+// QUIL_MAX_DISPLAY_LINES sizes stack-local line-start tables in
+// quil_layout()'s three call sites. It is intentionally decoupled from
+// QUIL_BUFFER_MAX_LEN (which used to double as "worst case one line per
+// byte") — at 12 KiB that would be a ~24KB stack array against a 64KB
+// per-PD user stack (kernel/src/init.rs stack_top), too tight a margin.
+// 768 lines comfortably covers any realistically-typed document; only
+// QUIL_VIEW_ROWS of it are ever visible at once.
+const QUIL_MAX_DISPLAY_LINES: usize = 768;
 
 /// Mutable text buffer — initialized from QUIL_TEXT_INIT at boot.
 /// Updated by quil_load(). Read by draw_text_lines().
@@ -94,7 +142,6 @@ static mut QUIL_GOAL_COL: usize = usize::MAX;
 /// (scancode_to_char emits ASCII; sanitizers strip the rest).
 const QUIL_VIEW_COLS: usize = 80;
 const QUIL_VIEW_ROWS: usize = 22;
-const QUIL_MAX_DISPLAY_LINES: usize = QUIL_BUFFER_MAX_LEN + 1;
 
 fn quil_layout(buf: &[u8], starts: &mut [u16; QUIL_MAX_DISPLAY_LINES]) -> usize {
     let mut count = 1usize;
@@ -150,7 +197,10 @@ static mut CLIPBOARD: [u8; 256] = [0u8; 256];
 static mut CLIPBOARD_LEN: usize = 0;
 
 // ── Undo/Redo Static Ring ─────────────────────────────────────────────────
-const UNDO_DEPTH: usize = 16;
+// DISKFS_V4: buffer grew 512 -> 12288 (24x). UNDO_RING is one full buffer
+// copy per depth level; trimming depth 16->6 keeps its BSS footprint
+// (~72KB) in the same ballpark as before rather than scaling 24x with it.
+const UNDO_DEPTH: usize = 6;
 static mut UNDO_RING: [[u8; QUIL_BUFFER_MAX_LEN]; UNDO_DEPTH] =
     [[0u8; QUIL_BUFFER_MAX_LEN]; UNDO_DEPTH];
 static mut UNDO_CURSORS: [usize; UNDO_DEPTH] = [0usize; UNDO_DEPTH];
@@ -338,6 +388,9 @@ const OP_DISKFS_STAT: u64 = 0x3B;
 const OP_DISKFS_SELECT: u64 = 0x3E;
 const OP_DISKFS_CREATE: u64 = 0x42;
 const OP_DISKFS_LIST: u64 = 0x43;
+/// DISKFS_V4: shrink the selected object to an exact length after a save's
+/// write loop, so a shorter re-save never leaves stale trailing bytes.
+const OP_DISKFS_TRUNCATE: u64 = 0x49;
 const QUIL_DISKFS_PATH_ID: u64 = 2;
 const QUIL_DISKFS_EXPECT_SIZE: u64 = 4096;
 const QUIL_DISKFS_EXPECT_FLAGS: u64 = 0x3;
@@ -1788,6 +1841,15 @@ fn quil_persist_save() -> Result<usize, i64> {
                 .map_err(|e| { serial_println!("[quil.persist.save.err] stage=write off={} err={}", off, e); e })?;
             off += 16;
         }
+        // DISKFS_V4: the write loop above always sends full 16-byte chunks,
+        // so a `len` that isn't a multiple of 16 leaves size_bytes up to 15
+        // bytes longer than the true content (header + len). A prior save
+        // that was longer than this one leaves even more stale tail. Commit
+        // the exact length explicitly so shrink-saves never carry stale
+        // trailing bytes forward.
+        let exact_len = (16 + len) as u64;
+        pdx_storage_call_bounded(OP_DISKFS_TRUNCATE, exact_len, 0, 0)
+            .map_err(|e| { serial_println!("[quil.persist.save.err] stage=truncate err={}", e); e })?;
         QUIL_DIRTY = false;
         // FNV-1a over the saved bytes — lets gates assert EXACT content.
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -1823,13 +1885,18 @@ fn quil_persist_load() -> Result<usize, i64> {
         }
         let mut off = 0usize;
         while off < len {
-            let word = pdx_storage_call_bounded(OP_DISKFS_READ, 16 + off as u64, 8, 0)
+            // DISKFS_V4: the backend bounds reads strictly to the object's
+            // exact committed size — request only what's actually left on
+            // the final chunk, not a flat 8, or a non-multiple-of-8 length
+            // would overrun size_bytes and get ERR_OVERFLOW.
+            let want = (len - off).min(8);
+            let word = pdx_storage_call_bounded(OP_DISKFS_READ, 16 + off as u64, want as u64, 0)
                 .map_err(|e| { serial_println!("[quil.persist.load.err] stage=read off={} err={}", off, e); e })?;
             let bytes = word.to_le_bytes();
-            for i in 0..8 {
-                if off + i < len { QUIL_BUFFER[off + i] = bytes[i]; }
+            for i in 0..want {
+                QUIL_BUFFER[off + i] = bytes[i];
             }
-            off += 8;
+            off += want;
         }
         QUIL_BUFFER_LEN = len;
         QUIL_CURSOR_POS = len;
