@@ -106,6 +106,11 @@ const QUIL_MAX_DISPLAY_LINES: usize = 768;
 /// Updated by quil_load(). Read by draw_text_lines().
 static mut QUIL_BUFFER: [u8; QUIL_BUFFER_MAX_LEN] = [0u8; QUIL_BUFFER_MAX_LEN];
 static mut QUIL_BUFFER_LEN: usize = 0;
+/// LANE3: quil_persist_load stages a full reload here first and only
+/// copies into QUIL_BUFFER on complete success — a failed/partial reload
+/// must leave the current buffer and dirty state exactly as they were,
+/// not a mix of old and partially-read new content.
+static mut QUIL_LOAD_STAGING: [u8; QUIL_BUFFER_MAX_LEN] = [0u8; QUIL_BUFFER_MAX_LEN];
 /// QUIL_EDITOR_V1: true when the buffer has unsaved edits. Cleared on
 /// save/load/new; shown as '*' in the status line.
 static mut QUIL_DIRTY: bool = false;
@@ -219,6 +224,7 @@ const OP_RAMFS_CLOSE: u64 = 0x33;
 const RAMFS_O_CREATE: u32 = 0x01;
 const STORAGE_CAP_PROOF_ENABLED: bool = option_env!("SEXOS_STORAGE_CAP_PROOF").is_some();
 const QUIL_DISKFS_SLOT_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_DISKFS_SLOT_PROOF").is_some();
+const QUIL_READ_V2_HIGHBIT_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_READ_V2_HIGHBIT_PROOF").is_some();
 const QUIL_KEYBOARD_NAV_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_KEYBOARD_NAV_PROOF").is_some();
 const QUIL_KEYBOARD_BUFFER_PROOF_ENABLED: bool = option_env!("SEXOS_QUIL_KEYBOARD_BUFFER_PROOF").is_some();
 static mut QUIL_BUFFER_PROOF_ACTIVE: bool = false;
@@ -383,7 +389,6 @@ static mut PHYSICAL_KEYBOARD_PROOF_DONE: bool = false;
 static mut PHYSICAL_KEYBOARD_PROOF_ITER: u64 = 0;
 
 const OP_DISKFS_WRITE: u64 = 0x38;
-const OP_DISKFS_READ: u64 = 0x39;
 const OP_DISKFS_STAT: u64 = 0x3B;
 const OP_DISKFS_SELECT: u64 = 0x3E;
 const OP_DISKFS_CREATE: u64 = 0x42;
@@ -391,6 +396,14 @@ const OP_DISKFS_LIST: u64 = 0x43;
 /// DISKFS_V4: shrink the selected object to an exact length after a save's
 /// write loop, so a shorter re-save never leaves stale trailing bytes.
 const OP_DISKFS_TRUNCATE: u64 = 0x49;
+/// LANE3: canonical-reply READ, replacing OP_DISKFS_READ for all real
+/// content restore. See servers/sexfiles/src/messages.rs's
+/// OP_DISKFS_READ_V2 doc comment for the reply bit layout (status in bits
+/// 63..56, up to 6 payload bytes in bits 47..0) — a data byte >= 0x80 can
+/// never be misread as an error the way OP_DISKFS_READ's full-width reply
+/// could.
+const OP_DISKFS_READ_V2: u64 = 0x4A;
+const DISKFS_V2_MAX_READ: u64 = 6;
 const QUIL_DISKFS_PATH_ID: u64 = 2;
 const QUIL_DISKFS_EXPECT_SIZE: u64 = 4096;
 const QUIL_DISKFS_EXPECT_FLAGS: u64 = 0x3;
@@ -1613,23 +1626,37 @@ fn run_quil_diskfs_slot_min_proof() {
         }
     }
 
-    // READ 2x8B through reply path
+    // LANE3: READ_V2 through the reply path (was OP_DISKFS_READ, 2x8B) -
+    // this is a test-only proof, migrated per the same audit as the real
+    // content-restore path so no diskfs read anywhere in quil still uses
+    // the ambiguous encoding. 16 bytes / 6-per-call = 3 calls (6+6+4).
     let mut readback: [u8; 16] = [0u8; 16];
-    for chunk in 0..2u64 {
-        let off = chunk * 8;
-        match pdx_storage_call(OP_DISKFS_READ, off, 8, 0) {
-            Ok(word) => {
-                let bytes = word.to_le_bytes();
-                for i in 0..8 {
-                    readback[(off as usize) + i] = bytes[i];
-                }
-            }
+    let mut off: usize = 0;
+    while off < 16 {
+        let want = (16 - off).min(6);
+        let reply = match pdx_storage_call(OP_DISKFS_READ_V2, off as u64, want as u64, 0) {
+            Ok(v) => v,
             Err(e) => {
                 serial_println!("[quil.diskfs.slot.min.read.err] err={}", e);
                 serial_println!("[quil.diskfs.slot.min.done] ok=0");
                 return;
             }
+        };
+        let status = (reply >> 56) & 0xFF;
+        if status != 0x00 {
+            serial_println!("[quil.diskfs.slot.min.read.err] status={:#x}", status);
+            serial_println!("[quil.diskfs.slot.min.done] ok=0");
+            return;
         }
+        let n = (((reply >> 48) & 0xFF) as usize).min(6);
+        let payload = (reply & 0xFFFF_FFFF_FFFF).to_le_bytes();
+        if n < want {
+            serial_println!("[quil.diskfs.slot.min.read.err] reason=short_read got={} want={}", n, want);
+            serial_println!("[quil.diskfs.slot.min.done] ok=0");
+            return;
+        }
+        readback[off..off + n].copy_from_slice(&payload[..n]);
+        off += n;
     }
     serial_println!("[quil.diskfs.slot.min.read.ok] size=16");
 
@@ -1646,6 +1673,113 @@ fn run_quil_diskfs_slot_min_proof() {
     }
     serial_println!("[quil.diskfs.slot.min.match] ok=1");
     serial_println!("[quil.diskfs.slot.min.done] ok=1");
+}
+
+/// LANE3: proves quil_persist_save/quil_persist_load (the real
+/// content-restore path, now on OP_DISKFS_READ_V2) round-trip bytes with
+/// the high bit set exactly - the class of byte that OP_DISKFS_READ could
+/// misread as an error. Content is mostly printable text (visibly
+/// inspectable in the editor after the load) with 0x00, 0x7f, 0x80, and
+/// 0xff spliced in at known offsets, verified individually and via a
+/// whole-buffer FNV-1a hash so the gate asserts exact transport, not just
+/// "some content loaded".
+fn run_quil_read_v2_highbit_proof() {
+    serial_println!("[quil.read_v2.highbit.begin]");
+    const PATTERN: &[u8] = b"HIGHBIT-PROOF-A-\x00-B-\x7f-C-\x80-D-\xff-END";
+    let name = b"hibitproof";
+    let mut lo = 0u64;
+    let mut hi = 0u64;
+    for i in 0..name.len().min(16) {
+        let b = name[i] as u64;
+        if i < 8 { lo |= b << (i * 8); } else { hi |= b << ((i - 8) * 8); }
+    }
+    let id = match pdx_storage_call_bounded(OP_DISKFS_CREATE, 0, lo, hi) {
+        Ok(id) => id,
+        Err(e) => {
+            serial_println!("[quil.read_v2.highbit.err] stage=create err={}", e);
+            serial_println!("[quil.read_v2.highbit.done] ok=0");
+            return;
+        }
+    };
+    unsafe {
+        QUIL_DOC_ID = id;
+        QUIL_LAST_DOC_ID = id;
+        QUIL_BUFFER[..PATTERN.len()].copy_from_slice(PATTERN);
+        QUIL_BUFFER_LEN = PATTERN.len();
+    }
+    if let Err(e) = quil_persist_save() {
+        serial_println!("[quil.read_v2.highbit.err] stage=save err={}", e);
+        serial_println!("[quil.read_v2.highbit.done] ok=0");
+        return;
+    }
+    // Overwrite with a sentinel distinct from PATTERN so a successful
+    // match below proves the load actually repopulated the buffer, not
+    // that it was already sitting there from the save above.
+    unsafe {
+        for b in QUIL_BUFFER[..PATTERN.len()].iter_mut() { *b = 0xAA; }
+        QUIL_BUFFER_LEN = 0;
+    }
+    if let Err(e) = quil_persist_load() {
+        serial_println!("[quil.read_v2.highbit.err] stage=load err={}", e);
+        serial_println!("[quil.read_v2.highbit.done] ok=0");
+        return;
+    }
+    let (got_len, matched, hash) = unsafe {
+        let len = QUIL_BUFFER_LEN;
+        let mut ok = len == PATTERN.len();
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for i in 0..len.min(QUIL_BUFFER_MAX_LEN) {
+            let got = QUIL_BUFFER[i];
+            h ^= got as u64;
+            h = h.wrapping_mul(0x100_0000_01b3);
+            if i < PATTERN.len() && got != PATTERN[i] { ok = false; }
+        }
+        (len, ok, h)
+    };
+    // Individually called out per the audit: each representative byte at
+    // its known offset in PATTERN.
+    for (label, byte) in [("0x00", 0x00u8), ("0x7f", 0x7fu8), ("0x80", 0x80u8), ("0xff", 0xffu8)] {
+        let pos = PATTERN.iter().position(|&b| b == byte);
+        let ok = match pos {
+            Some(p) => unsafe { p < QUIL_BUFFER_LEN && QUIL_BUFFER[p] == byte },
+            None => false,
+        };
+        serial_println!("[quil.read_v2.highbit.byte] label={} ok={}", label, ok as u8);
+    }
+    serial_println!(
+        "[quil.read_v2.highbit.result] len={} expected_len={} hash={:#x} ok={}",
+        got_len, PATTERN.len(), hash, matched as u8
+    );
+
+    // Negative path: a failed reload must leave the CURRENT buffer/dirty
+    // state exactly as they were, not clear or corrupt them. Mark the
+    // buffer dirty (simulating an unsaved edit), then force a load
+    // failure via an out-of-range path_id, and confirm nothing changed.
+    let before_len = unsafe { QUIL_BUFFER_LEN };
+    let before_hash = hash; // buffer content unchanged from the successful load above
+    unsafe { QUIL_DIRTY = true; }
+    let saved_doc_id = unsafe { QUIL_DOC_ID };
+    unsafe { QUIL_DOC_ID = 9999; } // deliberately invalid path_id
+    let load_result = quil_persist_load();
+    let (after_len, after_hash, after_dirty) = unsafe {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for i in 0..QUIL_BUFFER_LEN.min(QUIL_BUFFER_MAX_LEN) {
+            h ^= QUIL_BUFFER[i] as u64;
+            h = h.wrapping_mul(0x100_0000_01b3);
+        }
+        (QUIL_BUFFER_LEN, h, QUIL_DIRTY)
+    };
+    unsafe { QUIL_DOC_ID = saved_doc_id; } // restore for anything running after this proof
+    let neg_reported_failure = load_result.is_err();
+    let neg_buffer_intact = after_len == before_len && after_hash == before_hash;
+    let neg_dirty_preserved = after_dirty; // was set true above, must still be true
+    let neg_ok = neg_reported_failure && neg_buffer_intact && neg_dirty_preserved;
+    serial_println!(
+        "[quil.read_v2.highbit.negative] reported_failure={} buffer_intact={} dirty_preserved={} ok={}",
+        neg_reported_failure as u8, neg_buffer_intact as u8, neg_dirty_preserved as u8, neg_ok as u8
+    );
+
+    serial_println!("[quil.read_v2.highbit.done] ok={}", (matched && neg_ok) as u8);
 }
 
 // ── RamFS Save/Load Helpers ──────────────────────────────────────────────────
@@ -1811,6 +1945,29 @@ fn quil_load() -> Result<(), i64> {
 // no new ABI. Fails soft (markers, no panic) when NVMe is absent.
 const QUIL_PERSIST_MAGIC: u64 = 0x3130_5051; // "QP01" LE
 
+/// LANE3: one OP_DISKFS_READ_V2 call, decoded. Returns (payload bytes,
+/// actual count) on OK or EOF (EOF surfaces as count 0, not an error — the
+/// caller's own "n < want" check turns that into a short-read condition
+/// without needing a separate EOF branch threaded through every call
+/// site). Returns Err(-magnitude) on a real server error, using the same
+/// ERR_* vocabulary every other quil storage call already uses.
+fn read_v2_chunk(offset: u64, want: u64) -> Result<([u8; 6], usize), i64> {
+    let reply = pdx_storage_call_bounded(OP_DISKFS_READ_V2, offset, want, 0)?;
+    let status = (reply >> 56) & 0xFF;
+    if status == 0x01 {
+        return Ok(([0u8; 6], 0)); // EOF
+    }
+    if status != 0x00 {
+        let mag = ((reply >> 48) & 0xFF) as i64;
+        return Err(-mag);
+    }
+    let n = (((reply >> 48) & 0xFF) as usize).min(6);
+    let payload = (reply & 0xFFFF_FFFF_FFFF).to_le_bytes();
+    let mut out = [0u8; 6];
+    out[..6].copy_from_slice(&payload[..6]);
+    Ok((out, n))
+}
+
 fn quil_persist_save() -> Result<usize, i64> {
     unsafe {
         let len = QUIL_BUFFER_LEN.min(QUIL_BUFFER_MAX_LEN);
@@ -1875,29 +2032,54 @@ fn quil_persist_load() -> Result<usize, i64> {
         }
         pdx_storage_call_bounded(OP_DISKFS_SELECT, target, 0, 0)
             .map_err(|e| { serial_println!("[quil.persist.load.err] stage=select err={}", e); e })?;
-        let hdr = pdx_storage_call_bounded(OP_DISKFS_READ, 0, 8, 0)
-            .map_err(|e| { serial_println!("[quil.persist.load.err] stage=header err={}", e); e })?;
+        // Header is 8 bytes (magic u32 | len u32); READ_V2 caps a single
+        // call at DISKFS_V2_MAX_READ (6) payload bytes, so two calls.
+        let mut hdr_bytes = [0u8; 8];
+        let mut hoff = 0usize;
+        while hoff < 8 {
+            let want = (8 - hoff).min(DISKFS_V2_MAX_READ as usize);
+            let (b, n) = read_v2_chunk(hoff as u64, want as u64)
+                .map_err(|e| { serial_println!("[quil.persist.load.err] stage=header err={}", e); e })?;
+            hdr_bytes[hoff..hoff + n].copy_from_slice(&b[..n]);
+            if n < want {
+                // EOF before the 8-byte header even completes — malformed
+                // object, not a real document. Treat like a magic miss.
+                serial_println!("[quil.persist.load.miss] magic=short_header");
+                return Err(-2);
+            }
+            hoff += n;
+        }
+        let hdr = u64::from_le_bytes(hdr_bytes);
         let magic = hdr & 0xFFFF_FFFF;
         let len = (((hdr >> 32) & 0xFFFF_FFFF) as usize).min(QUIL_BUFFER_MAX_LEN);
         if magic != QUIL_PERSIST_MAGIC || len == 0 {
             serial_println!("[quil.persist.load.miss] magic={:#x} len={}", magic, len);
             return Err(-2);
         }
+        // Stage into QUIL_LOAD_STAGING, not QUIL_BUFFER directly: a failure
+        // partway through must leave the CURRENT buffer and dirty state
+        // exactly as they were, never a mix of old and partially-read new
+        // content.
         let mut off = 0usize;
         while off < len {
             // DISKFS_V4: the backend bounds reads strictly to the object's
             // exact committed size — request only what's actually left on
-            // the final chunk, not a flat 8, or a non-multiple-of-8 length
-            // would overrun size_bytes and get ERR_OVERFLOW.
-            let want = (len - off).min(8);
-            let word = pdx_storage_call_bounded(OP_DISKFS_READ, 16 + off as u64, want as u64, 0)
+            // the final chunk, not a flat max, or an overrun would get
+            // ERR_OVERFLOW.
+            let want = (len - off).min(DISKFS_V2_MAX_READ as usize);
+            let (bytes, n) = read_v2_chunk(16 + off as u64, want as u64)
                 .map_err(|e| { serial_println!("[quil.persist.load.err] stage=read off={} err={}", off, e); e })?;
-            let bytes = word.to_le_bytes();
-            for i in 0..want {
-                QUIL_BUFFER[off + i] = bytes[i];
+            if n < want {
+                serial_println!(
+                    "[quil.persist.load.err] stage=read off={} reason=short_read got={} want={}",
+                    off, n, want
+                );
+                return Err(-2);
             }
+            QUIL_LOAD_STAGING[off..off + n].copy_from_slice(&bytes[..n]);
             off += want;
         }
+        QUIL_BUFFER[..len].copy_from_slice(&QUIL_LOAD_STAGING[..len]);
         QUIL_BUFFER_LEN = len;
         QUIL_CURSOR_POS = len;
         QUIL_DIRTY = false;
@@ -2907,6 +3089,9 @@ pub extern "C" fn _start() -> ! {
     if QUIL_DISKFS_SLOT_PROOF_ENABLED {
         serial_println!("[quil.diskfs.mount]");
         run_quil_diskfs_slot_min_proof();
+    }
+    if QUIL_READ_V2_HIGHBIT_PROOF_ENABLED {
+        run_quil_read_v2_highbit_proof();
     }
 
     // ── Replay any HID events stashed during diskfs proof ─────────────
