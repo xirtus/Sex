@@ -295,11 +295,27 @@ fn handle_diskfs_write(byte_offset: u64, data_lo: u64, data_hi: u64, caller_pd: 
             return e;
         }
         v4_cache_put(i, extents, count);
+        // Deterministic injection point for crash-safety testing (see
+        // scripts/diskfs_v4_crash_injection_gate.sh): the new extent is on
+        // disk and readable by a rebuilt bitmap, but the manifest has not
+        // yet published this object's new size. A crash landing exactly
+        // here must still resolve to the OLD version on reboot.
+        crate::pdx::serial_println!(
+            "[sexfiles.diskfs.v4.crash_point.extent_committed] slot={} new_count={}",
+            i, count
+        );
     }
     if need_end > entry.size_bytes as u64 {
         entry.size_bytes = need_end as u32;
         unsafe { V4_TABLE[i] = entry; }
         if let Err(e) = v4_persist(buf_va) { return e; }
+        // Deterministic injection point: the manifest now publishes the new
+        // size. A crash landing exactly here must resolve to the complete
+        // NEW version on reboot, never a partial one.
+        crate::pdx::serial_println!(
+            "[sexfiles.diskfs.v4.crash_point.manifest_committed] slot={} size={}",
+            i, entry.size_bytes
+        );
     }
 
     crate::pdx::serial_println!(
@@ -429,6 +445,15 @@ fn handle_diskfs_truncate(new_len: u64, caller_pd: u32) -> u64 {
     entry.size_bytes = new_len as u32;
     unsafe { V4_TABLE[i] = entry; }
     if let Err(e) = v4_persist(buf_va) { return e; }
+    // Deterministic injection point (see scripts/diskfs_v4_crash_injection_gate.sh):
+    // this is the atomicity boundary a WRITE-loop-then-TRUNCATE save (spindle's
+    // filldoc, quil's persist_save) actually relies on for "the complete new
+    // version is durable" -- not the last WRITE, which may still be padded to
+    // a block/chunk boundary the caller intends to trim away.
+    crate::pdx::serial_println!(
+        "[sexfiles.diskfs.v4.crash_point.manifest_committed] slot={} size={}",
+        i, entry.size_bytes
+    );
 
     let (mut extents, count) = v4_cache_get(i, buf_va);
     let mut cum = 0u64;
