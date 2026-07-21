@@ -79,14 +79,20 @@ const PAGE_SIZE: u64 = 4096;
 const NVME_SQ0TDBL: u64 = 0x1000;
 const NVME_CQ0HDBL: u64 = 0x1004;
 const NVME_LBA_BYTES: u64 = 512;
-const WRITE_PROOF_LBA: u64 = 2047; // Final LBA in gate nvme.img (2048 sectors)
+// LBA constants below are re-exported from sex_pdx's canonical disk-layout
+// module (the single source of truth every fixed on-disk region in the
+// system must be declared in) rather than defined locally — that module's
+// compile-time asserts are what would have caught the LBA 128 collision
+// between this file's own AP4 self-test and DISKFS_V4's content pool
+// before it ever shipped. See docs/handoff/SEXDRIVE_NVME_QUEUE_WRAP_V1.md.
+const WRITE_PROOF_LBA: u64 = sex_pdx::SEXDRIVE_AP3_WRITE_PROOF_LBA; // Final LBA in gate nvme.img (2048 sectors)
 const WRITE_PROOF_LEN: u64 = 512;
 const WRITE_PROOF_MAGIC: u64 = 0x3156_4554_4952_5753; // "SWRITEV1" LE
-const AP4_MULTI_BASE_LBA: u64 = 128;
-const AP4_MULTI_BLOCKS: u64 = 4;
+const AP4_MULTI_BASE_LBA: u64 = sex_pdx::SEXDRIVE_AP4_MULTI_BASE_LBA;
+const AP4_MULTI_BLOCKS: u64 = sex_pdx::SEXDRIVE_AP4_MULTI_SECTORS;
 const AP4_MULTI_BLOCK_BYTES: u64 = NVME_LBA_BYTES;
-const AP5A_PERSIST_BASE_LBA: u64 = 256;
-const AP5A_PERSIST_BLOCKS: u64 = 4;
+const AP5A_PERSIST_BASE_LBA: u64 = sex_pdx::SEXDRIVE_AP5A_PERSIST_BASE_LBA;
+const AP5A_PERSIST_BLOCKS: u64 = sex_pdx::SEXDRIVE_AP5A_PERSIST_SECTORS;
 const AP5A_PERSIST_BLOCK_BYTES: u64 = NVME_LBA_BYTES;
 const STORAGE_100_PERSIST_WRITE_ENABLED: bool =
     option_env!("SEXOS_STORAGE_100_PERSIST_WRITE").is_some();
@@ -100,21 +106,21 @@ const STORAGE_100_NEG_MISMATCH_ENABLED: bool =
     option_env!("SEXOS_STORAGE_100_NEG_MISMATCH").is_some();
 const STORAGE_100_IO_READ_PROBE_ENABLED: bool =
     option_env!("SEXOS_STORAGE_100_IO_READ_PROBE").is_some();
-const AP6_NEG_MISMATCH_LBA: u64 = 384;
+const AP6_NEG_MISMATCH_LBA: u64 = sex_pdx::SEXDRIVE_AP6_NEG_MISMATCH_LBA;
 const AP6_NEG_MISMATCH_BYTES: u64 = NVME_LBA_BYTES;
-const MANIFEST_LBA: u64 = 2046;
-const PROOF_OBJECT_START_LBA: u64 = 2038;
-const PROOF_OBJECT_END_LBA: u64 = 2045;
+const MANIFEST_LBA: u64 = sex_pdx::DISKFS_MANIFEST_LBA;
+const PROOF_OBJECT_START_LBA: u64 = sex_pdx::DISKFS_SEXFILES_PROOF_START_LBA;
+const PROOF_OBJECT_END_LBA: u64 = sex_pdx::DISKFS_SEXFILES_PROOF_START_LBA + sex_pdx::DISKFS_SEXFILES_PROOF_SECTORS - 1;
 // V2 multi-object slots (SEXFILES_DISK_MULTI_OBJECT_MANIFEST_PLAN_V1)
-const LINEN_OBJECT_START_LBA: u64 = 2030;
-const LINEN_OBJECT_END_LBA:   u64 = 2037;
-const QUIL_OBJECT_START_LBA:  u64 = 2022;
-const QUIL_OBJECT_END_LBA:    u64 = 2029;
+const LINEN_OBJECT_START_LBA: u64 = sex_pdx::DISKFS_LINEN_OBJECT_START_LBA;
+const LINEN_OBJECT_END_LBA:   u64 = sex_pdx::DISKFS_LINEN_OBJECT_START_LBA + sex_pdx::DISKFS_LINEN_OBJECT_SECTORS - 1;
+const QUIL_OBJECT_START_LBA:  u64 = sex_pdx::DISKFS_QUIL_OBJECT_START_LBA;
+const QUIL_OBJECT_END_LBA:    u64 = sex_pdx::DISKFS_QUIL_OBJECT_START_LBA + sex_pdx::DISKFS_QUIL_OBJECT_SECTORS - 1;
 // SexFS v0 on-disk regions (SEXFS_V0_ONDISK_CONTRACT_SPEC_V1)
-const SEXFS_V0_META_START_LBA: u64 = 0;
-const SEXFS_V0_META_END_LBA:   u64 = 47;
-const SEXFS_V0_OBJECT_START_LBA: u64 = 128;
-const SEXFS_V0_OBJECT_END_LBA:   u64 = 2019;
+const SEXFS_V0_META_START_LBA: u64 = sex_pdx::SEXFS_V0_META_START_LBA;
+const SEXFS_V0_META_END_LBA:   u64 = sex_pdx::SEXFS_V0_META_END_LBA;
+const SEXFS_V0_OBJECT_START_LBA: u64 = sex_pdx::SEXFS_V0_OBJECT_START_LBA;
+const SEXFS_V0_OBJECT_END_LBA:   u64 = sex_pdx::SEXFS_V0_OBJECT_END_LBA;
 
 struct NvmeIoState {
     ready: bool,

@@ -39,10 +39,13 @@ pub const DISKFS_EXTENT_BLOCK_COUNT: usize = 1024;
 pub const DISKFS_EXTENT_BITMAP_WORDS: usize = DISKFS_EXTENT_BLOCK_COUNT / 64; // 16
 pub const DISKFS_EXTENT_JOURNAL_CAPACITY: usize = 32;
 const DISKFS_EXTENT_JOURNAL_KIND: u16 = 10; // JournalRecordKind discriminator for extent ops
-pub const DISKFS_MANIFEST_LBA: u64 = 2046;
-pub const DISKFS_WRITE_PROOF_LBA: u64 = 2047;
-pub const DISKFS_PROOF_OBJECT_START_LBA: u64 = 2038;
-pub const DISKFS_PROOF_OBJECT_SECTORS: u64 = 8;
+// Re-exported from sex_pdx's canonical disk-layout module (single source
+// of truth for every fixed on-disk LBA region — see
+// docs/handoff/DISK_LAYOUT_V1.md) rather than defined independently here.
+pub const DISKFS_MANIFEST_LBA: u64 = sex_pdx::DISKFS_MANIFEST_LBA;
+pub const DISKFS_WRITE_PROOF_LBA: u64 = sex_pdx::SEXDRIVE_AP3_WRITE_PROOF_LBA;
+pub const DISKFS_PROOF_OBJECT_START_LBA: u64 = sex_pdx::DISKFS_SEXFILES_PROOF_START_LBA;
+pub const DISKFS_PROOF_OBJECT_SECTORS: u64 = sex_pdx::DISKFS_SEXFILES_PROOF_SECTORS;
 pub const DISKFS_MANIFEST_MAGIC: u64 = 0x3156_4D4B_5349_4453; // "SDISKMV1" LE
 pub const DISKFS_MANIFEST_VERSION: u16 = 1;
 pub const DISKFS_MANIFEST_ENTRY_MAX: u16 = 15;
@@ -59,8 +62,8 @@ pub const DISKFS_V2_ENTRY_COUNT: u16 = 3;
 pub const DISKFS_OBJECT_PATH_SEXFILES: &[u8] = b"/disk/sexfiles-proof-v1";
 pub const DISKFS_OBJECT_PATH_LINEN:    &[u8] = b"/disk/linen-object-v1";
 pub const DISKFS_OBJECT_PATH_QUIL:     &[u8] = b"/disk/quil-object-v1";
-pub const DISKFS_OBJECT_SLOT_LINEN_LBA: u64 = 2030;
-pub const DISKFS_OBJECT_SLOT_QUIL_LBA:  u64 = 2022;
+pub const DISKFS_OBJECT_SLOT_LINEN_LBA: u64 = sex_pdx::DISKFS_LINEN_OBJECT_START_LBA;
+pub const DISKFS_OBJECT_SLOT_QUIL_LBA:  u64 = sex_pdx::DISKFS_QUIL_OBJECT_START_LBA;
 pub const DISKFS_OBJECT_SLOT_SECTORS:   u64 = 8;
 pub const DISKFS_OBJECT_SLOT_SIZE:      u32 = 4096;
 pub const DISKFS_V2_MANIFEST_VERSION:   u16 = 2;
@@ -3726,10 +3729,11 @@ pub fn proof_sexobject_table_persist() -> Result<(), i64> {
 const SEXFS_V0_DATA_REGION_MIN_BLOCK: usize = 16;
 /// Last freemap block number in the object data region (= LBA 2016 start sector).
 const SEXFS_V0_DATA_REGION_MAX_BLOCK: usize = 252;
-/// Minimum sector LBA for object data writes.
-const SEXFS_V0_DATA_LBA_MIN: u64 = 128;
+/// Minimum sector LBA for object data writes. Re-exported from sex_pdx's
+/// canonical disk-layout module (docs/handoff/DISK_LAYOUT_V1.md).
+const SEXFS_V0_DATA_LBA_MIN: u64 = sex_pdx::SEXFS_V0_OBJECT_START_LBA;
 /// Maximum sector LBA for object data writes (inclusive).
-const SEXFS_V0_DATA_LBA_MAX: u64 = 2019;
+const SEXFS_V0_DATA_LBA_MAX: u64 = sex_pdx::SEXFS_V0_OBJECT_END_LBA;
 
 /// Recompute freemap checksum in-place.
 /// XOR bytes [0..16) + [20..32) + [32..160), store at [16..20).

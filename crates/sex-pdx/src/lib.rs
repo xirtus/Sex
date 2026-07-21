@@ -491,6 +491,136 @@ pub const BLOCK_ERR_TIMEOUT:  u64 = 5; // Operation timed out
 pub const BLOCK_SECTOR_SIZE:  u64 = 512;     // Minimum alignment unit
 pub const BLOCK_MAX_XFER:     u64 = 4096;    // Max bytes per transfer (one page)
 
+// ═══════════════════════════════════════════════════════════════════════════
+// DISK LAYOUT — canonical, single source of truth for every fixed on-disk
+// LBA region any component reserves.
+//
+// Why this exists: DISKFS_V4's content pool was originally placed at LBA
+// 128, chosen independently in servers/sexfiles/src/vfs.rs because it was
+// the start of the SexFS v0 write-allowed range. apps/sexdrive's own
+// boot-time self-test (nvme_multiblock_write_readback_proof) ALSO used LBA
+// 128 as its base, chosen independently for the same reason, years
+// earlier. Neither side knew about the other's reservation because there
+// was no single place both were required to check. The self-test runs
+// UNCONDITIONALLY on every boot and silently overwrote real DiskFS content
+// there — see docs/handoff/SEXDRIVE_NVME_QUEUE_WRAP_V1.md for the full
+// incident writeup (initially misdiagnosed as an NVMe queue-wrap bug
+// before the actual LBA collision was found).
+//
+// Rule going forward: every fixed-LBA region, in any crate, gets declared
+// here BEFORE it's used anywhere, and every new region gets a
+// `ranges_overlap` assertion added below against every existing one. This
+// makes a future collision a build failure, not a silent reboot-time data
+// loss discovered by accident.
+//
+// Units are 512-byte sectors (LBAs) throughout.
+pub const DISK_TOTAL_SECTORS: u64 = 2048;
+
+// apps/sexdrive boot-time self-tests. AP3 and AP4 run UNCONDITIONALLY on
+// every boot (no gate). AP5A and AP6 are gated behind option_env! flags
+// (off in normal builds) but reserved anyway so an intentionally-enabled
+// test build can't silently collide with real data either.
+pub const SEXDRIVE_AP3_WRITE_PROOF_LBA: u64 = 2047;
+pub const SEXDRIVE_AP3_WRITE_PROOF_SECTORS: u64 = 1;
+pub const SEXDRIVE_AP4_MULTI_BASE_LBA: u64 = 128;
+pub const SEXDRIVE_AP4_MULTI_SECTORS: u64 = 4;
+pub const SEXDRIVE_AP5A_PERSIST_BASE_LBA: u64 = 256;
+pub const SEXDRIVE_AP5A_PERSIST_SECTORS: u64 = 4;
+pub const SEXDRIVE_AP6_NEG_MISMATCH_LBA: u64 = 384;
+pub const SEXDRIVE_AP6_NEG_MISMATCH_SECTORS: u64 = 1;
+
+// DiskFS fixed regions (servers/sexfiles/src/vfs.rs and
+// servers/sexfiles/src/backends/diskfs.rs).
+pub const DISKFS_MANIFEST_LBA: u64 = 2046;
+pub const DISKFS_MANIFEST_SECTORS: u64 = 1;
+/// Legacy V3 object slots (quil/linen/sexfiles-proof), migrated in place
+/// by DISKFS_V4 — 15 slots x 8 sectors, ending just below the manifest.
+pub const DISKFS_LEGACY_SLOTS_START_LBA: u64 = 1926;
+pub const DISKFS_LEGACY_SLOTS_SECTORS: u64 = 2046 - 1926;
+/// The 3 named system-object sub-ranges within the legacy slot region
+/// (slots 0-2). apps/sexdrive's write_guard_allows checks these
+/// individually rather than as one combined range, so they're declared
+/// here too rather than only as the combined region above.
+pub const DISKFS_SEXFILES_PROOF_START_LBA: u64 = 2038;
+pub const DISKFS_SEXFILES_PROOF_SECTORS: u64 = 8;
+pub const DISKFS_LINEN_OBJECT_START_LBA: u64 = 2030;
+pub const DISKFS_LINEN_OBJECT_SECTORS: u64 = 8;
+pub const DISKFS_QUIL_OBJECT_START_LBA: u64 = 2022;
+pub const DISKFS_QUIL_OBJECT_SECTORS: u64 = 8;
+/// Per-slot indirect extent descriptors: 15 sectors, one per V4 slot,
+/// ending just below the legacy slot region.
+pub const DISKFS_V4_INDIRECT_BASE_LBA: u64 = 1911;
+pub const DISKFS_V4_INDIRECT_SECTORS: u64 = 15;
+/// Variable-length content pool. Must stay inside SEXFS_V0's allowed write
+/// envelope below AND clear of every sexdrive self-test region above —
+/// including AP5A/AP6, which are gated off in normal builds but still
+/// real reservations (a future enabled test build must not collide with
+/// real data either). 400 clears AP3/AP4/AP5A/AP6 all with margin.
+pub const DISKFS_V4_POOL_BASE_LBA: u64 = 400;
+pub const DISKFS_V4_BLOCK_SECTORS: u64 = 8;
+pub const DISKFS_V4_POOL_BLOCKS: u64 = 176;
+pub const DISKFS_V4_POOL_SECTORS: u64 = DISKFS_V4_POOL_BLOCKS * DISKFS_V4_BLOCK_SECTORS;
+
+// SexFS v0 allowed write envelope (apps/sexdrive write_guard_allows) — not
+// itself a reservation, the outer bound DiskFS's pool must stay inside.
+pub const SEXFS_V0_META_START_LBA: u64 = 0;
+pub const SEXFS_V0_META_END_LBA: u64 = 47;
+pub const SEXFS_V0_OBJECT_START_LBA: u64 = 128;
+pub const SEXFS_V0_OBJECT_END_LBA: u64 = 2019;
+
+/// Also used at runtime (not just in this file's compile-time asserts) by
+/// servers/sexfiles for a boot-time confirmation log line — see
+/// v4_ensure's disk-layout self-check.
+pub const fn ranges_overlap(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> bool {
+    a_start < b_start + b_len && b_start < a_start + a_len
+}
+
+// Compile-time non-overlap guarantees. Add a new assert here for every
+// new fixed region introduced anywhere in the system, checked against
+// every region that already exists — this is the one place a collision
+// gets caught before boot instead of after a reboot silently eats data.
+const _: () = assert!(
+    !ranges_overlap(DISKFS_V4_POOL_BASE_LBA, DISKFS_V4_POOL_SECTORS, SEXDRIVE_AP3_WRITE_PROOF_LBA, SEXDRIVE_AP3_WRITE_PROOF_SECTORS),
+    "DISKFS_V4 content pool overlaps sexdrive AP3 self-test LBA"
+);
+const _: () = assert!(
+    !ranges_overlap(DISKFS_V4_POOL_BASE_LBA, DISKFS_V4_POOL_SECTORS, SEXDRIVE_AP4_MULTI_BASE_LBA, SEXDRIVE_AP4_MULTI_SECTORS),
+    "DISKFS_V4 content pool overlaps sexdrive AP4 self-test LBA range"
+);
+const _: () = assert!(
+    !ranges_overlap(DISKFS_V4_POOL_BASE_LBA, DISKFS_V4_POOL_SECTORS, SEXDRIVE_AP5A_PERSIST_BASE_LBA, SEXDRIVE_AP5A_PERSIST_SECTORS),
+    "DISKFS_V4 content pool overlaps sexdrive AP5A self-test LBA range"
+);
+const _: () = assert!(
+    !ranges_overlap(DISKFS_V4_POOL_BASE_LBA, DISKFS_V4_POOL_SECTORS, SEXDRIVE_AP6_NEG_MISMATCH_LBA, SEXDRIVE_AP6_NEG_MISMATCH_SECTORS),
+    "DISKFS_V4 content pool overlaps sexdrive AP6 self-test LBA"
+);
+const _: () = assert!(
+    !ranges_overlap(DISKFS_V4_POOL_BASE_LBA, DISKFS_V4_POOL_SECTORS, DISKFS_V4_INDIRECT_BASE_LBA, DISKFS_V4_INDIRECT_SECTORS),
+    "DISKFS_V4 content pool overlaps its own indirect-descriptor region"
+);
+const _: () = assert!(
+    !ranges_overlap(DISKFS_V4_POOL_BASE_LBA, DISKFS_V4_POOL_SECTORS, DISKFS_LEGACY_SLOTS_START_LBA, DISKFS_LEGACY_SLOTS_SECTORS),
+    "DISKFS_V4 content pool overlaps the legacy V3 slot region"
+);
+const _: () = assert!(
+    !ranges_overlap(DISKFS_V4_POOL_BASE_LBA, DISKFS_V4_POOL_SECTORS, DISKFS_MANIFEST_LBA, DISKFS_MANIFEST_SECTORS),
+    "DISKFS_V4 content pool overlaps the manifest sector"
+);
+const _: () = assert!(
+    !ranges_overlap(DISKFS_V4_INDIRECT_BASE_LBA, DISKFS_V4_INDIRECT_SECTORS, DISKFS_LEGACY_SLOTS_START_LBA, DISKFS_LEGACY_SLOTS_SECTORS),
+    "DiskFS indirect-descriptor region overlaps the legacy V3 slot region"
+);
+const _: () = assert!(
+    DISKFS_V4_POOL_BASE_LBA >= SEXFS_V0_OBJECT_START_LBA
+        && DISKFS_V4_POOL_BASE_LBA + DISKFS_V4_POOL_SECTORS <= SEXFS_V0_OBJECT_END_LBA + 1,
+    "DISKFS_V4 content pool must stay entirely inside the sexdrive-allowed SexFS v0 write range"
+);
+const _: () = assert!(
+    DISKFS_V4_POOL_BASE_LBA + DISKFS_V4_POOL_SECTORS <= DISK_TOTAL_SECTORS,
+    "DISKFS_V4 content pool runs past the end of the disk image"
+);
+
 // Capability invocation trap numbers (ring-3 → ring-0 transition only).
 // These are sex-pdx implementation details, NOT POSIX-style syscall numbers.
 pub const SYSCALL_PDX_REPLY: u64 = 1;
