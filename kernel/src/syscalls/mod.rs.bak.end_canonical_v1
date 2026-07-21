@@ -37,24 +37,16 @@ fn validate_user_bytes(start: u64, len: usize, writable: bool) -> bool {
     if !is_canonical_addr(start) {
         return false;
     }
-    // Validate the inclusive end address independently before any page
-    // alignment, masking, or translation.  Reject arithmetic wraparound
-    // and any range that touches a non-canonical byte.
-    let inclusive_end = match start.checked_add((len as u64) - 1) {
+    let end = match start.checked_add(len as u64) {
         Some(e) => e,
         None => return false,
     };
-    if !is_canonical_addr(inclusive_end) {
-        return false;
-    }
 
     let pd = crate::core_local::CoreLocal::get().current_pd_ref();
     let pkru = pd.current_pkru_mask.load(Ordering::Acquire);
 
-    let first_page = start & !0xFFFu64;
-    let last_page = inclusive_end & !0xFFFu64;
-    let mut va = first_page;
-    loop {
+    let mut va = start & !0xFFFu64;
+    while va < end {
         match crate::memory::manager::read_pte_flags(x86_64::VirtAddr::new(va)) {
             Ok(pte) => {
                 if (pte & 0x1) == 0 {
@@ -76,9 +68,6 @@ fn validate_user_bytes(start: u64, len: usize, writable: bool) -> bool {
                 }
             }
             Err(_) => return false,
-        }
-        if va == last_page {
-            break;
         }
         va = match va.checked_add(4096) {
             Some(v) => v,

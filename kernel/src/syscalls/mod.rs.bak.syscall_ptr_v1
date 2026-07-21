@@ -14,79 +14,6 @@ use x86_64::structures::paging::PageTableFlags;
 use x86_64::VirtAddr;
 
 const SNAPSHOT_MAX: usize = 64;
-const RAW_PRINT_MAX: usize = 4096;
-
-/// Reject addresses whose high bits do not match bit 47 (x86_64 canonical form).
-#[inline]
-fn is_canonical_addr(addr: u64) -> bool {
-    let sign = (addr >> 47) & 1;
-    let high = addr >> 48;
-    (sign == 0 && high == 0) || (sign == 1 && high == 0xFFFF)
-}
-
-/// Validate that every 4 KiB page touched by `[start, start + len)` is mapped,
-/// user-accessible, and has the requested read/write permissions under the
-/// current PD's user-mode PKRU mask.
-///
-/// Does NOT hold GLOBAL_VAS or any allocator lock; it only reads the existing
-/// page tables via `read_pte_flags`.
-fn validate_user_bytes(start: u64, len: usize, writable: bool) -> bool {
-    if len == 0 {
-        return true;
-    }
-    if !is_canonical_addr(start) {
-        return false;
-    }
-    // Validate the inclusive end address independently before any page
-    // alignment, masking, or translation.  Reject arithmetic wraparound
-    // and any range that touches a non-canonical byte.
-    let inclusive_end = match start.checked_add((len as u64) - 1) {
-        Some(e) => e,
-        None => return false,
-    };
-    if !is_canonical_addr(inclusive_end) {
-        return false;
-    }
-
-    let pd = crate::core_local::CoreLocal::get().current_pd_ref();
-    let pkru = pd.current_pkru_mask.load(Ordering::Acquire);
-
-    let first_page = start & !0xFFFu64;
-    let last_page = inclusive_end & !0xFFFu64;
-    let mut va = first_page;
-    loop {
-        match crate::memory::manager::read_pte_flags(x86_64::VirtAddr::new(va)) {
-            Ok(pte) => {
-                if (pte & 0x1) == 0 {
-                    return false; // not present
-                }
-                if (pte & 0x4) == 0 {
-                    return false; // not user-accessible
-                }
-                if writable && (pte & 0x2) == 0 {
-                    return false; // not writable
-                }
-                let pkey = ((pte >> 59) & 0xF) as u32;
-                let shift = pkey * 2;
-                if ((pkru >> shift) & 1) != 0 {
-                    return false; // access disabled for this pkey
-                }
-                if writable && ((pkru >> (shift + 1)) & 1) != 0 {
-                    return false; // write disabled for this pkey
-                }
-            }
-            Err(_) => return false,
-        }
-        if va == last_page {
-            break;
-        }
-        va = match va.checked_add(4096) {
-            Some(v) => v,
-            None => return false,
-        };
-    }
-    true
-}
 
 static mut SNAP_RING: [sex_pdx::SceneSnapshot; SNAPSHOT_MAX] = [sex_pdx::SceneSnapshot {
     layers_ptr: 0, layers_len: 0, cursor_x: 0, cursor_y: 0,
@@ -99,11 +26,7 @@ static mut SNAP_GEN: [u32; SNAPSHOT_MAX] = [0u32; SNAPSHOT_MAX];
 // SNAPSHOT_HANDLE = (gen << 32 | idx)
 // prevents stale slot reuse attacks after ring wrap
 unsafe fn snapshot_ingest(src: *const sex_pdx::SceneSnapshot) -> Result<u64, u64> {
-    let size = core::mem::size_of::<sex_pdx::SceneSnapshot>();
-    if src.is_null()
-        || (src as usize) % core::mem::align_of::<sex_pdx::SceneSnapshot>() != 0
-        || !validate_user_bytes(src as u64, size, false)
-    {
+    if src as usize % core::mem::align_of::<sex_pdx::SceneSnapshot>() != 0 {
         return Err(sex_pdx::ERR_CAP_INVALID);
     }
     let idx = SNAP_IDX.fetch_add(1, Ordering::AcqRel) % SNAPSHOT_MAX;
@@ -116,16 +39,12 @@ unsafe fn snapshot_ingest(src: *const sex_pdx::SceneSnapshot) -> Result<u64, u64
 fn snapshot_resolve(handle: u64, out_ptr: *mut sex_pdx::SceneSnapshot) -> u64 {
     let idx = (handle & 0xFFFF_FFFF) as usize;
     let gen = (handle >> 32) as u32;
-    let size = core::mem::size_of::<sex_pdx::SceneSnapshot>();
-    if idx >= SNAPSHOT_MAX
-        || out_ptr.is_null()
-        || !validate_user_bytes(out_ptr as u64, size, true)
-    {
+    if idx >= SNAPSHOT_MAX || out_ptr.is_null() {
         return sex_pdx::ERR_CAP_INVALID;
     }
     unsafe {
         if SNAP_GEN[idx] != gen {
-            return sex_pdx::ERR_CAP_INVALID; // stale handle
+            return sex_pdx::ERR_CAP_INVALID;  // stale handle
         }
         *out_ptr = SNAP_RING[idx];
     }
@@ -169,10 +88,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                 match num {
                     0xE3 => { // PDX_GET_DISPLAY_INFO
                         let ptr = arg0 as *mut DisplayInfo;
-                        let info_size = core::mem::size_of::<DisplayInfo>();
-                        if ptr.is_null() || !validate_user_bytes(arg0, info_size, true) {
-                            (sex_pdx::ERR_CAP_INVALID, 0)
-                        } else if let Some(fb_res) = crate::FB_REQUEST.response() {
+                        if let Some(fb_res) = crate::FB_REQUEST.response() {
                             if let Some(fb) = fb_res.framebuffers().iter().next() {
                                 unsafe {
                                     let fb_virt = fb.address() as u64;
@@ -189,24 +105,15 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                     69 => { // raw_print
                         let ptr = arg0 as *const u8;
                         let len = arg1 as usize;
-                        if len == 0 {
-                            (0u64, 0u64)
-                        } else if ptr.is_null()
-                            || len > RAW_PRINT_MAX
-                            || !validate_user_bytes(arg0, len, false)
-                        {
-                            (sex_pdx::ERR_CAP_INVALID, 0)
-                        } else {
-                            unsafe {
-                                let slice = core::slice::from_raw_parts(ptr, len);
-                                for &b in slice {
-                                    use x86_64::instructions::port::Port;
-                                    let mut port = Port::new(0x3f8);
-                                    port.write(b);
-                                }
+                        unsafe {
+                            let slice = core::slice::from_raw_parts(ptr, len);
+                            for &b in slice {
+                                use x86_64::instructions::port::Port;
+                                let mut port = Port::new(0x3f8);
+                                port.write(b);
                             }
-                            (0u64, 0u64)
                         }
+                        (0u64, 0u64)
                     }
                     0x12 => { // pdx_get_init_arg
                         let core_local = crate::core_local::CoreLocal::get();
